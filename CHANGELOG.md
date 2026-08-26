@@ -6,6 +6,7 @@
 - Clear inherited setgid bits on image-manager temporary build trees without weakening the systemd sandbox.
 - Use the deployment user's pinned pnpm instead of an older system-wide Corepack shim.
 - Accept an active remotely managed Cloudflare Tunnel when no host-local ingress file exists.
+- Prebuild the TeX Live source image before quiescing production services.
 
 ## 1.0.0 - 2026-08-26
 

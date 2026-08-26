@@ -40,6 +40,12 @@ sync_path="$sync_pnpm_bin:/usr/local/bin:/usr/bin:/bin"
 runuser -u "$sync_user" -- env HOME="$sync_home" USER="$sync_user" LOGNAME="$sync_user" PNPM_HOME="$sync_pnpm_bin" PATH="$sync_path" \
   "$sync_pnpm_bin/pnpm" --dir "$source_root" build:production-services
 
+# Complete the expensive TeX Live source-image build while the current
+# production services are still available. prepare-host repeats this build
+# from the immutable release tree, where Docker verifies the same context and
+# reuses these completed layers before any service restart.
+docker build --tag latex-renderer:texlive-2026 "$source_root/renderer"
+
 # Freeze all TeX environment mutations before prepare-host changes the current
 # release symlink, renderer.env, inventory, or persisted Image Manager state.
 # The quiesce helper is backward-compatible with the release immediately before

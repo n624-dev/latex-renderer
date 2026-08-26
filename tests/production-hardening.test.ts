@@ -147,6 +147,16 @@ describe("production hardening", () => {
     expect(deploy).toContain(build);
     expect(deploy.indexOf(build)).toBeLessThan(deploy.indexOf(prepare));
   });
+  it("prebuilds the expensive TeX image before quiescing production services", () => {
+    const deploy = read("deploy/scripts/deploy-production-release.sh"),
+      imageBuild =
+        'docker build --tag latex-renderer:texlive-2026 "$source_root/renderer"',
+      quiesce = "quiesce-image-manager.sh",
+      prepare = 'prepare-host.sh" "$release_id';
+    expect(deploy).toContain(imageBuild);
+    expect(deploy.indexOf(imageBuild)).toBeLessThan(deploy.indexOf(quiesce));
+    expect(deploy.indexOf(quiesce)).toBeLessThan(deploy.indexOf(prepare));
+  });
   it("enables Remote MCP so it returns after a production host reboot", () => {
     const deploy = read("deploy/scripts/deploy-production-release.sh");
     expect(deploy).toMatch(
