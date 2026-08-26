@@ -140,6 +140,12 @@ describe("production hardening", () => {
     expect(deploy).toContain(build);
     expect(deploy.indexOf(build)).toBeLessThan(deploy.indexOf(prepare));
   });
+  it("enables Remote MCP so it returns after a production host reboot", () => {
+    const deploy = read("deploy/scripts/deploy-production-release.sh");
+    expect(deploy).toMatch(
+      /systemctl enable --now \\\n\s+latex-renderer-remote-mcp\.service/,
+    );
+  });
   it("allows public Worker Routes to converge before judging the production boundary", () => {
     const smoke = read("deploy/scripts/smoke-test-public-worker-boundary.sh");
     expect(smoke).toContain("LATEX_RENDER_BOUNDARY_ATTEMPTS");

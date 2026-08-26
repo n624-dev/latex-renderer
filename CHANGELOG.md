@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Enable the Remote MCP systemd service during production deployment so it returns after a host reboot.
+
 ## 1.0.0 - 2026-08-26
 
 Initial public release.
