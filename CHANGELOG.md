@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Enable the Remote MCP systemd service during production deployment so it returns after a host reboot.
+- Clear inherited setgid bits on image-manager temporary build trees without weakening the systemd sandbox.
 
 ## 1.0.0 - 2026-08-26
 

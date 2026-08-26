@@ -146,6 +146,19 @@ describe("production hardening", () => {
       /systemctl enable --now \\\n\s+latex-renderer-remote-mcp\.service/,
     );
   });
+  it("clears inherited setgid bits before rootless Docker reads temporary build trees", () => {
+    for (const path of [
+      "deploy/scripts/build-language-runtime.sh",
+      "deploy/scripts/smoke-test-renderer-basic.sh",
+      "deploy/scripts/smoke-test-renderer-svg.sh",
+    ]) {
+      expect(read(path)).toContain('chmod 00755 "$');
+      expect(read(path)).not.toContain('chmod 0755 "$');
+    }
+    expect(
+      read("deploy/systemd/latex-renderer-image-manager.service"),
+    ).toContain("RestrictSUIDSGID=true");
+  });
   it("allows public Worker Routes to converge before judging the production boundary", () => {
     const smoke = read("deploy/scripts/smoke-test-public-worker-boundary.sh");
     expect(smoke).toContain("LATEX_RENDER_BOUNDARY_ATTEMPTS");

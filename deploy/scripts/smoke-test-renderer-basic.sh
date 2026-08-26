@@ -7,7 +7,7 @@ smoke_root=$(mktemp -d)
 input="$smoke_root/input"
 output="$smoke_root/output"
 trap 'rm -rf "$smoke_root"' EXIT HUP INT TERM
-chmod 0755 "$smoke_root"
+chmod 00755 "$smoke_root"
 mkdir "$input" "$output"
 cp -R "$repo_root/tests/fixtures/runtime-basic/." "$input/"
 chmod -R a+rX "$input"
