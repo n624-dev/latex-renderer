@@ -19,6 +19,7 @@ describe("post-review TeX environment regressions", () => {
   it("uses a shared writable temp root and requires image restoration before renderer consumers", () => {
     const manager = read("deploy/systemd/latex-renderer-image-manager.service");
     const waitDocker = read("deploy/scripts/wait-rootless-docker.sh");
+    const waitHttp = read("deploy/scripts/wait-image-manager-http.sh");
     const worker = read("deploy/systemd/latex-renderer-worker.service");
     const internal = read("deploy/systemd/latex-renderer-internal-api.service");
     const remote = read("deploy/systemd/latex-renderer-remote-mcp.service");
@@ -28,10 +29,15 @@ describe("post-review TeX environment regressions", () => {
     expect(manager).toContain(
       "ExecStartPre=/bin/sh deploy/scripts/wait-rootless-docker.sh",
     );
+    expect(manager).toContain(
+      "ExecStartPost=/bin/sh deploy/scripts/wait-image-manager-http.sh",
+    );
     expect(manager).toContain("NoNewPrivileges=false");
     expect(manager).not.toContain("NoNewPrivileges=true");
     expect(manager).toContain("TimeoutStartSec=1h");
     expect(waitDocker).toContain("docker info >/dev/null 2>&1");
+    expect(waitHttp).toContain('"$endpoint/v1/state"');
+    expect(waitHttp).toContain("IMAGE_MANAGER_READY_ATTEMPTS");
     for (const unit of [worker, internal, remote]) {
       expect(unit).toContain("Requires=latex-renderer-image-manager.service");
       expect(unit).toContain(
@@ -265,6 +271,7 @@ describe("post-review TeX environment regressions", () => {
         "deploy/scripts/prepare-host.sh",
         "deploy/scripts/resolve-texlive-snapshot.sh",
         "deploy/scripts/wait-rootless-docker.sh",
+        "deploy/scripts/wait-image-manager-http.sh",
       ]) {
         const syntax = spawnSync("sh", ["-n", path], { encoding: "utf8" });
         expect(syntax.status, `${path}: ${syntax.stderr}`).toBe(0);

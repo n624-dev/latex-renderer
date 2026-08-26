@@ -20,6 +20,7 @@ LoadCredential=image-manager-token:/etc/latex-renderer/secrets/image-manager-tok
 ExecStartPre=/bin/sh deploy/scripts/wait-rootless-docker.sh
 ExecStartPre=/bin/sh deploy/scripts/restore-managed-runtime.sh
 ExecStart=/bin/sh deploy/scripts/start-image-manager.sh
+ExecStartPost=/bin/sh deploy/scripts/wait-image-manager-http.sh
 Restart=on-failure
 RestartSec=5
 # ExecStartPre may need to re-derive the current Runtime when renderer code was
