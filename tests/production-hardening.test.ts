@@ -44,7 +44,7 @@ describe("production hardening", () => {
     expect(script).toContain("レンダリング処理：応答中");
     expect(script).not.toContain("grep -q 'クライアント登録'");
   });
-  it("uses host-local Tunnel credentials and reconciles remote routes without restarting the connector", () => {
+  it("preflights local or remotely managed Tunnels and reconciles routes without restarting the connector", () => {
     const prepare = read("deploy/scripts/prepare-host.sh"),
       deploy = read("deploy/scripts/deploy-production-release.sh"),
       sync = read("deploy/scripts/sync-cloudflare-tunnel-config.mjs");
@@ -53,6 +53,13 @@ describe("production hardening", () => {
     );
     expect(prepare).toContain("CLOUDFLARED_CONFIG_FILE");
     expect(prepare).not.toContain("source_owner_home");
+    expect(prepare).toContain("using the active remotely managed connector");
+    expect(prepare).toContain("systemctl is-active --quiet cloudflared");
+    expect(
+      prepare.indexOf("cloudflared_config=${CLOUDFLARED_CONFIG_FILE"),
+    ).toBeLessThan(
+      prepare.indexOf('install -d -o root -g root -m 0755 "$release_root"'),
+    );
     expect(sync).toContain('before.source !== "cloudflare"');
     expect(deploy).toContain("sync-cloudflare-tunnel-config.mjs");
     expect(deploy).not.toContain("systemctl restart cloudflared");

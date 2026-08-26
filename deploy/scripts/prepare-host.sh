@@ -26,6 +26,16 @@ runtime_dir="/run/user/$worker_uid"
 user_bus="unix:path=$runtime_dir/bus"
 rootless_socket="unix://$runtime_dir/docker.sock"
 
+cloudflared_config=${CLOUDFLARED_CONFIG_FILE:-/etc/cloudflared/config.yml}
+if [ -f "$cloudflared_config" ]; then
+  cloudflared tunnel --config "$cloudflared_config" ingress validate
+elif systemctl is-active --quiet cloudflared; then
+  echo "No host-local Tunnel config found; using the active remotely managed connector."
+else
+  echo "neither a host-local Cloudflare Tunnel config nor an active connector was found" >&2
+  exit 74
+fi
+
 grep -q "^$worker_user:" /etc/subuid || usermod --add-subuids 165536-231071 "$worker_user"
 grep -q "^$worker_user:" /etc/subgid || usermod --add-subgids 165536-231071 "$worker_user"
 
@@ -114,13 +124,6 @@ chmod 0640 /etc/latex-renderer/backup.env
 install -o root -g latex-renderer -m 0644 "$source_root/deploy/security/seccomp.json" /etc/latex-renderer/seccomp.json
 install -o root -g root -m 0644 "$source_root/deploy/security/latex-renderer.apparmor" /etc/apparmor.d/latex-renderer
 install -o root -g root -m 0644 "$source_root"/deploy/systemd/*.service "$source_root"/deploy/systemd/*.timer /etc/systemd/system/
-cloudflared_config=${CLOUDFLARED_CONFIG_FILE:-/etc/cloudflared/config.yml}
-if [ ! -f "$cloudflared_config" ]; then
-  echo "host-local Cloudflare Tunnel config not found: $cloudflared_config" >&2
-  echo "copy deploy/cloudflared/config.example.yml outside the repository and configure credentials first" >&2
-  exit 74
-fi
-cloudflared tunnel --config "$cloudflared_config" ingress validate
 apparmor_parser -r /etc/apparmor.d/latex-renderer
 systemctl daemon-reload
 
