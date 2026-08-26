@@ -5,6 +5,7 @@
 - Enable the Remote MCP systemd service during production deployment so it returns after a host reboot.
 - Clear inherited setgid bits on image-manager temporary build trees without weakening the systemd sandbox.
 - Use the deployment user's pinned pnpm instead of an older system-wide Corepack shim.
+- Accept an active remotely managed Cloudflare Tunnel when no host-local ingress file exists.
 
 ## 1.0.0 - 2026-08-26
 
