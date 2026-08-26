@@ -1,0 +1,36 @@
+[Unit]
+Description=LaTeX Renderer Worker
+After=network-online.target latex-renderer-image-manager.service latex-renderer-api.service
+Wants=network-online.target
+Requires=latex-renderer-image-manager.service
+PartOf=latex-renderer-image-manager.service
+
+[Service]
+Type=simple
+User=latex-render-worker
+Group=latex-renderer
+WorkingDirectory=/opt/latex-renderer/current
+EnvironmentFile=/etc/latex-renderer/renderer.env
+ExecStart=/usr/local/bin/node apps/renderer-worker/dist/index.js
+Restart=on-failure
+RestartSec=5
+# SIGTERM stops new claims but lets the active render finish. Keep this above
+# the default 420-second render timeout so routine image activation does not
+# turn a healthy long-running job into a forced worker kill.
+TimeoutStopSec=15min
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/latex-renderer
+UMask=0007
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,16 @@
+\documentclass{ltjsarticle}
+\usepackage{amsmath}
+\usepackage{tikz}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
+\begin{document}
+日本語とEnglishのLua\LaTeX{}レンダリング確認。
+\[
+  \int_0^1 x^2\,dx=\frac13
+\]
+\begin{tikzpicture}
+  \begin{axis}[width=8cm,height=5cm,xlabel={$x$},ylabel={$y$},grid=major]
+    \addplot[blue,domain=-2:2,samples=50] {x^2};
+  \end{axis}
+\end{tikzpicture}
+\end{document}

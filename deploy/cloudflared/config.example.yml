@@ -1,0 +1,31 @@
+# Copy this file to a host-local path such as /etc/cloudflared/config.yml and
+# replace every REPLACE_* value. Do not commit the resulting production file.
+tunnel: REPLACE_WITH_TUNNEL_ID
+credentials-file: /etc/cloudflared/REPLACE_WITH_TUNNEL_ID.json
+
+ingress:
+  # Keep specific application routes before the web fallback.
+  - hostname: latex.example.com
+    path: ^/\.well-known/oauth-(authorization-server|protected-resource)(/.*)?$
+    service: http://127.0.0.1:3104
+  - hostname: latex.example.com
+    path: ^/(oauth|mcp)(/.*)?$
+    service: http://127.0.0.1:3104
+  - hostname: latex.example.com
+    path: ^/admin/api(/.*)?$
+    service: http://127.0.0.1:3102
+  - hostname: latex.example.com
+    path: ^/admin(/.*)?$
+    service: http://127.0.0.1:3101
+  - hostname: latex.example.com
+    path: ^/app/api(/.*)?$
+    service: http://127.0.0.1:3102
+  - hostname: latex.example.com
+    path: ^/app(/.*)?$
+    service: http://127.0.0.1:3101
+  - hostname: latex.example.com
+    path: ^/api(/.*)?$
+    service: http://127.0.0.1:3100
+  - hostname: latex.example.com
+    service: http://127.0.0.1:3101
+  - service: http_status:404

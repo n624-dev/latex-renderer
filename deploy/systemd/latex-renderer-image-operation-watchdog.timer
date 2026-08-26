@@ -1,0 +1,11 @@
+[Unit]
+Description=Check for stale LaTeX Renderer image-manager operations
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=5min
+Persistent=true
+Unit=latex-renderer-image-operation-watchdog.service
+
+[Install]
+WantedBy=timers.target

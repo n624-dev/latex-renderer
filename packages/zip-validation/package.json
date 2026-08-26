@@ -1,0 +1,26 @@
+{
+  "name": "@latex-renderer/zip-validation",
+  "version": "1.0.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@latex-renderer/shared": "workspace:*",
+    "yauzl": "^3.2.0"
+  },
+  "devDependencies": {
+    "@types/yauzl": "^2.10.3"
+  }
+}

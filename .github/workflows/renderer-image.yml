@@ -1,0 +1,45 @@
+name: renderer-image
+
+on:
+  pull_request:
+    paths:
+      - "renderer/**"
+      - "deploy/security/seccomp.json"
+      - "deploy/scripts/smoke-test-renderer-svg.sh"
+      - "tests/fixtures/svg/**"
+  push:
+    branches: [main]
+    paths:
+      - "renderer/**"
+      - "deploy/security/seccomp.json"
+      - "deploy/scripts/smoke-test-renderer-svg.sh"
+      - "tests/fixtures/svg/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: renderer-image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      DOCKER_BUILD_RECORD_UPLOAD: "false"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+      - name: Build renderer image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: renderer
+          load: true
+          push: false
+          tags: latex-renderer:ci
+          cache-from: type=gha,scope=renderer-image-texlive-2026
+          cache-to: type=gha,mode=min,scope=renderer-image-texlive-2026,ignore-error=true
+      - name: Exercise optional SVG extraction under the production seccomp profile
+        run: sh deploy/scripts/smoke-test-renderer-svg.sh latex-renderer:ci

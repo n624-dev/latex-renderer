@@ -1,0 +1,153 @@
+openapi: 3.1.0
+info:
+  title: LaTeX Renderer Job Creation API
+  version: 0.3.0
+  description: Create render jobs and renew job-operation tickets.
+servers:
+  - url: https://latex-render.n624.jp
+paths:
+  /api/v1/source-tickets:
+    post:
+      summary: Reserve or deduplicate an immutable Source
+      security: [{ renderApiKey: [] }]
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema: { type: string, minLength: 16, maxLength: 200 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SourceTicketRequest" }
+      responses:
+        "200": { description: Existing ready or idempotent Source }
+        "201":
+          {
+            description: Source reserved; upload it when uploadRequired is true,
+          }
+        "429": { $ref: "#/components/responses/Error" }
+  /api/v1/render-tickets:
+    post:
+      summary: Create a render job
+      description: Reserve a job using the ZIP size and SHA-256, then return upload and job-operation tickets.
+      security: [{ renderApiKey: [] }]
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          description: A unique value for this request. Reusing it with different content is rejected.
+          schema: { type: string, minLength: 16, maxLength: 200 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RenderTicketRequest" }
+            example:
+              size: 12345
+              sha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+              outputs: [pdf, svg]
+      responses:
+        "201":
+          description: Job and tickets created
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/TicketResponse" }
+                  - { $ref: "#/components/schemas/SourceRenderResponse" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /api/v1/job-tickets/{jobId}:
+    post:
+      summary: Renew a job-operation ticket
+      security: [{ renderApiKey: [] }]
+      parameters:
+        - in: path
+          name: jobId
+          required: true
+          schema: { type: string, pattern: "^job_[a-f0-9]{32}$" }
+      responses:
+        "200":
+          description: Ticket renewed
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [jobTicket, expiresAt]
+                properties:
+                  jobTicket: { type: string }
+                  expiresAt: { type: string, format: date-time }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+components:
+  schemas:
+    RenderTicketRequest:
+      oneOf:
+        - { $ref: "#/components/schemas/SourceTicketRequest" }
+        - type: object
+          additionalProperties: false
+          required: [sourceId]
+          properties:
+            sourceId: { type: string, pattern: "^source_[a-f0-9]{32}$" }
+            entrypoint: { type: string, maxLength: 2048, default: main.tex }
+            outputs: { $ref: "#/components/schemas/RenderOutputs" }
+    SourceTicketRequest:
+      type: object
+      additionalProperties: false
+      required: [size, sha256]
+      properties:
+        size: { type: integer, minimum: 1, maximum: 20971520 }
+        sha256: { type: string, pattern: "^[a-f0-9]{64}$" }
+        outputs: { $ref: "#/components/schemas/RenderOutputs" }
+    RenderOutputs:
+      type: array
+      default: [pdf]
+      minItems: 1
+      maxItems: 2
+      uniqueItems: true
+      description: PDF is mandatory; include svg to extract outermost math and top-level TikZ objects.
+      items: { type: string, enum: [pdf, svg] }
+    TicketResponse:
+      type: object
+      required: [jobId, uploadTicket, jobTicket, uploadUrl, expiresAt]
+      properties:
+        jobId: { type: string }
+        uploadTicket: { type: string }
+        jobTicket: { type: string }
+        uploadUrl: { type: string, format: uri }
+        expiresAt: { type: string, format: date-time }
+    SourceRenderResponse:
+      type: object
+      required: [jobId, jobTicket, expiresAt]
+      properties:
+        jobId: { type: string, pattern: "^job_[a-f0-9]{32}$" }
+        jobTicket: { type: string }
+        expiresAt: { type: string, format: date-time }
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string }
+            message: { type: string }
+            requestId: { type: string }
+  responses:
+    Error:
+      description: Error response
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+  securitySchemes:
+    renderApiKey:
+      type: http
+      scheme: bearer
+      bearerFormat: lrk

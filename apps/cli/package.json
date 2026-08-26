@@ -1,0 +1,23 @@
+{
+  "name": "@latex-renderer/cli",
+  "version": "1.0.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "latex-render": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "dev": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "@latex-renderer/api-client": "workspace:*",
+    "@latex-renderer/client-core": "workspace:*",
+    "@latex-renderer/setup-core": "workspace:*",
+    "@latex-renderer/setup-web": "workspace:*",
+    "@latex-renderer/shared": "workspace:*",
+    "commander": "^14.0.0"
+  }
+}

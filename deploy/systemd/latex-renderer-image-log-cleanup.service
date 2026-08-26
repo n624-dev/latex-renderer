@@ -1,0 +1,19 @@
+[Unit]
+Description=Prune old LaTeX Renderer image-manager operation logs and temp files
+
+[Service]
+Type=oneshot
+User=root
+Group=latex-renderer
+ExecStart=/bin/sh -c '[ ! -d /var/lib/latex-renderer/image-manager/operations ] || find /var/lib/latex-renderer/image-manager/operations -xdev -type f -mtime +30 -delete; [ ! -d /var/lib/latex-renderer/image-manager/tmp ] || find /var/lib/latex-renderer/image-manager/tmp -xdev -mindepth 1 -mtime +1 -delete'
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX
+ReadWritePaths=/var/lib/latex-renderer/image-manager

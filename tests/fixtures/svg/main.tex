@@ -1,0 +1,38 @@
+\documentclass{ltjsarticle}
+\usepackage{amsmath}
+\usepackage{tikz}
+\usetikzlibrary{calc}
+\newcommand{\repeatmath}{r=1}
+\begin{document}
+Inline $a^2+b^2=c^2$ appears first.
+
+\[
+  \int_0^1 x^2\,dx=\frac13
+\]
+
+\begin{align}
+  x+y &= 4 \\
+  x-y &= 2
+\end{align}
+
+\begin{tikzpicture}
+  \coordinate (A) at (0,0);
+  \coordinate (B) at (2,1);
+  \draw[->] (0,0) -- (2,0);
+  \draw (1,0) circle (4mm) node {$x^2$};
+  \node at ($(A)!0.5!(B)$) {$h$};
+  \node at ($(A)!0.5!(B)+(1,0)$) {計算座標};
+\end{tikzpicture}
+
+After TikZ: $u+v=w$ remains inline math.
+
+\begin{pgfpicture}
+  \pgfpathmoveto{\pgfpoint{0cm}{0cm}}
+  \pgfpathlineto{\pgfpoint{1cm}{0cm}}
+  \pgfusepath{stroke}
+\end{pgfpicture}
+
+\input{section}
+
+Repeated: $\repeatmath$, then $\repeatmath$, and $\repeatmath$ again.
+\end{document}

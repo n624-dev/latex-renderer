@@ -1,0 +1,22 @@
+{
+  "name": "@latex-renderer/public-web",
+  "version": "1.0.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "build": "pnpm build:assets && wrangler deploy --dry-run --outdir .wrangler/dry-run && pnpm check:preview",
+    "build:assets": "pnpm --dir ../.. build:client && node build.mjs",
+    "dev": "pnpm build:assets && wrangler dev --local",
+    "check:preview": "node check-preview.mjs",
+    "check:deploy": "pnpm build",
+    "deploy": "pnpm build:assets && wrangler deploy",
+    "routes:check": "node ../../deploy/scripts/sync-public-worker-routes.mjs",
+    "routes:apply": "node ../../deploy/scripts/sync-public-worker-routes.mjs --apply",
+    "routes:disable": "node ../../deploy/scripts/sync-public-worker-routes.mjs --disable"
+  },
+  "dependencies": {
+    "@latex-renderer/api-client": "workspace:*",
+    "@latex-renderer/web": "workspace:*"
+  }
+}

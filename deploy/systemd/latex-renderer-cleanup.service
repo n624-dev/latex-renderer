@@ -1,0 +1,18 @@
+[Unit]
+Description=Clean expired LaTeX render jobs
+
+[Service]
+Type=oneshot
+User=latex-renderer
+Group=latex-renderer
+WorkingDirectory=/opt/latex-renderer/current
+EnvironmentFile=/etc/latex-renderer/renderer.env
+ExecStart=/usr/local/bin/node deploy/scripts/cleanup.mjs
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+RestrictAddressFamilies=AF_UNIX
+ReadWritePaths=/var/lib/latex-renderer
+UMask=0007

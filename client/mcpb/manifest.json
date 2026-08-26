@@ -1,0 +1,79 @@
+{
+  "$schema": "https://raw.githubusercontent.com/modelcontextprotocol/mcpb/main/schemas/mcpb-manifest-v0.4.schema.json",
+  "manifest_version": "0.4",
+  "name": "latex-renderer-local",
+  "display_name": "LaTeX Renderer Local",
+  "version": "1.0.0",
+  "description": "Render local LaTeX projects through LaTeX Renderer from Claude Desktop.",
+  "long_description": "A local stdio MCP server for explicitly selected LaTeX files, directories, and ZIP projects. The server uploads source through the existing sandboxed renderer and downloads artifacts to the local machine.",
+  "author": {
+    "name": "n624-dev",
+    "url": "https://github.com/n624-dev"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/n624-dev/latex-renderer"
+  },
+  "homepage": "https://latex-render.n624.jp/",
+  "documentation": "https://latex-render.n624.jp/docs/mcp/",
+  "support": "https://github.com/n624-dev/latex-renderer/issues",
+  "server": {
+    "type": "node",
+    "entry_point": "server/index.cjs",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/server/index.cjs"],
+      "env": {
+        "LATEX_RENDER_API_KEY": "${user_config.api_key}",
+        "LATEX_RENDER_BASE_URL": "https://latex-render.n624.jp"
+      }
+    }
+  },
+  "tools": [
+    {
+      "name": "upload_source",
+      "description": "Prepare one explicitly selected local directory or ZIP as a Source."
+    },
+    {
+      "name": "create_render_job",
+      "description": "Create one Job from a Source and explicit entrypoint."
+    },
+    {
+      "name": "render_project",
+      "description": "Render one explicitly selected local project."
+    },
+    {
+      "name": "get_render_status",
+      "description": "Get safe Job status metadata."
+    },
+    {
+      "name": "download_render_artifacts",
+      "description": "Download artifacts to an explicit local directory."
+    },
+    {
+      "name": "cancel_render",
+      "description": "Cancel an owned Job after user confirmation."
+    },
+    {
+      "name": "delete_render",
+      "description": "Delete an owned terminal Job after user confirmation."
+    }
+  ],
+  "keywords": ["latex", "pdf", "mcp", "renderer"],
+  "license": "MIT",
+  "privacy_policies": ["https://latex-render.n624.jp/docs/security/"],
+  "user_config": {
+    "api_key": {
+      "type": "string",
+      "title": "LaTeX Renderer API key",
+      "description": "Rendering key beginning with lrk_. It is injected only into the local MCP server process.",
+      "sensitive": true,
+      "required": true
+    }
+  },
+  "compatibility": {
+    "claude_desktop": ">=0.10.0",
+    "platforms": ["darwin", "win32", "linux"],
+    "runtimes": { "node": ">=24.0.0" }
+  }
+}

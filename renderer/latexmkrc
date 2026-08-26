@@ -1,0 +1,5 @@
+$lualatex = 'lualatex -no-shell-escape %O %S';
+$pdf_mode = 4;
+$max_repeat = 5;
+$bibtex_use = 2;
+$cleanup_includes_cusdep_generated = 1;

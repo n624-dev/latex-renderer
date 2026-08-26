@@ -1,0 +1,24 @@
+#!/bin/sh
+set -eu
+
+launcher=$0
+launcher_dir=$(CDPATH= cd "$(dirname "$launcher")" && pwd)
+script=$launcher
+while [ -L "$script" ]; do
+  link=$(readlink "$script")
+  case $link in
+    /*) script=$link ;;
+    *) script=$(dirname "$script")/$link ;;
+  esac
+done
+bin_dir=$(CDPATH= cd "$(dirname "$script")" && pwd)
+: "${LATEX_RENDER_BASE_URL:=https://latex-render.n624.jp}"
+export LATEX_RENDER_BASE_URL
+export LATEX_RENDER_CLI_PATH="$bin_dir/latex-render"
+LATEX_RENDER_INSTALL_DIRECTORY=$(CDPATH= cd "$bin_dir/.." && pwd)
+export LATEX_RENDER_INSTALL_DIRECTORY
+if [ "$launcher_dir" != "$bin_dir" ]; then
+  LATEX_RENDER_BIN_DIRECTORY=$launcher_dir
+  export LATEX_RENDER_BIN_DIRECTORY
+fi
+exec node "$bin_dir/../app/latex-renderer-mcp.cjs" "$@"

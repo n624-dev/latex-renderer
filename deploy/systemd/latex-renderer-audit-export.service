@@ -1,0 +1,20 @@
+[Unit]
+Description=Encrypted append-only audit log export
+
+[Service]
+Type=oneshot
+User=latex-renderer-backup
+Group=latex-renderer
+WorkingDirectory=/opt/latex-renderer/current
+EnvironmentFile=/etc/latex-renderer/backup.env
+Environment=BACKUP_AGE_RECIPIENT_FILE=%d/age-recipient
+LoadCredential=age-recipient:/etc/latex-renderer/secrets/backup-age-recipient
+ExecStart=/usr/local/bin/node deploy/scripts/audit-export.mjs
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/latex-renderer /var/lib/latex-renderer/backups
+UMask=0077

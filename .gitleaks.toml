@@ -1,0 +1,12 @@
+title = "LaTeX Renderer secret scanning"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Public TeX Live distribution signing-key fingerprint"
+targetRules = ["generic-api-key"]
+regexTarget = "line"
+regexes = [
+  '''TEXLIVE_KEY_FINGERPRINT=C78B82D8C79512F79CC0D7C80D5E5D9106BAB6BC''',
+]

@@ -1,0 +1,45 @@
+[Unit]
+Description=LaTeX Renderer TeX Image Manager
+After=network-online.target
+Wants=network-online.target latex-renderer-image-log-cleanup.timer
+Before=latex-renderer-worker.service latex-renderer-internal-api.service latex-renderer-admin-api.service latex-renderer-remote-mcp.service
+
+[Service]
+Type=simple
+User=root
+Group=latex-renderer
+WorkingDirectory=/opt/latex-renderer/current
+EnvironmentFile=/etc/latex-renderer/renderer.env
+Environment=IMAGE_MANAGER_HOST=127.0.0.1
+Environment=IMAGE_MANAGER_PORT=3110
+Environment=IMAGE_MANAGER_TOKEN_FILE=%d/image-manager-token
+Environment=TMPDIR=/var/lib/latex-renderer/image-manager/tmp
+Environment=HOME=/var/lib/latex-render-worker
+LoadCredential=image-manager-token:/etc/latex-renderer/secrets/image-manager-token
+ExecStartPre=/bin/sh deploy/scripts/wait-rootless-docker.sh
+ExecStartPre=/bin/sh deploy/scripts/restore-managed-runtime.sh
+ExecStart=/bin/sh deploy/scripts/start-image-manager.sh
+Restart=on-failure
+RestartSec=5
+# ExecStartPre may need to re-derive the current Runtime when renderer code was
+# upgraded. Rootless-Docker readiness has its own short bounded wait, while a
+# legitimate TeX language install/cache rebuild/smoke can take much longer.
+TimeoutStartSec=1h
+# The manager deliberately drops from root to latex-render-worker with runuser
+# for every rootless-Docker command. NoNewPrivileges blocks that UID transition
+# on Ubuntu/systemd, so it cannot be enabled for this privileged coordinator.
+NoNewPrivileges=false
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/etc/latex-renderer /var/lib/latex-renderer
+UMask=0007
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,26 @@
+{
+  "name": "@latex-renderer/web",
+  "version": "1.0.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    "./client-distribution": {
+      "types": "./dist/client-distribution.d.ts",
+      "import": "./dist/client-distribution.js"
+    },
+    "./static-site": {
+      "types": "./dist/static-site.d.ts",
+      "import": "./dist/static-site.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.0.12",
+    "gray-matter": "4.0.3",
+    "hono": "^4.9.2",
+    "marked": "18.0.9"
+  }
+}

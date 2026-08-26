@@ -1,0 +1,770 @@
+openapi: 3.1.0
+info:
+  title: LaTeX Renderer Administrator API
+  version: 0.3.0
+  description: Administrative API used by the protected Web UI and administration CLI.
+servers:
+  - url: https://latex-render.n624.jp/admin/api/v1
+security:
+  - accessAndAdmin: []
+paths:
+  /session:
+    get:
+      summary: Inspect the verified Cloudflare Access identity and invitation linkage
+      security:
+        - cloudflareAccess: []
+      responses:
+        "200":
+          description: Current Access identity and linkage state
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Session" }
+  /session/claim-subject:
+    post:
+      summary: Link the verified Cloudflare Access subject to its invited administrator
+      description: The subject and email are read exclusively from the verified Access JWT. Any request body is ignored.
+      security:
+        - cloudflareAccess: []
+      parameters:
+        - in: header
+          name: X-CSRF-Token
+          required: true
+          schema: { type: string, const: "1" }
+      responses:
+        "200":
+          description: Linked, or already linked to the same identity
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: "#/components/schemas/Session" }
+                  - type: object
+                    required: [claimed]
+                    properties:
+                      claimed: { type: boolean }
+        "403":
+          { description: The email is not an active administrator invitation }
+        "409":
+          {
+            description: The subject belongs to another user or the invitation is linked to another identity,
+          }
+  /me:
+    get:
+      summary: Return the authenticated administrator
+      responses:
+        "200": { description: Administrator identity }
+  /users:
+    get:
+      summary: List users
+      responses:
+        "200": { description: Users }
+    post:
+      summary: Register an unlinked user invitation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateUser" }
+      responses:
+        "201": { description: Created }
+        "409": { description: A user with the same email already exists }
+  /users/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      summary: Get a user
+      responses:
+        "200": { description: User }
+    patch:
+      summary: Update a display name or role
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                displayName: { type: string, minLength: 1, maxLength: 200 }
+                role: { $ref: "#/components/schemas/Role" }
+              minProperties: 1
+      responses:
+        "200": { description: Updated }
+  /users/{id}/enable:
+    post:
+      summary: Enable a user
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      responses:
+        "200": { description: Enabled }
+  /users/{id}/disable:
+    post:
+      summary: Disable a user
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      responses:
+        "200": { description: Disabled }
+        "409": { description: The final active owner cannot be disabled }
+  /users/{id}/unlink-access-subject:
+    post:
+      summary: Unlink a user's Cloudflare Access identity for a future reclaim
+      description: Owner-only. This does not change Cloudflare Access policy or revoke an Access session.
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [reason]
+              properties:
+                reason: { type: string, minLength: 1, maxLength: 500 }
+      responses:
+        "200":
+          {
+            description: Unlinked; the next matching verified identity may claim the invitation,
+          }
+        "403": { description: Owner role required }
+        "409":
+          { description: The user is already unlinked or changed concurrently }
+  /service-accounts:
+    get:
+      summary: List service accounts
+      responses:
+        "200": { description: Service accounts }
+    post:
+      summary: Create a service account
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateServiceAccount" }
+      responses:
+        "201": { description: Created }
+  /service-accounts/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      summary: Get a service account
+      responses:
+        "200": { description: Service account }
+    patch:
+      summary: Update a service account
+      responses:
+        "200": { description: Updated }
+    delete:
+      summary: Disable a service account and revoke all related API keys
+      responses:
+        "204": { description: Disabled and keys revoked }
+  /service-accounts/{id}/enable:
+    post:
+      summary: Enable a service account
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      responses:
+        "200": { description: Enabled }
+  /service-accounts/{id}/disable:
+    post:
+      summary: Disable a service account
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      responses:
+        "200": { description: Disabled }
+  /service-accounts/{id}/api-keys:
+    post:
+      summary: Issue an API key for a service account
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateApiKey" }
+      responses:
+        "201": { description: Key issued. The secret is returned only once. }
+  /api-keys:
+    get:
+      summary: List API keys without secrets
+      responses:
+        "200": { description: API keys }
+  /api-keys/{id}:
+    get:
+      summary: Get API key metadata
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      responses:
+        "200": { description: API key metadata }
+  /api-keys/{id}/revoke:
+    post:
+      summary: Revoke an API key
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      responses:
+        "200": { description: Revoked }
+  /api-keys/{id}/rotate:
+    post:
+      summary: Rotate an API key and revoke the previous key
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      responses:
+        "201": { description: New key issued once }
+  /jobs:
+    get:
+      summary: List render jobs
+      responses:
+        "200": { description: Jobs }
+  /jobs/render-targets:
+    get:
+      summary: List active render identities available to the administrator Web UI
+      description: Returns identifiers and labels only. API key secrets and hashes are never returned.
+      responses:
+        "200":
+          description: Eligible active service accounts and render API keys
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/RenderTarget" }
+  /jobs/render-tickets:
+    post:
+      summary: Create a render job from the Access-protected administrator Web UI
+      parameters:
+        - in: header
+          name: X-CSRF-Token
+          required: true
+          schema: { type: string, const: "1" }
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema: { type: string, minLength: 16, maxLength: 200 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AdminRenderTicketRequest" }
+      responses:
+        "201":
+          description: Job reserved and short-lived tickets issued
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RenderTicket" }
+        "200":
+          description: Existing idempotent job and freshly issued short-lived tickets
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RenderTicket" }
+        "409":
+          {
+            description: The selected render identity is unavailable or the idempotency key conflicts,
+          }
+  /jobs/source-tickets:
+    post:
+      summary: Reserve or reuse a Source for administrator browser rendering
+      parameters:
+        - in: header
+          name: X-CSRF-Token
+          required: true
+          schema: { type: string, const: "1" }
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema: { type: string, minLength: 16, maxLength: 200 }
+      responses:
+        "200": { description: Existing ready or idempotent Source }
+        "201": { description: Source reserved }
+  /jobs/bulk-delete:
+    post:
+      summary: Mark up to 100 terminal jobs for deletion
+      responses:
+        "202": { description: Accepted job IDs }
+  /jobs/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      summary: Get a render job
+      responses:
+        "200": { description: Job }
+    delete:
+      summary: Mark a terminal render job for deletion
+      responses:
+        "202": { description: Deletion requested }
+  /jobs/{id}/cancel:
+    post:
+      summary: Request cancellation
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      responses:
+        "202": { description: Cancellation requested }
+  /jobs/{id}/retry:
+    post:
+      summary: Retry a terminal job
+      parameters:
+        - $ref: "#/components/parameters/Id"
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema: { type: string, minLength: 16, maxLength: 200 }
+      responses:
+        "202": { description: Retry created }
+  /jobs/{id}/artifacts/{path}:
+    get:
+      summary: Download a retained Job artifact through the administrator session
+      parameters:
+        - $ref: "#/components/parameters/Id"
+        - in: path
+          name: path
+          required: true
+          description: Nested relative artifact path, including svg/manifest.json and svg/objects/*.svg.
+          schema: { type: string, minLength: 1, maxLength: 512 }
+        - in: query
+          name: disposition
+          schema: { type: string, enum: [attachment, inline] }
+      responses:
+        "200": { description: Integrity-labelled artifact stream }
+        "410": { description: Job artifact retention has expired }
+  /jobs/{id}/previews/{name}:
+    get:
+      summary: View or download a retained page preview through the administrator session
+      parameters:
+        - $ref: "#/components/parameters/Id"
+        - in: path
+          name: name
+          required: true
+          schema: { type: string, pattern: "^page-[1-9][0-9]{0,2}\\.png$" }
+        - in: query
+          name: disposition
+          schema: { type: string, enum: [attachment, inline] }
+      responses:
+        "200": { description: Integrity-labelled PNG stream }
+        "410": { description: Job artifact retention has expired }
+  /sources:
+    get:
+      summary: List retained Sources and their related Jobs
+      responses:
+        "200": { description: Sources }
+  /sources/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      summary: Get Source paths, entrypoints, retention, and related Jobs
+      responses:
+        "200": { description: Source }
+    delete:
+      summary: Delete an unreferenced retained Source
+      responses:
+        "202": { description: Deletion requested }
+        "409": { description: Retained Jobs still reference the Source }
+  /sources/{id}/render:
+    post:
+      summary: Create a new Job from an existing Source and selected entrypoint
+      parameters:
+        - $ref: "#/components/parameters/Id"
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema: { type: string, minLength: 16, maxLength: 200 }
+      responses:
+        "201": { description: Job created }
+  /sources/{id}/source-ref:
+    post:
+      summary: Issue a short-lived Remote MCP reference for a retained Source
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "201": { description: Source reference issued }
+  /tex-environment/state:
+    get:
+      summary: Read persisted desired, current, previous, and active TeX image state
+      responses:
+        "200": { description: TeX environment state }
+        "503": { description: Image Manager is not configured or unavailable }
+  /tex-environment/images:
+    get:
+      summary: List available Daily and Weekly GHCR image selectors
+      responses:
+        "200":
+          {
+            description: Available image tags or degraded registryUnavailable response,
+          }
+        "503": { description: Image Manager is not configured or unavailable }
+  /tex-environment/languages:
+    get:
+      summary: List TeX Live language collections in the shared country-aware order
+      description: The server uses its detected country or the persisted country override for ordering only; no language is automatically selected. If live catalog discovery fails, the response sets catalogUnavailable=true and returns persisted choices only.
+      responses:
+        "200":
+          {
+            description: Language catalog with detected/effective country and selection state,
+          }
+        "503": { description: Image Manager is not configured or unavailable }
+  /tex-environment/country:
+    post:
+      summary: Set or clear the persisted country override used for language ordering
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [country]
+              properties:
+                country: { type: [string, "null"], pattern: "^[A-Z]{2}$" }
+      responses:
+        "200": { description: Country override updated }
+        "409": { description: A TeX image operation is active }
+  /tex-environment/apply:
+    post:
+      summary: Build, validate, and transactionally activate a TeX runtime from a clean selected base
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TexEnvironmentApply" }
+      responses:
+        "202": { description: Image operation accepted }
+        "409": { description: Another image operation is active }
+  /tex-environment/operations/{id}:
+    get:
+      summary: Read image operation progress and retained log output
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      responses:
+        "200": { description: Operation state and log }
+        "404": { description: Operation not found }
+  /tex-environment/inventory/{kind}:
+    get:
+      summary: Search the current runtime package or font inventory
+      parameters:
+        - in: path
+          name: kind
+          required: true
+          schema: { type: string, enum: [packages, fonts] }
+        - in: query
+          name: q
+          schema: { type: string, maxLength: 200 }
+      responses:
+        "200": { description: Matching inventory entries }
+  /tex-environment/rollback:
+    post:
+      summary: Validate and activate the previous known-good runtime
+      responses:
+        "202": { description: Rollback operation accepted }
+  /tex-environment/revalidate:
+    post:
+      summary: Re-run production-equivalent validation for the current runtime
+      responses:
+        "202": { description: Revalidation operation accepted }
+  /tex-environment/cleanup:
+    post:
+      summary: Remove safe unused locally derived images while preserving current and previous runtimes/bases
+      responses:
+        "202": { description: Cleanup operation accepted }
+  /tex-environment/refresh:
+    post:
+      summary: Follow a newer validated latest image when automatic following is enabled
+      responses:
+        "202": { description: Refresh operation accepted }
+  /system/status:
+    get:
+      summary: Read system status
+      responses:
+        "200": { description: Status }
+  /system/config:
+    get:
+      summary: Read mutable limits
+      responses:
+        "200": { description: Configuration }
+    patch:
+      summary: Update a mutable limit
+      responses:
+        "200": { description: Updated }
+  /system/maintenance/enable:
+    post:
+      summary: Enable maintenance mode
+      responses:
+        "200": { description: Mode updated }
+  /system/maintenance/disable:
+    post:
+      summary: Disable maintenance mode
+      responses:
+        "200": { description: Mode updated }
+  /system/ticket-keys:
+    get:
+      summary: List active and verification-only ticket signing key identifiers
+      responses:
+        "200":
+          { description: Key identifiers and the minimum revocation duration }
+  /system/ticket-keys/{kid}/revoke:
+    post:
+      summary: Revoke a ticket signing key identifier
+      parameters:
+        - in: path
+          name: kid
+          required: true
+          schema: { type: string, pattern: "^[A-Za-z0-9._-]{1,100}$" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [reason, expiresAt]
+              properties:
+                reason: { type: string, minLength: 1, maxLength: 500 }
+                expiresAt:
+                  {
+                    type: string,
+                    format: date-time,
+                    description: Must remain active for at least 35 minutes.,
+                  }
+      responses:
+        "200": { description: Revoked }
+        "409": { description: The active signing key cannot be revoked }
+  /worker/{action}:
+    post:
+      summary: Pause, resume, or drain the worker
+      parameters:
+        - in: path
+          name: action
+          required: true
+          schema: { type: string, enum: [pause, resume, drain] }
+      responses:
+        "200": { description: Worker mode updated }
+  /audit-logs:
+    get:
+      summary: Search and page audit log entries
+      parameters:
+        - {
+            in: query,
+            name: page,
+            schema: { type: integer, minimum: 1, default: 1 },
+          }
+        - {
+            in: query,
+            name: pageSize,
+            schema: { type: integer, minimum: 1, maximum: 100, default: 50 },
+          }
+        - { in: query, name: action, schema: { type: string, maxLength: 200 } }
+        - { in: query, name: actor, schema: { type: string, maxLength: 500 } }
+        - { in: query, name: target, schema: { type: string, maxLength: 500 } }
+        - { in: query, name: result, schema: { type: string, maxLength: 100 } }
+        - { in: query, name: from, schema: { type: string, format: date-time } }
+        - { in: query, name: to, schema: { type: string, format: date-time } }
+      responses:
+        "200":
+          {
+            description: Audit log page with items,
+            page,
+            pageSize,
+            total,
+            and totalPages,
+          }
+components:
+  parameters:
+    Id:
+      in: path
+      name: id
+      required: true
+      schema: { type: string }
+  schemas:
+    Session:
+      type: object
+      required: [identity, linkage]
+      properties:
+        identity:
+          type: object
+          required: [subject, email]
+          properties:
+            subject: { type: string }
+            email: { type: [string, "null"], format: email }
+        linkage:
+          type: object
+          required: [state, claimable, user]
+          properties:
+            state:
+              type: string
+              enum:
+                [
+                  identity_incomplete,
+                  not_invited,
+                  disabled,
+                  ineligible,
+                  claimable,
+                  linked,
+                  conflict,
+                ]
+            claimable: { type: boolean }
+            user:
+              oneOf:
+                - type: "null"
+                - type: object
+                  required:
+                    [id, email, displayName, role, status, linkedAt, generation]
+                  properties:
+                    id: { type: string }
+                    email: { type: string, format: email }
+                    displayName: { type: string }
+                    role: { $ref: "#/components/schemas/Role" }
+                    status: { type: string, enum: [active, disabled] }
+                    linkedAt: { type: [string, "null"], format: date-time }
+                    generation: { type: integer, minimum: 0 }
+    Role:
+      type: string
+      enum: [user, admin, owner]
+    CreateUser:
+      type: object
+      additionalProperties: false
+      required: [email, displayName, role]
+      properties:
+        email: { type: string, format: email, maxLength: 320 }
+        displayName: { type: string, minLength: 1, maxLength: 200 }
+        role: { $ref: "#/components/schemas/Role" }
+    CreateServiceAccount:
+      type: object
+      additionalProperties: false
+      required: [ownerUserId, name, clientType]
+      properties:
+        ownerUserId: { type: string }
+        name: { type: string, minLength: 1, maxLength: 100 }
+        clientType:
+          { type: string, enum: [codex, claude-code, mcp, ci, generic] }
+    CreateApiKey:
+      type: object
+      additionalProperties: false
+      required: [name, scopes]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        scopes:
+          type: array
+          minItems: 1
+          maxItems: 32
+          uniqueItems: true
+          description: Render and admin scopes cannot be mixed. Admin key issuance is owner-only.
+          items:
+            type: string
+            enum:
+              [
+                render:create,
+                render:read:own,
+                "admin:users:read",
+                "admin:users:write",
+                "admin:service-accounts:read",
+                "admin:service-accounts:write",
+                "admin:api-keys:read",
+                "admin:api-keys:write",
+                "admin:jobs:read",
+                "admin:jobs:write",
+                "admin:system:read",
+                "admin:system:write",
+                "admin:audit:read",
+                "admin:*",
+              ]
+        expiresAt: { type: [string, "null"], format: date-time }
+    TexImageSelector:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [mode]
+          properties:
+            mode: { type: string, const: latest }
+            value: { type: "null", default: null }
+        - type: object
+          additionalProperties: false
+          required: [mode, value]
+          properties:
+            mode: { type: string, const: date }
+            value: { type: string, pattern: "^\\d{4}-\\d{2}-\\d{2}$" }
+        - type: object
+          additionalProperties: false
+          required: [mode, value]
+          properties:
+            mode: { type: string, const: weekly }
+            value:
+              {
+                type: string,
+                pattern: "^\\d{4}-W(?:0[1-9]|[1-4][0-9]|5[0-3])$",
+              }
+        - type: object
+          additionalProperties: false
+          required: [mode, value]
+          properties:
+            mode: { type: string, const: digest }
+            value: { type: string, pattern: "^sha256:[a-f0-9]{64}$" }
+    TexEnvironmentApply:
+      type: object
+      additionalProperties: false
+      required: [selector, languages, autoUpdate]
+      properties:
+        selector: { $ref: "#/components/schemas/TexImageSelector" }
+        languages:
+          type: array
+          maxItems: 100
+          uniqueItems: true
+          items: { type: string, pattern: "^collection-lang[A-Za-z0-9._-]+$" }
+        autoUpdate:
+          type: boolean
+          description: Valid only with the latest selector.
+        rebuildIfMissing:
+          type: boolean
+          default: true
+          description: For a dated selector missing from GHCR, cold-build the same TeX Live archive locally.
+    RenderTarget:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          apiKeyId,
+          apiKeyName,
+          serviceAccountId,
+          serviceAccountName,
+          userId,
+          userEmail,
+        ]
+      properties:
+        apiKeyId: { type: string }
+        apiKeyName: { type: string }
+        serviceAccountId: { type: string }
+        serviceAccountName: { type: string }
+        userId: { type: string }
+        userEmail: { type: string, format: email }
+    AdminRenderTicketRequest:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [apiKeyId, size, sha256]
+          properties:
+            apiKeyId: { type: string, minLength: 1, maxLength: 128 }
+            size: { type: integer, minimum: 1, maximum: 20971520 }
+            sha256: { type: string, pattern: "^[a-f0-9]{64}$" }
+            outputs: { $ref: "#/components/schemas/RenderOutputs" }
+        - type: object
+          additionalProperties: false
+          required: [apiKeyId, sourceId]
+          properties:
+            apiKeyId: { type: string, minLength: 1, maxLength: 128 }
+            sourceId: { type: string, pattern: "^source_[a-f0-9]{32}$" }
+            entrypoint: { type: string, maxLength: 2048, default: main.tex }
+            outputs: { $ref: "#/components/schemas/RenderOutputs" }
+    RenderOutputs:
+      type: array
+      default: [pdf]
+      minItems: 1
+      maxItems: 2
+      uniqueItems: true
+      items: { type: string, enum: [pdf, svg] }
+    RenderTicket:
+      type: object
+      additionalProperties: false
+      required: [jobId, uploadTicket, jobTicket, uploadUrl, expiresAt]
+      properties:
+        jobId: { type: string, pattern: "^job_[a-f0-9]{32}$" }
+        uploadTicket: { type: string }
+        jobTicket: { type: string }
+        uploadUrl: { type: string, format: uri }
+        expiresAt: { type: string, format: date-time }
+  securitySchemes:
+    cloudflareAccess:
+      type: apiKey
+      in: header
+      name: Cf-Access-Jwt-Assertion
+      description: Cloudflare Access JWT verified by the server. Its sub and email claims are authoritative.
+    accessAndAdmin:
+      type: http
+      scheme: bearer
+      description: Cloudflare Access is always required. The administration CLI also supplies an lra_ API key.

@@ -1,0 +1,37 @@
+[Unit]
+Description=LaTeX Renderer Internal Ticket API
+After=network-online.target latex-renderer-image-manager.service
+Wants=network-online.target
+Requires=latex-renderer-image-manager.service
+PartOf=latex-renderer-image-manager.service
+
+[Service]
+Type=simple
+User=latex-renderer
+Group=latex-renderer
+WorkingDirectory=/opt/latex-renderer/current
+EnvironmentFile=/etc/latex-renderer/renderer.env
+Environment=PORT=3103
+Environment=API_KEY_PEPPER_FILE=%d/api-key-pepper
+Environment=TICKET_SIGNING_KEY_DIR=/etc/latex-renderer/ticket-keys
+LoadCredential=api-key-pepper:/etc/latex-renderer/secrets/api-key-pepper
+ExecStart=/usr/local/bin/node apps/internal-api/dist/server.js
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/latex-renderer
+BindReadOnlyPaths=/etc/latex-renderer/ticket-keys
+UMask=0007
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,75 @@
+% Renderer-owned instrumentation for optional per-object SVG export.
+% This file is loaded as the top-level document and never modifies user input.
+\RequirePackage{currfile}
+\PassOptionsToPackage{active,tightpage,textmath,displaymath,delayed}{preview}
+\RequirePackage{preview}
+
+\makeatletter
+\newwrite\LR@metadata
+\newcount\LR@object
+\LR@object=0
+\def\LR@kind{}
+\def\LR@source{}
+\def\LR@line{0}
+
+\def\LR@remember#1{%
+  \ifpr@outer
+    \LR@remember@force{#1}%
+  \fi
+}
+\def\LR@remember@force#1{%
+  \gdef\LR@kind{#1}%
+  \xdef\LR@source{\currfilepath}%
+  \xdef\LR@line{\the\inputlineno}%
+}
+
+\let\LR@original@ship@start\pr@ship@start
+\def\pr@ship@start{%
+  \ifx\LR@kind\@empty\LR@remember@force{math}\fi
+  \LR@original@ship@start
+}
+
+\let\LR@original@ship@end\pr@ship@end
+\def\pr@ship@end{%
+  \global\advance\LR@object by 1
+  \immediate\write\LR@metadata{OBJECT:\the\LR@object}%
+  \immediate\write\LR@metadata{KIND:\LR@kind}%
+  \immediate\write\LR@metadata{SOURCE:\LR@source}%
+  \immediate\write\LR@metadata{LINE:\LR@line}%
+  \global\let\LR@kind\@empty
+  \global\let\LR@source\@empty
+  \xdef\LR@line{0}%
+  \LR@original@ship@end
+}
+
+\AtBeginDocument{%
+  \immediate\openout\LR@metadata=objects.meta
+  \@for\LR@environment:=equation,equation*,displaymath,align,align*,alignat,alignat*,flalign,flalign*,gather,gather*,multline,multline*\do{%
+    \expandafter\PreviewEnvironment\expandafter{\LR@environment}%
+    \AddToHook{env/\LR@environment/before}{\LR@remember{math}}%
+  }%
+  \PreviewEnvironment{tikzpicture}%
+  \AddToHook{env/tikzpicture/begin}{%
+    % Run inside the environment group: TikZ calc needs math shift, while
+    % preview's active $ must resume immediately after tikzpicture ends.
+    \catcode`\$=3\relax
+    \LR@remember{tikz}%
+  }%
+  \PreviewEnvironment{pgfpicture}%
+  \AddToHook{env/pgfpicture/before}{\LR@remember{tikz}}%
+}
+\AtEndDocument{\immediate\closeout\LR@metadata}
+\makeatother
+
+\directlua{
+  local path = os.getenv("LATEX_ENTRYPOINT_ABSOLUTE")
+  local unsafe = path and (
+    path:find(string.char(10), 1, true) or path:find(string.char(13), 1, true)
+  )
+  if not path or path:sub(1, 12) ~= "/work/input/" or path:sub(-4) ~= ".tex" or unsafe then
+    tex.error("renderer: invalid SVG entrypoint")
+  end
+  tex.sprint("\\input{")
+  tex.sprint(-2, path)
+  tex.sprint("}")
+}

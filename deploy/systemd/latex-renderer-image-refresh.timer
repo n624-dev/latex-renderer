@@ -1,0 +1,11 @@
+[Unit]
+Description=Check for a new validated TeX image periodically
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=10m
+Unit=latex-renderer-image-refresh.service
+
+[Install]
+WantedBy=timers.target

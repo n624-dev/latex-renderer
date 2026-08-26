@@ -1,0 +1,4 @@
+import { readFileSync } from "node:fs";
+import { describe,expect,it } from "vitest";
+const read=(path:string)=>readFileSync(new URL(`../${path}`,import.meta.url),"utf8");
+describe("architecture boundaries",()=>{it("keeps composition roots small",()=>{expect(read("apps/admin-api/src/app.ts").split("\n").length).toBeLessThan(80);expect(read("apps/renderer-api/src/app.ts").split("\n").length).toBeLessThan(80);expect(read("apps/renderer-worker/src/index.ts").split("\n").length).toBeLessThan(80);});it("keeps large transfer routes out of Gateway Worker",()=>{const gateway=read("apps/gateway-worker/src/index.ts");expect(gateway).not.toContain("/:jobId/source");expect(gateway).not.toContain("artifacts/:name");expect(gateway).toContain("/api/v1/job-tickets/:jobId");});it("keeps client distribution out of Renderer API",()=>{expect(read("apps/renderer-api/src/app.ts")).not.toContain("/client");});});

@@ -1,0 +1,12 @@
+openin_any = p
+openout_any = p
+shell_escape = f
+max_print_line = 10000
+error_line = 254
+half_error_line = 238
+main_memory = 5000000
+extra_mem_bot = 2000000
+extra_mem_top = 2000000
+pool_size = 6250000
+max_strings = 500000
+hash_extra = 600000

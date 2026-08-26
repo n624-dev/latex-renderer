@@ -1,0 +1,34 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@latex-renderer/shared": ["packages/shared/src/index.ts"],
+      "@latex-renderer/contracts": ["packages/contracts/src/index.ts"],
+      "@latex-renderer/database": ["packages/database/src/index.ts"],
+      "@latex-renderer/auth": ["packages/auth/src/index.ts"],
+      "@latex-renderer/ticket": ["packages/ticket/src/index.ts"],
+      "@latex-renderer/zip-validation": [
+        "packages/zip-validation/src/index.ts"
+      ],
+      "@latex-renderer/log-parser": ["packages/log-parser/src/index.ts"],
+      "@latex-renderer/api-client": ["packages/api-client/src/index.ts"],
+      "@latex-renderer/client-core": ["packages/client-core/src/index.ts"],
+      "@latex-renderer/mcp-core": ["packages/mcp-core/src/index.ts"],
+      "@latex-renderer/remote-mcp-core": [
+        "packages/remote-mcp-core/src/index.ts"
+      ],
+      "@latex-renderer/setup-core": ["packages/setup-core/src/index.ts"],
+      "@latex-renderer/setup-web": ["packages/setup-web/src/index.ts"]
+    }
+  },
+  "include": [
+    "*.ts",
+    "apps/**/*.ts",
+    "client/**/*.ts",
+    "packages/**/*.ts",
+    "tests/**/*.ts"
+  ],
+  "exclude": ["apps/gateway-worker/**"]
+}

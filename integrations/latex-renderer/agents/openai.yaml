@@ -1,0 +1,4 @@
+interface:
+  display_name: "LaTeX Renderer"
+  short_description: "Render one or more selected LaTeX documents securely"
+  default_prompt: "Use $latex-renderer to render the requested LaTeX entrypoint(s), reuse one Source when multiple documents are selected, and diagnose compilation errors."

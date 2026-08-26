@@ -1,0 +1,26 @@
+[Unit]
+Description=Recover stale LaTeX Renderer image-manager operations
+After=latex-renderer-image-manager.service
+Wants=latex-renderer-image-manager.service
+
+[Service]
+Type=oneshot
+User=root
+Group=latex-renderer
+WorkingDirectory=/opt/latex-renderer/current
+Environment=IMAGE_MANAGER_URL=http://127.0.0.1:3110
+Environment=IMAGE_OPERATION_MAX_AGE_MS=14400000
+LoadCredential=image-manager-token:/etc/latex-renderer/secrets/image-manager-token
+ExecStart=/usr/local/bin/node deploy/scripts/watch-image-manager-operation.mjs
+TimeoutStartSec=1h10min
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6

@@ -1,0 +1,38 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "latex-renderer-gateway",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-26",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "routes": [
+    {
+      "pattern": "latex.example.com/api/v1/health",
+      "zone_name": "example.com",
+    },
+    {
+      "pattern": "latex.example.com/api/v1/render-tickets",
+      "zone_name": "example.com",
+    },
+    {
+      "pattern": "latex.example.com/api/v1/source-tickets",
+      "zone_name": "example.com",
+    },
+    {
+      "pattern": "latex.example.com/api/v1/job-tickets/*",
+      "zone_name": "example.com",
+    },
+  ],
+  "vpc_services": [
+    {
+      "binding": "INTERNAL_API",
+      "service_id": "00000000-0000-0000-0000-000000000000",
+      "remote": true,
+    },
+  ],
+  "observability": {
+    "enabled": true,
+    "logs": { "enabled": true, "head_sampling_rate": 1 },
+    "traces": { "enabled": true, "head_sampling_rate": 0.05 },
+  },
+}

@@ -1,0 +1,32 @@
+[Unit]
+Description=LaTeX Renderer API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=latex-renderer
+Group=latex-renderer
+WorkingDirectory=/opt/latex-renderer/current
+EnvironmentFile=/etc/latex-renderer/renderer.env
+Environment=TICKET_SIGNING_KEY_DIR=/etc/latex-renderer/ticket-keys
+ExecStart=/usr/local/bin/node apps/renderer-api/dist/server.js
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/latex-renderer
+BindReadOnlyPaths=/etc/latex-renderer/ticket-keys
+UMask=0007
+
+[Install]
+WantedBy=multi-user.target

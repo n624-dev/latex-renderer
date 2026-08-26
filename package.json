@@ -1,0 +1,48 @@
+{
+  "name": "latex-renderer",
+  "version": "1.0.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "packageManager": "pnpm@11.24.0",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "pnpm build:workspaces && pnpm build:client",
+    "build:workspaces": "pnpm -r build",
+    "build:production-services": "pnpm --filter @latex-renderer/admin-api... --filter @latex-renderer/admin-local... --filter @latex-renderer/web... --filter @latex-renderer/internal-api... --filter @latex-renderer/remote-mcp... --filter @latex-renderer/renderer-api... --filter @latex-renderer/renderer-worker... build",
+    "build:client": "node client/build-client.mjs && node client/build-mcpb.mjs",
+    "build:mcpb": "node client/build-mcpb.mjs",
+    "verify:mcpb": "node client/verify-mcpb.mjs",
+    "test:mcpb:clean": "node client/test-mcpb-clean-install.mjs",
+    "typecheck": "pnpm --filter @latex-renderer/gateway-worker typecheck && tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint .",
+    "check:docs": "tsx docs-check.ts",
+    "check": "pnpm typecheck && pnpm build:workspaces && pnpm check:docs && pnpm test && pnpm lint",
+    "format": "prettier --write ."
+  },
+  "devDependencies": {
+    "@anthropic-ai/mcpb": "2.1.2",
+    "@eslint/js": "^9.32.0",
+    "@latex-renderer/auth": "workspace:*",
+    "@latex-renderer/database": "workspace:*",
+    "@latex-renderer/setup-core": "workspace:*",
+    "@latex-renderer/setup-web": "workspace:*",
+    "@latex-renderer/ticket": "workspace:*",
+    "@latex-renderer/zip-validation": "workspace:*",
+    "@types/node": "^24.1.0",
+    "@types/yazl": "^3.3.0",
+    "esbuild": "0.28.1",
+    "eslint": "^9.32.0",
+    "prettier": "^3.6.2",
+    "tsx": "^4.20.3",
+    "typescript": "^5.9.2",
+    "typescript-eslint": "^8.39.0",
+    "vitest": "^3.2.4",
+    "wrangler": "4.125.0",
+    "yazl": "^3.3.1"
+  }
+}

@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily cleanup of LaTeX Renderer image-manager logs
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=15m
+Unit=latex-renderer-image-log-cleanup.service
+
+[Install]
+WantedBy=timers.target

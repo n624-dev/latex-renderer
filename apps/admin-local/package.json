@@ -1,0 +1,20 @@
+{
+  "name": "@latex-renderer/admin-local",
+  "version": "1.0.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "latex-renderer-admin-local": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@latex-renderer/auth": "workspace:*",
+    "@latex-renderer/database": "workspace:*",
+    "@latex-renderer/shared": "workspace:*",
+    "commander": "^14.0.0"
+  }
+}

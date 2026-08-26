@@ -1,0 +1,64 @@
+name: mcpb
+
+on:
+  pull_request:
+    paths:
+      - "apps/mcp-server/**"
+      - "packages/mcp-core/**"
+      - "packages/client-core/**"
+      - "client/mcpb/**"
+      - "client/*mcpb*.mjs"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/mcpb.yml"
+  push:
+    branches: [main]
+    paths:
+      - "apps/mcp-server/**"
+      - "packages/mcp-core/**"
+      - "packages/client-core/**"
+      - "client/mcpb/**"
+      - "client/*mcpb*.mjs"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/mcpb.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  clean-install:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            platform: darwin
+          - runner: windows-2025
+            platform: win32
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "24"
+      - name: Enable Corepack
+        run: corepack enable
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Select OpenSSL on macOS
+        if: runner.os == 'macOS'
+        run: echo "$(brew --prefix openssl@3)/bin" >> "$GITHUB_PATH"
+      - name: Install OpenSSL on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install openssl --no-progress -y
+          $openssl = Get-ChildItem 'C:\Program Files\OpenSSL*\bin\openssl.exe' | Select-Object -First 1
+          if ($null -eq $openssl) { throw 'OpenSSL was not installed' }
+          $openssl.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Validate, pack, sign, and verify MCPB
+        run: pnpm build:mcpb && pnpm verify:mcpb
+      - name: Exercise clean local server install
+        run: pnpm test:mcpb:clean -- ${{ matrix.platform }}
