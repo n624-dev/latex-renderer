@@ -285,6 +285,7 @@ describe("managed TeX Live image pipeline", () => {
       "deploy/scripts/smoke-test-renderer-basic.sh",
       "deploy/scripts/smoke-test-texlive-base.sh",
       "deploy/scripts/start-image-manager.sh",
+      "deploy/scripts/wait-image-manager-http.sh",
     ])
       expectShellSyntax(path);
     for (const path of [

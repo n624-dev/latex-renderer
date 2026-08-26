@@ -9,6 +9,7 @@
 - Reconcile the saved TeX image selector and languages through Image Manager during production deployment, using GHCR before any verified dated fallback build.
 - Keep rootless Docker CLI state in the Image Manager's writable sandbox directory.
 - Preserve the immutable GHCR digest reference while deriving a Runtime with Docker's containerd image store.
+- Wait for the Image Manager HTTP endpoint before deployment reconciliation begins.
 
 ## 1.0.0 - 2026-08-26
 
