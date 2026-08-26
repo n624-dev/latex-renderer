@@ -1429,10 +1429,18 @@ function inspectPathEnvironment(
 }
 
 function normalizePath(value: string, platform: SetupPlatform): string {
-  const normalized = (platform === "win32" ? win32 : posix)
-    .normalize(value)
-    .replace(/[\\/]+$/, "");
+  const valueNormalized = (platform === "win32" ? win32 : posix).normalize(
+      value,
+    ),
+    normalized = stripTrailingSeparators(valueNormalized);
   return platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+function stripTrailingSeparators(value: string): string {
+  let end = value.length;
+  while (end > 0 && (value[end - 1] === "/" || value[end - 1] === "\\"))
+    end -= 1;
+  return value.slice(0, end);
 }
 
 function validateManifest(value: unknown): ClientManifest {
