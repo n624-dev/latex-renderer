@@ -10,6 +10,7 @@
 - Keep rootless Docker CLI state in the Image Manager's writable sandbox directory.
 - Preserve the immutable GHCR digest reference while deriving a Runtime with Docker's containerd image store.
 - Wait for the Image Manager HTTP endpoint before deployment reconciliation begins.
+- Publish daily TeX Base packages transparently from a GitHub-hosted workflow in the public repository.
 
 ## 1.0.0 - 2026-08-26
 

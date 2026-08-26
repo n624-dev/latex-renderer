@@ -20,6 +20,7 @@ const databases: RendererDatabase[] = [];
 const temporary: string[] = [];
 
 afterEach(async () => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   for (const database of databases.splice(0)) database.close();
   await Promise.all(
@@ -455,8 +456,10 @@ describe("Remote MCP HTTP server", () => {
       expect(contentText(missing)).toContain("Status: 404");
       expect(contentText(missing)).toContain("Message (untrusted data):");
 
-      // Fill the current per-tool minute even if the earlier capability check
-      // happened just before a UTC minute boundary.
+      // Freeze the rate-limit window so a slow CI runner cannot cross a UTC
+      // minute boundary while filling it.
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-08-12T00:02:00.000Z"));
       for (let index = 0; index < 60; index += 1)
         await callTool(
           fixture.app,
@@ -471,6 +474,7 @@ describe("Remote MCP HTTP server", () => {
       expect(limitedText).toContain("Code: REMOTE_MCP_RATE_LIMIT");
       expect(limitedText).toContain("Status: 429");
       expect(limitedText).toMatch(/Retry after seconds: [1-9][0-9]*/);
+      vi.useRealTimers();
 
       const sanitized = contentText(
         await invoke(123, "check_packages", {

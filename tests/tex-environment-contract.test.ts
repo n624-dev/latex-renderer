@@ -47,6 +47,20 @@ describe("managed TeX Live image pipeline", () => {
     expect(profile).toContain("selected_scheme scheme-custom");
   });
 
+  it("publishes daily images transparently from a separate hosted-only workflow", () => {
+    const workflow = read(".github/workflows/renderer-image-daily.yml");
+    expect(workflow).toContain("schedule:");
+    expect(workflow).toContain("runs-on: ubuntu-24.04");
+    expect(workflow).not.toContain("self-hosted");
+    expect(workflow).toContain("packages: write");
+    expect(workflow).toContain("persist-credentials: false");
+    expect(workflow).not.toContain("source_ref");
+    expect(workflow).toContain("smoke-test-texlive-base.sh");
+    expect(workflow).toContain("smoke-test-renderer-basic.sh");
+    expect(workflow).toContain("smoke-test-renderer-svg.sh");
+    expect(workflow).toContain("Verify anonymous pull");
+  });
+
   it("pins every derived runtime to a clean base and validates languages in that exact snapshot", () => {
     const builder = read("deploy/scripts/build-language-runtime.sh");
     const manager = read("deploy/scripts/image-manager.mjs");
