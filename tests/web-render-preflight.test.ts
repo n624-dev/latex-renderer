@@ -281,9 +281,9 @@ describe("Web render ZIP preflight", () => {
     ).resolves.toMatchObject({ status: "queued" });
     await cancelRenderJob(fetcher, ORIGIN, JOB_ID, "job-token-1234567890");
 
-    expect(requests[0]?.url).toMatch(
-      new RegExp(`^${ORIGIN}/api/v1/jobs/${JOB_ID}\\?fresh=`),
-    );
+    expect(
+      requests[0]?.url.startsWith(`${ORIGIN}/api/v1/jobs/${JOB_ID}?fresh=`),
+    ).toBe(true);
     expect(requests[0]?.init?.cache).toBe("no-store");
     expect(headers(requests[0]?.init).get("Authorization")).toBe(
       "Bearer job-token-1234567890",
