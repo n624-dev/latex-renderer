@@ -60,7 +60,10 @@ cleanup() {
   docker image rm "$base_lock_tag" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT HUP INT TERM
-chmod 0755 "$tmp"
+# TMPDIR is setgid in production. GNU chmod preserves directory setgid bits
+# unless an extra leading zero explicitly clears them; RestrictSUIDSGID then
+# rejects the implicit 02755 chmod with EPERM.
+chmod 00755 "$tmp"
 mkdir "$tmp/runtime"
 for file in $runtime_files; do
   cp "$renderer_source/$file" "$tmp/runtime/$file"
