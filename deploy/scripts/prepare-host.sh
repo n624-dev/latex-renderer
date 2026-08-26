@@ -61,6 +61,7 @@ fi
 install -d -o latex-renderer-backup -g latex-renderer -m 0750 /var/lib/latex-renderer/backups
 install -d -o root -g latex-renderer -m 0750 /etc/latex-renderer /etc/latex-renderer/secrets /etc/latex-renderer/ticket-keys
 install -d -o root -g latex-renderer -m 0750 /var/lib/latex-renderer/image-manager /var/lib/latex-renderer/image-manager/operations /var/lib/latex-renderer/image-manager/tmp
+install -d -o "$worker_user" -g latex-renderer -m 0700 /var/lib/latex-renderer/image-manager/docker-config
 
 renderer_env_preexisting=false
 if [ -f /etc/latex-renderer/renderer.env ]; then
@@ -153,118 +154,8 @@ while [ ! -S "$runtime_dir/docker.sock" ]; do
   sleep 1
 done
 
-source_image=latex-renderer:texlive-2026
-docker build --tag "$source_image" "$release_root/renderer"
-source_image_id=$(docker image inspect "$source_image" --format '{{.Id}}')
-environment_tmp=$(mktemp -d /tmp/latex-renderer-environment.XXXXXX)
-trap 'rm -rf -- "$environment_tmp"' EXIT HUP INT TERM
-docker run --rm --network none --read-only --tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m \
-  --entrypoint /bin/sh "$source_image" -c '
-    { tlmgr info --only-installed --data name 2>/dev/null | sed "s/^name: //" | sed "/^$/d";
-      find /opt/texlive/2026/texmf-dist/tex -type f \
-        \( -name "*.sty" -o -name "*.cls" -o -name "*.tex" -o -name "*.lua" -o -name "*.bst" \) \
-        -printf "%f\n" | sed "s/\.[^.]*$//"; } | LC_ALL=C sort -fu
-  ' > "$environment_tmp/packages.txt"
-docker run --rm --network none --read-only --tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m \
-  --entrypoint /bin/sh "$source_image" -c '
-    { fc-list --format "%{family}\n";
-      find /opt/texlive/2026/texmf-dist/fonts -type f \
-        \( -name "*.otf" -o -name "*.ttf" \) -print0 \
-        | xargs -0 -r fc-scan --format "%{family}\n"; } \
-      | tr "," "\n" | sed "/^[[:space:]]*$/d" | LC_ALL=C sort -fu
-  ' > "$environment_tmp/fonts.txt"
-if [ ! -s "$environment_tmp/packages.txt" ] || [ ! -s "$environment_tmp/fonts.txt" ]; then
-  echo "renderer environment inventory generation failed" >&2
-  exit 76
-fi
-install -d -o root -g latex-renderer -m 0750 /var/lib/latex-renderer/environment
-install -o root -g latex-renderer -m 0640 \
-  "$environment_tmp/packages.txt" "$environment_tmp/fonts.txt" \
-  /var/lib/latex-renderer/environment/
-source_image_marker=/etc/latex-renderer/renderer-source-image-id
-installed_source_image_id=
-if [ -f "$source_image_marker" ]; then
-  installed_source_image_id=$(cat "$source_image_marker")
-fi
-if [ "$installed_source_image_id" != "$source_image_id" ] || \
-   ! runuser -u "$worker_user" -- env DOCKER_HOST="$rootless_socket" docker image inspect "$source_image" >/dev/null 2>&1; then
-  docker save "$source_image" | runuser -u "$worker_user" -- env DOCKER_HOST="$rootless_socket" docker load
-fi
-loaded_id=$(runuser -u "$worker_user" -- env DOCKER_HOST="$rootless_socket" docker image inspect "$source_image" --format '{{.Id}}')
-loaded_user=$(runuser -u "$worker_user" -- env DOCKER_HOST="$rootless_socket" docker image inspect "$source_image" --format '{{.Config.User}}')
-loaded_title=$(runuser -u "$worker_user" -- env DOCKER_HOST="$rootless_socket" docker image inspect "$source_image" --format '{{index .Config.Labels "org.opencontainers.image.title"}}')
-loaded_repository=$(runuser -u "$worker_user" -- env DOCKER_HOST="$rootless_socket" docker image inspect "$source_image" --format '{{index .Config.Labels "jp.n624.latex-renderer.texlive.repository"}}')
-if [ "$loaded_user" != "10000:10000" ] || [ "$loaded_title" != "latex-renderer-texlive" ]; then
-  echo "rootless Docker image identity check failed" >&2
-  exit 76
-fi
-source_runtime_fingerprint=$(docker run --rm --network none --read-only --entrypoint sha256sum "$source_image" \
-  /opt/renderer/compile.sh /opt/renderer/latexmkrc /opt/renderer/texmf.cnf | sha256sum | cut -d' ' -f1)
-loaded_runtime_fingerprint=$(runuser -u "$worker_user" -- env DOCKER_HOST="$rootless_socket" \
-  docker run --rm --network none --read-only --entrypoint sha256sum "$source_image" \
-  /opt/renderer/compile.sh /opt/renderer/latexmkrc /opt/renderer/texmf.cnf | sha256sum | cut -d' ' -f1)
-if [ "$loaded_runtime_fingerprint" != "$source_runtime_fingerprint" ]; then
-  echo "rootless Docker image runtime fingerprint check failed" >&2
-  exit 76
-fi
-printf '{"sourceImageId":"%s","runtimeFingerprint":"%s","generatedAt":"%s"}\n' \
-  "$source_image_id" "$source_runtime_fingerprint" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-  > "$environment_tmp/manifest.json"
-install -o root -g latex-renderer -m 0640 \
-  "$environment_tmp/manifest.json" /var/lib/latex-renderer/environment/manifest.json
-rm -rf -- "$environment_tmp"
-trap - EXIT HUP INT TERM
-printf '%s\n' "$source_image_id" > "$source_image_marker"
-chown root:latex-renderer "$source_image_marker"
-chmod 0640 "$source_image_marker"
-sed -i "s|^RENDERER_IMAGE=.*|RENDERER_IMAGE=$loaded_id|" /etc/latex-renderer/renderer.env
-
-image_manager_state=/var/lib/latex-renderer/image-manager/state.json
-if [ -f "$image_manager_state" ]; then
-  legacy_languages=$(runuser -u "$worker_user" -- env DOCKER_HOST="$rootless_socket" \
-    docker run --rm --entrypoint /bin/sh "$loaded_id" -c \
-    "tlmgr info --only-installed --data name 2>/dev/null | sed 's/^name: //' | grep '^collection-lang' || true")
-  legacy_languages_csv=$(printf '%s\n' "$legacy_languages" | sed '/^$/d' | paste -sd, -)
-  /usr/local/bin/node - "$image_manager_state" "$loaded_id" "$source_image" "$loaded_repository" "$legacy_languages_csv" <<'NODE'
-const fs = require('node:fs');
-const path = process.argv[2];
-const runtimeImageId = process.argv[3];
-const runtimeRef = process.argv[4];
-const repository = process.argv[5] || null;
-const languages = process.argv[6] ? process.argv[6].split(',').filter(Boolean).sort() : [];
-const state = JSON.parse(fs.readFileSync(path, 'utf8'));
-if (!state.current || state.current.legacy !== true) process.exit(0);
-const match = /tlnet-archive\/(\d{4})\/(\d{2})\/(\d{2})\/tlnet/.exec(repository ?? '');
-state.current = {
-  ...state.current,
-  selector: match ? { mode: 'date', value: `${match[1]}-${match[2]}-${match[3]}` } : null,
-  baseRef: null,
-  baseDigest: null,
-  baseImageId: null,
-  runtimeRef,
-  runtimeImageId,
-  rendererRuntimeFingerprint: null,
-  snapshotDate: match ? `${match[1]}-${match[2]}-${match[3]}` : null,
-  languages,
-  effectiveLanguageCollections: languages,
-  rendererUpdatedAt: new Date().toISOString(),
-  legacy: true,
-};
-state.updatedAt = new Date().toISOString();
-const tmp = `${path}.part-${process.pid}`;
-fs.writeFileSync(tmp, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o640 });
-fs.renameSync(tmp, path);
-NODE
-  chown root:latex-renderer "$image_manager_state"
-  chmod 0640 "$image_manager_state"
-fi
-
-if [ "$loaded_id" != "$source_image_id" ]; then
-  echo "Note: rootless Docker registered a daemon-local image ID; renderer.env was pinned to $loaded_id"
-fi
-
 echo "Host preparation complete."
 echo "Release: $release_root"
 echo "Rootless Docker: $rootless_socket"
-echo "Renderer image: $loaded_id"
+echo "Renderer image will be reconciled from saved Image Manager settings."
 echo "Services were not started; configure Cloudflare Access and /etc/latex-renderer/renderer.env first."

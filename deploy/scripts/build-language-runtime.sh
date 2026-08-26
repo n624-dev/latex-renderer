@@ -26,8 +26,20 @@ case "$base_image_id" in
   sha256:[0-9a-f][0-9a-f]*) ;;
   *) echo "Could not resolve immutable base image ID: $base_image" >&2; exit 65 ;;
 esac
-base_lock_tag="latex-renderer:base-lock-$(printf '%s' "${base_image_id#sha256:}" | cut -c1-24)"
-docker image tag "$base_image_id" "$base_lock_tag"
+# Keep a registry image on its immutable digest-qualified reference. Docker's
+# containerd image store may resolve lazy GHCR layers during export; replacing
+# the reference with a docker.io local tag loses the original pull scope. A
+# locally rebuilt dated Base has no RepoDigest and uses an ID-locked local tag.
+base_repo_digest=$(docker image inspect "$base_image" --format '{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}')
+base_lock_tag=
+case "$base_repo_digest" in
+  *@sha256:[0-9a-f][0-9a-f]*) base_lock_ref=$base_repo_digest ;;
+  *)
+    base_lock_tag="latex-renderer:base-lock-$(printf '%s' "${base_image_id#sha256:}" | cut -c1-24)"
+    docker image tag "$base_image_id" "$base_lock_tag"
+    base_lock_ref=$base_lock_tag
+    ;;
+esac
 
 languages=
 for language in "$@"; do
@@ -57,7 +69,9 @@ esac
 tmp=$(mktemp -d)
 cleanup() {
   rm -rf "$tmp"
-  docker image rm "$base_lock_tag" >/dev/null 2>&1 || true
+  if [ -n "$base_lock_tag" ]; then
+    docker image rm "$base_lock_tag" >/dev/null 2>&1 || true
+  fi
 }
 trap cleanup EXIT HUP INT TERM
 # TMPDIR is setgid in production. GNU chmod preserves directory setgid bits
@@ -106,7 +120,7 @@ DOCKERFILE
 chmod 0644 "$tmp/Dockerfile"
 
 docker build \
-  --build-arg "BASE_IMAGE=$base_lock_tag" \
+  --build-arg "BASE_IMAGE=$base_lock_ref" \
   --build-arg "TEXLIVE_REPOSITORY=$repository" \
   --build-arg "TEXLIVE_LANGUAGES=$languages" \
   --build-arg "RENDERER_RUNTIME_FINGERPRINT=$runtime_fingerprint" \

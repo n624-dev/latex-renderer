@@ -147,15 +147,18 @@ describe("production hardening", () => {
     expect(deploy).toContain(build);
     expect(deploy.indexOf(build)).toBeLessThan(deploy.indexOf(prepare));
   });
-  it("prebuilds the expensive TeX image before quiescing production services", () => {
+  it("reconciles the saved TeX configuration before renderer consumers restart", () => {
     const deploy = read("deploy/scripts/deploy-production-release.sh"),
-      imageBuild =
-        'docker build --tag latex-renderer:texlive-2026 "$source_root/renderer"',
-      quiesce = "quiesce-image-manager.sh",
-      prepare = 'prepare-host.sh" "$release_id';
-    expect(deploy).toContain(imageBuild);
-    expect(deploy.indexOf(imageBuild)).toBeLessThan(deploy.indexOf(quiesce));
-    expect(deploy.indexOf(quiesce)).toBeLessThan(deploy.indexOf(prepare));
+      managerRestart = "systemctl restart latex-renderer-image-manager",
+      reconcile = "reconcile-managed-runtime.mjs",
+      consumers = "systemctl restart \\\n  latex-renderer-api";
+    expect(deploy).not.toContain(
+      'docker build --tag latex-renderer:texlive-2026 "$source_root/renderer"',
+    );
+    expect(deploy.indexOf(managerRestart)).toBeLessThan(
+      deploy.indexOf(reconcile),
+    );
+    expect(deploy.indexOf(reconcile)).toBeLessThan(deploy.indexOf(consumers));
   });
   it("enables Remote MCP so it returns after a production host reboot", () => {
     const deploy = read("deploy/scripts/deploy-production-release.sh");
@@ -202,17 +205,25 @@ describe("production hardening", () => {
     );
     expect(verify).toContain("LATEX_RENDER_CLIENT_ASSET_ATTEMPTS");
   });
-  it("builds, refreshes, and verifies rootless renderer images from each immutable release", () => {
-    const script = read("deploy/scripts/prepare-host.sh"),
-      build = 'docker build --tag "$source_image" "$release_root/renderer"',
-      inspect = "source_image_id=$(docker image inspect";
-    expect(script).toContain(build);
-    expect(script.indexOf(build)).toBeLessThan(script.indexOf(inspect));
-    expect(script).toContain("renderer-source-image-id");
-    expect(script).toContain('installed_source_image_id" != "$source_image_id');
-    expect(script).toContain(
-      "rootless Docker image runtime fingerprint check failed",
-    );
+  it("keeps TeX image selection in rootless Image Manager instead of root Docker", () => {
+    const prepare = read("deploy/scripts/prepare-host.sh"),
+      manager = read("deploy/scripts/image-manager.mjs");
+    expect(prepare).not.toContain("docker build");
+    expect(prepare).toContain("saved Image Manager settings");
+    expect(prepare).toContain("image-manager/docker-config");
+    expect(prepare).toContain('-o "$worker_user" -g latex-renderer -m 0700');
+    expect(manager).toContain("pullOrRebuildBase");
+    expect(manager).toContain("reconcileDesired");
+  });
+  it("documents equivalent Web and CLI TeX update workflows", () => {
+    const deployment = read("DEPLOYMENT.md");
+    expect(deployment).toContain("/admin/tex-environment/");
+    expect(deployment).toContain("latex-render-admin tex apply");
+    expect(deployment).toContain("--image latest");
+    expect(deployment).toContain("--image 2026-08-26");
+    expect(deployment).toContain("--rebuild-if-missing on");
+    expect(deployment).toContain("deploy-production-release.sh");
+    expect(deployment).toContain("remain outside Git");
   });
   it("prunes old releases and dangling rootless images only after production verification", () => {
     const deploy = read("deploy/scripts/deploy-production-release.sh"),

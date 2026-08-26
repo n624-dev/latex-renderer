@@ -53,8 +53,10 @@ describe("managed TeX Live image pipeline", () => {
     const legacyDockerfile = read("renderer/Dockerfile");
 
     expect(builder).toContain("base_image_id=$(docker image inspect");
+    expect(builder).toContain("base_repo_digest=$(docker image inspect");
+    expect(builder).toContain("*@sha256:[0-9a-f][0-9a-f]*)");
+    expect(builder).toContain("BASE_IMAGE=$base_lock_ref");
     expect(builder).toContain("base-lock-");
-    expect(builder).toContain("BASE_IMAGE=$base_lock_tag");
     expect(builder).toContain("RENDERER_RUNTIME_SOURCE");
     expect(builder).toContain("COPY runtime/ /opt/renderer/");
     expect(builder).toContain("jp.n624.latex-renderer.base-image-id");
@@ -83,6 +85,7 @@ describe("managed TeX Live image pipeline", () => {
       "Selected language collections were not installed",
     );
     expect(manager).toContain('baseKind !== "texlive-only-v1"');
+    expect(manager).toContain("base.ref,");
     expect(manager).toContain('"--file", join(context, "Dockerfile.base")');
     expect(legacyDockerfile).toContain("ARG DEBIAN_SNAPSHOT=20260812T235959Z");
     expect(legacyDockerfile).toContain("gpgv --keyring /tmp/texlive.gpg");
@@ -154,6 +157,7 @@ describe("managed TeX Live image pipeline", () => {
 
   it("restores managed state before every renderer-image consumer and uses a shared writable temp root", () => {
     const restore = read("deploy/scripts/restore-managed-runtime.sh");
+    const manager = read("deploy/scripts/image-manager.mjs");
     const managerUnit = read(
       "deploy/systemd/latex-renderer-image-manager.service",
     );
@@ -195,14 +199,16 @@ describe("managed TeX Live image pipeline", () => {
     expect(restore).toContain("RENDERER_IMAGE=");
     expect(restore).toContain("packages.txt");
     expect(restore).toContain("fonts.txt");
-    expect(prepare).toContain("state.current.legacy !== true");
-    expect(prepare).toContain("effectiveLanguageCollections: languages");
+    expect(manager).toContain("effectiveLanguageCollections");
     expect(prepare).toContain("migrate-legacy-languages");
     expect(managerUnit).toContain(
       "ExecStartPre=/bin/sh deploy/scripts/restore-managed-runtime.sh",
     );
     expect(managerUnit).toContain(
       "Environment=TMPDIR=/var/lib/latex-renderer/image-manager/tmp",
+    );
+    expect(managerUnit).toContain(
+      "Environment=DOCKER_CONFIG=/var/lib/latex-renderer/image-manager/docker-config",
     );
     expect(managerUnit).toContain("Before=latex-renderer-worker.service");
     for (const unit of [workerUnit, internalUnit, remoteUnit]) {

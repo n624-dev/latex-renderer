@@ -40,7 +40,10 @@ cp apps/gateway-worker/wrangler.example.jsonc apps/gateway-worker/wrangler.jsonc
 cp deploy/cloudflared/config.example.yml /etc/cloudflared/config.yml
 ```
 
-Do not commit the resulting files. Start with [ARCHITECTURE.md](ARCHITECTURE.md) and [DEPLOYMENT.md](DEPLOYMENT.md); user-facing guides are in [docs/public](docs/public).
+Do not commit the resulting files. Start with [ARCHITECTURE.md](ARCHITECTURE.md)
+and [DEPLOYMENT.md](DEPLOYMENT.md); the latter documents both Web and CLI TeX
+environment updates and explains how application releases reconcile the saved
+image selector. User-facing guides are in [docs/public](docs/public).
 
 ## Security and support
 

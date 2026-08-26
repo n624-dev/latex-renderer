@@ -6,7 +6,9 @@
 - Clear inherited setgid bits on image-manager temporary build trees without weakening the systemd sandbox.
 - Use the deployment user's pinned pnpm instead of an older system-wide Corepack shim.
 - Accept an active remotely managed Cloudflare Tunnel when no host-local ingress file exists.
-- Prebuild the TeX Live source image before quiescing production services.
+- Reconcile the saved TeX image selector and languages through Image Manager during production deployment, using GHCR before any verified dated fallback build.
+- Keep rootless Docker CLI state in the Image Manager's writable sandbox directory.
+- Preserve the immutable GHCR digest reference while deriving a Runtime with Docker's containerd image store.
 
 ## 1.0.0 - 2026-08-26
 

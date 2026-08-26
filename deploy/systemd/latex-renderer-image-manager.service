@@ -15,6 +15,7 @@ Environment=IMAGE_MANAGER_PORT=3110
 Environment=IMAGE_MANAGER_TOKEN_FILE=%d/image-manager-token
 Environment=TMPDIR=/var/lib/latex-renderer/image-manager/tmp
 Environment=HOME=/var/lib/latex-render-worker
+Environment=DOCKER_CONFIG=/var/lib/latex-renderer/image-manager/docker-config
 LoadCredential=image-manager-token:/etc/latex-renderer/secrets/image-manager-token
 ExecStartPre=/bin/sh deploy/scripts/wait-rootless-docker.sh
 ExecStartPre=/bin/sh deploy/scripts/restore-managed-runtime.sh
