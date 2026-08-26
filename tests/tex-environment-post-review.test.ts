@@ -72,17 +72,14 @@ describe("post-review TeX environment regressions", () => {
     expect(manager).toContain("languages: []");
   });
 
-  it("reconciles a newly deployed legacy runtime into persisted image state with stable permissions", () => {
-    const prepare = read("deploy/scripts/prepare-host.sh");
-    expect(prepare).toContain("state.current.legacy !== true");
-    expect(prepare).toContain("state.current = {");
-    expect(prepare).toContain("runtimeImageId,");
-    expect(prepare).toContain("effectiveLanguageCollections: languages");
-    expect(prepare).toContain("rendererUpdatedAt: new Date().toISOString()");
-    expect(prepare).toContain(
-      'chown root:latex-renderer "$image_manager_state"',
-    );
-    expect(prepare).toContain('chmod 0640 "$image_manager_state"');
+  it("reconciles saved selectors through the same manager path during deployment", () => {
+    const manager = read("deploy/scripts/image-manager.mjs");
+    const deploy = read("deploy/scripts/deploy-production-release.sh");
+    expect(manager).toContain("async function reconcileDesired(op)");
+    expect(manager).toContain('selector.mode === "latest"');
+    expect(manager).toContain("rebuildIfMissing: selector.mode === \"date\"");
+    expect(manager).toContain('url.pathname === "/v1/reconcile"');
+    expect(deploy).toContain("reconcile-managed-runtime.mjs");
   });
 
   it("quiesces image mutations before production deploy changes the release or state", () => {
@@ -255,6 +252,7 @@ describe("post-review TeX environment regressions", () => {
       "deploy/scripts/image-manager.mjs",
       "deploy/scripts/run-image-refresh.mjs",
       "deploy/scripts/watch-image-manager-operation.mjs",
+      "deploy/scripts/reconcile-managed-runtime.mjs",
     ]) {
       const syntax = spawnSync(process.execPath, ["--check", path], {
         encoding: "utf8",

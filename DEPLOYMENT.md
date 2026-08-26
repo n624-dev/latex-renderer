@@ -128,10 +128,68 @@ without pinning the application code to the date on which the Base was
 published. A normal application deployment compares the renderer runtime
 fingerprint and re-derives the managed Runtime from the same clean Base and
 persisted language selection before renderer consumers start when the renderer
-code changed. If the active target is the legacy rollback Runtime, a normal
-deployment reconciles `state.current` to the newly built legacy image before
-services start so persisted state cannot describe a different image than
-`renderer.env`.
+code changed. The production release command then reconciles the saved desired
+selector through the same Image Manager operation used by Web and CLI. It does
+not build or activate a separate fixed bootstrap image.
+
+### Updating the TeX environment
+
+Use either the administrator Web page at `/admin/tex-environment/` or
+`latex-render-admin`; both call the same transactional operation and persist the
+same desired state. In Web, choose the image selector, language collections,
+and automatic-update setting, then select **Apply**. Keep the operation page
+open until it reports success; closing the page does not cancel the server-side
+operation.
+
+For CLI administration, inspect the available images and languages first:
+
+```bash
+latex-render-admin tex status
+latex-render-admin tex images
+latex-render-admin tex languages --search japanese
+```
+
+Follow the newest published Base and install English and Japanese support:
+
+```bash
+latex-render-admin tex apply \
+  --image latest \
+  --language collection-langenglish collection-langjapanese \
+  --auto-update on \
+  --rebuild-if-missing off \
+  --yes
+```
+
+Pin an archive date instead:
+
+```bash
+latex-render-admin tex apply \
+  --image 2026-08-26 \
+  --language collection-langenglish collection-langjapanese \
+  --auto-update off \
+  --rebuild-if-missing on \
+  --yes
+```
+
+For `latest`, Image Manager pulls the public GHCR package and persists its
+resolved digest. For a date, it pulls the matching dated GHCR tag when present.
+With `--rebuild-if-missing on`, it starts the long local archive build only
+after a successful registry listing proves that the dated tag is absent; a
+registry or network failure does not silently trigger that fallback. Weekly and
+digest selectors are pull-only. Use the operation ID returned by `apply` to
+inspect a long-running change:
+
+```bash
+latex-render-admin tex operation <operation-id>
+```
+
+Application releases preserve this desired selector, language list, and
+automatic-update setting. Running `deploy-production-release.sh` after a code
+update asks Image Manager to reconcile those saved values before renderer
+consumers start: `latest` is checked for a new digest, pinned selectors remain
+pinned, and changed renderer files are overlaid on the selected clean Base.
+Credentials, `/etc/latex-renderer`, Image Manager state, databases, and
+host-specific Worker/Tunnel configuration remain outside Git.
 
 The previous runtime is retained for rollback, including the legacy runtime that
 was active before the first managed switch. Managed rollback re-derives the

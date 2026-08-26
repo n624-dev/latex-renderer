@@ -4,6 +4,7 @@ import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import {
   chmod,
+  chown,
   cp,
   mkdir,
   mkdtemp,
@@ -23,6 +24,7 @@ const tokenFile = process.env.IMAGE_MANAGER_TOKEN_FILE ?? "/etc/latex-renderer/s
 const rendererEnv = process.env.RENDERER_ENV_FILE ?? "/etc/latex-renderer/renderer.env";
 const repoRoot = process.env.IMAGE_MANAGER_REPO_ROOT ?? "/opt/latex-renderer/current";
 const stateRoot = process.env.IMAGE_MANAGER_STATE_ROOT ?? "/var/lib/latex-renderer/image-manager";
+const dockerConfigRoot = process.env.DOCKER_CONFIG ?? join(stateRoot, "docker-config");
 const environmentRoot = process.env.RENDERER_ENVIRONMENT_ROOT ?? "/var/lib/latex-renderer/environment";
 const workerUser = process.env.RENDERER_WORKER_USER ?? "latex-render-worker";
 const imageRepository = process.env.TEXLIVE_IMAGE_REPOSITORY ?? "ghcr.io/n624-dev/latex-renderer-texlive";
@@ -42,6 +44,11 @@ const token = (await readFile(tokenFile, "utf8")).trim();
 if (token.length < 32) throw new Error("Image manager token is too short");
 const workerUid = Number((await runCapture("id", ["-u", workerUser])).trim());
 if (!Number.isInteger(workerUid) || workerUid < 1) throw new Error("Could not resolve renderer worker uid");
+const workerGid = Number((await runCapture("id", ["-g", workerUser])).trim());
+if (!Number.isInteger(workerGid) || workerGid < 1) throw new Error("Could not resolve renderer worker gid");
+await mkdir(dockerConfigRoot, { recursive: true, mode: 0o700 });
+await chown(dockerConfigRoot, workerUid, workerGid);
+await chmod(dockerConfigRoot, 0o700);
 const workerPasswd = (await runCapture("getent", ["passwd", workerUser])).trim().split(":");
 const workerHome = workerPasswd[5];
 if (!workerHome?.startsWith("/")) throw new Error("Could not resolve renderer worker home");
@@ -139,6 +146,7 @@ function rootlessEnv(extra = {}) {
     HOME: workerHome,
     XDG_RUNTIME_DIR: runtimeDir,
     DOCKER_HOST: dockerHost,
+    DOCKER_CONFIG: dockerConfigRoot,
     ...extra,
   };
 }
@@ -639,7 +647,7 @@ async function buildRuntime(op, base, languages) {
     "sh",
     [
       join(repoRoot, "deploy/scripts/build-language-runtime.sh"),
-      base.imageId,
+      base.ref,
       base.repository,
       tag,
       ...languages,
@@ -968,6 +976,46 @@ function sameLanguages(a, b) {
   return left.length === right.length && left.every((item, index) => item === right[index]);
 }
 
+function sameSelector(a, b) {
+  return a?.mode === b?.mode && (a?.value ?? null) === (b?.value ?? null);
+}
+
+async function reconcileDesired(op) {
+  const selector = validateSelector(state.desired.selector);
+  const languages = validateLanguages(state.desired.languages ?? []);
+  const autoUpdate = Boolean(state.desired.autoUpdate);
+  const currentMatches =
+    state.current?.legacy !== true &&
+    sameSelector(selector, state.current?.selector) &&
+    sameLanguages(languages, state.current?.languages);
+
+  if (selector.mode === "latest") {
+    const latest = await pullOrRebuildBase(op, selector, false);
+    if (currentMatches && state.current?.baseImageId === latest.imageId) {
+      await appendLog(op, "Desired latest TeX Runtime is already active.\n");
+      return;
+    }
+    await applyRuntime(op, {
+      selector,
+      languages,
+      autoUpdate,
+      rebuildIfMissing: false,
+    }, latest);
+    return;
+  }
+
+  if (currentMatches) {
+    await appendLog(op, "Desired pinned TeX Runtime is already active.\n");
+    return;
+  }
+  await applyRuntime(op, {
+    selector,
+    languages,
+    autoUpdate,
+    rebuildIfMissing: selector.mode === "date",
+  });
+}
+
 async function refreshLatest(op) {
   if (!state.desired.autoUpdate || state.desired.selector?.mode !== "latest") {
     await appendLog(op, "Automatic latest following is disabled.\n");
@@ -1192,6 +1240,10 @@ const server = createServer(async (req, res) => {
         await applyRuntime(op, { ...body, selector, languages, autoUpdate });
       });
       return send(res, 202, operation);
+    }
+
+    if (req.method === "POST" && url.pathname === "/v1/reconcile") {
+      return send(res, 202, await startOperation("reconcile", reconcileDesired));
     }
 
     if (req.method === "POST" && url.pathname === "/v1/rollback") {
