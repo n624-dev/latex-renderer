@@ -25,7 +25,7 @@ case "${1:-deploy}" in
       exit 64
     }
     version_id=$2
-    corepack pnpm --filter @latex-renderer/public-web exec wrangler rollback "$version_id" \
+    pnpm --filter @latex-renderer/public-web exec wrangler rollback "$version_id" \
       --message "latex-renderer public Web rollback"
     deploy/scripts/smoke-test-public-worker-boundary.sh
     echo "Public Worker rolled back and verified: $version_id"
@@ -65,15 +65,15 @@ temporary_root=$(mktemp -d /tmp/latex-renderer-public-deploy.XXXXXX)
 cleanup() { rm -rf -- "$temporary_root"; }
 trap cleanup EXIT INT TERM HUP
 
-corepack pnpm --filter @latex-renderer/public-web exec wrangler deployments list --json \
+pnpm --filter @latex-renderer/public-web exec wrangler deployments list --json \
   >"$temporary_root/deployments-before.json"
 previous_version=$(node deploy/scripts/read-active-worker-version.mjs \
   "$temporary_root/deployments-before.json")
 
 # Validation and the local Workers runtime preview complete before any remote
 # Worker version or production route can change.
-corepack pnpm check
-corepack pnpm --filter @latex-renderer/public-web run deploy
+pnpm check
+pnpm --filter @latex-renderer/public-web run deploy
 
 preview_attempt=1
 while [ "$preview_attempt" -le 12 ]; do
@@ -100,7 +100,7 @@ if ! deploy/scripts/smoke-test-public-worker-boundary.sh; then
 fi
 deploy/scripts/smoke-test-unified-origin.sh
 
-corepack pnpm --filter @latex-renderer/public-web exec wrangler deployments list --json \
+pnpm --filter @latex-renderer/public-web exec wrangler deployments list --json \
   >"$temporary_root/deployments-after.json"
 current_version=$(node deploy/scripts/read-active-worker-version.mjs \
   "$temporary_root/deployments-after.json")

@@ -130,8 +130,8 @@ function authenticationToken() {
   if (process.env.CLOUDFLARE_API_TOKEN) return process.env.CLOUDFLARE_API_TOKEN;
   try {
     const output = execFileSync(
-      "corepack",
-      ["pnpm", "exec", "wrangler", "auth", "token", "--json"],
+      "pnpm",
+      ["exec", "wrangler", "auth", "token", "--json"],
       {
         cwd: repositoryRoot,
         encoding: "utf8",

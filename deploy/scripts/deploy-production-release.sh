@@ -38,7 +38,7 @@ fi
 sync_path="$sync_pnpm_bin:/usr/local/bin:/usr/bin:/bin"
 
 runuser -u "$sync_user" -- env HOME="$sync_home" USER="$sync_user" LOGNAME="$sync_user" PNPM_HOME="$sync_pnpm_bin" PATH="$sync_path" \
-  /usr/local/bin/corepack pnpm --dir "$source_root" build:production-services
+  "$sync_pnpm_bin/pnpm" --dir "$source_root" build:production-services
 
 # Freeze all TeX environment mutations before prepare-host changes the current
 # release symlink, renderer.env, inventory, or persisted Image Manager state.
@@ -87,9 +87,9 @@ done
 systemctl is-active --quiet cloudflared
 
 runuser -u "$sync_user" -- env HOME="$sync_home" USER="$sync_user" LOGNAME="$sync_user" PNPM_HOME="$sync_pnpm_bin" PATH="$sync_path" \
-  /usr/local/bin/corepack pnpm --dir "$source_root" --filter @latex-renderer/gateway-worker run deploy
+  "$sync_pnpm_bin/pnpm" --dir "$source_root" --filter @latex-renderer/gateway-worker run deploy
 runuser -u "$sync_user" -- env HOME="$sync_home" USER="$sync_user" LOGNAME="$sync_user" PNPM_HOME="$sync_pnpm_bin" PATH="$sync_path" \
-  /usr/local/bin/corepack pnpm --dir "$source_root" --filter @latex-renderer/public-web run deploy
+  "$sync_pnpm_bin/pnpm" --dir "$source_root" --filter @latex-renderer/public-web run deploy
 runuser -u "$sync_user" -- env HOME="$sync_home" USER="$sync_user" LOGNAME="$sync_user" PNPM_HOME="$sync_pnpm_bin" PATH="$sync_path" \
   /usr/local/bin/node "$source_root/deploy/scripts/sync-public-worker-routes.mjs" --apply
 

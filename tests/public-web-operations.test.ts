@@ -39,7 +39,7 @@ describe("public Web operations", () => {
   it("validates main and Preview before production mutation", () => {
     const deploy = read("deploy/scripts/deploy-public-web-production.sh");
     const mainGuard = deploy.indexOf('= "main"');
-    const repositoryCheck = deploy.indexOf("corepack pnpm check");
+    const repositoryCheck = deploy.indexOf("pnpm check");
     const workerDeploy = deploy.indexOf("run deploy");
     const routeApply = deploy.indexOf("sync-public-worker-routes.mjs --apply");
 
