@@ -58,12 +58,10 @@ describe("production hardening", () => {
     expect(deploy).not.toContain("systemctl restart cloudflared");
     expect(deploy).toContain("systemctl is-active --quiet cloudflared");
   });
-  it("retrieves Wrangler credentials through system-wide Corepack under sudo", () => {
+  it("retrieves Wrangler credentials through the deployment user's pinned pnpm", () => {
     const script = read("deploy/scripts/sync-cloudflare-tunnel-config.mjs");
-    expect(script).toMatch(
-      /execFileSync\(\s*"corepack",\s*\["pnpm", "exec", "wrangler"/,
-    );
-    expect(script).not.toContain('execFileSync("pnpm"');
+    expect(script).toMatch(/execFileSync\(\s*"pnpm",\s*\["exec", "wrangler"/);
+    expect(script).not.toContain('execFileSync("corepack"');
   });
   it("deploys the production Gateway explicitly and smoke-tests its health route with each release", () => {
     const deploy = read("deploy/scripts/deploy-production-release.sh"),
@@ -127,6 +125,8 @@ describe("production hardening", () => {
     );
     expect(deploy).toContain('PNPM_HOME="$sync_pnpm_bin" PATH="$sync_path"');
     expect(deploy).toContain('if [ ! -x "$sync_pnpm_bin/pnpm" ]');
+    expect(deploy).toContain('"$sync_pnpm_bin/pnpm" --dir "$source_root"');
+    expect(deploy).not.toContain("/usr/local/bin/corepack pnpm");
   });
   it("builds production service artifacts before copying the immutable release", () => {
     const deploy = read("deploy/scripts/deploy-production-release.sh"),
