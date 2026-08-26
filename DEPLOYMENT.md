@@ -61,11 +61,12 @@ sudo env \
 ## Managed TeX Live images
 
 The public repository contains the reproducible Base and Runtime Dockerfiles,
-language-profile generator, registry helpers, and renderer smoke tests. Public
-pull requests run only on GitHub-hosted runners and never receive package-write
-permission. Scheduled GHCR publication runs from a separate private
-infrastructure repository so untrusted public changes cannot execute on the
-production build host.
+language-profile generator, registry helpers, renderer smoke tests, and the
+scheduled GHCR publication workflow. Pull-request image validation and daily
+publication both use ephemeral GitHub-hosted runners. Pull requests receive
+only read permission and never publish; only the scheduled/manual daily job has
+job-scoped package-write permission. Production hosts and private
+infrastructure configuration are not involved in public package builds.
 
 The public package is `ghcr.io/n624-dev/latex-renderer-texlive`. Its Base is
 built from `renderer/Dockerfile.base` and intentionally excludes application

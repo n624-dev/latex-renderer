@@ -1,0 +1,216 @@
+name: renderer-image-daily
+
+on:
+  schedule:
+    # 03:17 JST. Avoid the busiest top-of-hour scheduling window.
+    - cron: "17 18 * * *"
+  workflow_dispatch:
+    inputs:
+      texlive_date:
+        description: "TeX Live snapshot: latest or YYYY-MM-DD"
+        required: true
+        default: latest
+        type: string
+      publish:
+        description: "Publish a validated image to GHCR"
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: renderer-image-daily
+  cancel-in-progress: false
+
+jobs:
+  validate-source:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "24"
+      - name: Enable Corepack
+        run: corepack enable
+      - name: Install and validate source
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm check
+
+  build-and-publish:
+    needs: validate-source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE_REPOSITORY: ghcr.io/n624-dev/latex-renderer-texlive
+      REQUESTED_DATE: ${{ github.event.inputs.texlive_date || 'latest' }}
+      PUBLISH_REQUESTED: ${{ github.event_name == 'schedule' || inputs.publish == true }}
+      DOCKER_BUILD_RECORD_UPLOAD: "false"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "24"
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+        id: buildx
+        with:
+          name: latex-renderer-ghcr
+          driver: docker-container
+          cleanup: true
+
+      - name: Resolve TeX Live snapshot
+        id: snapshot
+        run: sh deploy/scripts/resolve-texlive-snapshot.sh "$REQUESTED_DATE"
+
+      - name: Build and validate
+        id: validate
+        env:
+          SNAPSHOT_DATE: ${{ steps.snapshot.outputs.date }}
+          TEXLIVE_REPOSITORY: ${{ steps.snapshot.outputs.repository }}
+          TEXLIVE_INSTALLER_SHA512: ${{ steps.snapshot.outputs.installer_sha512 }}
+          BUILDX_BUILDER: ${{ steps.buildx.outputs.name }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_OWNER: n624-dev
+          GHCR_PACKAGE: latex-renderer-texlive
+        run: |
+          set -euo pipefail
+          base="latex-renderer:base-$SNAPSHOT_DATE"
+          runtime="latex-renderer:validation-$SNAPSHOT_DATE"
+          dated_ref="$IMAGE_REPOSITORY:$SNAPSHOT_DATE"
+
+          printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
+          tag_status=$(node deploy/scripts/ghcr-tag-status.mjs "$SNAPSHOT_DATE")
+          if [[ "$tag_status" == present ]]; then
+            docker pull "$dated_ref"
+            base="$dated_ref"
+            base_source=reused-existing
+          elif [[ "$tag_status" == absent ]]; then
+            sh deploy/scripts/generate-texlive-profile.sh \
+              "$TEXLIVE_REPOSITORY" renderer/texlive.profile
+            if grep -Eq '^collection-lang[^[:space:]]*[[:space:]]+1$' renderer/texlive.profile; then
+              echo 'Generated base profile selects an optional language collection.' >&2
+              exit 65
+            fi
+            docker buildx build \
+              --builder "$BUILDX_BUILDER" \
+              --no-cache \
+              --pull \
+              --load \
+              --file renderer/Dockerfile.base \
+              --build-arg "TEXLIVE_REPOSITORY=$TEXLIVE_REPOSITORY" \
+              --build-arg "TEXLIVE_INSTALLER_SHA512=$TEXLIVE_INSTALLER_SHA512" \
+              --build-arg "TEXLIVE_PROFILE_KIND=language-neutral-maximal" \
+              --tag "$base" \
+              renderer
+            base_source=cold-built
+          else
+            echo "Unexpected GHCR tag status: $tag_status" >&2
+            exit 65
+          fi
+
+          [[ $(docker image inspect "$base" --format '{{index .Config.Labels "org.opencontainers.image.title"}}') == latex-renderer-texlive ]]
+          [[ $(docker image inspect "$base" --format '{{index .Config.Labels "jp.n624.latex-renderer.texlive.profile-kind"}}') == language-neutral-maximal ]]
+          [[ $(docker image inspect "$base" --format '{{index .Config.Labels "jp.n624.latex-renderer.base-kind"}}') == texlive-only-v1 ]]
+          [[ $(docker image inspect "$base" --format '{{index .Config.Labels "jp.n624.latex-renderer.texlive.repository"}}') == "$TEXLIVE_REPOSITORY" ]]
+          [[ $(docker image inspect "$base" --format '{{index .Config.Labels "jp.n624.latex-renderer.texlive.installer-sha512"}}') == "$TEXLIVE_INSTALLER_SHA512" ]]
+          sh deploy/scripts/smoke-test-texlive-base.sh "$base"
+
+          RENDERER_RUNTIME_SOURCE="$GITHUB_WORKSPACE/renderer" \
+            sh deploy/scripts/build-language-runtime.sh \
+              "$base" "$TEXLIVE_REPOSITORY" "$runtime" \
+              collection-langenglish collection-langjapanese
+          sh deploy/scripts/smoke-test-renderer-basic.sh "$runtime"
+          sh deploy/scripts/smoke-test-renderer-svg.sh "$runtime"
+
+          docker image rm "$runtime" >/dev/null 2>&1 || true
+          printf '%s\n' "$base" > "$RUNNER_TEMP/validated-base-image"
+          printf '%s\n' "$base_source" > "$RUNNER_TEMP/validated-base-source"
+
+      - name: Publish immutable dated image
+        id: publish
+        if: steps.validate.outcome == 'success' && env.PUBLISH_REQUESTED == 'true'
+        env:
+          SNAPSHOT_DATE: ${{ steps.snapshot.outputs.date }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_OWNER: n624-dev
+          GHCR_PACKAGE: latex-renderer-texlive
+        run: |
+          set -euo pipefail
+          base=$(cat "$RUNNER_TEMP/validated-base-image")
+          base_source=$(cat "$RUNNER_TEMP/validated-base-source")
+          dated_ref="$IMAGE_REPOSITORY:$SNAPSHOT_DATE"
+          printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
+
+          if [[ "$base_source" == cold-built ]]; then
+            [[ $(node deploy/scripts/ghcr-tag-status.mjs "$SNAPSHOT_DATE") == absent ]]
+            local_id=$(docker image inspect "$base" --format '{{.Id}}')
+            docker tag "$base" "$dated_ref"
+            docker push "$dated_ref"
+            digest=$(docker buildx imagetools inspect "$dated_ref" | awk '$1 == "Digest:" { print $2; exit }')
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+            docker pull "$IMAGE_REPOSITORY@$digest" >/dev/null
+            [[ $(docker image inspect "$IMAGE_REPOSITORY@$digest" --format '{{.Id}}') == "$local_id" ]]
+          elif [[ "$base_source" == reused-existing ]]; then
+            digest=$(docker buildx imagetools inspect "$dated_ref" | awk '$1 == "Digest:" { print $2; exit }')
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          else
+            echo "Unexpected validated base source: $base_source" >&2
+            exit 65
+          fi
+
+          if [[ "$REQUESTED_DATE" == latest ]]; then
+            docker buildx imagetools create \
+              --prefer-index=false \
+              --tag "$IMAGE_REPOSITORY:latest" \
+              "$IMAGE_REPOSITORY@$digest"
+            latest_digest=$(docker buildx imagetools inspect "$IMAGE_REPOSITORY:latest" | awk '$1 == "Digest:" { print $2; exit }')
+            [[ "$latest_digest" == "$digest" ]]
+          fi
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Verify anonymous pull
+        if: steps.publish.outcome == 'success'
+        env:
+          IMAGE_DIGEST: ${{ steps.publish.outputs.digest }}
+        run: |
+          set -euo pipefail
+          docker logout ghcr.io >/dev/null
+          docker image rm "$IMAGE_REPOSITORY@$IMAGE_DIGEST" >/dev/null 2>&1 || true
+          docker pull "$IMAGE_REPOSITORY@$IMAGE_DIGEST"
+
+      - name: Registry maintenance
+        if: steps.publish.outcome == 'success' && env.REQUESTED_DATE == 'latest'
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_OWNER: n624-dev
+          GHCR_PACKAGE: latex-renderer-texlive
+          GHCR_REPOSITORY: ghcr.io/n624-dev/latex-renderer-texlive
+        run: node deploy/scripts/ghcr-retention.mjs
+
+      - name: Clean local image state
+        if: always()
+        env:
+          SNAPSHOT_DATE: ${{ steps.snapshot.outputs.date }}
+          BUILDX_BUILDER: ${{ steps.buildx.outputs.name }}
+        run: |
+          set +e
+          docker image rm \
+            "latex-renderer:validation-${SNAPSHOT_DATE:-unknown}" \
+            "$IMAGE_REPOSITORY:${SNAPSHOT_DATE:-unknown}" \
+            "$IMAGE_REPOSITORY:latest" \
+            "latex-renderer:base-${SNAPSHOT_DATE:-unknown}" \
+            >/dev/null 2>&1 || true
+          docker buildx prune --builder "${BUILDX_BUILDER:-latex-renderer-ghcr}" --all --force >/dev/null 2>&1 || true
+          docker buildx rm --force "${BUILDX_BUILDER:-latex-renderer-ghcr}" >/dev/null 2>&1 || true
+          docker logout ghcr.io >/dev/null 2>&1 || true
