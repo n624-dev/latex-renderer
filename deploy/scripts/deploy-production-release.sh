@@ -72,6 +72,7 @@ systemctl restart \
   latex-renderer-remote-mcp \
   latex-renderer-worker
 systemctl enable --now \
+  latex-renderer-remote-mcp.service \
   latex-renderer-image-refresh.timer \
   latex-renderer-image-operation-watchdog.timer \
   latex-renderer-image-log-cleanup.timer
