@@ -20,6 +20,7 @@ const applySchema = z
     languages: z.array(languageSchema).max(100),
     autoUpdate: z.boolean(),
     rebuildIfMissing: z.boolean().default(true),
+    runtimeBuildIfMissing: z.boolean().default(false),
   })
   .superRefine((value, context) => {
     if (value.autoUpdate && value.selector.mode !== "latest") {
@@ -139,7 +140,7 @@ export function createTexEnvironmentRouter(deps: AdminDependencies): Hono {
     // The exact selected TeX Live snapshot is authoritative for collection existence.
     const result = (await serializeMutation(() => manager().apply(input))) as OperationResponse;
     audit(deps, actor, "tex_environment.apply_requested", result.id ?? "apply", "requested", {
-      selector: input.selector, languages: input.languages, autoUpdate: input.autoUpdate, rebuildIfMissing: input.rebuildIfMissing,
+      selector: input.selector, languages: input.languages, autoUpdate: input.autoUpdate, rebuildIfMissing: input.rebuildIfMissing, runtimeBuildIfMissing: input.runtimeBuildIfMissing,
     });
     return c.json(result, 202);
   });

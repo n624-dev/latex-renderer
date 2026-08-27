@@ -47,3 +47,23 @@ additionally requires the database `owner` or `admin` role. Admin CLI uses an
 allowed Origin and `X-CSRF-Token`.
 
 `admin-local` is the intentional direct-SQL recovery exception. Normal runtime SQL is owned by database repositories and business operations live in services.
+
+## Host update boundary
+
+The unprivileged Admin API is the common control plane for Web and CLI update
+operations. It has neither `sudo` nor Docker/systemd access. TeX changes are
+forwarded to the loopback-only Image Manager; application changes are forwarded
+over a group-restricted Unix socket to the root-owned Update Manager. Both use
+independent random host credentials and declarative allowlisted operations.
+Both privileged managers hold one non-blocking OS mutation lock for the full
+operation, so an application update and a TeX environment mutation cannot run
+concurrently even when they were requested from different interfaces.
+
+The Update Manager trusts only immutable semantic-version releases from
+`n624-dev/latex-renderer`, verifies the locked tag commit and GitHub-provided
+asset digest, stages dependencies as a configured non-root deployment user, and
+then invokes the fixed production deployment entry point. It cannot accept a
+caller-supplied repository, URL, path, command, service name, or environment.
+Host configuration, credentials, databases, and generated data remain outside
+release bundles and Git. Durable redacted operation records allow Web/CLI clients
+to reconnect while services or the Update Manager restart.

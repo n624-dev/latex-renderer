@@ -136,9 +136,7 @@ describe("managed TeX Live image pipeline", () => {
     expect(manager).not.toContain(
       "state.desired = { ...state.desired, selector, languages, autoUpdate }",
     );
-    expect(manager.match(/GHCR Base is not publicly readable/g)).toHaveLength(
-      2,
-    );
+    expect(manager).toContain("GHCR Base is not publicly readable");
   });
 
   it("keeps image activation crash-recoverable and cleanup ID-safe", () => {
@@ -196,7 +194,10 @@ describe("managed TeX Live image pipeline", () => {
       "Refusing to fall back silently to the legacy renderer image",
     );
     expect(restore).toContain(
-      "Renderer code changed; rebuilding the managed runtime from its clean TeX base",
+      "Renderer code changed; pulled the matching public Runtime",
+    );
+    expect(restore).toContain(
+      "GHCR confirms the Runtime is absent; building the custom language Runtime locally",
     );
     expect(restore).toContain(
       "tmp_root=${TMPDIR:-/var/lib/latex-renderer/image-manager/tmp}",

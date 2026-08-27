@@ -29,6 +29,7 @@ for (const value of [
   current.snapshotDate ?? 'custom',
   languages.join(' '),
   state.previous?.runtimeImageId ?? '',
+  state.desired?.runtimeBuildIfMissing === true ? 'true' : 'false',
 ]) process.stdout.write(`${value}\n`);
 NODE
 ) || {
@@ -42,6 +43,7 @@ runtime_ref=$(printf '%s\n' "$state_values" | sed -n '3p')
 snapshot_date=$(printf '%s\n' "$state_values" | sed -n '4p')
 languages=$(printf '%s\n' "$state_values" | sed -n '5p')
 previous_runtime=$(printf '%s\n' "$state_values" | sed -n '6p')
+runtime_build_if_missing=$(printf '%s\n' "$state_values" | sed -n '7p')
 [ -n "$runtime_image" ] || exit 0
 [ -n "$base_image" ] || {
   echo "Managed TeX runtime has no clean base image recorded" >&2
@@ -94,15 +96,54 @@ if [ "$image_fingerprint" != "$current_fingerprint" ]; then
     *) echo "Managed TeX base has an invalid repository label" >&2; exit 78 ;;
   esac
 
-  hash=$(
-    {
-      printf '%s\n' "$base_image"
-      for language in $languages; do printf '%s\n' "$language"; done
-    } | sha256sum | cut -d' ' -f1 | cut -c1-16
-  )
-  new_runtime_ref="latex-renderer:runtime-${snapshot_date:-custom}-$hash"
-  echo "Renderer code changed; rebuilding the managed runtime from its clean TeX base."
-  env \
+  # shellcheck disable=SC2086
+  runtime_tag=$(HOME="$worker_home" XDG_RUNTIME_DIR="$runtime_dir" DOCKER_HOST="$docker_host" \
+    RENDERER_RUNTIME_SOURCE="$repo_root/renderer" /usr/local/bin/node \
+    "$repo_root/deploy/scripts/runtime-image-identity.mjs" --format tag "$base_image" $languages)
+  # shellcheck disable=SC2086
+  runtime_identity=$(HOME="$worker_home" XDG_RUNTIME_DIR="$runtime_dir" DOCKER_HOST="$docker_host" \
+    RENDERER_RUNTIME_SOURCE="$repo_root/renderer" /usr/local/bin/node \
+    "$repo_root/deploy/scripts/runtime-image-identity.mjs" --format digest "$base_image" $languages)
+  image_repository=${TEXLIVE_IMAGE_REPOSITORY:-ghcr.io/n624-dev/latex-renderer-texlive}
+  package_ref="$image_repository:$runtime_tag"
+  local_ref="latex-renderer:$runtime_tag"
+  new_runtime_ref=
+  runtime_source=
+  runtime_package_ref=
+
+  if rootless_docker image inspect "$package_ref" >/dev/null 2>&1; then
+    new_runtime_ref=$package_ref
+    runtime_source=ghcr
+    runtime_package_ref=$package_ref
+    echo "Renderer code changed; reusing the exact locally cached public Runtime."
+  elif rootless_docker image inspect "$local_ref" >/dev/null 2>&1; then
+    new_runtime_ref=$local_ref
+    runtime_source=local-build
+    echo "Renderer code changed; reusing the exact locally built Runtime."
+  elif rootless_docker pull "$package_ref"; then
+    new_runtime_ref=$package_ref
+    runtime_source=ghcr
+    runtime_package_ref=$package_ref
+    echo "Renderer code changed; pulled the matching public Runtime."
+  else
+    tag_status=$(GHCR_REPOSITORY="$image_repository" /usr/local/bin/node \
+      "$repo_root/deploy/scripts/ghcr-tag-status.mjs" "$runtime_tag")
+    if [ "$tag_status" = present ]; then
+      echo "Matching Runtime exists in GHCR but could not be pulled; refusing a local build." >&2
+      exit 78
+    fi
+    if [ "$tag_status" != absent ]; then
+      echo "Could not confirm whether the matching Runtime exists in GHCR." >&2
+      exit 78
+    fi
+    if [ "$runtime_build_if_missing" != true ]; then
+      echo "No matching prebuilt Runtime is published. Enable the explicit Runtime local-build fallback for a custom language set." >&2
+      exit 78
+    fi
+    new_runtime_ref=$local_ref
+    runtime_source=local-build
+    echo "GHCR confirms the Runtime is absent; building the custom language Runtime locally."
+    env \
     TMPDIR="$tmp_root" \
     HOME="$worker_home" \
     XDG_RUNTIME_DIR="$runtime_dir" \
@@ -110,12 +151,22 @@ if [ "$image_fingerprint" != "$current_fingerprint" ]; then
     RENDERER_RUNTIME_SOURCE="$repo_root/renderer" \
     sh "$repo_root/deploy/scripts/build-language-runtime.sh" \
       "$base_image" "$repository" "$new_runtime_ref" $languages
+  fi
 
   new_runtime_image=$(rootless_docker image inspect "$new_runtime_ref" --format '{{.Id}}')
   new_fingerprint=$(rootless_docker image inspect "$new_runtime_image" \
     --format '{{index .Config.Labels "jp.n624.latex-renderer.renderer-runtime-fingerprint"}}')
-  if [ "$new_fingerprint" != "$current_fingerprint" ]; then
-    echo "Rebuilt managed runtime does not contain the current renderer code" >&2
+  new_identity=$(rootless_docker image inspect "$new_runtime_image" \
+    --format '{{index .Config.Labels "jp.n624.latex-renderer.runtime-identity"}}')
+  new_kind=$(rootless_docker image inspect "$new_runtime_image" \
+    --format '{{index .Config.Labels "jp.n624.latex-renderer.runtime-kind"}}')
+  new_base=$(rootless_docker image inspect "$new_runtime_image" \
+    --format '{{index .Config.Labels "jp.n624.latex-renderer.base-image-id"}}')
+  if [ "$new_fingerprint" != "$current_fingerprint" ] || \
+     [ "$new_identity" != "$runtime_identity" ] || \
+     [ "$new_kind" != prebuilt-v1 ] || \
+     [ "$new_base" != "$base_image" ]; then
+    echo "Selected managed Runtime identity does not match the current renderer and clean Base" >&2
     exit 78
   fi
 
@@ -128,12 +179,18 @@ if [ "$image_fingerprint" != "$current_fingerprint" ]; then
 
   effective_languages=$(rootless_docker run --rm --entrypoint /bin/sh "$new_runtime_image" -c \
     "tlmgr info --only-installed --data name 2>/dev/null | sed 's/^name: //' | grep '^collection-lang' || true")
+  for language in $languages; do
+    if ! printf '%s\n' "$effective_languages" | grep -qx "$language"; then
+      echo "Selected managed Runtime is missing language collection: $language" >&2
+      exit 78
+    fi
+  done
   effective_csv=$(printf '%s\n' "$effective_languages" | sed '/^$/d' | paste -sd, -)
 
   old_runtime_image=$runtime_image
   runtime_image=$new_runtime_image
   runtime_ref=$new_runtime_ref
-  /usr/local/bin/node - "$state_file" "$runtime_image" "$runtime_ref" "$current_fingerprint" "$effective_csv" <<'NODE'
+  /usr/local/bin/node - "$state_file" "$runtime_image" "$runtime_ref" "$current_fingerprint" "$effective_csv" "$runtime_identity" "$runtime_source" "$runtime_package_ref" <<'NODE'
 const fs = require('node:fs');
 const path = process.argv[2];
 const runtimeImageId = process.argv[3];
@@ -142,11 +199,17 @@ const rendererRuntimeFingerprint = process.argv[5];
 const effectiveLanguageCollections = process.argv[6]
   ? process.argv[6].split(',').filter(Boolean).sort()
   : [];
+const runtimeIdentity = process.argv[7];
+const runtimeSource = process.argv[8];
+const runtimePackageRef = process.argv[9] || null;
 const state = JSON.parse(fs.readFileSync(path, 'utf8'));
 if (!state.current || state.current.legacy === true) process.exit(78);
 state.current.runtimeImageId = runtimeImageId;
 state.current.runtimeRef = runtimeRef;
 state.current.rendererRuntimeFingerprint = rendererRuntimeFingerprint;
+state.current.runtimeIdentity = runtimeIdentity;
+state.current.runtimeSource = runtimeSource;
+state.current.runtimePackageRef = runtimePackageRef;
 state.current.effectiveLanguageCollections = effectiveLanguageCollections;
 state.current.rendererUpdatedAt = new Date().toISOString();
 state.updatedAt = new Date().toISOString();

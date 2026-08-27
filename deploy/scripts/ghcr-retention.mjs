@@ -35,6 +35,10 @@ function parseDateTag(tag) {
   if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== tag) return null;
   return date;
 }
+function parseRuntimeDateTag(tag) {
+  const match = /^runtime-v1-(\d{4}-\d{2}-\d{2})-[a-f0-9]{32}$/.exec(tag);
+  return match ? parseDateTag(match[1]) : null;
+}
 function ageDays(date) {
   return Math.floor((today.getTime() - date.getTime()) / dayMs);
 }
@@ -137,16 +141,18 @@ for (const version of list) {
     continue;
   }
 
-  const unknown = tags.some((tag) => tag !== "latest" && !parseDateTag(tag) && !/^weekly-\d{4}-W\d{2}$/.test(tag));
+  const unknown = tags.some((tag) => tag !== "latest" && !parseDateTag(tag) && !parseRuntimeDateTag(tag) && !/^weekly-\d{4}-W\d{2}$/.test(tag));
   if (unknown) continue;
   let protectedVersion = tags.includes("latest");
   for (const tag of tags) {
     const date = parseDateTag(tag);
-    if (date) {
-      const age = ageDays(date);
+    const runtimeDate = parseRuntimeDateTag(tag);
+    if (date || runtimeDate) {
+      const effectiveDate = date ?? runtimeDate;
+      const age = ageDays(effectiveDate);
       if (
         age <= 14 ||
-        (age >= 15 && age <= 90 && selectedDates.has(tag)) ||
+        (date && age >= 15 && age <= 90 && selectedDates.has(tag)) ||
         (age > 14 && versionAge <= onDemandRetentionDays)
       ) protectedVersion = true;
       continue;

@@ -53,7 +53,7 @@ for language in "$@"; do
   esac
   languages="$languages $language"
 done
-languages=$(printf '%s' "$languages" | sed 's/^ *//')
+languages=$(printf '%s' "$languages" | tr ' ' '\n' | sed '/^$/d' | LC_ALL=C sort -u | tr '\n' ' ' | sed 's/ *$//')
 
 runtime_fingerprint=$(
   for file in $runtime_files; do
@@ -64,6 +64,16 @@ runtime_fingerprint=$(
 case "$runtime_fingerprint" in
   [0-9a-f][0-9a-f]*) ;;
   *) echo "Could not calculate renderer runtime fingerprint" >&2; exit 65 ;;
+esac
+runtime_identity=$(
+  {
+    printf 'runtime-v1\n%s\n%s\n' "$base_image_id" "$runtime_fingerprint"
+    for language in $languages; do printf '%s\n' "$language"; done
+  } | sha256sum | cut -d' ' -f1
+)
+case "$runtime_identity" in
+  [0-9a-f][0-9a-f]*) ;;
+  *) echo "Could not calculate Runtime identity" >&2; exit 65 ;;
 esac
 
 tmp=$(mktemp -d)
@@ -128,6 +138,9 @@ docker build \
   --label "jp.n624.latex-renderer.languages=$(printf '%s' "$languages" | sed 's/ /,/g')" \
   --label "jp.n624.latex-renderer.base-image-id=$base_image_id" \
   --label "jp.n624.latex-renderer.renderer-runtime-fingerprint=$runtime_fingerprint" \
+  --label "jp.n624.latex-renderer.runtime-kind=prebuilt-v1" \
+  --label "jp.n624.latex-renderer.runtime-identity=$runtime_identity" \
+  --label "org.opencontainers.image.source=https://github.com/n624-dev/latex-renderer" \
   --tag "$output_tag" \
   "$tmp"
 

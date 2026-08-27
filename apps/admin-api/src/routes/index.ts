@@ -12,6 +12,7 @@ import {
   createWorkerRouter,
 } from "./system.js";
 import { createTexEnvironmentRouter } from "./tex-environment.js";
+import { createUpdatesRouter } from "./updates.js";
 import { createUsersRouter } from "./users.js";
 
 export function createAdminV1Router(deps: AdminDependencies): Hono {
@@ -42,6 +43,7 @@ export function createAdminV1Router(deps: AdminDependencies): Hono {
   r.route("/system", createSystemRouter(deps));
   r.route("/worker", createWorkerRouter(deps));
   r.route("/tex-environment", createTexEnvironmentRouter(deps));
+  r.route("/updates", createUpdatesRouter(deps));
   r.route("/audit-logs", createAuditRouter(deps));
   return r;
 }

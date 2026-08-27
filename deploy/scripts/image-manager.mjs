@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { createHash, timingSafeEqual } from "node:crypto";
+import { timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import {
@@ -17,6 +17,11 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  rendererRuntimeFingerprint,
+  runtimeIdentity,
+} from "./runtime-image-identity.mjs";
+import { acquireMutationLock } from "./mutation-lock.mjs";
 
 const host = process.env.IMAGE_MANAGER_HOST ?? "127.0.0.1";
 const port = Number(process.env.IMAGE_MANAGER_PORT ?? "3110");
@@ -66,6 +71,7 @@ const emptyState = () => ({
     selector: { mode: "latest", value: null },
     languages: [],
     autoUpdate: false,
+    runtimeBuildIfMissing: false,
     countryOverride: null,
   },
   current: null,
@@ -377,6 +383,15 @@ async function startOperation(type, task) {
     if (activeOperationId) {
       throw httpError(409, "IMAGE_OPERATION_ACTIVE", "Another image operation is already running");
     }
+    let mutationLock;
+    try {
+      mutationLock = await acquireMutationLock();
+    } catch (error) {
+      if (error?.code === "MUTATION_LOCK_BUSY") {
+        throw httpError(409, "MUTATION_LOCK_BUSY", error.message);
+      }
+      throw error;
+    }
     const id = `imgop_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
     const op = {
       id,
@@ -398,6 +413,7 @@ async function startOperation(type, task) {
       state.lastOperationId = previousLastOperationId;
       await rm(operationMetaPath(id), { force: true }).catch(() => {});
       await persistState().catch(() => {});
+      await mutationLock.release().catch(() => {});
       throw error;
     }
 
@@ -405,8 +421,9 @@ async function startOperation(type, task) {
       .then(() => task(op))
       .then(() => finishOperationSucceeded(op))
       .catch((error) => finishOperationFailed(op, error))
-      .finally(() => {
+      .finally(async () => {
         operations.delete(id);
+        await mutationLock.release().catch(() => {});
       });
     return operationView(op);
   });
@@ -637,11 +654,14 @@ async function seedCurrentRuntimeIfNeeded() {
 }
 
 async function buildRuntime(op, base, languages) {
-  const hash = createHash("sha256")
-    .update(`${base.imageId}\n${languages.join("\n")}`)
-    .digest("hex")
-    .slice(0, 16);
-  const tag = `latex-renderer:runtime-${base.snapshotDate ?? "custom"}-${hash}`;
+  const rendererFingerprint = await rendererRuntimeFingerprint(join(repoRoot, "renderer"));
+  const identity = runtimeIdentity({
+    baseImageId: base.imageId,
+    rendererFingerprint,
+    languages,
+    snapshotDate: base.snapshotDate,
+  });
+  const tag = `latex-renderer:${identity.tag}`;
   await runLogged(
     op,
     "sh",
@@ -660,14 +680,108 @@ async function buildRuntime(op, base, languages) {
   if (missing.length > 0) {
     throw new Error(`Selected language collections were not installed: ${missing.join(",")}`);
   }
-  const rendererFingerprint = (await dockerCapture([
+  const builtRendererFingerprint = (await dockerCapture([
     "image", "inspect", tag, "--format",
     '{{index .Config.Labels "jp.n624.latex-renderer.renderer-runtime-fingerprint"}}',
   ])).trim();
-  if (!/^[a-f0-9]{64}$/.test(rendererFingerprint)) {
+  if (builtRendererFingerprint !== rendererFingerprint) {
     throw new Error("Derived runtime is missing the current renderer runtime fingerprint");
   }
-  return { ref: tag, imageId, rendererFingerprint, effectiveLanguages: installed };
+  return {
+    ref: tag,
+    imageId,
+    rendererFingerprint,
+    effectiveLanguages: installed,
+    identity: identity.digest,
+    source: "local-build",
+    packageRef: null,
+  };
+}
+
+async function inspectRuntimeCandidate(ref, expected) {
+  const raw = await dockerCapture(["image", "inspect", ref, "--format", "{{json .}}"]);
+  const info = JSON.parse(raw);
+  const labels = info.Config?.Labels ?? {};
+  const languages = validateLanguages(
+    String(labels["jp.n624.latex-renderer.languages"] ?? "")
+      .split(",")
+      .filter(Boolean),
+  );
+  if (
+    labels["jp.n624.latex-renderer.runtime-kind"] !== "prebuilt-v1" ||
+    labels["jp.n624.latex-renderer.runtime-identity"] !== expected.digest ||
+    labels["jp.n624.latex-renderer.base-image-id"] !== expected.baseImageId ||
+    labels["jp.n624.latex-renderer.renderer-runtime-fingerprint"] !== expected.rendererFingerprint ||
+    !sameLanguages(languages, expected.languages)
+  ) {
+    throw new Error(`Runtime image identity metadata does not match the requested environment: ${ref}`);
+  }
+  const installed = await installedLanguageCollections(ref);
+  const missing = expected.languages.filter((language) => !installed.includes(language));
+  if (missing.length > 0) {
+    throw new Error(`Prebuilt Runtime is missing selected language collections: ${missing.join(",")}`);
+  }
+  return {
+    ref,
+    imageId: info.Id,
+    rendererFingerprint: expected.rendererFingerprint,
+    effectiveLanguages: installed,
+    identity: expected.digest,
+    source: ref.startsWith(`${imageRepository}:`) ? "ghcr" : "local-build",
+    packageRef: ref.startsWith(`${imageRepository}:`) ? ref : null,
+  };
+}
+
+async function acquireRuntime(op, base, languages, runtimeBuildIfMissing) {
+  const expected = runtimeIdentity({
+    baseImageId: base.imageId,
+    rendererFingerprint: await rendererRuntimeFingerprint(join(repoRoot, "renderer")),
+    languages,
+    snapshotDate: base.snapshotDate,
+  });
+  const localRef = `latex-renderer:${expected.tag}`;
+  const packageRef = `${imageRepository}:${expected.tag}`;
+  for (const ref of [packageRef, localRef]) {
+    try {
+      const runtime = await inspectRuntimeCandidate(ref, expected);
+      await appendLog(op, `Reusing exact local TeX Runtime ${ref}.\n`);
+      return runtime;
+    } catch {
+      // A missing or stale local tag is not authoritative; try the public package.
+    }
+  }
+
+  let pullError;
+  try {
+    await dockerLogged(op, ["pull", packageRef]);
+    const runtime = await inspectRuntimeCandidate(packageRef, expected);
+    await appendLog(op, `Using verified prebuilt TeX Runtime ${packageRef}.\n`);
+    return runtime;
+  } catch (error) {
+    pullError = error;
+  }
+
+  let tagStatus;
+  try {
+    tagStatus = await registryTagStatus(expected.tag);
+  } catch (registryError) {
+    await appendLog(
+      op,
+      `Registry discovery failed after Runtime pull error; refusing local build: ${registryError instanceof Error ? registryError.message : String(registryError)}\n`,
+    );
+    throw registryError;
+  }
+  if (tagStatus === "present") {
+    await appendLog(op, `GHCR still reports ${expected.tag}; refusing local build because the pull failure was not proven to be a missing tag.\n`);
+    throw pullError;
+  }
+  if (!runtimeBuildIfMissing) {
+    throw new Error(
+      `No matching prebuilt TeX Runtime is published for ${expected.tag}. Enable the explicit Runtime local-build fallback for a custom language set.`,
+    );
+  }
+  await appendLog(op, `GHCR confirms ${expected.tag} is absent; building the requested custom TeX Runtime locally.\n`);
+  return buildRuntime(op, base, languages);
 }
 
 async function validateRuntime(op, runtimeRef) {
@@ -816,10 +930,11 @@ async function applyRuntime(op, input, resolvedBase = null) {
   const selector = validateSelector(input.selector);
   const languages = validateLanguages(input.languages ?? []);
   const autoUpdate = Boolean(input.autoUpdate);
+  const runtimeBuildIfMissing = input.runtimeBuildIfMissing === true;
   const rebuildIfMissing = input.rebuildIfMissing !== false;
-  await appendLog(op, `Applying ${JSON.stringify({ selector, languages, autoUpdate })}\n`);
+  await appendLog(op, `Applying ${JSON.stringify({ selector, languages, autoUpdate, runtimeBuildIfMissing })}\n`);
   const base = resolvedBase ?? await pullOrRebuildBase(op, selector, rebuildIfMissing);
-  const runtime = await buildRuntime(op, base, languages);
+  const runtime = await acquireRuntime(op, base, languages, runtimeBuildIfMissing);
   await validateRuntime(op, runtime.ref);
   const inventory = await collectInventory(runtime.ref);
   const previousState = cloneState();
@@ -831,6 +946,7 @@ async function applyRuntime(op, input, resolvedBase = null) {
       selector,
       languages,
       autoUpdate,
+      runtimeBuildIfMissing,
     },
     current: {
       selector,
@@ -840,6 +956,9 @@ async function applyRuntime(op, input, resolvedBase = null) {
       runtimeRef: runtime.ref,
       runtimeImageId: runtime.imageId,
       rendererRuntimeFingerprint: runtime.rendererFingerprint,
+      runtimeIdentity: runtime.identity,
+      runtimeSource: runtime.source,
+      runtimePackageRef: runtime.packageRef,
       snapshotDate: base.snapshotDate,
       languages,
       effectiveLanguageCollections: runtime.effectiveLanguages,
@@ -875,7 +994,12 @@ async function rollback(op) {
   } else {
     const base = await inspectBase(target.baseImageId);
     const languages = validateLanguages(target.languages ?? []);
-    const runtime = await buildRuntime(op, base, languages);
+    const runtime = await acquireRuntime(
+      op,
+      base,
+      languages,
+      state.desired.runtimeBuildIfMissing === true,
+    );
     await validateRuntime(op, runtime.ref);
     imageId = runtime.imageId;
     inventory = await collectInventory(runtime.ref);
@@ -887,6 +1011,9 @@ async function rollback(op) {
       runtimeRef: runtime.ref,
       runtimeImageId: runtime.imageId,
       rendererRuntimeFingerprint: runtime.rendererFingerprint,
+      runtimeIdentity: runtime.identity,
+      runtimeSource: runtime.source,
+      runtimePackageRef: runtime.packageRef,
       snapshotDate: target.snapshotDate ?? base.snapshotDate,
       languages,
       effectiveLanguageCollections: runtime.effectiveLanguages,
@@ -984,10 +1111,12 @@ async function reconcileDesired(op) {
   const selector = validateSelector(state.desired.selector);
   const languages = validateLanguages(state.desired.languages ?? []);
   const autoUpdate = Boolean(state.desired.autoUpdate);
+  const runtimeBuildIfMissing = state.desired.runtimeBuildIfMissing === true;
   const currentMatches =
     state.current?.legacy !== true &&
     sameSelector(selector, state.current?.selector) &&
-    sameLanguages(languages, state.current?.languages);
+    sameLanguages(languages, state.current?.languages) &&
+    state.current?.rendererRuntimeFingerprint === await rendererRuntimeFingerprint(join(repoRoot, "renderer"));
 
   if (selector.mode === "latest") {
     const latest = await pullOrRebuildBase(op, selector, false);
@@ -999,6 +1128,7 @@ async function reconcileDesired(op) {
       selector,
       languages,
       autoUpdate,
+      runtimeBuildIfMissing,
       rebuildIfMissing: false,
     }, latest);
     return;
@@ -1012,6 +1142,7 @@ async function reconcileDesired(op) {
     selector,
     languages,
     autoUpdate,
+    runtimeBuildIfMissing,
     rebuildIfMissing: selector.mode === "date",
   });
 }
@@ -1024,7 +1155,8 @@ async function refreshLatest(op) {
   const latest = await pullOrRebuildBase(op, { mode: "latest", value: null }, false);
   const runtimeDrift =
     state.current?.selector?.mode !== "latest" ||
-    !sameLanguages(state.desired.languages, state.current?.languages);
+    !sameLanguages(state.desired.languages, state.current?.languages) ||
+    state.current?.rendererRuntimeFingerprint !== await rendererRuntimeFingerprint(join(repoRoot, "renderer"));
   if (state.current?.baseImageId === latest.imageId && !runtimeDrift) {
     await appendLog(op, "Already using the latest validated base with the desired language set.\n");
     return;
@@ -1033,6 +1165,7 @@ async function refreshLatest(op) {
     selector: { mode: "latest", value: null },
     languages: state.desired.languages,
     autoUpdate: true,
+    runtimeBuildIfMissing: state.desired.runtimeBuildIfMissing === true,
     rebuildIfMissing: false,
   }, latest);
 }
@@ -1063,30 +1196,66 @@ async function quiesceManager() {
   });
 }
 
-async function listImages() {
-  const tokenResponse = await fetchWithTimeout(
-    `https://ghcr.io/token?service=ghcr.io&scope=${encodeURIComponent(`repository:${ghcrOwner}/${ghcrName}:pull`)}`,
-  );
-  if (tokenResponse.status === 401 || tokenResponse.status === 403) {
-    throw new Error(
-      "GHCR Base is not publicly readable. Set the container package visibility to Public before applying it.",
-    );
-  }
-  if (!tokenResponse.ok) throw new Error(`GHCR token request failed: ${tokenResponse.status}`);
-  const tokenBody = await tokenResponse.json();
-  const registryToken = typeof tokenBody?.token === "string" ? tokenBody.token : "";
-  if (!registryToken) throw new Error("GHCR token response did not include a registry token");
+async function listRegistryTags() {
+  const registryToken = await registryPullToken();
   const response = await fetchWithTimeout(
     `https://ghcr.io/v2/${ghcrOwner}/${ghcrName}/tags/list?n=1000`,
     { headers: { Authorization: `Bearer ${registryToken}` } },
   );
+  assertPublicRegistryResponse(response);
+  if (!response.ok) throw new Error(`GHCR tag list failed: ${response.status}`);
+  const tags = (await response.json()).tags ?? [];
+  if (!Array.isArray(tags) || tags.some((tag) => typeof tag !== "string")) {
+    throw new Error("GHCR tag list response is invalid");
+  }
+  return tags;
+}
+
+async function registryPullToken() {
+  const tokenResponse = await fetchWithTimeout(
+    `https://ghcr.io/token?service=ghcr.io&scope=${encodeURIComponent(`repository:${ghcrOwner}/${ghcrName}:pull`)}`,
+  );
+  assertPublicRegistryResponse(tokenResponse);
+  if (!tokenResponse.ok) throw new Error(`GHCR token request failed: ${tokenResponse.status}`);
+  const tokenBody = await tokenResponse.json();
+  const registryToken = typeof tokenBody?.token === "string" ? tokenBody.token : "";
+  if (!registryToken) throw new Error("GHCR token response did not include a registry token");
+  return registryToken;
+}
+
+function assertPublicRegistryResponse(response) {
   if (response.status === 401 || response.status === 403) {
     throw new Error(
       "GHCR Base is not publicly readable. Set the container package visibility to Public before applying it.",
     );
   }
-  if (!response.ok) throw new Error(`GHCR tag list failed: ${response.status}`);
-  const tags = (await response.json()).tags ?? [];
+}
+
+async function registryTagStatus(tag) {
+  const registryToken = await registryPullToken();
+  const response = await fetchWithTimeout(
+    `https://ghcr.io/v2/${ghcrOwner}/${ghcrName}/manifests/${encodeURIComponent(tag)}`,
+    {
+      method: "HEAD",
+      headers: {
+        Authorization: `Bearer ${registryToken}`,
+        Accept: [
+          "application/vnd.oci.image.index.v1+json",
+          "application/vnd.oci.image.manifest.v1+json",
+          "application/vnd.docker.distribution.manifest.list.v2+json",
+          "application/vnd.docker.distribution.manifest.v2+json",
+        ].join(", "),
+      },
+    },
+  );
+  assertPublicRegistryResponse(response);
+  if (response.ok) return "present";
+  if (response.status === 404) return "absent";
+  throw new Error(`GHCR manifest check failed: ${response.status}`);
+}
+
+async function listImages() {
+  const tags = await listRegistryTags();
   return {
     repository: imageRepository,
     latest: tags.includes("latest"),

@@ -7,6 +7,7 @@ import { loadSigningKeyRing, TicketService } from "@latex-renderer/ticket";
 import { loadResourceLimits } from "@latex-renderer/shared";
 import { createAdminApp } from "./app.js";
 import { ImageManagerClient } from "./services/image-manager.js";
+import { UpdateManagerClient } from "./services/update-manager.js";
 
 function required(name: string): string {
   const value = process.env[name];
@@ -43,6 +44,15 @@ const imageManager =
         readFileSync(imageManagerTokenPath, "utf8").trim(),
       )
     : undefined;
+const updateManagerSocket = process.env.UPDATE_MANAGER_SOCKET;
+const updateManagerTokenPath = updateManagerSocket
+  ? process.env.CREDENTIALS_DIRECTORY
+    ? join(process.env.CREDENTIALS_DIRECTORY, "update-manager-token")
+    : required("UPDATE_MANAGER_TOKEN_FILE")
+  : undefined;
+const updateManager = updateManagerSocket && updateManagerTokenPath
+  ? new UpdateManagerClient(updateManagerSocket, readFileSync(updateManagerTokenPath, "utf8").trim())
+  : undefined;
 const app = createAdminApp({
   database,
   apiKeys: new ApiKeyService(
@@ -59,6 +69,7 @@ const app = createAdminApp({
   storageRoot: required("STORAGE_ROOT"),
   rendererVersion: required("RENDERER_IMAGE"),
   ...(imageManager ? { imageManager } : {}),
+  ...(updateManager ? { updateManager } : {}),
   maxUploadBytes: loadResourceLimits(process.env).maxUploadBytes,
   maxQueueLength: Number(process.env.MAX_QUEUE_LENGTH ?? "100"),
   maxUserStorageBytes: Number(

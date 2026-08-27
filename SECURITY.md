@@ -19,5 +19,6 @@ Include the affected version or commit, deployment profile, impact, and a minima
 - ZIP paths and headers are validated before extraction; directory entries and actual extracted byte and file totals are enforced.
 - Only allowlisted, validated artifacts are copied from untrusted staging into persistent storage.
 - Secrets and document contents are never logged. Returned log and error text is treated as untrusted.
+- The Web and Admin API never run `sudo`. Privileged application updates cross a local Unix-socket boundary to a root-owned helper that accepts only allowlisted operations and immutable project Releases. It verifies the locked release tag, GitHub asset digest, archive paths, and embedded version/commit metadata before executing the fixed deployment entry point. Update logs are redacted and host secrets/configuration remain outside release artifacts and Git.
 
 Development may use `ALLOW_ROOTFUL_DOCKER=true` only on an isolated machine; production must not. Key rotation, emergency revocation, and incident procedures are in [INCIDENT_RESPONSE.md](INCIDENT_RESPONSE.md).

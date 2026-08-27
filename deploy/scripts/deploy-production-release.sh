@@ -110,6 +110,11 @@ if [ ! -f /etc/latex-renderer/secrets/image-manager-token ]; then
 fi
 chown root:root /etc/latex-renderer/secrets/image-manager-token
 chmod 0400 /etc/latex-renderer/secrets/image-manager-token
+if [ ! -f /etc/latex-renderer/secrets/update-manager-token ]; then
+  (umask 077; openssl rand -hex 32 > /etc/latex-renderer/secrets/update-manager-token)
+fi
+chown root:root /etc/latex-renderer/secrets/update-manager-token
+chmod 0400 /etc/latex-renderer/secrets/update-manager-token
 
 env \
   DATABASE_PATH=/var/lib/latex-renderer/renderer.sqlite3 \
@@ -119,6 +124,7 @@ env \
   web-principals ensure --yes
 
 systemctl daemon-reload
+systemctl enable --now latex-renderer-update-manager.service
 systemctl restart latex-renderer-image-manager
 systemctl is-active --quiet latex-renderer-image-manager
 /usr/local/bin/node /opt/latex-renderer/current/deploy/scripts/reconcile-managed-runtime.mjs
@@ -131,14 +137,15 @@ systemctl restart \
   latex-renderer-worker
 systemctl enable --now \
   latex-renderer-remote-mcp.service \
+  latex-renderer-update-refresh.timer \
   latex-renderer-image-refresh.timer \
   latex-renderer-image-operation-watchdog.timer \
   latex-renderer-image-log-cleanup.timer
 
-for unit in latex-renderer-image-manager latex-renderer-api latex-renderer-internal-api latex-renderer-admin-api latex-renderer-admin-web latex-renderer-remote-mcp latex-renderer-worker; do
+for unit in latex-renderer-update-manager latex-renderer-image-manager latex-renderer-api latex-renderer-internal-api latex-renderer-admin-api latex-renderer-admin-web latex-renderer-remote-mcp latex-renderer-worker; do
   systemctl is-active --quiet "$unit"
 done
-for timer in latex-renderer-image-refresh.timer latex-renderer-image-operation-watchdog.timer latex-renderer-image-log-cleanup.timer; do
+for timer in latex-renderer-update-refresh.timer latex-renderer-image-refresh.timer latex-renderer-image-operation-watchdog.timer latex-renderer-image-log-cleanup.timer; do
   systemctl is-active --quiet "$timer"
 done
 

@@ -8,6 +8,7 @@ const links = [
   ["jobs", "ジョブ", "/admin/jobs/"],
   ["sources", "Source", "/admin/sources/"],
   ["tex", "TeX環境", "/admin/tex-environment/"],
+  ["updates", "更新", "/admin/updates/"],
   ["system", "システム", "/admin/system/"],
   ["audit", "監査ログ", "/admin/audit-logs/"],
   ["docs", "API資料", "/admin/docs/"],

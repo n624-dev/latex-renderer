@@ -1,26 +1,17 @@
 [Unit]
-Description=LaTeX Renderer Admin API
+Description=Check latex-renderer immutable stable application release
 After=network-online.target latex-renderer-image-manager.service latex-renderer-update-manager.service
 Wants=network-online.target latex-renderer-image-manager.service latex-renderer-update-manager.service
 
 [Service]
-Type=simple
+Type=oneshot
 User=latex-renderer
 Group=latex-renderer
 WorkingDirectory=/opt/latex-renderer/current
-EnvironmentFile=/etc/latex-renderer/renderer.env
-Environment=PORT=3102
-Environment=API_KEY_PEPPER_FILE=%d/api-key-pepper
-Environment=IMAGE_MANAGER_URL=http://127.0.0.1:3110
-Environment=IMAGE_MANAGER_TOKEN_FILE=%d/image-manager-token
 Environment=UPDATE_MANAGER_SOCKET=/run/latex-renderer/update-manager.sock
 Environment=UPDATE_MANAGER_TOKEN_FILE=%d/update-manager-token
-LoadCredential=api-key-pepper:/etc/latex-renderer/secrets/api-key-pepper
-LoadCredential=image-manager-token:/etc/latex-renderer/secrets/image-manager-token
 LoadCredential=update-manager-token:/etc/latex-renderer/secrets/update-manager-token
-ExecStart=/usr/local/bin/node apps/admin-api/dist/server.js
-Restart=on-failure
-RestartSec=5
+ExecStart=/usr/local/bin/node deploy/scripts/run-update-refresh.mjs
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
@@ -31,9 +22,4 @@ ProtectKernelModules=true
 ProtectControlGroups=true
 RestrictSUIDSGID=true
 LockPersonality=true
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-ReadWritePaths=/var/lib/latex-renderer
-UMask=0007
-
-[Install]
-WantedBy=multi-user.target
+RestrictAddressFamilies=AF_UNIX

@@ -1,0 +1,106 @@
+name: server-release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Existing release tag, for example v1.1.0"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: server-release-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-upload-draft:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.version }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "24"
+      - name: Enable Corepack
+        run: corepack enable
+      - name: Validate tag and source
+        env:
+          RELEASE_TAG: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          version=${RELEASE_TAG#v}
+          [[ $(node -p 'require("./package.json").version') == "$version" ]]
+          [[ $(git tag --points-at HEAD) == *"$RELEASE_TAG"* ]]
+          pnpm install --frozen-lockfile
+          pnpm check
+      - name: Build versioned server source bundle
+        env:
+          RELEASE_TAG: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          version=${RELEASE_TAG#v}
+          commit=$(git rev-parse HEAD)
+          renderer_fingerprint=$(node deploy/scripts/runtime-image-identity.mjs --renderer-fingerprint)
+          top="latex-renderer-server-$version"
+          stage="$RUNNER_TEMP/$top"
+          mkdir -p "$stage"
+          git archive HEAD | tar -x -C "$stage"
+          node - "$stage/.latex-renderer-release.json" "$stage/deploy/release-policy.json" "$stage/package.json" "$version" "$RELEASE_TAG" "$commit" "$renderer_fingerprint" <<'NODE'
+          const fs = require("node:fs");
+          const policy = JSON.parse(fs.readFileSync(process.argv[3], "utf8"));
+          const packageJson = JSON.parse(fs.readFileSync(process.argv[4], "utf8"));
+          fs.writeFileSync(process.argv[2], `${JSON.stringify({
+            schemaVersion: 1,
+            version: process.argv[5],
+            tag: process.argv[6],
+            commit: process.argv[7],
+            repository: "n624-dev/latex-renderer",
+            minimumSourceVersion: policy.minimumSourceVersion,
+            rollbackCompatible: policy.rollbackCompatible,
+            requiredNodeMajor: 24,
+            packageManager: packageJson.packageManager,
+            rendererRuntimeFingerprint: process.argv[8],
+          }, null, 2)}\n`, { mode: 0o644 });
+          NODE
+          test -z "$(find "$stage" -type l -print -quit)"
+          tar \
+            --sort=name \
+            --mtime='UTC 1970-01-01' \
+            --owner=0 --group=0 --numeric-owner \
+            -czf "$RUNNER_TEMP/$top.tar.gz" \
+            -C "$RUNNER_TEMP" "$top"
+          sha256sum "$RUNNER_TEMP/$top.tar.gz" > "$RUNNER_TEMP/SHA256SUMS-server"
+      - name: Require immutable-release protection and upload to draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          gh api --hostname github.com \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            repos/n624-dev/latex-renderer/immutable-releases \
+            --jq 'select(.enabled == true) | .enabled' | grep -qx true
+          version=${RELEASE_TAG#v}
+          if ! gh api --paginate repos/n624-dev/latex-renderer/releases \
+            --jq ".[] | select(.tag_name == \"$RELEASE_TAG\" and .draft == true) | .id" \
+            | grep -q .; then
+            gh release create "$RELEASE_TAG" \
+              --repo n624-dev/latex-renderer \
+              --verify-tag \
+              --draft \
+              --title "$RELEASE_TAG" \
+              --generate-notes
+          fi
+          gh release upload "$RELEASE_TAG" \
+            "$RUNNER_TEMP/latex-renderer-server-$version.tar.gz" \
+            "$RUNNER_TEMP/SHA256SUMS-server" \
+            --repo n624-dev/latex-renderer \
+            --clobber
+          echo "Server bundle uploaded to the draft. Attach every other release asset, review notes, then publish the draft to make it immutable."
