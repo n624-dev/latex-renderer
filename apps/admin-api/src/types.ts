@@ -2,6 +2,7 @@ import type { AccessJwtVerifier, ApiKeyService } from "@latex-renderer/auth";
 import type { RendererDatabase } from "@latex-renderer/database";
 import type { TicketService } from "@latex-renderer/ticket";
 import type { ImageManagerClient } from "./services/image-manager.js";
+import type { UpdateManagerClient } from "./services/update-manager.js";
 
 export interface AppActor {
   type: "user" | "admin_key";
@@ -23,6 +24,7 @@ export interface AdminDependencies {
   storageRoot: string;
   rendererVersion: string;
   imageManager?: ImageManagerClient;
+  updateManager?: UpdateManagerClient;
   maxUploadBytes?: number;
   maxQueueLength: number;
   maxUserStorageBytes: number;

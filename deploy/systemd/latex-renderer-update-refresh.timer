@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily latex-renderer immutable stable application release check
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=2h
+Persistent=true
+Unit=latex-renderer-update-refresh.service
+
+[Install]
+WantedBy=timers.target

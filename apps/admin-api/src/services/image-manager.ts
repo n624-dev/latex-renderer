@@ -6,6 +6,7 @@ type ApplyInput = {
   languages?: string[];
   autoUpdate?: boolean;
   rebuildIfMissing?: boolean;
+  runtimeBuildIfMissing?: boolean;
   [key: string]: unknown;
 };
 type ImagesResponse = { daily?: string[] };
@@ -14,6 +15,7 @@ type ManagerStateResponse = {
     selector?: ImageSelector;
     languages?: string[];
     autoUpdate?: boolean;
+    runtimeBuildIfMissing?: boolean;
   };
   current?: {
     selector?: ImageSelector | null;
@@ -112,6 +114,7 @@ export class ImageManagerClient {
           selector: { mode: "latest", value: null },
           languages: desiredLanguages,
           autoUpdate: true,
+          runtimeBuildIfMissing: desired.runtimeBuildIfMissing === true,
           rebuildIfMissing: false,
         });
       }

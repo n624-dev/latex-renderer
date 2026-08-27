@@ -24,10 +24,12 @@ sudo systemctl enable --now \
   latex-renderer-web.service \
   latex-renderer-remote-mcp.service \
   latex-renderer-worker.service \
+  latex-renderer-update-manager.service \
   latex-renderer-image-manager.service \
   latex-renderer-image-refresh.timer \
   latex-renderer-image-operation-watchdog.timer \
   latex-renderer-image-log-cleanup.timer \
+  latex-renderer-update-refresh.timer \
   latex-renderer-cleanup.timer \
   latex-renderer-backup.timer \
   latex-renderer-audit-export.timer
@@ -43,11 +45,13 @@ ignored by Git:
 sudo install -d -m 0750 /etc/latex-renderer /etc/cloudflared
 sudo install -m 0640 .env.example /etc/latex-renderer/renderer.env
 sudo install -m 0600 deploy/deployment.env.example /etc/latex-renderer/deployment.env
+sudo install -m 0600 deploy/update-manager.env.example /etc/latex-renderer/update-manager.env
 sudo install -m 0600 deploy/cloudflared/config.example.yml /etc/cloudflared/config.yml
 sudo install -m 0600 apps/gateway-worker/wrangler.example.jsonc \
   /etc/latex-renderer/gateway-worker.wrangler.jsonc
 sudoedit /etc/latex-renderer/renderer.env \
   /etc/latex-renderer/deployment.env \
+  /etc/latex-renderer/update-manager.env \
   /etc/cloudflared/config.yml \
   /etc/latex-renderer/gateway-worker.wrangler.jsonc
 ```
@@ -74,10 +78,11 @@ infrastructure configuration are not involved in public package builds.
 
 The public package is `ghcr.io/n624-dev/latex-renderer-texlive`. Its Base is
 built from `renderer/Dockerfile.base` and intentionally excludes application
-renderer files. A deployment derives a Runtime from an immutable Base, overlays
-the renderer files from the checked-out release, installs only the requested
-language collections, and validates the resulting PDF/SVG behavior under the
-production seccomp profile before activation.
+renderer files. The daily workflow also publishes both the language-neutral and
+English/Japanese supported Runtime presets. Their immutable identities bind the exact Base image ID, renderer runtime
+fingerprint, and normalized language collection set. Production validates its
+OCI identity labels and PDF behavior under the production seccomp profile before
+activation.
 
 Both the Debian substrate and TeX Live inputs are pinned. Registry consumers
 should select a dated tag or digest; `latest` is convenient for discovery but
@@ -96,9 +101,11 @@ second unless already present, and remaining collections alphabetically. Nothing
 is checked automatically. The country can be persistently overridden or cleared
 from either Web UI or CLI; neither client has a private locale heuristic.
 
-When applying a new image or language set, the Image Manager always starts from
-a clean selected base and builds a new runtime. It does not accumulate `tlmgr
-install`/`remove` mutations in the active runtime. Language collection identifiers
+When applying a new image or language set, the Image Manager first reuses an
+exact local Runtime, then pulls the exact prebuilt Runtime from public GHCR. It
+builds from the clean selected Base only when no matching Runtime tag exists and
+the administrator explicitly enabled the custom-language local-build fallback.
+It does not accumulate `tlmgr install`/`remove` mutations in the active runtime. Language collection identifiers
 are schema/syntax-validated before privileged execution, then `tlmgr` verifies
 each requested collection against the **exact selected TeX Live snapshot** before
 installing it. This means applying a historical Base is not gated on whatever
@@ -126,16 +133,14 @@ or other transient lookup failure therefore returns an error instead of silently
 starting a multi-gigabyte cold build. Before switching, the new runtime is
 smoke-tested and its package/font inventory is generated.
 
-A runtime is always derived by overlaying the **currently installed renderer
-code** on the selected TeX Live Base, even when zero optional languages are
-selected. This keeps a dated selector tied to the requested TeX Live snapshot
-without pinning the application code to the date on which the Base was
-published. A normal application deployment compares the renderer runtime
-fingerprint and re-derives the managed Runtime from the same clean Base and
-persisted language selection before renderer consumers start when the renderer
-code changed. The production release command then reconciles the saved desired
-selector through the same Image Manager operation used by Web and CLI. It does
-not build or activate a separate fixed bootstrap image.
+A Runtime always contains the **currently installed renderer code** over the
+selected TeX Live Base, even when zero optional languages are selected. A normal
+application deployment compares the renderer runtime fingerprint, resolves the
+exact Runtime identity, and uses the same local-cache/GHCR/explicit-local-fallback
+order before renderer consumers start. The production release command then
+reconciles the saved desired selector through the same Image Manager operation
+used by Web and CLI. It does not build or activate a separate fixed bootstrap
+image.
 
 ### Updating the TeX environment
 
@@ -162,6 +167,7 @@ latex-render-admin tex apply \
   --language collection-langenglish collection-langjapanese \
   --auto-update on \
   --rebuild-if-missing off \
+  --runtime-build-if-missing off \
   --yes
 ```
 
@@ -173,6 +179,7 @@ latex-render-admin tex apply \
   --language collection-langenglish collection-langjapanese \
   --auto-update off \
   --rebuild-if-missing on \
+  --runtime-build-if-missing off \
   --yes
 ```
 
@@ -181,7 +188,10 @@ resolved digest. For a date, it pulls the matching dated GHCR tag when present.
 With `--rebuild-if-missing on`, it starts the long local archive build only
 after a successful registry listing proves that the dated tag is absent; a
 registry or network failure does not silently trigger that fallback. Weekly and
-digest selectors are pull-only. Use the operation ID returned by `apply` to
+digest selectors are pull-only. `--runtime-build-if-missing off` keeps Runtime
+selection pull-only. Enable it only for a custom language combination that is
+not one of the documented prebuilt presets; the Image Manager still requires a
+successful GHCR absence check before building locally. Use the operation ID returned by `apply` to
 inspect a long-running change:
 
 ```bash
@@ -195,6 +205,72 @@ consumers start: `latest` is checked for a new digest, pinned selectors remain
 pinned, and changed renderer files are overlaid on the selected clean Base.
 Credentials, `/etc/latex-renderer`, Image Manager state, databases, and
 host-specific Worker/Tunnel configuration remain outside Git.
+
+### Updating the application
+
+System installations use a root-owned Update Manager over a permission-restricted
+local Unix socket. The Web/API processes never run `sudo` and never receive a
+general root shell. The one-time `install-host.sh` bootstrap creates the helper,
+its random credential, durable operation state, and the root-owned
+`/etc/latex-renderer/update-manager.env`. Set `UPDATE_DEPLOY_USER` there to the
+non-root account that owns the pnpm and Wrangler login used for deployments.
+
+The default application policy is stable **notification only**. Check, apply,
+and rollback from `/admin/updates/` or the equivalent CLI commands:
+
+```bash
+latex-render-admin update status
+latex-render-admin update check
+latex-render-admin update policy --mode notify --yes
+latex-render-admin update apply v1.1.0 --yes
+latex-render-admin update rollback --yes
+```
+
+`latex-renderer-update-refresh.timer` performs the same stable check daily with
+jitter. To opt in to unattended verified updates, use the Web policy control or
+`latex-render-admin update policy --mode automatic --yes`. Return to the safer
+default with `--mode notify`. Automatic mode still refuses mutable releases,
+missing/mismatched assets, invalid upgrade paths, or an already active update.
+
+An apply accepts only `n624-dev/latex-renderer` semantic-version releases. It
+requires GitHub to report the release as immutable, resolves the locked tag to
+its commit, requires the exact `latex-renderer-server-<version>.tar.gz` asset,
+and verifies the API-provided SHA-256 digest and embedded version/tag/commit
+metadata, Node/pnpm requirements, renderer fingerprint, and available staging
+and release filesystem capacity. Caller-supplied URLs, paths, repositories,
+branches, service names, and commands are not accepted. Application and TeX
+mutations share a non-blocking host lock; a concurrent request is rejected
+instead of waiting behind a long-running build or deployment.
+
+The host must already provide the release's required Node major. When the
+verified manifest pins a different pnpm patch/minor version, the helper updates
+pnpm only in the configured non-root deployment user's pnpm home, verifies the
+resulting version, and then performs the frozen-lockfile install.
+
+After verification, the helper extracts the source as the configured non-root
+deployment user, rejects paths outside the versioned archive root and source
+symlinks, runs `pnpm install --frozen-lockfile` without root, takes the configured
+backup, and invokes the existing guarded production deployment. Releases remain
+immutable under `/opt/latex-renderer/releases`; configuration, credentials,
+databases, storage, TeX desired state, and host-specific Cloudflare files remain
+outside the bundle and outside Git. A failed deployment attempts to redeploy the
+previous known-good release only when the embedded release policy declares that
+rollback compatible; every result is recorded in a redacted durable log. For a
+forward-only schema change, follow [MIGRATIONS.md](MIGRATIONS.md) and its backup
+restore procedure instead of forcing an application-only rollback.
+
+For a host where the privileged helper is intentionally unavailable, download
+and verify the immutable server asset manually, then use the existing
+`sudo sh deploy/scripts/deploy-production-release.sh <release-id>` procedure.
+Rootless installations can check releases, but service/image activation must be
+performed by their external administrator or orchestrator.
+
+Maintainers must enable GitHub **immutable releases** before publishing an
+updater-compatible release. Run the `server-release` workflow for an existing
+protected `v*` tag; it validates the source and uploads the server bundle to a
+draft. Attach and review all remaining release assets before publishing the
+draft, because publication locks its tag and assets. The updater deliberately
+rejects older mutable releases, including v1.0.0.
 
 The previous runtime is retained for rollback, including the legacy runtime that
 was active before the first managed switch. Managed rollback re-derives the

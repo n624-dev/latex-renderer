@@ -255,11 +255,13 @@ export function createWebApp(
     "/admin/jobs/": "jobs",
     "/admin/sources/": "sources",
     "/admin/tex-environment/": "tex",
+    "/admin/updates/": "updates",
     "/admin/system/": "system",
     "/admin/audit-logs/": "audit",
   };
   app.get("/admin", (c) => c.redirect("/admin/", 308));
   app.get("/admin/tex-environment", (c) => c.redirect("/admin/tex-environment/", 308));
+  app.get("/admin/updates", (c) => c.redirect("/admin/updates/", 308));
   app.get("/admin/docs", (c) => c.redirect("/admin/docs/", 308));
   app.get("/admin/docs/", (c) => c.html(adminDocsPage()));
   app.get("/admin/render", (c) => c.redirect("/app/", 308));

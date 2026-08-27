@@ -73,8 +73,9 @@ tex.command("apply")
   .option("--clear-languages", "select zero optional language collections")
   .requiredOption("--auto-update <on|off>")
   .option("--rebuild-if-missing <on|off>", "rebuild an unavailable dated image locally", "on")
+  .option("--runtime-build-if-missing <on|off>", "build a missing custom-language Runtime locally", "off")
   .requiredOption("--yes")
-  .action(async (o: { image: string; language?: string[]; allLanguages?: boolean; clearLanguages?: boolean; autoUpdate: string; rebuildIfMissing: string }) => {
+  .action(async (o: { image: string; language?: string[]; allLanguages?: boolean; clearLanguages?: boolean; autoUpdate: string; rebuildIfMissing: string; runtimeBuildIfMissing: string }) => {
     const selectionModes = Number(Boolean(o.allLanguages)) + Number(Boolean(o.clearLanguages)) + Number((o.language?.length ?? 0) > 0);
     if (selectionModes !== 1)
       throw new AppError("INVALID_OPTION", "Choose exactly one of --language, --all-languages, or --clear-languages", 400);
@@ -97,6 +98,7 @@ tex.command("apply")
       languages,
       autoUpdate: parseOnOff(o.autoUpdate, "auto-update"),
       rebuildIfMissing: parseOnOff(o.rebuildIfMissing, "rebuild-if-missing"),
+      runtimeBuildIfMissing: parseOnOff(o.runtimeBuildIfMissing, "runtime-build-if-missing"),
     });
   });
 tex.command("operation").argument("<id>").action(async (id: string) => print(await request("GET", `/tex-environment/operations/${encodeURIComponent(id)}`)));
@@ -109,6 +111,28 @@ for (const [action, path] of [
   tex.command(action).requiredOption("--yes").action(async () => runTexMutation(path, {}));
 tex.command("packages").argument("[query]").action(async (query?: string) => print(await request("GET", `/tex-environment/inventory/packages${query ? `?q=${encodeURIComponent(query)}` : ""}`)));
 tex.command("fonts").argument("[query]").action(async (query?: string) => print(await request("GET", `/tex-environment/inventory/fonts${query ? `?q=${encodeURIComponent(query)}` : ""}`)));
+
+const update = program.command("update").description("Update the self-hosted latex-renderer application from immutable GitHub Releases");
+update.command("status").action(async () => print(await request("GET", "/updates/state")));
+update.command("check").argument("[version]").action(async (version?: string) => print(await request("POST", "/updates/check", version ? { version } : {})));
+update.command("policy")
+  .requiredOption("--mode <notify|automatic>")
+  .requiredOption("--yes")
+  .action(async (options: { mode: string }) => {
+    if (!(["notify", "automatic"] as const).includes(options.mode as "notify" | "automatic")) {
+      throw new AppError("INVALID_OPTION", "mode must be notify or automatic", 400);
+    }
+    print(await request("POST", "/updates/policy", { channel: "stable", mode: options.mode }));
+  });
+update.command("refresh").requiredOption("--yes").action(async () => print(await request("POST", "/updates/refresh", {})));
+update.command("apply")
+  .argument("[version]")
+  .requiredOption("--yes")
+  .action(async (version?: string) => runUpdateMutation("/updates/apply", version ? { version } : {}));
+update.command("rollback")
+  .requiredOption("--yes")
+  .action(async () => runUpdateMutation("/updates/rollback", {}));
+update.command("operation").argument("<id>").action(async (id: string) => print(await request("GET", `/updates/operations/${encodeURIComponent(id)}`)));
 
 await program.parseAsync().catch((error: unknown) => {
   process.stderr.write(`latex-render-admin: ${error instanceof Error ? error.message : "Unknown error"}\n`);
@@ -170,6 +194,42 @@ async function waitTexOperation(initial: unknown): Promise<unknown> {
       lastStatus = status;
     }
     if (status === "succeeded" || status === "failed") return current;
+    await sleep(1_500);
+  }
+}
+
+async function runUpdateMutation(path: string, body: unknown): Promise<void> {
+  const final = await waitUpdateOperation(await request("POST", path, body));
+  print(final);
+  const value = asRecord(final);
+  if (value.status === "failed") throw new AppError("UPDATE_OPERATION_FAILED", typeof value.error === "string" ? value.error : "Application update failed", 500);
+}
+
+async function waitUpdateOperation(initial: unknown): Promise<unknown> {
+  const value = asRecord(initial);
+  if (typeof value.id !== "string") return initial;
+  const id = value.id;
+  let lastStatus = "";
+  let failures = 0;
+  for (;;) {
+    try {
+      const current = await request("GET", `/updates/operations/${encodeURIComponent(id)}`);
+      failures = 0;
+      const record = asRecord(current);
+      const status = typeof record.status === "string" ? record.status : "unknown";
+      if (status !== lastStatus) {
+        process.stderr.write(`Application update: ${status}\n`);
+        lastStatus = status;
+      }
+      if (status === "succeeded" || status === "failed") return current;
+    } catch (error) {
+      failures += 1;
+      if (failures >= 120) throw error;
+      if (lastStatus !== "reconnecting") {
+        process.stderr.write("Application update: reconnecting to Admin API...\n");
+        lastStatus = "reconnecting";
+      }
+    }
     await sleep(1_500);
   }
 }

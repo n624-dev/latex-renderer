@@ -17,15 +17,17 @@ Environment=TMPDIR=/var/lib/latex-renderer/image-manager/tmp
 Environment=HOME=/var/lib/latex-render-worker
 Environment=DOCKER_CONFIG=/var/lib/latex-renderer/image-manager/docker-config
 LoadCredential=image-manager-token:/etc/latex-renderer/secrets/image-manager-token
+RuntimeDirectory=latex-renderer
+RuntimeDirectoryMode=0750
 ExecStartPre=/bin/sh deploy/scripts/wait-rootless-docker.sh
 ExecStartPre=/bin/sh deploy/scripts/restore-managed-runtime.sh
 ExecStart=/bin/sh deploy/scripts/start-image-manager.sh
 ExecStartPost=/bin/sh deploy/scripts/wait-image-manager-http.sh
 Restart=on-failure
 RestartSec=5
-# ExecStartPre may need to re-derive the current Runtime when renderer code was
-# upgraded. Rootless-Docker readiness has its own short bounded wait, while a
-# legitimate TeX language install/cache rebuild/smoke can take much longer.
+# ExecStartPre may need to pull a matching Runtime, or explicitly build a custom
+# language Runtime when that persisted fallback is enabled. Rootless-Docker
+# readiness has its own bounded wait; Runtime validation may take longer.
 TimeoutStartSec=1h
 # The manager deliberately drops from root to latex-render-worker with runuser
 # for every rootless-Docker command. NoNewPrivileges blocks that UID transition
@@ -40,7 +42,7 @@ ProtectControlGroups=true
 RestrictSUIDSGID=true
 LockPersonality=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-ReadWritePaths=/etc/latex-renderer /var/lib/latex-renderer
+ReadWritePaths=/etc/latex-renderer /var/lib/latex-renderer /run/latex-renderer
 UMask=0007
 
 [Install]

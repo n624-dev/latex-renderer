@@ -1,0 +1,37 @@
+[Unit]
+Description=LaTeX Renderer Application Update Manager
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=latex-renderer
+WorkingDirectory=/opt/latex-renderer/current
+Environment=UPDATE_MANAGER_SOCKET=/run/latex-renderer/update-manager.sock
+Environment=UPDATE_MANAGER_TOKEN_FILE=%d/update-manager-token
+Environment=UPDATE_MANAGER_STATE_ROOT=/var/lib/latex-renderer/update-manager
+EnvironmentFile=-/etc/latex-renderer/update-manager.env
+LoadCredential=update-manager-token:/etc/latex-renderer/secrets/update-manager-token
+RuntimeDirectory=latex-renderer
+RuntimeDirectoryMode=0750
+ExecStart=/usr/local/bin/node deploy/scripts/update-manager.mjs
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=2min
+TimeoutStopSec=15min
+NoNewPrivileges=false
+ProtectSystem=strict
+ProtectHome=false
+PrivateDevices=false
+ProtectKernelTunables=false
+ProtectKernelModules=false
+ProtectControlGroups=false
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/opt/latex-renderer /var/lib/latex-renderer /etc/latex-renderer /etc/systemd/system /etc/apparmor.d /run/latex-renderer /tmp
+UMask=0007
+
+[Install]
+WantedBy=multi-user.target

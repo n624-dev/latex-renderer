@@ -61,6 +61,18 @@ fi
 install -d -o latex-renderer-backup -g latex-renderer -m 0750 /var/lib/latex-renderer/backups
 install -d -o root -g latex-renderer -m 0750 /etc/latex-renderer /etc/latex-renderer/secrets /etc/latex-renderer/ticket-keys
 install -d -o root -g latex-renderer -m 0750 /var/lib/latex-renderer/image-manager /var/lib/latex-renderer/image-manager/operations /var/lib/latex-renderer/image-manager/tmp
+install -d -o root -g latex-renderer -m 0750 /var/lib/latex-renderer/update-manager /var/lib/latex-renderer/update-manager/staging /var/lib/latex-renderer/update-manager/operations
+if [ ! -f /etc/latex-renderer/update-manager.env ]; then
+  update_deploy_user=${UPDATE_DEPLOY_USER:-${SUDO_USER:-$(stat -c '%U' "$source_root")}}
+  if [ "$update_deploy_user" = root ] || \
+     ! printf '%s\n' "$update_deploy_user" | grep -Eq '^[a-z_][a-z0-9_-]{0,31}$'; then
+    echo "A valid non-root UPDATE_DEPLOY_USER is required for application updates" >&2
+    exit 64
+  fi
+  printf 'UPDATE_DEPLOY_USER=%s\n' "$update_deploy_user" > /etc/latex-renderer/update-manager.env
+fi
+chown root:root /etc/latex-renderer/update-manager.env
+chmod 0600 /etc/latex-renderer/update-manager.env
 install -d -o "$worker_user" -g latex-renderer -m 0700 /var/lib/latex-renderer/image-manager/docker-config
 
 renderer_env_preexisting=false

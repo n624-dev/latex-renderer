@@ -85,7 +85,8 @@ jobs:
         run: |
           set -euo pipefail
           base="latex-renderer:base-$SNAPSHOT_DATE"
-          runtime="latex-renderer:validation-$SNAPSHOT_DATE"
+          runtime_neutral="latex-renderer:validation-neutral-$SNAPSHOT_DATE"
+          runtime_default="latex-renderer:validation-en-jp-$SNAPSHOT_DATE"
           dated_ref="$IMAGE_REPOSITORY:$SNAPSHOT_DATE"
 
           printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
@@ -127,14 +128,26 @@ jobs:
 
           RENDERER_RUNTIME_SOURCE="$GITHUB_WORKSPACE/renderer" \
             sh deploy/scripts/build-language-runtime.sh \
-              "$base" "$TEXLIVE_REPOSITORY" "$runtime" \
-              collection-langenglish collection-langjapanese
-          sh deploy/scripts/smoke-test-renderer-basic.sh "$runtime"
-          sh deploy/scripts/smoke-test-renderer-svg.sh "$runtime"
+              "$base" "$TEXLIVE_REPOSITORY" "$runtime_neutral"
+          sh deploy/scripts/smoke-test-renderer-basic.sh "$runtime_neutral"
+          sh deploy/scripts/smoke-test-renderer-svg.sh "$runtime_neutral"
 
-          docker image rm "$runtime" >/dev/null 2>&1 || true
+          RENDERER_RUNTIME_SOURCE="$GITHUB_WORKSPACE/renderer" \
+            sh deploy/scripts/build-language-runtime.sh \
+              "$base" "$TEXLIVE_REPOSITORY" "$runtime_default" \
+              collection-langenglish collection-langjapanese
+          sh deploy/scripts/smoke-test-renderer-basic.sh "$runtime_default"
+          sh deploy/scripts/smoke-test-renderer-svg.sh "$runtime_default"
+
+          runtime_neutral_tag=$(node deploy/scripts/runtime-image-identity.mjs \
+            --format tag "$base")
+          runtime_default_tag=$(node deploy/scripts/runtime-image-identity.mjs \
+            --format tag "$base" \
+            collection-langenglish collection-langjapanese)
           printf '%s\n' "$base" > "$RUNNER_TEMP/validated-base-image"
           printf '%s\n' "$base_source" > "$RUNNER_TEMP/validated-base-source"
+          printf '%s\n' "$runtime_neutral" "$runtime_default" > "$RUNNER_TEMP/validated-runtime-images"
+          printf '%s\n' "$runtime_neutral_tag" "$runtime_default_tag" > "$RUNNER_TEMP/validated-runtime-tags"
 
       - name: Publish immutable dated image
         id: publish
@@ -148,6 +161,8 @@ jobs:
           set -euo pipefail
           base=$(cat "$RUNNER_TEMP/validated-base-image")
           base_source=$(cat "$RUNNER_TEMP/validated-base-source")
+          mapfile -t runtimes < "$RUNNER_TEMP/validated-runtime-images"
+          mapfile -t runtime_tags < "$RUNNER_TEMP/validated-runtime-tags"
           dated_ref="$IMAGE_REPOSITORY:$SNAPSHOT_DATE"
           printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
 
@@ -176,17 +191,39 @@ jobs:
             latest_digest=$(docker buildx imagetools inspect "$IMAGE_REPOSITORY:latest" | awk '$1 == "Digest:" { print $2; exit }')
             [[ "$latest_digest" == "$digest" ]]
           fi
+          runtime_digests=()
+          for index in "${!runtimes[@]}"; do
+            runtime=${runtimes[$index]}
+            runtime_ref="$IMAGE_REPOSITORY:${runtime_tags[$index]}"
+            runtime_local_id=$(docker image inspect "$runtime" --format '{{.Id}}')
+            docker tag "$runtime" "$runtime_ref"
+            docker push "$runtime_ref"
+            runtime_digest=$(docker buildx imagetools inspect "$runtime_ref" | awk '$1 == "Digest:" { print $2; exit }')
+            [[ "$runtime_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+            docker pull "$IMAGE_REPOSITORY@$runtime_digest" >/dev/null
+            [[ $(docker image inspect "$IMAGE_REPOSITORY@$runtime_digest" --format '{{.Id}}') == "$runtime_local_id" ]]
+            runtime_digests+=("$runtime_digest")
+          done
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          runtime_digest_csv=$(IFS=,; printf '%s' "${runtime_digests[*]}")
+          echo "runtime_digests=$runtime_digest_csv" >> "$GITHUB_OUTPUT"
 
       - name: Verify anonymous pull
         if: steps.publish.outcome == 'success'
         env:
           IMAGE_DIGEST: ${{ steps.publish.outputs.digest }}
+          RUNTIME_IMAGE_DIGESTS: ${{ steps.publish.outputs.runtime_digests }}
         run: |
           set -euo pipefail
           docker logout ghcr.io >/dev/null
           docker image rm "$IMAGE_REPOSITORY@$IMAGE_DIGEST" >/dev/null 2>&1 || true
           docker pull "$IMAGE_REPOSITORY@$IMAGE_DIGEST"
+          IFS=, read -ra runtime_digests <<< "$RUNTIME_IMAGE_DIGESTS"
+          for runtime_digest in "${runtime_digests[@]}"; do
+            docker image rm "$IMAGE_REPOSITORY@$runtime_digest" >/dev/null 2>&1 || true
+            docker pull "$IMAGE_REPOSITORY@$runtime_digest"
+            sh deploy/scripts/smoke-test-renderer-basic.sh "$IMAGE_REPOSITORY@$runtime_digest"
+          done
 
       - name: Registry maintenance
         if: steps.publish.outcome == 'success' && env.REQUESTED_DATE == 'latest'
@@ -206,7 +243,8 @@ jobs:
         run: |
           set +e
           docker image rm \
-            "latex-renderer:validation-${SNAPSHOT_DATE:-unknown}" \
+            "latex-renderer:validation-neutral-${SNAPSHOT_DATE:-unknown}" \
+            "latex-renderer:validation-en-jp-${SNAPSHOT_DATE:-unknown}" \
             "$IMAGE_REPOSITORY:${SNAPSHOT_DATE:-unknown}" \
             "$IMAGE_REPOSITORY:latest" \
             "latex-renderer:base-${SNAPSHOT_DATE:-unknown}" \

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: LaTeX Renderer Administrator API
-  version: 0.3.0
+  version: 0.4.0
   description: Administrative API used by the protected Web UI and administration CLI.
 servers:
   - url: https://latex-render.n624.jp/admin/api/v1
@@ -459,6 +459,66 @@ paths:
       summary: Follow a newer validated latest image when automatic following is enabled
       responses:
         "202": { description: Refresh operation accepted }
+  /updates/state:
+    get:
+      summary: Read installed, available, previous, and active application update state
+      responses:
+        "200": { description: Application update state }
+        "503": { description: Update Manager is not configured or unavailable }
+  /updates/check:
+    post:
+      summary: Check and verify an immutable stable GitHub Release
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ApplicationUpdateRequest" }
+      responses:
+        "200": { description: Verified release metadata }
+  /updates/policy:
+    post:
+      summary: Select notification-only or opt-in automatic stable application updates
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [mode]
+              properties:
+                channel: { type: string, const: stable, default: stable }
+                mode: { type: string, enum: [notify, automatic] }
+      responses:
+        "200": { description: Persisted update policy }
+        "409": { description: An application update operation is active }
+  /updates/refresh:
+    post:
+      summary: Check the stable channel and start an update only when automatic mode is enabled
+      responses:
+        "200": { description: Up-to-date, unavailable, available, or started result }
+  /updates/apply:
+    post:
+      summary: Download, verify, stage, and transactionally deploy an immutable application release
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ApplicationUpdateRequest" }
+      responses:
+        "202": { description: Application update operation accepted }
+        "409": { description: Another application update operation is active }
+  /updates/rollback:
+    post:
+      summary: Back up current state and redeploy the previous known-good application release
+      responses:
+        "202": { description: Application rollback operation accepted }
+        "409": { description: Another application update operation is active }
+  /updates/operations/{id}:
+    get:
+      summary: Read application update progress and retained redacted log output
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      responses:
+        "200": { description: Application update operation and log }
+        "404": { description: Operation not found }
   /system/status:
     get:
       summary: Read system status
@@ -704,6 +764,18 @@ components:
           type: boolean
           default: true
           description: For a dated selector missing from GHCR, cold-build the same TeX Live archive locally.
+        runtimeBuildIfMissing:
+          type: boolean
+          default: false
+          description: Build a custom-language Runtime locally only after GHCR confirms that the exact prebuilt Runtime tag is absent.
+    ApplicationUpdateRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        version:
+          type: string
+          pattern: "^v?[0-9]+\\.[0-9]+\\.[0-9]+$"
+          description: An explicit immutable release version. Omit to select the latest stable release.
     RenderTarget:
       type: object
       additionalProperties: false

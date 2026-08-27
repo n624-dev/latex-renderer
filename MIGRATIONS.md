@@ -4,6 +4,13 @@ Migration 001 creates all current tables, constraints, and indexes and is idempo
 
 Future migrations must be numbered, transactional where SQLite permits, recorded in `schema_migrations`, tested against a copy of production data, and state whether the previous application version can read the new schema. Rollback normally means restoring the pre-migration backup; never edit the live SQLite file with a text or generic file-copy tool while services are active.
 
+For each migration release, update `deploy/release-policy.json` as part of the
+same pull request. `rollbackCompatible` may remain `true` only if the immediately
+preceding release can safely use all post-upgrade schema and persisted data.
+Otherwise set it to `false`; application-only rollback will be blocked and
+recovery requires the migration's documented database restore procedure. Raise
+`minimumSourceVersion` whenever skipping older releases would be unsafe.
+
 ## Migration 004: Remote MCP
 
 Migration 004 adds OAuth client/code/token-family/token tables, an internal Remote MCP accounting principal, owner-scoped short-lived Source references, and per-tool rate windows. It is additive and the previous application version can read the database, but it does not know how to expire the new records. Rollback therefore means stopping the Remote MCP unit and restoring the encrypted pre-migration backup; do not drop these tables from a live database. The SQL and rollback checklist are in `deploy/migrations/004_remote_mcp.sql` and `deploy/migrations/004_remote_mcp.rollback.md`.
