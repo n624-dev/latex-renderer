@@ -8,29 +8,6 @@ function deniedMessage(repositoryPath) {
   return `GHCR denied package write access for ${repositoryPath}. In the package settings, add the workflow repository under Manage Actions access with the Write role. Connecting the repository or granting Manage access is not sufficient.`;
 }
 
-export function registryAccessClaims(registryToken) {
-  if (typeof registryToken !== "string" || !registryToken) {
-    throw new Error("GHCR token response did not include a registry token");
-  }
-  const parts = registryToken.split(".");
-  if (parts.length !== 3) throw new Error("GHCR returned an unrecognized registry token");
-  try {
-    const claims = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"));
-    if (!claims || typeof claims !== "object") throw new Error("invalid claims");
-    return claims;
-  } catch {
-    throw new Error("GHCR returned an invalid registry token");
-  }
-}
-
-export function hasRepositoryAction(claims, repositoryPath, action) {
-  return Array.isArray(claims.access) && claims.access.some((entry) =>
-    entry?.type === "repository" &&
-    entry?.name === repositoryPath &&
-    Array.isArray(entry.actions) &&
-    entry.actions.includes(action));
-}
-
 export async function verifyGhcrWriteAccess({ repository, actor, token, fetchImpl = globalThis.fetch }) {
   const match = /^ghcr\.io\/([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))\/([A-Za-z0-9._-]+)$/.exec(repository);
   if (!match) throw new Error("GHCR repository must be ghcr.io/OWNER/PACKAGE");
@@ -50,9 +27,59 @@ export async function verifyGhcrWriteAccess({ repository, actor, token, fetchImp
   }
   if (!response.ok) throw new Error(`GHCR write-access token request failed: ${response.status}`);
   const body = await response.json();
-  const claims = registryAccessClaims(body?.token ?? body?.access_token);
-  if (!hasRepositoryAction(claims, repositoryPath, "push")) {
+  const registryToken = body?.token ?? body?.access_token;
+  if (typeof registryToken !== "string" || !registryToken) {
+    throw new Error("GHCR token response did not include a registry token");
+  }
+
+  // Registry bearer tokens may be opaque. Exercise actual push permission by
+  // mounting a blob that is already linked to this same repository. A
+  // successful same-repository mount creates no tag, manifest, layer, or
+  // package version; a token without push permission is rejected at the mount.
+  const authorization = { Authorization: `Bearer ${registryToken}` };
+  const manifestResponse = await fetchImpl(
+    `https://ghcr.io/v2/${repositoryPath}/manifests/latest`,
+    {
+      headers: {
+        ...authorization,
+        Accept: "application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json",
+      },
+      signal: globalThis.AbortSignal.timeout(requestTimeoutMs),
+    },
+  );
+  if (!manifestResponse.ok) {
+    throw new Error(`GHCR write-access probe could not read the existing latest manifest: ${manifestResponse.status}`);
+  }
+  const manifest = await manifestResponse.json();
+  const blobDigest = manifest?.config?.digest;
+  if (typeof blobDigest !== "string" || !/^sha256:[0-9a-f]{64}$/.test(blobDigest)) {
+    throw new Error("GHCR latest must be a single-platform image manifest with a valid config digest");
+  }
+  const blobResponse = await fetchImpl(
+    `https://ghcr.io/v2/${repositoryPath}/blobs/${blobDigest}`,
+    {
+      method: "HEAD",
+      headers: authorization,
+      signal: globalThis.AbortSignal.timeout(requestTimeoutMs),
+    },
+  );
+  if (!blobResponse.ok) {
+    throw new Error(`GHCR write-access probe could not read its existing config blob: ${blobResponse.status}`);
+  }
+  const mountResponse = await fetchImpl(
+    `https://ghcr.io/v2/${repositoryPath}/blobs/uploads/?mount=${encodeURIComponent(blobDigest)}&from=${encodeURIComponent(repositoryPath)}`,
+    {
+      method: "POST",
+      headers: authorization,
+      redirect: "manual",
+      signal: globalThis.AbortSignal.timeout(requestTimeoutMs),
+    },
+  );
+  if (mountResponse.status === 401 || mountResponse.status === 403) {
     throw new Error(deniedMessage(repositoryPath));
+  }
+  if (mountResponse.status !== 201) {
+    throw new Error(`GHCR write-access blob mount returned an unexpected response: ${mountResponse.status}`);
   }
   process.stdout.write(`GHCR package write access is available for ${repositoryPath}.\n`);
 }

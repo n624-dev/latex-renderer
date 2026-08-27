@@ -79,9 +79,12 @@ infrastructure configuration are not involved in public package builds.
 For an existing personal-account package, repository linking and ordinary
 **Manage access** roles do not grant a workflow access. In the package's
 **Manage Actions access** settings, add the repository that owns the publishing
-workflow and assign it the **Write** role. The daily workflow requests a
-non-mutating GHCR token before setting up Docker or downloading TeX Live and
-stops immediately if that token does not contain `push` for the exact package.
+workflow and assign it the **Write** role. Before setting up Docker or
+downloading TeX Live, the daily workflow asks GHCR to mount the config blob from
+the package's existing single-platform `latest` manifest back into that same
+package. The blob is already linked, so this proves push access while creating
+no manifest, tag, layer, or package version. The workflow stops immediately if
+GHCR denies that probe.
 Do not replace this repository-scoped `GITHUB_TOKEN` flow with a long-lived
 personal access token.
 
