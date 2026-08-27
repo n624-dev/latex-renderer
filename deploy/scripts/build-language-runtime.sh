@@ -129,7 +129,15 @@ ENTRYPOINT ["/opt/renderer/compile.sh"]
 DOCKERFILE
 chmod 0644 "$tmp/Dockerfile"
 
-docker build \
+set -- docker build
+if [ -n "${RUNTIME_BUILDX_BUILDER:-}" ]; then
+  case "$RUNTIME_BUILDX_BUILDER" in
+    [!A-Za-z0-9]*|*[!A-Za-z0-9._-]*) echo "RUNTIME_BUILDX_BUILDER is invalid" >&2; exit 64 ;;
+  esac
+  set -- docker buildx build --builder "$RUNTIME_BUILDX_BUILDER"
+fi
+
+"$@" \
   --load \
   --build-arg "BASE_IMAGE=$base_lock_ref" \
   --build-arg "TEXLIVE_REPOSITORY=$repository" \
