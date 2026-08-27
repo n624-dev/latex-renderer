@@ -11,6 +11,7 @@
 - Preserve the immutable GHCR digest reference while deriving a Runtime with Docker's containerd image store.
 - Wait for the Image Manager HTTP endpoint before deployment reconciliation begins.
 - Publish daily TeX Base packages transparently from a GitHub-hosted workflow in the public repository.
+- Load derived Runtime images into container-backed Buildx image stores and verify Image Manager HTTP readiness without reading its credential from `ExecStartPost`.
 
 ## 1.0.0 - 2026-08-26
 
