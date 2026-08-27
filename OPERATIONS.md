@@ -20,5 +20,7 @@ Health endpoints are loopback `/health`; Renderer API also has `/ready`, which c
 - Do not print credential files, request authorization headers, source ZIPs, PDFs, or raw unescaped logs during diagnosis.
 - Application update state and redacted logs are available from `latex-render-admin update status` and `latex-render-admin update operation <id>`. The helper accepts only immutable public project releases; do not bypass that check with a mutable source archive.
 - `latex-renderer-update-refresh.timer` checks stable releases daily with jitter. Its default `notify` policy never applies code; `automatic` must be explicitly selected in Web or with `latex-render-admin update policy --mode automatic --yes`.
+- A daily image run that fails at **Verify GHCR package write access** must not be retried until the package's **Manage Actions access** list grants the workflow repository the **Write** role. Repository linking and ordinary package **Manage access** are separate settings.
+- After changing that setting, run `gh workflow run ghcr-publish-access.yml --ref main` and require success before starting the long daily image workflow. This check requests a scoped registry token but does not mutate the package.
 
 Use `journalctl -u UNIT --since ... -o cat` and filter structured event names. Emergency containment is described in [INCIDENT_RESPONSE.md](INCIDENT_RESPONSE.md).

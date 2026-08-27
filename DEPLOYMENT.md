@@ -76,6 +76,19 @@ only read permission and never publish; only the scheduled/manual daily job has
 job-scoped package-write permission. Production hosts and private
 infrastructure configuration are not involved in public package builds.
 
+For an existing personal-account package, repository linking and ordinary
+**Manage access** roles do not grant a workflow access. In the package's
+**Manage Actions access** settings, add the repository that owns the publishing
+workflow and assign it the **Write** role. The daily workflow requests a
+non-mutating GHCR token before setting up Docker or downloading TeX Live and
+stops immediately if that token does not contain `push` for the exact package.
+Do not replace this repository-scoped `GITHUB_TOKEN` flow with a long-lived
+personal access token.
+
+After changing package access, run the `ghcr-publish-access` workflow first. It
+performs only the token-scope check and does not build or push an image. Start
+`renderer-image-daily` only after that short workflow succeeds.
+
 The public package is `ghcr.io/n624-dev/latex-renderer-texlive`. Its Base is
 built from `renderer/Dockerfile.base` and intentionally excludes application
 renderer files. The daily workflow also publishes both the language-neutral and

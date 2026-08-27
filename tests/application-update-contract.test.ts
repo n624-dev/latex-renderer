@@ -69,6 +69,25 @@ describe("pull-first Runtime delivery", () => {
     expect(latestPromotion).toBeGreaterThan(runtimePush);
   });
 
+  it("proves GHCR push scope before starting the expensive image build", () => {
+    const workflow = read(".github/workflows/renderer-image-daily.yml");
+    const accessWorkflow = read(".github/workflows/ghcr-publish-access.yml");
+    const preflight = workflow.indexOf("Verify GHCR package write access");
+    const snapshot = workflow.indexOf("Resolve TeX Live snapshot");
+    const build = workflow.indexOf("Build and validate");
+    expect(preflight).toBeGreaterThan(0);
+    expect(preflight).toBeLessThan(snapshot);
+    expect(preflight).toBeLessThan(build);
+    expect(workflow).toContain(
+      'node deploy/scripts/verify-ghcr-write-access.mjs "$IMAGE_REPOSITORY"',
+    );
+    expect(accessWorkflow).toContain("workflow_dispatch:");
+    expect(accessWorkflow).toContain("packages: write");
+    expect(accessWorkflow).toContain("verify-ghcr-write-access.mjs");
+    expect(accessWorkflow).not.toContain("docker build");
+    expect(accessWorkflow).not.toContain("docker push");
+  });
+
   it("uses exact local, public package, and explicit local-build fallback in that order", () => {
     const manager = read("deploy/scripts/image-manager.mjs");
     const local = manager.indexOf("Reusing exact local TeX Runtime");
