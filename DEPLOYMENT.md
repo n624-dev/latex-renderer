@@ -43,9 +43,11 @@ ignored by Git:
 sudo install -d -m 0750 /etc/latex-renderer /etc/cloudflared
 sudo install -m 0640 .env.example /etc/latex-renderer/renderer.env
 sudo install -m 0600 deploy/cloudflared/config.example.yml /etc/cloudflared/config.yml
-cp apps/gateway-worker/wrangler.example.jsonc apps/gateway-worker/wrangler.jsonc
-sudoedit /etc/latex-renderer/renderer.env /etc/cloudflared/config.yml
-# Edit apps/gateway-worker/wrangler.jsonc as the deployment user.
+sudo install -m 0600 apps/gateway-worker/wrangler.example.jsonc \
+  /etc/latex-renderer/gateway-worker.wrangler.jsonc
+sudoedit /etc/latex-renderer/renderer.env \
+  /etc/cloudflared/config.yml \
+  /etc/latex-renderer/gateway-worker.wrangler.jsonc
 ```
 
 Bootstrap the first owner with values from your Cloudflare Access identity:
@@ -293,8 +295,9 @@ Workers before reconciling the Tunnel routes. The invoking user must already be
 logged in with Wrangler and have the required Worker, Route, and Tunnel access:
 
 ```bash
-cp apps/gateway-worker/wrangler.example.jsonc apps/gateway-worker/wrangler.jsonc
-# Edit /etc/latex-renderer/renderer.env and wrangler.jsonc with deployment values.
+# Keep the configured Gateway Worker file outside the repository at
+# /etc/latex-renderer/gateway-worker.wrangler.jsonc (root:root, mode 0600).
+# Edit it and /etc/latex-renderer/renderer.env with deployment values.
 pnpm exec wrangler login
 export CLOUDFLARE_ACCOUNT_ID=REPLACE_WITH_ACCOUNT_ID
 export CLOUDFLARE_TUNNEL_ID=REPLACE_WITH_TUNNEL_ID
