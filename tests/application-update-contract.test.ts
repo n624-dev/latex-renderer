@@ -48,6 +48,25 @@ describe("pull-first Runtime delivery", () => {
     expect(read("deploy/scripts/build-language-runtime.sh")).toContain(
       'set -- docker buildx build --builder "$RUNTIME_BUILDX_BUILDER"',
     );
+    const neutralBuild = workflow.indexOf('"$base" "$TEXLIVE_REPOSITORY" "$runtime_neutral"');
+    const defaultBuild = workflow.indexOf('"$base" "$TEXLIVE_REPOSITORY" "$runtime_default"');
+    const fullSvgSmoke = workflow.indexOf('smoke-test-renderer-svg.sh "$runtime_default"');
+    expect(neutralBuild).toBeGreaterThan(0);
+    expect(workflow.slice(neutralBuild, defaultBuild)).not.toContain(
+      "smoke-test-renderer-svg.sh",
+    );
+    expect(fullSvgSmoke).toBeGreaterThan(defaultBuild);
+  });
+
+  it("checkpoints a validated dated Base while keeping latest behind Runtime publication", () => {
+    const workflow = read(".github/workflows/renderer-image-daily.yml");
+    const baseSmoke = workflow.indexOf('smoke-test-texlive-base.sh "$base"');
+    const checkpoint = workflow.indexOf("base_source=published-checkpoint");
+    const runtimePush = workflow.indexOf('docker push "$runtime_ref"');
+    const latestPromotion = workflow.indexOf('--tag "$IMAGE_REPOSITORY:latest"');
+    expect(checkpoint).toBeGreaterThan(baseSmoke);
+    expect(checkpoint).toBeLessThan(runtimePush);
+    expect(latestPromotion).toBeGreaterThan(runtimePush);
   });
 
   it("uses exact local, public package, and explicit local-build fallback in that order", () => {

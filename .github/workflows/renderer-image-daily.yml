@@ -139,12 +139,27 @@ jobs:
           [[ $(docker image inspect "$base" --format '{{index .Config.Labels "jp.n624.latex-renderer.texlive.installer-sha512"}}') == "$TEXLIVE_INSTALLER_SHA512" ]]
           sh deploy/scripts/smoke-test-texlive-base.sh "$base"
 
+          # Checkpoint the independently validated immutable Base before the
+          # Runtime matrix. A failed Runtime smoke test can then retry without
+          # rebuilding the full TeX Live snapshot. Do not promote latest until
+          # every Runtime below has passed and been published.
+          if [[ "$base_source" == cold-built && "$PUBLISH_REQUESTED" == true ]]; then
+            [[ $(node deploy/scripts/ghcr-tag-status.mjs "$SNAPSHOT_DATE") == absent ]]
+            local_id=$(docker image inspect "$base" --format '{{.Id}}')
+            docker tag "$base" "$dated_ref"
+            docker push "$dated_ref"
+            checkpoint_digest=$(docker buildx imagetools inspect "$dated_ref" | awk '$1 == "Digest:" { print $2; exit }')
+            [[ "$checkpoint_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+            docker pull "$IMAGE_REPOSITORY@$checkpoint_digest" >/dev/null
+            [[ $(docker image inspect "$IMAGE_REPOSITORY@$checkpoint_digest" --format '{{.Id}}') == "$local_id" ]]
+            base_source=published-checkpoint
+          fi
+
           RUNTIME_BUILDX_BUILDER=default \
             RENDERER_RUNTIME_SOURCE="$GITHUB_WORKSPACE/renderer" \
             sh deploy/scripts/build-language-runtime.sh \
               "$base" "$TEXLIVE_REPOSITORY" "$runtime_neutral"
           sh deploy/scripts/smoke-test-renderer-basic.sh "$runtime_neutral"
-          sh deploy/scripts/smoke-test-renderer-svg.sh "$runtime_neutral"
 
           RUNTIME_BUILDX_BUILDER=default \
             RENDERER_RUNTIME_SOURCE="$GITHUB_WORKSPACE/renderer" \
@@ -181,16 +196,7 @@ jobs:
           dated_ref="$IMAGE_REPOSITORY:$SNAPSHOT_DATE"
           printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
 
-          if [[ "$base_source" == cold-built ]]; then
-            [[ $(node deploy/scripts/ghcr-tag-status.mjs "$SNAPSHOT_DATE") == absent ]]
-            local_id=$(docker image inspect "$base" --format '{{.Id}}')
-            docker tag "$base" "$dated_ref"
-            docker push "$dated_ref"
-            digest=$(docker buildx imagetools inspect "$dated_ref" | awk '$1 == "Digest:" { print $2; exit }')
-            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-            docker pull "$IMAGE_REPOSITORY@$digest" >/dev/null
-            [[ $(docker image inspect "$IMAGE_REPOSITORY@$digest" --format '{{.Id}}') == "$local_id" ]]
-          elif [[ "$base_source" == reused-existing ]]; then
+          if [[ "$base_source" == published-checkpoint || "$base_source" == reused-existing ]]; then
             digest=$(docker buildx imagetools inspect "$dated_ref" | awk '$1 == "Digest:" { print $2; exit }')
             [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           else
@@ -198,14 +204,6 @@ jobs:
             exit 65
           fi
 
-          if [[ "$REQUESTED_DATE" == latest ]]; then
-            docker buildx imagetools create \
-              --prefer-index=false \
-              --tag "$IMAGE_REPOSITORY:latest" \
-              "$IMAGE_REPOSITORY@$digest"
-            latest_digest=$(docker buildx imagetools inspect "$IMAGE_REPOSITORY:latest" | awk '$1 == "Digest:" { print $2; exit }')
-            [[ "$latest_digest" == "$digest" ]]
-          fi
           runtime_digests=()
           for index in "${!runtimes[@]}"; do
             runtime=${runtimes[$index]}
@@ -219,6 +217,14 @@ jobs:
             [[ $(docker image inspect "$IMAGE_REPOSITORY@$runtime_digest" --format '{{.Id}}') == "$runtime_local_id" ]]
             runtime_digests+=("$runtime_digest")
           done
+          if [[ "$REQUESTED_DATE" == latest ]]; then
+            docker buildx imagetools create \
+              --prefer-index=false \
+              --tag "$IMAGE_REPOSITORY:latest" \
+              "$IMAGE_REPOSITORY@$digest"
+            latest_digest=$(docker buildx imagetools inspect "$IMAGE_REPOSITORY:latest" | awk '$1 == "Digest:" { print $2; exit }')
+            [[ "$latest_digest" == "$digest" ]]
+          fi
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
           runtime_digest_csv=$(IFS=,; printf '%s' "${runtime_digests[*]}")
           echo "runtime_digests=$runtime_digest_csv" >> "$GITHUB_OUTPUT"
