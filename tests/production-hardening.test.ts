@@ -73,8 +73,25 @@ describe("production hardening", () => {
   it("deploys the production Gateway explicitly and smoke-tests its health route with each release", () => {
     const deploy = read("deploy/scripts/deploy-production-release.sh"),
       smoke = read("deploy/scripts/smoke-test-unified-origin.sh");
-    expect(deploy).toContain("@latex-renderer/gateway-worker run deploy");
+    expect(deploy).toContain(
+      "@latex-renderer/gateway-worker exec wrangler deploy",
+    );
     expect(smoke).toContain("/api/v1/health");
+  });
+  it("keeps production Gateway configuration outside the Git worktree", () => {
+    const deploy = read("deploy/scripts/deploy-production-release.sh"),
+      ignored = read(".gitignore");
+    expect(deploy).toContain(
+      "/etc/latex-renderer/gateway-worker.wrangler.jsonc",
+    );
+    expect(deploy).toContain(
+      "Gateway Worker production configuration must be stored outside the Git worktree",
+    );
+    expect(deploy).toContain("root with mode 0600");
+    expect(deploy).toContain(".wrangler.production.XXXXXX.jsonc");
+    expect(ignored).toContain(
+      "apps/gateway-worker/.wrangler.production.*.jsonc",
+    );
   });
   it("exercises secret-free structured CLI output in the production render smoke test", () => {
     const smoke = read("deploy/scripts/smoke-test-production.sh");
@@ -97,7 +114,7 @@ describe("production hardening", () => {
       tunnel = read("deploy/scripts/sync-cloudflare-tunnel-config.mjs"),
       smoke = read("deploy/scripts/smoke-test-production.sh"),
       prepare = 'deploy/scripts/prepare-host.sh" "$release_id',
-      gatewayDeploy = "gateway-worker run deploy",
+      gatewayDeploy = "gateway-worker exec wrangler deploy",
       renderSmoke = "smoke-test-production.sh",
       removeLegacy = "sync-cloudflare-tunnel-config.mjs";
     expect(gateway).toContain('"binding": "INTERNAL_API"');

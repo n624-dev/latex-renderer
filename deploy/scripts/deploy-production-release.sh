@@ -13,13 +13,34 @@ fi
 release_id=$1
 source_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
 temporary_root=$(mktemp -d /tmp/latex-renderer-deploy.XXXXXX)
-cleanup() { rm -rf -- "$temporary_root"; }
+gateway_runtime_config=
+cleanup() {
+  [ -z "$gateway_runtime_config" ] || rm -f -- "$gateway_runtime_config"
+  rm -rf -- "$temporary_root"
+}
 trap cleanup EXIT INT TERM HUP
 
 environment_file=/etc/latex-renderer/renderer.env
 if [ ! -f "$environment_file" ]; then
   echo "renderer environment file not found: $environment_file" >&2
   exit 66
+fi
+gateway_worker_config=${GATEWAY_WORKER_CONFIG_FILE:-/etc/latex-renderer/gateway-worker.wrangler.jsonc}
+case "$gateway_worker_config" in
+  /*) ;;
+  *) echo "GATEWAY_WORKER_CONFIG_FILE must be an absolute path" >&2; exit 64 ;;
+esac
+if [ ! -f "$gateway_worker_config" ]; then
+  echo "Gateway Worker configuration file not found: $gateway_worker_config" >&2
+  exit 66
+fi
+gateway_worker_config=$(readlink -f -- "$gateway_worker_config")
+case "$gateway_worker_config" in
+  "$source_root"/*) echo "Gateway Worker production configuration must be stored outside the Git worktree" >&2; exit 78 ;;
+esac
+if [ "$(stat -c '%u:%a' "$gateway_worker_config")" != "0:600" ]; then
+  echo "Gateway Worker production configuration must be owned by root with mode 0600" >&2
+  exit 78
 fi
 public_origin=$(sed -n 's/^PUBLIC_ORIGIN=//p' "$environment_file" | tail -n 1)
 case "$public_origin" in
@@ -36,6 +57,9 @@ if [ ! -x "$sync_pnpm_bin/pnpm" ]; then
   exit 69
 fi
 sync_path="$sync_pnpm_bin:/usr/local/bin:/usr/bin:/bin"
+sync_group=$(id -gn "$sync_user")
+gateway_runtime_config=$(mktemp "$source_root/apps/gateway-worker/.wrangler.production.XXXXXX.jsonc")
+install -o "$sync_user" -g "$sync_group" -m 0600 "$gateway_worker_config" "$gateway_runtime_config"
 
 runuser -u "$sync_user" -- env HOME="$sync_home" USER="$sync_user" LOGNAME="$sync_user" PNPM_HOME="$sync_pnpm_bin" PATH="$sync_path" \
   "$sync_pnpm_bin/pnpm" --dir "$source_root" build:production-services
@@ -88,7 +112,7 @@ done
 systemctl is-active --quiet cloudflared
 
 runuser -u "$sync_user" -- env HOME="$sync_home" USER="$sync_user" LOGNAME="$sync_user" PNPM_HOME="$sync_pnpm_bin" PATH="$sync_path" \
-  "$sync_pnpm_bin/pnpm" --dir "$source_root" --filter @latex-renderer/gateway-worker run deploy
+  "$sync_pnpm_bin/pnpm" --dir "$source_root" --filter @latex-renderer/gateway-worker exec wrangler deploy --config "$gateway_runtime_config"
 runuser -u "$sync_user" -- env HOME="$sync_home" USER="$sync_user" LOGNAME="$sync_user" PNPM_HOME="$sync_pnpm_bin" PATH="$sync_path" \
   "$sync_pnpm_bin/pnpm" --dir "$source_root" --filter @latex-renderer/public-web run deploy
 runuser -u "$sync_user" -- env HOME="$sync_home" USER="$sync_user" LOGNAME="$sync_user" PNPM_HOME="$sync_pnpm_bin" PATH="$sync_path" \
