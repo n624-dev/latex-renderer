@@ -287,6 +287,11 @@ describe("managed TeX Live image pipeline", () => {
     expect(installHost).toContain("xz-utils");
   });
 
+  it("loads derived runtime images into the active Docker image store", () => {
+    const runtimeBuild = read("deploy/scripts/build-language-runtime.sh");
+    expect(runtimeBuild).toContain("docker build \\\n  --load \\");
+  });
+
   it("keeps changed shell and Node scripts syntactically valid", () => {
     for (const path of [
       "deploy/scripts/build-language-runtime.sh",

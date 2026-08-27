@@ -38,6 +38,9 @@ describe("post-review TeX environment regressions", () => {
     expect(waitDocker).toContain("docker info >/dev/null 2>&1");
     expect(waitHttp).toContain('"$endpoint/v1/state"');
     expect(waitHttp).toContain("IMAGE_MANAGER_READY_ATTEMPTS");
+    expect(waitHttp).toContain('[ "$status" = "401" ]');
+    expect(waitHttp).not.toContain("Authorization: Bearer");
+    expect(waitHttp).not.toContain("IMAGE_MANAGER_TOKEN_FILE");
     for (const unit of [worker, internal, remote]) {
       expect(unit).toContain("Requires=latex-renderer-image-manager.service");
       expect(unit).toContain(

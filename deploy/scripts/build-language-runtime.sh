@@ -120,6 +120,7 @@ DOCKERFILE
 chmod 0644 "$tmp/Dockerfile"
 
 docker build \
+  --load \
   --build-arg "BASE_IMAGE=$base_lock_ref" \
   --build-arg "TEXLIVE_REPOSITORY=$repository" \
   --build-arg "TEXLIVE_LANGUAGES=$languages" \
