@@ -93,6 +93,23 @@ describe("production hardening", () => {
       "apps/gateway-worker/.wrangler.production.*.jsonc",
     );
   });
+  it("preflights root-only Cloudflare deployment identifiers outside Git", () => {
+    const deploy = read("deploy/scripts/deploy-production-release.sh"),
+      example = read("deploy/deployment.env.example");
+    expect(deploy).toContain("/etc/latex-renderer/deployment.env");
+    expect(deploy).toContain(
+      "Production deployment environment must be stored outside the Git worktree",
+    );
+    expect(deploy).toContain(
+      "Production deployment environment must be owned by root with mode 0600",
+    );
+    expect(deploy.indexOf("deployment environment file not found")).toBeLessThan(
+      deploy.indexOf("build:production-services"),
+    );
+    expect(example).toContain("CLOUDFLARE_ACCOUNT_ID=REPLACE_WITH_ACCOUNT_ID");
+    expect(example).toContain("CLOUDFLARE_TUNNEL_ID=REPLACE_WITH_TUNNEL_ID");
+    expect(example).not.toContain("n624");
+  });
   it("exercises secret-free structured CLI output in the production render smoke test", () => {
     const smoke = read("deploy/scripts/smoke-test-production.sh");
     expect(smoke).toContain('render "$temporary_root/project" --json');
