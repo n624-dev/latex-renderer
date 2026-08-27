@@ -290,7 +290,7 @@ describe("managed TeX Live image pipeline", () => {
 
   it("loads derived runtime images into the active Docker image store", () => {
     const runtimeBuild = read("deploy/scripts/build-language-runtime.sh");
-    expect(runtimeBuild).toContain("docker build \\\n  --load \\");
+    expect(runtimeBuild).toContain('"$@" \\\n  --load \\');
   });
 
   it("keeps changed shell and Node scripts syntactically valid", () => {

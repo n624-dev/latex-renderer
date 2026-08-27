@@ -40,8 +40,13 @@ describe("pull-first Runtime delivery", () => {
     expect(workflow).toContain('docker push "$runtime_ref"');
     expect(workflow).toContain('docker pull "$IMAGE_REPOSITORY@$runtime_digest"');
     expect(workflow).toContain('smoke-test-renderer-basic.sh "$IMAGE_REPOSITORY@$runtime_digest"');
-    expect(workflow.indexOf("docker buildx use default")).toBeLessThan(
+    expect(workflow).toContain("Verify local Runtime builder");
+    expect(workflow).toContain("docker buildx build --builder default --load");
+    expect(workflow.indexOf("RUNTIME_BUILDX_BUILDER=default")).toBeLessThan(
       workflow.indexOf("sh deploy/scripts/build-language-runtime.sh"),
+    );
+    expect(read("deploy/scripts/build-language-runtime.sh")).toContain(
+      'set -- docker buildx build --builder "$RUNTIME_BUILDX_BUILDER"',
     );
   });
 
