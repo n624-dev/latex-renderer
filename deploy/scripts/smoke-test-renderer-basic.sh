@@ -13,6 +13,7 @@ cp -R "$repo_root/tests/fixtures/runtime-basic/." "$input/"
 chmod -R a+rX "$input"
 chmod 0777 "$output"
 
+set +e
 docker run --rm \
   --network none \
   --read-only \
@@ -28,6 +29,18 @@ docker run --rm \
   --mount "type=bind,src=$input,dst=/work/input,readonly" \
   --mount "type=bind,src=$output,dst=/work/output" \
   "$image"
+renderer_status=$?
+set -e
+if [ "$renderer_status" -ne 0 ]; then
+  echo "Renderer language-neutral smoke fixture failed with exit code $renderer_status." >&2
+  if [ -s "$output/compile.log" ]; then
+    echo '--- renderer compile.log (last 200 lines) ---' >&2
+    tail -n 200 "$output/compile.log" >&2
+  else
+    echo 'Renderer did not produce compile.log.' >&2
+  fi
+  exit "$renderer_status"
+fi
 
 [ -s "$output/result.pdf" ] || {
   echo "Renderer did not produce result.pdf" >&2
