@@ -40,6 +40,9 @@ describe("pull-first Runtime delivery", () => {
     expect(workflow).toContain('docker push "$runtime_ref"');
     expect(workflow).toContain('docker pull "$IMAGE_REPOSITORY@$runtime_digest"');
     expect(workflow).toContain('smoke-test-renderer-basic.sh "$IMAGE_REPOSITORY@$runtime_digest"');
+    expect(workflow.indexOf("docker buildx use default")).toBeLessThan(
+      workflow.indexOf("sh deploy/scripts/build-language-runtime.sh"),
+    );
   });
 
   it("uses exact local, public package, and explicit local-build fallback in that order", () => {

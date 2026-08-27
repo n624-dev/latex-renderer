@@ -126,6 +126,12 @@ jobs:
           [[ $(docker image inspect "$base" --format '{{index .Config.Labels "jp.n624.latex-renderer.texlive.installer-sha512"}}') == "$TEXLIVE_INSTALLER_SHA512" ]]
           sh deploy/scripts/smoke-test-texlive-base.sh "$base"
 
+          # Runtime Dockerfiles derive from the Base loaded into the runner's
+          # local image store. The docker-container Buildx builder used for the
+          # clean Base build cannot resolve that local-only tag and otherwise
+          # falls back to Docker Hub.
+          docker buildx use default
+
           RENDERER_RUNTIME_SOURCE="$GITHUB_WORKSPACE/renderer" \
             sh deploy/scripts/build-language-runtime.sh \
               "$base" "$TEXLIVE_REPOSITORY" "$runtime_neutral"
