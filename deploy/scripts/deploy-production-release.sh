@@ -25,6 +25,39 @@ if [ ! -f "$environment_file" ]; then
   echo "renderer environment file not found: $environment_file" >&2
   exit 66
 fi
+deployment_environment_file=${LATEX_RENDERER_DEPLOYMENT_ENV_FILE:-/etc/latex-renderer/deployment.env}
+case "$deployment_environment_file" in
+  /*) ;;
+  *) echo "LATEX_RENDERER_DEPLOYMENT_ENV_FILE must be an absolute path" >&2; exit 64 ;;
+esac
+if [ ! -f "$deployment_environment_file" ]; then
+  echo "deployment environment file not found: $deployment_environment_file" >&2
+  exit 66
+fi
+deployment_environment_file=$(readlink -f -- "$deployment_environment_file")
+case "$deployment_environment_file" in
+  "$source_root"/*) echo "Production deployment environment must be stored outside the Git worktree" >&2; exit 78 ;;
+esac
+if [ "$(stat -c '%u:%a' "$deployment_environment_file")" != "0:600" ]; then
+  echo "Production deployment environment must be owned by root with mode 0600" >&2
+  exit 78
+fi
+set -a
+# This is trusted root-owned shell syntax so values can be quoted safely.
+. "$deployment_environment_file"
+set +a
+if ! printf '%s\n' "${CLOUDFLARE_ACCOUNT_ID:-}" | grep -Eq '^[0-9a-fA-F]{32}$'; then
+  echo "CLOUDFLARE_ACCOUNT_ID must be a 32-character hexadecimal ID" >&2
+  exit 65
+fi
+if ! printf '%s\n' "${CLOUDFLARE_TUNNEL_ID:-}" | grep -Eq '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'; then
+  echo "CLOUDFLARE_TUNNEL_ID must be a UUID" >&2
+  exit 65
+fi
+case "${CLOUDFLARE_ZONE_NAME:-}" in
+  *.*) ;;
+  *) echo "CLOUDFLARE_ZONE_NAME must be a DNS zone name" >&2; exit 65 ;;
+esac
 gateway_worker_config=${GATEWAY_WORKER_CONFIG_FILE:-/etc/latex-renderer/gateway-worker.wrangler.jsonc}
 case "$gateway_worker_config" in
   /*) ;;

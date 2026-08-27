@@ -42,10 +42,12 @@ ignored by Git:
 ```bash
 sudo install -d -m 0750 /etc/latex-renderer /etc/cloudflared
 sudo install -m 0640 .env.example /etc/latex-renderer/renderer.env
+sudo install -m 0600 deploy/deployment.env.example /etc/latex-renderer/deployment.env
 sudo install -m 0600 deploy/cloudflared/config.example.yml /etc/cloudflared/config.yml
 sudo install -m 0600 apps/gateway-worker/wrangler.example.jsonc \
   /etc/latex-renderer/gateway-worker.wrangler.jsonc
 sudoedit /etc/latex-renderer/renderer.env \
+  /etc/latex-renderer/deployment.env \
   /etc/cloudflared/config.yml \
   /etc/latex-renderer/gateway-worker.wrangler.jsonc
 ```
@@ -297,13 +299,10 @@ logged in with Wrangler and have the required Worker, Route, and Tunnel access:
 ```bash
 # Keep the configured Gateway Worker file outside the repository at
 # /etc/latex-renderer/gateway-worker.wrangler.jsonc (root:root, mode 0600).
-# Edit it and /etc/latex-renderer/renderer.env with deployment values.
+# Keep Account, Tunnel, and Zone identifiers in /etc/latex-renderer/deployment.env
+# (root:root, mode 0600). Edit both host-local files with deployment values.
 pnpm exec wrangler login
-export CLOUDFLARE_ACCOUNT_ID=REPLACE_WITH_ACCOUNT_ID
-export CLOUDFLARE_TUNNEL_ID=REPLACE_WITH_TUNNEL_ID
-export CLOUDFLARE_ZONE_NAME=example.com
-sudo --preserve-env=CLOUDFLARE_ACCOUNT_ID,CLOUDFLARE_TUNNEL_ID,CLOUDFLARE_ZONE_NAME,CLOUDFLARE_API_TOKEN \
-  sh deploy/scripts/deploy-production-release.sh <release-id>
+sudo sh deploy/scripts/deploy-production-release.sh <release-id>
 ```
 
 After all production smoke tests pass, the command retains the three newest
