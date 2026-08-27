@@ -61,6 +61,14 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "24"
+
+      - name: Verify GHCR package write access
+        if: env.PUBLISH_REQUESTED == 'true'
+        env:
+          GHCR_ACTOR: ${{ github.actor }}
+          GHCR_TOKEN: ${{ github.token }}
+        run: node deploy/scripts/verify-ghcr-write-access.mjs "$IMAGE_REPOSITORY"
+
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
         id: buildx
         with:
