@@ -34,6 +34,7 @@ const contentDirectory = fileURLToPath(
 const sourceFiles = [
   "index.md",
   "client.md",
+  "self-hosting.md",
   "web.md",
   "windows.md",
   "cli.md",

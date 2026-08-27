@@ -9,6 +9,20 @@ The hosted service is available at [latex-render.n624.jp](https://latex-render.n
 
 The hostname `latex.example.com` used by deployment examples and tests is a placeholder. The hosted-service URL above is intentionally public, but this repository does not contain its production credentials or infrastructure-specific configuration.
 
+## Get started
+
+- Use the hosted service: [public documentation](https://latex-render.n624.jp/docs/)
+- Install the CLI, MCP, and AI integrations: [client setup](https://latex-render.n624.jp/docs/client/)
+- Prepare a self-hosted server: [self-hosting guide](https://latex-render.n624.jp/docs/self-hosting/) or [SETUP.md](SETUP.md)
+- Develop or contribute: [CONTRIBUTING.md](CONTRIBUTING.md)
+
+General server installation is not yet available. The current `v1.0.0` release
+contains client assets but no server bundle whose tag and files are locked
+against replacement after publication. The updater requires that protection.
+Do not deploy the changeable `main` branch as a substitute; the self-hosting
+guide records the supported profile and readiness requirements until that
+bundle is published.
+
 ## Components
 
 - `apps/gateway-worker`: small JSON ticket gateway
@@ -22,28 +36,10 @@ The hostname `latex.example.com` used by deployment examples and tests is a plac
 
 ## Development
 
-Requirements: Linux, Node.js 24 or newer, pnpm 11, and Docker.
-
-```bash
-corepack enable
-pnpm install --frozen-lockfile
-pnpm check
-pnpm build
-docker build -t latex-renderer:2026 renderer
-```
-
-Copy only example configuration files, then provide values for your own environment:
-
-```bash
-cp .env.example .env
-cp apps/gateway-worker/wrangler.example.jsonc apps/gateway-worker/wrangler.jsonc
-cp deploy/cloudflared/config.example.yml /etc/cloudflared/config.yml
-```
-
-Do not commit the resulting files. Start with [ARCHITECTURE.md](ARCHITECTURE.md)
-and [DEPLOYMENT.md](DEPLOYMENT.md); the latter documents both Web and CLI TeX
-environment updates and explains how application releases reconcile the saved
-image selector. User-facing guides are in [docs/public](docs/public).
+Development setup and contribution requirements are in
+[CONTRIBUTING.md](CONTRIBUTING.md). Production internals and advanced operator
+procedures are in [DEPLOYMENT.md](DEPLOYMENT.md); general users should start
+with the Web-visible self-hosting guide instead.
 
 ## Security and support
 

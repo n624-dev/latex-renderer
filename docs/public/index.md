@@ -4,7 +4,7 @@ category: はじめる
 title: はじめに
 description: APIキーを登録し、最初のPDFを作成するまでの最短手順です。
 navOrder: 10
-updated: "2026-08-12"
+updated: "2026-08-28"
 since: "v1.0.0"
 ---
 
@@ -13,6 +13,7 @@ since: "v1.0.0"
 | 方法                                           | 用途                                                               |
 | ---------------------------------------------- | ------------------------------------------------------------------ |
 | [クライアント](/docs/client/)                  | Windows、Linux、macOSへCLI、MCP、AI向けSkillをまとめて導入します。 |
+| [セルフホスト](/docs/self-hosting/)            | 対応するサーバー構成、提供状況、初期設定と運用を確認します。       |
 | [CLI](/docs/cli/)                              | ターミナルから変換、状態確認、キャンセル、成果物取得を行います。   |
 | [Codex・Claude Code・MCP](/docs/integrations/) | APIキーを会話へ渡さず、ローカルCLI経由で操作します。               |
 | [公開API](/docs/api/)                          | 独自アプリケーションからHTTP APIを利用します。                     |
