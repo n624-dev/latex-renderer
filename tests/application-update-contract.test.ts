@@ -218,10 +218,13 @@ describe("release-based application updates", () => {
     expect(openapi).toContain("/updates/operations/{id}:");
   });
 
-  it("builds server assets only for protected tags and uploads them to an immutable-release draft", () => {
+  it("builds server assets only for protected tags and uploads them to a draft", () => {
     const workflow = read(".github/workflows/server-release.yml");
     expect(workflow).toContain("workflow_dispatch:");
-    expect(workflow).toContain("immutable-releases");
+    expect(workflow).toContain("contents: write");
+    expect(workflow).not.toContain(
+      "repos/n624-dev/latex-renderer/immutable-releases",
+    );
     expect(workflow).toContain("--verify-tag");
     expect(workflow).toContain("--draft");
     expect(workflow).not.toContain("--draft=false");
@@ -229,6 +232,7 @@ describe("release-based application updates", () => {
     expect(workflow).toContain("latex-renderer-client-$version.zip");
     expect(workflow).toContain("latex-renderer-local-$version.mcpb");
     expect(workflow).toContain("SHA256SUMS");
+    expect(workflow).toContain(".isDraft == true");
     expect(workflow).toContain("^v[0-9]+\\.[0-9]+\\.[0-9]+$");
     const builder = read("deploy/scripts/build-server-release-assets.sh");
     expect(builder).toContain('readlink "$admin_web_unit"');

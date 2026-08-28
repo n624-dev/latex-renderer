@@ -286,9 +286,11 @@ updater-compatible release. Run the `server-release` workflow for an existing
 protected `v*` tag; it validates the source and uploads the server bundle,
 client ZIP, signed MCPB, and combined checksums to one draft. Review every asset
 and the generated notes before publishing the draft, because publication locks
-its tag and assets. The updater deliberately rejects older mutable releases,
-including v1.0.0; v1.1.0 is the first planned updater-compatible server
-release.
+its tag and assets. The workflow's repository-scoped token cannot read the
+administrative immutable-release setting, so a maintainer must verify that
+setting with repository administration access before dispatch and again before
+publication. The updater deliberately rejects older mutable releases, including
+v1.0.0; v1.1.0 is the first planned updater-compatible server release.
 
 The previous runtime is retained for rollback, including the legacy runtime that
 was active before the first managed switch. Managed rollback re-derives the
