@@ -3,7 +3,7 @@
   "manifest_version": "0.4",
   "name": "latex-renderer-local",
   "display_name": "LaTeX Renderer Local",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Render local LaTeX projects through LaTeX Renderer from Claude Desktop.",
   "long_description": "A local stdio MCP server for explicitly selected LaTeX files, directories, and ZIP projects. The server uploads source through the existing sandboxed renderer and downloads artifacts to the local machine.",
   "author": {
