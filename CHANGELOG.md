@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 1.1.5 - 2026-08-29
+
+- Publish the supported sudo recovery path for legacy Update Managers that fail before verified release code can take over, without granting Web or API processes elevated privileges.
+- Prepare a fresh immutable release bundle with its manifest-pinned pnpm and frozen lockfile instead of retrying failed legacy staging or weakening protected host paths.
+
 ## 1.1.4 - 2026-08-28
 
 - Run deployment-user update and build commands from the verified private stage instead of inheriting a protected service working directory.

@@ -10,9 +10,9 @@ since: "v1.1.0"
 
 ## 現在の提供状況
 
-一般利用者向けの現在のサーバー用bundleは、[`v1.1.4`](https://github.com/n624-dev/latex-renderer/releases/tag/v1.1.4)です。最初のUpdater対応版v1.1.0に、初回bootstrap、`client-dist`配置順序、共通mutation lock解放、非rootデプロイ用staging、安全な作業directory、Corepackによるpnpm固定版導入の修正を加えています。このReleaseは公開後にタグや配布ファイルを差し替えできない設定で固定され、次を含みます。
+一般利用者向けの現在のサーバー用bundleは、[`v1.1.5`](https://github.com/n624-dev/latex-renderer/releases/tag/v1.1.5)です。v1.1.4のUpdater修正に加え、旧Updaterが検証済みReleaseの処理へ到達する前に失敗する場合のsudo手動復旧手順をbundle内に収録しています。このReleaseは公開後にタグや配布ファイルを差し替えできない設定で固定され、次を含みます。
 
-- `latex-renderer-server-1.1.4.tar.gz`
+- `latex-renderer-server-1.1.5.tar.gz`
 - クライアントZIPとClaude Desktop用MCPB
 - 3つの配布ファイルを検証する`SHA256SUMS`
 - commit、バージョン、Renderer fingerprint、Node.js／pnpm要件を記録したbundle内metadata
@@ -78,12 +78,12 @@ since: "v1.1.0"
 
 公開リポジトリの`*.example`ファイルは項目確認のための雛形です。設定済みファイルを雛形へ上書きしてcommitする運用はしません。
 
-## v1.1.4をダウンロードして検証
+## v1.1.5をダウンロードして検証
 
 次のコマンドは、固定されたReleaseであることをGitHub APIで確認し、APIが返すdigestとダウンロードしたbundleを照合します。通常の非rootユーザーで実行します。
 
 ```bash
-version=1.1.4
+version=1.1.5
 repository=n624-dev/latex-renderer
 asset="latex-renderer-server-$version.tar.gz"
 work_dir=$(mktemp -d)
@@ -243,10 +243,10 @@ admin_cli=/opt/latex-renderer/current/apps/admin-cli/dist/index.js
 /usr/local/bin/node "$admin_cli" update status
 /usr/local/bin/node "$admin_cli" update check
 /usr/local/bin/node "$admin_cli" update policy --mode notify --yes
-/usr/local/bin/node "$admin_cli" update apply 1.1.4 --yes
+/usr/local/bin/node "$admin_cli" update apply 1.1.5 --yes
 ```
 
-上の`1.1.4`は更新対象versionを明示する例です。利用可能と表示された実在versionだけを指定します。CLIは事前にAdmin API keyとCloudflare service tokenを設定し、通常ユーザーとして実行します。CLIへsudoを付けません。
+上の`1.1.5`は更新対象versionを明示する例です。利用可能と表示された実在versionだけを指定します。CLIは事前にAdmin API keyとCloudflare service tokenを設定し、通常ユーザーとして実行します。CLIへsudoを付けません。
 
 更新前にはmaintenance mode、実行中jobのdrain、データベースbackupが必要です。データベースschemaを戻す必要がある場合は、アプリだけを強制的にロールバックせず、対応するbackupを復元します。
 
