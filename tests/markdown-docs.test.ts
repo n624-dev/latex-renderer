@@ -37,7 +37,9 @@ describe("Markdown public documentation", () => {
       expect(document.category).not.toBe("");
       expect(document.description).not.toBe("");
       expect(document.updated).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-      expect(document.since).toBe("v1.0.0");
+      expect(document.since).toBe(
+        document.slug === "self-hosting" ? "v1.1.0" : "v1.0.0",
+      );
       expect(
         readFileSync(
           new URL(`../${document.sourcePath}`, import.meta.url),
@@ -47,14 +49,17 @@ describe("Markdown public documentation", () => {
     }
   });
 
-  it("publishes the guarded general-user self-hosting guide", () => {
+  it("publishes the versioned general-user self-hosting guide", () => {
     const selfHosting = publicDocs.find(({ slug }) => slug === "self-hosting");
     expect(selfHosting).toBeDefined();
-    expect(selfHosting?.html).toContain("一般利用者向けのサーバーインストール");
+    expect(selfHosting?.html).toContain("latex-renderer-server-1.1.0.tar.gz");
     expect(selfHosting?.html).toContain("現在の提供状況");
     expect(selfHosting?.html).toContain(
       "公開後にタグや配布ファイルを差し替えできない",
     );
+    expect(selfHosting?.html).toContain("sha256sum --check");
+    expect(selfHosting?.html).toContain("install-host.sh");
+    expect(selfHosting?.html).not.toContain("まだ正式提供前");
     expect(selfHosting?.html).toContain("main");
     expect(selfHosting?.html).toContain("TeX環境の初期設定");
     expect(selfHosting?.html).toContain("バックアップ");

@@ -5,23 +5,22 @@ title: 自分のサーバーに構築
 description: 対応するサーバー構成、導入前の準備、初期設定、更新とバックアップを説明します。
 navOrder: 18
 updated: "2026-08-28"
-since: "v1.0.0"
+since: "v1.1.0"
 ---
 
 ## 現在の提供状況
 
-> [!WARNING]
-> 一般利用者向けのサーバーインストールは、まだ正式提供前です。公開済みの`v1.0.0`にはクライアント配布物だけが含まれ、検証済みのサーバー用配布ファイルは含まれていません。また、`v1.0.0`は公開後の差し替えを禁止した固定リリースではないため、サーバーの自動更新機能は安全上の理由から適用を拒否します。
+一般利用者向けの最初のサーバー用bundleは、[`v1.1.0`](https://github.com/n624-dev/latex-renderer/releases/tag/v1.1.0)で公開されています。このReleaseは公開後にタグや配布ファイルを差し替えできない設定で固定され、次を含みます。
 
-現在の`main`ブランチをcloneして本番へ直接デプロイしないでください。このページでは、正式なserver bundleが公開されるまでに準備できる内容と、公開後に利用する初期設定・運用方針を説明します。ホスト済みサービスを利用する場合は、[はじめに](/docs/)または[クライアントのインストール](/docs/client/)へ進んでください。
+- `latex-renderer-server-1.1.0.tar.gz`
+- クライアントZIPとClaude Desktop用MCPB
+- 3つの配布ファイルを検証する`SHA256SUMS`
+- commit、バージョン、Renderer fingerprint、Node.js／pnpm要件を記録したbundle内metadata
+- GitHub APIが返す各assetのSHA-256 digest
 
-正式提供の条件は次のとおりです。
+現在の`main`ブランチをcloneして本番へ直接デプロイしないでください。必ずバージョン付きReleaseを使用します。旧`v1.0.0`にはサーバー用bundleがなく、公開後の差し替え禁止も適用されていないため、Update Managerではインストールできません。
 
-- 公開後にタグや配布ファイルを差し替えできない固定リリース（GitHub Immutable Release）
-- commit、バージョン、Renderer fingerprintを含むサーバー用bundle
-- GitHub APIから確認できるSHA-256 digest
-- 対応するNode.js・pnpmバージョンとアップグレード経路
-- 新規ホストで完了するインストールと実レンダリングの検証
+ホスト済みサービスを利用する場合は、[はじめに](/docs/)または[クライアントのインストール](/docs/client/)へ進んでください。
 
 ## 対応する構成
 
@@ -46,6 +45,7 @@ since: "v1.0.0"
 - Cloudflare Tunnel、Access Application、Workerを作成できる権限
 - GitHub Releases、`ghcr.io`、TeX Live archive、Debian repositoryへHTTPS接続できるネットワーク
 - Ownerとして登録するCloudflare Access identity
+- `curl`、`jq`、`tar`、`sha256sum`
 
 既定設定では空き容量が5 GiBを下回ると新規レンダリングを拒否します。TeX Live、複数のRuntime、リリース、成果物、暗号化バックアップにも容量が必要なため、5 GiBをホスト全体の必要容量として扱わないでください。
 
@@ -70,7 +70,7 @@ since: "v1.0.0"
 | `/etc/latex-renderer/deployment.env`                | Cloudflareのデプロイ識別子・token      | `0600`   |
 | `/etc/latex-renderer/update-manager.env`            | 非rootのデプロイ用ユーザー             | `0600`   |
 | `/etc/latex-renderer/gateway-worker.wrangler.jsonc` | 本番Worker bindingとroute              | `0600`   |
-| `/etc/cloudflared/config.yml`                       | Tunnel ingress                         | `0600`   |
+| `/etc/cloudflared/config.yml`                       | Tunnel ingress                         | `0640`   |
 | `/etc/latex-renderer/secrets/`                      | pepper、ticket key、manager credential | 個別指定 |
 
 > [!WARNING]
@@ -78,22 +78,94 @@ since: "v1.0.0"
 
 公開リポジトリの`*.example`ファイルは項目確認のための雛形です。設定済みファイルを雛形へ上書きしてcommitする運用はしません。
 
-## 正式Release公開後の導入順序
+## v1.1.0をダウンロードして検証
 
-一般向けserver bundleが公開された後は、次の順序を正式なセットアップ経路にします。このページには、bundle名、digest検証、実行コマンドが新規ホストで検証された時点で追記します。
+次のコマンドは、固定されたReleaseであることをGitHub APIで確認し、APIが返すdigestとダウンロードしたbundleを照合します。通常の非rootユーザーで実行します。
 
-1. Releaseとサーバー用bundleが公開後に差し替えできないことを確認
-2. GitHub APIが返すdigestとダウンロードしたbundleのSHA-256を照合
-3. 非rootのデプロイ用ユーザーから、sudoで一度だけhost bootstrapを実行
-4. Node.js 24、pnpm 11、`latex-render-worker`用rootless Docker、cloudflaredを準備
-5. `/etc/latex-renderer`と`/etc/cloudflared`へhost-local設定を作成
-6. Cloudflare Tunnel、Access、Worker Routesを設定
-7. バージョン付きReleaseを`/opt/latex-renderer/releases/`へ配置し、サービスを起動
-8. 最初のOwnerを登録
-9. 公開GHCRからTeX Runtimeを適用
-10. health check、Access境界、英語／日本語の実レンダリングを確認
+```bash
+version=1.1.0
+repository=n624-dev/latex-renderer
+asset="latex-renderer-server-$version.tar.gz"
+work_dir=$(mktemp -d)
+release_json="$work_dir/release.json"
 
-導入作業を`git pull`、`pnpm install`、ローカルの`docker build`から始める手順は、一般向けセットアップには採用しません。これらは開発・保守用です。
+curl --proto '=https' --tlsv1.2 --fail --silent --show-error \
+  "https://api.github.com/repos/$repository/releases/tags/v$version" \
+  --output "$release_json"
+jq -e --arg version "$version" --arg asset "$asset" '
+  .immutable == true and
+  .tag_name == ("v" + $version) and
+  any(.assets[]; .name == $asset and (.digest | test("^sha256:[a-f0-9]{64}$")))
+' "$release_json"
+
+asset_url=$(jq -r --arg asset "$asset" '.assets[] | select(.name == $asset) | .browser_download_url' "$release_json")
+asset_digest=$(jq -r --arg asset "$asset" '.assets[] | select(.name == $asset) | .digest' "$release_json")
+curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error \
+  "$asset_url" --output "$work_dir/$asset"
+printf '%s  %s\n' "${asset_digest#sha256:}" "$work_dir/$asset" | sha256sum --check -
+
+tar -xzf "$work_dir/$asset" -C "$work_dir"
+bundle_root="$work_dir/latex-renderer-server-$version"
+```
+
+`OK`が表示されなければ、展開やsudo操作へ進みません。`work_dir`と`bundle_root`は同じシェルで続く手順に使用します。
+
+## ホストを準備
+
+導入スクリプトの前に、Node.js 24、`/usr/local/bin/node`、デプロイ用ユーザーの`$HOME/.local/share/pnpm/bin/pnpm`（bundleの`packageManager`に記録された版）、Docker Engineのrootless用tool、cloudflaredを準備します。インストール元はそれぞれの公式ドキュメントを使用し、第三者の非公式スクリプトをrootで実行しません。
+
+```bash
+/usr/local/bin/node --version
+"$HOME/.local/share/pnpm/bin/pnpm" --version
+command -v dockerd-rootless-setuptool.sh
+cloudflared --version
+```
+
+その後、通常のデプロイ用ユーザーからhost bootstrapを一度実行します。
+
+```bash
+sudo sh "$bundle_root/deploy/scripts/install-host.sh"
+```
+
+この処理は専用user、ディレクトリ、manager credentialを作成しますが、サービスはまだ起動しません。
+
+## ホスト固有設定を作成
+
+公開されている雛形をGit管理外のホスト用pathへコピーします。次の最初の3ファイルは必須です。
+
+```bash
+sudo install -o root -g latex-renderer -m 0640 \
+  "$bundle_root/.env.example" /etc/latex-renderer/renderer.env
+sudo install -o root -g root -m 0600 \
+  "$bundle_root/deploy/deployment.env.example" /etc/latex-renderer/deployment.env
+sudo install -o root -g root -m 0600 \
+  "$bundle_root/apps/gateway-worker/wrangler.example.jsonc" \
+  /etc/latex-renderer/gateway-worker.wrangler.jsonc
+```
+
+host-local Tunnel設定を使用する場合だけ、次も実行します。
+
+```bash
+sudo install -o root -g cloudflared -m 0640 \
+  "$bundle_root/deploy/cloudflared/config.example.yml" /etc/cloudflared/config.yml
+```
+
+各ファイル内の`example.com`、`REPLACE_*`、UUID、Access audienceを自分の環境の値へ置き換えます。Cloudflare tokenを使用する場合だけ`/etc/latex-renderer/deployment.env`へ追加し、modeを`0600`のまま維持します。設定済みファイルをbundleやGit worktreeへコピーしません。
+
+Cloudflare Tunnelをremote管理する場合は、host-localの`config.yml`を使わず、deploy前にconnectorがactiveであることを確認します。不要な雛形を有効な設定として残さないでください。
+
+## サービスを配置
+
+Cloudflare Access、Tunnel、VPC Service、Worker Routesとホスト固有設定が揃ったら、bundleのmetadataから一意なRelease IDを作って配置します。
+
+```bash
+release_id=$(jq -r '"v\(.version)-\(.commit[0:12])"' "$bundle_root/.latex-renderer-release.json")
+sudo sh "$bundle_root/deploy/scripts/deploy-production-release.sh" "$release_id"
+```
+
+このコマンドはproduction serviceをbuildし、`/opt/latex-renderer/releases/$release_id`へ固定配置して、health checkと公開境界のsmoke testを行います。途中で失敗した場合は、エラーを修正せずに同じ処理を繰り返さず、最初に表示された失敗箇所とredacted logを確認します。
+
+導入作業を`git pull`、未固定の`main`、ローカルのTeX用`docker build`から始める手順は、一般向けセットアップには採用しません。これらは開発・保守用です。
 
 ## Cloudflareの境界
 
@@ -106,6 +178,20 @@ Tunnel ingressは、固有のAPI／管理pathを先に、Web fallbackを後に�
 ## 最初のOwner
 
 最初のOwnerは、Cloudflare Accessが返すemail、表示名、Access subjectを使ってhost上で一度だけ登録します。値をシェル履歴へ残さない方法を選び、登録後は`/admin/`へそのidentityでログインできることを確認します。
+
+次の例は値を対話入力し、コマンド履歴へ直接書きません。
+
+```bash
+IFS= read -r -p 'Owner email: ' owner_email
+IFS= read -r -p 'Owner display name: ' owner_name
+IFS= read -r -p 'Cloudflare Access subject: ' owner_subject
+sudo env \
+  LATEX_RENDER_OWNER_EMAIL="$owner_email" \
+  LATEX_RENDER_OWNER_NAME="$owner_name" \
+  LATEX_RENDER_OWNER_ACCESS_SUBJECT="$owner_subject" \
+  sh /opt/latex-renderer/current/deploy/scripts/bootstrap-owner.sh
+unset owner_email owner_name owner_subject
+```
 
 以後の管理者・利用者はWeb管理画面から招待します。レンダリング用の`lrk_` API keyと、Cloudflare tokenや管理用credentialを混同しないでください。
 
@@ -146,7 +232,19 @@ TeXとアプリケーションは別々に更新します。
 - TeX：`/admin/tex-environment/`でImage、言語、自動更新を管理
 - アプリ：`/admin/updates/`で更新確認、通知／自動ポリシー、適用、ロールバックを管理
 
-アプリ更新は、公開後に差し替えできない固定リリース、固定tag／commit、サーバー用bundleのdigest、埋め込みmetadata、Renderer fingerprint、Node／pnpm要件を検証します。現在の`v1.0.0`は公開後の差し替えを禁止する設定がないため、Update Managerでは適用できません。
+アプリ更新は、公開後に差し替えできない固定リリース、固定tag／commit、サーバー用bundleのdigest、埋め込みmetadata、Renderer fingerprint、Node／pnpm要件を検証します。`v1.1.0`以降がこの更新経路に対応します。`v1.0.0`はサーバー用bundleと差し替え禁止設定がないため、Update Managerでは適用できません。
+
+Webでは`/admin/updates/`から更新確認、方針変更、適用、operation確認、rollbackを行います。認証済みのAdmin CLIを使う場合も同じAPIと安全検査を使用します。
+
+```bash
+admin_cli=/opt/latex-renderer/current/apps/admin-cli/dist/index.js
+/usr/local/bin/node "$admin_cli" update status
+/usr/local/bin/node "$admin_cli" update check
+/usr/local/bin/node "$admin_cli" update policy --mode notify --yes
+/usr/local/bin/node "$admin_cli" update apply 1.1.1 --yes
+```
+
+上の`1.1.1`は将来の更新例です。利用可能と表示された実在versionだけを指定します。CLIは事前にAdmin API keyとCloudflare service tokenを設定し、通常ユーザーとして実行します。CLIへsudoを付けません。
 
 更新前にはmaintenance mode、実行中jobのdrain、データベースbackupが必要です。データベースschemaを戻す必要がある場合は、アプリだけを強制的にロールバックせず、対応するbackupを復元します。
 

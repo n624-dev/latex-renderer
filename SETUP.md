@@ -9,13 +9,13 @@ The guide describes the supported Cloudflare Tunnel + Access Linux profile,
 sudo boundaries, host-local configuration, initial administration, TeX image
 selection, verification, updates, rollback, and backups.
 
-General server installation is not yet available: the current `v1.0.0` release
-contains client assets but no server bundle whose tag and files are locked
-against replacement after publication. The updater requires that protection.
-Do not deploy the changeable `main` branch as a substitute. This file will
-remain a short entry point; executable installation steps belong in the
-Web-visible canonical guide after the server release path is verified on a new
-host.
+Self-hosted installation starts with the immutable
+[`v1.1.0` release](https://github.com/n624-dev/latex-renderer/releases/tag/v1.1.0).
+It includes `latex-renderer-server-1.1.0.tar.gz`, with a SHA-256 digest reported
+by the GitHub API and matching embedded release metadata. Do not deploy the
+changeable `main` branch as a substitute. This file remains a short entry point;
+the executable installation and verification steps live in the Web-visible
+canonical guide.
 
 Development setup is documented separately in [CONTRIBUTING.md](CONTRIBUTING.md).
 Detailed deployment internals remain in [DEPLOYMENT.md](DEPLOYMENT.md).

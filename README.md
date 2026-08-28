@@ -5,7 +5,7 @@
 
 A security-oriented LuaLaTeX rendering platform with Web, CLI, HTTP API, and MCP interfaces. Untrusted TeX runs in a networkless, read-only, non-root Docker sandbox with explicit resource limits. Jobs produce PDF by default and can also extract self-contained SVG objects for math and TikZ output.
 
-The hosted service is available at [latex-render.n624.jp](https://latex-render.n624.jp/), with documentation at [latex-render.n624.jp/docs/](https://latex-render.n624.jp/docs/). Version 1.0 also supports the Cloudflare deployment profile documented in this repository: Cloudflare Tunnel and Access protect a Linux host, while Workers route the small public request surface.
+The hosted service is available at [latex-render.n624.jp](https://latex-render.n624.jp/), with documentation at [latex-render.n624.jp/docs/](https://latex-render.n624.jp/docs/). Version 1.1 supports the Cloudflare deployment profile documented in this repository: Cloudflare Tunnel and Access protect a Linux host, while Workers route the small public request surface.
 
 The hostname `latex.example.com` used by deployment examples and tests is a placeholder. The hosted-service URL above is intentionally public, but this repository does not contain its production credentials or infrastructure-specific configuration.
 
@@ -16,12 +16,11 @@ The hostname `latex.example.com` used by deployment examples and tests is a plac
 - Prepare a self-hosted server: [self-hosting guide](https://latex-render.n624.jp/docs/self-hosting/) or [SETUP.md](SETUP.md)
 - Develop or contribute: [CONTRIBUTING.md](CONTRIBUTING.md)
 
-General server installation is not yet available. The current `v1.0.0` release
-contains client assets but no server bundle whose tag and files are locked
-against replacement after publication. The updater requires that protection.
-Do not deploy the changeable `main` branch as a substitute; the self-hosting
-guide records the supported profile and readiness requirements until that
-bundle is published.
+Self-hosted installation starts with the immutable
+[`v1.1.0` release](https://github.com/n624-dev/latex-renderer/releases/tag/v1.1.0),
+which includes a digest-labelled server bundle. Do not deploy the changeable
+`main` branch as a substitute. Follow the self-hosting guide for the supported
+profile, host prerequisites, checksum verification, and configuration steps.
 
 ## Components
 
