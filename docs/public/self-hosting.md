@@ -127,7 +127,7 @@ cloudflared --version
 sudo sh "$bundle_root/deploy/scripts/install-host.sh"
 ```
 
-この処理は専用user、ディレクトリ、manager credentialを作成しますが、サービスはまだ起動しません。
+この処理は専用user、ディレクトリ、manager credentialを作成しますが、サービスはまだ起動しません。`/var/lib/latex-renderer`はroot所有、group `latex-renderer`、mode `2770`とし、その配下の通常データだけを各専用userへ所有させます。Image／Update Managerのroot所有領域を非root所有の親から辿らせないことで、`systemd-tmpfiles`のunsafe path判定を避けます。
 
 ## ホスト固有設定を作成
 
@@ -163,7 +163,7 @@ release_id=$(jq -r '"v\(.version)-\(.commit[0:12])"' "$bundle_root/.latex-render
 sudo sh "$bundle_root/deploy/scripts/deploy-production-release.sh" "$release_id"
 ```
 
-このコマンドはproduction serviceをbuildし、`/opt/latex-renderer/releases/$release_id`へ固定配置して、health checkと公開境界のsmoke testを行います。途中で失敗した場合は、エラーを修正せずに同じ処理を繰り返さず、最初に表示された失敗箇所とredacted logを確認します。
+このコマンドはproduction serviceとWebが必要とする`client-dist`を先にbuildし、`/opt/latex-renderer/releases/$release_id`へ一緒に固定配置して、Update Managerのsocket、health check、公開境界のsmoke testを確認します。途中で失敗した場合は、エラーを修正せずに同じ処理を繰り返さず、最初に表示された失敗箇所とredacted logを確認します。
 
 導入作業を`git pull`、未固定の`main`、ローカルのTeX用`docker build`から始める手順は、一般向けセットアップには採用しません。これらは開発・保守用です。
 
@@ -263,14 +263,16 @@ admin_cli=/opt/latex-renderer/current/apps/admin-cli/dist/index.js
 
 ## 問題が起きた場合
 
-| 状況                       | 最初に確認すること                                                    |
-| -------------------------- | --------------------------------------------------------------------- |
-| `/app/`へ到達できない      | Tunnel、DNS、Access Application、ingressの順序                        |
-| 管理者だけログインできない | Owner invitation、Access subject、audience                            |
-| TeX Imageを取得できない    | `ghcr.io`へのHTTPS、PackageのPublic設定、指定tag                      |
-| TeX変更が長時間終わらない  | operation IDとImage Managerのredacted log                             |
-| アプリ更新が拒否される     | Releaseが差し替え禁止か、asset digest、upgrade path、空き容量         |
-| レンダリングが開始されない | queue、空き容量、worker、rootless Docker socket                       |
-| 更新直後に問題が起きた     | 新規jobを止め、現在と以前のRelease／Runtimeを確認してからrollback判断 |
+| 状況                                | 最初に確認すること                                                    |
+| ----------------------------------- | --------------------------------------------------------------------- |
+| `/app/`へ到達できない               | Tunnel、DNS、Access Application、ingressの順序                        |
+| 管理者だけログインできない          | Owner invitation、Access subject、audience                            |
+| TeX Imageを取得できない             | `ghcr.io`へのHTTPS、PackageのPublic設定、指定tag                      |
+| TeX変更が長時間終わらない           | operation IDとImage Managerのredacted log                             |
+| アプリ更新が拒否される              | Releaseが差し替え禁止か、asset digest、upgrade path、空き容量         |
+| host bootstrapがunsafe pathで止まる | `/var/lib/latex-renderer`が`root:latex-renderer`、mode `2770`か       |
+| 更新画面だけ起動しない              | Release内の`client-dist/manifest.json`とAdmin Webのservice状態        |
+| レンダリングが開始されない          | queue、空き容量、worker、rootless Docker socket                       |
+| 更新直後に問題が起きた              | 新規jobを止め、現在と以前のRelease／Runtimeを確認してからrollback判断 |
 
 診断時もcredentialファイル、Authorization header、ユーザーのSource ZIP、PDF、raw logを表示・共有しません。詳細な運用と障害対応は、GitHubの[OPERATIONS.md](https://github.com/n624-dev/latex-renderer/blob/main/OPERATIONS.md)および[SECURITY.md](https://github.com/n624-dev/latex-renderer/blob/main/SECURITY.md)を参照してください。

@@ -230,6 +230,11 @@ general root shell. The one-time `install-host.sh` bootstrap creates the helper,
 its random credential, durable operation state, and the root-owned
 `/etc/latex-renderer/update-manager.env`. Set `UPDATE_DEPLOY_USER` there to the
 non-root account that owns the pnpm and Wrangler login used for deployments.
+The shared `/var/lib/latex-renderer` parent remains root-owned and group-writable
+(`root:latex-renderer`, mode `2770`) so root-owned Manager state is never reached
+through a service-user-owned parent. Service-owned storage remains in dedicated
+children. The deployment builds `client-dist` before copying the immutable
+release and waits for the Update Manager socket before continuing verification.
 
 The default application policy is stable **notification only**. Check, apply,
 and rollback from `/admin/updates/` or the equivalent CLI commands:

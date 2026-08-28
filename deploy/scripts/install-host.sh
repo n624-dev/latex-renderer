@@ -14,7 +14,8 @@ grep -q '^latex-render-worker:' /etc/subuid || usermod --add-subuids 165536-2310
 grep -q '^latex-render-worker:' /etc/subgid || usermod --add-subgids 165536-231071 latex-render-worker
 id latex-renderer-backup >/dev/null 2>&1 || useradd --system --gid latex-renderer --home-dir /var/backups/latex-renderer --shell /usr/sbin/nologin latex-renderer-backup
 id cloudflared >/dev/null 2>&1 || useradd --system --home-dir /var/lib/cloudflared --shell /usr/sbin/nologin cloudflared
-install -d -o latex-renderer -g latex-renderer -m 2770 /var/lib/latex-renderer /var/lib/latex-renderer/storage
+install -d -o root -g latex-renderer -m 2770 /var/lib/latex-renderer
+install -d -o latex-renderer -g latex-renderer -m 2770 /var/lib/latex-renderer/storage
 install -d -o root -g latex-renderer -m 0750 /var/lib/latex-renderer/image-manager /var/lib/latex-renderer/image-manager/tmp /var/lib/latex-renderer/image-manager/operations
 install -d -o root -g latex-renderer -m 0750 /var/lib/latex-renderer/update-manager /var/lib/latex-renderer/update-manager/staging /var/lib/latex-renderer/update-manager/operations
 install -d -o root -g latex-renderer -m 0750 /etc/latex-renderer /etc/latex-renderer/secrets
@@ -45,10 +46,13 @@ chown root:root /etc/latex-renderer/update-manager.env
 chmod 0600 /etc/latex-renderer/update-manager.env
 # Keep operation diagnostics for 30 days without allowing unbounded growth.
 cat > /etc/tmpfiles.d/latex-renderer-image-manager.conf <<'EOF'
+d /var/lib/latex-renderer 2770 root latex-renderer -
+d /var/lib/latex-renderer/image-manager 0750 root latex-renderer -
 d /var/lib/latex-renderer/image-manager/tmp 0750 root latex-renderer -
 d /var/lib/latex-renderer/image-manager/operations 0750 root latex-renderer -
 e /var/lib/latex-renderer/image-manager/tmp - - - 1d
 e /var/lib/latex-renderer/image-manager/operations - - - 30d
+d /var/lib/latex-renderer/update-manager 0750 root latex-renderer -
 d /var/lib/latex-renderer/update-manager/staging 0750 root latex-renderer -
 d /var/lib/latex-renderer/update-manager/operations 0750 root latex-renderer -
 e /var/lib/latex-renderer/update-manager/staging - - - 1d
