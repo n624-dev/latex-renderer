@@ -136,9 +136,11 @@ describe("release-based application updates", () => {
     expect(manager).toContain(
       "manifest?.rendererRuntimeFingerprint !== stagedRendererFingerprint",
     );
-    expect(manager).toContain("await assertDiskSpace(stateRoot");
+    expect(manager).toMatch(/await assertDiskSpace\(\s*stagingRoot,/);
     expect(manager).toContain("manifest?.requiredNodeMajor !== 24");
-    expect(manager).toContain('pnpm, "self-update", expectedPnpmVersion');
+    expect(manager).toMatch(
+      /pnpm,\s*"self-update",\s*expectedPnpmVersion/,
+    );
     expect(manager).not.toContain("body.url");
     expect(manager).not.toContain("body.command");
     expect(manager).not.toContain("body.path");
@@ -151,6 +153,9 @@ describe("release-based application updates", () => {
     );
     expect(manager).toContain(
       'stateRoot !== "/var/lib/latex-renderer/update-manager"',
+    );
+    expect(manager).toContain(
+      'const stagingRoot = "/opt/latex-renderer/update-staging"',
     );
     expect(manager).toContain('releaseRoot !== "/opt/latex-renderer/releases"');
     expect(manager).toContain('currentLink !== "/opt/latex-renderer/current"');
@@ -168,6 +173,33 @@ describe("release-based application updates", () => {
     expect(client).toContain("socketPath: this.socketPath");
     expect(client).not.toContain("sudo");
     expect(adminScript).not.toContain("sudo ");
+  });
+
+  it("gives the deployment user a private stage without granting application-state access", () => {
+    const manager = read("deploy/scripts/update-manager.mjs");
+    const installHost = read("deploy/scripts/install-host.sh");
+    const prepareHost = read("deploy/scripts/prepare-host.sh");
+    const unit = read("deploy/systemd/latex-renderer-update-manager.service");
+    expect(manager).toContain("mkdtemp(join(stagingRoot");
+    expect(manager).not.toContain('mkdtemp(join(stateRoot, "staging"');
+    expect(manager).toContain("await chown(stagingRoot, 0, deployGid)");
+    expect(manager).toContain("await chmod(stagingRoot, 0o710)");
+    expect(manager).toContain("await chown(stage, deployUid, deployGid)");
+    expect(manager).toContain("await chmod(stage, 0o700)");
+    expect(installHost).toContain(
+      "install -d -o root -g root -m 0711 /opt/latex-renderer/update-staging",
+    );
+    expect(prepareHost).toContain(
+      "install -d -o root -g root -m 0711 /opt/latex-renderer/update-staging",
+    );
+    expect(manager).toContain("await cleanupStagingRoot()");
+    expect(manager).toContain("24 * 60 * 60 * 1000");
+    expect(prepareHost).toContain(
+      "chmod 0750 /var/lib/latex-renderer/update-manager/staging",
+    );
+    expect(unit).toContain("ReadWritePaths=/opt/latex-renderer");
+    expect(installHost).not.toContain("usermod -aG latex-renderer");
+    expect(prepareHost).not.toContain("usermod -aG latex-renderer");
   });
 
   it("serializes application and TeX mutations with one non-blocking OS lock", () => {

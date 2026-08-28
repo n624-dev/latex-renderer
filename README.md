@@ -17,7 +17,7 @@ The hostname `latex.example.com` used by deployment examples and tests is a plac
 - Develop or contribute: [CONTRIBUTING.md](CONTRIBUTING.md)
 
 Self-hosted installation starts with the immutable
-[`v1.1.2` release](https://github.com/n624-dev/latex-renderer/releases/tag/v1.1.2),
+[`v1.1.3` release](https://github.com/n624-dev/latex-renderer/releases/tag/v1.1.3),
 which includes a digest-labelled server bundle. Do not deploy the changeable
 `main` branch as a substitute. Follow the self-hosting guide for the supported
 profile, host prerequisites, checksum verification, and configuration steps.

@@ -56,7 +56,13 @@ describe("production hardening", () => {
       tmpfiles.indexOf("/var/lib/latex-renderer/image-manager/tmp"),
     );
     expect(tmpfiles.indexOf(updateManager)).toBeLessThan(
-      tmpfiles.indexOf("/var/lib/latex-renderer/update-manager/staging"),
+      tmpfiles.indexOf("/var/lib/latex-renderer/update-manager/operations"),
+    );
+    expect(tmpfiles).not.toContain(
+      "/var/lib/latex-renderer/update-manager/staging",
+    );
+    expect(install).toContain(
+      "install -d -o root -g root -m 0711 /opt/latex-renderer/update-staging",
     );
   });
   it("does not enable unsupported AppArmor in the rootless production environment", () => {
