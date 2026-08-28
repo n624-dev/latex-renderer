@@ -40,6 +40,7 @@ jobs:
           [[ $(git tag --points-at HEAD) == *"$RELEASE_TAG"* ]]
           pnpm install --frozen-lockfile
           pnpm check
+          pnpm build:client
       - name: Build versioned server source bundle
         env:
           RELEASE_TAG: ${{ inputs.version }}
@@ -50,7 +51,9 @@ jobs:
           renderer_fingerprint=$(node deploy/scripts/runtime-image-identity.mjs --renderer-fingerprint)
           top="latex-renderer-server-$version"
           stage="$RUNNER_TEMP/$top"
+          release_assets="$RUNNER_TEMP/release-assets"
           mkdir -p "$stage"
+          mkdir -p "$release_assets"
           git archive HEAD | tar -x -C "$stage"
           node - "$stage/.latex-renderer-release.json" "$stage/deploy/release-policy.json" "$stage/package.json" "$version" "$RELEASE_TAG" "$commit" "$renderer_fingerprint" <<'NODE'
           const fs = require("node:fs");
@@ -74,9 +77,18 @@ jobs:
             --sort=name \
             --mtime='UTC 1970-01-01' \
             --owner=0 --group=0 --numeric-owner \
-            -czf "$RUNNER_TEMP/$top.tar.gz" \
+            -czf "$release_assets/$top.tar.gz" \
             -C "$RUNNER_TEMP" "$top"
-          sha256sum "$RUNNER_TEMP/$top.tar.gz" > "$RUNNER_TEMP/SHA256SUMS-server"
+          cp "client-dist/latex-renderer-client-$version.zip" "$release_assets/"
+          cp "client-dist/latex-renderer-local-$version.mcpb" "$release_assets/"
+          (
+            cd "$release_assets"
+            sha256sum \
+              "$top.tar.gz" \
+              "latex-renderer-client-$version.zip" \
+              "latex-renderer-local-$version.mcpb" \
+              > SHA256SUMS
+          )
       - name: Require immutable-release protection and upload to draft
         env:
           GH_TOKEN: ${{ github.token }}
@@ -99,8 +111,10 @@ jobs:
               --generate-notes
           fi
           gh release upload "$RELEASE_TAG" \
-            "$RUNNER_TEMP/latex-renderer-server-$version.tar.gz" \
-            "$RUNNER_TEMP/SHA256SUMS-server" \
+            "$RUNNER_TEMP/release-assets/latex-renderer-server-$version.tar.gz" \
+            "$RUNNER_TEMP/release-assets/latex-renderer-client-$version.zip" \
+            "$RUNNER_TEMP/release-assets/latex-renderer-local-$version.mcpb" \
+            "$RUNNER_TEMP/release-assets/SHA256SUMS" \
             --repo n624-dev/latex-renderer \
             --clobber
-          echo "Server bundle uploaded to the draft. Attach every other release asset, review notes, then publish the draft to make it immutable."
+          echo "Server and client assets uploaded to the draft. Review every asset and the generated notes, then publish the draft to make it immutable."
