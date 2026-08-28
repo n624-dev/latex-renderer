@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.1.2 - 2026-08-28
+
+- Release the actual `flock` lock holder after application or TeX mutations, preventing completed operations from leaving all later updates blocked.
+
 ## 1.1.1 - 2026-08-28
 
 - Keep the shared application state parent root-owned so `systemd-tmpfiles` can safely manage root-owned Image and Update Manager directories.
