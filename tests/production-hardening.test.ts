@@ -25,6 +25,40 @@ describe("production hardening", () => {
     ])
       expect(read(path)).toContain("/var/lib/latex-renderer/backups");
   });
+  it("keeps privileged manager roots below a root-owned group-writable state parent", () => {
+    const install = read("deploy/scripts/install-host.sh"),
+      prepare = read("deploy/scripts/prepare-host.sh");
+    for (const script of [install, prepare]) {
+      expect(script).toContain(
+        "install -d -o root -g latex-renderer -m 2770 /var/lib/latex-renderer",
+      );
+      expect(script).toContain(
+        "install -d -o latex-renderer -g latex-renderer -m 2770 /var/lib/latex-renderer/storage",
+      );
+      expect(script).not.toContain(
+        "-o latex-renderer -g latex-renderer -m 2770 /var/lib/latex-renderer /var/lib/latex-renderer/storage",
+      );
+    }
+    const tmpfiles = install.slice(
+        install.indexOf(
+          "cat > /etc/tmpfiles.d/latex-renderer-image-manager.conf",
+        ),
+      ),
+      parent = "d /var/lib/latex-renderer 2770 root latex-renderer -",
+      imageManager =
+        "d /var/lib/latex-renderer/image-manager 0750 root latex-renderer -",
+      updateManager =
+        "d /var/lib/latex-renderer/update-manager 0750 root latex-renderer -";
+    expect(tmpfiles.indexOf(parent)).toBeLessThan(
+      tmpfiles.indexOf(imageManager),
+    );
+    expect(tmpfiles.indexOf(imageManager)).toBeLessThan(
+      tmpfiles.indexOf("/var/lib/latex-renderer/image-manager/tmp"),
+    );
+    expect(tmpfiles.indexOf(updateManager)).toBeLessThan(
+      tmpfiles.indexOf("/var/lib/latex-renderer/update-manager/staging"),
+    );
+  });
   it("does not enable unsupported AppArmor in the rootless production environment", () => {
     expect(read(".env.example")).not.toMatch(/^RENDERER_APPARMOR_PROFILE=/m);
     expect(read("deploy/scripts/prepare-host.sh")).toContain(
@@ -103,9 +137,9 @@ describe("production hardening", () => {
     expect(deploy).toContain(
       "Production deployment environment must be owned by root with mode 0600",
     );
-    expect(deploy.indexOf("deployment environment file not found")).toBeLessThan(
-      deploy.indexOf("build:production-services"),
-    );
+    expect(
+      deploy.indexOf("deployment environment file not found"),
+    ).toBeLessThan(deploy.indexOf("build:production-services"));
     expect(example).toContain("CLOUDFLARE_ACCOUNT_ID=REPLACE_WITH_ACCOUNT_ID");
     expect(example).toContain("CLOUDFLARE_TUNNEL_ID=REPLACE_WITH_TUNNEL_ID");
     expect(example).not.toContain("n624");
@@ -169,17 +203,34 @@ describe("production hardening", () => {
     expect(deploy).toContain('"$sync_pnpm_bin/pnpm" --dir "$source_root"');
     expect(deploy).not.toContain("/usr/local/bin/corepack pnpm");
   });
-  it("builds production service artifacts before copying the immutable release", () => {
+  it("builds production services and the client distribution before copying the immutable release", () => {
     const deploy = read("deploy/scripts/deploy-production-release.sh"),
       root = JSON.parse(read("package.json")) as {
         scripts: Record<string, string>;
       },
       build = "build:production-services",
+      clientBuild = "build:client",
       prepare = 'prepare-host.sh" "$release_id';
     expect(root.scripts[build]).toContain("@latex-renderer/remote-mcp...");
     expect(root.scripts[build]).toContain("@latex-renderer/renderer-api...");
     expect(deploy).toContain(build);
     expect(deploy.indexOf(build)).toBeLessThan(deploy.indexOf(prepare));
+    expect(deploy).toContain(clientBuild);
+    expect(deploy.indexOf(build)).toBeLessThan(deploy.indexOf(clientBuild));
+    expect(deploy.indexOf(clientBuild)).toBeLessThan(deploy.indexOf(prepare));
+    expect(deploy).toContain('[ -f "$source_root/client-dist/manifest.json" ]');
+  });
+  it("waits for the privileged Update Manager socket without restarting its caller", () => {
+    const deploy = read("deploy/scripts/deploy-production-release.sh"),
+      wait = read("deploy/scripts/wait-update-manager-socket.sh");
+    expect(deploy.match(/wait-update-manager-socket\.sh/g)).toHaveLength(2);
+    expect(deploy).not.toContain(
+      "systemctl restart latex-renderer-update-manager",
+    );
+    expect(wait).toContain("UPDATE_MANAGER_READY_ATTEMPTS");
+    expect(wait).toContain("systemctl is-active --quiet");
+    expect(wait).toContain('[ -S "$socket_path" ]');
+    expect(wait).toContain('sleep "$retry_delay"');
   });
   it("reconciles the saved TeX configuration before renderer consumers restart", () => {
     const deploy = read("deploy/scripts/deploy-production-release.sh"),

@@ -96,6 +96,12 @@ install -o "$sync_user" -g "$sync_group" -m 0600 "$gateway_worker_config" "$gate
 
 runuser -u "$sync_user" -- env HOME="$sync_home" USER="$sync_user" LOGNAME="$sync_user" PNPM_HOME="$sync_pnpm_bin" PATH="$sync_path" \
   "$sync_pnpm_bin/pnpm" --dir "$source_root" build:production-services
+runuser -u "$sync_user" -- env HOME="$sync_home" USER="$sync_user" LOGNAME="$sync_user" PNPM_HOME="$sync_pnpm_bin" PATH="$sync_path" \
+  "$sync_pnpm_bin/pnpm" --dir "$source_root" build:client
+[ -f "$source_root/client-dist/manifest.json" ] || {
+  echo "production client distribution was not generated before release copy" >&2
+  exit 70
+}
 
 # Freeze all TeX environment mutations before prepare-host changes the current
 # release symlink, renderer.env, inventory, or persisted Image Manager state.
@@ -125,6 +131,7 @@ env \
 
 systemctl daemon-reload
 systemctl enable --now latex-renderer-update-manager.service
+/opt/latex-renderer/current/deploy/scripts/wait-update-manager-socket.sh
 systemctl restart latex-renderer-image-manager
 systemctl is-active --quiet latex-renderer-image-manager
 /usr/local/bin/node /opt/latex-renderer/current/deploy/scripts/reconcile-managed-runtime.mjs
@@ -148,6 +155,7 @@ done
 for timer in latex-renderer-update-refresh.timer latex-renderer-image-refresh.timer latex-renderer-image-operation-watchdog.timer latex-renderer-image-log-cleanup.timer; do
   systemctl is-active --quiet "$timer"
 done
+/opt/latex-renderer/current/deploy/scripts/wait-update-manager-socket.sh
 
 systemctl is-active --quiet cloudflared
 

@@ -52,7 +52,8 @@ chown -R root:latex-renderer "$release_root"
 chmod -R g+rX,o-rwx "$release_root"
 ln -sfn "$release_root" /opt/latex-renderer/current
 
-install -d -o latex-renderer -g latex-renderer -m 2770 /var/lib/latex-renderer /var/lib/latex-renderer/storage
+install -d -o root -g latex-renderer -m 2770 /var/lib/latex-renderer
+install -d -o latex-renderer -g latex-renderer -m 2770 /var/lib/latex-renderer/storage
 if [ -d /var/lib/latex-renderer/storage/jobs ]; then
   find /var/lib/latex-renderer/storage/jobs -mindepth 2 -maxdepth 13 -type d -path '*/work*' -exec chmod g+rwx {} +
   find /var/lib/latex-renderer/storage/jobs -mindepth 2 -maxdepth 13 -type d \
