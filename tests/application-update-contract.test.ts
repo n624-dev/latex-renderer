@@ -174,6 +174,7 @@ describe("release-based application updates", () => {
     const lock = read("deploy/scripts/mutation-lock.mjs");
     expect(lock).toContain("/run/latex-renderer/mutation.lock");
     expect(lock).toContain('"--nonblock"');
+    expect(lock).toContain('"--no-fork"');
     expect(read("deploy/scripts/update-manager.mjs")).toContain(
       "await acquireMutationLock()",
     );

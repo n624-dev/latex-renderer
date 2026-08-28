@@ -10,9 +10,9 @@ since: "v1.1.0"
 
 ## 現在の提供状況
 
-一般利用者向けの現在のサーバー用bundleは、[`v1.1.1`](https://github.com/n624-dev/latex-renderer/releases/tag/v1.1.1)です。最初のUpdater対応版v1.1.0に、初回bootstrap時のtmpfiles所有権と`client-dist`配置順序の修正を加えています。このReleaseは公開後にタグや配布ファイルを差し替えできない設定で固定され、次を含みます。
+一般利用者向けの現在のサーバー用bundleは、[`v1.1.2`](https://github.com/n624-dev/latex-renderer/releases/tag/v1.1.2)です。最初のUpdater対応版v1.1.0に、初回bootstrap、`client-dist`配置順序、共通mutation lock解放の修正を加えています。このReleaseは公開後にタグや配布ファイルを差し替えできない設定で固定され、次を含みます。
 
-- `latex-renderer-server-1.1.1.tar.gz`
+- `latex-renderer-server-1.1.2.tar.gz`
 - クライアントZIPとClaude Desktop用MCPB
 - 3つの配布ファイルを検証する`SHA256SUMS`
 - commit、バージョン、Renderer fingerprint、Node.js／pnpm要件を記録したbundle内metadata
@@ -78,12 +78,12 @@ since: "v1.1.0"
 
 公開リポジトリの`*.example`ファイルは項目確認のための雛形です。設定済みファイルを雛形へ上書きしてcommitする運用はしません。
 
-## v1.1.1をダウンロードして検証
+## v1.1.2をダウンロードして検証
 
 次のコマンドは、固定されたReleaseであることをGitHub APIで確認し、APIが返すdigestとダウンロードしたbundleを照合します。通常の非rootユーザーで実行します。
 
 ```bash
-version=1.1.1
+version=1.1.2
 repository=n624-dev/latex-renderer
 asset="latex-renderer-server-$version.tar.gz"
 work_dir=$(mktemp -d)
@@ -241,12 +241,34 @@ admin_cli=/opt/latex-renderer/current/apps/admin-cli/dist/index.js
 /usr/local/bin/node "$admin_cli" update status
 /usr/local/bin/node "$admin_cli" update check
 /usr/local/bin/node "$admin_cli" update policy --mode notify --yes
-/usr/local/bin/node "$admin_cli" update apply 1.1.1 --yes
+/usr/local/bin/node "$admin_cli" update apply 1.1.2 --yes
 ```
 
-上の`1.1.1`は更新対象versionを明示する例です。利用可能と表示された実在versionだけを指定します。CLIは事前にAdmin API keyとCloudflare service tokenを設定し、通常ユーザーとして実行します。CLIへsudoを付けません。
+上の`1.1.2`は更新対象versionを明示する例です。利用可能と表示された実在versionだけを指定します。CLIは事前にAdmin API keyとCloudflare service tokenを設定し、通常ユーザーとして実行します。CLIへsudoを付けません。
 
 更新前にはmaintenance mode、実行中jobのdrain、データベースbackupが必要です。データベースschemaを戻す必要がある場合は、アプリだけを強制的にロールバックせず、対応するbackupを復元します。
+
+### mutation lockが使用中と表示される場合
+
+`MUTATION_LOCK_BUSY`はアプリ更新とTeX変更の同時実行を防ぐ安全機構です。Webに実行中operationが表示されている間は、完了を待ちます。ロックファイル自体を削除してはいけません。使用中のファイルを削除すると、新旧2つのロックが同時に存在できてしまいます。
+
+実行中operationがなく、managerのログでも直前の処理が完了しているのに同じ表示が続く場合だけ、managerを停止して保持者を確認します。
+
+```bash
+sudo systemctl stop latex-renderer-image-manager.service \
+  latex-renderer-update-manager.service
+sudo fuser --verbose /run/latex-renderer/mutation.lock
+```
+
+表示されたprocessが完了済みoperationの孤立したlock helperであることを確認できた場合だけ、ロックを保持しているprocessを終了してmanagerを再開します。設定ファイルやcredentialは操作しません。
+
+```bash
+sudo fuser --kill /run/latex-renderer/mutation.lock
+sudo systemctl start latex-renderer-image-manager.service \
+  latex-renderer-update-manager.service
+```
+
+再開後にWebから状態を読み直し、アプリ更新とTeX変更を同時には開始しないでください。原因をIssueへ報告する場合も、`/etc/latex-renderer`、credential、入力文書、生成物、未編集の実ログは添付しません。
 
 ## バックアップ
 
