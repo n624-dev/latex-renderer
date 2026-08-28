@@ -225,12 +225,15 @@ describe("release-based application updates", () => {
     expect(workflow).toContain("--verify-tag");
     expect(workflow).toContain("--draft");
     expect(workflow).not.toContain("--draft=false");
-    expect(workflow).toContain(".latex-renderer-release.json");
     expect(workflow).toContain("latex-renderer-server-$version.tar.gz");
     expect(workflow).toContain("latex-renderer-client-$version.zip");
     expect(workflow).toContain("latex-renderer-local-$version.mcpb");
     expect(workflow).toContain("SHA256SUMS");
     expect(workflow).toContain("^v[0-9]+\\.[0-9]+\\.[0-9]+$");
+    const builder = read("deploy/scripts/build-server-release-assets.sh");
+    expect(builder).toContain('readlink "$admin_web_unit"');
+    expect(builder).toContain('find "$stage" -type l');
+    expect(builder).toContain(".latex-renderer-release.json");
   });
 
   it("keeps manager scripts syntactically valid", () => {
@@ -245,6 +248,7 @@ describe("release-based application updates", () => {
       expect(result.status, `${path}: ${result.stderr}`).toBe(0);
     }
     for (const path of [
+      "deploy/scripts/build-server-release-assets.sh",
       "deploy/scripts/build-language-runtime.sh",
       "deploy/scripts/restore-managed-runtime.sh",
     ]) {
