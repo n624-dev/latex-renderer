@@ -12,6 +12,7 @@ fi
 
 release_id=$1
 source_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
+cd "$source_root"
 temporary_root=$(mktemp -d /tmp/latex-renderer-deploy.XXXXXX)
 gateway_runtime_config=
 cleanup() {

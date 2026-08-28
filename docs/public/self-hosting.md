@@ -10,9 +10,9 @@ since: "v1.1.0"
 
 ## 現在の提供状況
 
-一般利用者向けの現在のサーバー用bundleは、[`v1.1.3`](https://github.com/n624-dev/latex-renderer/releases/tag/v1.1.3)です。最初のUpdater対応版v1.1.0に、初回bootstrap、`client-dist`配置順序、共通mutation lock解放、非rootデプロイ用stagingの修正を加えています。このReleaseは公開後にタグや配布ファイルを差し替えできない設定で固定され、次を含みます。
+一般利用者向けの現在のサーバー用bundleは、[`v1.1.4`](https://github.com/n624-dev/latex-renderer/releases/tag/v1.1.4)です。最初のUpdater対応版v1.1.0に、初回bootstrap、`client-dist`配置順序、共通mutation lock解放、非rootデプロイ用staging、安全な作業directory、Corepackによるpnpm固定版導入の修正を加えています。このReleaseは公開後にタグや配布ファイルを差し替えできない設定で固定され、次を含みます。
 
-- `latex-renderer-server-1.1.3.tar.gz`
+- `latex-renderer-server-1.1.4.tar.gz`
 - クライアントZIPとClaude Desktop用MCPB
 - 3つの配布ファイルを検証する`SHA256SUMS`
 - commit、バージョン、Renderer fingerprint、Node.js／pnpm要件を記録したbundle内metadata
@@ -78,12 +78,12 @@ since: "v1.1.0"
 
 公開リポジトリの`*.example`ファイルは項目確認のための雛形です。設定済みファイルを雛形へ上書きしてcommitする運用はしません。
 
-## v1.1.3をダウンロードして検証
+## v1.1.4をダウンロードして検証
 
 次のコマンドは、固定されたReleaseであることをGitHub APIで確認し、APIが返すdigestとダウンロードしたbundleを照合します。通常の非rootユーザーで実行します。
 
 ```bash
-version=1.1.3
+version=1.1.4
 repository=n624-dev/latex-renderer
 asset="latex-renderer-server-$version.tar.gz"
 work_dir=$(mktemp -d)
@@ -112,11 +112,11 @@ bundle_root="$work_dir/latex-renderer-server-$version"
 
 ## ホストを準備
 
-導入スクリプトの前に、Node.js 24、`/usr/local/bin/node`、デプロイ用ユーザーの`$HOME/.local/share/pnpm/bin/pnpm`（bundleの`packageManager`に記録された版）、Docker Engineのrootless用tool、cloudflaredを準備します。インストール元はそれぞれの公式ドキュメントを使用し、第三者の非公式スクリプトをrootで実行しません。
+導入スクリプトの前に、Node.js 24、`/usr/local/bin/node`、`/usr/local/bin/corepack`、Docker Engineのrootless用tool、cloudflaredを準備します。Update Managerはbundle metadataに記録されたpnpmをCorepackでデプロイ用ユーザーへ導入し、実行前に版を照合します。インストール元はそれぞれの公式ドキュメントを使用し、第三者の非公式スクリプトをrootで実行しません。
 
 ```bash
 /usr/local/bin/node --version
-"$HOME/.local/share/pnpm/bin/pnpm" --version
+/usr/local/bin/corepack --version
 command -v dockerd-rootless-setuptool.sh
 cloudflared --version
 ```
@@ -243,44 +243,68 @@ admin_cli=/opt/latex-renderer/current/apps/admin-cli/dist/index.js
 /usr/local/bin/node "$admin_cli" update status
 /usr/local/bin/node "$admin_cli" update check
 /usr/local/bin/node "$admin_cli" update policy --mode notify --yes
-/usr/local/bin/node "$admin_cli" update apply 1.1.3 --yes
+/usr/local/bin/node "$admin_cli" update apply 1.1.4 --yes
 ```
 
-上の`1.1.3`は更新対象versionを明示する例です。利用可能と表示された実在versionだけを指定します。CLIは事前にAdmin API keyとCloudflare service tokenを設定し、通常ユーザーとして実行します。CLIへsudoを付けません。
+上の`1.1.4`は更新対象versionを明示する例です。利用可能と表示された実在versionだけを指定します。CLIは事前にAdmin API keyとCloudflare service tokenを設定し、通常ユーザーとして実行します。CLIへsudoを付けません。
 
 更新前にはmaintenance mode、実行中jobのdrain、データベースbackupが必要です。データベースschemaを戻す必要がある場合は、アプリだけを強制的にロールバックせず、対応するbackupを復元します。
 
-### v1.1.0〜v1.1.2からv1.1.3へ更新する場合
+### v1.1.0〜v1.1.3からv1.1.4へ更新する場合
 
-旧Updaterは検証済みbundleを保護されたmanager stateの配下へ置いていたため、非rootのデプロイ用ユーザーが展開時に親directoryを通過できない場合があります。デプロイ用ユーザーを`latex-renderer` groupへ追加しないでください。実行中operationがないことを確認してImage／Update Managerを止め、既存lockの保持者が残っている場合だけ終了してから、旧staging経路へ一時的に通過権限だけを付けます。
+旧Updaterには、検証済みbundleを保護されたmanager stateの配下へ置く版、非rootコマンドへ保護されたservice working directoryを引き継ぐ版、`pnpm self-update`が不完全な実行ファイルを作る環境があります。デプロイ用ユーザーを`latex-renderer` groupへ追加しないでください。最初にその通常ユーザーでCorepackの固定版shimを用意し、現在のrelease pathを検証します。設定・credential・データは操作しません。
+
+```bash
+current_release=$(readlink -f /opt/latex-renderer/current)
+case "$current_release" in
+  /opt/latex-renderer/releases/*) ;;
+  *) echo 'current release is outside /opt/latex-renderer/releases' >&2; exit 1 ;;
+esac
+install -d -m 0755 "$HOME/.local/share/pnpm/bin"
+/usr/local/bin/corepack install --global pnpm@11.24.0
+/usr/local/bin/corepack enable --install-directory "$HOME/.local/share/pnpm/bin"
+"$HOME/.local/share/pnpm/bin/pnpm" --version
+```
+
+`11.24.0`が表示されたことを確認します。続いて、実行中operationがないことをWebで確認してImage／Update Managerを止め、既存lockの保持者が残っている場合だけ終了します。旧staging経路には一時的な通過権限、検証済みの現在release directoryには一時的な読み取り・通過権限だけを付けます。
 
 ```bash
 sudo systemctl stop latex-renderer-image-manager.service \
   latex-renderer-update-manager.service
 sudo fuser --verbose /run/latex-renderer/mutation.lock
 sudo fuser --kill --signal TERM /run/latex-renderer/mutation.lock || true
-sudo chmod o+x /var/lib/latex-renderer \
-  /var/lib/latex-renderer/update-manager \
-  /var/lib/latex-renderer/update-manager/staging
+if [ -d /var/lib/latex-renderer/update-manager/staging ]; then
+  sudo chmod o+x /var/lib/latex-renderer \
+    /var/lib/latex-renderer/update-manager \
+    /var/lib/latex-renderer/update-manager/staging
+fi
+sudo chmod o+rx "$current_release"
 sudo systemctl start latex-renderer-image-manager.service \
   latex-renderer-update-manager.service
 ```
 
-Webから`v1.1.3`を適用すると、デプロイ処理が旧pathを`2770`／`0750`へ戻し、以後は専用stagingを使用します。更新が失敗した場合は、再試行する前に一時権限を手動で戻します。
+Webから`v1.1.4`を適用すると、デプロイ処理が旧pathを`2770`／`0750`へ戻し、旧releaseの一時権限も閉じます。以後は専用staging、安全なcwd、Corepack固定版を使用します。更新が失敗した場合は、再試行する前に一時権限を手動で戻します。
 
 ```bash
 sudo chmod 2770 /var/lib/latex-renderer
-sudo chmod 0750 /var/lib/latex-renderer/update-manager \
-  /var/lib/latex-renderer/update-manager/staging
+sudo chmod 0750 /var/lib/latex-renderer/update-manager
+if [ -d /var/lib/latex-renderer/update-manager/staging ]; then
+  sudo chmod 0750 /var/lib/latex-renderer/update-manager/staging
+fi
+sudo chmod o-rwx "$current_release"
 ```
 
-更新後は次の表示が`2770 root:latex-renderer`、`750 root:latex-renderer`、`750 root:latex-renderer`の順になることを確認します。
+更新後はapplication stateが`2770 root:latex-renderer`、managerと存在する旧stagingが`750 root:latex-renderer`、旧releaseが`750 root:latex-renderer`になったことを確認します。
 
 ```bash
-stat -c '%a %U:%G %n' \
+for path in \
   /var/lib/latex-renderer \
   /var/lib/latex-renderer/update-manager \
-  /var/lib/latex-renderer/update-manager/staging
+  /var/lib/latex-renderer/update-manager/staging \
+  "$current_release"
+do
+  [ ! -e "$path" ] || stat -c '%a %U:%G %n' "$path"
+done
 ```
 
 ### mutation lockが使用中と表示される場合

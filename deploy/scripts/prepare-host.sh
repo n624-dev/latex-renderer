@@ -19,6 +19,14 @@ esac
 source_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
 release_root="/opt/latex-renderer/releases/$release_id"
 release_marker="$release_root/.host-prepare-source-complete"
+previous_release=
+if [ -L /opt/latex-renderer/current ]; then
+  current_target=$(readlink -f /opt/latex-renderer/current)
+  case "$current_target" in
+    /opt/latex-renderer/releases/*) previous_release=$current_target ;;
+    *) echo "current release points outside the immutable release root" >&2; exit 78 ;;
+  esac
+fi
 worker_user=latex-render-worker
 worker_uid=$(id -u "$worker_user")
 worker_home=/var/lib/latex-render-worker
@@ -51,6 +59,9 @@ fi
 chown -R root:latex-renderer "$release_root"
 chmod -R g+rX,o-rwx "$release_root"
 ln -sfn "$release_root" /opt/latex-renderer/current
+if [ -n "$previous_release" ] && [ "$previous_release" != "$release_root" ]; then
+  chmod o-rwx "$previous_release"
+fi
 
 install -d -o root -g latex-renderer -m 2770 /var/lib/latex-renderer
 install -d -o latex-renderer -g latex-renderer -m 2770 /var/lib/latex-renderer/storage

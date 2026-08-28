@@ -1,6 +1,14 @@
 #!/bin/sh
 set -eu
 if [ "$(id -u)" -ne 0 ]; then echo "install-host.sh must run as root" >&2; exit 77; fi
+if [ ! -x /usr/local/bin/node ] || [ "$(/usr/local/bin/node -p 'process.versions.node.split(".")[0]')" != 24 ]; then
+  echo "Node.js 24 must be installed at /usr/local/bin/node before host setup" >&2
+  exit 69
+fi
+if [ ! -x /usr/local/bin/corepack ] || ! /usr/local/bin/corepack --version >/dev/null 2>&1; then
+  echo "Corepack must be installed at /usr/local/bin/corepack before host setup" >&2
+  exit 69
+fi
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl age apparmor apparmor-utils jq openssl psmisc rsync sqlite3 uidmap dbus-user-session slirp4netns fuse-overlayfs util-linux xz-utils
 getent group latex-renderer >/dev/null || groupadd --system latex-renderer

@@ -138,9 +138,13 @@ describe("release-based application updates", () => {
     );
     expect(manager).toMatch(/await assertDiskSpace\(\s*stagingRoot,/);
     expect(manager).toContain("manifest?.requiredNodeMajor !== 24");
-    expect(manager).toMatch(
-      /pnpm,\s*"self-update",\s*expectedPnpmVersion/,
+    expect(manager).toContain(
+      'corepack, "install", "--global", `pnpm@${expectedPnpmVersion}`',
     );
+    expect(manager).toContain(
+      'corepack, "enable", "--install-directory", pnpmBin',
+    );
+    expect(manager).not.toContain('pnpm, "self-update"');
     expect(manager).not.toContain("body.url");
     expect(manager).not.toContain("body.command");
     expect(manager).not.toContain("body.path");
@@ -189,6 +193,7 @@ describe("release-based application updates", () => {
     expect(installHost).toContain(
       "install -d -o root -g root -m 0711 /opt/latex-renderer/update-staging",
     );
+    expect(installHost).toContain("/usr/local/bin/corepack --version");
     expect(prepareHost).toContain(
       "install -d -o root -g root -m 0711 /opt/latex-renderer/update-staging",
     );
@@ -197,9 +202,26 @@ describe("release-based application updates", () => {
     expect(prepareHost).toContain(
       "chmod 0750 /var/lib/latex-renderer/update-manager/staging",
     );
+    expect(prepareHost).toContain('chmod o-rwx "$previous_release"');
     expect(unit).toContain("ReadWritePaths=/opt/latex-renderer");
     expect(installHost).not.toContain("usermod -aG latex-renderer");
     expect(prepareHost).not.toContain("usermod -aG latex-renderer");
+  });
+
+  it("runs deployment-user commands from the private stage instead of the protected service cwd", () => {
+    const manager = read("deploy/scripts/update-manager.mjs");
+    const deploy = read("deploy/scripts/deploy-production-release.sh");
+    expect(manager).toContain("function deployCommandOptions(cwd)");
+    expect(manager).toContain("dirname(normalized) !== stagingRoot");
+    expect(manager).toContain("return { cwd: normalized }");
+    expect(manager).toContain("runAsDeployCapture(stage");
+    expect(manager).toContain("runAsDeployLogged(operation, stage");
+    expect(manager.match(/"runuser"/g)).toHaveLength(2);
+    expect(deploy).toContain('source_root=$(CDPATH= cd --');
+    expect(deploy).toContain('cd "$source_root"');
+    expect(deploy.indexOf('cd "$source_root"')).toBeLessThan(
+      deploy.indexOf('runuser -u "$sync_user"'),
+    );
   });
 
   it("serializes application and TeX mutations with one non-blocking OS lock", () => {

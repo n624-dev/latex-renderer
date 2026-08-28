@@ -178,6 +178,31 @@ function runLogged(operation, command, args, options = {}) {
   });
 }
 
+function deployCommandOptions(cwd) {
+  const normalized = resolve(cwd);
+  if (dirname(normalized) !== stagingRoot) {
+    throw new Error("Deployment-user command cwd must be a direct child of the update staging root");
+  }
+  return { cwd: normalized };
+}
+
+function runAsDeployCapture(cwd, args) {
+  return runCapture(
+    "runuser",
+    ["-u", deployUser, "--", ...args],
+    deployCommandOptions(cwd),
+  );
+}
+
+function runAsDeployLogged(operation, cwd, args) {
+  return runLogged(
+    operation,
+    "runuser",
+    ["-u", deployUser, "--", ...args],
+    deployCommandOptions(cwd),
+  );
+}
+
 function operationView(operation) {
   return {
     id: operation.id,
@@ -428,8 +453,8 @@ async function prepareRelease(operation, release) {
     await chmod(stage, 0o700);
     await chown(bundle, deployUid, deployGid);
     await chmod(bundle, 0o600);
-    await runLogged(operation, "runuser", [
-      "-u", deployUser, "--", "tar", "-xzf", bundle,
+    await runAsDeployLogged(operation, stage, [
+      "tar", "-xzf", bundle,
       "--directory", stage, "--no-same-owner", "--no-same-permissions",
     ]);
     const source = join(stage, topLevel);
@@ -455,35 +480,36 @@ async function prepareRelease(operation, release) {
     const symlinks = (await runCapture("find", [source, "-type", "l", "-print"])).trim();
     if (symlinks) throw new Error("Release source bundle must not contain symbolic links");
     const pnpm = join(deployHome, ".local/share/pnpm/bin/pnpm");
+    const pnpmBin = dirname(pnpm);
+    const corepack = "/usr/local/bin/corepack";
+    const corepackHome = join(deployHome, ".cache/node/corepack");
     const expectedPnpmVersion = manifest.packageManager.slice("pnpm@".length);
-    let pnpmVersion = (await runCapture("runuser", [
-      "-u", deployUser, "--", "env",
+    const deployEnvironment = [
+      "env",
       `HOME=${deployHome}`, `USER=${deployUser}`, `LOGNAME=${deployUser}`,
-      `PNPM_HOME=${dirname(pnpm)}`, `PATH=${dirname(pnpm)}:/usr/local/bin:/usr/bin:/bin`,
+      `COREPACK_HOME=${corepackHome}`, `PNPM_HOME=${pnpmBin}`,
+      `PATH=${pnpmBin}:/usr/local/bin:/usr/bin:/bin`,
+    ];
+    await runAsDeployLogged(operation, stage, [
+      "install", "-d", "-m", "0755", pnpmBin,
+    ]);
+    await runAsDeployLogged(operation, stage, [
+      ...deployEnvironment,
+      corepack, "install", "--global", `pnpm@${expectedPnpmVersion}`,
+    ]);
+    await runAsDeployLogged(operation, stage, [
+      ...deployEnvironment,
+      corepack, "enable", "--install-directory", pnpmBin,
+    ]);
+    const pnpmVersion = (await runAsDeployCapture(stage, [
+      ...deployEnvironment,
       pnpm, "--version",
     ])).trim();
     if (pnpmVersion !== expectedPnpmVersion) {
-      await appendLog(operation, `Updating deployment-user pnpm from ${pnpmVersion} to ${expectedPnpmVersion}.\n`);
-      await runLogged(operation, "runuser", [
-        "-u", deployUser, "--", "env",
-        `HOME=${deployHome}`, `USER=${deployUser}`, `LOGNAME=${deployUser}`,
-        `PNPM_HOME=${dirname(pnpm)}`, `PATH=${dirname(pnpm)}:/usr/local/bin:/usr/bin:/bin`,
-        pnpm, "self-update", expectedPnpmVersion,
-      ]);
-      pnpmVersion = (await runCapture("runuser", [
-        "-u", deployUser, "--", "env",
-        `HOME=${deployHome}`, `USER=${deployUser}`, `LOGNAME=${deployUser}`,
-        `PNPM_HOME=${dirname(pnpm)}`, `PATH=${dirname(pnpm)}:/usr/local/bin:/usr/bin:/bin`,
-        pnpm, "--version",
-      ])).trim();
-      if (pnpmVersion !== expectedPnpmVersion) {
-        throw new Error(`pnpm self-update did not activate required version ${expectedPnpmVersion}`);
-      }
+      throw new Error(`Corepack did not activate required pnpm version ${expectedPnpmVersion}`);
     }
-    await runLogged(operation, "runuser", [
-      "-u", deployUser, "--", "env",
-      `HOME=${deployHome}`, `USER=${deployUser}`, `LOGNAME=${deployUser}`,
-      `PNPM_HOME=${dirname(pnpm)}`, `PATH=${dirname(pnpm)}:/usr/local/bin:/usr/bin:/bin`,
+    await runAsDeployLogged(operation, stage, [
+      ...deployEnvironment,
       pnpm, "--dir", source, "install", "--frozen-lockfile",
     ]);
     return { stage, source, manifest };

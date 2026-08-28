@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 1.1.4 - 2026-08-28
+
+- Run deployment-user update and build commands from the verified private stage instead of inheriting a protected service working directory.
+- Provision the manifest-pinned pnpm through Corepack instead of `pnpm self-update`, then verify the activated version before installing the release.
+
 ## 1.1.3 - 2026-08-28
 
 - Stage verified application bundles in a deployment-user-reachable private directory without granting that user access to protected application state.
