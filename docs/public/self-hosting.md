@@ -10,9 +10,9 @@ since: "v1.1.0"
 
 ## 現在の提供状況
 
-一般利用者向けの最初のサーバー用bundleは、[`v1.1.0`](https://github.com/n624-dev/latex-renderer/releases/tag/v1.1.0)で公開されています。このReleaseは公開後にタグや配布ファイルを差し替えできない設定で固定され、次を含みます。
+一般利用者向けの現在のサーバー用bundleは、[`v1.1.1`](https://github.com/n624-dev/latex-renderer/releases/tag/v1.1.1)です。最初のUpdater対応版v1.1.0に、初回bootstrap時のtmpfiles所有権と`client-dist`配置順序の修正を加えています。このReleaseは公開後にタグや配布ファイルを差し替えできない設定で固定され、次を含みます。
 
-- `latex-renderer-server-1.1.0.tar.gz`
+- `latex-renderer-server-1.1.1.tar.gz`
 - クライアントZIPとClaude Desktop用MCPB
 - 3つの配布ファイルを検証する`SHA256SUMS`
 - commit、バージョン、Renderer fingerprint、Node.js／pnpm要件を記録したbundle内metadata
@@ -78,12 +78,12 @@ since: "v1.1.0"
 
 公開リポジトリの`*.example`ファイルは項目確認のための雛形です。設定済みファイルを雛形へ上書きしてcommitする運用はしません。
 
-## v1.1.0をダウンロードして検証
+## v1.1.1をダウンロードして検証
 
 次のコマンドは、固定されたReleaseであることをGitHub APIで確認し、APIが返すdigestとダウンロードしたbundleを照合します。通常の非rootユーザーで実行します。
 
 ```bash
-version=1.1.0
+version=1.1.1
 repository=n624-dev/latex-renderer
 asset="latex-renderer-server-$version.tar.gz"
 work_dir=$(mktemp -d)
@@ -244,7 +244,7 @@ admin_cli=/opt/latex-renderer/current/apps/admin-cli/dist/index.js
 /usr/local/bin/node "$admin_cli" update apply 1.1.1 --yes
 ```
 
-上の`1.1.1`は将来の更新例です。利用可能と表示された実在versionだけを指定します。CLIは事前にAdmin API keyとCloudflare service tokenを設定し、通常ユーザーとして実行します。CLIへsudoを付けません。
+上の`1.1.1`は更新対象versionを明示する例です。利用可能と表示された実在versionだけを指定します。CLIは事前にAdmin API keyとCloudflare service tokenを設定し、通常ユーザーとして実行します。CLIへsudoを付けません。
 
 更新前にはmaintenance mode、実行中jobのdrain、データベースbackupが必要です。データベースschemaを戻す必要がある場合は、アプリだけを強制的にロールバックせず、対応するbackupを復元します。
 

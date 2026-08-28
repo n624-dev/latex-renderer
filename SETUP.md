@@ -10,8 +10,8 @@ sudo boundaries, host-local configuration, initial administration, TeX image
 selection, verification, updates, rollback, and backups.
 
 Self-hosted installation starts with the immutable
-[`v1.1.0` release](https://github.com/n624-dev/latex-renderer/releases/tag/v1.1.0).
-It includes `latex-renderer-server-1.1.0.tar.gz`, with a SHA-256 digest reported
+[`v1.1.1` release](https://github.com/n624-dev/latex-renderer/releases/tag/v1.1.1).
+It includes `latex-renderer-server-1.1.1.tar.gz`, with a SHA-256 digest reported
 by the GitHub API and matching embedded release metadata. Do not deploy the
 changeable `main` branch as a substitute. This file remains a short entry point;
 the executable installation and verification steps live in the Web-visible

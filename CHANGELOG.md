@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.1.1 - 2026-08-28
+
 - Keep the shared application state parent root-owned so `systemd-tmpfiles` can safely manage root-owned Image and Update Manager directories.
 - Build `client-dist` before copying an immutable production release, preventing Unified Admin Web from starting without its manifest.
 - Wait for the Update Manager Unix socket after service activation and again before remote deployment verification.

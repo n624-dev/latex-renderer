@@ -243,7 +243,7 @@ and rollback from `/admin/updates/` or the equivalent CLI commands:
 latex-render-admin update status
 latex-render-admin update check
 latex-render-admin update policy --mode notify --yes
-latex-render-admin update apply v1.1.0 --yes
+latex-render-admin update apply v1.1.1 --yes
 latex-render-admin update rollback --yes
 ```
 
@@ -295,7 +295,7 @@ its tag and assets. The workflow's repository-scoped token cannot read the
 administrative immutable-release setting, so a maintainer must verify that
 setting with repository administration access before dispatch and again before
 publication. The updater deliberately rejects older mutable releases, including
-v1.0.0; v1.1.0 is the first planned updater-compatible server release.
+v1.0.0; v1.1.0 is the first updater-compatible server release.
 
 The previous runtime is retained for rollback, including the legacy runtime that
 was active before the first managed switch. Managed rollback re-derives the
