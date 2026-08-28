@@ -5,9 +5,22 @@
 
 A security-oriented LuaLaTeX rendering platform with Web, CLI, HTTP API, and MCP interfaces. Untrusted TeX runs in a networkless, read-only, non-root Docker sandbox with explicit resource limits. Jobs produce PDF by default and can also extract self-contained SVG objects for math and TikZ output.
 
-The hosted service is available at [latex-render.n624.jp](https://latex-render.n624.jp/), with documentation at [latex-render.n624.jp/docs/](https://latex-render.n624.jp/docs/). Version 1.0 also supports the Cloudflare deployment profile documented in this repository: Cloudflare Tunnel and Access protect a Linux host, while Workers route the small public request surface.
+The hosted service is available at [latex-render.n624.jp](https://latex-render.n624.jp/), with documentation at [latex-render.n624.jp/docs/](https://latex-render.n624.jp/docs/). Version 1.1 supports the Cloudflare deployment profile documented in this repository: Cloudflare Tunnel and Access protect a Linux host, while Workers route the small public request surface.
 
 The hostname `latex.example.com` used by deployment examples and tests is a placeholder. The hosted-service URL above is intentionally public, but this repository does not contain its production credentials or infrastructure-specific configuration.
+
+## Get started
+
+- Use the hosted service: [public documentation](https://latex-render.n624.jp/docs/)
+- Install the CLI, MCP, and AI integrations: [client setup](https://latex-render.n624.jp/docs/client/)
+- Prepare a self-hosted server: [self-hosting guide](https://latex-render.n624.jp/docs/self-hosting/) or [SETUP.md](SETUP.md)
+- Develop or contribute: [CONTRIBUTING.md](CONTRIBUTING.md)
+
+Self-hosted installation starts with the immutable
+[`v1.1.0` release](https://github.com/n624-dev/latex-renderer/releases/tag/v1.1.0),
+which includes a digest-labelled server bundle. Do not deploy the changeable
+`main` branch as a substitute. Follow the self-hosting guide for the supported
+profile, host prerequisites, checksum verification, and configuration steps.
 
 ## Components
 
@@ -22,28 +35,10 @@ The hostname `latex.example.com` used by deployment examples and tests is a plac
 
 ## Development
 
-Requirements: Linux, Node.js 24 or newer, pnpm 11, and Docker.
-
-```bash
-corepack enable
-pnpm install --frozen-lockfile
-pnpm check
-pnpm build
-docker build -t latex-renderer:2026 renderer
-```
-
-Copy only example configuration files, then provide values for your own environment:
-
-```bash
-cp .env.example .env
-cp apps/gateway-worker/wrangler.example.jsonc apps/gateway-worker/wrangler.jsonc
-cp deploy/cloudflared/config.example.yml /etc/cloudflared/config.yml
-```
-
-Do not commit the resulting files. Start with [ARCHITECTURE.md](ARCHITECTURE.md)
-and [DEPLOYMENT.md](DEPLOYMENT.md); the latter documents both Web and CLI TeX
-environment updates and explains how application releases reconcile the saved
-image selector. User-facing guides are in [docs/public](docs/public).
+Development setup and contribution requirements are in
+[CONTRIBUTING.md](CONTRIBUTING.md). Production internals and advanced operator
+procedures are in [DEPLOYMENT.md](DEPLOYMENT.md); general users should start
+with the Web-visible self-hosting guide instead.
 
 ## Security and support
 

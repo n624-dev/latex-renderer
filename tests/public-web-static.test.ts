@@ -41,6 +41,7 @@ describe("public web static build", () => {
       "docs/mcp/index.html",
       "docs/projects/index.html",
       "docs/security/index.html",
+      "docs/self-hosting/index.html",
       "docs/troubleshooting/index.html",
       "docs/web/index.html",
       "docs/windows/index.html",
@@ -121,6 +122,9 @@ describe("public web static build", () => {
 
     expect(redirectFile).toContain("/docs/windows /docs/windows/ 308");
     expect(redirectFile).toContain("/docs/security /docs/security/ 308");
+    expect(redirectFile).toContain(
+      "/docs/self-hosting /docs/self-hosting/ 308",
+    );
     expect(redirectFile).toContain(
       "/docs/contributing /docs/contributing/ 308",
     );

@@ -18,6 +18,7 @@ describe("Markdown public documentation", () => {
     expect(publicDocs.map(({ slug }) => slug)).toEqual([
       "index",
       "client",
+      "self-hosting",
       "windows",
       "web",
       "cli",
@@ -29,14 +30,16 @@ describe("Markdown public documentation", () => {
       "api",
       "contributing",
     ]);
-    expect(new Set(publicDocs.map(({ navOrder }) => navOrder)).size).toBe(12);
+    expect(new Set(publicDocs.map(({ navOrder }) => navOrder)).size).toBe(13);
     for (const document of publicDocs) {
       expect(document.sourcePath).toBe(`docs/public/${document.slug}.md`);
       expect(document.title).not.toBe("");
       expect(document.category).not.toBe("");
       expect(document.description).not.toBe("");
       expect(document.updated).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-      expect(document.since).toBe("v1.0.0");
+      expect(document.since).toBe(
+        document.slug === "self-hosting" ? "v1.1.0" : "v1.0.0",
+      );
       expect(
         readFileSync(
           new URL(`../${document.sourcePath}`, import.meta.url),
@@ -44,6 +47,22 @@ describe("Markdown public documentation", () => {
         ),
       ).toContain(`slug: ${document.slug}`);
     }
+  });
+
+  it("publishes the versioned general-user self-hosting guide", () => {
+    const selfHosting = publicDocs.find(({ slug }) => slug === "self-hosting");
+    expect(selfHosting).toBeDefined();
+    expect(selfHosting?.html).toContain("latex-renderer-server-1.1.0.tar.gz");
+    expect(selfHosting?.html).toContain("現在の提供状況");
+    expect(selfHosting?.html).toContain(
+      "公開後にタグや配布ファイルを差し替えできない",
+    );
+    expect(selfHosting?.html).toContain("sha256sum --check");
+    expect(selfHosting?.html).toContain("install-host.sh");
+    expect(selfHosting?.html).not.toContain("まだ正式提供前");
+    expect(selfHosting?.html).toContain("main");
+    expect(selfHosting?.html).toContain("TeX環境の初期設定");
+    expect(selfHosting?.html).toContain("バックアップ");
   });
 
   it("renders Japanese, code, tables, admonitions, and stable heading anchors", () => {
@@ -56,7 +75,7 @@ describe("Markdown public documentation", () => {
     expect(page).toContain('id="最短でpdfを作る"');
     expect(page).toContain('href="#最短でpdfを作る"');
     expect(page).toContain('aria-current="page"');
-    expect(page).toContain('<time datetime="2026-08-12">');
+    expect(page).toContain('<time datetime="2026-08-28">');
   });
 
   it("deduplicates heading fragments and escapes raw HTML", () => {
