@@ -236,7 +236,7 @@ TeXとアプリケーションは別々に更新します。
 
 アプリ更新は、公開後に差し替えできない固定リリース、固定tag／commit、サーバー用bundleのdigest、埋め込みmetadata、Renderer fingerprint、Node／pnpm要件を検証します。`v1.1.0`以降がこの更新経路に対応します。`v1.0.0`はサーバー用bundleと差し替え禁止設定がないため、Update Managerでは適用できません。
 
-Webでは`/admin/updates/`から更新確認、方針変更、適用、operation確認、rollbackを行います。認証済みのAdmin CLIを使う場合も同じAPIと安全検査を使用します。
+Webでは`/admin/updates/`から更新確認、方針変更、適用、operation確認、rollbackを行います。認証済みのAdmin CLIを使う場合も同じAPIと安全検査を使用します。これが通常の更新経路です。旧Updaterが新しいReleaseのデプロイ処理へ到達する前に失敗する場合だけ、後述のsudo手動更新を使います。
 
 ```bash
 admin_cli=/opt/latex-renderer/current/apps/admin-cli/dist/index.js
@@ -250,62 +250,72 @@ admin_cli=/opt/latex-renderer/current/apps/admin-cli/dist/index.js
 
 更新前にはmaintenance mode、実行中jobのdrain、データベースbackupが必要です。データベースschemaを戻す必要がある場合は、アプリだけを強制的にロールバックせず、対応するbackupを復元します。
 
-### v1.1.0〜v1.1.3からv1.1.4へ更新する場合
+### Web／CLIの更新がデプロイ前に失敗する場合
 
-旧Updaterには、検証済みbundleを保護されたmanager stateの配下へ置く版、非rootコマンドへ保護されたservice working directoryを引き継ぐ版、`pnpm self-update`が不完全な実行ファイルを作る環境があります。デプロイ用ユーザーを`latex-renderer` groupへ追加しないでください。最初にその通常ユーザーでCorepackの固定版shimを用意し、現在のrelease pathを検証します。設定・credential・データは操作しません。
+旧Updaterは、新しいReleaseの修正コードが起動する前に、staging directory、実行時のworking directory、pnpmの起動で失敗することがあります。同じWeb operationを繰り返しても、新Releaseの修正は使われません。この場合はv1.1.0〜v1.1.3のUpdaterを経由せず、検証済みのRelease bundleを公式デプロイスクリプトで直接配置します。Web／APIにsudo権限を与える手順ではありません。
+
+最初にこのページの「ダウンロードして検証」を通常のデプロイ用ユーザーで実行し、同じshellの`bundle_root`を使います。失敗したUpdaterのstagingやGit worktreeは再利用しません。bundleに記録されたpnpmをCorepackで用意し、固定lockfileから依存関係を導入します。
 
 ```bash
-current_release=$(readlink -f /opt/latex-renderer/current)
-case "$current_release" in
-  /opt/latex-renderer/releases/*) ;;
-  *) echo 'current release is outside /opt/latex-renderer/releases' >&2; exit 1 ;;
+package_manager=$(jq -r .packageManager "$bundle_root/package.json")
+case "$package_manager" in
+  pnpm@*) ;;
+  *) echo 'Release does not declare a supported pnpm version' >&2; exit 1 ;;
 esac
-install -d -m 0755 "$HOME/.local/share/pnpm/bin"
-/usr/local/bin/corepack install --global pnpm@11.24.0
-/usr/local/bin/corepack enable --install-directory "$HOME/.local/share/pnpm/bin"
-"$HOME/.local/share/pnpm/bin/pnpm" --version
+pnpm_version=${package_manager#pnpm@}
+pnpm_home="$HOME/.local/share/pnpm/bin"
+install -d -m 0755 "$pnpm_home"
+cd "$bundle_root"
+/usr/local/bin/corepack install --global "$package_manager"
+/usr/local/bin/corepack enable --install-directory "$pnpm_home"
+pnpm="$pnpm_home/pnpm"
+[ "$("$pnpm" --version)" = "$pnpm_version" ]
+"$pnpm" --dir "$bundle_root" install --frozen-lockfile
+release_id=$(jq -r '"v\(.version)-\(.commit[0:12])"' \
+  "$bundle_root/.latex-renderer-release.json")
 ```
 
-`11.24.0`が表示されたことを確認します。続いて、実行中operationがないことをWebで確認してImage／Update Managerを止め、既存lockの保持者が残っている場合だけ終了します。旧staging経路には一時的な通過権限、検証済みの現在release directoryには一時的な読み取り・通過権限だけを付けます。
+実行中のTeX変更とアプリ更新がないこと、jobのdrainとbackupが完了したことを確認します。失敗した旧Updaterが残っている場合はUpdate Managerを止め、lockの保持者を確認します。
 
 ```bash
-sudo systemctl stop latex-renderer-image-manager.service \
-  latex-renderer-update-manager.service
-sudo fuser --verbose /run/latex-renderer/mutation.lock
-sudo fuser --kill --signal TERM /run/latex-renderer/mutation.lock || true
-if [ -d /var/lib/latex-renderer/update-manager/staging ]; then
-  sudo chmod o+x /var/lib/latex-renderer \
-    /var/lib/latex-renderer/update-manager \
-    /var/lib/latex-renderer/update-manager/staging
-fi
-sudo chmod o+rx "$current_release"
-sudo systemctl start latex-renderer-image-manager.service \
-  latex-renderer-update-manager.service
+sudo systemctl stop latex-renderer-update-manager.service
+sudo fuser --verbose /run/latex-renderer/mutation.lock || true
 ```
 
-Webから`v1.1.4`を適用すると、デプロイ処理が旧pathを`2770`／`0750`へ戻し、旧releaseの一時権限も閉じます。以後は専用staging、安全なcwd、Corepack固定版を使用します。更新が失敗した場合は、再試行する前に一時権限を手動で戻します。
+表示されたprocessが、完了済みの更新operationが残した孤立lock helperであると確認できた場合だけ、次を実行します。TeX変更またはアプリ更新が実行中なら、processを終了せず完了を待ちます。lockファイル自体は削除しません。
 
 ```bash
-sudo chmod 2770 /var/lib/latex-renderer
-sudo chmod 0750 /var/lib/latex-renderer/update-manager
-if [ -d /var/lib/latex-renderer/update-manager/staging ]; then
-  sudo chmod 0750 /var/lib/latex-renderer/update-manager/staging
-fi
-sudo chmod o-rwx "$current_release"
+sudo fuser --kill --signal TERM /run/latex-renderer/mutation.lock
 ```
 
-更新後はapplication stateが`2770 root:latex-renderer`、managerと存在する旧stagingが`750 root:latex-renderer`、旧releaseが`750 root:latex-renderer`になったことを確認します。
+固定Release IDを表示して確認し、bundleに含まれる公式デプロイスクリプトをsudoで一度だけ実行します。スクリプトはImage Managerのquiesce、immutable release directoryへの配置、systemd service、Cloudflare Worker／公開Web、health checkとsmoke testを同じ通常デプロイ経路で処理します。
 
 ```bash
-for path in \
-  /var/lib/latex-renderer \
-  /var/lib/latex-renderer/update-manager \
-  /var/lib/latex-renderer/update-manager/staging \
-  "$current_release"
-do
-  [ ! -e "$path" ] || stat -c '%a %U:%G %n' "$path"
-done
+printf 'Deploying %s\n' "$release_id"
+sudo sh "$bundle_root/deploy/scripts/deploy-production-release.sh" \
+  "$release_id"
 ```
+
+デプロイに成功したら、現在のReleaseと必須serviceを確認します。表示するのは公開済みのbundle metadataとservice stateだけです。
+
+```bash
+active_release=$(readlink -f /opt/latex-renderer/current)
+case "$active_release" in
+  /opt/latex-renderer/releases/*) ;;
+  *) echo 'current release is outside the immutable release root' >&2; exit 1 ;;
+esac
+sudo jq -r '.version + " " + .commit' \
+  "$active_release/.latex-renderer-release.json"
+systemctl is-active \
+  latex-renderer-update-manager.service \
+  latex-renderer-image-manager.service \
+  latex-renderer-api.service \
+  latex-renderer-admin-api.service \
+  latex-renderer-admin-web.service \
+  latex-renderer-worker.service
+```
+
+途中で失敗したら同じコマンドをそのまま再実行せず、最初のエラー、`/opt/latex-renderer/current`の指すRelease、停止中serviceを確認します。設定を復旧できるように、host固有の設定・credential・データベースはRelease外に保持し、bundle、Git、Issue、未編集のlogへコピーしません。
 
 ### mutation lockが使用中と表示される場合
 
