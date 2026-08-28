@@ -52,7 +52,7 @@ describe("Markdown public documentation", () => {
   it("publishes the versioned general-user self-hosting guide", () => {
     const selfHosting = publicDocs.find(({ slug }) => slug === "self-hosting");
     expect(selfHosting).toBeDefined();
-    expect(selfHosting?.html).toContain("latex-renderer-server-1.1.3.tar.gz");
+    expect(selfHosting?.html).toContain("latex-renderer-server-1.1.4.tar.gz");
     expect(selfHosting?.html).toContain(
       "/opt/latex-renderer/update-staging",
     );
@@ -64,6 +64,9 @@ describe("Markdown public documentation", () => {
       "公開後にタグや配布ファイルを差し替えできない",
     );
     expect(selfHosting?.html).toContain("sha256sum --check");
+    expect(selfHosting?.html).toContain(
+      "corepack install --global pnpm@11.24.0",
+    );
     expect(selfHosting?.html).toContain("install-host.sh");
     expect(selfHosting?.html).not.toContain("まだ正式提供前");
     expect(selfHosting?.html).toContain("main");
