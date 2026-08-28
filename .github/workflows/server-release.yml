@@ -48,16 +48,15 @@ jobs:
           set -euo pipefail
           sh deploy/scripts/build-server-release-assets.sh \
             "$RELEASE_TAG" "$RUNNER_TEMP/release-assets"
-      - name: Require immutable-release protection and upload to draft
+      # GITHUB_TOKEN can manage draft release assets with contents:write, but
+      # cannot read repository Administration settings. The maintainer verifies
+      # immutable-release protection before dispatch and again before publish.
+      - name: Upload all release assets to draft
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          gh api --hostname github.com \
-            -H 'X-GitHub-Api-Version: 2026-03-10' \
-            repos/n624-dev/latex-renderer/immutable-releases \
-            --jq 'select(.enabled == true) | .enabled' | grep -qx true
           version=${RELEASE_TAG#v}
           if ! gh api --paginate repos/n624-dev/latex-renderer/releases \
             --jq ".[] | select(.tag_name == \"$RELEASE_TAG\" and .draft == true) | .id" \
@@ -76,4 +75,9 @@ jobs:
             "$RUNNER_TEMP/release-assets/SHA256SUMS" \
             --repo n624-dev/latex-renderer \
             --clobber
+          gh release view "$RELEASE_TAG" \
+            --repo n624-dev/latex-renderer \
+            --json isDraft \
+            --jq 'select(.isDraft == true) | .isDraft' \
+            | grep -qx true
           echo "Server and client assets uploaded to the draft. Review every asset and the generated notes, then publish the draft to make it immutable."
