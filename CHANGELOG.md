@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+## 1.1.0 - 2026-08-28
+
+- Publish an updater-compatible server source bundle together with the client ZIP, signed MCPB, and checksums from one protected release workflow.
 - Enable the Remote MCP systemd service during production deployment so it returns after a host reboot.
 - Clear inherited setgid bits on image-manager temporary build trees without weakening the systemd sandbox.
 - Use the deployment user's pinned pnpm instead of an older system-wide Corepack shim.
