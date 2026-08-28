@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.1.3 - 2026-08-28
+
+- Stage verified application bundles in a deployment-user-reachable private directory without granting that user access to protected application state.
+
 ## 1.1.2 - 2026-08-28
 
 - Release the actual `flock` lock holder after application or TeX mutations, preventing completed operations from leaving all later updates blocked.

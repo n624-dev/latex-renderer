@@ -9,6 +9,7 @@ import {
   mkdir,
   mkdtemp,
   open,
+  readdir,
   readFile,
   readlink,
   rename,
@@ -32,6 +33,7 @@ if (repository !== "n624-dev/latex-renderer") {
 const socketPath = process.env.UPDATE_MANAGER_SOCKET ?? "/run/latex-renderer/update-manager.sock";
 const tokenFile = process.env.UPDATE_MANAGER_TOKEN_FILE ?? "/etc/latex-renderer/secrets/update-manager-token";
 const stateRoot = process.env.UPDATE_MANAGER_STATE_ROOT ?? "/var/lib/latex-renderer/update-manager";
+const stagingRoot = "/opt/latex-renderer/update-staging";
 const releaseRoot = process.env.UPDATE_RELEASE_ROOT ?? "/opt/latex-renderer/releases";
 const currentLink = process.env.UPDATE_CURRENT_LINK ?? "/opt/latex-renderer/current";
 const deployUser = process.env.UPDATE_DEPLOY_USER ?? "ubuntu";
@@ -59,12 +61,23 @@ const token = (await readFile(tokenFile, "utf8")).trim();
 if (token.length < 32) throw new Error("Update Manager token is too short");
 const deployHome = (await runCapture("getent", ["passwd", deployUser])).trim().split(":")[5];
 if (!deployHome?.startsWith("/")) throw new Error("Could not resolve update deployment user home");
+const deployUid = Number((await runCapture("id", ["-u", deployUser])).trim());
+const deployGid = Number((await runCapture("id", ["-g", deployUser])).trim());
+if (!Number.isSafeInteger(deployUid) || deployUid < 1 || !Number.isSafeInteger(deployGid) || deployGid < 1) {
+  throw new Error("Could not resolve update deployment user IDs");
+}
 const appGroupGid = Number((await runCapture("getent", ["group", "latex-renderer"])).trim().split(":")[2]);
 if (!Number.isSafeInteger(appGroupGid) || appGroupGid < 1) throw new Error("Could not resolve latex-renderer group");
 
 await mkdir(stateRoot, { recursive: true, mode: 0o750 });
 await mkdir(join(stateRoot, "operations"), { recursive: true, mode: 0o750 });
-await mkdir(join(stateRoot, "staging"), { recursive: true, mode: 0o750 });
+await mkdir(stagingRoot, { recursive: true, mode: 0o710 });
+const stagingRootInfo = await lstat(stagingRoot);
+if (!stagingRootInfo.isDirectory() || stagingRootInfo.uid !== 0) {
+  throw new Error("Update staging root must be a root-owned directory");
+}
+await chown(stagingRoot, 0, deployGid);
+await chmod(stagingRoot, 0o710);
 const statePath = join(stateRoot, "state.json");
 const operationsRoot = join(stateRoot, "operations");
 const emptyState = () => ({
@@ -80,6 +93,19 @@ const emptyState = () => ({
 let state = await loadState();
 let activeOperation = null;
 await recoverInterruptedOperation();
+await cleanupStagingRoot();
+
+async function cleanupStagingRoot() {
+  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+  for (const entry of await readdir(stagingRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory() || !/^v\d+\.\d+\.\d+-[A-Za-z0-9]{6}$/.test(entry.name)) continue;
+    const candidate = join(stagingRoot, entry.name);
+    const info = await lstat(candidate);
+    if (info.isDirectory() && info.mtimeMs < cutoff) {
+      await rm(candidate, { recursive: true, force: true });
+    }
+  }
+}
 
 async function loadState() {
   try {
@@ -392,15 +418,16 @@ async function validateArchive(bundle, topLevel) {
 }
 
 async function prepareRelease(operation, release) {
-  const stage = await mkdtemp(join(stateRoot, "staging", `v${release.version}-`));
+  const stage = await mkdtemp(join(stagingRoot, `v${release.version}-`));
   const bundle = join(stage, release.name);
   const topLevel = `latex-renderer-server-${release.version}`;
   try {
     await downloadBundle(operation, release, bundle);
     await validateArchive(bundle, topLevel);
-    await chown(stage, Number((await runCapture("id", ["-u", deployUser])).trim()), appGroupGid);
-    await chown(bundle, Number((await runCapture("id", ["-u", deployUser])).trim()), appGroupGid);
-    await chmod(bundle, 0o640);
+    await chown(stage, deployUid, deployGid);
+    await chmod(stage, 0o700);
+    await chown(bundle, deployUid, deployGid);
+    await chmod(bundle, 0o600);
     await runLogged(operation, "runuser", [
       "-u", deployUser, "--", "tar", "-xzf", bundle,
       "--directory", stage, "--no-same-owner", "--no-same-permissions",
@@ -519,7 +546,7 @@ async function deployPrepared(operation, release, prepared) {
 async function applyRelease(operation, requestedVersion) {
   const release = await checkRelease(requestedVersion, true);
   const requiredBytes = Math.max(2 * 1024 * 1024 * 1024, release.size * 3);
-  await assertDiskSpace(stateRoot, requiredBytes, "Application update staging");
+  await assertDiskSpace(stagingRoot, requiredBytes, "Application update staging");
   await assertDiskSpace(releaseRoot, requiredBytes, "Application release installation");
   const installed = await installedRelease();
   if (installed?.version === release.version) throw new Error(`v${release.version} is already installed`);

@@ -10,9 +10,9 @@ since: "v1.1.0"
 
 ## 現在の提供状況
 
-一般利用者向けの現在のサーバー用bundleは、[`v1.1.2`](https://github.com/n624-dev/latex-renderer/releases/tag/v1.1.2)です。最初のUpdater対応版v1.1.0に、初回bootstrap、`client-dist`配置順序、共通mutation lock解放の修正を加えています。このReleaseは公開後にタグや配布ファイルを差し替えできない設定で固定され、次を含みます。
+一般利用者向けの現在のサーバー用bundleは、[`v1.1.3`](https://github.com/n624-dev/latex-renderer/releases/tag/v1.1.3)です。最初のUpdater対応版v1.1.0に、初回bootstrap、`client-dist`配置順序、共通mutation lock解放、非rootデプロイ用stagingの修正を加えています。このReleaseは公開後にタグや配布ファイルを差し替えできない設定で固定され、次を含みます。
 
-- `latex-renderer-server-1.1.2.tar.gz`
+- `latex-renderer-server-1.1.3.tar.gz`
 - クライアントZIPとClaude Desktop用MCPB
 - 3つの配布ファイルを検証する`SHA256SUMS`
 - commit、バージョン、Renderer fingerprint、Node.js／pnpm要件を記録したbundle内metadata
@@ -78,12 +78,12 @@ since: "v1.1.0"
 
 公開リポジトリの`*.example`ファイルは項目確認のための雛形です。設定済みファイルを雛形へ上書きしてcommitする運用はしません。
 
-## v1.1.2をダウンロードして検証
+## v1.1.3をダウンロードして検証
 
 次のコマンドは、固定されたReleaseであることをGitHub APIで確認し、APIが返すdigestとダウンロードしたbundleを照合します。通常の非rootユーザーで実行します。
 
 ```bash
-version=1.1.2
+version=1.1.3
 repository=n624-dev/latex-renderer
 asset="latex-renderer-server-$version.tar.gz"
 work_dir=$(mktemp -d)
@@ -165,6 +165,8 @@ sudo sh "$bundle_root/deploy/scripts/deploy-production-release.sh" "$release_id"
 
 このコマンドはproduction serviceとWebが必要とする`client-dist`を先にbuildし、`/opt/latex-renderer/releases/$release_id`へ一緒に固定配置して、Update Managerのsocket、health check、公開境界のsmoke testを確認します。途中で失敗した場合は、エラーを修正せずに同じ処理を繰り返さず、最初に表示された失敗箇所とredacted logを確認します。
 
+アプリ更新用bundleは専用の`/opt/latex-renderer/update-staging`へ一時配置します。Update Managerはこのroot所有directoryにデプロイ用ユーザーのprimary groupだけが通過できる権限を設定し、ランダム名の各stageはそのユーザーだけが読める`0700`にします。デプロイ用ユーザーを`latex-renderer` groupへ追加しないため、manager state、利用者データ、設定、credentialへアクセス範囲が広がることはありません。通常はoperation終了時に削除し、プロセス中断で残ったstageも24時間後のManager起動時に削除します。
+
 導入作業を`git pull`、未固定の`main`、ローカルのTeX用`docker build`から始める手順は、一般向けセットアップには採用しません。これらは開発・保守用です。
 
 ## Cloudflareの境界
@@ -241,12 +243,45 @@ admin_cli=/opt/latex-renderer/current/apps/admin-cli/dist/index.js
 /usr/local/bin/node "$admin_cli" update status
 /usr/local/bin/node "$admin_cli" update check
 /usr/local/bin/node "$admin_cli" update policy --mode notify --yes
-/usr/local/bin/node "$admin_cli" update apply 1.1.2 --yes
+/usr/local/bin/node "$admin_cli" update apply 1.1.3 --yes
 ```
 
-上の`1.1.2`は更新対象versionを明示する例です。利用可能と表示された実在versionだけを指定します。CLIは事前にAdmin API keyとCloudflare service tokenを設定し、通常ユーザーとして実行します。CLIへsudoを付けません。
+上の`1.1.3`は更新対象versionを明示する例です。利用可能と表示された実在versionだけを指定します。CLIは事前にAdmin API keyとCloudflare service tokenを設定し、通常ユーザーとして実行します。CLIへsudoを付けません。
 
 更新前にはmaintenance mode、実行中jobのdrain、データベースbackupが必要です。データベースschemaを戻す必要がある場合は、アプリだけを強制的にロールバックせず、対応するbackupを復元します。
+
+### v1.1.0〜v1.1.2からv1.1.3へ更新する場合
+
+旧Updaterは検証済みbundleを保護されたmanager stateの配下へ置いていたため、非rootのデプロイ用ユーザーが展開時に親directoryを通過できない場合があります。デプロイ用ユーザーを`latex-renderer` groupへ追加しないでください。実行中operationがないことを確認してImage／Update Managerを止め、既存lockの保持者が残っている場合だけ終了してから、旧staging経路へ一時的に通過権限だけを付けます。
+
+```bash
+sudo systemctl stop latex-renderer-image-manager.service \
+  latex-renderer-update-manager.service
+sudo fuser --verbose /run/latex-renderer/mutation.lock
+sudo fuser --kill --signal TERM /run/latex-renderer/mutation.lock || true
+sudo chmod o+x /var/lib/latex-renderer \
+  /var/lib/latex-renderer/update-manager \
+  /var/lib/latex-renderer/update-manager/staging
+sudo systemctl start latex-renderer-image-manager.service \
+  latex-renderer-update-manager.service
+```
+
+Webから`v1.1.3`を適用すると、デプロイ処理が旧pathを`2770`／`0750`へ戻し、以後は専用stagingを使用します。更新が失敗した場合は、再試行する前に一時権限を手動で戻します。
+
+```bash
+sudo chmod 2770 /var/lib/latex-renderer
+sudo chmod 0750 /var/lib/latex-renderer/update-manager \
+  /var/lib/latex-renderer/update-manager/staging
+```
+
+更新後は次の表示が`2770 root:latex-renderer`、`750 root:latex-renderer`、`750 root:latex-renderer`の順になることを確認します。
+
+```bash
+stat -c '%a %U:%G %n' \
+  /var/lib/latex-renderer \
+  /var/lib/latex-renderer/update-manager \
+  /var/lib/latex-renderer/update-manager/staging
+```
 
 ### mutation lockが使用中と表示される場合
 

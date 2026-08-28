@@ -52,7 +52,13 @@ describe("Markdown public documentation", () => {
   it("publishes the versioned general-user self-hosting guide", () => {
     const selfHosting = publicDocs.find(({ slug }) => slug === "self-hosting");
     expect(selfHosting).toBeDefined();
-    expect(selfHosting?.html).toContain("latex-renderer-server-1.1.2.tar.gz");
+    expect(selfHosting?.html).toContain("latex-renderer-server-1.1.3.tar.gz");
+    expect(selfHosting?.html).toContain(
+      "/opt/latex-renderer/update-staging",
+    );
+    expect(selfHosting?.html).toContain(
+      "chmod 2770 /var/lib/latex-renderer",
+    );
     expect(selfHosting?.html).toContain("現在の提供状況");
     expect(selfHosting?.html).toContain(
       "公開後にタグや配布ファイルを差し替えできない",

@@ -2,7 +2,7 @@
 set -eu
 if [ "$(id -u)" -ne 0 ]; then echo "install-host.sh must run as root" >&2; exit 77; fi
 apt-get update
-DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl age apparmor apparmor-utils jq openssl rsync sqlite3 uidmap dbus-user-session slirp4netns fuse-overlayfs util-linux xz-utils
+DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl age apparmor apparmor-utils jq openssl psmisc rsync sqlite3 uidmap dbus-user-session slirp4netns fuse-overlayfs util-linux xz-utils
 getent group latex-renderer >/dev/null || groupadd --system latex-renderer
 id latex-renderer >/dev/null 2>&1 || useradd --system --gid latex-renderer --home-dir /var/lib/latex-renderer --shell /usr/sbin/nologin latex-renderer
 id latex-renderer-web >/dev/null 2>&1 || useradd --system --gid latex-renderer --home-dir /nonexistent --shell /usr/sbin/nologin latex-renderer-web
@@ -17,7 +17,8 @@ id cloudflared >/dev/null 2>&1 || useradd --system --home-dir /var/lib/cloudflar
 install -d -o root -g latex-renderer -m 2770 /var/lib/latex-renderer
 install -d -o latex-renderer -g latex-renderer -m 2770 /var/lib/latex-renderer/storage
 install -d -o root -g latex-renderer -m 0750 /var/lib/latex-renderer/image-manager /var/lib/latex-renderer/image-manager/tmp /var/lib/latex-renderer/image-manager/operations
-install -d -o root -g latex-renderer -m 0750 /var/lib/latex-renderer/update-manager /var/lib/latex-renderer/update-manager/staging /var/lib/latex-renderer/update-manager/operations
+install -d -o root -g latex-renderer -m 0750 /var/lib/latex-renderer/update-manager /var/lib/latex-renderer/update-manager/operations
+install -d -o root -g root -m 0711 /opt/latex-renderer/update-staging
 install -d -o root -g latex-renderer -m 0750 /etc/latex-renderer /etc/latex-renderer/secrets
 install -d -o root -g latex-renderer -m 0750 /etc/latex-renderer/ticket-keys
 install -d -o latex-renderer-backup -g latex-renderer -m 0750 /var/lib/latex-renderer/backups
@@ -53,9 +54,7 @@ d /var/lib/latex-renderer/image-manager/operations 0750 root latex-renderer -
 e /var/lib/latex-renderer/image-manager/tmp - - - 1d
 e /var/lib/latex-renderer/image-manager/operations - - - 30d
 d /var/lib/latex-renderer/update-manager 0750 root latex-renderer -
-d /var/lib/latex-renderer/update-manager/staging 0750 root latex-renderer -
 d /var/lib/latex-renderer/update-manager/operations 0750 root latex-renderer -
-e /var/lib/latex-renderer/update-manager/staging - - - 1d
 e /var/lib/latex-renderer/update-manager/operations - - - 30d
 EOF
 systemd-tmpfiles --create /etc/tmpfiles.d/latex-renderer-image-manager.conf
