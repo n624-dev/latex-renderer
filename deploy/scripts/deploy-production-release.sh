@@ -11,13 +11,59 @@ if [ "$#" -ne 1 ]; then
 fi
 
 release_id=$1
+parent_mutation_lock=${LATEX_RENDERER_PARENT_MUTATION_LOCK:-}
+# Compatibility for the updater release immediately before the explicit marker
+# was introduced. Update Manager passes these fixed service variables to its
+# deployment child; a normal sudo deployment has neither one.
+if [ -z "$parent_mutation_lock" ] && \
+   [ "${UPDATE_MANAGER_STATE_ROOT:-}" = /var/lib/latex-renderer/update-manager ] && \
+   [ "${UPDATE_MANAGER_SOCKET:-}" = /run/latex-renderer/update-manager.sock ]; then
+  parent_mutation_lock=application-update
+fi
+case "$parent_mutation_lock" in
+  ''|application-update) ;;
+  *) echo "LATEX_RENDERER_PARENT_MUTATION_LOCK is invalid" >&2; exit 64 ;;
+esac
 source_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
 cd "$source_root"
 temporary_root=$(mktemp -d /tmp/latex-renderer-deploy.XXXXXX)
 gateway_runtime_config=
+deployment_quiesced=false
+deployment_finished=false
+
+restore_services_after_failure() {
+  recovery_failed=false
+  echo "Deployment did not finish; restoring local services on the active release." >&2
+  systemctl start latex-renderer-update-manager.service >/dev/null 2>&1 || recovery_failed=true
+  systemctl start latex-renderer-image-manager.service >/dev/null 2>&1 || recovery_failed=true
+  systemctl restart \
+    latex-renderer-api.service \
+    latex-renderer-internal-api.service \
+    latex-renderer-admin-api.service \
+    latex-renderer-admin-web.service \
+    latex-renderer-remote-mcp.service \
+    latex-renderer-worker.service >/dev/null 2>&1 || recovery_failed=true
+  systemctl start \
+    latex-renderer-update-refresh.timer \
+    latex-renderer-image-refresh.timer \
+    latex-renderer-image-operation-watchdog.timer \
+    latex-renderer-image-log-cleanup.timer >/dev/null 2>&1 || recovery_failed=true
+  if [ "$recovery_failed" = true ]; then
+    echo "One or more local services could not be restored; inspect systemd state before retrying." >&2
+  else
+    echo "Local services restored after deployment failure." >&2
+  fi
+}
+
 cleanup() {
+  status=$?
+  trap - EXIT INT TERM HUP
   [ -z "$gateway_runtime_config" ] || rm -f -- "$gateway_runtime_config"
   rm -rf -- "$temporary_root"
+  if [ "$deployment_quiesced" = true ] && [ "$deployment_finished" != true ]; then
+    restore_services_after_failure
+  fi
+  exit "$status"
 }
 trap cleanup EXIT INT TERM HUP
 
@@ -109,6 +155,7 @@ runuser -u "$sync_user" -- env HOME="$sync_home" USER="$sync_user" LOGNAME="$syn
 # The quiesce helper is backward-compatible with the release immediately before
 # /v1/quiesce by stopping normal mutation callers before checking active state.
 sh "$source_root/deploy/scripts/quiesce-image-manager.sh"
+deployment_quiesced=true
 "$source_root/deploy/scripts/prepare-host.sh" "$release_id"
 /opt/latex-renderer/current/deploy/scripts/configure-host-access.sh
 
@@ -135,7 +182,11 @@ systemctl enable --now latex-renderer-update-manager.service
 /opt/latex-renderer/current/deploy/scripts/wait-update-manager-socket.sh
 systemctl restart latex-renderer-image-manager
 systemctl is-active --quiet latex-renderer-image-manager
-/usr/local/bin/node /opt/latex-renderer/current/deploy/scripts/reconcile-managed-runtime.mjs
+if [ "$parent_mutation_lock" = application-update ]; then
+  echo "Application update owns the shared mutation lock; Image Manager startup restored the saved TeX Runtime."
+else
+  /usr/local/bin/node /opt/latex-renderer/current/deploy/scripts/reconcile-managed-runtime.mjs
+fi
 systemctl restart \
   latex-renderer-api \
   latex-renderer-internal-api \
@@ -235,6 +286,7 @@ LATEX_RENDER_BASE_URL="$public_origin" "$source_root/deploy/scripts/smoke-test-p
 
 /opt/latex-renderer/current/deploy/scripts/prune-production-artifacts.sh "$release_id"
 
+deployment_finished=true
 echo "Production release deployed and verified: $release_id"
 echo "Cross-platform installer: $client_base/install.mjs"
 echo "Windows PowerShell installer: $public_origin/downloads/windows/install.ps1"

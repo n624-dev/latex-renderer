@@ -19,6 +19,9 @@ Environment=DOCKER_CONFIG=/var/lib/latex-renderer/image-manager/docker-config
 LoadCredential=image-manager-token:/etc/latex-renderer/secrets/image-manager-token
 RuntimeDirectory=latex-renderer
 RuntimeDirectoryMode=0750
+# Update Manager owns a Unix socket in this shared runtime directory. Preserve
+# the directory across Image Manager restarts so systemd does not unlink it.
+RuntimeDirectoryPreserve=yes
 ExecStartPre=/bin/sh deploy/scripts/wait-rootless-docker.sh
 ExecStartPre=/bin/sh deploy/scripts/restore-managed-runtime.sh
 ExecStart=/bin/sh deploy/scripts/start-image-manager.sh
