@@ -238,6 +238,8 @@ TeXとアプリケーションは別々に更新します。
 
 Webでは`/admin/updates/`から更新確認、方針変更、適用、operation確認、rollbackを行います。認証済みのAdmin CLIを使う場合も同じAPIと安全検査を使用します。これが通常の更新経路です。旧Updaterが新しいReleaseのデプロイ処理へ到達する前に失敗する場合だけ、後述のsudo手動更新を使います。
 
+適用中はAdmin API自身も新しいReleaseで再起動するため、画面が一時的に「Admin APIへ再接続中」となったり、プロキシが短時間502を返したりすることがあります。画面は同じoperation IDへ再接続するので、その間に更新ボタンをもう一度押しません。修正版のデプロイ処理は、アプリ更新が保持しているmutation lockをTeX Runtime復元処理から重ねて取得せず、Image Manager起動時に検証済みの保存状態を復元します。デプロイが途中で失敗した場合も、停止したローカルserviceとtimerを復旧してからoperationを失敗として確定します。
+
 ```bash
 admin_cli=/opt/latex-renderer/current/apps/admin-cli/dist/index.js
 /usr/local/bin/node "$admin_cli" update status
@@ -320,6 +322,8 @@ systemctl is-active \
 ### mutation lockが使用中と表示される場合
 
 `MUTATION_LOCK_BUSY`はアプリ更新とTeX変更の同時実行を防ぐ安全機構です。Webに実行中operationが表示されている間は、完了を待ちます。ロックファイル自体を削除してはいけません。使用中のファイルを削除すると、新旧2つのロックが同時に存在できてしまいます。
+
+アプリ更新中の内部TeX Runtime復元でこのエラーが出た場合は、同じWeb operationを再実行しません。Update Manager自身が保持するlockとの自己競合である可能性があるため、operation log、現在のRelease、停止中serviceを確認します。rollbackでは保護済みのimmutable Releaseを直接非rootユーザーへ公開せず、専用stagingへ一時複製して固定デプロイ処理を実行し、完了後に複製を削除します。
 
 実行中operationがなく、managerのログでも直前の処理が完了しているのに同じ表示が続く場合だけ、managerを停止して保持者を確認します。
 

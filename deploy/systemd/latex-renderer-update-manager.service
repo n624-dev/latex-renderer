@@ -15,6 +15,10 @@ EnvironmentFile=-/etc/latex-renderer/update-manager.env
 LoadCredential=update-manager-token:/etc/latex-renderer/secrets/update-manager-token
 RuntimeDirectory=latex-renderer
 RuntimeDirectoryMode=0750
+# Image Manager uses the same runtime directory for the cross-manager mutation
+# lock. Keep the directory while either unit restarts so one manager cannot
+# unlink the other manager's live Unix socket.
+RuntimeDirectoryPreserve=yes
 ExecStart=/usr/local/bin/node deploy/scripts/update-manager.mjs
 Restart=on-failure
 RestartSec=5

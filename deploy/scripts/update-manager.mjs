@@ -5,6 +5,7 @@ import { spawn } from "node:child_process";
 import {
   chmod,
   chown,
+  copyFile,
   lstat,
   mkdir,
   mkdtemp,
@@ -21,6 +22,7 @@ import {
 import { dirname, join, resolve } from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { fileURLToPath } from "node:url";
 import { acquireMutationLock } from "./mutation-lock.mjs";
 import { rendererRuntimeFingerprint } from "./runtime-image-identity.mjs";
 
@@ -34,6 +36,7 @@ const socketPath = process.env.UPDATE_MANAGER_SOCKET ?? "/run/latex-renderer/upd
 const tokenFile = process.env.UPDATE_MANAGER_TOKEN_FILE ?? "/etc/latex-renderer/secrets/update-manager-token";
 const stateRoot = process.env.UPDATE_MANAGER_STATE_ROOT ?? "/var/lib/latex-renderer/update-manager";
 const stagingRoot = "/opt/latex-renderer/update-staging";
+const deploymentDriver = join(dirname(fileURLToPath(import.meta.url)), "deploy-production-release.sh");
 const releaseRoot = process.env.UPDATE_RELEASE_ROOT ?? "/opt/latex-renderer/releases";
 const currentLink = process.env.UPDATE_CURRENT_LINK ?? "/opt/latex-renderer/current";
 const deployUser = process.env.UPDATE_DEPLOY_USER ?? "ubuntu";
@@ -98,7 +101,7 @@ await cleanupStagingRoot();
 async function cleanupStagingRoot() {
   const cutoff = Date.now() - 24 * 60 * 60 * 1000;
   for (const entry of await readdir(stagingRoot, { withFileTypes: true })) {
-    if (!entry.isDirectory() || !/^v\d+\.\d+\.\d+-[A-Za-z0-9]{6}$/.test(entry.name)) continue;
+    if (!entry.isDirectory() || !/^(?:v\d+\.\d+\.\d+|rollback-[A-Za-z0-9._-]+)-[A-Za-z0-9]{6}$/.test(entry.name)) continue;
     const candidate = join(stagingRoot, entry.name);
     const info = await lstat(candidate);
     if (info.isDirectory() && info.mtimeMs < cutoff) {
@@ -532,12 +535,7 @@ async function deployPrepared(operation, release, prepared) {
   const releaseId = `v${release.version}-${prepared.manifest.commit.slice(0, 12)}`;
   await runLogged(operation, "systemctl", ["restart", "latex-renderer-backup.service"]);
   try {
-    await runLogged(
-      operation,
-      "sh",
-      [join(prepared.source, "deploy/scripts/deploy-production-release.sh"), releaseId],
-      { env: { ...process.env, SUDO_USER: deployUser } },
-    );
+    await deployReleaseScript(operation, prepared.source, releaseId);
   } catch (deploymentError) {
     if (prepared.manifest.rollbackCompatible !== true) {
       throw new Error(`Deployment failed and this release declares its migration non-rollback-compatible; automatic code rollback was not attempted: ${deploymentError instanceof Error ? deploymentError.message : String(deploymentError)}`);
@@ -545,12 +543,7 @@ async function deployPrepared(operation, release, prepared) {
     if (!before?.path || !before.releaseId) throw deploymentError;
     await appendLog(operation, "Deployment failed; attempting to restore the previous known-good release.\n");
     try {
-      await runLogged(
-        operation,
-        "sh",
-        [join(before.path, "deploy/scripts/deploy-production-release.sh"), before.releaseId],
-        { env: { ...process.env, SUDO_USER: deployUser } },
-      );
+      await deployExistingRelease(operation, before.path, before.releaseId);
     } catch (rollbackError) {
       throw new Error(
         `Deployment failed and automatic rollback also failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}; original failure: ${deploymentError instanceof Error ? deploymentError.message : String(deploymentError)}`,
@@ -567,6 +560,55 @@ async function deployPrepared(operation, release, prepared) {
   state.available = release;
   await persistState();
   return after;
+}
+
+function applicationDeploymentEnvironment() {
+  return {
+    ...process.env,
+    SUDO_USER: deployUser,
+    LATEX_RENDERER_PARENT_MUTATION_LOCK: "application-update",
+  };
+}
+
+async function deployReleaseScript(operation, source, releaseId) {
+  await runLogged(
+    operation,
+    "sh",
+    [join(source, "deploy/scripts/deploy-production-release.sh"), releaseId],
+    { env: applicationDeploymentEnvironment() },
+  );
+}
+
+async function deployExistingRelease(operation, target, releaseId) {
+  const stage = await mkdtemp(join(stagingRoot, `rollback-${releaseId}-`));
+  const source = join(stage, "source");
+  try {
+    await mkdir(source, { mode: 0o700 });
+    await runLogged(operation, "rsync", [
+      "-a",
+      "--exclude=.git",
+      "--exclude=node_modules",
+      `${target}/`,
+      `${source}/`,
+    ]);
+    // Run the current, fixed deployment coordinator against the rollback
+    // source. The immutable target itself is never modified, and older
+    // releases do not need to know about the parent application's lock.
+    await copyFile(
+      deploymentDriver,
+      join(source, "deploy/scripts/deploy-production-release.sh"),
+    );
+    await runLogged(operation, "chown", [
+      "-R",
+      `${deployUid}:${deployGid}`,
+      source,
+    ]);
+    await chown(stage, deployUid, deployGid);
+    await chmod(stage, 0o700);
+    await deployReleaseScript(operation, source, releaseId);
+  } finally {
+    await rm(stage, { recursive: true, force: true });
+  }
 }
 
 async function applyRelease(operation, requestedVersion) {
@@ -598,12 +640,7 @@ async function rollbackRelease(operation) {
   if (resolve(target) !== `${releaseRoot}/${releaseId}`) throw new Error("Rollback release path is invalid");
   const current = await installedRelease();
   await runLogged(operation, "systemctl", ["restart", "latex-renderer-backup.service"]);
-  await runLogged(
-    operation,
-    "sh",
-    [join(target, "deploy/scripts/deploy-production-release.sh"), releaseId],
-    { env: { ...process.env, SUDO_USER: deployUser } },
-  );
+  await deployExistingRelease(operation, target, releaseId);
   const after = await installedRelease();
   if (after?.releaseId !== releaseId) throw new Error("Rollback did not activate the requested release");
   state.previousReleaseId = current?.releaseId ?? null;

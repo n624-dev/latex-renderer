@@ -250,6 +250,26 @@ describe("production hardening", () => {
       deploy.indexOf(reconcile),
     );
     expect(deploy.indexOf(reconcile)).toBeLessThan(deploy.indexOf(consumers));
+    expect(deploy).toContain(
+      'if [ "$parent_mutation_lock" = application-update ]',
+    );
+    expect(deploy).toContain('${UPDATE_MANAGER_STATE_ROOT:-}');
+    expect(deploy).toContain("/var/lib/latex-renderer/update-manager");
+    expect(deploy).toContain('${UPDATE_MANAGER_SOCKET:-}');
+    expect(deploy).toContain(
+      "Image Manager startup restored the saved TeX Runtime",
+    );
+  });
+  it("restores local services when deployment fails after Image Manager quiesce", () => {
+    const deploy = read("deploy/scripts/deploy-production-release.sh");
+    expect(deploy).toContain("deployment_quiesced=true");
+    expect(deploy).toContain("restore_services_after_failure");
+    expect(deploy).toContain(
+      "Deployment did not finish; restoring local services",
+    );
+    expect(deploy).toContain("latex-renderer-admin-api.service");
+    expect(deploy).toContain("latex-renderer-worker.service");
+    expect(deploy).toContain("deployment_finished=true");
   });
   it("enables Remote MCP so it returns after a production host reboot", () => {
     const deploy = read("deploy/scripts/deploy-production-release.sh");

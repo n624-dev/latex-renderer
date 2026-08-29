@@ -168,12 +168,19 @@ describe("release-based application updates", () => {
 
   it("uses a root-owned Unix socket helper and leaves sudo out of Web and API", () => {
     const unit = read("deploy/systemd/latex-renderer-update-manager.service");
+    const imageManagerUnit = read(
+      "deploy/systemd/latex-renderer-image-manager.service",
+    );
     const client = read("apps/admin-api/src/services/update-manager.ts");
     expect(unit).toContain("User=root");
     expect(unit).toContain(
       "UPDATE_MANAGER_SOCKET=/run/latex-renderer/update-manager.sock",
     );
     expect(unit).toContain("ProtectSystem=strict");
+    expect(unit).toContain("RuntimeDirectory=latex-renderer");
+    expect(unit).toContain("RuntimeDirectoryPreserve=yes");
+    expect(imageManagerUnit).toContain("RuntimeDirectory=latex-renderer");
+    expect(imageManagerUnit).toContain("RuntimeDirectoryPreserve=yes");
     expect(client).toContain("socketPath: this.socketPath");
     expect(client).not.toContain("sudo");
     expect(adminScript).not.toContain("sudo ");
@@ -199,6 +206,13 @@ describe("release-based application updates", () => {
     );
     expect(manager).toContain("await cleanupStagingRoot()");
     expect(manager).toContain("24 * 60 * 60 * 1000");
+    expect(manager).toContain("deployExistingRelease(operation");
+    expect(manager).toContain('"--exclude=node_modules"');
+    expect(manager).toContain("await copyFile(");
+    expect(manager).toContain("deploymentDriver");
+    expect(manager).toContain(
+      'LATEX_RENDERER_PARENT_MUTATION_LOCK: "application-update"',
+    );
     expect(prepareHost).toContain(
       "chmod 0750 /var/lib/latex-renderer/update-manager/staging",
     );
@@ -217,7 +231,7 @@ describe("release-based application updates", () => {
     expect(manager).toContain("runAsDeployCapture(stage");
     expect(manager).toContain("runAsDeployLogged(operation, stage");
     expect(manager.match(/"runuser"/g)).toHaveLength(2);
-    expect(deploy).toContain('source_root=$(CDPATH= cd --');
+    expect(deploy).toContain("source_root=$(CDPATH= cd --");
     expect(deploy).toContain('cd "$source_root"');
     expect(deploy.indexOf('cd "$source_root"')).toBeLessThan(
       deploy.indexOf('runuser -u "$sync_user"'),
@@ -310,6 +324,7 @@ describe("release-based application updates", () => {
       "deploy/scripts/build-server-release-assets.sh",
       "deploy/scripts/build-language-runtime.sh",
       "deploy/scripts/restore-managed-runtime.sh",
+      "deploy/scripts/deploy-production-release.sh",
     ]) {
       const result = spawnSync("sh", ["-n", path], { encoding: "utf8" });
       expect(result.status, `${path}: ${result.stderr}`).toBe(0);
