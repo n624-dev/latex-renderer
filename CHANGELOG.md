@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 1.1.6 - 2026-08-29
+
+- Preserve the shared privileged-manager runtime directory across service restarts so the Update Manager and Image Manager sockets remain reachable.
+- Avoid nested mutation-lock acquisition during application updates, restore quiesced services after failures, and stage readable rollback copies without weakening immutable installed releases.
+- Report safe, actionable Update Manager transport failures and document the temporary Admin API reconnect window during Web updates.
+
 ## 1.1.5 - 2026-08-29
 
 - Publish the supported sudo recovery path for legacy Update Managers that fail before verified release code can take over, without granting Web or API processes elevated privileges.
