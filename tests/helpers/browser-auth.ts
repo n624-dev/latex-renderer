@@ -3,11 +3,12 @@ import type {
   BrowserAuthenticationService,
 } from "@latex-renderer/auth";
 import type { RendererDatabase } from "@latex-renderer/database";
-import { AppError, newId } from "../../packages/shared/src/index.js";
+import { AppError, newId } from "@latex-renderer/shared";
 
 export function legacyTestBrowserAuth(
   database: RendererDatabase,
   access: Pick<AccessJwtVerifier, "verify">,
+  options: { enforceExactOrigin?: boolean } = {},
 ): BrowserAuthenticationService {
   let established:
     | {
@@ -67,7 +68,13 @@ export function legacyTestBrowserAuth(
           403,
         );
     },
-    requireExactOrigin: () => undefined,
+    requireExactOrigin: (request: Request) => {
+      if (
+        options.enforceExactOrigin === true &&
+        request.headers.get("Origin") !== "https://latex.example.com"
+      )
+        throw new AppError("ORIGIN_REJECTED", "Origin is not allowed", 403);
+    },
     logout: () => [],
     createExternalIdentity: (input: {
       userId: string;

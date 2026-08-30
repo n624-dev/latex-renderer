@@ -318,13 +318,16 @@ describe("production hardening", () => {
     expect(smoke).toContain('sleep "$boundary_retry_delay"');
     expect(smoke).toContain("assert_worker legacy-client");
   });
-  it("separates Cloudflare Access redirects from local OAuth Origin validation", () => {
+  it("separates Cloudflare Access redirects from local OAuth browser authentication", () => {
     const smoke = read("deploy/scripts/smoke-test-public-worker-boundary.sh");
     expect(smoke).toContain("LATEX_RENDER_REMOTE_MCP_LOCAL_ORIGIN");
     expect(smoke).toContain("302|403)");
     expect(smoke).toContain('"$remote_mcp_local_origin/oauth/authorize"');
-    expect(smoke).toContain("Authorization confirmation expired");
+    expect(smoke).toContain("A browser login is required");
     expect(smoke).toContain("Origin is not allowed");
+    expect(smoke).toContain(
+      "cross-origin rejection is covered by the Remote MCP integration tests",
+    );
   });
   it("waits for the published client manifest and archive to converge to the local release", () => {
     const deploy = read("deploy/scripts/deploy-production-release.sh"),
