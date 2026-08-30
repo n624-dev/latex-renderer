@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 1.2.1 - 2026-08-30
+
+- Treat an unauthenticated OAuth consent response as the expected browser-authentication boundary during final production verification, while retaining an authenticated cross-origin consent regression test.
+- Allow deployments that already passed service smoke tests and public route publication to finish instead of reporting a false late failure; this patch does not add a database migration.
+
 ## 1.2.0 - 2026-08-30
 
 - Add explicit Cloudflare and standalone deployment profiles with a shared admission gateway core and loopback-only Hono gateway for TLS reverse proxies.

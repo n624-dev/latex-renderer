@@ -30,6 +30,9 @@ importers:
       '@latex-renderer/setup-web':
         specifier: workspace:*
         version: link:packages/setup-web
+      '@latex-renderer/shared':
+        specifier: workspace:*
+        version: link:packages/shared
       '@latex-renderer/ticket':
         specifier: workspace:*
         version: link:packages/ticket

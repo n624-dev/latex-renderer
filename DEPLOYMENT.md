@@ -325,7 +325,7 @@ and rollback from `/admin/updates/` or the equivalent CLI commands:
 latex-render-admin update status
 latex-render-admin update check
 latex-render-admin update policy --mode notify --yes
-latex-render-admin update apply v1.2.0 --yes
+latex-render-admin update apply v1.2.1 --yes
 latex-render-admin update rollback --yes
 ```
 

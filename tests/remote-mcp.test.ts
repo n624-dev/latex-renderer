@@ -83,6 +83,22 @@ describe("Remote MCP HTTP server", () => {
       approval = new URLSearchParams(query);
     approval.set("csrf", csrf);
     approval.set("decision", "approve");
+    const rejectedOrigin = await fixture.app.request("/oauth/authorize", {
+      method: "POST",
+      headers: {
+        Host: "latex.example.com",
+        Cookie: cookie,
+        Origin: "https://claude.ai",
+        "Cf-Access-Jwt-Assertion": "access-jwt",
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: approval.toString(),
+    });
+    expect(rejectedOrigin.status).toBe(403);
+    await expect(rejectedOrigin.json()).resolves.toMatchObject({
+      error: "server_error",
+      error_description: "Origin is not allowed",
+    });
     const approved = await fixture.app.request("/oauth/authorize", {
       method: "POST",
       headers: {
@@ -1076,7 +1092,9 @@ async function createFixture() {
     } as unknown as AccessJwtVerifier,
     app = createRemoteMcpApp({
       database,
-      browserAuth: legacyTestBrowserAuth(database, access),
+      browserAuth: legacyTestBrowserAuth(database, access, {
+        enforceExactOrigin: true,
+      }),
       oauth,
       mcp: createRemoteMcpHandler(renders, "0.2.0"),
       publicOrigin: ORIGIN,

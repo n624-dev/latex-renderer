@@ -82,18 +82,17 @@ assert_not_worker_with_origin() {
   fi
 }
 
-assert_oauth_consent_origin() {
+assert_oauth_consent_authentication() {
   name=$1
-  client_origin=$2
   public_status=$(curl --silent --show-error --max-redirs 0 -X POST \
-    -H "Origin: $client_origin" \
+    -H "Origin: $origin" \
     -H "Content-Type: application/x-www-form-urlencoded" \
     --data 'csrf=invalid&decision=approve' \
     -D "$temporary_root/$name.headers" -o "$temporary_root/$name.body" \
     --write-out '%{http_code}' "$origin/oauth/authorize")
   case "$public_status" in
     302|403) ;;
-    *) echo "unexpected public OAuth consent status for Origin $client_origin: $public_status" >&2; exit 1 ;;
+    *) echo "unexpected public OAuth consent status: $public_status" >&2; exit 1 ;;
   esac
   if grep -qi '^X-LaTeX-Renderer-Serving: workers-static' "$temporary_root/$name.headers"; then
     echo "OAuth consent was swallowed by the public Worker" >&2
@@ -102,19 +101,20 @@ assert_oauth_consent_origin() {
 
   # The public authorization route is protected by Cloudflare Access, which
   # redirects an unauthenticated smoke request before it reaches the app. Probe
-  # the deployed loopback service as well to verify vendor-neutral Origin
-  # handling reaches CSRF validation.
+  # the deployed loopback service as well: POST consent must authenticate the
+  # browser before it reads the form or checks same-origin CSRF. Authenticated
+  # cross-origin rejection is covered by the Remote MCP integration tests.
   local_status=$(curl --silent --show-error --max-redirs 0 -X POST \
     -H "Host: $public_host" \
-    -H "Origin: $client_origin" \
+    -H "Origin: $origin" \
     -H "Content-Type: application/x-www-form-urlencoded" \
     --data 'csrf=invalid&decision=approve' \
     -o "$temporary_root/$name.local.body" \
     --write-out '%{http_code}' "$remote_mcp_local_origin/oauth/authorize")
-  if [ "$local_status" != "403" ] ||
-    ! grep -q 'Authorization confirmation expired' "$temporary_root/$name.local.body" ||
+  if [ "$local_status" != "401" ] ||
+    ! grep -q 'A browser login is required' "$temporary_root/$name.local.body" ||
     grep -q 'Origin is not allowed' "$temporary_root/$name.local.body"; then
-    echo "OAuth consent rejected client Origin $client_origin before CSRF validation (local status: $local_status)" >&2
+    echo "OAuth consent did not stop at browser authentication (local status: $local_status)" >&2
     exit 1
   fi
 }
@@ -141,12 +141,11 @@ assert_not_worker app GET /app/ "200 302 401 403"
 assert_not_worker app-api GET /app/api/v1/me "200 302 401 403"
 assert_not_worker oauth-metadata GET /.well-known/oauth-protected-resource/mcp "200"
 assert_not_worker remote-mcp POST /mcp "401"
-# OAuth clients legitimately send their own Origin. MCP and consent requests
-# must reach authentication/CSRF checks without a vendor-specific allowlist.
+# OAuth clients legitimately send their own Origin to the token-authenticated
+# MCP endpoint. Browser consent itself is hosted here and remains same-origin.
 assert_not_worker_with_origin remote-mcp-claude POST /mcp https://claude.ai "401"
 assert_not_worker_with_origin remote-mcp-generic POST /mcp https://ai-client.example "401"
-assert_oauth_consent_origin oauth-consent-claude https://claude.ai
-assert_oauth_consent_origin oauth-consent-generic https://ai-client.example
+assert_oauth_consent_authentication oauth-consent
 for name in admin admin-api app app-api; do
   grep -Eqi '^Cache-Control:.*no-store' "$temporary_root/$name.headers" || {
     echo "administrator response is missing no-store protection: $name" >&2

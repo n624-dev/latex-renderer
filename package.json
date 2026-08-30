@@ -1,6 +1,6 @@
 {
   "name": "latex-renderer",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "private": true,
   "license": "Apache-2.0",
   "type": "module",
@@ -29,6 +29,7 @@
     "@eslint/js": "^10.0.1",
     "@latex-renderer/auth": "workspace:*",
     "@latex-renderer/database": "workspace:*",
+    "@latex-renderer/shared": "workspace:*",
     "@latex-renderer/setup-core": "workspace:*",
     "@latex-renderer/setup-web": "workspace:*",
     "@latex-renderer/ticket": "workspace:*",
