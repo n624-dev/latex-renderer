@@ -3,6 +3,10 @@
   "compilerOptions": {
     "module": "ESNext",
     "moduleResolution": "Bundler",
+    "baseUrl": "../..",
+    "paths": {
+      "@latex-renderer/gateway-core": ["packages/gateway-core/src/index.ts"]
+    },
     "types": ["./worker-configuration.d.ts"],
     "noEmit": true
   },
