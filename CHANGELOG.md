@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 1.2.2 - 2026-08-30
+
+- Publish the browser-login controller with the public Worker assets so Cloudflare Access, OIDC, and password mode selection runs instead of exposing the inactive password form.
+- Keep inactive login methods hidden before JavaScript loads, and verify the login controller in both the local Worker preview and final production boundary smoke test. This patch adds no database migration.
+
 ## 1.2.1 - 2026-08-30
 
 - Treat an unauthenticated OAuth consent response as the expected browser-authentication boundary during final production verification, while retaining an authenticated cross-origin consent regression test.

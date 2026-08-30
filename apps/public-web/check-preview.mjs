@@ -33,6 +33,12 @@ try {
   await assertAsset("/", 200, "text/html", "LaTeXをPDFに変換");
   await assertAsset("/docs/", 200, "text/html", "最短でPDFを作る");
   await assertAsset("/downloads/", 200, "text/html", "最新版ZIP");
+  await assertAsset(
+    "/assets/login.js",
+    200,
+    "text/javascript",
+    "/auth/config",
+  );
   await assertAsset("/assets/styles.css", 200, "text/css");
   await assertAsset(
     "/assets/docs-search.json",

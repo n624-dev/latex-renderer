@@ -124,6 +124,7 @@ assert_worker docs /docs/ 200
 assert_worker downloads /downloads/ 200
 assert_worker mcpb /downloads/mcpb/latest.mcpb 200
 assert_worker asset /assets/styles.css 200
+assert_worker login-script /assets/login.js 200
 assert_worker openapi /openapi/gateway.openapi.yaml 200
 assert_worker missing-doc /docs/definitely-not-present 404
 
