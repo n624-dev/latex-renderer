@@ -89,6 +89,14 @@ export class RemoteMcpRepository {
       .run(timestamp, id);
   }
 
+  countClients(): number {
+    return (
+      this.db
+        .prepare("SELECT COUNT(*) AS count FROM remote_mcp_clients")
+        .get() as { count: number }
+    ).count;
+  }
+
   insertAuthorizationCode(input: {
     codeHash: string;
     clientId: string;
@@ -246,7 +254,11 @@ export class RemoteMcpRepository {
       );
   }
 
-  sourceRef(id: string, ownerUserId: string, now: string): SourceRefRow | undefined {
+  sourceRef(
+    id: string,
+    ownerUserId: string,
+    now: string,
+  ): SourceRefRow | undefined {
     return this.db
       .prepare(
         `SELECT * FROM source_refs WHERE id=? AND owner_user_id=?
@@ -294,12 +306,44 @@ export class RemoteMcpRepository {
     ).count;
   }
 
-  cleanup(before: string): void {
+  cleanup(input: {
+    now: string;
+    rateLimitBefore: string;
+    unusedClientBefore: string;
+  }): void {
     this.db
       .prepare("DELETE FROM remote_mcp_authorization_codes WHERE expires_at<=?")
-      .run(before);
+      .run(input.now);
+    this.db
+      .prepare("DELETE FROM remote_mcp_tokens WHERE expires_at<=?")
+      .run(input.now);
+    this.db
+      .prepare(
+        `DELETE FROM remote_mcp_token_families
+         WHERE expires_at<=? AND NOT EXISTS (
+           SELECT 1 FROM remote_mcp_tokens WHERE family_id=remote_mcp_token_families.id
+         )`,
+      )
+      .run(input.now);
+    this.db
+      .prepare("DELETE FROM source_refs WHERE expires_at<=?")
+      .run(input.now);
     this.db
       .prepare("DELETE FROM remote_mcp_rate_limits WHERE window_start<?")
-      .run(before);
+      .run(input.rateLimitBefore);
+    this.db
+      .prepare(
+        `DELETE FROM remote_mcp_clients
+         WHERE last_used_at IS NULL AND created_at<?
+           AND NOT EXISTS (
+             SELECT 1 FROM remote_mcp_authorization_codes
+             WHERE client_id=remote_mcp_clients.client_id
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM remote_mcp_token_families
+             WHERE client_id=remote_mcp_clients.client_id
+           )`,
+      )
+      .run(input.unusedClientBefore);
   }
 }

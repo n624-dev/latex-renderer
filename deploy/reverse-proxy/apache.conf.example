@@ -1,0 +1,44 @@
+# Enable ssl, headers, proxy, proxy_http, rewrite, and reqtimeout modules first.
+# Apache does not include a per-client request-count limiter. Enforce one at the
+# hosting/LB layer or explicitly audit a compatible module before exposure.
+<VirtualHost *:443>
+  ServerName latex.example.com
+  SSLEngine on
+  SSLCertificateFile /etc/letsencrypt/live/latex.example.com/fullchain.pem
+  SSLCertificateKeyFile /etc/letsencrypt/live/latex.example.com/privkey.pem
+  SSLProtocol -all +TLSv1.2 +TLSv1.3
+  LimitRequestBody 230686720
+  RequestReadTimeout handshake=10-20,MinRate=500 header=10-30,MinRate=500 body=20,MinRate=500
+  ProxyTimeout 360
+  Header always set Strict-Transport-Security "max-age=63072000; includeSubDomains"
+  RequestHeader unset CF-Access-Jwt-Assertion
+  RequestHeader unset CF-Connecting-IP
+  RequestHeader unset Forwarded
+  RequestHeader set X-Forwarded-Proto "https"
+  RequestHeader set X-Forwarded-Host "latex.example.com"
+  RequestHeader set Host "latex.example.com"
+  RequestHeader set X-Forwarded-For expr=%{REMOTE_ADDR}
+  RequestHeader set X-Real-IP expr=%{REMOTE_ADDR}
+  RequestHeader set X-Latex-Renderer-Client-IP expr=%{REMOTE_ADDR}
+  ProxyPreserveHost On
+  ProxyPassInterpolateEnv Off
+
+  ProxyPassMatch "^(/api/v1/(health|render-tickets|source-tickets))$" "http://127.0.0.1:3105$1" nocanon
+  ProxyPass /api/v1/job-tickets/ http://127.0.0.1:3105/api/v1/job-tickets/ nocanon
+  ProxyPass /.well-known/oauth-authorization-server http://127.0.0.1:3104/.well-known/oauth-authorization-server nocanon
+  ProxyPass /.well-known/oauth-protected-resource http://127.0.0.1:3104/.well-known/oauth-protected-resource nocanon
+  ProxyPass /oauth/ http://127.0.0.1:3104/oauth/ nocanon
+  ProxyPass /mcp http://127.0.0.1:3104/mcp nocanon
+  ProxyPass /auth/ http://127.0.0.1:3102/auth/ nocanon
+  ProxyPass /admin/api/ http://127.0.0.1:3102/admin/api/ nocanon
+  ProxyPass /admin/v1/ http://127.0.0.1:3102/admin/v1/ nocanon
+  ProxyPass /app/api/ http://127.0.0.1:3102/app/api/ nocanon
+  ProxyPass /api/ http://127.0.0.1:3100/api/ nocanon
+  ProxyPass / http://127.0.0.1:3101/ nocanon
+  ProxyPassReverse / http://127.0.0.1:3101/
+</VirtualHost>
+
+<VirtualHost *:80>
+  ServerName latex.example.com
+  Redirect permanent / https://latex.example.com/
+</VirtualHost>

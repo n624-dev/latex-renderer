@@ -16,18 +16,24 @@ type Fetcher = (
   init?: RequestInit,
 ) => Promise<Response>;
 type Job = ReturnType<typeof parseJobStatus>;
+let csrfToken = "";
 
 async function json(
   fetcher: Fetcher,
   path: string,
   init: RequestInit = {},
+  mutationCsrf = csrfToken,
 ): Promise<unknown> {
   const headers = new Headers(init.headers);
   headers.set("Accept", "application/json");
   headers.set("Cache-Control", "no-store");
+  const method = init.method ?? "GET";
   if (init.body !== undefined) {
     headers.set("Content-Type", "application/json");
-    headers.set("X-CSRF-Token", "1");
+  }
+  if (!["GET", "HEAD", "OPTIONS"].includes(method)) {
+    if (mutationCsrf.length === 0) throw new Error("セッションを再読み込みしてください。");
+    headers.set("X-CSRF-Token", mutationCsrf);
   }
   const response = await fetcher(path, {
     credentials: "same-origin",
@@ -139,24 +145,27 @@ function statusLabel(value: string): string {
 }
 
 async function establishSession(fetcher: Fetcher) {
-  const session = (await json(fetcher, "/app/api/v1/session")) as {
-    linkage: { state: string; claimable: boolean };
-  };
-  if (session.linkage.state === "claimable")
-    await json(fetcher, "/app/api/v1/session/claim-subject", {
-      method: "POST",
-      body: "{}",
-    });
-  else if (session.linkage.state !== "linked")
-    throw Object.assign(
-      new Error("利用者登録またはAccess連携を確認してください。"),
-      {
-        code: "APP_ACCESS_UNAVAILABLE",
-      },
+  const response = await fetcher("/auth/session", {
+    credentials: "same-origin",
+    cache: "no-store",
+  });
+  if (response.status === 401) {
+    location.replace(
+      `/login/?return_to=${encodeURIComponent(location.pathname + location.search)}`,
     );
+    return false;
+  }
+  const session = (await response.json()) as {
+    csrfToken?: string;
+    error?: { message?: string };
+  };
+  if (!response.ok || typeof session.csrfToken !== "string")
+    throw new Error(session.error?.message ?? "ログインできませんでした。");
+  csrfToken = session.csrfToken;
   const me = (await json(fetcher, "/app/api/v1/me")) as { isAdmin: boolean };
   const admin = document.querySelector<HTMLElement>("#admin-link");
   if (admin) admin.hidden = !me.isAdmin;
+  return true;
 }
 
 async function createSource(fetcher: Fetcher, bytes: Uint8Array, key: string) {
@@ -192,7 +201,7 @@ function parseRender(value: unknown) {
   };
 }
 
-async function issueAccess(fetcher: Fetcher, id: string) {
+async function issueAccess(fetcher: Fetcher, id: string, mutationCsrf = csrfToken) {
   return parseRender(
     await json(
       fetcher,
@@ -201,6 +210,7 @@ async function issueAccess(fetcher: Fetcher, id: string) {
         method: "POST",
         body: "{}",
       },
+      mutationCsrf,
     ),
   );
 }
@@ -227,6 +237,7 @@ export function jobTracker(
   fetcher: Fetcher,
   id: string,
   initial?: { jobTicket: string; expiresAt: string },
+  mutationCsrf = csrfToken,
 ) {
   let credential = initial,
     refresh: Promise<{ jobTicket: string; expiresAt: string }> | undefined;
@@ -237,7 +248,7 @@ export function jobTracker(
       Date.parse(credential.expiresAt) - Date.now() > 60_000
     )
       return credential.jobTicket;
-    refresh ??= issueAccess(fetcher, id)
+    refresh ??= issueAccess(fetcher, id, mutationCsrf)
       .then((next) => {
         credential = next;
         return next;
@@ -829,7 +840,8 @@ function installEnvironment(fetcher: Fetcher) {
 function installApp() {
   const fetcher = globalThis.fetch.bind(globalThis);
   void establishSession(fetcher)
-    .then(() => {
+    .then((authenticated) => {
+      if (!authenticated) return;
       const page = document.body.dataset.appPage;
       if (page === "render") installRender(fetcher);
       if (page === "history") {
@@ -841,6 +853,13 @@ function installApp() {
       if (page === "environment") installEnvironment(fetcher);
     })
     .catch(showError);
+  document.querySelector("#app-logout")?.addEventListener("click", () => {
+    void fetcher("/auth/logout", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": csrfToken },
+    }).finally(() => location.replace("/login/"));
+  });
   addEventListener("pagehide", () => {
     // Credentials live only in closures and are discarded with the page.
   });
@@ -848,6 +867,7 @@ function installApp() {
 
 export const appScript = `
 (() => {
+  let csrfToken = "";
   const JOB_STATUSES = ${JSON.stringify(JOB_STATUSES)};
   const crc32 = ${crc32.toString()};
   const inspectZipCandidates = ${inspectZipCandidates.toString()};

@@ -1,6 +1,6 @@
 {
   "name": "latex-renderer",
-  "version": "1.1.6",
+  "version": "1.2.0",
   "private": true,
   "license": "Apache-2.0",
   "type": "module",
@@ -11,7 +11,7 @@
   "scripts": {
     "build": "pnpm build:workspaces && pnpm build:client",
     "build:workspaces": "pnpm -r build",
-    "build:production-services": "pnpm --filter @latex-renderer/admin-api... --filter @latex-renderer/admin-local... --filter @latex-renderer/web... --filter @latex-renderer/internal-api... --filter @latex-renderer/remote-mcp... --filter @latex-renderer/renderer-api... --filter @latex-renderer/renderer-worker... build",
+    "build:production-services": "pnpm --filter @latex-renderer/admin-api... --filter @latex-renderer/admin-local... --filter @latex-renderer/web... --filter @latex-renderer/internal-api... --filter @latex-renderer/remote-mcp... --filter @latex-renderer/renderer-api... --filter @latex-renderer/renderer-worker... --filter @latex-renderer/standalone-gateway... build",
     "build:client": "node client/build-client.mjs && node client/build-mcpb.mjs",
     "build:mcpb": "node client/build-mcpb.mjs",
     "verify:mcpb": "node client/verify-mcpb.mjs",
@@ -26,7 +26,7 @@
   },
   "devDependencies": {
     "@anthropic-ai/mcpb": "2.1.2",
-    "@eslint/js": "^9.32.0",
+    "@eslint/js": "^10.0.1",
     "@latex-renderer/auth": "workspace:*",
     "@latex-renderer/database": "workspace:*",
     "@latex-renderer/setup-core": "workspace:*",
@@ -35,14 +35,15 @@
     "@latex-renderer/zip-validation": "workspace:*",
     "@types/node": "^24.1.0",
     "@types/yazl": "^3.3.0",
-    "esbuild": "0.28.1",
-    "eslint": "^9.32.0",
+    "esbuild": "0.28.2",
+    "eslint": "^10.9.1",
+    "jose": "^6.2.10",
     "prettier": "^3.6.2",
-    "tsx": "^4.20.3",
+    "tsx": "^4.23.12",
     "typescript": "^5.9.2",
-    "typescript-eslint": "^8.39.0",
-    "vitest": "^3.2.4",
-    "wrangler": "4.125.0",
+    "typescript-eslint": "^8.68.0",
+    "vitest": "^4.1.11",
+    "wrangler": "4.127.1",
     "yazl": "^3.3.1"
   }
 }

@@ -11,3 +11,4 @@ export * from "./worker.js";
 export * from "./web-principals.js";
 export * from "./projects.js";
 export * from "./remote-mcp.js";
+export * from "./browser-auth.js";

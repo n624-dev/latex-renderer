@@ -23,6 +23,7 @@ export {
 export {
   downloadsPage,
   homePage,
+  loginPage,
   publicPage404,
   statusPage,
 } from "./templates-pages.js";

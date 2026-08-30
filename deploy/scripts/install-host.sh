@@ -42,6 +42,13 @@ if [ ! -f /etc/latex-renderer/secrets/update-manager-token ]; then
 fi
 chown root:root /etc/latex-renderer/secrets/update-manager-token
 chmod 0400 /etc/latex-renderer/secrets/update-manager-token
+if [ ! -f /etc/latex-renderer/secrets/auth-password-pepper ]; then
+  (umask 077; dd if=/dev/urandom \
+    of=/etc/latex-renderer/secrets/auth-password-pepper \
+    bs=32 count=1 status=none)
+fi
+chown root:latex-renderer /etc/latex-renderer/secrets/auth-password-pepper
+chmod 0440 /etc/latex-renderer/secrets/auth-password-pepper
 if [ ! -f /etc/latex-renderer/update-manager.env ]; then
   update_deploy_user=${UPDATE_DEPLOY_USER:-${SUDO_USER:-}}
   if [ "$update_deploy_user" = root ] || \
@@ -67,4 +74,4 @@ e /var/lib/latex-renderer/update-manager/operations - - - 30d
 EOF
 systemd-tmpfiles --create /etc/tmpfiles.d/latex-renderer-image-manager.conf
 systemd-tmpfiles --clean /etc/tmpfiles.d/latex-renderer-image-manager.conf || true
-echo "Host users and directories created. Install Node.js 24, rootless Docker for latex-render-worker, and cloudflared before enabling services."
+echo "Host users and directories created. Install Node.js 24 and rootless Docker for latex-render-worker before enabling services; cloudflared is required only for the cloudflare profile."

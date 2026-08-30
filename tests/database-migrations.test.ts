@@ -33,6 +33,10 @@ const svgOutputsMigration = readFileSync(
   new URL("../deploy/migrations/006_svg_outputs.sql", import.meta.url),
   "utf8",
 );
+const browserAuthMigration = readFileSync(
+  new URL("../deploy/migrations/007_browser_auth.sql", import.meta.url),
+  "utf8",
+);
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true });
@@ -79,6 +83,7 @@ describe("database migration 002", () => {
       { version: 4 },
       { version: 5 },
       { version: 6 },
+      { version: 7 },
     ]);
 
     expect(() => migrated.migrate()).not.toThrow();
@@ -260,6 +265,60 @@ describe("database migration 002", () => {
       .all()
       .find((column) => column.name === "outputs_json");
     expect(outputs).toMatchObject({ notnull: 1, dflt_value: "'[\"pdf\"]'" });
+    expect(db.prepare("PRAGMA integrity_check").get()).toEqual({
+      integrity_check: "ok",
+    });
+    expect(db.prepare("PRAGMA foreign_key_check").all()).toHaveLength(0);
+    db.close();
+  });
+
+  it("adds provider-neutral identities, credentials, and hashed sessions", () => {
+    const { db } = legacyDatabase();
+    seedLegacyUsers(db);
+    db.exec(deploymentMigration);
+    db.exec(sourcesMigration);
+    db.exec(remoteMcpMigration);
+    db.exec(webAppMigration);
+    db.exec(svgOutputsMigration);
+    db.exec(browserAuthMigration);
+
+    expect(
+      db
+        .prepare("SELECT version FROM schema_migrations ORDER BY version")
+        .all(),
+    ).toEqual([1, 2, 3, 4, 5, 6, 7].map((version) => ({ version })));
+    const email = db
+      .prepare("PRAGMA table_info(users)")
+      .all()
+      .find((column) => column.name === "email");
+    expect(email).toMatchObject({ notnull: 0 });
+    db.prepare(
+      `INSERT INTO users
+       (id,email,display_name,role,status,security_version,created_by,created_at,updated_at)
+       VALUES ('user_no_email',NULL,'No email','user','active',1,'test',?,?)`,
+    ).run("2026-08-30T00:00:00Z", "2026-08-30T00:00:00Z");
+    db.prepare(
+      `INSERT INTO users
+       (id,email,display_name,role,status,security_version,created_by,created_at,updated_at)
+       VALUES ('user_same_email','owner@example.com','Duplicate attribute','user','active',1,'test',?,?)`,
+    ).run("2026-08-30T00:00:00Z", "2026-08-30T00:00:00Z");
+    db.prepare(
+      `INSERT INTO user_identities
+       (id,user_id,provider,issuer,subject,linked_at,last_seen_at)
+       VALUES ('identity_owner','user_owner','oidc','https://id.example.test','stable-subject',?,?)`,
+    ).run("2026-08-30T00:00:00Z", "2026-08-30T00:00:00Z");
+    db.prepare(
+      `INSERT INTO local_credentials
+       (user_id,login_name,password_hash,password_updated_at)
+       VALUES ('user_no_email','local-owner',?,?)`,
+    ).run("$scrypt$ln=17,r=8,p=1$" + "a".repeat(44) + "$" + "b".repeat(44), "2026-08-30T00:00:00Z");
+    expect(() =>
+      db.prepare(
+        `INSERT INTO user_identities
+         (id,user_id,provider,issuer,subject,linked_at,last_seen_at)
+         VALUES ('identity_duplicate','user_disabled','oidc','https://id.example.test','stable-subject',?,?)`,
+      ).run("2026-08-30T00:00:00Z", "2026-08-30T00:00:00Z"),
+    ).toThrow(/UNIQUE constraint failed/);
     expect(db.prepare("PRAGMA integrity_check").get()).toEqual({
       integrity_check: "ok",
     });

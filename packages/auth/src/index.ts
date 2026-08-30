@@ -1,5 +1,4 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { createRemoteJWKSet, jwtVerify, type JWTPayload } from "jose";
 import type { RendererDatabase } from "@latex-renderer/database";
 import { AppError, nowIso } from "@latex-renderer/shared";
 
@@ -103,41 +102,7 @@ export class ApiKeyService {
   }
 }
 
-export interface AccessIdentity { subject: string; email?: string; payload: JWTPayload }
-
-export class AccessJwtVerifier {
-  private readonly jwks: ReturnType<typeof createRemoteJWKSet>;
-
-  constructor(private readonly issuer: string, private readonly audience: string) {
-    const base = issuer.endsWith("/") ? issuer : `${issuer}/`;
-    this.jwks = createRemoteJWKSet(new URL("cdn-cgi/access/certs", base));
-  }
-
-  async verify(assertion: string): Promise<AccessIdentity> {
-    const payload = await this.verifyPayload(assertion);
-    if (typeof payload.sub !== "string" || payload.sub.length === 0) {
-      throw new AppError("ACCESS_SUBJECT_MISSING", "Access token subject is missing", 401);
-    }
-    const email = typeof payload.email === "string" ? payload.email : undefined;
-    return email === undefined ? { subject: payload.sub, payload } : { subject: payload.sub, email, payload };
-  }
-
-  async verifyService(assertion: string, expectedCommonName: string): Promise<JWTPayload> {
-    const payload = await this.verifyPayload(assertion);
-    if (payload.sub !== "" || payload.common_name !== expectedCommonName) {
-      throw new AppError("ACCESS_SERVICE_IDENTITY_INVALID", "Access service identity is invalid", 401);
-    }
-    return payload;
-  }
-
-  private async verifyPayload(assertion: string): Promise<JWTPayload> {
-    try {
-      const { payload } = await jwtVerify(assertion, this.jwks, { issuer: this.issuer, audience: this.audience });
-      if (payload.type !== "app") throw new AppError("INVALID_ACCESS_TOKEN", "Cloudflare Access token is invalid", 401);
-      return payload;
-    } catch (error) {
-      if (error instanceof AppError) throw error;
-      throw new AppError("INVALID_ACCESS_TOKEN", "Cloudflare Access token is invalid", 401);
-    }
-  }
-}
+export * from "./access.js";
+export * from "./browser.js";
+export * from "./oidc.js";
+export * from "./config.js";

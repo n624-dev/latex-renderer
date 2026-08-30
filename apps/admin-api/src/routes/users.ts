@@ -23,7 +23,7 @@ export function createUsersRouter(deps: AdminDependencies): Hono {
   router.post("/", async (c) => {
     const actor = await requireActor(deps, c, "admin:users:write");
     const input = parse(createUserSchema, await c.req.json<unknown>());
-    return c.json({ id: service.create(actor, input) }, 201);
+    return c.json({ id: await service.create(actor, input) }, 201);
   });
 
   router.post("/:id/enable", async (c) => {
@@ -36,22 +36,50 @@ export function createUsersRouter(deps: AdminDependencies): Hono {
     return c.json(service.changeStatus(actor, c.req.param("id"), "disable"));
   });
 
-  router.post("/:id/unlink-access-subject", async (c) => {
+  router.post("/:id/identities/:identityId/unlink", async (c) => {
     const actor = await requireActor(deps, c, "admin:users:write");
     const input = parse(
       z.object({ reason: z.string().trim().min(1).max(500) }).strict(),
       await c.req.json<unknown>(),
     );
-    return c.json(service.unlinkAccessSubject(actor, c.req.param("id"), input.reason));
+    return c.json(
+      service.unlinkIdentity(
+        actor,
+        c.req.param("id"),
+        c.req.param("identityId"),
+        input.reason,
+      ),
+    );
+  });
+
+  router.post("/:id/password", async (c) => {
+    const actor = await requireActor(deps, c, "admin:users:write");
+    const input = parse(
+      z
+        .object({
+          loginName: z.string().regex(/^[a-z0-9][a-z0-9._-]{2,63}$/),
+          password: z.string().min(12).max(1024),
+          reason: z.string().trim().min(1).max(500),
+        })
+        .strict(),
+      await c.req.json<unknown>(),
+    );
+    return c.json(await service.resetPassword(actor, c.req.param("id"), input));
   });
 
   router.patch("/:id", async (c) => {
     const actor = await requireActor(deps, c, "admin:users:write");
     const input = parse(
       z.object({
+        email: z.email().max(320).nullable().optional(),
         displayName: z.string().min(1).max(200).optional(),
         role: z.enum(["user", "admin", "owner"]).optional(),
-      }).refine((value) => value.displayName !== undefined || value.role !== undefined),
+      }).refine(
+        (value) =>
+          value.email !== undefined ||
+          value.displayName !== undefined ||
+          value.role !== undefined,
+      ),
       await c.req.json<unknown>(),
     );
     service.update(actor, c.req.param("id"), input);

@@ -38,7 +38,7 @@ describe("Markdown public documentation", () => {
       expect(document.description).not.toBe("");
       expect(document.updated).toMatch(/^\d{4}-\d{2}-\d{2}$/);
       expect(document.since).toBe(
-        document.slug === "self-hosting" ? "v1.1.0" : "v1.0.0",
+        document.slug === "self-hosting" ? "v1.2.0" : "v1.0.0",
       );
       expect(
         readFileSync(
@@ -52,7 +52,7 @@ describe("Markdown public documentation", () => {
   it("publishes the versioned general-user self-hosting guide", () => {
     const selfHosting = publicDocs.find(({ slug }) => slug === "self-hosting");
     expect(selfHosting).toBeDefined();
-    expect(selfHosting?.html).toContain("latex-renderer-server-1.1.6.tar.gz");
+    expect(selfHosting?.html).toContain("latex-renderer-server-1.2.0.tar.gz");
     expect(selfHosting?.html).toContain("/opt/latex-renderer/update-staging");
     expect(selfHosting?.html).toContain("install --frozen-lockfile");
     expect(selfHosting?.html).toContain("deploy-production-release.sh");

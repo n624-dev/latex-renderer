@@ -8,6 +8,13 @@ export function homePage(): string {
   );
 }
 
+export function loginPage(): string {
+  return shell(
+    "ログイン",
+    `<section class="login-panel"><h1>ログイン</h1><p id="login-message" role="alert"></p><form id="password-login" class="stack" hidden><label>ログイン名<input name="loginName" autocomplete="username" required minlength="3" maxlength="64" autofocus></label><label>パスワード<input name="password" type="password" autocomplete="current-password" required minlength="12" maxlength="1024"></label><button type="submit">ログイン</button></form><button id="external-login" type="button" hidden>ログインを続ける</button></section><script data-cfasync="false" type="module" src="/assets/login.js"></script>`,
+  );
+}
+
 export function downloadsPage(
   version: string,
   archiveName: string,

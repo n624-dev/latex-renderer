@@ -155,8 +155,11 @@ async function createFixture(): Promise<{
 }
 
 function quietOutput(): {
-  output: { write: ReturnType<typeof vi.fn> };
-  warning: { write: ReturnType<typeof vi.fn> };
+  output: { write: (value: string) => unknown };
+  warning: { write: (value: string) => unknown };
 } {
-  return { output: { write: vi.fn() }, warning: { write: vi.fn() } };
+  return {
+    output: { write: vi.fn<(value: string) => unknown>() },
+    warning: { write: vi.fn<(value: string) => unknown>() },
+  };
 }

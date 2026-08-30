@@ -39,6 +39,11 @@ export function desiredLatexRoutes(hostname) {
     },
     {
       hostname,
+      path: "^/auth(/.*)?$",
+      service: "http://127.0.0.1:3102",
+    },
+    {
+      hostname,
       path: "^/admin/api(/.*)?$",
       service: "http://127.0.0.1:3102",
     },

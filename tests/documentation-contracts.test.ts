@@ -48,6 +48,7 @@ describe("documentation implementation contracts", () => {
           "OAuth discovery metadata",
         ],
         ["path: ^/(oauth|mcp)(/.*)?$", "`/oauth/*` and `/mcp`"],
+        ["path: ^/auth(/.*)?$", "`/auth/*`"],
         ["path: ^/admin/api(/.*)?$", "`/admin/api/*`"],
         ["path: ^/admin(/.*)?$", "`/admin/*`"],
         ["path: ^/app/api(/.*)?$", "`/app/api/*`"],

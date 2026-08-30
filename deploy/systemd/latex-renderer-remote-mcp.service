@@ -12,6 +12,8 @@ Group=latex-renderer
 WorkingDirectory=/opt/latex-renderer/current
 EnvironmentFile=/etc/latex-renderer/renderer.env
 Environment=PORT=3104
+Environment=AUTH_PASSWORD_PEPPER_FILE=/etc/latex-renderer/secrets/auth-password-pepper
+Environment=OIDC_CLIENT_SECRET_FILE=/etc/latex-renderer/secrets/oidc-client-secret
 ExecStart=/usr/local/bin/node apps/remote-mcp/dist/server.js
 Restart=on-failure
 RestartSec=5

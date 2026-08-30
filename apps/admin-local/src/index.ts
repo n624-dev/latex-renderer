@@ -1,7 +1,12 @@
 #!/usr/bin/env node
-import { readFileSync } from "node:fs";
+import { lstatSync, readFileSync } from "node:fs";
 import { Command } from "commander";
-import { ApiKeyService } from "@latex-renderer/auth";
+import {
+  ApiKeyService,
+  BrowserAuthenticationService,
+  normalizeLoginName,
+  parseAuthMode,
+} from "@latex-renderer/auth";
 import { RendererDatabase } from "@latex-renderer/database";
 import { AppError, newId, nowIso } from "@latex-renderer/shared";
 
@@ -26,11 +31,52 @@ const keys = new ApiKeyService(
 const program = new Command().name("latex-renderer-admin-local");
 program
   .command("bootstrap")
-  .requiredOption("--email <email>")
+  .requiredOption("--auth-mode <mode>")
   .requiredOption("--display-name <name>")
-  .requiredOption("--access-subject <subject>")
+  .option("--email <email>")
+  .option("--subject <subject>")
+  .option("--issuer <issuer>")
+  .option("--login-name <name>")
+  .option("--password-file <path>")
   .action(
-    (o: { email: string; displayName: string; accessSubject: string }) => {
+    async (o: {
+      authMode: string;
+      email?: string | undefined;
+      displayName: string;
+      subject?: string | undefined;
+      issuer?: string | undefined;
+      loginName?: string | undefined;
+      passwordFile?: string | undefined;
+    }) => {
+      const authMode = parseAuthMode(o.authMode);
+      const displayName = boundedText(o.displayName, "display name", 200);
+      const email =
+        o.email === undefined ? undefined : normalizedEmail(o.email);
+      let passwordHash: string | undefined;
+      let loginName: string | undefined;
+      if (authMode === "password") {
+        if (o.loginName === undefined || o.passwordFile === undefined)
+          throw new AppError(
+            "BOOTSTRAP_OPTIONS_INVALID",
+            "Password bootstrap requires --login-name and --password-file",
+            400,
+          );
+        loginName = normalizeLoginName(o.loginName);
+        const password = readBootstrapPassword(o.passwordFile);
+        const passwordAuth = new BrowserAuthenticationService({
+          database,
+          mode: "password",
+          publicOrigin: "https://bootstrap.invalid",
+          passwordPepper: readFileSync(required("AUTH_PASSWORD_PEPPER_FILE")),
+        });
+        passwordHash = await passwordAuth.hashPassword(password, loginName);
+      } else if (o.subject === undefined || o.issuer === undefined) {
+        throw new AppError(
+          "BOOTSTRAP_OPTIONS_INVALID",
+          "External bootstrap requires --subject and --issuer",
+          400,
+        );
+      } else boundedText(o.subject, "external identity subject", 500);
       database.transaction(() => {
         const count = database.raw
           .prepare("SELECT COUNT(*) AS count FROM users WHERE role='owner'")
@@ -39,11 +85,39 @@ program
           throw new AppError("OWNER_EXISTS", "An owner already exists", 409);
         const id = newId("user"),
           now = nowIso();
-        database.raw
-          .prepare(
-            `INSERT INTO users(id,access_subject,email,display_name,role,status,security_version,created_by,created_at,updated_at) VALUES (?,?,?,?, 'owner','active',1,'local-bootstrap',?,?)`,
-          )
-          .run(id, o.accessSubject, o.email, o.displayName, now, now);
+        database.users.insertInvitation({
+          id,
+          email: email ?? null,
+          displayName,
+          role: "owner",
+          createdBy: "local-bootstrap",
+          timestamp: now,
+        });
+        if (authMode === "password") {
+          database.browserAuth.upsertCredential({
+            user_id: id,
+            login_name: loginName ?? "",
+            password_hash: passwordHash ?? "",
+            password_updated_at: now,
+          });
+        } else {
+          database.browserAuth.insertIdentity({
+            id: newId("identity"),
+            user_id: id,
+            provider: authMode,
+            issuer: strictIssuer(o.issuer ?? "", authMode),
+            subject: boundedText(
+              o.subject ?? "",
+              "external identity subject",
+              500,
+            ),
+            preferred_username: null,
+            email_at_provider: email ?? null,
+            linked_at: now,
+            last_seen_at: now,
+          });
+        }
+        database.webPrincipals.ensure(id);
         database.audit({
           actorType: "local",
           actorId: String(process.geteuid?.() ?? -1),
@@ -51,10 +125,150 @@ program
           targetType: "user",
           targetId: id,
           result: "success",
-          metadata: { role: "owner" },
+          metadata: { role: "owner", authMode },
         });
         process.stdout.write(`${id}\n`);
       });
+    },
+  );
+const localAuth = program.command("auth");
+localAuth
+  .command("provision-owner")
+  .description(
+    "Provision a new browser-auth method for an existing active owner before an AUTH_MODE switch",
+  )
+  .requiredOption("--owner-id <id>")
+  .requiredOption("--auth-mode <mode>")
+  .option("--subject <subject>")
+  .option("--issuer <issuer>")
+  .option("--login-name <name>")
+  .option("--password-file <path>")
+  .requiredOption("--yes")
+  .action(
+    async (o: {
+      ownerId: string;
+      authMode: string;
+      subject?: string | undefined;
+      issuer?: string | undefined;
+      loginName?: string | undefined;
+      passwordFile?: string | undefined;
+    }) => {
+      if (!/^user_[a-f0-9]{32}$/.test(o.ownerId))
+        throw new AppError("OWNER_ID_INVALID", "Owner id is invalid", 400);
+      const authMode = parseAuthMode(o.authMode);
+      let loginName: string | undefined;
+      let passwordHash: string | undefined;
+      let issuer: string | undefined;
+      let subject: string | undefined;
+      if (authMode === "password") {
+        if (o.loginName === undefined || o.passwordFile === undefined)
+          throw new AppError(
+            "PROVISION_OPTIONS_INVALID",
+            "Password provisioning requires --login-name and --password-file",
+            400,
+          );
+        loginName = normalizeLoginName(o.loginName);
+        const passwordAuth = new BrowserAuthenticationService({
+          database,
+          mode: "password",
+          publicOrigin: "https://provision.invalid",
+          passwordPepper: readFileSync(required("AUTH_PASSWORD_PEPPER_FILE")),
+        });
+        passwordHash = await passwordAuth.hashPassword(
+          readBootstrapPassword(o.passwordFile),
+          loginName,
+        );
+      } else {
+        if (o.subject === undefined || o.issuer === undefined)
+          throw new AppError(
+            "PROVISION_OPTIONS_INVALID",
+            "External provisioning requires --subject and --issuer",
+            400,
+          );
+        issuer = strictIssuer(o.issuer, authMode);
+        subject = boundedText(o.subject, "external identity subject", 500);
+      }
+
+      database.transaction(() => {
+        const owner = database.raw
+          .prepare(
+            "SELECT id FROM users WHERE id=? AND role='owner' AND status='active'",
+          )
+          .get(o.ownerId) as { id: string } | undefined;
+        if (owner === undefined)
+          throw new AppError(
+            "ACTIVE_OWNER_NOT_FOUND",
+            "An active owner with that id was not found",
+            404,
+          );
+        const timestamp = nowIso();
+        if (authMode === "password") {
+          if (
+            database.browserAuth.getCredentialForUser(owner.id) !== undefined ||
+            database.browserAuth.getCredentialByLogin(loginName ?? "") !==
+              undefined
+          )
+            throw new AppError(
+              "CREDENTIAL_ALREADY_EXISTS",
+              "The owner or login name already has a password credential",
+              409,
+            );
+          database.raw
+            .prepare(
+              `INSERT INTO local_credentials(user_id,login_name,password_hash,password_updated_at)
+               VALUES (?,?,?,?)`,
+            )
+            .run(owner.id, loginName ?? "", passwordHash ?? "", timestamp);
+        } else {
+          if (
+            database.browserAuth.findIdentity(
+              authMode,
+              issuer ?? "",
+              subject ?? "",
+            ) !== undefined ||
+            database.browserAuth
+              .identitiesForUser(owner.id)
+              .some(
+                (identity) =>
+                  identity.provider === authMode && identity.issuer === issuer,
+              )
+          )
+            throw new AppError(
+              "IDENTITY_ALREADY_EXISTS",
+              "The external identity or provider/issuer link already exists",
+              409,
+            );
+          database.browserAuth.insertIdentity({
+            id: newId("identity"),
+            user_id: owner.id,
+            provider: authMode,
+            issuer: issuer ?? "",
+            subject: subject ?? "",
+            preferred_username: null,
+            email_at_provider: null,
+            linked_at: timestamp,
+            last_seen_at: timestamp,
+          });
+        }
+        database.raw
+          .prepare(
+            "UPDATE users SET security_version=security_version+1,updated_at=? WHERE id=?",
+          )
+          .run(timestamp, owner.id);
+        database.browserAuth.revokeUserSessions(owner.id, timestamp);
+        database.audit({
+          actorType: "local",
+          actorId: String(process.geteuid?.() ?? -1),
+          action: "user.auth_provisioned",
+          targetType: "user",
+          targetId: owner.id,
+          result: "success",
+          metadata: { authMode },
+        });
+      });
+      process.stdout.write(
+        `${authMode} authentication provisioned for ${o.ownerId}; existing browser sessions were revoked.\n`,
+      );
     },
   );
 program
@@ -289,18 +503,20 @@ webPrincipals
 const smokeKey = program.command("smoke-key");
 smokeKey
   .command("create")
-  .requiredOption("--owner-email <email>")
+  .requiredOption("--owner-id <id>")
   .requiredOption("--yes")
-  .action((o: { ownerEmail: string }) => {
+  .action((o: { ownerId: string }) => {
+    if (!/^user_[a-f0-9]{32}$/.test(o.ownerId))
+      throw new AppError("OWNER_ID_INVALID", "Owner id is invalid", 400);
     const owner = database.raw
       .prepare(
-        "SELECT id FROM users WHERE email=? COLLATE NOCASE AND role='owner' AND status='active'",
+        "SELECT id FROM users WHERE id=? AND role='owner' AND status='active'",
       )
-      .get(o.ownerEmail) as { id: string } | undefined;
+      .get(o.ownerId) as { id: string } | undefined;
     if (owner === undefined)
       throw new AppError(
         "ACTIVE_OWNER_NOT_FOUND",
-        "An active owner with that email was not found",
+        "An active owner with that id was not found",
         404,
       );
     const serviceAccountId = newId("sa"),
@@ -425,4 +641,83 @@ function required(name: string): string {
   const value = process.env[name];
   if (!value) throw new Error(`${name} is required`);
   return value;
+}
+
+function boundedText(value: string, label: string, maximum: number): string {
+  if (
+    value.trim() !== value ||
+    value.length < 1 ||
+    value.length > maximum ||
+    hasControlCharacters(value)
+  )
+    throw new AppError("BOOTSTRAP_VALUE_INVALID", `${label} is invalid`, 400);
+  return value;
+}
+
+function normalizedEmail(value: string): string {
+  const email = boundedText(value, "email", 320);
+  if (!/^[^\s@]+@[^\s@]+$/.test(email))
+    throw new AppError("BOOTSTRAP_VALUE_INVALID", "email is invalid", 400);
+  return email;
+}
+
+function readBootstrapPassword(path: string): string {
+  const stat = lstatSync(path);
+  const allowedOwners = new Set([
+    process.geteuid?.(),
+    process.env.SUDO_UID === undefined
+      ? undefined
+      : Number(process.env.SUDO_UID),
+  ]);
+  if (
+    !stat.isFile() ||
+    stat.isSymbolicLink() ||
+    stat.size < 12 ||
+    stat.size > 4097 ||
+    !allowedOwners.has(stat.uid) ||
+    (stat.mode & 0o077) !== 0
+  )
+    throw new AppError(
+      "PASSWORD_FILE_INVALID",
+      "Password file must be a private regular file owned by the invoking account",
+      400,
+    );
+  const password = readFileSync(path, "utf8").replace(/\r?\n$/, "");
+  if (password.includes("\r") || password.includes("\n"))
+    throw new AppError(
+      "PASSWORD_FILE_INVALID",
+      "Password file must contain exactly one line",
+      400,
+    );
+  return password;
+}
+
+function hasControlCharacters(value: string): boolean {
+  for (const character of value) {
+    const code = character.charCodeAt(0);
+    if (code <= 0x1f || code === 0x7f) return true;
+  }
+  return false;
+}
+
+function strictIssuer(
+  value: string,
+  mode: "cloudflare-access" | "oidc",
+): string {
+  const url = new URL(value);
+  if (
+    url.protocol !== "https:" ||
+    url.username !== "" ||
+    url.password !== "" ||
+    url.search !== "" ||
+    url.hash !== ""
+  )
+    throw new AppError("ISSUER_INVALID", "Issuer must be an HTTPS URL", 400);
+  if (mode === "cloudflare-access" && url.pathname !== "/")
+    throw new AppError(
+      "ISSUER_INVALID",
+      "Cloudflare Access issuer must be an HTTPS origin",
+      400,
+    );
+  return mode === "cloudflare-access" ? url.origin : url.toString();
 }

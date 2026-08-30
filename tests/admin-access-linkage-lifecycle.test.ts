@@ -7,6 +7,7 @@ import {
 import { RendererDatabase } from "@latex-renderer/database";
 import { createAdminApp } from "../apps/admin-api/src/app.js";
 import { adminScript } from "../apps/admin-web/src/assets/admin-script.js";
+import { legacyTestBrowserAuth } from "./helpers/browser-auth.js";
 
 const databases: RendererDatabase[] = [];
 
@@ -14,24 +15,16 @@ afterEach(() => {
   for (const database of databases.splice(0)) database.close();
 });
 
-describe("administrator Access linkage lifecycle", () => {
-  it("lets an owner unlink a subject and the verified user reclaim it", async () => {
+describe("administrator external identity lifecycle", () => {
+  it("lets an owner explicitly unlink an identity and revokes user security state", async () => {
     const { app, database } = adminApp({
       owner: { subject: "subject-owner", email: "owner@example.test" },
-      reclaimed: {
-        subject: "subject-target-new",
-        email: "target@example.test",
-      },
     });
-    seedUser(database, {
-      id: "target",
-      subject: "subject-target-old",
-      email: "target@example.test",
-      role: "admin",
-    });
+    seedUser(database, "target", "target@example.test", "admin");
+    seedIdentity(database, "target", "identity_target", "subject-target");
 
-    const unlink = await app.request(
-      "/admin/api/v1/users/target/unlink-access-subject",
+    const response = await app.request(
+      "/admin/api/v1/users/target/identities/identity_target/unlink",
       {
         method: "POST",
         headers: mutationHeaders("owner"),
@@ -41,63 +34,41 @@ describe("administrator Access linkage lifecycle", () => {
         }),
       },
     );
-    expect(unlink.status).toBe(200);
-    await expect(unlink.json()).resolves.toEqual({
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
       id: "target",
-      generation: 2,
+      identityId: "identity_target",
     });
-    expect(database.users.get("target")).toMatchObject({
-      access_subject: null,
-      access_subject_linked_at: null,
-      access_subject_generation: 2,
-      security_version: 2,
-    });
+    expect(database.browserAuth.identitiesForUser("target")).toEqual([]);
+    expect(database.users.get("target")?.security_version).toBe(2);
 
-    const unlinkAudit = database.raw
+    const audit = database.raw
       .prepare(
-        "SELECT result,metadata_json FROM audit_logs WHERE action='user.access_subject_unlinked'",
+        "SELECT result,metadata_json FROM audit_logs WHERE action='user.identity_unlinked'",
       )
       .get() as { result: string; metadata_json: string };
-    expect(unlinkAudit.result).toBe("success");
-    expect(JSON.parse(unlinkAudit.metadata_json)).toEqual({
+    expect(audit.result).toBe("success");
+    expect(JSON.parse(audit.metadata_json)).toEqual({
       reason:
         "Account replaced; JWT [REDACTED_JWT]; key [REDACTED_API_TOKEN]; OTP [REDACTED_OTP]",
-      accessSubjectGeneration: 2,
+      identityId: "identity_target",
+      provider: "cloudflare-access",
+      issuer: "https://team.cloudflareaccess.com",
     });
-    expect(unlinkAudit.metadata_json).not.toContain("subject-target-old");
-    expect(unlinkAudit.metadata_json).not.toContain("supersecret");
-    expect(unlinkAudit.metadata_json).not.toContain("123456");
-
-    const reclaim = await app.request("/admin/api/v1/session/claim-subject", {
-      method: "POST",
-      headers: mutationHeaders("reclaimed"),
-      body: "{}",
-    });
-    expect(reclaim.status).toBe(200);
-    await expect(reclaim.json()).resolves.toMatchObject({
-      claimed: true,
-      linkage: { state: "linked" },
-    });
-    expect(database.users.get("target")).toMatchObject({
-      access_subject: "subject-target-new",
-      access_subject_generation: 3,
-      security_version: 3,
-    });
+    expect(audit.metadata_json).not.toContain("subject-target");
+    expect(audit.metadata_json).not.toContain("supersecret");
+    expect(audit.metadata_json).not.toContain("123456");
   });
 
-  it("rejects unlink by an admin and preserves the existing identity", async () => {
+  it("rejects unlink by an admin and preserves the identity", async () => {
     const { app, database } = adminApp({
       admin: { subject: "subject-admin", email: "admin@example.test" },
     });
-    seedUser(database, {
-      id: "target",
-      subject: "subject-target",
-      email: "target@example.test",
-      role: "admin",
-    });
+    seedUser(database, "target", "target@example.test", "admin");
+    seedIdentity(database, "target", "identity_target", "subject-target");
 
     const response = await app.request(
-      "/admin/api/v1/users/target/unlink-access-subject",
+      "/admin/api/v1/users/target/identities/identity_target/unlink",
       {
         method: "POST",
         headers: mutationHeaders("admin"),
@@ -105,23 +76,17 @@ describe("administrator Access linkage lifecycle", () => {
       },
     );
     await expectError(response, 403, "OWNER_REQUIRED");
-    expect(database.users.get("target")?.access_subject).toBe("subject-target");
-    expect(auditCount(database, "user.access_subject_unlinked")).toBe(0);
+    expect(database.browserAuth.identitiesForUser("target")).toHaveLength(1);
   });
 
-  it("requires a reason and rejects an already unlinked user", async () => {
+  it("requires a reason and rejects a nonexistent identity", async () => {
     const { app, database } = adminApp({
       owner: { subject: "subject-owner", email: "owner@example.test" },
     });
-    seedUser(database, {
-      id: "pending",
-      subject: null,
-      email: "pending@example.test",
-      role: "admin",
-    });
+    seedUser(database, "target", null, "admin");
 
     const missingReason = await app.request(
-      "/admin/api/v1/users/pending/unlink-access-subject",
+      "/admin/api/v1/users/target/identities/identity_missing/unlink",
       {
         method: "POST",
         headers: mutationHeaders("owner"),
@@ -130,32 +95,30 @@ describe("administrator Access linkage lifecycle", () => {
     );
     await expectError(missingReason, 400, "INVALID_REQUEST");
 
-    const pending = await app.request(
-      "/admin/api/v1/users/pending/unlink-access-subject",
+    const missingIdentity = await app.request(
+      "/admin/api/v1/users/target/identities/identity_missing/unlink",
       {
         method: "POST",
         headers: mutationHeaders("owner"),
-        body: JSON.stringify({ reason: "Retry" }),
+        body: JSON.stringify({ reason: "Account recovery" }),
       },
     );
-    await expectError(pending, 409, "ACCESS_SUBJECT_NOT_LINKED");
+    await expectError(missingIdentity, 404, "IDENTITY_NOT_FOUND");
   });
 
-  it("exposes pending/linked guidance and owner-only unlink controls in the UI", () => {
-    expect(adminScript).toContain("初回ログイン待ち");
-    expect(adminScript).toContain("連携済み");
-    expect(adminScript).toContain("連携日時");
-    expect(adminScript).toContain("Cloudflare AccessユーザーID");
-    expect(adminScript).toContain("me.role==='owner'&&x.access_subject");
-    expect(adminScript).toContain("Access連携を解除");
+  it("shows explicit provider-neutral identity controls in the UI", () => {
+    expect(adminScript).toContain("issuer＋subject");
+    expect(adminScript).toContain("外部identityのsubject");
+    expect(adminScript).toContain("メールによる自動再連携は行いません");
+    expect(adminScript).toContain("me.role==='owner'&&x.identities?.length");
+    expect(adminScript).toContain("identityを解除");
     expect(adminScript).toContain('name="reason"');
     expect(adminScript).toContain('name="confirm" required');
     expect(adminScript).toContain("秘密値は入力しないでください");
-    expect(adminScript).toContain("/session/claim-subject");
-    expect(adminScript).toContain(
-      "別のCloudflare Access identityがすでに連携されています",
-    );
-    expect(adminScript).toContain("location.assign('/cdn-cgi/access/logout')");
+    expect(adminScript).toContain("/identities/");
+    expect(adminScript).toContain("/unlink");
+    expect(adminScript).toContain("fetch('/auth/logout'");
+    expect(adminScript).not.toContain("/session/claim-subject");
   });
 });
 
@@ -168,23 +131,15 @@ function adminApp(
   const database = new RendererDatabase(":memory:");
   databases.push(database);
   database.migrate();
-  seedUser(database, {
-    id: "owner",
-    subject: "subject-owner",
-    email: "owner@example.test",
-    role: "owner",
-  });
-  seedUser(database, {
-    id: "admin",
-    subject: "subject-admin",
-    email: "admin@example.test",
-    role: "admin",
-  });
+  seedUser(database, "owner", "owner@example.test", "owner", "subject-owner");
+  seedUser(database, "admin", "admin@example.test", "admin", "subject-admin");
   const access = {
     verify: (assertion: string) => {
       const identity = identities[assertion];
       if (identity === undefined) throw new Error("Unexpected test assertion");
       return Promise.resolve({
+        provider: "cloudflare-access" as const,
+        issuer: "https://team.cloudflareaccess.com",
         ...identity,
         payload: { sub: identity.subject, email: identity.email },
       });
@@ -199,7 +154,9 @@ function adminApp(
         new Map([["v1", Buffer.alloc(32, 1)]]),
         "v1",
       ),
-      access,
+      browserAuth: legacyTestBrowserAuth(database, access),
+      deploymentMode: "cloudflare",
+      publicOrigin: "https://latex.example.com",
       allowedOrigins: new Set(),
       writeEnabled: true,
       storageRoot: "/nonexistent",
@@ -215,31 +172,49 @@ function adminApp(
 
 function seedUser(
   database: RendererDatabase,
-  input: {
-    id: string;
-    subject: string | null;
-    email: string;
-    role: "owner" | "admin" | "user";
-  },
+  id: string,
+  email: string | null,
+  role: "owner" | "admin" | "user",
+  subject: string | null = null,
 ): void {
   const now = new Date().toISOString();
   database.raw
     .prepare(
       `INSERT INTO users
-    (id,access_subject,access_subject_linked_at,access_subject_generation,email,display_name,role,status,security_version,created_by,created_at,updated_at)
-    VALUES (?,?,?,?,?,?,?,'active',1,'test',?,?)`,
+       (id,access_subject,access_subject_linked_at,access_subject_generation,email,display_name,role,status,security_version,created_by,created_at,updated_at)
+       VALUES (?,?,?,?,?,?,?,'active',1,'test',?,?)`,
     )
     .run(
-      input.id,
-      input.subject,
-      input.subject === null ? null : now,
-      input.subject === null ? 0 : 1,
-      input.email,
-      input.id,
-      input.role,
+      id,
+      subject,
+      subject === null ? null : now,
+      subject === null ? 0 : 1,
+      email,
+      id,
+      role,
       now,
       now,
     );
+}
+
+function seedIdentity(
+  database: RendererDatabase,
+  userId: string,
+  id: string,
+  subject: string,
+): void {
+  const now = new Date().toISOString();
+  database.browserAuth.insertIdentity({
+    id,
+    user_id: userId,
+    provider: "cloudflare-access",
+    issuer: "https://team.cloudflareaccess.com",
+    subject,
+    preferred_username: null,
+    email_at_provider: null,
+    linked_at: now,
+    last_seen_at: now,
+  });
 }
 
 function mutationHeaders(assertion: string): Record<string, string> {
@@ -257,12 +232,4 @@ async function expectError(
 ): Promise<void> {
   expect(response.status).toBe(status);
   await expect(response.json()).resolves.toMatchObject({ error: { code } });
-}
-
-function auditCount(database: RendererDatabase, action: string): number {
-  return (
-    database.raw
-      .prepare("SELECT COUNT(*) AS count FROM audit_logs WHERE action=?")
-      .get(action) as { count: number }
-  ).count;
 }

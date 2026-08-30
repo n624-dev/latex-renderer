@@ -71,7 +71,8 @@ describe("gateway boundary", () => {
       {
         method: "POST",
         headers: {
-          Authorization: "Bearer key",
+          Authorization:
+            "Bearer lrk_11111111111111111111111111111111_1111111111111111111111111111111111111111111",
           "Content-Type": "application/json",
           "Content-Length": "86",
           "Idempotency-Key": "source-ticket-123456789",

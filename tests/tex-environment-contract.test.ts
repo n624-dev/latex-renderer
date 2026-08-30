@@ -100,7 +100,9 @@ describe("managed TeX Live image pipeline", () => {
     );
     expect(manager).toContain('baseKind !== "texlive-only-v1"');
     expect(manager).toContain("base.ref,");
-    expect(manager).toContain('"--file", join(context, "Dockerfile.base")');
+    expect(manager).toMatch(
+      /["']--file["'],\s*join\(context,\s*["']Dockerfile\.base["']\)/,
+    );
     expect(legacyDockerfile).toContain("ARG DEBIAN_SNAPSHOT=20260812T235959Z");
     expect(legacyDockerfile).toContain("gpgv --keyring /tmp/texlive.gpg");
     expect(legacyDockerfile).toContain(

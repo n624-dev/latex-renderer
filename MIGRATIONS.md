@@ -37,6 +37,19 @@ The SQL is `deploy/migrations/006_svg_outputs.sql`, and successful application r
 
 Treat Migration 006 as forward-only in production. To return to an older application, stop admission and workers and restore the pre-migration backup. The detailed data-preserving rebuild procedure for a controlled non-production rollback is in `deploy/migrations/006_svg_outputs.rollback.md`; do not manually alter the live tables while services are running.
 
+## Migration 007: Browser authentication
+
+Migration 007 generalizes browser authentication for the Cloudflare and standalone deployment profiles. It rebuilds `users` so `email` is nullable and no longer unique, preserves the internal immutable user ID and legacy Access columns, and adds:
+
+- `user_identities`, uniquely keyed by provider, exact issuer, and subject;
+- `local_credentials`, with one normalized unique login name and scrypt hash per user;
+- `web_sessions`, containing only session-token and CSRF hashes with idle, absolute, revocation, and user-security-version checks;
+- `auth_login_attempts`, containing keyed rate-limit counters rather than login names or IP addresses.
+
+The SQL is `deploy/migrations/007_browser_auth.sql`, and successful application records schema version `7` in `schema_migrations`. Existing Cloudflare Access subjects are copied into the new identity table only after startup has an explicit, valid Access issuer, then cleared from the legacy columns. This is a one-time consumption: explicitly unlinking the new identity cannot recreate it on restart. Email and display-name values never link identities automatically. The first password or OIDC owner must be explicitly bootstrapped on the host.
+
+Migration 007 is forward-only in production. Version 1.1 cannot safely administer the nullable-email and provider-neutral identity model. Before upgrading, enter maintenance mode, drain Jobs, stop every SQLite writer, and take a WAL-consistent encrypted backup. To return to 1.1, stop admission and all writers and restore that backup; do not merely point `current` at an older release. The non-production inspection and rebuild notes are in `deploy/migrations/007_browser_auth.rollback.md`.
+
 ## Administrative API migration for 0.3
 
 This release changes administrative HTTP routes but does not require an additional database migration beyond the schema migrations documented above.

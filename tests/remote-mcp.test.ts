@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createRemoteMcpApp } from "../apps/remote-mcp/src/app.js";
 import { createRemoteMcpHandler } from "../apps/remote-mcp/src/mcp.js";
 import yazl from "yazl";
+import { legacyTestBrowserAuth } from "./helpers/browser-auth.js";
 
 const ORIGIN = "https://latex.example.com";
 const RESOURCE = `${ORIGIN}/mcp`;
@@ -73,8 +74,12 @@ describe("Remote MCP HTTP server", () => {
     expect(consentHtml).toContain('href="/assets/styles.css"');
     expect(consentHtml).toContain('class="site-header"');
     expect(consentHtml).not.toContain("<style");
-    const cookie = consent.headers.get("Set-Cookie") as string,
-      csrf = /oauth_csrf=([^;]+)/.exec(cookie)?.[1] as string,
+    const setCookie = consent.headers.get("Set-Cookie") as string,
+      csrf = /oauth_csrf=([^;]+)/.exec(setCookie)?.[1] as string,
+      browserSession = /test_browser_session=([^;]+)/.exec(
+        setCookie,
+      )?.[1] as string,
+      cookie = `test_browser_session=${browserSession}; oauth_csrf=${csrf}`,
       approval = new URLSearchParams(query);
     approval.set("csrf", csrf);
     approval.set("decision", "approve");
@@ -83,7 +88,7 @@ describe("Remote MCP HTTP server", () => {
       headers: {
         Host: "latex.example.com",
         Cookie: cookie,
-        Origin: "https://claude.ai",
+        Origin: ORIGIN,
         "Cf-Access-Jwt-Assertion": "access-jwt",
         "Content-Type": "application/x-www-form-urlencoded",
       },
@@ -116,7 +121,7 @@ describe("Remote MCP HTTP server", () => {
     });
   });
 
-  it("allows OAuth and MCP client origins while retaining consent CSRF", async () => {
+  it("allows OAuth and MCP client origins while requiring a browser session for consent", async () => {
     const fixture = await createFixture(),
       registrationBody = JSON.stringify({
         client_name: "Generic AI client origin test",
@@ -142,10 +147,10 @@ describe("Remote MCP HTTP server", () => {
       },
       body: "csrf=invalid&decision=approve",
     });
-    expect(invalidConsent.status).toBe(403);
+    expect(invalidConsent.status).toBe(401);
     await expect(invalidConsent.json()).resolves.toMatchObject({
       error: "server_error",
-      error_description: "Authorization confirmation expired",
+      error_description: "A browser login is required",
     });
 
     const mcpChallenge = await fixture.app.request("/mcp", {
@@ -161,6 +166,53 @@ describe("Remote MCP HTTP server", () => {
     expect(mcpChallenge.headers.get("WWW-Authenticate")).toContain(
       "oauth-protected-resource/mcp",
     );
+  });
+
+  it("bounds anonymous OAuth registration and prunes unused stale clients", async () => {
+    const fixture = await createFixture();
+    fixture.database.remoteMcp.insertClient({
+      id: `mcp_client_${"f".repeat(32)}`,
+      name: "stale",
+      redirectUris: ["https://stale.example/callback"],
+      timestamp: "2000-01-01T00:00:00.000Z",
+    });
+    for (let index = 0; index < 10; index += 1) {
+      const response = await fixture.app.request("/oauth/register", {
+        method: "POST",
+        headers: {
+          Host: "latex.example.com",
+          "CF-Connecting-IP": "192.0.2.10",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          client_name: `bounded-${index}`,
+          redirect_uris: [`https://client.example/callback/${index}`],
+          grant_types: ["authorization_code", "refresh_token"],
+          response_types: ["code"],
+        }),
+      });
+      expect(response.status).toBe(201);
+    }
+    expect(
+      fixture.database.remoteMcp.client(`mcp_client_${"f".repeat(32)}`),
+    ).toBeUndefined();
+    const limited = await fixture.app.request("/oauth/register", {
+      method: "POST",
+      headers: {
+        Host: "latex.example.com",
+        "CF-Connecting-IP": "192.0.2.10",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        client_name: "one-too-many",
+        redirect_uris: ["https://client.example/callback/limited"],
+      }),
+    });
+    expect(limited.status).toBe(429);
+    await expect(limited.json()).resolves.toMatchObject({
+      error: "server_error",
+      error_description: "Too many OAuth client registrations",
+    });
   });
 
   it("publishes OAuth discovery and challenges unauthenticated MCP requests", async () => {
@@ -197,6 +249,40 @@ describe("Remote MCP HTTP server", () => {
     expect(denied.headers.get("WWW-Authenticate")).toContain(
       `resource_metadata="${ORIGIN}/.well-known/oauth-protected-resource/mcp"`,
     );
+  });
+
+  it("authenticates before reading MCP bodies and bounds authenticated bodies", async () => {
+    const fixture = await createFixture();
+    const unread = new Request(`${ORIGIN}/mcp`, {
+      method: "POST",
+      headers: {
+        Host: "latex.example.com",
+        "Content-Type": "application/json",
+      },
+      body: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.error(new Error("unauthenticated body must not be read"));
+        },
+      }),
+      duplex: "half",
+    } as RequestInit & { duplex: "half" });
+    const denied = await fixture.app.request(unread);
+    expect(denied.status).toBe(401);
+
+    const token = issueAccessToken(fixture.oauth),
+      oversized = await fixture.app.request("/mcp", {
+        method: "POST",
+        headers: {
+          Host: "latex.example.com",
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: "x".repeat(8 * 1024 * 1024 + 1),
+      });
+    expect(oversized.status).toBe(413);
+    await expect(oversized.json()).resolves.toMatchObject({
+      error: { code: "REQUEST_TOO_LARGE" },
+    });
   });
 
   it.each(["2025-06-18", "2025-03-26"])(
@@ -888,7 +974,7 @@ describe("Remote MCP HTTP server", () => {
         jobIdValue,
         "result.pdf",
       ),
-    ).rejects.toThrowError("Job does not exist");
+    ).rejects.toThrow("Job does not exist");
     const sourceIdValue = fixture.database.jobs.get(jobIdValue)?.source_id;
     if (sourceIdValue === null || sourceIdValue === undefined)
       throw new Error("Seeded Job has no Source");
@@ -897,7 +983,7 @@ describe("Remote MCP HTTP server", () => {
         { userId: "user_other", scopes: ["mcp:render"] },
         { sourceId: sourceIdValue, entrypoint: "main.tex" },
       ),
-    ).rejects.toThrowError("Source does not exist");
+    ).rejects.toThrow("Source does not exist");
   });
 
   it("returns tool-level 429 semantics and writes metadata-only audit records", async () => {
@@ -916,7 +1002,7 @@ describe("Remote MCP HTTP server", () => {
         "get_render_status",
         60,
       ),
-    ).toThrowError("Remote MCP tool rate limit exceeded");
+    ).toThrow("Remote MCP tool rate limit exceeded");
     fixture.renders.auditToolCall(identity, "get_render_status", "failure", {
       code: "REMOTE_MCP_RATE_LIMIT",
       status: 429,
@@ -990,7 +1076,7 @@ async function createFixture() {
     } as unknown as AccessJwtVerifier,
     app = createRemoteMcpApp({
       database,
-      access,
+      browserAuth: legacyTestBrowserAuth(database, access),
       oauth,
       mcp: createRemoteMcpHandler(renders, "0.2.0"),
       publicOrigin: ORIGIN,

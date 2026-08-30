@@ -95,10 +95,9 @@ describe("production hardening", () => {
     expect(prepare).not.toContain("source_owner_home");
     expect(prepare).toContain("using the active remotely managed connector");
     expect(prepare).toContain("systemctl is-active --quiet cloudflared");
-    expect(
+    expect(prepare).toContain("cloudflare)");
+    expect(prepare.indexOf("deployment_mode=")).toBeLessThan(
       prepare.indexOf("cloudflared_config=${CLOUDFLARED_CONFIG_FILE"),
-    ).toBeLessThan(
-      prepare.indexOf('install -d -o root -g root -m 0755 "$release_root"'),
     );
     expect(sync).toContain('before.source !== "cloudflare"');
     expect(deploy).toContain("sync-cloudflare-tunnel-config.mjs");
@@ -149,6 +148,29 @@ describe("production hardening", () => {
     expect(example).toContain("CLOUDFLARE_ACCOUNT_ID=REPLACE_WITH_ACCOUNT_ID");
     expect(example).toContain("CLOUDFLARE_TUNNEL_ID=REPLACE_WITH_TUNNEL_ID");
     expect(example).not.toContain("n624");
+  });
+  it("validates authentication profiles and secret permissions before builds or service quiescing", () => {
+    const deploy = read("deploy/scripts/deploy-production-release.sh"),
+      validator = read("deploy/scripts/validate-production-profile.mjs"),
+      validation = "validate-production-profile.mjs";
+    expect(deploy.indexOf(validation)).toBeLessThan(
+      deploy.indexOf("build:production-services"),
+    );
+    expect(deploy.indexOf(validation)).toBeLessThan(
+      deploy.indexOf("quiesce-image-manager.sh"),
+    );
+    expect(validator).toContain(
+      "AUTH_MODE=cloudflare-access requires DEPLOYMENT_MODE=cloudflare",
+    );
+    expect(validator).toContain(
+      "OIDC_ALLOWED_ALGORITHMS must be a unique asymmetric allowlist",
+    );
+    expect(validator).toContain("password authentication pepper");
+    expect(validator).toContain("OIDC client secret");
+    expect(validator).not.toContain("process.stdout.write(readFileSync");
+    expect(deploy.indexOf("auth-password-pepper")).toBeLessThan(
+      deploy.indexOf(validation),
+    );
   });
   it("exercises secret-free structured CLI output in the production render smoke test", () => {
     const smoke = read("deploy/scripts/smoke-test-production.sh");
@@ -253,9 +275,9 @@ describe("production hardening", () => {
     expect(deploy).toContain(
       'if [ "$parent_mutation_lock" = application-update ]',
     );
-    expect(deploy).toContain('${UPDATE_MANAGER_STATE_ROOT:-}');
+    expect(deploy).toContain("${UPDATE_MANAGER_STATE_ROOT:-}");
     expect(deploy).toContain("/var/lib/latex-renderer/update-manager");
-    expect(deploy).toContain('${UPDATE_MANAGER_SOCKET:-}');
+    expect(deploy).toContain("${UPDATE_MANAGER_SOCKET:-}");
     expect(deploy).toContain(
       "Image Manager startup restored the saved TeX Runtime",
     );

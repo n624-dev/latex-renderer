@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 1.2.0 - 2026-08-30
+
+- Add explicit Cloudflare and standalone deployment profiles with a shared admission gateway core and loopback-only Hono gateway for TLS reverse proxies.
+- Add Cloudflare Access, strict OIDC Authorization Code + PKCE, and scrypt password browser authentication on one role/session model.
+- Replace email-based identity linkage with explicit provider, exact issuer, and subject identities; make email optional and add owner-controlled identity/password lifecycle operations.
+- Add an audited, local-only owner authentication provisioning command so an existing instance can change `AUTH_MODE` without email linking or administrator lockout.
+- Store only browser session and CSRF hashes, enforce exact-origin per-session CSRF, preserve the original absolute/identity expiry during CSRF-cookie repair, revoke stale mode/issuer/security-version sessions, bound login state, and keep CLI Admin API keys independent.
+- Add forward-only Migration 007, mode-aware owner bootstrap and systemd deployment, hardened nginx/Caddy/Apache examples, public self-hosting guidance, and provider-neutral Web/Remote MCP consent.
+- Fail before service quiescing when profile values or secret-file permissions are unsafe, consume legacy Access subjects exactly once, bound JWT/JWKS inputs, and update the supported pnpm toolchain dependencies.
+
 ## 1.1.6 - 2026-08-29
 
 - Preserve the shared privileged-manager runtime directory across service restarts so the Update Manager and Image Manager sockets remain reachable.

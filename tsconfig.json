@@ -19,6 +19,7 @@
       "@latex-renderer/remote-mcp-core": [
         "packages/remote-mcp-core/src/index.ts"
       ],
+      "@latex-renderer/gateway-core": ["packages/gateway-core/src/index.ts"],
       "@latex-renderer/setup-core": ["packages/setup-core/src/index.ts"],
       "@latex-renderer/setup-web": ["packages/setup-web/src/index.ts"]
     }

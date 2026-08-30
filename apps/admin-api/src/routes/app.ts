@@ -5,15 +5,10 @@ import type { JobRow } from "@latex-renderer/database";
 import { renderOutputsSchema } from "@latex-renderer/contracts";
 import { AppError, DEFAULT_RESOURCE_LIMITS } from "@latex-renderer/shared";
 import { validateEntrypointPath } from "@latex-renderer/zip-validation";
-import {
-  requireAccessIdentity,
-  requireAppActor,
-  requireCsrfToken,
-} from "../auth/actor.js";
+import { requireAppActor } from "../auth/actor.js";
 import { adminArtifactResponse } from "../services/artifacts.js";
 import { AdminJobsService } from "../services/jobs.js";
 import { AppProjectsService } from "../services/app-projects.js";
-import { AdminSessionService } from "../services/session.js";
 import type { AdminDependencies, AppActor } from "../types.js";
 import { parse } from "./helpers.js";
 
@@ -38,21 +33,8 @@ const jobId = z.string().regex(/^job_[a-f0-9]{32}$/),
 export function createAppV1Router(deps: AdminDependencies): Hono {
   const router = new Hono(),
     jobs = new AdminJobsService(deps),
-    projects = new AppProjectsService(deps),
-    sessions = new AdminSessionService(deps, false);
+    projects = new AppProjectsService(deps);
 
-  router.get("/session", async (c) =>
-    c.json(sessions.inspect(await requireAccessIdentity(deps, c))),
-  );
-  router.post("/session/claim-subject", async (c) => {
-    requireCsrfToken(c);
-    return c.json(
-      sessions.claim(await requireAccessIdentity(deps, c), {
-        ipAddress: c.req.header("CF-Connecting-IP"),
-        userAgent: c.req.header("User-Agent"),
-      }),
-    );
-  });
   router.get("/me", async (c) => {
     const actor = await requireAppActor(deps, c),
       user = deps.database.users.get(actor.userId);
@@ -384,7 +366,7 @@ function environmentService(deps: AdminDependencies) {
     deps.database,
     deps.storageRoot,
     deps.rendererVersion,
-    deps.renderTickets?.rendererPublicUrl ?? "https://latex-render.n624.jp",
+    deps.renderTickets?.rendererPublicUrl ?? deps.publicOrigin,
     deps.maxQueueLength,
     deps.maxUserStorageBytes,
     deps.environmentRoot ?? "/var/lib/latex-renderer/environment",

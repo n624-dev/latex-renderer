@@ -4,7 +4,7 @@ category: AI・MCP
 title: Remote MCP・Local MCP
 description: OAuthで接続するRemote MCPと、ローカルファイルを扱うLocal MCPの使い分けです。
 navOrder: 45
-updated: "2026-08-22"
+updated: "2026-08-29"
 since: "v1.0.0"
 ---
 
@@ -16,7 +16,7 @@ Remote MCPはクライアントのインストールやAPIキーの入力を必�
 https://latex-render.n624.jp/mcp
 ```
 
-Team・EnterpriseではOwnerがOrganization settingsのConnectorsからCustom Web connectorを追加し、各利用者がConnectして認可します。認可画面ではCloudflare Accessへログインし、要求された操作を確認してください。OAuth access tokenは10分、refresh tokenはローテーションされ、長期レンダリングAPIキーへ変換されません。
+Team・EnterpriseではOwnerがOrganization settingsのConnectorsからCustom Web connectorを追加し、各利用者がConnectして認可します。認可画面ではサーバーに設定されたCloudflare Access、OIDC、またはpasswordでログインし、要求された操作を確認してください。OAuth access tokenは10分、refresh tokenはローテーションされ、長期レンダリングAPIキーへ変換されません。
 
 Remote MCPは次のツールを提供します。
 

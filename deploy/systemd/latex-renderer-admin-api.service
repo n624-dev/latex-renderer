@@ -11,6 +11,8 @@ WorkingDirectory=/opt/latex-renderer/current
 EnvironmentFile=/etc/latex-renderer/renderer.env
 Environment=PORT=3102
 Environment=API_KEY_PEPPER_FILE=%d/api-key-pepper
+Environment=AUTH_PASSWORD_PEPPER_FILE=/etc/latex-renderer/secrets/auth-password-pepper
+Environment=OIDC_CLIENT_SECRET_FILE=/etc/latex-renderer/secrets/oidc-client-secret
 Environment=IMAGE_MANAGER_URL=http://127.0.0.1:3110
 Environment=IMAGE_MANAGER_TOKEN_FILE=%d/image-manager-token
 Environment=UPDATE_MANAGER_SOCKET=/run/latex-renderer/update-manager.sock

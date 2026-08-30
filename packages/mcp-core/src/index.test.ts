@@ -44,7 +44,7 @@ describe("MCP core", () => {
 
   it("requires a bounded positive render timeout", () => {
     expect(validateRenderTimeout(1_000)).toBe(1_000);
-    expect(() => validateRenderTimeout(0)).toThrowError(
+    expect(() => validateRenderTimeout(0)).toThrow(
       "MCP render timeout must be a positive integer",
     );
   });

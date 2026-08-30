@@ -1,53 +1,25 @@
 openapi: 3.1.0
 info:
   title: LaTeX Renderer Administrator API
-  version: 0.4.0
-  description: Administrative API used by the protected Web UI and administration CLI.
+  version: 1.2.0
+  description: Administrative API used by the authenticated Web UI and administration CLI. Browser login endpoints are rooted at /auth rather than this server prefix.
 servers:
-  - url: https://latex-render.n624.jp/admin/api/v1
+  - url: /admin/api/v1
 security:
-  - accessAndAdmin: []
+  - browserSession: []
+  - adminKey: []
 paths:
   /session:
     get:
-      summary: Inspect the verified Cloudflare Access identity and invitation linkage
+      summary: Establish or inspect the provider-neutral browser session
       security:
-        - cloudflareAccess: []
+        - browserSession: []
       responses:
         "200":
-          description: Current Access identity and linkage state
+          description: Current browser session, authentication mode, user, and CSRF token
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Session" }
-  /session/claim-subject:
-    post:
-      summary: Link the verified Cloudflare Access subject to its invited administrator
-      description: The subject and email are read exclusively from the verified Access JWT. Any request body is ignored.
-      security:
-        - cloudflareAccess: []
-      parameters:
-        - in: header
-          name: X-CSRF-Token
-          required: true
-          schema: { type: string, const: "1" }
-      responses:
-        "200":
-          description: Linked, or already linked to the same identity
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - { $ref: "#/components/schemas/Session" }
-                  - type: object
-                    required: [claimed]
-                    properties:
-                      claimed: { type: boolean }
-        "403":
-          { description: The email is not an active administrator invitation }
-        "409":
-          {
-            description: The subject belongs to another user or the invitation is linked to another identity,
-          }
   /me:
     get:
       summary: Return the authenticated administrator
@@ -59,7 +31,7 @@ paths:
       responses:
         "200": { description: Users }
     post:
-      summary: Register an unlinked user invitation
+      summary: Create a user with an explicit external identity or local credential
       requestBody:
         required: true
         content:
@@ -67,7 +39,7 @@ paths:
             schema: { $ref: "#/components/schemas/CreateUser" }
       responses:
         "201": { description: Created }
-        "409": { description: A user with the same email already exists }
+        "409": { description: The identity or login name is already assigned }
   /users/{id}:
     parameters:
       - $ref: "#/components/parameters/Id"
@@ -76,7 +48,7 @@ paths:
       responses:
         "200": { description: User }
     patch:
-      summary: Update a display name or role
+      summary: Update optional email, display name, or role
       requestBody:
         required: true
         content:
@@ -84,6 +56,7 @@ paths:
             schema:
               type: object
               properties:
+                email: { type: [string, "null"], format: email, maxLength: 320 }
                 displayName: { type: string, minLength: 1, maxLength: 200 }
                 role: { $ref: "#/components/schemas/Role" }
               minProperties: 1
@@ -102,11 +75,16 @@ paths:
       responses:
         "200": { description: Disabled }
         "409": { description: The final active owner cannot be disabled }
-  /users/{id}/unlink-access-subject:
+  /users/{id}/identities/{identityId}/unlink:
     post:
-      summary: Unlink a user's Cloudflare Access identity for a future reclaim
-      description: Owner-only. This does not change Cloudflare Access policy or revoke an Access session.
-      parameters: [{ $ref: "#/components/parameters/Id" }]
+      summary: Unlink a provisioned external identity and revoke the user's sessions
+      description: Owner-only. Email attributes never cause automatic relinking.
+      parameters:
+        - { $ref: "#/components/parameters/Id" }
+        - in: path
+          name: identityId
+          required: true
+          schema: { type: string }
       requestBody:
         required: true
         content:
@@ -118,13 +96,32 @@ paths:
               properties:
                 reason: { type: string, minLength: 1, maxLength: 500 }
       responses:
-        "200":
-          {
-            description: Unlinked; the next matching verified identity may claim the invitation,
-          }
+        "200": { description: Identity unlinked and sessions revoked }
         "403": { description: Owner role required }
         "409":
-          { description: The user is already unlinked or changed concurrently }
+          {
+            description: Self-unlink or a concurrent identity change was rejected,
+          }
+  /users/{id}/password:
+    post:
+      summary: Replace a local login credential and revoke the user's sessions
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [loginName, password, reason]
+              properties:
+                loginName:
+                  { type: string, pattern: "^[a-z0-9][a-z0-9._-]{2,63}$" }
+                password: { type: string, minLength: 12, maxLength: 1024 }
+                reason: { type: string, minLength: 1, maxLength: 500 }
+      responses:
+        "200": { description: Credential replaced }
+        "403": { description: Owner role required }
   /service-accounts:
     get:
       summary: List service accounts
@@ -223,12 +220,12 @@ paths:
                     items: { $ref: "#/components/schemas/RenderTarget" }
   /jobs/render-tickets:
     post:
-      summary: Create a render job from the Access-protected administrator Web UI
+      summary: Create a render job from the authenticated administrator Web UI
       parameters:
         - in: header
           name: X-CSRF-Token
           required: true
-          schema: { type: string, const: "1" }
+          schema: { type: string, pattern: "^[A-Za-z0-9_-]{43}$" }
         - in: header
           name: Idempotency-Key
           required: true
@@ -260,7 +257,7 @@ paths:
         - in: header
           name: X-CSRF-Token
           required: true
-          schema: { type: string, const: "1" }
+          schema: { type: string, pattern: "^[A-Za-z0-9_-]{43}$" }
         - in: header
           name: Idempotency-Key
           required: true
@@ -495,7 +492,8 @@ paths:
     post:
       summary: Check the stable channel and start an update only when automatic mode is enabled
       responses:
-        "200": { description: Up-to-date, unavailable, available, or started result }
+        "200":
+          { description: Up-to-date, unavailable, available, or started result }
   /updates/apply:
     post:
       summary: Download, verify, stage, and transactionally deploy an immutable application release
@@ -625,56 +623,50 @@ components:
   schemas:
     Session:
       type: object
-      required: [identity, linkage]
+      required: [authenticated, authMode, csrfToken, user]
       properties:
-        identity:
+        authenticated: { type: boolean, const: true }
+        authMode: { type: string, enum: [cloudflare-access, oidc, password] }
+        csrfToken: { type: string, pattern: "^[A-Za-z0-9_-]{43}$" }
+        user:
           type: object
-          required: [subject, email]
+          required: [id, email, displayName, role, status]
           properties:
-            subject: { type: string }
+            id: { type: string }
             email: { type: [string, "null"], format: email }
-        linkage:
-          type: object
-          required: [state, claimable, user]
-          properties:
-            state:
-              type: string
-              enum:
-                [
-                  identity_incomplete,
-                  not_invited,
-                  disabled,
-                  ineligible,
-                  claimable,
-                  linked,
-                  conflict,
-                ]
-            claimable: { type: boolean }
-            user:
-              oneOf:
-                - type: "null"
-                - type: object
-                  required:
-                    [id, email, displayName, role, status, linkedAt, generation]
-                  properties:
-                    id: { type: string }
-                    email: { type: string, format: email }
-                    displayName: { type: string }
-                    role: { $ref: "#/components/schemas/Role" }
-                    status: { type: string, enum: [active, disabled] }
-                    linkedAt: { type: [string, "null"], format: date-time }
-                    generation: { type: integer, minimum: 0 }
+            displayName: { type: string }
+            role: { $ref: "#/components/schemas/Role" }
+            status: { type: string, enum: [active, disabled] }
     Role:
       type: string
       enum: [user, admin, owner]
     CreateUser:
       type: object
       additionalProperties: false
-      required: [email, displayName, role]
+      required: [displayName, role, authentication]
       properties:
-        email: { type: string, format: email, maxLength: 320 }
+        email: { type: [string, "null"], format: email, maxLength: 320 }
         displayName: { type: string, minLength: 1, maxLength: 200 }
         role: { $ref: "#/components/schemas/Role" }
+        authentication:
+          oneOf:
+            - type: object
+              additionalProperties: false
+              required: [type, subject]
+              properties:
+                type: { type: string, const: external }
+                subject: { type: string, minLength: 1, maxLength: 500 }
+                preferredUsername:
+                  { type: string, minLength: 1, maxLength: 500 }
+                emailAtProvider: { type: string, format: email, maxLength: 320 }
+            - type: object
+              additionalProperties: false
+              required: [type, loginName, password]
+              properties:
+                type: { type: string, const: password }
+                loginName:
+                  { type: string, pattern: "^[a-z0-9][a-z0-9._-]{2,63}$" }
+                password: { type: string, minLength: 12, maxLength: 1024 }
     CreateServiceAccount:
       type: object
       additionalProperties: false
@@ -786,7 +778,7 @@ components:
           serviceAccountId,
           serviceAccountName,
           userId,
-          userEmail,
+          userLabel,
         ]
       properties:
         apiKeyId: { type: string }
@@ -794,7 +786,7 @@ components:
         serviceAccountId: { type: string }
         serviceAccountName: { type: string }
         userId: { type: string }
-        userEmail: { type: string, format: email }
+        userLabel: { type: string, minLength: 1, maxLength: 320 }
     AdminRenderTicketRequest:
       oneOf:
         - type: object
@@ -831,12 +823,12 @@ components:
         uploadUrl: { type: string, format: uri }
         expiresAt: { type: string, format: date-time }
   securitySchemes:
-    cloudflareAccess:
+    browserSession:
       type: apiKey
-      in: header
-      name: Cf-Access-Jwt-Assertion
-      description: Cloudflare Access JWT verified by the server. Its sub and email claims are authoritative.
-    accessAndAdmin:
+      in: cookie
+      name: __Host-latex_renderer_session
+      description: Provider-neutral Secure HttpOnly browser session. Mutations also require the per-session X-CSRF-Token and exact Origin.
+    adminKey:
       type: http
       scheme: bearer
-      description: Cloudflare Access is always required. The administration CLI also supplies an lra_ API key.
+      description: Scoped lra_ administration API key for CLI use. It is independent of browser authentication.
