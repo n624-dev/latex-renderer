@@ -1,7 +1,10 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { serve } from "@hono/node-server";
-import { AccessJwtVerifier, ApiKeyService } from "@latex-renderer/auth";
+import {
+  ApiKeyService,
+  createBrowserAuthenticationFromEnvironment,
+} from "@latex-renderer/auth";
 import { RendererDatabase } from "@latex-renderer/database";
 import { loadSigningKeyRing, TicketService } from "@latex-renderer/ticket";
 import { loadResourceLimits } from "@latex-renderer/shared";
@@ -18,6 +21,7 @@ if (process.env.ADMIN_API_ENABLED === "false")
   throw new Error("Admin API is disabled by configuration");
 const database = new RendererDatabase(required("DATABASE_PATH"));
 database.migrate();
+const authentication = createBrowserAuthenticationFromEnvironment(database);
 const pepperId = process.env.API_KEY_PEPPER_ID ?? "v1";
 const pepperPath = process.env.CREDENTIALS_DIRECTORY
   ? join(process.env.CREDENTIALS_DIRECTORY, "api-key-pepper")
@@ -60,11 +64,10 @@ const app = createAdminApp({
     new Map([[pepperId, readFileSync(pepperPath)]]),
     pepperId,
   ),
-  access: new AccessJwtVerifier(
-    required("CLOUDFLARE_ACCESS_ISSUER"),
-    required("CLOUDFLARE_ADMIN_AUDIENCE"),
-  ),
-  allowedOrigins: new Set(required("ADMIN_ALLOWED_ORIGINS").split(",")),
+  browserAuth: authentication.browserAuth,
+  deploymentMode: authentication.deploymentMode,
+  publicOrigin: authentication.publicOrigin,
+  allowedOrigins: new Set([authentication.publicOrigin]),
   writeEnabled: process.env.ADMIN_API_WRITE_ENABLED !== "false",
   storageRoot: required("STORAGE_ROOT"),
   rendererVersion: required("RENDERER_IMAGE"),
@@ -93,7 +96,7 @@ const app = createAdminApp({
       signingKeys.verification,
     ),
     rendererPublicUrl:
-      process.env.RENDERER_PUBLIC_URL ?? "https://latex-render.n624.jp",
+      process.env.RENDERER_PUBLIC_URL ?? authentication.publicOrigin,
   },
 });
 serve(

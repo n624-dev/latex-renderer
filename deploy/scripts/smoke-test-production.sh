@@ -14,10 +14,10 @@ render_cli="$source_root/client-dist/latex-renderer-client/app/latex-render.cjs"
 temporary_root=$(mktemp -d /tmp/latex-renderer-smoke.XXXXXX)
 key_id=
 service_account_id=
-owner_email=${LATEX_RENDER_SMOKE_OWNER_EMAIL:-$(sqlite3 "$database" "SELECT email FROM users WHERE role='owner' AND status='active' ORDER BY created_at LIMIT 1;" 2>/dev/null || true)}
+owner_id=${LATEX_RENDER_SMOKE_OWNER_ID:-$(sqlite3 "$database" "SELECT id FROM users WHERE role='owner' AND status='active' ORDER BY created_at,id LIMIT 1;" 2>/dev/null || true)}
 
-if [ -z "$owner_email" ]; then
-  echo "an active owner or LATEX_RENDER_SMOKE_OWNER_EMAIL is required" >&2
+if [ -z "$owner_id" ]; then
+  echo "an active owner or LATEX_RENDER_SMOKE_OWNER_ID is required" >&2
   exit 64
 fi
 public_origin=$(sed -n 's/^PUBLIC_ORIGIN=//p' /etc/latex-renderer/renderer.env | tail -n 1)
@@ -41,7 +41,7 @@ env DATABASE_PATH="$database" API_KEY_PEPPER_ID=v1 API_KEY_PEPPER_FILE="$pepper"
 
 env DATABASE_PATH="$database" API_KEY_PEPPER_ID=v1 API_KEY_PEPPER_FILE="$pepper" \
   /usr/local/bin/node "$admin_cli" smoke-key create \
-  --owner-email "$owner_email" --yes > "$temporary_root/key.json"
+  --owner-id "$owner_id" --yes > "$temporary_root/key.json"
 
 token=$(/usr/local/bin/node -e 'const x=require(process.argv[1]);process.stdout.write(x.token)' "$temporary_root/key.json")
 key_id=$(/usr/local/bin/node -e 'const x=require(process.argv[1]);process.stdout.write(x.keyId)' "$temporary_root/key.json")

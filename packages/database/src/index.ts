@@ -17,6 +17,7 @@ import {
   RemoteMcpRepository,
   WebPrincipalsRepository,
   ProjectsRepository,
+  BrowserAuthRepository,
 } from "./repositories/index.js";
 
 export interface DatabaseOptions {
@@ -39,6 +40,7 @@ export class RendererDatabase {
   public readonly remoteMcp: RemoteMcpRepository;
   public readonly webPrincipals: WebPrincipalsRepository;
   public readonly projects: ProjectsRepository;
+  public readonly browserAuth: BrowserAuthRepository;
 
   constructor(path: string, options: DatabaseOptions = {}) {
     this.raw = new DatabaseSync(path, {
@@ -59,6 +61,7 @@ export class RendererDatabase {
     this.remoteMcp = new RemoteMcpRepository(this.raw);
     this.webPrincipals = new WebPrincipalsRepository(this.raw);
     this.projects = new ProjectsRepository(this.raw);
+    this.browserAuth = new BrowserAuthRepository(this.raw);
   }
 
   migrate(): void {

@@ -11,6 +11,7 @@ import { TicketService } from "@latex-renderer/ticket";
 import { validateAndExtract } from "@latex-renderer/zip-validation";
 import { createAdminApp } from "../apps/admin-api/src/app.js";
 import { createWebApp } from "../apps/admin-web/src/app.js";
+import { legacyTestBrowserAuth } from "./helpers/browser-auth.js";
 
 const databases: RendererDatabase[] = [];
 const temporaryPaths: string[] = [];
@@ -34,7 +35,7 @@ describe("state and credentials", () => {
         ["reserved"],
         "queued",
       ),
-    ).toThrowError(/concurrently/);
+    ).toThrow(/concurrently/);
   });
 
   it("allows exactly one nonce claimant", () => {
@@ -57,7 +58,7 @@ describe("state and credentials", () => {
         "second",
         new Date(Date.now() + 30_000).toISOString(),
       ),
-    ).toThrowError(/already in use/);
+    ).toThrow(/already in use/);
   });
 
   it("invalidates an API key and an already-issued ticket when its user is disabled", async () => {
@@ -118,10 +119,10 @@ describe("state and credentials", () => {
         "UPDATE users SET status='disabled',security_version=2 WHERE id='user_seed'",
       )
       .run();
-    expect(() => auth.authenticate(generated.token)).toThrowError(/disabled/);
+    expect(() => auth.authenticate(generated.token)).toThrow(/disabled/);
     await expect(
       tickets.verify(token, "status", "job_00000000000000000000000000000000"),
-    ).rejects.toThrowError(/inactive/);
+    ).rejects.toThrow(/inactive/);
   });
 
   it("reports a malformed renderer ticket as an authentication error", async () => {
@@ -156,7 +157,9 @@ describe("administrative safety", () => {
         new Map([["v1", Buffer.alloc(32, 1)]]),
         "v1",
       ),
-      access,
+      browserAuth: legacyTestBrowserAuth(db, access),
+      deploymentMode: "cloudflare",
+      publicOrigin: "https://latex.example.com",
       allowedOrigins: new Set(),
       writeEnabled: true,
       storageRoot: "/nonexistent",
@@ -190,7 +193,9 @@ describe("administrative safety", () => {
         new Map([["v1", Buffer.alloc(32, 1)]]),
         "v1",
       ),
-      access,
+      browserAuth: legacyTestBrowserAuth(db, access),
+      deploymentMode: "cloudflare",
+      publicOrigin: "https://latex.example.com",
       allowedOrigins: new Set(),
       writeEnabled: true,
       storageRoot: "/nonexistent",
@@ -327,7 +332,7 @@ describe("ZIP boundary", () => {
     await writeFile(tampered, bytes);
     await expect(
       validateAndExtract(tampered, join(root, "bad"), limits),
-    ).rejects.toThrowError(/do not match/);
+    ).rejects.toThrow(/do not match/);
   });
 
   it("counts directory entries separately from extracted files", async () => {
@@ -342,10 +347,15 @@ describe("ZIP boundary", () => {
     zip.end();
     await done;
     await expect(
-      validateAndExtract(archive, join(root, "output"), {
-        ...limits,
-        maxEntries: 2,
-      }, ""),
+      validateAndExtract(
+        archive,
+        join(root, "output"),
+        {
+          ...limits,
+          maxEntries: 2,
+        },
+        "",
+      ),
     ).rejects.toMatchObject({ code: "ZIP_TOO_MANY_ENTRIES" });
   });
 });

@@ -1,0 +1,43 @@
+[Unit]
+Description=LaTeX Renderer Standalone API Gateway
+After=network-online.target latex-renderer-internal-api.service
+Wants=network-online.target
+Requires=latex-renderer-internal-api.service
+
+[Service]
+Type=simple
+User=latex-renderer
+Group=latex-renderer
+WorkingDirectory=/opt/latex-renderer/current
+EnvironmentFile=/etc/latex-renderer/renderer.env
+Environment=PORT=3105
+Environment=INTERNAL_API_URL=http://127.0.0.1:3103
+ExecStart=/usr/local/bin/node apps/standalone-gateway/dist/server.js
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectClock=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET
+IPAddressDeny=any
+IPAddressAllow=localhost
+SocketBindDeny=any
+SocketBindAllow=tcp:3105
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

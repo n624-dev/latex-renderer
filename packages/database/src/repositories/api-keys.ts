@@ -20,7 +20,8 @@ export interface RenderIdentityRow {
   service_account_name: string;
   service_account_security_version: number;
   user_id: string;
-  user_email: string;
+  user_email: string | null;
+  user_display_name: string;
   user_security_version: number;
 }
 
@@ -50,7 +51,8 @@ export class ApiKeysRepository {
       .prepare(
         `SELECT k.id AS api_key_id,k.name AS api_key_name,k.scopes_json,
       s.id AS service_account_id,s.name AS service_account_name,s.security_version AS service_account_security_version,
-      u.id AS user_id,u.email AS user_email,u.security_version AS user_security_version
+      u.id AS user_id,u.email AS user_email,u.display_name AS user_display_name,
+      u.security_version AS user_security_version
       FROM api_keys k JOIN service_accounts s ON s.id=k.service_account_id
       JOIN users u ON u.id=s.owner_user_id
       WHERE k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at>?)
@@ -81,6 +83,7 @@ export class ApiKeysRepository {
         service_account_security_version: row.service_account_security_version,
         user_id: row.user_id,
         user_email: row.user_email,
+        user_display_name: row.user_display_name,
         user_security_version: row.user_security_version,
       }));
   }
@@ -95,7 +98,8 @@ export class ApiKeysRepository {
         `SELECT k.id AS api_key_id,k.name AS api_key_name,
         s.id AS service_account_id,s.name AS service_account_name,
         s.security_version AS service_account_security_version,
-        u.id AS user_id,u.email AS user_email,u.security_version AS user_security_version
+        u.id AS user_id,u.email AS user_email,u.display_name AS user_display_name,
+        u.security_version AS user_security_version
         FROM api_keys k JOIN service_accounts s ON s.id=k.service_account_id
         JOIN users u ON u.id=s.owner_user_id
         WHERE k.id=? AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at>?)

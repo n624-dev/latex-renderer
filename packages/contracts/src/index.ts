@@ -135,9 +135,28 @@ export const errorResponseSchema = z.object({
 
 export const createUserSchema = z
   .object({
-    email: z.email().max(320),
+    email: z.email().max(320).nullable().optional(),
     displayName: z.string().min(1).max(200),
     role: roleSchema,
+    authentication: z.discriminatedUnion("type", [
+      z
+        .object({
+          type: z.literal("external"),
+          subject: z.string().min(1).max(500),
+          preferredUsername: z.string().min(1).max(500).optional(),
+          emailAtProvider: z.email().max(320).optional(),
+        })
+        .strict(),
+      z
+        .object({
+          type: z.literal("password"),
+          loginName: z
+            .string()
+            .regex(/^[a-z0-9][a-z0-9._-]{2,63}$/),
+          password: z.string().min(12).max(1024),
+        })
+        .strict(),
+    ]),
   })
   .strict();
 

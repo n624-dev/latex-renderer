@@ -10,7 +10,7 @@ pnpm build
 docker build -t latex-renderer:2026 renderer
 ```
 
-Migration 006 is required by the optional SVG output flow. Before applying a release that includes a new schema migration, enter maintenance mode, drain active work, stop database writers, and take the WAL-consistent backup required by [MIGRATIONS.md](MIGRATIONS.md). Migration 006 adds requested outputs to Jobs and permits the validated SVG artifact types. Releases remain immutable under `/opt/latex-renderer/releases/<release-id>` with `/opt/latex-renderer/current` pointing to the active release.
+Migration 007 is required by the v1.2 provider-neutral browser authentication model. Before applying it, enter maintenance mode, drain active work, stop every database writer, and take the WAL-consistent encrypted backup required by [MIGRATIONS.md](MIGRATIONS.md). Version 1.1 cannot safely administer the post-migration nullable-email and identity tables, so rollback requires restoring that backup. Releases remain immutable under `/opt/latex-renderer/releases/<release-id>` with `/opt/latex-renderer/current` pointing to the active release.
 
 ## Host services
 
@@ -38,33 +38,115 @@ sudo systemctl enable --now \
 `latex-renderer-admin-web.service` is a compatibility alias for `latex-renderer-web.service` during migration.
 
 Before the first deployment, create host-local configuration from the public
-examples and replace every placeholder. These configured files are deliberately
-ignored by Git:
+examples and replace every placeholder. These configured files remain outside
+the Git worktree. `renderer.env` and `update-manager.env` are common to both
+profiles; the remaining files are Cloudflare-only:
 
 ```bash
 sudo install -d -m 0750 /etc/latex-renderer /etc/cloudflared
 sudo install -m 0640 .env.example /etc/latex-renderer/renderer.env
-sudo install -m 0600 deploy/deployment.env.example /etc/latex-renderer/deployment.env
 sudo install -m 0600 deploy/update-manager.env.example /etc/latex-renderer/update-manager.env
+sudoedit /etc/latex-renderer/renderer.env \
+  /etc/latex-renderer/update-manager.env
+
+# DEPLOYMENT_MODE=cloudflare only
+sudo install -m 0600 deploy/deployment.env.example /etc/latex-renderer/deployment.env
 sudo install -m 0600 deploy/cloudflared/config.example.yml /etc/cloudflared/config.yml
 sudo install -m 0600 apps/gateway-worker/wrangler.example.jsonc \
   /etc/latex-renderer/gateway-worker.wrangler.jsonc
-sudoedit /etc/latex-renderer/renderer.env \
-  /etc/latex-renderer/deployment.env \
-  /etc/latex-renderer/update-manager.env \
+sudoedit /etc/latex-renderer/deployment.env \
   /etc/cloudflared/config.yml \
   /etc/latex-renderer/gateway-worker.wrangler.jsonc
 ```
 
-Bootstrap the first owner with values from your Cloudflare Access identity:
+Set exact `PUBLIC_ORIGIN`, `DEPLOYMENT_MODE=cloudflare|standalone`, and
+`AUTH_MODE=cloudflare-access|oidc|password`; no production default is inferred.
+Standalone rejects Cloudflare Access. For OIDC, configure the exact HTTPS issuer
+and client ID in `renderer.env`, and put the client secret only in the documented
+root-owned secret file. Password mode uses the independently generated
+root-owned pepper.
+
+For standalone, install one example from `deploy/reverse-proxy/`, replace the
+hostname and certificate paths, validate its syntax, and expose no application
+port directly. The proxy must strip incoming `CF-Access-*`, replace the trusted
+client-IP header, enforce TLS/body/connection/rate/time limits, and send only the
+small ticket routes to port 3105.
+
+Bootstrap the first owner using the authentication mode already selected in
+`renderer.env`. Email is optional and never links an identity. Read secrets
+interactively rather than placing them in shell history:
 
 ```bash
+# cloudflare-access or oidc
 sudo env \
   LATEX_RENDER_OWNER_EMAIL=owner@example.com \
   LATEX_RENDER_OWNER_NAME='Owner' \
-  LATEX_RENDER_OWNER_ACCESS_SUBJECT=REPLACE_WITH_ACCESS_SUBJECT \
+  LATEX_RENDER_OWNER_SUBJECT=REPLACE_WITH_STABLE_SUBJECT \
   sh deploy/scripts/bootstrap-owner.sh
+
+# password
+password_file=$(mktemp)
+chmod 0600 "$password_file"
+read -r -s -p 'Initial password: ' owner_password
+printf '%s' "$owner_password" > "$password_file"
+unset owner_password
+sudo env \
+  LATEX_RENDER_OWNER_EMAIL=owner@example.com \
+  LATEX_RENDER_OWNER_NAME='Owner' \
+  LATEX_RENDER_OWNER_LOGIN_NAME=owner \
+  LATEX_RENDER_OWNER_PASSWORD_FILE="$password_file" \
+  sh deploy/scripts/bootstrap-owner.sh
+shred -u "$password_file"
 ```
+
+### Changing `AUTH_MODE` without locking out the instance
+
+An existing owner is never relinked by email and `bootstrap-owner.sh` never
+changes credentials after the first owner exists. Before changing `AUTH_MODE`,
+provision the target method locally against the owner's immutable `user_...`
+ID. This recovery-only command accepts active owners, refuses to replace an
+existing identity or password credential, records an audit event, and revokes
+the owner's existing browser sessions.
+
+Stop the Admin API while modifying authentication state, take a current
+encrypted backup, and copy the owner ID from the Admin UI or the local
+`users list` command. Then run exactly one target-mode command:
+
+```bash
+admin_local=/opt/latex-renderer/current/apps/admin-local/dist/index.js
+common_env="DATABASE_PATH=/var/lib/latex-renderer/renderer.sqlite3 API_KEY_PEPPER_ID=v1 API_KEY_PEPPER_FILE=/etc/latex-renderer/secrets/api-key-pepper"
+sudo systemctl stop latex-renderer-admin-api.service
+
+# cloudflare-access or oidc: enter the exact configured issuer and stable sub
+IFS= read -r -p 'Owner user ID: ' owner_id
+IFS= read -r -p 'Target auth mode: ' target_mode
+IFS= read -r -p 'Exact issuer: ' target_issuer
+IFS= read -r -p 'Stable subject: ' target_subject
+sudo env $common_env /usr/local/bin/node "$admin_local" auth provision-owner \
+  --owner-id "$owner_id" --auth-mode "$target_mode" \
+  --issuer "$target_issuer" --subject "$target_subject" --yes
+
+# password: keep the password out of argv and the environment
+password_file=$(mktemp)
+chmod 0600 "$password_file"
+read -r -s -p 'Initial password: ' owner_password
+printf '%s' "$owner_password" > "$password_file"
+unset owner_password
+sudo env $common_env \
+  AUTH_PASSWORD_PEPPER_FILE=/etc/latex-renderer/secrets/auth-password-pepper \
+  /usr/local/bin/node "$admin_local" auth provision-owner \
+  --owner-id "$owner_id" --auth-mode password --login-name owner \
+  --password-file "$password_file" --yes
+shred -u "$password_file"
+```
+
+Do not use both examples. Configure the target mode and its root-owned secret
+files in `/etc/latex-renderer/renderer.env`, run
+`validate-production-profile.mjs`, and only then restart the Admin API and Web
+service. Confirm login in a private browser window before removing the old
+identity or credential. On any failure, leave the old `AUTH_MODE` configured,
+restore service availability, and investigate from the audit log; never create
+an email-based recovery link.
 
 ## Managed TeX Live images
 
@@ -243,7 +325,7 @@ and rollback from `/admin/updates/` or the equivalent CLI commands:
 latex-render-admin update status
 latex-render-admin update check
 latex-render-admin update policy --mode notify --yes
-latex-render-admin update apply v1.1.6 --yes
+latex-render-admin update apply v1.2.0 --yes
 latex-render-admin update rollback --yes
 ```
 
@@ -335,16 +417,13 @@ a long apply cannot overwrite a concurrently saved country override.
 ## Safe rollout order
 
 1. Enable maintenance mode `reject-new-jobs`, let active work drain, stop the worker, and take the pre-migration database backup.
-2. Deploy code with legacy routes enabled, apply all pending database migrations through Migration 006, and provision one secretless Web accounting principal for every invited user before enabling Web Project writes or SVG output.
-3. Start all loopback services and verify `/health`.
-4. Configure `/app`, `/admin`, and `/oauth/authorize` in the same human-user Access application so they share one audience. Add the human Allow and Admin CLI Service Auth policies, then set `CLOUDFLARE_ADMIN_AUDIENCE` and `CLOUDFLARE_REMOTE_MCP_AUDIENCE` to that application audience.
-5. Deploy Gateway Worker with its narrow API Worker Routes.
-6. Reconcile the remotely managed Tunnel path rules in the documented order.
-7. Deploy `@latex-renderer/public-web` without production routes and validate its `workers.dev` preview.
-8. Apply only the explicit public Worker Routes with `sync-public-worker-routes.mjs --apply`.
-9. Run both unified-origin and public/private boundary smoke tests.
-10. In a signed-out browser, verify that `/app/` and `/admin/` redirect to Cloudflare Access while `/docs/` remains public. Sign in as an invited user and test `/app/`; then verify `/admin/` with an owner/admin and run a real Japanese/English render smoke test.
-11. Start the worker, disable maintenance mode, and keep old hosts and route aliases through the compatibility release.
+2. Verify exact `PUBLIC_ORIGIN`, deployment/authentication mode, root-owned secret files, and the selected external issuer/audience. Apply all pending migrations through Migration 007. Do not start v1.1 against schema 7.
+3. Bootstrap or verify at least one active owner with an explicit provider/issuer/subject identity or password credential. Never claim an account by email. On a clean install, the first deployment defers only the authenticated render smoke test until this bootstrap is complete; run `smoke-test-production.sh` after the TeX environment is ready.
+4. Start the common loopback services and verify their local health. Confirm ports 3100-3105 are unreachable from an external interface.
+5. For Cloudflare, configure `/auth`, `/app`, `/admin`, and `/oauth/authorize` in the intended Access application when Access is the selected authentication mode; deploy the Gateway Worker, reconcile Tunnel paths, preview public Web, and apply only the explicit Worker Routes. For OIDC/password, do not create a conflicting Access policy in front of the login callbacks.
+6. For standalone, enable the standalone gateway, validate and reload exactly one TLS reverse proxy example, verify that spoofed Cloudflare/client-IP headers are replaced, and confirm that Internal API and manager endpoints have no route.
+7. Run unified-origin and public/private boundary smoke tests. In a signed-out browser, verify that `/app/` and `/admin/` enter the configured login flow while `/docs/` stays public. Sign in as a user and as an owner/admin, then verify logout and CSRF rejection.
+8. Run a real English/Japanese PDF and SVG render, verify Remote MCP consent with the same browser session, start the worker, and disable maintenance mode. Retain the pre-Migration-007 backup until a restore drill succeeds.
 
 ## Public Web CI and preview
 
@@ -497,9 +576,9 @@ when the failure mode or Worker version is uncertain.
    routes with `--apply` after the incident is resolved.
 
 4. Restore the prior remote Tunnel and Access configuration.
-5. If the rollback also requires reverting database schema, stop all writers and restore the pre-migration backup. Do not manually rebuild Migration 006 tables or drop Migration 005 structures from the live database.
+5. If rollback crosses Migration 007, stop admission and every database writer and restore the pre-migration backup. Do not run v1.1 against schema 7 or manually rebuild identity/user tables on the live database.
 
-Migration 006 changes the Job and artifact contracts used by the worker. A public-Worker-only rollback does not require a database restore, but rolling the application or worker back across Migration 006 requires the pre-migration backup unless the controlled rollback procedure has been completed. Keep that backup until the rollback path has been exercised.
+Migration 006 still changes the Job and artifact contracts used by the worker, while Migration 007 changes user and authentication contracts. A public-Worker-only rollback does not require a database restore. Rolling the application back across either incompatible migration requires its pre-migration backup unless the controlled non-production rebuild has been completed. Keep the backups until the rollback paths have been exercised.
 
 ## Health and logs
 

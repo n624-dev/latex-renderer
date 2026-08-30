@@ -2,9 +2,11 @@ import { Hono } from "hono";
 import { secureHeaders } from "hono/secure-headers";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { safeError } from "@latex-renderer/shared";
+import { installBodyLimit } from "./middleware/body-limit.js";
 import { installRequestPolicy } from "./middleware/request-policy.js";
 import { createAdminV1Router } from "./routes/index.js";
 import { createAppV1Router } from "./routes/app.js";
+import { createAuthenticationRouter } from "./routes/auth.js";
 import { AdminSystemService } from "./services/system.js";
 import type { AdminDependencies } from "./types.js";
 
@@ -20,6 +22,8 @@ export function createAdminApp(deps: AdminDependencies): Hono {
     }),
   );
   installRequestPolicy(app, deps);
+  installBodyLimit(app, 64 * 1024);
+  app.route("/auth", createAuthenticationRouter(deps));
   app.route("/admin/api/v1", createAdminV1Router(deps));
   app.route("/admin/v1", createAdminV1Router(deps));
   app.route("/app/api/v1", createAppV1Router(deps));

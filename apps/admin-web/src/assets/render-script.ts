@@ -68,7 +68,7 @@ export interface AdminRenderTarget {
   serviceAccountId: string;
   serviceAccountName: string;
   userId: string;
-  userEmail: string;
+  userLabel: string;
 }
 
 export interface BrowserJobArtifact {
@@ -549,7 +549,7 @@ function parseAdminRenderTargets(value: unknown): AdminRenderTarget[] {
       "serviceAccountId",
       "serviceAccountName",
       "userId",
-      "userEmail",
+      "userLabel",
     ] as const)
       if (typeof row[key] !== "string" || row[key].length === 0)
         throw new Error("レンダリング候補の応答形式が不正です。");
@@ -580,6 +580,7 @@ export async function createAdminRenderTicket(
   size: number,
   sha256: string,
   idempotencyKey: string,
+  csrfToken: string,
   outputs: ("pdf" | "svg")[] = ["pdf"],
 ): Promise<BrowserRenderTicket> {
   const response = await fetcher(
@@ -588,7 +589,7 @@ export async function createAdminRenderTicket(
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "X-CSRF-Token": "1",
+        "X-CSRF-Token": csrfToken,
         "Idempotency-Key": idempotencyKey,
       },
       body: JSON.stringify({ apiKeyId, size, sha256, outputs }),
@@ -658,6 +659,7 @@ export async function createAdminSourceTicket(
   size: number,
   sha256: string,
   idempotencyKey: string,
+  csrfToken: string,
 ): Promise<BrowserSourceTicket> {
   const response = await fetcher(
     new URL("/admin/api/v1/jobs/source-tickets", origin),
@@ -665,7 +667,7 @@ export async function createAdminSourceTicket(
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "X-CSRF-Token": "1",
+        "X-CSRF-Token": csrfToken,
         "Idempotency-Key": idempotencyKey,
       },
       body: JSON.stringify({ apiKeyId, size, sha256 }),
@@ -683,6 +685,7 @@ export async function createAdminSourceRef(
   origin: string,
   apiKeyId: string,
   sourceId: string,
+  csrfToken: string,
 ): Promise<BrowserSourceRef> {
   const response = await fetcher(
       new URL("/admin/api/v1/jobs/source-refs", origin),
@@ -690,7 +693,7 @@ export async function createAdminSourceRef(
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-CSRF-Token": "1",
+          "X-CSRF-Token": csrfToken,
         },
         body: JSON.stringify({ apiKeyId, sourceId }),
         cache: "no-store",
@@ -743,6 +746,7 @@ export async function createAdminSourceRenderTicket(
   sourceId: string,
   entrypoint: string,
   idempotencyKey: string,
+  csrfToken: string,
   outputs: ("pdf" | "svg")[] = ["pdf"],
 ): Promise<BrowserSourceRenderTicket> {
   const response = await fetcher(
@@ -751,7 +755,7 @@ export async function createAdminSourceRenderTicket(
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-CSRF-Token": "1",
+          "X-CSRF-Token": csrfToken,
           "Idempotency-Key": idempotencyKey,
         },
         body: JSON.stringify({ apiKeyId, sourceId, entrypoint, outputs }),
@@ -912,7 +916,7 @@ function jobStatusLabel(status: string): string {
   );
 }
 
-function installRenderWorkflow(): void {
+function installRenderWorkflow(csrfToken: string): void {
   const form = document.querySelector<HTMLFormElement>("#render-preflight"),
     input = document.querySelector<HTMLInputElement>("#project-files"),
     directory = document.querySelector<HTMLInputElement>("#project-directory"),
@@ -1421,6 +1425,7 @@ function installRenderWorkflow(): void {
           task.size,
           task.sha256,
           key,
+          csrfToken,
         ),
       );
     task.sourceId = ticket.sourceId;
@@ -1473,6 +1478,7 @@ function installRenderWorkflow(): void {
             task.size,
             task.sha256,
             `legacy-${task.id}`,
+            csrfToken,
             outputs,
           ),
         );
@@ -1496,6 +1502,7 @@ function installRenderWorkflow(): void {
             sourceId,
             task.entrypoint,
             `job-${task.id}`,
+            csrfToken,
             outputs,
           ),
         );
@@ -1571,6 +1578,7 @@ function installRenderWorkflow(): void {
           source.size,
           source.sha256,
           `remote-mcp-source-${globalThis.crypto.randomUUID()}`,
+          csrfToken,
         );
         if (ticket.uploadRequired)
           await uploadSourceZip(fetcher, ticket, source.blob);
@@ -1579,6 +1587,7 @@ function installRenderWorkflow(): void {
           origin,
           target.value,
           ticket.sourceId,
+          csrfToken,
         );
         sourceRefOutput.textContent = `${reference.sourceRef}（有効期限: ${new Date(reference.expiresAt).toLocaleString()}）`;
       } catch (caught) {
@@ -1690,7 +1699,7 @@ function installRenderWorkflow(): void {
               headers: {
                 Accept: "application/json",
                 "Content-Type": "application/json",
-                "X-CSRF-Token": "1",
+                "X-CSRF-Token": csrfToken,
                 "Idempotency-Key": globalThis.crypto.randomUUID(),
               },
               body: "{}",
@@ -1777,6 +1786,11 @@ export const renderScript = `
   const fetchRenderArtifact = ${fetchRenderArtifact.toString()};
   const formatBytes = ${formatBytes.toString()};
   const jobStatusLabel = ${jobStatusLabel.toString()};
-  (${installRenderWorkflow.toString()})();
+  fetch('/auth/session',{credentials:'same-origin',cache:'no-store'}).then(async response=>{
+    if(response.status===401){location.replace('/login/?return_to='+encodeURIComponent(location.pathname+location.search));return}
+    const session=await response.json();
+    if(!response.ok||typeof session.csrfToken!=='string')throw new Error(session?.error?.message||'ログインできませんでした。');
+    (${installRenderWorkflow.toString()})(session.csrfToken);
+  }).catch(error=>{const output=document.querySelector('#render-error');if(output)output.textContent=error instanceof Error?error.message:String(error)});
 })();
 `;

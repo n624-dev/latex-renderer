@@ -1,5 +1,5 @@
 import { serve } from "@hono/node-server";
-import { AccessJwtVerifier } from "@latex-renderer/auth";
+import { createBrowserAuthenticationFromEnvironment } from "@latex-renderer/auth";
 import { RendererDatabase } from "@latex-renderer/database";
 import {
   RemoteOAuthService,
@@ -18,6 +18,10 @@ function required(name: string): string {
 const publicOrigin = required("PUBLIC_ORIGIN"),
   database = new RendererDatabase(required("DATABASE_PATH"));
 database.migrate();
+const authentication = createBrowserAuthenticationFromEnvironment(
+  database,
+  "CLOUDFLARE_REMOTE_MCP_AUDIENCE",
+);
 const oauth = new RemoteOAuthService(
     database,
     publicOrigin,
@@ -35,10 +39,7 @@ const oauth = new RemoteOAuthService(
   ),
   app = createRemoteMcpApp({
     database,
-    access: new AccessJwtVerifier(
-      required("CLOUDFLARE_ACCESS_ISSUER"),
-      required("CLOUDFLARE_REMOTE_MCP_AUDIENCE"),
-    ),
+    browserAuth: authentication.browserAuth,
     oauth,
     mcp: createRemoteMcpHandler(renders, PLATFORM_VERSION),
     publicOrigin,

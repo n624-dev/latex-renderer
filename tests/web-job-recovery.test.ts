@@ -42,7 +42,7 @@ describe("Web Job recovery", () => {
         }),
       );
     };
-    const tracker = jobTracker(fetcher, jobId);
+    const tracker = jobTracker(fetcher, jobId, undefined, "csrf-test-token");
 
     await Promise.all([tracker.get(), tracker.get(), tracker.get()]);
     expect(issues).toBe(1);

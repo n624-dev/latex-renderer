@@ -1,0 +1,66 @@
+# Replace the hostname. Caddy obtains and renews the TLS certificate. Standard
+# Caddy has no per-client request-rate limiter; enforce one at the hosting/LB
+# layer or install and explicitly audit a compatible module before exposure.
+latex.example.com {
+  header Strict-Transport-Security "max-age=63072000; includeSubDomains"
+  request_header {
+    -CF-Access-Jwt-Assertion
+    -CF-Connecting-IP
+    -Forwarded
+    X-Forwarded-Proto https
+    X-Forwarded-Host latex.example.com
+    X-Forwarded-For {remote_host}
+    X-Real-IP {remote_host}
+    X-Latex-Renderer-Client-IP {remote_host}
+  }
+
+  @gateway path /api/v1/health /api/v1/render-tickets /api/v1/source-tickets /api/v1/job-tickets/*
+  reverse_proxy @gateway 127.0.0.1:3105 {
+    transport http {
+      dial_timeout 5s
+      response_header_timeout 30s
+      max_response_header 64KiB
+      max_conns_per_host 100
+    }
+  }
+
+  @remote path /.well-known/oauth-* /oauth/* /mcp /mcp/*
+  reverse_proxy @remote 127.0.0.1:3104 {
+    transport http {
+      dial_timeout 5s
+      response_header_timeout 60s
+      max_response_header 64KiB
+      max_conns_per_host 100
+    }
+  }
+
+  @admin path /auth/* /admin/api/* /admin/v1/* /app/api/*
+  reverse_proxy @admin 127.0.0.1:3102 {
+    transport http {
+      dial_timeout 5s
+      response_header_timeout 60s
+      max_response_header 64KiB
+      max_conns_per_host 100
+    }
+  }
+
+  @renderer path /api/*
+  reverse_proxy @renderer 127.0.0.1:3100 {
+    transport http {
+      dial_timeout 5s
+      response_header_timeout 360s
+      max_response_header 64KiB
+      max_conns_per_host 100
+    }
+  }
+  reverse_proxy 127.0.0.1:3101 {
+    transport http {
+      dial_timeout 5s
+      response_header_timeout 60s
+      max_response_header 64KiB
+      max_conns_per_host 100
+    }
+  }
+
+  request_body { max_size 220MB }
+}

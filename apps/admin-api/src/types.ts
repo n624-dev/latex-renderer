@@ -1,4 +1,8 @@
-import type { AccessJwtVerifier, ApiKeyService } from "@latex-renderer/auth";
+import type {
+  ApiKeyService,
+  BrowserAuthenticationService,
+  DeploymentMode,
+} from "@latex-renderer/auth";
 import type { RendererDatabase } from "@latex-renderer/database";
 import type { TicketService } from "@latex-renderer/ticket";
 import type { ImageManagerClient } from "./services/image-manager.js";
@@ -18,7 +22,9 @@ export interface AdminActor extends AppActor {
 export interface AdminDependencies {
   database: RendererDatabase;
   apiKeys: ApiKeyService;
-  access: AccessJwtVerifier;
+  browserAuth: BrowserAuthenticationService;
+  deploymentMode: DeploymentMode;
+  publicOrigin: string;
   allowedOrigins: ReadonlySet<string>;
   writeEnabled: boolean;
   storageRoot: string;

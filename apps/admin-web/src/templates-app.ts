@@ -8,7 +8,7 @@ const links = [
 ];
 
 function appHeader(page: string): string {
-  return `<header class="site-header"><strong><a href="/app/">LaTeX Renderer</a></strong><nav class="admin-nav" aria-label="アプリナビゲーション">${links.map(([id, label, url]) => `<a href="${url}"${id === page ? ' aria-current="page"' : ""}>${label}</a>`).join("")}</nav><div class="header-meta"><a id="admin-link" class="button secondary" href="/admin/" hidden>管理</a><button type="button" class="secondary" data-theme-toggle>表示: システム</button><a class="button secondary" href="/cdn-cgi/access/logout">ログアウト</a></div></header>`;
+  return `<header class="site-header"><strong><a href="/app/">LaTeX Renderer</a></strong><nav class="admin-nav" aria-label="アプリナビゲーション">${links.map(([id, label, url]) => `<a href="${url}"${id === page ? ' aria-current="page"' : ""}>${label}</a>`).join("")}</nav><div class="header-meta"><a id="admin-link" class="button secondary" href="/admin/" hidden>管理</a><button type="button" class="secondary" data-theme-toggle>表示: システム</button><button id="app-logout" type="button" class="secondary">ログアウト</button></div></header>`;
 }
 
 function shell(page: string, title: string, content: string): string {

@@ -1,0 +1,18 @@
+{
+  "name": "@latex-renderer/standalone-gateway",
+  "version": "1.2.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "dist/server.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/server.js"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.0.12",
+    "@latex-renderer/gateway-core": "workspace:*",
+    "hono": "^4.9.2"
+  }
+}

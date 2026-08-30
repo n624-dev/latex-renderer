@@ -10,10 +10,12 @@ latex.example.com
 ├── /mcp                      OAuth-protected Remote MCP Streamable HTTP
 ├── /oauth/*                  Remote MCP OAuth 2.1 endpoints
 ├── /.well-known/oauth-*      OAuth authorization/resource metadata
-├── /app/                     user Web, Cloudflare Access protected
-├── /app/api/v1/              user-scoped App API, Access protected
-├── /admin/                   owner/admin Web, Cloudflare Access protected
-├── /admin/api/v1/            Admin API, Access plus application authorization
+├── /login/                   configured browser login entry point
+├── /auth/*                   password, OIDC, or Access session endpoints
+├── /app/                     authenticated user Web
+├── /app/api/v1/              user-scoped App API
+├── /admin/                   owner/admin Web
+├── /admin/api/v1/            role-authorized Admin API or lra_ CLI key
 └── /api/v1/
     ├── health                Gateway Worker
     ├── render-tickets        Gateway Worker
@@ -23,14 +25,14 @@ latex.example.com
     └── jobs/*                Renderer API
 ```
 
-Internal API is deliberately absent from this public tree. It binds only to loopback port 3103 and is not published through DNS or a Cloudflare Access application. Gateway Worker reaches it through the least-privilege `INTERNAL_API` Workers VPC Service binding.
+Internal API is deliberately absent from this public tree. It binds only to loopback port 3103 and is never published through DNS or the reverse proxy. In the Cloudflare profile, Gateway Worker reaches it through the least-privilege `INTERNAL_API` Workers VPC Service binding. In the standalone profile, the loopback-only Hono gateway reaches the same service directly.
 
-Remote MCP binds to loopback port 3104 behind Tunnel path routing. Only `/oauth/authorize` is protected by the human Cloudflare Access application; OAuth tokens protect `/mcp`. OAuth subjects map to existing users and to an internal, non-authenticatable accounting principal, so no long-lived `lrk_` key crosses the Remote MCP boundary.
+Remote MCP binds to loopback port 3104 behind the selected trusted frontend. Its `/oauth/authorize` consent uses the same browser session as `/app` and `/admin`; OAuth tokens protect `/mcp`. OAuth subjects map to existing users and to an internal, non-authenticatable accounting principal, so no long-lived `lrk_` key crosses the Remote MCP boundary.
 
 ## Request flow
 
 1. CLI prepares a deterministic ZIP and SHA-256 locally. It may reserve a reusable Source first, or use the legacy one-Job upload flow.
-2. Gateway Worker validates the narrow ticket request and forwards it to Internal API through the `INTERNAL_API` Workers VPC Service binding. No public Internal API hostname or Cloudflare Access service token is used on this hop.
+2. The selected gateway validates the narrow ticket request with `packages/gateway-core`. Gateway Worker uses its `INTERNAL_API` Workers VPC Service binding; standalone Hono uses loopback. Neither profile exposes an Internal API hostname or uses a browser credential on this hop.
 3. Internal API authenticates the long-lived render key, applies quotas and idempotency, and returns only the short-lived ticket needed for the selected Source or Job flow.
 4. For the reusable Source flow, the client uploads the ZIP directly to Renderer API with the Source upload ticket, then creates one or more Jobs from `sourceId + entrypoint` through Gateway Worker. For the compatibility flow, it uploads directly to the reserved Job with the Job-scoped upload ticket.
 5. Renderer API verifies ticket scope, owner, ID, size, SHA-256, and nonce as applicable. Large ZIP/PDF/PNG/log traffic never traverses Gateway Worker.
@@ -39,12 +41,21 @@ Remote MCP binds to loopback port 3104 behind Tunnel path routing. Only `/oauth/
 
 ## Web application and administration
 
-Cloudflare Access controls who can reach `/app/*` and `/admin/*`. App API
-independently validates the Access JWT, requires an active invited user, and
-scopes Projects, revisions, Jobs, tickets, and artifacts to that user. Admin API
-additionally requires the database `owner` or `admin` role. Admin CLI uses an
-`lra_` key and an Access service token. Browser mutations require an exact
-allowed Origin and `X-CSRF-Token`.
+`DEPLOYMENT_MODE=cloudflare|standalone` selects only the public boundary.
+`AUTH_MODE=cloudflare-access|oidc|password` selects browser authentication;
+standalone deliberately rejects Cloudflare Access because it cannot establish
+the required edge assertion boundary. External users are identified only by
+provider, exact issuer, and subject. Local passwords are bound to a normalized
+login name. Email and display name are non-authoritative attributes, and every
+identity or credential is explicitly provisioned.
+
+After authentication, all browser modes use the same hashed server-side session,
+active-user/security-version check, user role, and owner-scoped resource model.
+Cookies are host-only, Secure, HttpOnly where applicable, and SameSite-restricted;
+browser mutations require exact `PUBLIC_ORIGIN` and a per-session CSRF secret.
+Admin API additionally requires `owner` or `admin`. Admin CLI authenticates with
+an independent `lra_` key before browser logic, so it does not depend on an IdP,
+cookies, or Cloudflare headers.
 
 `admin-local` is the intentional direct-SQL recovery exception. Normal runtime SQL is owned by database repositories and business operations live in services.
 

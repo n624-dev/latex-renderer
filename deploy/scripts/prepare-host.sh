@@ -34,16 +34,6 @@ runtime_dir="/run/user/$worker_uid"
 user_bus="unix:path=$runtime_dir/bus"
 rootless_socket="unix://$runtime_dir/docker.sock"
 
-cloudflared_config=${CLOUDFLARED_CONFIG_FILE:-/etc/cloudflared/config.yml}
-if [ -f "$cloudflared_config" ]; then
-  cloudflared tunnel --config "$cloudflared_config" ingress validate
-elif systemctl is-active --quiet cloudflared; then
-  echo "No host-local Tunnel config found; using the active remotely managed connector."
-else
-  echo "neither a host-local Cloudflare Tunnel config nor an active connector was found" >&2
-  exit 74
-fi
-
 grep -q "^$worker_user:" /etc/subuid || usermod --add-subuids 165536-231071 "$worker_user"
 grep -q "^$worker_user:" /etc/subgid || usermod --add-subgids 165536-231071 "$worker_user"
 
@@ -111,11 +101,34 @@ elif ! grep -q '^RENDERER_JOB_TIMEOUT_SECONDS=' /etc/latex-renderer/renderer.env
 fi
 sed -i '/^RENDERER_APPARMOR_PROFILE=/d' /etc/latex-renderer/renderer.env
 
+deployment_mode=$(sed -n 's/^DEPLOYMENT_MODE=//p' /etc/latex-renderer/renderer.env | tail -n 1)
+case "$deployment_mode" in
+  cloudflare)
+    cloudflared_config=${CLOUDFLARED_CONFIG_FILE:-/etc/cloudflared/config.yml}
+    if [ -f "$cloudflared_config" ]; then
+      cloudflared tunnel --config "$cloudflared_config" ingress validate
+    elif systemctl is-active --quiet cloudflared; then
+      echo "No host-local Tunnel config found; using the active remotely managed connector."
+    else
+      echo "neither a host-local Cloudflare Tunnel config nor an active connector was found" >&2
+      exit 74
+    fi
+    ;;
+  standalone) ;;
+  *) echo "DEPLOYMENT_MODE must be cloudflare or standalone in renderer.env" >&2; exit 65 ;;
+esac
+
 if [ ! -f /etc/latex-renderer/secrets/api-key-pepper ]; then
   (umask 077; dd if=/dev/urandom of=/etc/latex-renderer/secrets/api-key-pepper bs=32 count=1 status=none)
 fi
 chown root:root /etc/latex-renderer/secrets/api-key-pepper
 chmod 0400 /etc/latex-renderer/secrets/api-key-pepper
+
+if [ ! -f /etc/latex-renderer/secrets/auth-password-pepper ]; then
+  (umask 077; dd if=/dev/urandom of=/etc/latex-renderer/secrets/auth-password-pepper bs=32 count=1 status=none)
+fi
+chown root:latex-renderer /etc/latex-renderer/secrets/auth-password-pepper
+chmod 0440 /etc/latex-renderer/secrets/auth-password-pepper
 
 if [ ! -f /etc/latex-renderer/ticket-keys/v1.key ]; then
   (umask 027; dd if=/dev/urandom of=/etc/latex-renderer/ticket-keys/v1.key bs=32 count=1 status=none)
@@ -187,4 +200,4 @@ echo "Host preparation complete."
 echo "Release: $release_root"
 echo "Rootless Docker: $rootless_socket"
 echo "Renderer image will be reconciled from saved Image Manager settings."
-echo "Services were not started; configure Cloudflare Access and /etc/latex-renderer/renderer.env first."
+echo "Services were not started; finish the selected authentication and reverse-proxy configuration first."

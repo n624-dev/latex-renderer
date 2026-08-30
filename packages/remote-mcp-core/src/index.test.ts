@@ -71,8 +71,8 @@ describe("Remote MCP core", () => {
         clientId: client.clientId,
         resource: "https://latex.example.com/mcp",
       }),
-    ).toThrowError("Refresh token reuse revoked the grant");
-    expect(() => oauth.verifyAccessToken(rotated.access_token)).toThrowError(
+    ).toThrow("Refresh token reuse revoked the grant");
+    expect(() => oauth.verifyAccessToken(rotated.access_token)).toThrow(
       "Access token is invalid",
     );
   });

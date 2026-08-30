@@ -107,6 +107,7 @@ describe("Web render sample ZIP E2E", () => {
       file.size,
       sourceSha256,
       "web-e2e-1234567890123456",
+      "csrf-test-token",
     );
     await uploadRenderZip(fetcher, ticket, file);
     expect(uploaded).toEqual(source);

@@ -72,55 +72,66 @@ if [ ! -f "$environment_file" ]; then
   echo "renderer environment file not found: $environment_file" >&2
   exit 66
 fi
-deployment_environment_file=${LATEX_RENDERER_DEPLOYMENT_ENV_FILE:-/etc/latex-renderer/deployment.env}
-case "$deployment_environment_file" in
-  /*) ;;
-  *) echo "LATEX_RENDERER_DEPLOYMENT_ENV_FILE must be an absolute path" >&2; exit 64 ;;
-esac
-if [ ! -f "$deployment_environment_file" ]; then
-  echo "deployment environment file not found: $deployment_environment_file" >&2
-  exit 66
+preflight_auth_mode=$(sed -n 's/^AUTH_MODE=//p' "$environment_file" | tail -n 1)
+if [ "$preflight_auth_mode" = password ] && \
+   [ ! -f /etc/latex-renderer/secrets/auth-password-pepper ]; then
+  (umask 077; dd if=/dev/urandom \
+    of=/etc/latex-renderer/secrets/auth-password-pepper \
+    bs=32 count=1 status=none)
+  chown root:latex-renderer \
+    /etc/latex-renderer/secrets/auth-password-pepper
+  chmod 0440 /etc/latex-renderer/secrets/auth-password-pepper
 fi
-deployment_environment_file=$(readlink -f -- "$deployment_environment_file")
-case "$deployment_environment_file" in
-  "$source_root"/*) echo "Production deployment environment must be stored outside the Git worktree" >&2; exit 78 ;;
-esac
-if [ "$(stat -c '%u:%a' "$deployment_environment_file")" != "0:600" ]; then
-  echo "Production deployment environment must be owned by root with mode 0600" >&2
-  exit 78
+/usr/local/bin/node "$source_root/deploy/scripts/validate-production-profile.mjs" \
+  "$environment_file"
+deployment_mode=$(sed -n 's/^DEPLOYMENT_MODE=//p' "$environment_file" | tail -n 1)
+case "$deployment_mode" in cloudflare|standalone) ;; *) echo "DEPLOYMENT_MODE must be cloudflare or standalone" >&2; exit 65 ;; esac
+if [ "$deployment_mode" = cloudflare ]; then
+  deployment_environment_file=${LATEX_RENDERER_DEPLOYMENT_ENV_FILE:-/etc/latex-renderer/deployment.env}
+  case "$deployment_environment_file" in /*) ;; *) echo "LATEX_RENDERER_DEPLOYMENT_ENV_FILE must be an absolute path" >&2; exit 64 ;; esac
+  if [ ! -f "$deployment_environment_file" ]; then
+    echo "deployment environment file not found: $deployment_environment_file" >&2
+    exit 66
+  fi
+  deployment_environment_file=$(readlink -f -- "$deployment_environment_file")
+  case "$deployment_environment_file" in "$source_root"/*) echo "Production deployment environment must be stored outside the Git worktree" >&2; exit 78 ;; esac
+  if [ "$(stat -c '%u:%a' "$deployment_environment_file")" != "0:600" ]; then
+    echo "Production deployment environment must be owned by root with mode 0600" >&2
+    exit 78
+  fi
+  set -a
+  # This is trusted root-owned shell syntax so values can be quoted safely.
+  . "$deployment_environment_file"
+  set +a
 fi
-set -a
-# This is trusted root-owned shell syntax so values can be quoted safely.
-. "$deployment_environment_file"
-set +a
-if ! printf '%s\n' "${CLOUDFLARE_ACCOUNT_ID:-}" | grep -Eq '^[0-9a-fA-F]{32}$'; then
-  echo "CLOUDFLARE_ACCOUNT_ID must be a 32-character hexadecimal ID" >&2
+auth_mode=$(sed -n 's/^AUTH_MODE=//p' "$environment_file" | tail -n 1)
+case "$auth_mode" in cloudflare-access|oidc|password) ;; *) echo "AUTH_MODE must be cloudflare-access, oidc, or password" >&2; exit 65 ;; esac
+if [ "$deployment_mode" = standalone ] && [ "$auth_mode" = cloudflare-access ]; then
+  echo "AUTH_MODE=cloudflare-access requires DEPLOYMENT_MODE=cloudflare" >&2
   exit 65
 fi
-if ! printf '%s\n' "${CLOUDFLARE_TUNNEL_ID:-}" | grep -Eq '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'; then
-  echo "CLOUDFLARE_TUNNEL_ID must be a UUID" >&2
-  exit 65
-fi
-case "${CLOUDFLARE_ZONE_NAME:-}" in
-  *.*) ;;
-  *) echo "CLOUDFLARE_ZONE_NAME must be a DNS zone name" >&2; exit 65 ;;
-esac
-gateway_worker_config=${GATEWAY_WORKER_CONFIG_FILE:-/etc/latex-renderer/gateway-worker.wrangler.jsonc}
-case "$gateway_worker_config" in
-  /*) ;;
-  *) echo "GATEWAY_WORKER_CONFIG_FILE must be an absolute path" >&2; exit 64 ;;
-esac
-if [ ! -f "$gateway_worker_config" ]; then
-  echo "Gateway Worker configuration file not found: $gateway_worker_config" >&2
-  exit 66
-fi
-gateway_worker_config=$(readlink -f -- "$gateway_worker_config")
-case "$gateway_worker_config" in
-  "$source_root"/*) echo "Gateway Worker production configuration must be stored outside the Git worktree" >&2; exit 78 ;;
-esac
-if [ "$(stat -c '%u:%a' "$gateway_worker_config")" != "0:600" ]; then
-  echo "Gateway Worker production configuration must be owned by root with mode 0600" >&2
-  exit 78
+if [ "$deployment_mode" = cloudflare ]; then
+  if ! printf '%s\n' "${CLOUDFLARE_ACCOUNT_ID:-}" | grep -Eq '^[0-9a-fA-F]{32}$'; then
+    echo "CLOUDFLARE_ACCOUNT_ID must be a 32-character hexadecimal ID" >&2
+    exit 65
+  fi
+  if ! printf '%s\n' "${CLOUDFLARE_TUNNEL_ID:-}" | grep -Eq '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'; then
+    echo "CLOUDFLARE_TUNNEL_ID must be a UUID" >&2
+    exit 65
+  fi
+  case "${CLOUDFLARE_ZONE_NAME:-}" in *.*) ;; *) echo "CLOUDFLARE_ZONE_NAME must be a DNS zone name" >&2; exit 65 ;; esac
+  gateway_worker_config=${GATEWAY_WORKER_CONFIG_FILE:-/etc/latex-renderer/gateway-worker.wrangler.jsonc}
+  case "$gateway_worker_config" in /*) ;; *) echo "GATEWAY_WORKER_CONFIG_FILE must be an absolute path" >&2; exit 64 ;; esac
+  if [ ! -f "$gateway_worker_config" ]; then
+    echo "Gateway Worker configuration file not found: $gateway_worker_config" >&2
+    exit 66
+  fi
+  gateway_worker_config=$(readlink -f -- "$gateway_worker_config")
+  case "$gateway_worker_config" in "$source_root"/*) echo "Gateway Worker production configuration must be stored outside the Git worktree" >&2; exit 78 ;; esac
+  if [ "$(stat -c '%u:%a' "$gateway_worker_config")" != "0:600" ]; then
+    echo "Gateway Worker production configuration must be owned by root with mode 0600" >&2
+    exit 78
+  fi
 fi
 public_origin=$(sed -n 's/^PUBLIC_ORIGIN=//p' "$environment_file" | tail -n 1)
 case "$public_origin" in
@@ -138,8 +149,10 @@ if [ ! -x "$sync_pnpm_bin/pnpm" ]; then
 fi
 sync_path="$sync_pnpm_bin:/usr/local/bin:/usr/bin:/bin"
 sync_group=$(id -gn "$sync_user")
-gateway_runtime_config=$(mktemp "$source_root/apps/gateway-worker/.wrangler.production.XXXXXX.jsonc")
-install -o "$sync_user" -g "$sync_group" -m 0600 "$gateway_worker_config" "$gateway_runtime_config"
+if [ "$deployment_mode" = cloudflare ]; then
+  gateway_runtime_config=$(mktemp "$source_root/apps/gateway-worker/.wrangler.production.XXXXXX.jsonc")
+  install -o "$sync_user" -g "$sync_group" -m 0600 "$gateway_worker_config" "$gateway_runtime_config"
+fi
 
 runuser -u "$sync_user" -- env HOME="$sync_home" USER="$sync_user" LOGNAME="$sync_user" PNPM_HOME="$sync_pnpm_bin" PATH="$sync_path" \
   "$sync_pnpm_bin/pnpm" --dir "$source_root" build:production-services
@@ -157,7 +170,9 @@ runuser -u "$sync_user" -- env HOME="$sync_home" USER="$sync_user" LOGNAME="$syn
 sh "$source_root/deploy/scripts/quiesce-image-manager.sh"
 deployment_quiesced=true
 "$source_root/deploy/scripts/prepare-host.sh" "$release_id"
-/opt/latex-renderer/current/deploy/scripts/configure-host-access.sh
+if [ "$deployment_mode" = cloudflare ]; then
+  /opt/latex-renderer/current/deploy/scripts/configure-host-access.sh
+fi
 
 if [ ! -f /etc/latex-renderer/secrets/image-manager-token ]; then
   (umask 077; openssl rand -hex 32 > /etc/latex-renderer/secrets/image-manager-token)
@@ -194,6 +209,11 @@ systemctl restart \
   latex-renderer-admin-web \
   latex-renderer-remote-mcp \
   latex-renderer-worker
+if [ "$deployment_mode" = standalone ]; then
+  systemctl enable --now latex-renderer-standalone-gateway.service
+else
+  systemctl disable --now latex-renderer-standalone-gateway.service >/dev/null 2>&1 || true
+fi
 systemctl enable --now \
   latex-renderer-remote-mcp.service \
   latex-renderer-update-refresh.timer \
@@ -204,19 +224,23 @@ systemctl enable --now \
 for unit in latex-renderer-update-manager latex-renderer-image-manager latex-renderer-api latex-renderer-internal-api latex-renderer-admin-api latex-renderer-admin-web latex-renderer-remote-mcp latex-renderer-worker; do
   systemctl is-active --quiet "$unit"
 done
+if [ "$deployment_mode" = standalone ]; then
+  systemctl is-active --quiet latex-renderer-standalone-gateway
+fi
 for timer in latex-renderer-update-refresh.timer latex-renderer-image-refresh.timer latex-renderer-image-operation-watchdog.timer latex-renderer-image-log-cleanup.timer; do
   systemctl is-active --quiet "$timer"
 done
 /opt/latex-renderer/current/deploy/scripts/wait-update-manager-socket.sh
 
-systemctl is-active --quiet cloudflared
-
-runuser -u "$sync_user" -- env HOME="$sync_home" USER="$sync_user" LOGNAME="$sync_user" PNPM_HOME="$sync_pnpm_bin" PATH="$sync_path" \
-  "$sync_pnpm_bin/pnpm" --dir "$source_root" --filter @latex-renderer/gateway-worker exec wrangler deploy --config "$gateway_runtime_config"
-runuser -u "$sync_user" -- env HOME="$sync_home" USER="$sync_user" LOGNAME="$sync_user" PNPM_HOME="$sync_pnpm_bin" PATH="$sync_path" \
-  "$sync_pnpm_bin/pnpm" --dir "$source_root" --filter @latex-renderer/public-web run deploy
-runuser -u "$sync_user" -- env HOME="$sync_home" USER="$sync_user" LOGNAME="$sync_user" PNPM_HOME="$sync_pnpm_bin" PATH="$sync_path" \
-  /usr/local/bin/node "$source_root/deploy/scripts/sync-public-worker-routes.mjs" --apply
+if [ "$deployment_mode" = cloudflare ]; then
+  systemctl is-active --quiet cloudflared
+  runuser -u "$sync_user" -- env HOME="$sync_home" USER="$sync_user" LOGNAME="$sync_user" PNPM_HOME="$sync_pnpm_bin" PATH="$sync_path" \
+    "$sync_pnpm_bin/pnpm" --dir "$source_root" --filter @latex-renderer/gateway-worker exec wrangler deploy --config "$gateway_runtime_config"
+  runuser -u "$sync_user" -- env HOME="$sync_home" USER="$sync_user" LOGNAME="$sync_user" PNPM_HOME="$sync_pnpm_bin" PATH="$sync_path" \
+    "$sync_pnpm_bin/pnpm" --dir "$source_root" --filter @latex-renderer/public-web run deploy
+  runuser -u "$sync_user" -- env HOME="$sync_home" USER="$sync_user" LOGNAME="$sync_user" PNPM_HOME="$sync_pnpm_bin" PATH="$sync_path" \
+    /usr/local/bin/node "$source_root/deploy/scripts/sync-public-worker-routes.mjs" --apply
+fi
 
 client_base="$public_origin/downloads/client"
 mcpb_base="$public_origin/downloads/mcpb"
@@ -279,10 +303,20 @@ until curl --fail --silent --show-error "$public_origin/status/?$cache_buster&at
   sleep 2
 done
 
-LATEX_RENDER_BASE_URL="$public_origin" /opt/latex-renderer/current/deploy/scripts/smoke-test-production.sh
-runuser -u "$sync_user" -- env HOME="$sync_home" USER="$sync_user" LOGNAME="$sync_user" PNPM_HOME="$sync_pnpm_bin" PATH="$sync_path" \
-  /usr/local/bin/node "$source_root/deploy/scripts/sync-cloudflare-tunnel-config.mjs" --apply
-LATEX_RENDER_BASE_URL="$public_origin" "$source_root/deploy/scripts/smoke-test-public-worker-boundary.sh"
+active_owner_count=$(sqlite3 /var/lib/latex-renderer/renderer.sqlite3 \
+  "SELECT COUNT(*) FROM users WHERE role='owner' AND status='active';")
+if [ "$active_owner_count" -gt 0 ]; then
+  LATEX_RENDER_BASE_URL="$public_origin" \
+    /opt/latex-renderer/current/deploy/scripts/smoke-test-production.sh
+else
+  echo "No active owner exists yet; authenticated render smoke is deferred until owner bootstrap."
+fi
+if [ "$deployment_mode" = cloudflare ]; then
+  runuser -u "$sync_user" -- env HOME="$sync_home" USER="$sync_user" LOGNAME="$sync_user" PNPM_HOME="$sync_pnpm_bin" PATH="$sync_path" \
+    /usr/local/bin/node "$source_root/deploy/scripts/sync-cloudflare-tunnel-config.mjs" --apply
+  LATEX_RENDER_BASE_URL="$public_origin" \
+    "$source_root/deploy/scripts/smoke-test-public-worker-boundary.sh"
+fi
 
 /opt/latex-renderer/current/deploy/scripts/prune-production-artifacts.sh "$release_id"
 

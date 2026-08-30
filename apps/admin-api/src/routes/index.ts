@@ -1,7 +1,7 @@
 import { Hono } from "hono";
-import { requireAccessIdentity, requireActor, requireCsrfToken } from "../auth/actor.js";
+import { appendSetCookies } from "@latex-renderer/auth";
+import { requireActor } from "../auth/actor.js";
 import type { AdminDependencies } from "../types.js";
-import { AdminSessionService } from "../services/session.js";
 import { createApiKeysRouter } from "./api-keys.js";
 import { createJobsRouter } from "./jobs.js";
 import { createServiceAccountsRouter } from "./service-accounts.js";
@@ -17,14 +17,21 @@ import { createUsersRouter } from "./users.js";
 
 export function createAdminV1Router(deps: AdminDependencies): Hono {
   const r = new Hono();
-  const sessions = new AdminSessionService(deps);
-  r.get("/session", async (c) => c.json(sessions.inspect(await requireAccessIdentity(deps, c))));
-  r.post("/session/claim-subject", async (c) => {
-    requireCsrfToken(c);
-    return c.json(sessions.claim(await requireAccessIdentity(deps, c), {
-      ipAddress: c.req.header("CF-Connecting-IP"),
-      userAgent: c.req.header("User-Agent"),
-    }));
+  r.get("/session", async (c) => {
+    const session = await deps.browserAuth.establishSession(c.req.raw);
+    appendSetCookies(c.res.headers, session.cookies);
+    return c.json({
+      authenticated: true,
+      authMode: session.principal.authMode,
+      csrfToken: session.csrfToken,
+      user: {
+        id: session.principal.user.id,
+        email: session.principal.user.email,
+        displayName: session.principal.user.display_name,
+        role: session.principal.user.role,
+        status: session.principal.user.status,
+      },
+    });
   });
   r.get("/me", async (c) => {
     const actor = await requireActor(deps, c, "admin:users:read"),

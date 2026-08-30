@@ -1,8 +1,12 @@
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { isIP } from "node:net";
 import { Hono } from "hono";
 import { requestId } from "hono/request-id";
 import { secureHeaders } from "hono/secure-headers";
-import type { AccessJwtVerifier } from "@latex-renderer/auth";
+import {
+  appendSetCookies,
+  type BrowserAuthenticationService,
+} from "@latex-renderer/auth";
 import type { RendererDatabase } from "@latex-renderer/database";
 import {
   REMOTE_MCP_SCOPES,
@@ -15,7 +19,7 @@ import { z } from "zod";
 
 export interface RemoteMcpAppDependencies {
   database: RendererDatabase;
-  access: AccessJwtVerifier;
+  browserAuth: BrowserAuthenticationService;
   oauth: RemoteOAuthService;
   mcp: McpHttpHandler;
   publicOrigin: string;
@@ -23,16 +27,30 @@ export interface RemoteMcpAppDependencies {
 
 const registerSchema = z
   .object({
-    client_name: z.string().min(1).max(200),
-    redirect_uris: z.array(z.url()).min(1).max(10),
+    client_name: z
+      .string()
+      .trim()
+      .min(1)
+      .max(200)
+      .refine((value) => !hasControlCharacters(value)),
+    redirect_uris: z.array(z.url().max(2048)).min(1).max(10),
     token_endpoint_auth_method: z.literal("none").optional(),
-    grant_types: z.array(z.string()).optional(),
-    response_types: z.array(z.string()).optional(),
+    grant_types: z
+      .array(z.enum(["authorization_code", "refresh_token"]))
+      .min(1)
+      .max(2)
+      .optional(),
+    response_types: z.array(z.literal("code")).length(1).optional(),
   })
   .loose();
 
-export function createRemoteMcpApp(deps: RemoteMcpAppDependencies): Hono {
-  const app = new Hono();
+export function createRemoteMcpApp(deps: RemoteMcpAppDependencies) {
+  const app = new Hono<{
+      Variables: {
+        mcpAccess: ReturnType<RemoteOAuthService["verifyAccessToken"]>;
+      };
+    }>(),
+    registrationLimiter = new AnonymousRegistrationLimiter();
   app.use("*", requestId());
   app.use("*", secureHeaders());
   app.use("*", async (c, next) => {
@@ -42,10 +60,32 @@ export function createRemoteMcpApp(deps: RemoteMcpAppDependencies): Hono {
     await next();
   });
   app.use("*", async (c, next) => {
-    const expected = new URL(deps.publicOrigin).hostname,
-      host = c.req.header("Host")?.split(":")[0];
-    if (host !== expected && host !== "127.0.0.1" && host !== "localhost")
+    const expected = new URL(deps.publicOrigin).host.toLowerCase(),
+      host = c.req.header("Host")?.toLowerCase();
+    if (
+      host !== expected &&
+      host !== "127.0.0.1:3104" &&
+      host !== "localhost:3104" &&
+      host !== "[::1]:3104"
+    )
       throw new AppError("INVALID_HOST", "Host is not allowed", 400);
+    await next();
+  });
+  app.use("/mcp", async (c, next) => {
+    try {
+      c.set(
+        "mcpAccess",
+        deps.oauth.verifyAccessToken(
+          parseBearer(c.req.header("Authorization")),
+        ),
+      );
+    } catch {
+      return mcpAuthenticationChallenge(deps.publicOrigin);
+    }
+    await next();
+  });
+  app.use("/mcp", async (c, next) => {
+    c.req.raw = await boundedRequest(c.req.raw, 8 * 1024 * 1024);
     await next();
   });
 
@@ -80,12 +120,19 @@ export function createRemoteMcpApp(deps: RemoteMcpAppDependencies): Hono {
 
   app.post("/oauth/register", async (c) => {
     if (c.req.header("Content-Type")?.split(";", 1)[0] !== "application/json")
-      throw new AppError("INVALID_REQUEST", "Registration request must be JSON", 400);
-    const parsed = registerSchema.safeParse(
-      await readJson(c.req.raw, 16_384),
-    );
+      throw new AppError(
+        "INVALID_REQUEST",
+        "Registration request must be JSON",
+        400,
+      );
+    registrationLimiter.consume(trustedClientAddress(c.req.raw));
+    const parsed = registerSchema.safeParse(await readJson(c.req.raw, 16_384));
     if (!parsed.success)
-      throw new AppError("INVALID_CLIENT_METADATA", "OAuth client metadata is invalid", 400);
+      throw new AppError(
+        "INVALID_CLIENT_METADATA",
+        "OAuth client metadata is invalid",
+        400,
+      );
     const client = deps.oauth.registerClient({
       clientName: parsed.data.client_name,
       redirectUris: parsed.data.redirect_uris,
@@ -107,21 +154,34 @@ export function createRemoteMcpApp(deps: RemoteMcpAppDependencies): Hono {
     const request = deps.oauth.validateAuthorizationRequest(
         new URL(c.req.url).searchParams,
       ),
-      userId = await accessUserId(deps, c.req.header("Cf-Access-Jwt-Assertion")),
+      session = await establishOrRedirect(deps, c.req.raw),
       csrf = randomBytes(24).toString("base64url");
+    if (session instanceof Response) return session;
+    appendSetCookies(c.res.headers, session.cookies);
     c.header(
       "Set-Cookie",
       `oauth_csrf=${csrf}; Path=/oauth/authorize; HttpOnly; Secure; SameSite=Lax; Max-Age=300`,
+      { append: true },
     );
-    return c.html(consentPage(request, request.clientName, userId, csrf));
+    return c.html(
+      consentPage(request, request.clientName, session.principal.user.id, csrf),
+    );
   });
 
   app.post("/oauth/authorize", async (c) => {
+    const principal = deps.browserAuth.authenticateSession(c.req.raw);
+    if (principal === undefined)
+      throw new AppError("LOGIN_REQUIRED", "A browser login is required", 401);
+    deps.browserAuth.requireExactOrigin(c.req.raw);
     const body = await readForm(c.req.raw, 16_384),
       csrf = stringField(body.get("csrf")),
       cookie = parseCookie(c.req.header("Cookie"), "oauth_csrf");
     if (!safeEqual(csrf, cookie))
-      throw new AppError("OAUTH_CSRF", "Authorization confirmation expired", 403);
+      throw new AppError(
+        "OAUTH_CSRF",
+        "Authorization confirmation expired",
+        403,
+      );
     const params = new URLSearchParams();
     for (const name of [
       "response_type",
@@ -137,7 +197,7 @@ export function createRemoteMcpApp(deps: RemoteMcpAppDependencies): Hono {
       if (value !== null && value !== "") params.set(name, value);
     }
     const request = deps.oauth.validateAuthorizationRequest(params),
-      userId = await accessUserId(deps, c.req.header("Cf-Access-Jwt-Assertion"));
+      userId = principal.user.id;
     c.header(
       "Set-Cookie",
       "oauth_csrf=; Path=/oauth/authorize; HttpOnly; Secure; SameSite=Lax; Max-Age=0",
@@ -155,7 +215,11 @@ export function createRemoteMcpApp(deps: RemoteMcpAppDependencies): Hono {
   app.post("/oauth/token", async (c) => {
     const type = c.req.header("Content-Type")?.split(";", 1)[0];
     if (type !== "application/x-www-form-urlencoded")
-      throw new AppError("INVALID_REQUEST", "Token request must be form encoded", 400);
+      throw new AppError(
+        "INVALID_REQUEST",
+        "Token request must be form encoded",
+        400,
+      );
     const form = await readForm(c.req.raw, 16_384),
       grant = stringField(form.get("grant_type")),
       clientId = stringField(form.get("client_id")),
@@ -186,24 +250,7 @@ export function createRemoteMcpApp(deps: RemoteMcpAppDependencies): Hono {
   });
 
   app.all("/mcp", async (c) => {
-    const metadataUrl = `${deps.publicOrigin}/.well-known/oauth-protected-resource/mcp`;
-    let access;
-    try {
-      access = deps.oauth.verifyAccessToken(
-        parseBearer(c.req.header("Authorization")),
-      );
-    } catch {
-      return new Response(
-        JSON.stringify({ error: "invalid_token", error_description: "A valid Remote MCP access token is required" }),
-        {
-          status: 401,
-          headers: {
-            "Content-Type": "application/json",
-            "WWW-Authenticate": `Bearer resource_metadata="${metadataUrl}", error="invalid_token"`,
-          },
-        },
-      );
-    }
+    const access = c.get("mcpAccess");
     return deps.mcp.fetch(c.req.raw, {
       authInfo: {
         token: access.token,
@@ -241,17 +288,80 @@ export function createRemoteMcpApp(deps: RemoteMcpAppDependencies): Hono {
   return app;
 }
 
-async function accessUserId(
+class AnonymousRegistrationLimiter {
+  private readonly secret = randomBytes(32);
+  private readonly entries = new Map<
+    string,
+    { count: number; windowStartedAt: number }
+  >();
+
+  consume(address: string, timestamp = Date.now()): void {
+    const windowMs = 15 * 60_000;
+    for (const [key, entry] of this.entries)
+      if (entry.windowStartedAt + windowMs <= timestamp)
+        this.entries.delete(key);
+    const key = createHmac("sha256", this.secret).update(address).digest("hex");
+    const previous = this.entries.get(key);
+    if (previous === undefined) {
+      if (this.entries.size >= 10_000)
+        throw new AppError(
+          "OAUTH_REGISTRATION_BUSY",
+          "OAuth client registration is temporarily unavailable",
+          503,
+        );
+      this.entries.set(key, { count: 1, windowStartedAt: timestamp });
+      return;
+    }
+    if (previous.count >= 10)
+      throw new AppError(
+        "OAUTH_REGISTRATION_RATE_LIMIT",
+        "Too many OAuth client registrations",
+        429,
+      );
+    previous.count += 1;
+  }
+}
+
+function trustedClientAddress(request: Request): string {
+  for (const name of ["CF-Connecting-IP", "X-Latex-Renderer-Client-IP"]) {
+    const value = request.headers.get(name)?.trim();
+    if (value !== undefined && isIP(value) !== 0) return value;
+  }
+  return "unavailable";
+}
+
+function mcpAuthenticationChallenge(publicOrigin: string): Response {
+  const metadataUrl = `${publicOrigin}/.well-known/oauth-protected-resource/mcp`;
+  return new Response(
+    JSON.stringify({
+      error: "invalid_token",
+      error_description: "A valid Remote MCP access token is required",
+    }),
+    {
+      status: 401,
+      headers: {
+        "Content-Type": "application/json",
+        "WWW-Authenticate": `Bearer resource_metadata="${metadataUrl}", error="invalid_token"`,
+      },
+    },
+  );
+}
+
+async function establishOrRedirect(
   deps: RemoteMcpAppDependencies,
-  assertion: string | undefined,
-): Promise<string> {
-  if (assertion === undefined)
-    throw new AppError("ACCESS_LOGIN_REQUIRED", "Cloudflare Access login is required", 401);
-  const identity = await deps.access.verify(assertion),
-    user = deps.database.users.findByAccessSubject(identity.subject);
-  if (user === undefined || user.status !== "active")
-    throw new AppError("OAUTH_USER_NOT_LINKED", "Access identity is not linked to an active user", 403);
-  return user.id;
+  request: Request,
+) {
+  try {
+    return await deps.browserAuth.establishSession(request);
+  } catch (error) {
+    if (!(error instanceof AppError) || error.status !== 401) throw error;
+    const target = `${new URL(request.url).pathname}${new URL(request.url).search}`;
+    const login =
+      deps.browserAuth.mode === "oidc"
+        ? `/auth/oidc/start?return_to=${encodeURIComponent(target)}`
+        : `/login/?return_to=${encodeURIComponent(target)}`;
+    return Response.redirect(new URL(login, deps.publicOrigin), 302);
+  }
 }
 
 function consentPage(
@@ -272,12 +382,22 @@ function consentPage(
     csrf,
   };
   const scopes = request.scopes
-    .map((scope) => `<li><code>${escapeHtml(scope)}</code> — ${escapeHtml(scopeDescription(scope))}</li>`)
+    .map(
+      (scope) =>
+        `<li><code>${escapeHtml(scope)}</code> — ${escapeHtml(scopeDescription(scope))}</li>`,
+    )
     .join("");
-  return `<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>Remote MCPを承認 | LaTeX Renderer</title><link rel="stylesheet" href="/assets/styles.css"></head><body><header class="site-header"><strong><a href="/">LaTeX Renderer</a></strong></header><main><div class="hero"><p class="eyebrow">Remote MCP</p><h1>接続を承認</h1><p><strong>${escapeHtml(clientName)}</strong> がLaTeX Rendererへの接続を要求しています。</p></div><section class="card"><h2>許可する操作</h2><ul>${scopes}</ul><p class="muted">許可すると、この接続はあなたが所有するSourceとジョブだけを操作できます。</p><form class="actions" method="post" action="/oauth/authorize">${Object.entries(fields)
+  return `<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>Remote MCPを承認 | LaTeX Renderer</title><link rel="stylesheet" href="/assets/styles.css"></head><body><header class="site-header"><strong><a href="/">LaTeX Renderer</a></strong></header><main><div class="hero"><p class="eyebrow">Remote MCP</p><h1>接続を承認</h1><p><strong>${escapeHtml(clientName)}</strong> がLaTeX Rendererへの接続を要求しています。</p></div><section class="card"><h2>許可する操作</h2><ul>${scopes}</ul><p class="muted">許可すると、この接続はあなたが所有するSourceとジョブだけを操作できます。</p><form class="actions" method="post" action="/oauth/authorize">${Object.entries(
+    fields,
+  )
     .filter((entry): entry is [string, string] => entry[1] !== undefined)
-    .map(([name, value]) => `<input type="hidden" name="${escapeHtml(name)}" value="${escapeHtml(value)}">`)
-    .join("")}<button type="submit" name="decision" value="approve">接続を許可</button><button class="secondary" type="submit" name="decision" value="deny">拒否</button></form></section></main></body></html>`;
+    .map(
+      ([name, value]) =>
+        `<input type="hidden" name="${escapeHtml(name)}" value="${escapeHtml(value)}">`,
+    )
+    .join(
+      "",
+    )}<button type="submit" name="decision" value="approve">接続を許可</button><button class="secondary" type="submit" name="decision" value="deny">拒否</button></form></section></main></body></html>`;
 }
 
 function scopeDescription(scope: string): string {
@@ -313,11 +433,21 @@ function safeEqual(left: string, right: string): boolean {
 }
 
 function escapeHtml(value: string): string {
-  return value.replace(/[&<>"']/g, (character) =>
-    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[
-      character
-    ] as string,
+  return value.replace(
+    /[&<>"']/g,
+    (character) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[
+        character
+      ] as string,
   );
+}
+
+function hasControlCharacters(value: string): boolean {
+  for (const character of value) {
+    const code = character.charCodeAt(0);
+    if (code <= 0x1f || code === 0x7f) return true;
+  }
+  return false;
 }
 
 async function readJson(request: Request, maximum: number): Promise<unknown> {
@@ -325,7 +455,11 @@ async function readJson(request: Request, maximum: number): Promise<unknown> {
   try {
     return JSON.parse(text) as unknown;
   } catch {
-    throw new AppError("INVALID_REQUEST", "Request body is not valid JSON", 400);
+    throw new AppError(
+      "INVALID_REQUEST",
+      "Request body is not valid JSON",
+      400,
+    );
   }
 }
 
@@ -375,8 +509,58 @@ async function readLimitedBody(
   try {
     return new TextDecoder("utf-8", { fatal: true }).decode(body);
   } catch {
-    throw new AppError("INVALID_REQUEST", "Request body is not valid UTF-8", 400);
+    throw new AppError(
+      "INVALID_REQUEST",
+      "Request body is not valid UTF-8",
+      400,
+    );
   }
+}
+
+async function boundedRequest(
+  request: Request,
+  maximum: number,
+): Promise<Request> {
+  if (request.body === null) return request;
+  const declared = request.headers.get("Content-Length");
+  if (declared !== null && !/^(?:0|[1-9][0-9]{0,9})$/.test(declared))
+    throw new AppError(
+      "INVALID_CONTENT_LENGTH",
+      "Content-Length is invalid",
+      400,
+    );
+  const reader = request.body.getReader(),
+    chunks: Uint8Array[] = [];
+  let length = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    length += value.byteLength;
+    if (length > maximum) {
+      await reader.cancel();
+      throw new AppError(
+        "REQUEST_TOO_LARGE",
+        "MCP request body is too large",
+        413,
+      );
+    }
+    chunks.push(value);
+  }
+  if (declared !== null && Number(declared) !== length)
+    throw new AppError(
+      "CONTENT_LENGTH_MISMATCH",
+      "Content-Length does not match the request body",
+      400,
+    );
+  return new Request(request, {
+    body: new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const chunk of chunks) controller.enqueue(chunk);
+        controller.close();
+      },
+    }),
+    duplex: "half",
+  } as RequestInit & { duplex: "half" });
 }
 
 function oauthErrorCode(code: string): string {

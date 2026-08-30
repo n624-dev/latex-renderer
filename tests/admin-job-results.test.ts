@@ -7,6 +7,7 @@ import { ApiKeyService, type AccessJwtVerifier } from "@latex-renderer/auth";
 import { RendererDatabase } from "@latex-renderer/database";
 import { TicketService } from "@latex-renderer/ticket";
 import { createAdminApp } from "../apps/admin-api/src/app.js";
+import { legacyTestBrowserAuth } from "./helpers/browser-auth.js";
 
 const databases: RendererDatabase[] = [],
   roots: string[] = [];
@@ -274,7 +275,9 @@ async function setup() {
         new Map([["v1", Buffer.alloc(32, 1)]]),
         "v1",
       ),
-      access,
+      browserAuth: legacyTestBrowserAuth(database, access),
+      deploymentMode: "cloudflare",
+      publicOrigin: "https://latex.example.com",
       allowedOrigins: new Set(),
       writeEnabled: true,
       storageRoot: root,

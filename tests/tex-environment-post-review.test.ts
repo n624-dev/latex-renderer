@@ -86,7 +86,7 @@ describe("post-review TeX environment regressions", () => {
     const deploy = read("deploy/scripts/deploy-production-release.sh");
     expect(manager).toContain("async function reconcileDesired(op)");
     expect(manager).toContain('selector.mode === "latest"');
-    expect(manager).toContain("rebuildIfMissing: selector.mode === \"date\"");
+    expect(manager).toContain('rebuildIfMissing: selector.mode === "date"');
     expect(manager).toContain('url.pathname === "/v1/reconcile"');
     expect(deploy).toContain("reconcile-managed-runtime.mjs");
   });
@@ -137,7 +137,7 @@ describe("post-review TeX environment regressions", () => {
     const routes = read("apps/admin-api/src/routes/tex-environment.ts");
     const cli = read("apps/admin-cli/src/index.ts");
     expect(manager).toContain('await runCapture("curl", [');
-    expect(manager).toContain('"--connect-timeout", "10", "--max-time"');
+    expect(manager).toMatch(/"--connect-timeout",\s*"10",\s*"--max-time"/);
     expect(manager).toContain('magic.toString("hex") !== "fd377a585a00"');
     expect(routes).toContain("registryUnavailable: true");
     expect(routes).toContain('error.code === "IMAGE_MANAGER_UNAVAILABLE"');

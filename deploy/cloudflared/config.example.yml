@@ -12,6 +12,9 @@ ingress:
     path: ^/(oauth|mcp)(/.*)?$
     service: http://127.0.0.1:3104
   - hostname: latex.example.com
+    path: ^/auth(/.*)?$
+    service: http://127.0.0.1:3102
+  - hostname: latex.example.com
     path: ^/admin/api(/.*)?$
     service: http://127.0.0.1:3102
   - hostname: latex.example.com

@@ -55,6 +55,8 @@ const DIRECT_SOURCE_MAX_FILES = 100;
 const SOURCE_UPLOAD_CHUNK_MAX_BYTES = 512 * 1024;
 const SOURCE_UPLOAD_MS = 10 * 60_000;
 const SOURCE_RETENTION_MS = 60 * 60_000;
+const OAUTH_CLIENT_LIMIT = 10_000;
+const UNUSED_OAUTH_CLIENT_MS = 24 * 60 * 60_000;
 const ZIP_LIMITS = {
   maxExtractedBytes: DEFAULT_RESOURCE_LIMITS.maxExtractedBytes,
   maxFileBytes: DEFAULT_RESOURCE_LIMITS.maxUploadBytes,
@@ -98,7 +100,11 @@ export class RemoteOAuthService {
     clientName: string;
     redirectUris: readonly string[];
   } {
-    if (input.clientName.length < 1 || input.clientName.length > 200)
+    if (
+      input.clientName.length < 1 ||
+      input.clientName.length > 200 ||
+      hasControlCharacters(input.clientName)
+    )
       throw new AppError(
         "INVALID_CLIENT_METADATA",
         "Client name is invalid",
@@ -113,11 +119,20 @@ export class RemoteOAuthService {
       );
     const clientId = newId("mcp_client"),
       timestamp = this.now();
-    this.database.remoteMcp.insertClient({
-      id: clientId,
-      name: input.clientName,
-      redirectUris,
-      timestamp,
+    this.database.transaction(() => {
+      this.cleanupOAuth(timestamp);
+      if (this.database.remoteMcp.countClients() >= OAUTH_CLIENT_LIMIT)
+        throw new AppError(
+          "OAUTH_REGISTRATION_CAPACITY",
+          "OAuth client registration is temporarily unavailable",
+          503,
+        );
+      this.database.remoteMcp.insertClient({
+        id: clientId,
+        name: input.clientName,
+        redirectUris,
+        timestamp,
+      });
     });
     this.database.audit({
       actorType: "oauth",
@@ -144,11 +159,14 @@ export class RemoteOAuthService {
       );
     if (params.get("code_challenge_method") !== "S256")
       throw new AppError("INVALID_REQUEST", "PKCE S256 is required", 400);
-    const clientId = requiredParam(params, "client_id"),
-      redirectUri = validRedirectUri(requiredParam(params, "redirect_uri")),
+    const clientId = requiredParam(params, "client_id");
+    if (!/^mcp_client_[a-f0-9]{32}$/.test(clientId))
+      throw new AppError("INVALID_CLIENT", "OAuth client is unknown", 400);
+    const redirectUri = validRedirectUri(requiredParam(params, "redirect_uri")),
       resource = requiredParam(params, "resource"),
       codeChallenge = requiredParam(params, "code_challenge"),
-      client = this.database.remoteMcp.client(clientId);
+      client = this.database.remoteMcp.client(clientId),
+      state = optionalState(params.get("state"));
     if (client === undefined)
       throw new AppError("INVALID_CLIENT", "OAuth client is unknown", 400);
     const registered = parseStringArray(client.redirect_uris_json);
@@ -166,9 +184,7 @@ export class RemoteOAuthService {
       clientId,
       clientName: client.client_name,
       redirectUri,
-      ...(params.get("state") === null
-        ? {}
-        : { state: params.get("state") as string }),
+      ...(state === undefined ? {} : { state }),
       scopes: normalizeScopes(params.get("scope")),
       resource,
       codeChallenge,
@@ -177,11 +193,7 @@ export class RemoteOAuthService {
 
   authorize(userId: string, input: AuthorizationRequest): URL {
     const user = this.database.users.get(userId);
-    if (
-      user === undefined ||
-      user.status !== "active" ||
-      user.access_subject === null
-    )
+    if (user === undefined || user.status !== "active")
       throw new AppError(
         "OAUTH_USER_INACTIVE",
         "User is not eligible for Remote MCP",
@@ -223,8 +235,9 @@ export class RemoteOAuthService {
     codeVerifier: string;
     resource: string;
   }): OAuthTokenResponse {
-    const timestamp = this.now(),
-      codeHash = sha256Hex(input.code),
+    const timestamp = this.now();
+    this.cleanupOAuth(timestamp);
+    const codeHash = sha256Hex(input.code),
       code = this.database.remoteMcp.authorizationCode(codeHash);
     this.validateCode(code, input, timestamp);
     const user = this.database.users.get(code.user_id);
@@ -265,8 +278,9 @@ export class RemoteOAuthService {
     clientId: string;
     resource: string;
   }): OAuthTokenResponse {
-    const timestamp = this.now(),
-      token = this.database.remoteMcp.token(sha256Hex(input.refreshToken));
+    const timestamp = this.now();
+    this.cleanupOAuth(timestamp);
+    const token = this.database.remoteMcp.token(sha256Hex(input.refreshToken));
     if (token === undefined || token.token_type !== "refresh")
       throw new AppError("INVALID_GRANT", "Refresh token is invalid", 400);
     if (token.used_at !== null) {
@@ -438,6 +452,15 @@ export class RemoteOAuthService {
   }
   private after(milliseconds: number): string {
     return new Date(this.clock() + milliseconds).toISOString();
+  }
+
+  private cleanupOAuth(timestamp: string): void {
+    const now = Date.parse(timestamp);
+    this.database.remoteMcp.cleanup({
+      now: timestamp,
+      rateLimitBefore: new Date(now - 24 * 60 * 60_000).toISOString(),
+      unusedClientBefore: new Date(now - UNUSED_OAUTH_CLIENT_MS).toISOString(),
+    });
   }
 }
 
@@ -1810,12 +1833,19 @@ function requireScope(
 
 function requiredParam(params: URLSearchParams, name: string): string {
   const value = params.get(name);
-  if (value === null || value.length === 0)
+  if (
+    value === null ||
+    value.length === 0 ||
+    value.length > 4096 ||
+    hasControlCharacters(value)
+  )
     throw new AppError("INVALID_REQUEST", `${name} is required`, 400);
   return value;
 }
 
 function validRedirectUri(value: string): string {
+  if (value.length > 2048 || hasControlCharacters(value))
+    throw new AppError("INVALID_REDIRECT_URI", "Redirect URI is invalid", 400);
   let url: URL;
   try {
     url = new URL(value);
@@ -1842,6 +1872,12 @@ function validRedirectUri(value: string): string {
 }
 
 function normalizeScopes(value: string | null): RemoteMcpScope[] {
+  if (value !== null && (value.length > 500 || hasControlCharacters(value)))
+    throw new AppError(
+      "INVALID_SCOPE",
+      "Requested OAuth scope is invalid",
+      400,
+    );
   const requested =
     value === null || value.trim() === "" ? ["mcp"] : value.trim().split(/\s+/);
   if (
@@ -1855,6 +1891,21 @@ function normalizeScopes(value: string | null): RemoteMcpScope[] {
       400,
     );
   return [...new Set(requested)];
+}
+
+function optionalState(value: string | null): string | undefined {
+  if (value === null) return undefined;
+  if (value.length > 2048 || hasControlCharacters(value))
+    throw new AppError("INVALID_REQUEST", "state is invalid", 400);
+  return value;
+}
+
+function hasControlCharacters(value: string): boolean {
+  for (const character of value) {
+    const code = character.charCodeAt(0);
+    if (code <= 0x1f || code === 0x7f) return true;
+  }
+  return false;
 }
 
 function normalizeStoredScopes(value: string): RemoteMcpScope[] {

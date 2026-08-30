@@ -4,6 +4,7 @@ import { adminScript } from "./assets/admin-script.js";
 import { appScript } from "./assets/app-script.js";
 import { siteScript } from "./assets/site-script.js";
 import { renderScript } from "./assets/render-script.js";
+import { loginScript } from "./assets/login-script.js";
 import { styles } from "./assets/styles.js";
 import type { StatusProbe } from "./status-probe.js";
 import {
@@ -23,6 +24,7 @@ import {
   appRenderPage,
   downloadsPage,
   homePage,
+  loginPage,
   publicPage404,
   statusPage,
 } from "./templates.js";
@@ -74,6 +76,10 @@ export function createWebApp(
     c.header("Content-Type", "text/javascript; charset=utf-8");
     return c.body(siteScript);
   });
+  app.get("/assets/login.js", (c) => {
+    c.header("Content-Type", "text/javascript; charset=utf-8");
+    return c.body(loginScript);
+  });
   app.get("/assets/docs-search.json", (c) => {
     c.header("Content-Type", "application/json; charset=utf-8");
     return c.body(publicDocsSearchJson());
@@ -108,6 +114,8 @@ export function createWebApp(
   });
 
   app.get("/", (c) => c.html(homePage()));
+  app.get("/login", (c) => c.redirect("/login/", 308));
+  app.get("/login/", (c) => c.html(loginPage()));
   app.get("/render", (c) => c.redirect("/app/", 308));
   app.get("/render/", (c) => c.redirect("/app/", 308));
   app.get("/docs", (c) => c.redirect("/docs/", 308));

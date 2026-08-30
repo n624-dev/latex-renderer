@@ -5,7 +5,7 @@
 
 A security-oriented LuaLaTeX rendering platform with Web, CLI, HTTP API, and MCP interfaces. Untrusted TeX runs in a networkless, read-only, non-root Docker sandbox with explicit resource limits. Jobs produce PDF by default and can also extract self-contained SVG objects for math and TikZ output.
 
-The hosted service is available at [latex-render.n624.jp](https://latex-render.n624.jp/), with documentation at [latex-render.n624.jp/docs/](https://latex-render.n624.jp/docs/). Version 1.1 supports the Cloudflare deployment profile documented in this repository: Cloudflare Tunnel and Access protect a Linux host, while Workers route the small public request surface.
+The hosted service is available at [latex-render.n624.jp](https://latex-render.n624.jp/), with documentation at [latex-render.n624.jp/docs/](https://latex-render.n624.jp/docs/). Version 1.2 supports either Cloudflare Tunnel/Workers or a conventional TLS reverse proxy. Browser authentication is an explicit choice of Cloudflare Access, OIDC, or a local password.
 
 The hostname `latex.example.com` used by deployment examples and tests is a placeholder. The hosted-service URL above is intentionally public, but this repository does not contain its production credentials or infrastructure-specific configuration.
 
@@ -17,7 +17,7 @@ The hostname `latex.example.com` used by deployment examples and tests is a plac
 - Develop or contribute: [CONTRIBUTING.md](CONTRIBUTING.md)
 
 Self-hosted installation starts with the immutable
-[`v1.1.6` release](https://github.com/n624-dev/latex-renderer/releases/tag/v1.1.6),
+[`v1.2.0` release](https://github.com/n624-dev/latex-renderer/releases/tag/v1.2.0),
 which includes a digest-labelled server bundle. Do not deploy the changeable
 `main` branch as a substitute. Follow the self-hosting guide for the supported
 profile, host prerequisites, checksum verification, and configuration steps.
@@ -25,6 +25,8 @@ profile, host prerequisites, checksum verification, and configuration steps.
 ## Components
 
 - `apps/gateway-worker`: small JSON ticket gateway
+- `apps/standalone-gateway`: loopback-only equivalent for reverse-proxy deployments
+- `packages/gateway-core`: shared admission and route validation for both gateways
 - `apps/internal-api`: API-key authentication, quotas, reservations, and ticket issuance
 - `apps/renderer-api`: uploads, job operations, and artifact downloads
 - `apps/renderer-worker`: queue processing and sandbox execution
@@ -42,7 +44,7 @@ with the Web-visible self-hosting guide instead.
 
 ## Security and support
 
-Read [SECURITY.md](SECURITY.md) before deploying. Vulnerabilities must be reported through GitHub Private Vulnerability Reporting, not a public issue. Self-hosted deployment support is currently limited to the documented Cloudflare profile; broader authentication and standalone deployment work is tracked in the public issue backlog.
+Read [SECURITY.md](SECURITY.md) before deploying. Vulnerabilities must be reported through GitHub Private Vulnerability Reporting, not a public issue. The supported Cloudflare and standalone profiles, their deliberately different network-level protections, and the required authentication configuration are documented in the [self-hosting guide](https://latex-render.n624.jp/docs/self-hosting/).
 
 ## Contributing
 

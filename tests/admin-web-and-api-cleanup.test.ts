@@ -9,6 +9,7 @@ import { adminScript } from "../apps/admin-web/src/assets/admin-script.js";
 import { styles } from "../apps/admin-web/src/assets/styles.js";
 import { siteScript } from "../apps/admin-web/src/assets/site-script.js";
 import { createStatusProbe } from "../apps/admin-web/src/status-probe.js";
+import { legacyTestBrowserAuth } from "./helpers/browser-auth.js";
 
 const databases: RendererDatabase[] = [];
 afterEach(() => {
@@ -289,15 +290,15 @@ describe("public and administrative Web", () => {
     const app = createWebApp(distribution);
     const admin = await (await app.request("/admin/users/")).text();
     expect(admin).toContain("data-theme-toggle");
-    expect(admin).toContain('href="/cdn-cgi/access/logout"');
+    expect(admin).toContain('id="logout"');
+    expect(admin).not.toContain('/cdn-cgi/access/logout');
     expect(admin).not.toContain("owner / admin 専用");
 
     const adminDocs = await (await app.request("/admin/docs/")).text();
     expect(adminDocs).toContain("管理API資料");
-    expect(adminDocs).toContain(
-      "JWTの <code>email</code> と <code>sub</code> claim",
-    );
-    expect(adminDocs).toContain("別の認可境界");
+    expect(adminDocs).toContain("外部identityはissuer＋subject");
+    expect(adminDocs).toContain("emailでは自動連携しません");
+    expect(adminDocs).toContain("ブラウザ認証とは独立した");
   });
 
   it("keeps the administrative module valid and exposes guarded operations", () => {
@@ -369,7 +370,9 @@ function adminApp(): {
       new Map([["v1", Buffer.alloc(32, 1)]]),
       "v1",
     ),
-    access,
+    browserAuth: legacyTestBrowserAuth(database, access),
+    deploymentMode: "cloudflare",
+    publicOrigin: "https://latex.example.com",
     allowedOrigins: new Set(),
     writeEnabled: true,
     storageRoot: "/nonexistent",

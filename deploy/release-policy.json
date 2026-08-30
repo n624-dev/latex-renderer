@@ -1,5 +1,5 @@
 {
   "schemaVersion": 1,
-  "minimumSourceVersion": "1.0.0",
-  "rollbackCompatible": true
+  "minimumSourceVersion": "1.1.0",
+  "rollbackCompatible": false
 }

@@ -58,7 +58,7 @@ describe("Web render ZIP preflight", () => {
   it("rejects an archive without a root main.tex", async () => {
     const bytes = await zip([["project/main.tex", "nested"]]);
 
-    expect(() => inspectZip(bytes)).toThrowError(
+    expect(() => inspectZip(bytes)).toThrow(
       "ZIPのルートに main.tex がありません",
     );
   });
@@ -162,11 +162,14 @@ describe("Web render ZIP preflight", () => {
         ORIGIN,
         "key_1",
         `source_${"b".repeat(32)}`,
+        "csrf-test-token",
       ),
     ).resolves.toMatchObject({ sourceRef: `source_ref_${"a".repeat(32)}` });
     expect(requests[0]?.url).toBe(`${ORIGIN}/admin/api/v1/jobs/source-refs`);
     expect(requests[0]?.init?.credentials).toBe("same-origin");
-    expect(headers(requests[0]?.init).get("X-CSRF-Token")).toBe("1");
+    expect(headers(requests[0]?.init).get("X-CSRF-Token")).toBe(
+      "csrf-test-token",
+    );
   });
 
   it("rejects a ticket that would send the upload token off-origin", () => {
@@ -177,7 +180,7 @@ describe("Web render ZIP preflight", () => {
         ),
         "https://latex.example.com",
       ),
-    ).toThrowError("ZIP送信先が公開Renderer APIと一致しません");
+    ).toThrow("ZIP送信先が公開Renderer APIと一致しません");
   });
 
   it("uses the admin session for ticket creation and uploads with a short ticket", async () => {
@@ -195,7 +198,7 @@ describe("Web render ZIP preflight", () => {
                 serviceAccountId: "sa_1",
                 serviceAccountName: "browser",
                 userId: "user_1",
-                userEmail: "owner@example.com",
+                userLabel: "owner@example.com",
               },
             ],
           }),
@@ -218,6 +221,7 @@ describe("Web render ZIP preflight", () => {
       3,
       "a".repeat(64),
       "web-1234567890123456",
+      "csrf-test-token",
       ["pdf", "svg"],
     );
     await uploadRenderZip(
@@ -238,7 +242,9 @@ describe("Web render ZIP preflight", () => {
     )
       throw new Error("Expected a JSON render request");
     expect(headers(renderRequest.init).get("Authorization")).toBeNull();
-    expect(headers(renderRequest.init).get("X-CSRF-Token")).toBe("1");
+    expect(headers(renderRequest.init).get("X-CSRF-Token")).toBe(
+      "csrf-test-token",
+    );
     expect(renderRequest.init.credentials).toBe("same-origin");
     expect(JSON.parse(renderRequest.init.body)).toMatchObject({
       outputs: ["pdf", "svg"],

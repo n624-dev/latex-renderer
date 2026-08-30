@@ -24,7 +24,11 @@ export function installRequestPolicy(app: Hono, deps: AdminDependencies): void {
         "Vary": "Origin",
       } });
     }
-    if (isMutation(c.req.method) && !deps.writeEnabled) {
+    if (
+      isMutation(c.req.method) &&
+      !deps.writeEnabled &&
+      !c.req.path.startsWith("/auth/")
+    ) {
       throw new AppError("ADMIN_READ_ONLY", "Admin API writes are disabled", 503);
     }
     await next();

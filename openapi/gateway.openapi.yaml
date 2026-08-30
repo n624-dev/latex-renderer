@@ -4,7 +4,7 @@ info:
   version: 0.3.0
   description: Create render jobs and renew job-operation tickets.
 servers:
-  - url: https://latex-render.n624.jp
+  - url: /
 paths:
   /api/v1/source-tickets:
     post:

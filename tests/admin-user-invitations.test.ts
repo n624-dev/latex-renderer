@@ -4,6 +4,7 @@ import { ApiKeyService, type AccessJwtVerifier } from "@latex-renderer/auth";
 import { RendererDatabase } from "@latex-renderer/database";
 import { createAdminApp } from "../apps/admin-api/src/app.js";
 import { adminScript } from "../apps/admin-web/src/assets/admin-script.js";
+import { legacyTestBrowserAuth } from "./helpers/browser-auth.js";
 
 const databases: RendererDatabase[] = [];
 
@@ -11,8 +12,8 @@ afterEach(() => {
   for (const database of databases.splice(0)) database.close();
 });
 
-describe("administrator invitations", () => {
-  it("lets an admin register an active unlinked administrator", async () => {
+describe("administrator user provisioning", () => {
+  it("lets an admin provision an active administrator identity", async () => {
     const { app, database } = adminApp();
     const response = await createUser(app, "subject-admin", {
       email: "INVITED@example.test",
@@ -32,14 +33,15 @@ describe("administrator invitations", () => {
       access_subject_generation: 0,
       security_version: 1,
     });
+    expect(database.browserAuth.identitiesForUser(id)).toHaveLength(1);
     const audit = database.raw
       .prepare(
-        "SELECT metadata_json FROM audit_logs WHERE action='user.invited' AND target_id=?",
+        "SELECT metadata_json FROM audit_logs WHERE action='user.created' AND target_id=?",
       )
       .get(id) as { metadata_json: string };
     expect(JSON.parse(audit.metadata_json)).toEqual({
       role: "admin",
-      accessSubjectState: "unlinked",
+      authenticationType: "external",
     });
   });
 
@@ -65,7 +67,7 @@ describe("administrator invitations", () => {
     });
   });
 
-  it("returns a conflict for a duplicate email, including a disabled user", async () => {
+  it("allows duplicate optional email attributes because identity keys are authoritative", async () => {
     const { app, database } = adminApp();
     seedUser(database, {
       id: "user_disabled",
@@ -80,12 +82,14 @@ describe("administrator invitations", () => {
       displayName: "Duplicate",
       role: "admin",
     });
-    await expectError(response, 409, "USER_EMAIL_CONFLICT");
+    expect(response.status).toBe(201);
     expect(
       database.users
         .list()
-        .filter((user) => user.email.toLowerCase() === "existing@example.test"),
-    ).toHaveLength(1);
+        .filter(
+          (user) => user.email?.toLowerCase() === "existing@example.test",
+        ),
+    ).toHaveLength(2);
   });
 
   it("rejects legacy request-body accessSubject input", async () => {
@@ -111,10 +115,10 @@ describe("administrator invitations", () => {
     await expectError(response, 409, "LAST_OWNER");
   });
 
-  it("removes Subject input from the Web UI and Admin CLI", () => {
-    expect(adminScript).toContain(
-      "本人の初回ログイン時に検証済みAccess identityを連携します",
-    );
+  it("uses explicit provider-neutral authentication input in the Web UI", () => {
+    expect(adminScript).toContain("外部identityのsubject");
+    expect(adminScript).toContain("ログイン名");
+    expect(adminScript).toContain("認証情報を明示的に登録します");
     expect(adminScript).not.toContain('name="accessSubject"');
     const cli = readFileSync("apps/admin-cli/src/index.ts", "utf8");
     expect(cli).not.toContain("--access-subject");
@@ -155,7 +159,9 @@ function adminApp(): {
         new Map([["v1", Buffer.alloc(32, 1)]]),
         "v1",
       ),
-      access,
+      browserAuth: legacyTestBrowserAuth(database, access),
+      deploymentMode: "cloudflare",
+      publicOrigin: "https://latex.example.com",
       allowedOrigins: new Set(),
       writeEnabled: true,
       storageRoot: "/nonexistent",
@@ -205,10 +211,18 @@ function createUser(
   subject: string,
   body: Record<string, unknown>,
 ): Response | Promise<Response> {
+  const identityLabel =
+    typeof body.email === "string" ? body.email.toLowerCase() : "user";
   return app.request("/admin/api/v1/users", {
     method: "POST",
     headers: mutationHeaders(subject),
-    body: JSON.stringify(body),
+    body: JSON.stringify({
+      ...body,
+      authentication: body.authentication ?? {
+        type: "external",
+        subject: `provisioned-${identityLabel}`,
+      },
+    }),
   });
 }
 

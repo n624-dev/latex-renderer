@@ -117,7 +117,7 @@ export class AdminJobsService {
         serviceAccountId: row.service_account_id,
         serviceAccountName: row.service_account_name,
         userId: row.user_id,
-        userEmail: row.user_email,
+        userLabel: row.user_email ?? row.user_display_name,
       }));
   }
 
@@ -139,8 +139,7 @@ export class AdminJobsService {
       this.deps.database,
       this.deps.storageRoot,
       this.deps.rendererVersion,
-      this.deps.renderTickets?.rendererPublicUrl ??
-        "https://latex-render.n624.jp",
+      this.deps.renderTickets?.rendererPublicUrl ?? this.deps.publicOrigin,
       this.deps.maxQueueLength,
       this.deps.maxUserStorageBytes,
     ).createSourceRef(identity.user_id, input.sourceId);
