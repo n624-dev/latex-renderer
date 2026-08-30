@@ -702,9 +702,10 @@ export class BrowserAuthenticationService {
   }
 
   private passwordSalt(salt: Uint8Array): Buffer {
-    return createHmac("sha256", this.passwordPepper ?? Buffer.alloc(32))
-      .update(salt)
-      .digest();
+    return Buffer.concat([
+      Buffer.from(salt),
+      this.passwordPepper ?? Buffer.alloc(32),
+    ]);
   }
 
   private timestamp(): string {
