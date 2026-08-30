@@ -193,6 +193,19 @@ describe("strict browser authentication", () => {
       "another correct horse battery staple",
       "another-owner",
     );
+    const differentPepper = new BrowserAuthenticationService({
+      database,
+      mode: "password",
+      publicOrigin: "https://latex.example.com",
+      passwordPepper: Buffer.alloc(32, 8),
+      scryptLogN: 12,
+    });
+    expect(
+      await differentPepper.verifyPassword(
+        "another correct horse battery staple",
+        encoded,
+      ),
+    ).toBe(false);
     const results = await Promise.allSettled(
       Array.from({ length: 9 }, () =>
         browserAuth.verifyPassword(

@@ -657,11 +657,10 @@ export class BrowserAuthenticationService {
     salt: Uint8Array,
     logN: number,
   ): Promise<Buffer> {
-    const material = this.passwordMaterial(password);
     return new Promise((resolve, reject) => {
       scrypt(
-        material,
-        salt,
+        password,
+        this.passwordSalt(salt),
         SCRYPT_KEY_BYTES,
         {
           N: 2 ** logN,
@@ -694,7 +693,7 @@ export class BrowserAuthenticationService {
     salt: Uint8Array,
     logN: number,
   ): Buffer {
-    return scryptSync(this.passwordMaterial(password), salt, SCRYPT_KEY_BYTES, {
+    return scryptSync(password, this.passwordSalt(salt), SCRYPT_KEY_BYTES, {
       N: 2 ** logN,
       r: SCRYPT_R,
       p: SCRYPT_P,
@@ -702,9 +701,9 @@ export class BrowserAuthenticationService {
     });
   }
 
-  private passwordMaterial(password: string): Buffer {
+  private passwordSalt(salt: Uint8Array): Buffer {
     return createHmac("sha256", this.passwordPepper ?? Buffer.alloc(32))
-      .update(password, "utf8")
+      .update(salt)
       .digest();
   }
 
