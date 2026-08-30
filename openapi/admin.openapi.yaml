@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: LaTeX Renderer Administrator API
-  version: 1.2.1
+  version: 1.2.2
   description: Administrative API used by the authenticated Web UI and administration CLI. Browser login endpoints are rooted at /auth rather than this server prefix.
 servers:
   - url: /admin/api/v1

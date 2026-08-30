@@ -1,3 +1,4 @@
+import { loginScript } from "./assets/login-script.js";
 import { siteScript } from "./assets/site-script.js";
 import { styles } from "./assets/styles.js";
 import type { ClientDistribution } from "./client-distribution.js";
@@ -162,6 +163,7 @@ export function createPublicStaticAssets(
       content: distribution.rendererOpenApi,
     },
     { path: "404.html", content: publicPage404() },
+    { path: "assets/login.js", content: loginScript },
     { path: "assets/styles.css", content: styles },
     { path: "assets/site.js", content: siteScript },
     {

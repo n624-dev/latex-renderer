@@ -17,7 +17,7 @@ const distribution = {
 };
 
 describe("public web static build", () => {
-  it("emits all public routes without administrator or dynamic assets", () => {
+  it("emits all public routes without administrator assets", () => {
     const assets = new Map(
       createPublicStaticAssets(distribution).map((asset) => [
         asset.path,
@@ -30,6 +30,7 @@ describe("public web static build", () => {
       "_headers",
       "_redirects",
       "assets/docs-search.json",
+      "assets/login.js",
       "assets/site.js",
       "assets/styles.css",
       "docs/api/index.html",
@@ -61,6 +62,10 @@ describe("public web static build", () => {
       "openapi/renderer.openapi.yaml",
     ]);
     expect(assets.get("index.html")).toContain("LaTeXをPDFに変換");
+    expect(assets.get("assets/login.js")).toContain("/auth/config");
+    expect(assets.get("assets/styles.css")).toContain(
+      "[hidden] { display: none !important; }",
+    );
     expect(assets.has("render/index.html")).toBe(false);
     expect(assets.has("assets/render.js")).toBe(false);
     expect(assets.get("404.html")).toContain("ページが見つかりません");

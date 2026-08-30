@@ -10,9 +10,9 @@ since: "v1.2.0"
 
 ## 現在の提供状況
 
-このページは[`v1.2.1`](https://github.com/n624-dev/latex-renderer/releases/tag/v1.2.1)のサーバー用bundleを対象にします。Cloudflare構成に加えて、通常のTLSリバースプロキシとOIDC／ローカルパスワード認証を選択できます。このReleaseは公開後にタグや配布ファイルを差し替えできない設定で固定され、次を含みます。
+このページは[`v1.2.2`](https://github.com/n624-dev/latex-renderer/releases/tag/v1.2.2)のサーバー用bundleを対象にします。Cloudflare構成に加えて、通常のTLSリバースプロキシとOIDC／ローカルパスワード認証を選択できます。このReleaseは公開後にタグや配布ファイルを差し替えできない設定で固定され、次を含みます。
 
-- `latex-renderer-server-1.2.1.tar.gz`
+- `latex-renderer-server-1.2.2.tar.gz`
 - クライアントZIPとClaude Desktop用MCPB
 - 3つの配布ファイルを検証する`SHA256SUMS`
 - commit、バージョン、Renderer fingerprint、Node.js／pnpm要件を記録したbundle内metadata
@@ -89,12 +89,12 @@ since: "v1.2.0"
 
 公開リポジトリの`*.example`ファイルは項目確認のための雛形です。設定済みファイルを雛形へ上書きしてcommitする運用はしません。
 
-## v1.2.1をダウンロードして検証
+## v1.2.2をダウンロードして検証
 
 次のコマンドは、固定されたReleaseであることをGitHub APIで確認し、APIが返すdigestとダウンロードしたbundleを照合します。通常の非rootユーザーで実行します。
 
 ```bash
-version=1.2.1
+version=1.2.2
 repository=n624-dev/latex-renderer
 asset="latex-renderer-server-$version.tar.gz"
 work_dir=$(mktemp -d)
@@ -347,12 +347,12 @@ admin_cli=/opt/latex-renderer/current/apps/admin-cli/dist/index.js
 /usr/local/bin/node "$admin_cli" update status
 /usr/local/bin/node "$admin_cli" update check
 /usr/local/bin/node "$admin_cli" update policy --mode notify --yes
-/usr/local/bin/node "$admin_cli" update apply 1.2.1 --yes
+/usr/local/bin/node "$admin_cli" update apply 1.2.2 --yes
 ```
 
-上の`1.2.1`は更新対象versionを明示する例です。利用可能と表示された実在versionだけを指定します。CLIは事前にAdmin API keyを設定し、通常ユーザーとして実行します。Cloudflare profileでAccess Service Authも設定した場合だけservice tokenを追加します。CLIへsudoを付けません。
+上の`1.2.2`は更新対象versionを明示する例です。利用可能と表示された実在versionだけを指定します。CLIは事前にAdmin API keyを設定し、通常ユーザーとして実行します。Cloudflare profileでAccess Service Authも設定した場合だけservice tokenを追加します。CLIへsudoを付けません。
 
-v1.2.0からの更新で、service smoke testと公開route更新が成功した後にOAuth consentの401を理由として失敗表示になった場合、v1.2.0のserviceはすでに稼働しています。同じv1.2.0 operationを繰り返さず、v1.2.1を新しい更新として適用してください。v1.2.1はこの最終確認を修正し、新しいdatabase migrationは追加しません。
+v1.2.0からの更新で、service smoke testと公開route更新が成功した後にOAuth consentの401を理由として失敗表示になった場合、v1.2.0のserviceはすでに稼働しています。同じv1.2.0 operationを繰り返さず、v1.2.2以降を新しい更新として適用してください。v1.2.1はこの最終確認を修正し、v1.2.2は公開Workerへログイン方式を切り替えるJavaScriptを収録します。どちらも新しいdatabase migrationは追加しません。
 
 更新前にはmaintenance mode、実行中jobのdrain、データベースbackupが必要です。データベースschemaを戻す必要がある場合は、アプリだけを強制的にロールバックせず、対応するbackupを復元します。
 

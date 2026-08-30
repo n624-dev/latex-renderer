@@ -132,6 +132,7 @@ main { width: min(1180px, 100%); margin: 0 auto; padding: 2rem 1.25rem 4rem; }
 .actions { display: flex; flex-wrap: wrap; gap: 0.55rem; margin: 0.9rem 0; }
 .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 0.85rem; align-items: end; }
 .form-grid .wide { grid-column: 1 / -1; }
+[hidden] { display: none !important; }
 .stack { display: grid; gap: 0.75rem; }
 .muted { color: var(--muted); }
 .notice { border-left: 4px solid var(--text); padding: 0.8rem 1rem; background: var(--surface-subtle); }
