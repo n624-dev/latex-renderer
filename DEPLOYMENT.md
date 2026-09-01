@@ -328,7 +328,7 @@ and rollback from `/admin/updates/` or the equivalent CLI commands:
 latex-render-admin update status
 latex-render-admin update check
 latex-render-admin update policy --mode notify --reason "Keep updates manual" --yes
-latex-render-admin update apply v1.3.1 --reason "Apply verified stable release" --yes
+latex-render-admin update apply v1.3.2 --reason "Apply verified stable release" --yes
 latex-render-admin update rollback --reason "Recover previous known-good release" --yes
 ```
 
@@ -358,10 +358,11 @@ application update policy, refresh, apply, and rollback require an owner and a
 non-empty reason, retained as audit metadata. Reserve `admin:*` for emergency
 compatibility keys.
 
-The host must already provide the release's required Node major. When the
-verified manifest pins a different pnpm patch/minor version, the helper updates
-pnpm only in the configured non-root deployment user's pnpm home, verifies the
-resulting version, and then performs the frozen-lockfile install.
+The host must already provide the release's required Node major. The updater
+activates the manifest-pinned pnpm only through a Corepack shim inside the
+operation-private non-root build tree, verifies the resulting version, and then
+performs the frozen-lockfile install. Nested workspace scripts receive only that
+private shim on `PATH`; no user or global pnpm installation is modified.
 
 After verification, the controller builds in its private non-root tree. The
 root helper independently copies and verifies the bundle into a root-owned

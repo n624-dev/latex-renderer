@@ -79,7 +79,7 @@ const maxOutputBytes = positiveInteger(
   64 * 1024,
   64 * 1024 * 1024,
 );
-const githubCli = "/usr/local/bin/gh";
+const githubCliCandidates = ["/usr/local/bin/gh", "/usr/bin/gh"];
 const helperSource = fileURLToPath(import.meta.url);
 const helperRoot = resolve(dirname(helperSource), "../..");
 const bootstrapControlFiles = [
@@ -202,6 +202,36 @@ function runCapture(command, args, options = {}) {
       );
     });
   });
+}
+
+async function resolveGitHubCli() {
+  for (const candidate of githubCliCandidates) {
+    let info;
+    try {
+      info = await lstat(candidate);
+    } catch (error) {
+      if (error?.code === "ENOENT") continue;
+      throw error;
+    }
+    if (!info.isFile() || info.uid !== 0 || (info.mode & 0o022) !== 0) {
+      throw new Error(
+        `GitHub CLI path is not a sealed root-owned file: ${candidate}`,
+      );
+    }
+    let version;
+    try {
+      const output = await runCapture(candidate, ["--version"]);
+      version = /^gh version v?(\d+\.\d+\.\d+)\b/m.exec(output)?.[1];
+      if (!version || compareVersions(version, "2.98.0") < 0) continue;
+      await runCapture(candidate, ["attestation", "verify", "--help"]);
+    } catch {
+      continue;
+    }
+    return candidate;
+  }
+  throw new Error(
+    "GitHub CLI 2.98.0 or newer is required at /usr/local/bin/gh or /usr/bin/gh",
+  );
 }
 
 async function runLogged(command, args, options = {}) {
@@ -457,6 +487,7 @@ async function verifyAndExtractTrustedBundle(
   await writeOutput(
     "Verifying the Sigstore release attestation in the root helper.\n",
   );
+  const githubCli = await resolveGitHubCli();
   const attestationBundle = await publicAttestationBundle(release, rootStage);
   for (const directory of ["gh-home", "gh-config", "gh-cache"])
     await mkdir(join(rootStage, directory), { mode: 0o700 });
@@ -582,7 +613,8 @@ async function buildBootstrapRelease(
   const toolingHome = join(toolingRoot, "home");
   const corepackHome = join(toolingRoot, "corepack");
   const pnpmStore = join(toolingRoot, "store");
-  for (const directory of [toolingHome, corepackHome, pnpmStore])
+  const pnpmBin = join(toolingRoot, "bin");
+  for (const directory of [toolingHome, corepackHome, pnpmStore, pnpmBin])
     await mkdir(directory, { recursive: true, mode: 0o700 });
   await runLogged("chown", [
     "-R",
@@ -597,7 +629,7 @@ async function buildBootstrapRelease(
     throw new Error("Release package manager version is invalid");
   const corepack = "/usr/local/bin/corepack";
   const deployEnvironment = {
-    PATH: "/usr/local/bin:/usr/bin:/bin",
+    PATH: `${pnpmBin}:/usr/local/bin:/usr/bin:/bin`,
     HOME: toolingHome,
     USER: identity.deployUser,
     LOGNAME: identity.deployUser,
@@ -605,6 +637,7 @@ async function buildBootstrapRelease(
     XDG_CACHE_HOME: join(toolingRoot, "cache"),
     XDG_DATA_HOME: join(toolingRoot, "data"),
     NPM_CONFIG_CACHE: join(toolingRoot, "npm-cache"),
+    PNPM_HOME: pnpmBin,
   };
   const userOptions = {
     cwd: buildSource,
@@ -612,8 +645,13 @@ async function buildBootstrapRelease(
     uid: Number(identity.uid),
     gid: Number(identity.gid),
   };
+  await runLogged(
+    corepack,
+    ["enable", "--install-directory", pnpmBin, "pnpm"],
+    userOptions,
+  );
   const pnpmVersion = (
-    await runCapture(corepack, [packageManager, "--version"], userOptions)
+    await runCapture(join(pnpmBin, "pnpm"), ["--version"], userOptions)
   ).trim();
   if (pnpmVersion !== expectedPnpmVersion)
     throw new Error(

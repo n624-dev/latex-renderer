@@ -159,8 +159,15 @@ describe("release-based application updates", () => {
       'const toolingRoot = join(buildSource, ".update-tooling")',
     );
     expect(manager).toContain("NPM_CONFIG_CACHE:");
+    expect(manager).toContain('const pnpmBin = join(toolingRoot, "bin")');
+    expect(manager).toContain("PNPM_HOME: pnpmBin");
+    expect(manager).toContain('"--install-directory", pnpmBin, "pnpm"');
+    expect(manager).toContain(
+      "PATH: `${pnpmBin}:/usr/local/bin:/usr/bin:/bin`",
+    );
+    expect(manager).toContain('runCapture(join(pnpmBin, "pnpm"), ["--version"');
     expect(manager).not.toContain('"--global"');
-    expect(manager).not.toContain('"--install-directory"');
+    expect(manager).not.toContain('"--install-directory", "/usr/local/bin"');
     expect(manager).not.toContain('pnpm, "self-update"');
     expect(manager).not.toContain("body.url");
     expect(manager).not.toContain("body.command");
@@ -316,6 +323,13 @@ describe("release-based application updates", () => {
       "Bootstrap control files do not match the attested immutable release",
     );
     expect(helper).toContain("bootstrapControlFiles");
+    expect(helper).toContain(
+      'const githubCliCandidates = ["/usr/local/bin/gh", "/usr/bin/gh"]',
+    );
+    expect(helper).toContain('const pnpmBin = join(toolingRoot, "bin")');
+    expect(helper).toContain('"--install-directory", pnpmBin, "pnpm"');
+    expect(helper).toContain("PNPM_HOME: pnpmBin");
+    expect(helper).toContain('runCapture(join(pnpmBin, "pnpm"), ["--version"');
     expect(helper).toContain(
       '"stop",\n      "latex-renderer-update-manager.service"',
     );

@@ -809,6 +809,7 @@ async function buildAndAssemble(
   const toolingHome = join(toolingRoot, "home");
   const corepackHome = join(toolingRoot, "corepack");
   const pnpmStore = join(toolingRoot, "store");
+  const pnpmBin = join(toolingRoot, "bin");
   const expectedPnpmVersion = packageManager.slice("pnpm@".length);
   if (!/^\d+\.\d+\.\d+$/.test(expectedPnpmVersion))
     throw new Error("Release package manager version is invalid");
@@ -821,7 +822,8 @@ async function buildAndAssemble(
     XDG_CACHE_HOME: join(toolingRoot, "cache"),
     XDG_DATA_HOME: join(toolingRoot, "data"),
     NPM_CONFIG_CACHE: join(toolingRoot, "npm-cache"),
-    PATH: "/usr/local/bin:/usr/bin:/bin",
+    PNPM_HOME: pnpmBin,
+    PATH: `${pnpmBin}:/usr/local/bin:/usr/bin:/bin`,
   };
   await runLogged(operation, "install", [
     "-d",
@@ -830,10 +832,18 @@ async function buildAndAssemble(
     toolingHome,
     corepackHome,
     pnpmStore,
+    pnpmBin,
   ]);
+  await runLogged(
+    operation,
+    corepack,
+    ["enable", "--install-directory", pnpmBin, "pnpm"],
+    { env: deployEnvironment },
+  );
   const pnpmVersion = (
-    await runCapture(corepack, [packageManager, "--version"], {
+    await runCapture(join(pnpmBin, "pnpm"), ["--version"], {
       env: deployEnvironment,
+      cwd: buildSource,
     })
   ).trim();
   if (pnpmVersion !== expectedPnpmVersion)
