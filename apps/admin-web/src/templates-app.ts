@@ -12,7 +12,7 @@ function appHeader(page: string): string {
 }
 
 function shell(page: string, title: string, content: string): string {
-  return `<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>${escapeHtml(title)} | LaTeX Renderer</title><link rel="stylesheet" href="/app/assets/styles.css"><script data-cfasync="false" src="/app/assets/site.js"></script></head><body data-app-page="${escapeHtml(page)}">${appHeader(page)}<main><p id="app-error" role="alert"></p><p id="app-status" role="status" aria-live="polite"></p>${content}</main><script data-cfasync="false" type="module" src="/app/assets/app.js"></script></body></html>`;
+  return `<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>${escapeHtml(title)} | LaTeX Renderer</title><link rel="stylesheet" href="/app/assets/styles.css"><script data-cfasync="false" src="/app/assets/site.js"></script></head><body data-app-page="${escapeHtml(page)}"><a class="skip-link" href="#main-content">本文へ移動</a>${appHeader(page)}<main id="main-content"><p id="app-error" role="alert"></p><p id="app-status" role="status" aria-live="polite"></p>${content}</main><script data-cfasync="false" type="module" src="/app/assets/app.js"></script></body></html>`;
 }
 
 export function appRenderPage(): string {

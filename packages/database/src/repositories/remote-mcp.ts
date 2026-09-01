@@ -12,6 +12,7 @@ export interface RemoteMcpAuthorizationCodeRow {
   code_hash: string;
   client_id: string;
   user_id: string;
+  user_security_version: number;
   redirect_uri: string;
   scopes_json: string;
   resource: string;
@@ -101,6 +102,7 @@ export class RemoteMcpRepository {
     codeHash: string;
     clientId: string;
     userId: string;
+    userSecurityVersion: number;
     redirectUri: string;
     scopes: readonly string[];
     resource: string;
@@ -111,13 +113,14 @@ export class RemoteMcpRepository {
     this.db
       .prepare(
         `INSERT INTO remote_mcp_authorization_codes
-         (code_hash,client_id,user_id,redirect_uri,scopes_json,resource,code_challenge,created_at,expires_at)
-         VALUES (?,?,?,?,?,?,?,?,?)`,
+         (code_hash,client_id,user_id,user_security_version,redirect_uri,scopes_json,resource,code_challenge,created_at,expires_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?)`,
       )
       .run(
         input.codeHash,
         input.clientId,
         input.userId,
+        input.userSecurityVersion,
         input.redirectUri,
         JSON.stringify(input.scopes),
         input.resource,

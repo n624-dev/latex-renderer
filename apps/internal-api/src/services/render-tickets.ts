@@ -73,7 +73,8 @@ export class RenderTicketsService {
         }),
         this.deps.tickets.issueJob(subject),
       ]),
-      timestamp = nowIso();
+      timestamp = nowIso(),
+      expiresAt = new Date(Date.now() + 600_000).toISOString();
     try {
       this.deps.database.transaction(() => {
         this.assertAccepting(actor, input.size);
@@ -84,7 +85,7 @@ export class RenderTicketsService {
           sha256: input.sha256,
           storageKey: `sources/${sourceId}/source.zip`,
           timestamp,
-          expiresAt: new Date(Date.now() + 600_000).toISOString(),
+          expiresAt,
           dedupeEligible: false,
         });
         this.deps.database.jobs.insertReserved({
@@ -98,12 +99,9 @@ export class RenderTicketsService {
           timestamp,
           sourceId,
           outputs,
+          reservedOutputBytes: this.deps.maxOutputBytes,
         });
-        this.deps.database.security.insertNonce(
-          nonce,
-          jobId,
-          new Date(Date.now() + 600_000).toISOString(),
-        );
+        this.deps.database.security.insertNonce(nonce, jobId, expiresAt);
         this.deps.database.security.insertIdempotency({
           actorType: "service_account",
           actorId: actor.serviceAccountId,
@@ -112,7 +110,7 @@ export class RenderTicketsService {
           requestHash,
           resourceId: jobId,
           responseCode: 201,
-          expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+          expiresAt,
           createdAt: timestamp,
         });
         this.deps.database.audit({
@@ -147,7 +145,7 @@ export class RenderTicketsService {
         uploadTicket,
         jobTicket,
         uploadUrl: this.uploadUrl(jobId),
-        expiresAt: new Date(Date.now() + 600_000).toISOString(),
+        expiresAt,
       },
     };
   }
@@ -194,11 +192,12 @@ export class RenderTicketsService {
         value: await this.issueExistingSourceJob(actor, existing.resource_id),
       };
     }
-    const source = this.deps.database.sources.getOwned(
+    const source = this.deps.database.sources.getOwnedReady(
       input.sourceId,
       actor.userId,
+      nowIso(),
     );
-    if (source === undefined || source.status !== "ready")
+    if (source === undefined)
       throw new AppError(
         "SOURCE_NOT_READY",
         "Source does not exist or is not ready",
@@ -216,19 +215,44 @@ export class RenderTicketsService {
     try {
       this.deps.database.transaction(() => {
         this.assertAccepting(actor, 0);
-        this.deps.database.jobs.insertQueued({
-          id: jobId,
-          userId: actor.userId,
-          serviceAccountId: actor.serviceAccountId,
-          apiKeyId: actor.apiKeyId,
-          rendererVersion: this.deps.rendererVersion,
-          sourceId: source.id,
-          sourceSize: source.size,
-          sourceSha256: source.sha256,
-          entrypoint,
-          outputs,
+        const currentSource = this.deps.database.sources.getOwnedReady(
+          input.sourceId,
+          actor.userId,
           timestamp,
-        });
+        );
+        if (currentSource === undefined)
+          throw new AppError(
+            "SOURCE_NOT_READY",
+            "Source does not exist or is not ready",
+            409,
+          );
+        if (
+          !this.deps.database.sources.paths(currentSource).includes(entrypoint)
+        )
+          throw new AppError(
+            "ENTRYPOINT_MISSING",
+            "Source does not contain the requested entrypoint",
+            422,
+          );
+        if (
+          this.deps.database.jobs.insertQueued({
+            id: jobId,
+            userId: actor.userId,
+            serviceAccountId: actor.serviceAccountId,
+            apiKeyId: actor.apiKeyId,
+            rendererVersion: this.deps.rendererVersion,
+            sourceId: currentSource.id,
+            entrypoint,
+            outputs,
+            timestamp,
+            reservedOutputBytes: this.deps.maxOutputBytes,
+          }) !== 1
+        )
+          throw new AppError(
+            "SOURCE_NOT_READY",
+            "Source changed while the Render Job was being created",
+            409,
+          );
         this.deps.database.security.insertIdempotency({
           actorType: "service_account",
           actorId: actor.serviceAccountId,
@@ -247,7 +271,7 @@ export class RenderTicketsService {
           targetType: "job",
           targetId: jobId,
           result: "success",
-          metadata: { sourceId: source.id, entrypoint, outputs },
+          metadata: { sourceId: currentSource.id, entrypoint, outputs },
         });
       });
     } catch (caught) {
@@ -318,12 +342,25 @@ export class RenderTicketsService {
         "Service account pending job limit reached",
         429,
       );
+    const maxUserActiveJobs = this.deps.database.settings.value(
+      "max_user_active_jobs",
+      20,
+    );
+    if (
+      this.deps.database.jobs.countActiveForUser(actor.userId) >=
+      maxUserActiveJobs
+    )
+      throw new AppError(
+        "USER_QUEUE_LIMIT",
+        "User pending job limit reached",
+        429,
+      );
     const maxStorage = this.deps.database.settings.value(
         "max_user_storage_bytes",
         this.deps.maxUserStorageBytes,
       ),
       usedStorage = this.deps.database.jobs.storageUsageForUser(actor.userId);
-    if (requestedBytes > maxStorage - usedStorage)
+    if (requestedBytes + this.deps.maxOutputBytes > maxStorage - usedStorage)
       throw new AppError(
         "USER_STORAGE_QUOTA",
         "User storage quota is exhausted",
@@ -345,19 +382,24 @@ export class RenderTicketsService {
         "Idempotent job no longer exists",
         404,
       );
-    const timestamp = nowIso(),
-      expiresAt = new Date(Date.now() + 600_000).toISOString();
-    let nonce = this.deps.database.security.latestUsableNonce(jobId, timestamp);
-    if (nonce === undefined) {
-      nonce = randomBytes(24).toString("base64url");
-      this.deps.database.transaction(() =>
-        this.deps.database.security.insertNonce(
-          nonce as string,
-          jobId,
-          expiresAt,
-        ),
+    if (row.status !== "reserved")
+      throw new AppError(
+        "IDEMPOTENT_RESOURCE_STATE",
+        "Original Render upload is no longer pending",
+        409,
       );
-    }
+    const timestamp = nowIso(),
+      nonceRecord = this.deps.database.security.latestUsableNonceRecord(
+        jobId,
+        timestamp,
+      );
+    if (nonceRecord === undefined)
+      throw new AppError(
+        "IDEMPOTENT_RESOURCE_GONE",
+        "Original Render upload reservation has expired",
+        410,
+      );
+    const { nonce, expires_at: expiresAt } = nonceRecord;
     const subject = toSubject(actor, jobId);
     return {
       jobId,

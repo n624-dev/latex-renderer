@@ -11,10 +11,11 @@ chmod 00755 "$smoke_root"
 mkdir "$input" "$output"
 cp -R "$repo_root/tests/fixtures/runtime-basic/." "$input/"
 chmod -R a+rX "$input"
-chmod 0777 "$output"
+chmod 0770 "$output"
 
 set +e
 docker run --rm \
+  --user "$(id -u):$(id -g)" \
   --network none \
   --read-only \
   --cap-drop ALL \

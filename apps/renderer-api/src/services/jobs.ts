@@ -63,11 +63,12 @@ export class RendererJobsService {
   }
   delete(id: string, claims: TicketClaims): void {
     this.deps.database.transaction(() => {
-      this.deps.database.transitionJob(
-        id,
-        ["succeeded", "failed", "timeout", "canceled", "rejected", "expired"],
-        "deleting",
-      );
+      if (this.deps.database.jobs.markDeleting(id, nowIso()) !== 1)
+        throw new AppError(
+          "JOB_STATE_CONFLICT",
+          "Job state changed concurrently",
+          409,
+        );
       this.deps.database.audit({
         actorType: "service_account",
         actorId: claims.service_account_id,

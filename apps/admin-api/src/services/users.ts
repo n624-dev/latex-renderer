@@ -22,8 +22,17 @@ function redactAuditReason(reason: string): string {
 export class UsersService {
   constructor(private readonly deps: AdminDependencies) {}
 
-  list() {
-    return this.deps.database.users.list().map((row) => this.snapshot(row));
+  list(options: {
+    cursor?: string | undefined;
+    limit?: number | undefined;
+    query?: string | undefined;
+  } = {}) {
+    const page = this.deps.database.users.listPage(options);
+    return {
+      ...page,
+      // Credential/identity lookups are performed only for this page.
+      items: page.items.map((row) => this.snapshot(row)),
+    };
   }
 
   get(id: string) {
@@ -99,45 +108,49 @@ export class UsersService {
         : undefined;
     const id = newId("user");
     const timestamp = nowIso();
-    this.deps.database.transaction(() => {
-      this.deps.database.users.insertInvitation({
-        id,
-        email: input.email ?? null,
-        displayName: input.displayName,
-        role: input.role,
-        createdBy: actor.id,
-        timestamp,
-      });
-      if (input.authentication.type === "password") {
-        this.deps.database.browserAuth.upsertCredential({
-          user_id: id,
-          login_name: input.authentication.loginName,
-          password_hash: passwordHash ?? "",
-          password_updated_at: timestamp,
-        });
-      } else {
-        this.deps.browserAuth.createExternalIdentity({
-          userId: id,
-          subject: input.authentication.subject,
-          preferredUsername: input.authentication.preferredUsername,
-          email: input.authentication.emailAtProvider,
-          createdAt: timestamp,
-        });
-      }
-      this.deps.database.webPrincipals.ensure(id);
-      this.deps.database.audit({
-        actorType: actor.type,
-        actorId: actor.id,
-        action: "user.created",
-        targetType: "user",
-        targetId: id,
-        result: "success",
-        metadata: {
+    try {
+      this.deps.database.transaction(() => {
+        this.deps.database.users.insertInvitation({
+          id,
+          email: input.email ?? null,
+          displayName: input.displayName,
           role: input.role,
-          authenticationType: input.authentication.type,
-        },
+          createdBy: actor.id,
+          timestamp,
+        });
+        if (input.authentication.type === "password") {
+          this.deps.database.browserAuth.upsertCredential({
+            user_id: id,
+            login_name: input.authentication.loginName,
+            password_hash: passwordHash ?? "",
+            password_updated_at: timestamp,
+          });
+        } else {
+          this.deps.browserAuth.createExternalIdentity({
+            userId: id,
+            subject: input.authentication.subject,
+            preferredUsername: input.authentication.preferredUsername,
+            email: input.authentication.emailAtProvider,
+            createdAt: timestamp,
+          });
+        }
+        this.deps.database.webPrincipals.ensure(id);
+        this.deps.database.audit({
+          actorType: actor.type,
+          actorId: actor.id,
+          action: "user.created",
+          targetType: "user",
+          targetId: id,
+          result: "success",
+          metadata: {
+            role: input.role,
+            authenticationType: input.authentication.type,
+          },
+        });
       });
-    });
+    } catch (error) {
+      throw mapLoginNameConflict(error);
+    }
     return id;
   }
 
@@ -230,25 +243,29 @@ export class UsersService {
       input.loginName,
     );
     const timestamp = nowIso();
-    this.deps.database.transaction(() => {
-      this.deps.database.browserAuth.upsertCredential({
-        user_id: id,
-        login_name: input.loginName,
-        password_hash: passwordHash,
-        password_updated_at: timestamp,
+    try {
+      this.deps.database.transaction(() => {
+        this.deps.database.browserAuth.upsertCredential({
+          user_id: id,
+          login_name: input.loginName,
+          password_hash: passwordHash,
+          password_updated_at: timestamp,
+        });
+        this.deps.database.users.incrementSecurityVersion(id, timestamp);
+        this.deps.database.browserAuth.revokeUserSessions(id, timestamp);
+        this.deps.database.audit({
+          actorType: actor.type,
+          actorId: actor.id,
+          action: "user.password_reset",
+          targetType: "user",
+          targetId: id,
+          result: "success",
+          metadata: { reason: redactAuditReason(input.reason) },
+        });
       });
-      this.deps.database.users.incrementSecurityVersion(id, timestamp);
-      this.deps.database.browserAuth.revokeUserSessions(id, timestamp);
-      this.deps.database.audit({
-        actorType: actor.type,
-        actorId: actor.id,
-        action: "user.password_reset",
-        targetType: "user",
-        targetId: id,
-        result: "success",
-        metadata: { reason: redactAuditReason(input.reason) },
-      });
-    });
+    } catch (error) {
+      throw mapLoginNameConflict(error);
+    }
     return { id, loginName: input.loginName };
   }
 
@@ -378,4 +395,17 @@ export class UsersService {
             },
     };
   }
+}
+
+function mapLoginNameConflict(error: unknown): unknown {
+  const candidate = error as { message?: unknown };
+  const message =
+    typeof candidate.message === "string" ? candidate.message : "";
+  if (message.includes("UNIQUE constraint failed: local_credentials.login_name"))
+    return new AppError(
+      "LOGIN_NAME_CONFLICT",
+      "Login name is already assigned",
+      409,
+    );
+  return error;
 }

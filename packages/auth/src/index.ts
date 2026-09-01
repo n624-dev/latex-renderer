@@ -14,6 +14,8 @@ export interface AuthenticatedServiceAccount {
 
 interface ApiKeyRow {
   id: string;
+  prefix: string;
+  kind: "render" | "admin";
   service_account_id: string;
   secret_hash: string;
   pepper_id: string;
@@ -36,7 +38,7 @@ export class ApiKeyService {
     if (!peppers.has(activePepperId)) throw new AppError("PEPPER_CONFIG_INVALID", "Active API key pepper is missing");
   }
 
-  create(kind: "render" | "admin"): { token: string; id: string; prefix: string; secretHash: string; pepperId: string } {
+  create(kind: "render" | "admin"): { token: string; id: string; prefix: string; kind: "render" | "admin"; secretHash: string; pepperId: string } {
     const keyId = randomBytes(16).toString("hex");
     const secret = randomBytes(32).toString("base64url");
     const prefix = kind === "render" ? "lrk" : "lra";
@@ -45,6 +47,7 @@ export class ApiKeyService {
       token,
       id: `key_${keyId}`,
       prefix: `${prefix}_${keyId}`,
+      kind,
       secretHash: this.hash(secret, this.activePepperId),
       pepperId: this.activePepperId,
     };
@@ -53,15 +56,21 @@ export class ApiKeyService {
   authenticate(token: string, requiredScope?: string): AuthenticatedServiceAccount {
     const parsed = /^(lrk|lra)_([a-f0-9]{32})_([A-Za-z0-9_-]{43})$/.exec(token);
     if (parsed === null) throw new AppError("INVALID_API_KEY", "API key is invalid", 401);
-    const kind = parsed[1] === "lrk" ? "render" : "admin";
+    const credentialPrefix = String(parsed[1]);
+    const credentialKind = credentialPrefix === "lrk" ? "render" : "admin";
     const id = `key_${String(parsed[2])}`;
     const secret = String(parsed[3]);
-    const row = this.database.raw.prepare(`SELECT k.id,k.service_account_id,k.secret_hash,k.pepper_id,k.scopes_json,
+    const row = this.database.raw.prepare(`SELECT k.id,k.prefix,k.kind,k.service_account_id,k.secret_hash,k.pepper_id,k.scopes_json,
       k.expires_at,k.revoked_at,s.status AS service_account_status,s.security_version AS service_account_security_version,
       s.owner_user_id,u.status AS user_status,u.security_version AS user_security_version
       FROM api_keys k JOIN service_accounts s ON s.id=k.service_account_id JOIN users u ON u.id=s.owner_user_id
       WHERE k.id=?`).get(id) as ApiKeyRow | undefined;
-    if (row === undefined || !this.verify(secret, row.secret_hash, row.pepper_id)) {
+    if (
+      row === undefined ||
+      row.kind !== credentialKind ||
+      row.prefix !== `${credentialPrefix}_${String(parsed[2])}` ||
+      !this.verify(secret, row.secret_hash, row.pepper_id)
+    ) {
       throw new AppError("INVALID_API_KEY", "API key is invalid", 401);
     }
     if (row.revoked_at !== null || (row.expires_at !== null && row.expires_at <= nowIso())) {
@@ -85,7 +94,7 @@ export class ApiKeyService {
       userSecurityVersion: row.user_security_version,
       serviceAccountSecurityVersion: row.service_account_security_version,
       scopes,
-      keyKind: kind,
+      keyKind: row.kind,
     };
   }
 

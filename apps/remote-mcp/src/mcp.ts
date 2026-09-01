@@ -8,6 +8,7 @@ import {
 } from "@modelcontextprotocol/server";
 import {
   RemoteRenderService,
+  REMOTE_MCP_MAX_INLINE_ARTIFACT_BYTES,
   type RemoteMcpIdentity,
   type RemoteMcpScope,
 } from "@latex-renderer/remote-mcp-core";
@@ -115,6 +116,9 @@ const errorSchema = z
     retryAfterSeconds: z.number().int().positive().optional(),
   })
   .strict();
+const MAX_INLINE_RESOURCE_BASE64_BYTES = Math.ceil(
+  4 * Math.ceil(REMOTE_MCP_MAX_INLINE_ARTIFACT_BYTES / 3),
+);
 
 export function createRemoteMcpHandler(
   renders: RemoteRenderService,
@@ -859,7 +863,7 @@ async function executePreview(
         },
         {
           type: "image" as const,
-          data: artifact.bytes.toString("base64"),
+          data: inlineArtifactBase64(artifact),
           mimeType: "image/png",
         },
       ],
@@ -930,7 +934,8 @@ function registerJobResources(
     }),
     {
       title: "Compile log",
-      description: "Complete owned LaTeX compile log",
+      description:
+        "Sanitized untrusted LaTeX compile log (terminal controls removed)",
       mimeType: "text/plain",
     },
     async (uri, variables) => {
@@ -945,7 +950,10 @@ function registerJobResources(
           {
             uri: uri.href,
             mimeType: "text/plain",
-            text: artifact.bytes.toString("utf8"),
+            text: sanitizeControls(
+              artifact.bytes.toString("utf8").replace(/\r\n?/g, "\n"),
+              true,
+            ),
           },
         ],
       };
@@ -1023,6 +1031,7 @@ async function readResourceArtifact(
   try {
     renders.enforceRateLimit(identity.userId, operation, 60);
     const artifact = await renders.artifact(identity, jobIdValue, relativePath);
+    assertInlineArtifact(artifact);
     renders.auditToolCall(identity, operation, "success", {
       jobId: jobIdValue,
       relativePath,
@@ -1042,17 +1051,51 @@ async function readResourceArtifact(
 
 function binaryResource(
   uri: URL,
-  artifact: { mimeType: string; bytes: Buffer },
+  artifact: { mimeType: string; size: number; bytes: Buffer },
 ) {
   return {
     contents: [
       {
         uri: uri.href,
         mimeType: artifact.mimeType,
-        blob: artifact.bytes.toString("base64"),
+        blob: inlineArtifactBase64(artifact),
       },
     ],
   };
+}
+
+function assertInlineArtifact(artifact: { size: number; bytes: Buffer }): void {
+  if (
+    !Number.isSafeInteger(artifact.size) ||
+    artifact.size < 0 ||
+    artifact.size > REMOTE_MCP_MAX_INLINE_ARTIFACT_BYTES
+  )
+    throw new AppError(
+      "ARTIFACT_TOO_LARGE",
+      "Artifact exceeds the MCP inline resource limit; use the protected Web result instead",
+      413,
+    );
+  if (artifact.bytes.byteLength !== artifact.size)
+    throw new AppError(
+      "ARTIFACT_UNAVAILABLE",
+      "Artifact bytes do not match the recorded size",
+      503,
+    );
+}
+
+function inlineArtifactBase64(artifact: {
+  size: number;
+  bytes: Buffer;
+}): string {
+  assertInlineArtifact(artifact);
+  const encoded = artifact.bytes.toString("base64");
+  if (encoded.length > MAX_INLINE_RESOURCE_BASE64_BYTES)
+    throw new AppError(
+      "ARTIFACT_TOO_LARGE",
+      "Encoded artifact exceeds the MCP inline resource limit; use the protected Web result instead",
+      413,
+    );
+  return encoded;
 }
 
 function resourceVariable(value: string | string[] | undefined): string {

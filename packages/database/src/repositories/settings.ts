@@ -15,7 +15,7 @@ export class SettingsRepository {
   }
 
   listMutable(): SettingRow[] {
-    return this.db.prepare("SELECT key,value_json,updated_by,updated_at FROM system_settings WHERE key IN ('max_queue_length','max_user_storage_bytes') ORDER BY key").all() as unknown as SettingRow[];
+    return this.db.prepare("SELECT key,value_json,updated_by,updated_at FROM system_settings WHERE key IN ('max_queue_length','max_user_storage_bytes','max_user_active_jobs','source_orphan_retention_minutes') ORDER BY key").all() as unknown as SettingRow[];
   }
 
   upsert(key: string, value: unknown, updatedBy: string, timestamp: string): void {

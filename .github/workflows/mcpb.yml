@@ -54,9 +54,15 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          choco install openssl --no-progress -y
+          $opensslVersion = '4.0.2'
+          choco install openssl --version=$opensslVersion --exact --source='https://community.chocolatey.org/api/v2/' --no-progress -y
           $openssl = Get-ChildItem 'C:\Program Files\OpenSSL*\bin\openssl.exe' | Select-Object -First 1
           if ($null -eq $openssl) { throw 'OpenSSL was not installed' }
+          $actualVersion = (& $openssl.FullName version).Trim()
+          if ($actualVersion -notmatch "^OpenSSL $([regex]::Escape($opensslVersion))(\s|$)") {
+            throw "Expected OpenSSL $opensslVersion but found $actualVersion"
+          }
+          Write-Host "Using $actualVersion from the pinned Chocolatey package"
           $openssl.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - name: Validate, pack, sign, and verify MCPB
         run: pnpm build:mcpb && pnpm verify:mcpb

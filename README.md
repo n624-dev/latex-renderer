@@ -5,7 +5,7 @@
 
 A security-oriented LuaLaTeX rendering platform with Web, CLI, HTTP API, and MCP interfaces. Untrusted TeX runs in a networkless, read-only, non-root Docker sandbox with explicit resource limits. Jobs produce PDF by default and can also extract self-contained SVG objects for math and TikZ output.
 
-The hosted service is available at [latex-render.n624.jp](https://latex-render.n624.jp/), with documentation at [latex-render.n624.jp/docs/](https://latex-render.n624.jp/docs/). Version 1.2 supports either Cloudflare Tunnel/Workers or a conventional TLS reverse proxy. Browser authentication is an explicit choice of Cloudflare Access, OIDC, or a local password.
+The hosted service is available at [latex-render.n624.jp](https://latex-render.n624.jp/), with documentation at [latex-render.n624.jp/docs/](https://latex-render.n624.jp/docs/). Version 1.3 supports either Cloudflare Tunnel/Workers or a conventional TLS reverse proxy. Browser authentication is an explicit choice of Cloudflare Access, OIDC, or a local password.
 
 The hostname `latex.example.com` used by deployment examples and tests is a placeholder. The hosted-service URL above is intentionally public, but this repository does not contain its production credentials or infrastructure-specific configuration.
 
@@ -17,7 +17,7 @@ The hostname `latex.example.com` used by deployment examples and tests is a plac
 - Develop or contribute: [CONTRIBUTING.md](CONTRIBUTING.md)
 
 Self-hosted installation starts with the immutable
-[`v1.2.2` release](https://github.com/n624-dev/latex-renderer/releases/tag/v1.2.2),
+[`v1.3.0` release](https://github.com/n624-dev/latex-renderer/releases/tag/v1.3.0),
 which includes a digest-labelled server bundle. Do not deploy the changeable
 `main` branch as a substitute. Follow the self-hosting guide for the supported
 profile, host prerequisites, checksum verification, and configuration steps.

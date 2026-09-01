@@ -34,6 +34,7 @@ describe("renderer transient workspace cleanup", () => {
         source_storage_key: null,
         entrypoint: "main.tex",
         outputs_json: '["pdf"]',
+        lease_generation: 1,
       }),
     ).rejects.toThrow();
 
@@ -51,7 +52,7 @@ describe("renderer transient workspace cleanup", () => {
     await recordFailure(
       database,
       config,
-      jobId,
+      workerJob(jobId),
       "validation stopped after cancellation",
       "RENDERER_FAILED",
       "failed",
@@ -69,7 +70,7 @@ describe("renderer transient workspace cleanup", () => {
     await recordFailure(
       database,
       config,
-      jobId,
+      workerJob(jobId),
       "source validation failed",
       "ZIP_INVALID",
       "rejected",
@@ -119,8 +120,8 @@ async function fixture(status: "validating" | "canceled"): Promise<{
   database.raw
     .prepare(
       `INSERT INTO jobs
-      (id,user_id,service_account_id,api_key_id,status,renderer_version,source_size,source_sha256,created_at,updated_at)
-      VALUES (?,'user','service','key',?,'renderer',9,?,?,?)`,
+      (id,user_id,service_account_id,api_key_id,status,renderer_version,source_size,source_sha256,created_at,updated_at,lease_owner,lease_generation)
+      VALUES (?,'user','service','key',?,'renderer',9,?,?,?,'worker_test',1)`,
     )
     .run(jobId, status, "0".repeat(64), timestamp, timestamp);
   return {
@@ -139,6 +140,8 @@ async function fixture(status: "validating" | "canceled"): Promise<{
       maxFileCount: 500,
       maxZipEntries: 1_000,
       maxOutputBytes: 200 * 1024 * 1024,
+      maxOutputFileCount: 2_000,
+      maxOutputDirectoryCount: 200,
       maxLogBytes: 10 * 1024 * 1024,
       maxSvgObjects: 200,
       maxSvgBytes: 10 * 1024 * 1024,
@@ -148,6 +151,20 @@ async function fixture(status: "validating" | "canceled"): Promise<{
       containerGid: 10_000,
       jobTimeoutMs: 420_000,
     },
+  };
+}
+
+function workerJob(jobId: string) {
+  return {
+    id: jobId,
+    source_size: 9,
+    source_sha256: "0".repeat(64),
+    status: "validating",
+    source_id: null,
+    source_storage_key: null,
+    entrypoint: "main.tex",
+    outputs_json: '["pdf"]',
+    lease_generation: 1,
   };
 }
 

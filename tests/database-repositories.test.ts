@@ -34,7 +34,7 @@ describe("database repositories",()=>{
     db.raw.prepare(`INSERT INTO users(id,access_subject,email,display_name,role,status,security_version,created_by,created_at,updated_at) VALUES ('user',NULL,'user@example.test','User','user','active',1,'test',?,?)`).run(now,now);
     db.raw.prepare(`INSERT INTO service_accounts(id,owner_user_id,name,client_type,status,security_version,created_at,updated_at) VALUES ('service','user','Service','generic','active',1,?,?)`).run(now,now);
     db.raw.prepare(`INSERT INTO api_keys(id,service_account_id,name,prefix,secret_hash,pepper_id,scopes_json,created_at,created_by) VALUES ('key','service','Key','prefix','hash','v1','["render:create"]',?,'test')`).run(now);
-    const common={userId:"user",serviceAccountId:"service",apiKeyId:"key",rendererVersion:"test",sourceSize:1,sourceSha256:"a".repeat(64),timestamp:now};
+    const common={userId:"user",serviceAccountId:"service",apiKeyId:"key",rendererVersion:"test",sourceSize:1,sourceSha256:"a".repeat(64),timestamp:now,reservedOutputBytes:0};
     db.jobs.insertReserved({id:`job_${"1".repeat(32)}`,...common});
     db.jobs.insertReserved({id:`job_${"2".repeat(32)}`,...common,outputs:["pdf","svg"]});
     const pdfJob=db.jobs.get(`job_${"1".repeat(32)}`),svgJob=db.jobs.get(`job_${"2".repeat(32)}`);

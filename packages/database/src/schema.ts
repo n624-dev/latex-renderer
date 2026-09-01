@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
   service_account_id TEXT NOT NULL REFERENCES service_accounts(id),
   name TEXT NOT NULL,
   prefix TEXT NOT NULL UNIQUE,
+  kind TEXT NOT NULL DEFAULT 'render' CHECK(kind IN ('render','admin')),
   secret_hash TEXT NOT NULL,
   pepper_id TEXT NOT NULL,
   scopes_json TEXT NOT NULL,
@@ -64,7 +65,10 @@ CREATE TABLE IF NOT EXISTS sources (
   uploaded_at TEXT,
   paths_json TEXT,
   dedupe_eligible INTEGER NOT NULL DEFAULT 1 CHECK(dedupe_eligible IN (0,1)),
-  deleted_at TEXT
+  deleted_at TEXT,
+  upload_received_bytes INTEGER NOT NULL DEFAULT 0 CHECK(upload_received_bytes >= 0),
+  upload_lease_owner TEXT,
+  upload_lease_expires_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS jobs (
@@ -188,6 +192,7 @@ CREATE TABLE IF NOT EXISTS remote_mcp_authorization_codes (
   code_hash TEXT PRIMARY KEY,
   client_id TEXT NOT NULL REFERENCES remote_mcp_clients(client_id),
   user_id TEXT NOT NULL REFERENCES users(id),
+  user_security_version INTEGER NOT NULL DEFAULT 1 CHECK(user_security_version > 0),
   redirect_uri TEXT NOT NULL,
   scopes_json TEXT NOT NULL,
   resource TEXT NOT NULL,
@@ -268,6 +273,7 @@ CREATE TABLE IF NOT EXISTS project_revisions (
   display_name TEXT NOT NULL CHECK(length(display_name) BETWEEN 1 AND 200),
   original_filename TEXT NOT NULL CHECK(length(original_filename) BETWEEN 1 AND 240),
   entrypoint TEXT NOT NULL CHECK(length(entrypoint) BETWEEN 1 AND 240),
+  outputs_json TEXT NOT NULL DEFAULT '["pdf"]' CHECK(json_valid(outputs_json)),
   created_at TEXT NOT NULL,
   UNIQUE(project_id, revision_number),
   UNIQUE(project_id, source_id, entrypoint)

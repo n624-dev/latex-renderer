@@ -1,4 +1,5 @@
 import { AppError, nowIso } from "@latex-renderer/shared";
+import type { SourceListRow } from "@latex-renderer/database";
 import type { RenderOutput } from "@latex-renderer/contracts";
 import type { AdminActor, AdminDependencies } from "../types.js";
 import { AdminJobsService } from "./jobs.js";
@@ -10,35 +11,48 @@ export class AdminSourcesService {
     this.jobs = new AdminJobsService(deps);
   }
 
-  list(filters: { query?: string; status?: string } = {}) {
-    const query = filters.query?.trim().toLowerCase();
-    return this.deps.database.sources
-      .list()
-      .filter((source) => {
-        if (filters.status && source.status !== filters.status) return false;
-        return (
-          !query ||
-          [source.id, source.owner_user_id, source.sha256].some((value) =>
-            value.toLowerCase().includes(query),
-          )
-        );
-      })
-      .map((source) => this.summary(source.id));
+  list(
+    filters: {
+      query?: string;
+      status?: string;
+      cursor?: string | undefined;
+      limit?: number | undefined;
+    } = {},
+  ) {
+    const page = this.deps.database.sources.listPage(filters);
+    return {
+      ...page,
+      // Related Jobs are represented by SQL aggregates on list pages. The
+      // complete history is loaded only on a Source detail page.
+      items: page.items.map((source) => this.listSummary(source)),
+    };
   }
 
-  get(id: string) {
-    return this.summary(id, true);
+  get(
+    id: string,
+    options: { cursor?: string | undefined; limit?: number | undefined } = {},
+  ) {
+    return this.summary(id, true, options);
   }
 
   async render(
     actor: AdminActor,
     id: string,
-    input: { apiKeyId: string; entrypoint?: string | undefined; outputs: RenderOutput[] },
+    input: {
+      apiKeyId: string;
+      entrypoint?: string | undefined;
+      outputs: RenderOutput[];
+    },
     idempotencyKey: string,
   ) {
     return this.jobs.createRender(
       actor,
-      { apiKeyId: input.apiKeyId, sourceId: id, entrypoint: input.entrypoint, outputs: input.outputs },
+      {
+        apiKeyId: input.apiKeyId,
+        sourceId: id,
+        entrypoint: input.entrypoint,
+        outputs: input.outputs,
+      },
       idempotencyKey,
     );
   }
@@ -69,19 +83,53 @@ export class AdminSourcesService {
     });
   }
 
-  private summary(id: string, includePaths = false) {
+  private listSummary(source: SourceListRow) {
+    return {
+      id: source.id,
+      owner_user_id: source.owner_user_id,
+      status: source.status,
+      size: source.size,
+      sha256: source.sha256,
+      created_at: source.created_at,
+      updated_at: source.updated_at,
+      uploaded_at: source.uploaded_at,
+      expires_at: source.expires_at,
+      entrypoints: this.deps.database.sources
+        .paths(source)
+        .filter((path) => path.toLowerCase().endsWith(".tex")),
+      // Keep the old field as an empty list for clients that iterate it, but
+      // expose the complete count/latest row without scanning Jobs per Source.
+      jobs: [],
+      jobCount: source.job_count,
+      latestJob:
+        source.latest_job_id === null
+          ? null
+          : {
+              id: source.latest_job_id,
+              status: source.latest_job_status,
+              created_at: source.latest_job_created_at,
+            },
+      deletable:
+        ["ready", "expired"].includes(source.status) &&
+        source.blocking_reference_count === 0,
+    };
+  }
+
+  private summary(
+    id: string,
+    includePaths = false,
+    options: { cursor?: string | undefined; limit?: number | undefined } = {},
+  ) {
     const source = this.deps.database.sources.get(id);
     if (source === undefined || source.status === "deleted")
       throw new AppError("SOURCE_NOT_FOUND", "Source does not exist", 404);
-    const related = this.deps.database.jobs
-      .list()
-      .filter((job) => job.source_id === source.id)
-      .map((job) => ({
-        id: job.id,
-        status: job.status,
-        entrypoint: job.entrypoint,
-        created_at: job.created_at,
-      }));
+    const related = this.deps.database.jobs.listBySourcePage(
+        source.id,
+        options,
+      ),
+      blockingReferences = this.deps.database.sources.blockingReferenceCount(
+        source.id,
+      );
     return {
       id: source.id,
       owner_user_id: source.owner_user_id,
@@ -98,10 +146,12 @@ export class AdminSourcesService {
       paths: includePaths
         ? this.deps.database.sources.paths(source)
         : undefined,
-      jobs: related,
+      jobs: related.items,
+      jobsNextCursor: related.nextCursor,
+      jobsHasMore: related.hasMore,
       deletable:
         ["ready", "expired"].includes(source.status) &&
-        this.deps.database.sources.referenceCount(source.id) === 0,
+        blockingReferences === 0,
     };
   }
 }

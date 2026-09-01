@@ -63,6 +63,8 @@ html { background: var(--page); color: var(--text); }
 body { margin: 0; min-height: 100vh; background: var(--page); color: var(--text); }
 a { color: inherit; text-decoration-thickness: 0.08em; text-underline-offset: 0.18em; }
 a:hover { text-decoration-thickness: 0.14em; }
+.skip-link { position: absolute; z-index: 100; top: 0.5rem; left: 0.75rem; transform: translateY(-160%); padding: 0.6rem 0.85rem; border-radius: 0.45rem; background: var(--button); color: var(--button-text); font-weight: 750; }
+.skip-link:focus { transform: translateY(0); }
 button, input, select, textarea { font: inherit; }
 button, .button, input, select, textarea {
   border: 1px solid var(--border);
@@ -191,6 +193,16 @@ summary { cursor: pointer; font-weight: 700; }
 @media (max-width: 700px) {
   .page-heading { display: block; }
   .page-heading .actions { justify-content: flex-start; }
+  .table-wrap:has(.responsive-table) { overflow: visible; border: 0; }
+  .responsive-table, .responsive-table thead, .responsive-table tbody, .responsive-table tr, .responsive-table th, .responsive-table td { display: block; min-width: 0; }
+  .responsive-table thead { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+  .responsive-table tbody { display: grid; gap: 0.75rem; }
+  .responsive-table tr { border: 1px solid var(--border); border-radius: 0.7rem; background: var(--surface); overflow: hidden; }
+  .responsive-table td { display: grid; grid-template-columns: minmax(6.5rem, 38%) minmax(0, 1fr); gap: 0.65rem; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+  .responsive-table td::before { content: attr(data-label); color: var(--muted); font-weight: 700; }
+  .responsive-table td:last-child { border-bottom: 0; }
+  .responsive-table td.actions-cell { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+  .responsive-table td.actions-cell::before { flex: 0 0 100%; }
 }
 
 .dialog-backdrop, dialog::backdrop { background: rgba(0, 0, 0, 0.65); backdrop-filter: blur(2px); }

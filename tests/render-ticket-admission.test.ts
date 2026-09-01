@@ -30,6 +30,7 @@ describe("render ticket admission", () => {
       sourceSize: 8,
       sourceSha256: "0".repeat(64),
       timestamp: new Date().toISOString(),
+      reservedOutputBytes: 0,
     });
     await expect(
       service.create(
@@ -40,7 +41,7 @@ describe("render ticket admission", () => {
     ).rejects.toMatchObject({ code: "USER_STORAGE_QUOTA", status: 429 });
   });
 
-  it("replays an existing idempotent job before queue admission and persists a replacement nonce", async () => {
+  it("replays only a still-usable upload reservation and never mints a replacement nonce", async () => {
     const { database, service, actor, tickets } = fixture({
       maxStorage: 100,
       maxQueue: 1,
@@ -50,11 +51,6 @@ describe("render ticket admission", () => {
       { size: 1, sha256: "b".repeat(64) },
       "idempotent-render-123456",
     );
-    database.raw
-      .prepare(
-        "UPDATE used_nonces SET state='consumed',expires_at=? WHERE job_id=?",
-      )
-      .run(new Date(Date.now() - 1_000).toISOString(), first.value.jobId);
     const repeated = await service.create(
       actor,
       { size: 1, sha256: "b".repeat(64), outputs: ["pdf"] },
@@ -67,13 +63,6 @@ describe("render ticket admission", () => {
       typeof repeated.value.uploadTicket !== "string"
     )
       throw new Error("Legacy upload ticket is missing");
-    expect(
-      (
-        database.raw
-          .prepare("SELECT COUNT(*) AS count FROM used_nonces WHERE job_id=?")
-          .get(first.value.jobId) as { count: number }
-      ).count,
-    ).toBe(2);
     await expect(
       tickets.verify(repeated.value.uploadTicket, "upload", first.value.jobId),
     ).resolves.toMatchObject({
@@ -82,6 +71,29 @@ describe("render ticket admission", () => {
         new Date().toISOString(),
       ),
     });
+
+    database.raw
+      .prepare(
+        "UPDATE used_nonces SET state='consumed',expires_at=? WHERE job_id=?",
+      )
+      .run(new Date(Date.now() - 1_000).toISOString(), first.value.jobId);
+    await expect(
+      service.create(
+        actor,
+        { size: 1, sha256: "b".repeat(64) },
+        "idempotent-render-123456",
+      ),
+    ).rejects.toMatchObject({
+      code: "IDEMPOTENT_RESOURCE_GONE",
+      status: 410,
+    });
+    expect(
+      (
+        database.raw
+          .prepare("SELECT COUNT(*) AS count FROM used_nonces WHERE job_id=?")
+          .get(first.value.jobId) as { count: number }
+      ).count,
+    ).toBe(1);
   });
 
   it("atomically enforces the global queue limit across database connections", async () => {
@@ -129,6 +141,7 @@ describe("render ticket admission", () => {
         sourceSize: 1,
         sourceSha256: "f".repeat(64),
         timestamp,
+        reservedOutputBytes: 0,
       });
     const results = await Promise.allSettled(
       services.map((service, index) =>
@@ -170,11 +183,99 @@ describe("render ticket admission", () => {
       results.filter((result) => result.status === "fulfilled"),
     ).toHaveLength(1);
     expect(rejectionCodes(results)).toEqual(["USER_STORAGE_QUOTA"]);
-    expect(connections[0].jobs.storageUsageForUser(actor.userId)).toBe(6);
+    expect(connections[0].jobs.storageUsageForUser(actor.userId)).toBe(7);
+  });
+
+  it("enforces the active Job limit across a user's service accounts", async () => {
+    const { database, service, actor } = fixture({
+      maxStorage: 100,
+      maxQueue: 20,
+    });
+    const timestamp = new Date().toISOString();
+    database.settings.upsert("max_user_active_jobs", 1, "test", timestamp);
+    database.jobs.insertReserved({
+      id: `job_${"c".repeat(32)}`,
+      userId: actor.userId,
+      serviceAccountId: actor.serviceAccountId,
+      apiKeyId: actor.apiKeyId,
+      rendererVersion: "test",
+      sourceSize: 1,
+      sourceSha256: "c".repeat(64),
+      timestamp,
+      reservedOutputBytes: 1,
+    });
+    database.raw
+      .prepare(
+        "INSERT INTO service_accounts(id,owner_user_id,name,client_type,status,security_version,created_at,updated_at) VALUES ('service_two','user','Service two','generic','active',1,?,?)",
+      )
+      .run(timestamp, timestamp);
+    database.raw
+      .prepare(
+        "INSERT INTO api_keys(id,service_account_id,name,prefix,secret_hash,pepper_id,scopes_json,created_at,created_by) VALUES ('key_two','service_two','Key two','prefix-two','hash','v1','[\"render:create\"]',?,'test')",
+      )
+      .run(timestamp);
+
+    await expect(
+      service.create(
+        {
+          ...actor,
+          serviceAccountId: "service_two",
+          apiKeyId: "key_two",
+        },
+        { size: 1, sha256: "d".repeat(64) },
+        "user-queue-limit-123456",
+      ),
+    ).rejects.toMatchObject({ code: "USER_QUEUE_LIMIT", status: 429 });
+  });
+
+  it("atomically reserves maximum future output bytes for Source-based Jobs", async () => {
+    const {
+      services,
+      actor,
+      databases: connections,
+    } = await concurrentFixture({
+      maxStorage: 10,
+      maxQueue: 20,
+      maxOutput: 6,
+    });
+    const timestamp = new Date().toISOString(),
+      sourceId = `source_${"e".repeat(32)}`;
+    connections[0].sources.insertReserved({
+      id: sourceId,
+      ownerUserId: actor.userId,
+      size: 1,
+      sha256: "e".repeat(64),
+      storageKey: `sources/${sourceId}/source.zip`,
+      timestamp,
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+    connections[0].raw
+      .prepare(
+        "UPDATE sources SET status='ready',uploaded_at=?,paths_json='[\"main.tex\"]' WHERE id=?",
+      )
+      .run(timestamp, sourceId);
+    const results = await Promise.allSettled(
+      services.map((service, index) =>
+        service.create(
+          actor,
+          { sourceId },
+          `concurrent-output-${index}-123456`,
+        ),
+      ),
+    );
+    expect(
+      results.filter((result) => result.status === "fulfilled"),
+    ).toHaveLength(1);
+    expect(rejectionCodes(results)).toEqual(["USER_STORAGE_QUOTA"]);
+    expect(connections[0].jobs.storageUsageForUser(actor.userId)).toBe(7);
   });
 });
 
-function fixture(options: { maxStorage: number; maxQueue: number }) {
+function fixture(options: {
+  maxStorage: number;
+  maxQueue: number;
+  maxOutput?: number;
+}) {
   const database = new RendererDatabase(":memory:");
   databases.push(database);
   database.migrate();
@@ -217,6 +318,7 @@ function fixture(options: { maxStorage: number; maxQueue: number }) {
     rendererPublicUrl: "https://latex.example.com",
     rendererVersion: "test",
     maxUploadBytes: 20 * 1024 * 1024,
+    maxOutputBytes: options.maxOutput ?? 1,
     maxQueueLength: options.maxQueue,
     maxUserStorageBytes: options.maxStorage,
   });
@@ -226,6 +328,7 @@ function fixture(options: { maxStorage: number; maxQueue: number }) {
 async function concurrentFixture(options: {
   maxStorage: number;
   maxQueue: number;
+  maxOutput?: number;
 }) {
   const root = await mkdtemp(join(tmpdir(), "render-admission-"));
   roots.push(root);
@@ -275,6 +378,7 @@ async function concurrentFixture(options: {
         rendererPublicUrl: "https://latex.example.com",
         rendererVersion: "test",
         maxUploadBytes: 20 * 1024 * 1024,
+        maxOutputBytes: options.maxOutput ?? 1,
         maxQueueLength: options.maxQueue,
         maxUserStorageBytes: options.maxStorage,
       }),

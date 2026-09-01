@@ -7,7 +7,12 @@ import {
 } from "@latex-renderer/auth";
 import { RendererDatabase } from "@latex-renderer/database";
 import { loadSigningKeyRing, TicketService } from "@latex-renderer/ticket";
-import { loadResourceLimits } from "@latex-renderer/shared";
+import {
+  loadResourceLimits,
+  positiveBytesEnvironment,
+  positiveIntegerEnvironment,
+  validPortEnvironment,
+} from "@latex-renderer/shared";
 import { createAdminApp } from "./app.js";
 import { ImageManagerClient } from "./services/image-manager.js";
 import { UpdateManagerClient } from "./services/update-manager.js";
@@ -74,14 +79,11 @@ const app = createAdminApp({
   ...(imageManager ? { imageManager } : {}),
   ...(updateManager ? { updateManager } : {}),
   maxUploadBytes: loadResourceLimits(process.env).maxUploadBytes,
-  maxQueueLength: Number(process.env.MAX_QUEUE_LENGTH ?? "100"),
-  maxUserStorageBytes: Number(
-    process.env.MAX_USER_STORAGE_BYTES ?? String(1024 * 1024 * 1024),
-  ),
-  minFreeStorageBytes: Number(
-    process.env.MIN_FREE_STORAGE_BYTES ?? String(5 * 1024 * 1024 * 1024),
-  ),
-  artifactRetentionHours: Number(process.env.ARTIFACT_RETENTION_HOURS ?? "24"),
+  maxOutputBytes: positiveBytesEnvironment(process.env, "MAX_OUTPUT_BYTES", 200 * 1024 * 1024),
+  maxQueueLength: positiveIntegerEnvironment(process.env, "MAX_QUEUE_LENGTH", 100),
+  maxUserStorageBytes: positiveBytesEnvironment(process.env, "MAX_USER_STORAGE_BYTES", 1024 * 1024 * 1024),
+  minFreeStorageBytes: positiveBytesEnvironment(process.env, "MIN_FREE_STORAGE_BYTES", 5 * 1024 * 1024 * 1024),
+  artifactRetentionHours: positiveIntegerEnvironment(process.env, "ARTIFACT_RETENTION_HOURS", 24),
   environmentRoot:
     process.env.RENDERER_ENVIRONMENT_ROOT ??
     "/var/lib/latex-renderer/environment",
@@ -103,7 +105,7 @@ serve(
   {
     fetch: app.fetch,
     hostname: "127.0.0.1",
-    port: Number(process.env.PORT ?? "3102"),
+    port: validPortEnvironment(process.env, "PORT", 3102),
   },
   (info) => {
     console.log(

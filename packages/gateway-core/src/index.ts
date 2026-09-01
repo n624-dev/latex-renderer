@@ -17,24 +17,47 @@ export async function proxyGatewayJson(input: {
   requestId: string;
   fetchUpstream: (input: URL, init: RequestInit) => Promise<Response>;
   idempotencyRequired?: boolean | undefined;
+  /** Whether this route carries a JSON object body. Defaults to true. */
+  bodyRequired?: boolean | undefined;
 }): Promise<Response> {
+  const bodyRequired = input.bodyRequired !== false;
   const authorization = input.request.headers.get("Authorization");
   if (authorization === null || !API_KEY.test(authorization))
     return errorResponse("UNAUTHORIZED", "Bearer API key is required", 401);
-  if (mediaType(input.request.headers.get("Content-Type")) !== "application/json")
+  if (
+    bodyRequired &&
+    mediaType(input.request.headers.get("Content-Type")) !== "application/json"
+  )
     return errorResponse(
       "UNSUPPORTED_MEDIA_TYPE",
       "Content-Type must be application/json",
       415,
     );
   const lengthText = input.request.headers.get("Content-Length");
-  if (lengthText === null)
+  let length = 0;
+  if (lengthText !== null) {
+    if (!/^[0-9]{1,10}$/.test(lengthText))
+      return errorResponse(
+        "REQUEST_TOO_LARGE",
+        "JSON request is too large",
+        413,
+      );
+    length = Number(lengthText);
+    if (!Number.isSafeInteger(length) || length > MAX_JSON_BYTES)
+      return errorResponse(
+        "REQUEST_TOO_LARGE",
+        "JSON request is too large",
+        413,
+      );
+    if (bodyRequired && length < 2)
+      return errorResponse(
+        "REQUEST_TOO_LARGE",
+        "JSON request is too small",
+        413,
+      );
+  } else if (bodyRequired) {
     return errorResponse("LENGTH_REQUIRED", "Content-Length is required", 411);
-  if (!/^[0-9]{1,10}$/.test(lengthText))
-    return errorResponse("REQUEST_TOO_LARGE", "JSON request is too large", 413);
-  const length = Number(lengthText);
-  if (!Number.isSafeInteger(length) || length < 2 || length > MAX_JSON_BYTES)
-    return errorResponse("REQUEST_TOO_LARGE", "JSON request is too large", 413);
+  }
 
   const idempotencyKey = input.request.headers.get("Idempotency-Key");
   if (
@@ -53,34 +76,47 @@ export async function proxyGatewayJson(input: {
   } catch {
     return errorResponse("REQUEST_TOO_LARGE", "JSON request is too large", 413);
   }
-  if (body.byteLength !== length)
+  if (lengthText !== null && body.byteLength !== length)
     return errorResponse(
       "CONTENT_LENGTH_MISMATCH",
       "Content-Length does not match the JSON body",
       400,
     );
-  try {
-    const value = JSON.parse(
-      new TextDecoder("utf-8", { fatal: true }).decode(body),
-    ) as unknown;
-    if (value === null || typeof value !== "object" || Array.isArray(value))
-      throw new Error("JSON root is not an object");
-  } catch {
-    return errorResponse("INVALID_JSON", "Request body must be a JSON object", 400);
+  if (!bodyRequired && body.byteLength !== 0) {
+    return errorResponse(
+      "REQUEST_BODY_NOT_ALLOWED",
+      "This endpoint does not accept a request body",
+      400,
+    );
+  }
+  if (bodyRequired) {
+    try {
+      const value = JSON.parse(
+        new TextDecoder("utf-8", { fatal: true }).decode(body),
+      ) as unknown;
+      if (value === null || typeof value !== "object" || Array.isArray(value))
+        throw new Error("JSON root is not an object");
+    } catch {
+      return errorResponse(
+        "INVALID_JSON",
+        "Request body must be a JSON object",
+        400,
+      );
+    }
   }
 
   const headers = new Headers({
     Authorization: authorization,
-    "Content-Type": "application/json",
     "X-Request-Id": input.requestId,
   });
+  if (bodyRequired) headers.set("Content-Type", "application/json");
   if (idempotencyKey !== null) headers.set("Idempotency-Key", idempotencyKey);
   const response = await input.fetchUpstream(
     new URL(input.upstreamPath, "http://internal-api.local"),
     {
       method: input.request.method,
       headers,
-      body,
+      ...(body.byteLength === 0 ? {} : { body }),
       redirect: "manual",
       signal: AbortSignal.timeout(10_000),
     },
@@ -102,33 +138,61 @@ export async function proxyGatewayJson(input: {
     status: response.status,
     headers: {
       ...GATEWAY_RESPONSE_HEADERS,
-      "Content-Type": response.headers.get("Content-Type") ?? "application/json",
+      "Content-Type":
+        response.headers.get("Content-Type") ?? "application/json",
     },
   });
 }
 
-export function gatewayRoute(pathname: string, method: string):
-  | { upstreamPath: string; idempotencyRequired: boolean }
+export function gatewayRoute(
+  pathname: string,
+  method: string,
+):
+  | {
+      upstreamPath: string;
+      idempotencyRequired: boolean;
+      bodyRequired: boolean;
+    }
   | "health"
   | "invalid-job"
   | "method-not-allowed"
   | undefined {
   if (pathname === "/api/v1/health" || pathname === "/health")
-    return method === "GET" || method === "HEAD" ? "health" : "method-not-allowed";
-  if (pathname === "/api/v1/render-tickets" || pathname === "/v1/render-tickets") {
+    return method === "GET" || method === "HEAD"
+      ? "health"
+      : "method-not-allowed";
+  if (
+    pathname === "/api/v1/render-tickets" ||
+    pathname === "/v1/render-tickets"
+  ) {
     if (method !== "POST") return "method-not-allowed";
-    return { upstreamPath: "/internal/v1/render-tickets", idempotencyRequired: true };
+    return {
+      upstreamPath: "/internal/v1/render-tickets",
+      idempotencyRequired: true,
+      bodyRequired: true,
+    };
   }
-  if (pathname === "/api/v1/source-tickets" || pathname === "/v1/source-tickets") {
+  if (
+    pathname === "/api/v1/source-tickets" ||
+    pathname === "/v1/source-tickets"
+  ) {
     if (method !== "POST") return "method-not-allowed";
-    return { upstreamPath: "/internal/v1/source-tickets", idempotencyRequired: true };
+    return {
+      upstreamPath: "/internal/v1/source-tickets",
+      idempotencyRequired: true,
+      bodyRequired: true,
+    };
   }
-  const match = /^\/(?:api\/v1\/job-tickets|v1\/jobs)\/(job_[a-f0-9]{32})(?:\/ticket)?$/.exec(pathname);
+  const match =
+    /^\/(?:api\/v1\/job-tickets|v1\/jobs)\/(job_[a-f0-9]{32})(?:\/ticket)?$/.exec(
+      pathname,
+    );
   if (match !== null) {
     if (method !== "POST") return "method-not-allowed";
     return {
       upstreamPath: `/internal/v1/jobs/${String(match[1])}/ticket`,
       idempotencyRequired: false,
+      bodyRequired: false,
     };
   }
   if (
@@ -139,7 +203,11 @@ export function gatewayRoute(pathname: string, method: string):
   return undefined;
 }
 
-export function errorResponse(code: string, message: string, status: number): Response {
+export function errorResponse(
+  code: string,
+  message: string,
+  status: number,
+): Response {
   return Response.json(
     { error: { code, message } },
     { status, headers: GATEWAY_RESPONSE_HEADERS },

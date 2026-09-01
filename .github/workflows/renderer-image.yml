@@ -41,5 +41,26 @@ jobs:
           tags: latex-renderer:ci
           cache-from: type=gha,scope=renderer-image-texlive-2026
           cache-to: type=gha,mode=min,scope=renderer-image-texlive-2026,ignore-error=true
+      - name: Scan renderer image for known vulnerabilities
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: latex-renderer:ci
+          scan-type: image
+          scanners: vuln,misconfig,secret
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          # The scan remains visible on every renderer build.  Dependency and
+          # secret scans in the security workflow are the blocking controls;
+          # image findings are triaged against the pinned TeX snapshot.
+          exit-code: "0"
+      - name: Generate CycloneDX renderer image SBOM
+        uses: anchore/sbom-action@006b7ce8314066bdf1765b4500370d40fa6917a3 # v0.24.2
+        with:
+          image: latex-renderer:ci
+          format: cyclonedx-json
+          output-file: latex-renderer-image.cdx.json
+          artifact-name: latex-renderer-image.cdx.json
+          upload-artifact: true
+          dependency-snapshot: false
       - name: Exercise optional SVG extraction under the production seccomp profile
         run: sh deploy/scripts/smoke-test-renderer-svg.sh latex-renderer:ci

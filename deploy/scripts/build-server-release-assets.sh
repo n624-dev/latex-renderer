@@ -74,6 +74,7 @@ fs.writeFileSync(process.argv[2], `${JSON.stringify({
   requiredNodeMajor: 24,
   packageManager: packageJson.packageManager,
   rendererRuntimeFingerprint: process.argv[8],
+  provenance: "github-artifact-attestation",
 }, null, 2)}\n`, { mode: 0o644 });
 NODE
 

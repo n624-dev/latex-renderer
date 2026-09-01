@@ -17,6 +17,7 @@ case "$release_id" in
 esac
 
 source_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
+sh "$source_root/deploy/scripts/install-github-cli.sh"
 release_root="/opt/latex-renderer/releases/$release_id"
 release_marker="$release_root/.host-prepare-source-complete"
 previous_release=
@@ -34,6 +35,10 @@ runtime_dir="/run/user/$worker_uid"
 user_bus="unix:path=$runtime_dir/bus"
 rootless_socket="unix://$runtime_dir/docker.sock"
 
+id latex-renderer-update >/dev/null 2>&1 || useradd --system --gid latex-renderer \
+  --home-dir /var/lib/latex-renderer/update-manager --shell /usr/sbin/nologin \
+  latex-renderer-update
+
 grep -q "^$worker_user:" /etc/subuid || usermod --add-subuids 165536-231071 "$worker_user"
 grep -q "^$worker_user:" /etc/subgid || usermod --add-subgids 165536-231071 "$worker_user"
 
@@ -47,7 +52,7 @@ if [ ! -f "$release_marker" ]; then
   : > "$release_marker"
 fi
 chown -R root:latex-renderer "$release_root"
-chmod -R g+rX,o-rwx "$release_root"
+chmod -R u=rwX,g=rX,o= "$release_root"
 ln -sfn "$release_root" /opt/latex-renderer/current
 if [ -n "$previous_release" ] && [ "$previous_release" != "$release_root" ]; then
   chmod o-rwx "$previous_release"
@@ -57,18 +62,17 @@ install -d -o root -g latex-renderer -m 2770 /var/lib/latex-renderer
 install -d -o latex-renderer -g latex-renderer -m 2770 /var/lib/latex-renderer/storage
 if [ -d /var/lib/latex-renderer/storage/jobs ]; then
   find /var/lib/latex-renderer/storage/jobs -mindepth 2 -maxdepth 13 -type d -path '*/work*' -exec chmod g+rwx {} +
-  find /var/lib/latex-renderer/storage/jobs -mindepth 2 -maxdepth 13 -type d \
-    \( -path '*/output*' -o -path '*/staging*' \) -exec chmod a+rwx {} +
 fi
 install -d -o latex-renderer-backup -g latex-renderer -m 0750 /var/lib/latex-renderer/backups
+install -d -o latex-renderer-backup -g latex-renderer -m 0750 /var/lib/latex-renderer/audit
 install -d -o root -g latex-renderer -m 0750 /etc/latex-renderer /etc/latex-renderer/secrets /etc/latex-renderer/ticket-keys
 install -d -o root -g latex-renderer -m 0750 /var/lib/latex-renderer/image-manager /var/lib/latex-renderer/image-manager/operations /var/lib/latex-renderer/image-manager/tmp
-install -d -o root -g latex-renderer -m 0750 /var/lib/latex-renderer/update-manager /var/lib/latex-renderer/update-manager/operations
+install -d -o latex-renderer-update -g latex-renderer -m 0750 /var/lib/latex-renderer/update-manager /var/lib/latex-renderer/update-manager/operations /var/lib/latex-renderer/update-manager/staging
+chown -R latex-renderer-update:latex-renderer /var/lib/latex-renderer/update-manager
+chmod 0750 /var/lib/latex-renderer/update-manager
+chmod 0750 /var/lib/latex-renderer/update-manager/operations
+chmod 0700 /var/lib/latex-renderer/update-manager/staging
 install -d -o root -g root -m 0711 /opt/latex-renderer/update-staging
-if [ -d /var/lib/latex-renderer/update-manager/staging ]; then
-  chown root:latex-renderer /var/lib/latex-renderer/update-manager/staging
-  chmod 0750 /var/lib/latex-renderer/update-manager/staging
-fi
 if [ ! -f /etc/latex-renderer/update-manager.env ]; then
   update_deploy_user=${UPDATE_DEPLOY_USER:-${SUDO_USER:-$(stat -c '%U' "$source_root")}}
   if [ "$update_deploy_user" = root ] || \
@@ -100,6 +104,8 @@ elif ! grep -q '^RENDERER_JOB_TIMEOUT_SECONDS=' /etc/latex-renderer/renderer.env
   printf '%s\n' 'RENDERER_JOB_TIMEOUT_SECONDS=420' >> /etc/latex-renderer/renderer.env
 fi
 sed -i '/^RENDERER_APPARMOR_PROFILE=/d' /etc/latex-renderer/renderer.env
+sh "$source_root/deploy/scripts/configure-renderer-storage-acl.sh" \
+  /var/lib/latex-renderer/storage /etc/latex-renderer/renderer.env
 
 deployment_mode=$(sed -n 's/^DEPLOYMENT_MODE=//p' /etc/latex-renderer/renderer.env | tail -n 1)
 case "$deployment_mode" in
@@ -150,8 +156,12 @@ chmod 0440 /etc/latex-renderer/secrets/backup-age-recipient
 if [ ! -f /etc/latex-renderer/backup.env ]; then
   (umask 027; printf '%s\n' \
     'DATABASE_PATH=/var/lib/latex-renderer/renderer.sqlite3' \
+    'STORAGE_ROOT=/var/lib/latex-renderer/storage' \
     'BACKUP_DIRECTORY=/var/lib/latex-renderer/backups' \
     > /etc/latex-renderer/backup.env)
+fi
+if ! grep -q '^STORAGE_ROOT=' /etc/latex-renderer/backup.env; then
+  printf '%s\n' 'STORAGE_ROOT=/var/lib/latex-renderer/storage' >> /etc/latex-renderer/backup.env
 fi
 if grep -q '^BACKUP_DIRECTORY=/var/backups/latex-renderer$' /etc/latex-renderer/backup.env; then
   if [ -d /var/backups/latex-renderer ]; then
@@ -167,6 +177,14 @@ chmod 0640 /etc/latex-renderer/backup.env
 install -o root -g latex-renderer -m 0644 "$source_root/deploy/security/seccomp.json" /etc/latex-renderer/seccomp.json
 install -o root -g root -m 0644 "$source_root/deploy/security/latex-renderer.apparmor" /etc/apparmor.d/latex-renderer
 install -o root -g root -m 0644 "$source_root"/deploy/systemd/*.service "$source_root"/deploy/systemd/*.timer /etc/systemd/system/
+if ! command -v sudo >/dev/null 2>&1; then
+  echo "sudo is required for the non-root Update Manager controller" >&2
+  exit 69
+fi
+install -d -o root -g root -m 0755 /usr/local/libexec /etc/sudoers.d
+install -o root -g root -m 0755 "$source_root/deploy/scripts/update-manager-helper-launcher.sh" /usr/local/libexec/latex-renderer-update-helper
+install -o root -g root -m 0440 "$source_root/deploy/sudoers.d/latex-renderer-update" /etc/sudoers.d/latex-renderer-update
+visudo -cf /etc/sudoers.d/latex-renderer-update >/dev/null
 apparmor_parser -r /etc/apparmor.d/latex-renderer
 systemctl daemon-reload
 

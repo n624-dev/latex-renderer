@@ -562,6 +562,7 @@ async function passwordFixture() {
     writeEnabled: true,
     storageRoot: "/nonexistent",
     rendererVersion: "test",
+    maxOutputBytes: 1,
     maxQueueLength: 10,
     maxUserStorageBytes: 1024 * 1024,
     minFreeStorageBytes: 1,

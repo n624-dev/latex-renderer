@@ -8,12 +8,23 @@ import {
   parseAuthMode,
 } from "@latex-renderer/auth";
 import { RendererDatabase } from "@latex-renderer/database";
-import { AppError, newId, nowIso } from "@latex-renderer/shared";
+import {
+  AppError,
+  boundedIntegerEnvironment,
+  newId,
+  nowIso,
+} from "@latex-renderer/shared";
 
 const allowedGid =
   process.env.LATEX_RENDERER_ADMIN_GID === undefined
     ? undefined
-    : Number(process.env.LATEX_RENDERER_ADMIN_GID);
+    : boundedIntegerEnvironment(
+        process.env,
+        "LATEX_RENDERER_ADMIN_GID",
+        0,
+        0,
+        4_294_967_295,
+      );
 const processGroups = process.getgroups?.() ?? [];
 if (
   process.geteuid?.() !== 0 &&
@@ -331,13 +342,14 @@ program
     database.transaction(() => {
       database.raw
         .prepare(
-          `INSERT INTO api_keys(id,service_account_id,name,prefix,secret_hash,pepper_id,scopes_json,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,'local-recovery')`,
+          `INSERT INTO api_keys(id,service_account_id,name,prefix,kind,secret_hash,pepper_id,scopes_json,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,'local-recovery')`,
         )
         .run(
           generated.id,
           o.serviceAccount,
           "break-glass",
           generated.prefix,
+          generated.kind,
           generated.secretHash,
           generated.pepperId,
           JSON.stringify(["admin:*"]),
@@ -428,13 +440,14 @@ localKeys
     database.transaction(() => {
       database.raw
         .prepare(
-          `INSERT INTO api_keys(id,service_account_id,name,prefix,secret_hash,pepper_id,scopes_json,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,'local-recovery')`,
+          `INSERT INTO api_keys(id,service_account_id,name,prefix,kind,secret_hash,pepper_id,scopes_json,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,'local-recovery')`,
         )
         .run(
           generated.id,
           o.serviceAccount,
           "break-glass",
           generated.prefix,
+          generated.kind,
           generated.secretHash,
           generated.pepperId,
           JSON.stringify(["admin:*"]),
@@ -538,7 +551,7 @@ smokeKey
         );
       database.raw
         .prepare(
-          `INSERT INTO api_keys(id,service_account_id,name,prefix,secret_hash,pepper_id,scopes_json,expires_at,created_at,created_by)
+          `INSERT INTO api_keys(id,service_account_id,name,prefix,kind,secret_hash,pepper_id,scopes_json,expires_at,created_at,created_by)
       VALUES (?,?,?,?,?,?,?,?,?,'local-smoke-test')`,
         )
         .run(
@@ -546,6 +559,7 @@ smokeKey
           serviceAccountId,
           "production-smoke",
           generated.prefix,
+          generated.kind,
           generated.secretHash,
           generated.pepperId,
           JSON.stringify(["render:create", "render:read:own"]),
@@ -616,7 +630,8 @@ smokeKey
       const timestamp = nowIso();
       const result = database.raw
         .prepare(
-          `UPDATE jobs SET status='deleting',updated_at=?
+          `UPDATE jobs SET render_status=status,status='deleting',deletion_status='pending',
+      deletion_attempts=0,deletion_error=NULL,deletion_next_attempt_at=NULL,updated_at=?
       WHERE service_account_id IN (SELECT id FROM service_accounts WHERE name LIKE 'production-smoke-%')
       AND status IN ('succeeded','failed','timeout','canceled','rejected','expired')`,
         )
@@ -667,7 +682,13 @@ function readBootstrapPassword(path: string): string {
     process.geteuid?.(),
     process.env.SUDO_UID === undefined
       ? undefined
-      : Number(process.env.SUDO_UID),
+      : boundedIntegerEnvironment(
+          process.env,
+          "SUDO_UID",
+          0,
+          0,
+          4_294_967_295,
+        ),
   ]);
   if (
     !stat.isFile() ||

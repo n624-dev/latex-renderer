@@ -187,6 +187,17 @@ jobs:
           printf '%s\n' "$runtime_neutral" "$runtime_default" > "$RUNNER_TEMP/validated-runtime-images"
           printf '%s\n' "$runtime_neutral_tag" "$runtime_default_tag" > "$RUNNER_TEMP/validated-runtime-tags"
 
+      - name: Generate CycloneDX SBOM for the validated Runtime
+        if: steps.validate.outcome == 'success'
+        uses: anchore/sbom-action@006b7ce8314066bdf1765b4500370d40fa6917a3 # v0.24.2
+        with:
+          image: latex-renderer:validation-en-jp-${{ steps.snapshot.outputs.date }}
+          format: cyclonedx-json
+          output-file: latex-renderer-runtime.cdx.json
+          artifact-name: latex-renderer-runtime.cdx.json
+          upload-artifact: true
+          dependency-snapshot: false
+
       - name: Publish immutable dated image
         id: publish
         if: steps.validate.outcome == 'success' && env.PUBLISH_REQUESTED == 'true'
@@ -217,6 +228,12 @@ jobs:
             runtime=${runtimes[$index]}
             runtime_ref="$IMAGE_REPOSITORY:${runtime_tags[$index]}"
             runtime_local_id=$(docker image inspect "$runtime" --format '{{.Id}}')
+            runtime_tag_status=$(node deploy/scripts/ghcr-tag-status.mjs "${runtime_tags[$index]}")
+            if [[ "$runtime_tag_status" == present ]]; then
+              echo "Runtime tag ${runtime_tags[$index]} already exists; refusing to overwrite an immutable publication" >&2
+              exit 65
+            fi
+            [[ "$runtime_tag_status" == absent ]]
             docker tag "$runtime" "$runtime_ref"
             docker push "$runtime_ref"
             runtime_digest=$(docker buildx imagetools inspect "$runtime_ref" | awk '$1 == "Digest:" { print $2; exit }')

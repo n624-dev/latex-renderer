@@ -13,6 +13,9 @@ const MAXIMUM_TOKEN_BYTES = 64 * 1024;
 const MAXIMUM_JWKS_BYTES = 256 * 1024;
 const MAXIMUM_EXP_SECONDS = 253_402_300_799;
 const FLOW_LIFETIME_MS = 5 * 60 * 1000;
+const FLOW_START_WINDOW_MS = 15 * 60 * 1000;
+const MAXIMUM_FLOW_STARTS_PER_CLIENT = 20;
+const MAXIMUM_FLOW_START_RATE_KEYS = 10_000;
 
 export interface OidcClientOptions {
   issuer: string;
@@ -41,6 +44,11 @@ interface OidcFlow {
   expiresAt: number;
 }
 
+interface OidcFlowStartWindow {
+  windowStartedAt: number;
+  count: number;
+}
+
 export interface OidcAuthorizationStart {
   authorizationUrl: string;
   state: string;
@@ -56,7 +64,8 @@ export class OidcClient {
   private readonly fetchImpl: typeof fetch;
   private readonly now: () => Date;
   private readonly flows = new Map<string, OidcFlow>();
-  private metadataPromise?: Promise<OidcMetadata>;
+  private readonly flowStartWindows = new Map<string, OidcFlowStartWindow>();
+  private metadataPromise: Promise<OidcMetadata> | undefined;
   private jwks?: ReturnType<typeof createRemoteJWKSet>;
 
   constructor(options: OidcClientOptions) {
@@ -86,7 +95,12 @@ export class OidcClient {
     this.now = options.now ?? (() => new Date());
   }
 
-  async begin(returnTo = "/app/"): Promise<OidcAuthorizationStart> {
+  async begin(
+    returnTo = "/app/",
+    clientAddress = "unavailable",
+  ): Promise<OidcAuthorizationStart> {
+    this.pruneFlows();
+    this.consumeFlowStart(clientAddress);
     const metadata = await this.metadata();
     this.pruneFlows();
     const state = randomBytes(32).toString("base64url");
@@ -236,7 +250,18 @@ export class OidcClient {
   }
 
   private async metadata(): Promise<OidcMetadata> {
-    this.metadataPromise ??= this.loadMetadata();
+    if (this.metadataPromise === undefined) {
+      const pending = this.loadMetadata();
+      this.metadataPromise = pending;
+      try {
+        return await pending;
+      } catch (error) {
+        // Discovery failures are commonly transient. Do not permanently
+        // poison this process with a rejected promise.
+        if (this.metadataPromise === pending) this.metadataPromise = undefined;
+        throw error;
+      }
+    }
     return this.metadataPromise;
   }
 
@@ -291,6 +316,31 @@ export class OidcClient {
         "Too many OIDC login attempts are pending",
         503,
       );
+  }
+
+  private consumeFlowStart(clientAddress: string): void {
+    const now = this.now().getTime();
+    for (const [key, window] of this.flowStartWindows) {
+      if (window.windowStartedAt + FLOW_START_WINDOW_MS <= now)
+        this.flowStartWindows.delete(key);
+    }
+    const key = hash(clientAddress.trim() || "unavailable");
+    let window = this.flowStartWindows.get(key);
+    if (window === undefined) {
+      if (this.flowStartWindows.size >= MAXIMUM_FLOW_START_RATE_KEYS) {
+        const oldest = this.flowStartWindows.keys().next().value;
+        if (typeof oldest === "string") this.flowStartWindows.delete(oldest);
+      }
+      window = { windowStartedAt: now, count: 0 };
+      this.flowStartWindows.set(key, window);
+    }
+    if (window.count >= MAXIMUM_FLOW_STARTS_PER_CLIENT)
+      throw new AppError(
+        "OIDC_LOGIN_RATE_LIMITED",
+        "Too many OIDC login attempts; try again later",
+        429,
+      );
+    window.count += 1;
   }
 
   private boundedJwksFetch(): typeof fetch {

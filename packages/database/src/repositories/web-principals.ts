@@ -37,14 +37,15 @@ export class WebPrincipalsRepository {
     this.db
       .prepare(
         `INSERT INTO api_keys
-        (id,service_account_id,name,prefix,secret_hash,pepper_id,scopes_json,created_at,created_by)
-        VALUES (?,?,?,?,?,?,?,?,'web-principal')`,
+        (id,service_account_id,name,prefix,kind,secret_hash,pepper_id,scopes_json,created_at,created_by)
+        VALUES (?,?,?,?,?,?,?,?,?,'web-principal')`,
       )
       .run(
         principal.api_key_id,
         principal.service_account_id,
         "Web rendering principal",
         `web_${principal.api_key_id.slice(4)}`,
+        "render",
         "0".repeat(64),
         "web-principal",
         JSON.stringify(["render:create", "render:read:own"]),

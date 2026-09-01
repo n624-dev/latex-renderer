@@ -234,6 +234,73 @@ export class BrowserAuthRepository {
       );
   }
 
+  activeSessionCountForUser(userId: string, timestamp: string): number {
+    return (
+      this.db
+        .prepare(
+          `SELECT COUNT(*) AS count FROM web_sessions
+           WHERE user_id=? AND revoked_at IS NULL
+             AND idle_expires_at>? AND absolute_expires_at>?`,
+        )
+        .get(userId, timestamp, timestamp) as { count: number }
+    ).count;
+  }
+
+  activeSessionCount(timestamp: string): number {
+    return (
+      this.db
+        .prepare(
+          `SELECT COUNT(*) AS count FROM web_sessions
+           WHERE revoked_at IS NULL
+             AND idle_expires_at>? AND absolute_expires_at>?`,
+        )
+        .get(timestamp, timestamp) as { count: number }
+    ).count;
+  }
+
+  revokeOldestActiveSessionsForUser(
+    userId: string,
+    timestamp: string,
+    maximum: number,
+  ): number {
+    if (maximum <= 0) return 0;
+    return Number(
+      this.db
+        .prepare(
+          `UPDATE web_sessions SET revoked_at=?
+           WHERE token_hash IN (
+             SELECT token_hash FROM web_sessions
+             WHERE user_id=? AND revoked_at IS NULL
+               AND idle_expires_at>? AND absolute_expires_at>?
+             ORDER BY last_seen_at ASC,created_at ASC,token_hash ASC
+             LIMIT ?
+           )`,
+        )
+        .run(timestamp, userId, timestamp, timestamp, maximum).changes,
+    );
+  }
+
+  revokeOldestActiveSessions(
+    timestamp: string,
+    maximum: number,
+  ): number {
+    if (maximum <= 0) return 0;
+    return Number(
+      this.db
+        .prepare(
+          `UPDATE web_sessions SET revoked_at=?
+           WHERE token_hash IN (
+             SELECT token_hash FROM web_sessions
+             WHERE revoked_at IS NULL
+               AND idle_expires_at>? AND absolute_expires_at>?
+             ORDER BY last_seen_at ASC,created_at ASC,token_hash ASC
+             LIMIT ?
+           )`,
+        )
+        .run(timestamp, timestamp, timestamp, maximum).changes,
+    );
+  }
+
   getSession(tokenHash: string): WebSessionRow | undefined {
     return this.db
       .prepare(

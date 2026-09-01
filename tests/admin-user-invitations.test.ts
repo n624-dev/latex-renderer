@@ -166,6 +166,7 @@ function adminApp(): {
       writeEnabled: true,
       storageRoot: "/nonexistent",
       rendererVersion: "sha256:" + "0".repeat(64),
+      maxOutputBytes: 1,
       maxQueueLength: 100,
       maxUserStorageBytes: 1024,
       minFreeStorageBytes: 1,

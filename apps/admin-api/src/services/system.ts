@@ -8,7 +8,7 @@ export const ticketRevocationMinimumSeconds=35*60;
 export class AdminSystemService {
   constructor(private readonly deps:AdminDependencies){}
 
-  status(){return{writeEnabled:this.deps.writeEnabled,maintenance:this.deps.database.settings.get("maintenance_mode"),worker:this.deps.database.settings.get("worker_mode"),jobs:this.deps.database.jobs.statusCounts()};}
+  status(){return{writeEnabled:this.deps.writeEnabled,maintenance:this.deps.database.settings.get("maintenance_mode"),worker:this.deps.database.settings.get("worker_mode"),rendering:this.renderingHealth(),jobs:this.deps.database.jobs.statusCounts()};}
   config(){return this.deps.database.settings.listMutable();}
   audit(query:AuditLogQuery){return this.deps.database.auditLogs.search(query);}
   ticketKeys(){return{activeKid:this.deps.activeTicketKid,verificationKids:this.deps.verificationTicketKids,minRevocationSeconds:ticketRevocationMinimumSeconds};}
@@ -17,8 +17,8 @@ export class AdminSystemService {
     return{operational:fresh&&mode==="running",mode,fresh,lastHeartbeatAt:heartbeat?.at??null};
   }
 
-  updateConfig(actor:AdminActor,input:{key:"max_queue_length"|"max_user_storage_bytes"|"source_orphan_retention_minutes";value:number;reason:string}):void{
-    const bounds=input.key==="max_queue_length"?{min:1,max:10000}:input.key==="max_user_storage_bytes"?{min:100*1024*1024,max:100*1024*1024*1024}:{min:5,max:1440};
+  updateConfig(actor:AdminActor,input:{key:"max_queue_length"|"max_user_storage_bytes"|"max_user_active_jobs"|"source_orphan_retention_minutes";value:number;reason:string}):void{
+    const bounds=input.key==="max_queue_length"?{min:1,max:10000}:input.key==="max_user_storage_bytes"?{min:100*1024*1024,max:100*1024*1024*1024}:input.key==="max_user_active_jobs"?{min:1,max:1000}:{min:5,max:1440};
     if(input.value<bounds.min||input.value>bounds.max)throw new AppError("CONFIG_OUT_OF_RANGE","Configuration value is outside its safe range",400);
     const previous=this.deps.database.settings.value<number|null>(input.key,null);
     if(typeof previous==="number"&&input.value>previous&&actor.role!=="owner")throw new AppError("OWNER_REQUIRED","Only an owner can relax resource limits",403);
@@ -28,10 +28,11 @@ export class AdminSystemService {
     });
   }
 
-  maintenance(actor:AdminActor,action:"enable"|"disable",mode:MaintenanceMode):MaintenanceMode{
+  maintenance(actor:AdminActor,action:"enable"|"disable",mode:MaintenanceMode,reason?:string):MaintenanceMode{
+    if(action==="enable"&&(reason===undefined||reason.trim()===""))throw new AppError("MAINTENANCE_REASON_REQUIRED","Maintenance reason is required",400);
     const actual:MaintenanceMode=action==="disable"?"normal":mode;this.deps.database.transaction(()=>{
       this.deps.database.settings.upsert("maintenance_mode",actual,actor.id,nowIso());
-      this.deps.database.audit({actorType:actor.type,actorId:actor.id,action:`maintenance.${action}d`,targetType:"system",targetId:"maintenance",result:"success",metadata:{mode:actual}});
+      this.deps.database.audit({actorType:actor.type,actorId:actor.id,action:`maintenance.${action}d`,targetType:"system",targetId:"maintenance",result:"success",metadata:{mode:actual,...(reason===undefined?{}:{reason:reason.trim()})}});
     });return actual;
   }
 

@@ -4,21 +4,21 @@ category: セルフホスト
 title: 自分のサーバーに構築
 description: 対応するサーバー構成、導入前の準備、初期設定、更新とバックアップを説明します。
 navOrder: 18
-updated: "2026-08-30"
+updated: "2026-09-01"
 since: "v1.2.0"
 ---
 
 ## 現在の提供状況
 
-このページは[`v1.2.2`](https://github.com/n624-dev/latex-renderer/releases/tag/v1.2.2)のサーバー用bundleを対象にします。Cloudflare構成に加えて、通常のTLSリバースプロキシとOIDC／ローカルパスワード認証を選択できます。このReleaseは公開後にタグや配布ファイルを差し替えできない設定で固定され、次を含みます。
+このページは[`v1.3.0`](https://github.com/n624-dev/latex-renderer/releases/tag/v1.3.0)のサーバー用bundleを対象にします。Cloudflare構成に加えて、通常のTLSリバースプロキシとOIDC／ローカルパスワード認証を選択できます。このReleaseは公開後にタグや配布ファイルを差し替えできない設定で固定され、次を含みます。
 
-- `latex-renderer-server-1.2.2.tar.gz`
+- `latex-renderer-server-1.3.0.tar.gz`
 - クライアントZIPとClaude Desktop用MCPB
 - 3つの配布ファイルを検証する`SHA256SUMS`
 - commit、バージョン、Renderer fingerprint、Node.js／pnpm要件を記録したbundle内metadata
 - GitHub APIが返す各assetのSHA-256 digest
 
-現在の`main`ブランチをcloneして本番へ直接デプロイしないでください。必ずバージョン付きReleaseを使用します。v1.2.0の認証DB migrationはforward-onlyなので、更新前の暗号化backupが必須です。
+現在の`main`ブランチをcloneして本番へ直接デプロイしないでください。必ずバージョン付きReleaseを使用します。v1.3.0はforward-onlyのMigration 008〜016を追加します。更新前にmaintenance modeで実行中Jobをdrainし、暗号化backupを取得してください。Migration適用後にv1.2.xへ戻す場合は、コードだけを切り替えず更新前のdatabase backupも復元する必要があります。
 
 ホスト済みサービスを利用する場合は、[はじめに](/docs/)または[クライアントのインストール](/docs/client/)へ進んでください。
 
@@ -55,7 +55,7 @@ since: "v1.2.0"
 - `oidc`を選ぶ場合はHTTPS issuer、client ID、Git管理外のclient secret、ownerのstable subject
 - `password`を選ぶ場合はowner用の一時password file（コマンドライン引数や環境変数へpasswordを書かない）
 - GitHub Releases、`ghcr.io`、TeX Live archive、Debian repositoryへHTTPS接続できるネットワーク
-- `curl`、`jq`、`tar`、`sha256sum`
+- `curl`、`jq`、`tar`、`sha256sum`、`gh`（`gh attestation verify`対応版）
 
 既定設定では空き容量が5 GiBを下回ると新規レンダリングを拒否します。TeX Live、複数のRuntime、リリース、成果物、暗号化バックアップにも容量が必要なため、5 GiBをホスト全体の必要容量として扱わないでください。
 
@@ -89,12 +89,12 @@ since: "v1.2.0"
 
 公開リポジトリの`*.example`ファイルは項目確認のための雛形です。設定済みファイルを雛形へ上書きしてcommitする運用はしません。
 
-## v1.2.2をダウンロードして検証
+## v1.3.0をダウンロードして検証
 
 次のコマンドは、固定されたReleaseであることをGitHub APIで確認し、APIが返すdigestとダウンロードしたbundleを照合します。通常の非rootユーザーで実行します。
 
 ```bash
-version=1.2.2
+version=1.3.0
 repository=n624-dev/latex-renderer
 asset="latex-renderer-server-$version.tar.gz"
 work_dir=$(mktemp -d)
@@ -114,6 +114,11 @@ asset_digest=$(jq -r --arg asset "$asset" '.assets[] | select(.name == $asset) |
 curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error \
   "$asset_url" --output "$work_dir/$asset"
 printf '%s  %s\n' "${asset_digest#sha256:}" "$work_dir/$asset" | sha256sum --check -
+gh attestation verify "$work_dir/$asset" \
+  --repo "$repository" \
+  --signer-workflow "$repository/.github/workflows/server-release.yml" \
+  --source-ref "refs/tags/v$version" \
+  --deny-self-hosted-runners
 
 tar -xzf "$work_dir/$asset" -C "$work_dir"
 bundle_root="$work_dir/latex-renderer-server-$version"
@@ -307,6 +312,8 @@ shred -u "$password_file"
 
 この設定では、完全一致するローカルRuntime、公開GHCR Runtimeの順に再利用します。Packageが存在しない場合でも、長いローカルビルドを暗黙には開始しません。独自言語構成が必要な管理者だけが、GHCRで該当Runtimeが存在しないことを確認したうえでfallbackを明示的に有効にします。
 
+GHCRの公開Packageは、dated tag・Runtime tagの上書きを禁止するimmutable tags設定を有効にしてください。公開workflowは既存dated tagへのpushを拒否し、push後にmanifest digestと匿名pullを照合します。ホスト側は`latest`や日付tagを検出用に一度だけ使い、取得後は`@sha256:...`（ローカルではDocker image ID）へ固定してBase／Runtimeをbuild・実行します。GHCRでtag immutabilityを設定できない場合は、dated tagを本番のauthorityにしないでください。
+
 画面を閉じても開始済みoperationは継続します。Webへ再接続できない場合は、Admin CLIまたはsystemd journalからoperation IDを確認します。
 
 ## 導入完了の確認
@@ -338,7 +345,11 @@ TeXとアプリケーションは別々に更新します。
 
 アプリ更新は、公開後に差し替えできない固定リリース、固定tag／commit、サーバー用bundleのdigest、埋め込みmetadata、Renderer fingerprint、Node／pnpm要件を検証します。`v1.1.0`以降がこの更新経路に対応します。`v1.0.0`はサーバー用bundleと差し替え禁止設定がないため、Update Managerでは適用できません。
 
+Release workflowはtag refそのもの（`refs/tags/vX.Y.Z`）からのみ実行され、各配布assetへGitHub Actionsのkeyless Sigstore provenanceを付けます。Update Managerは保護された`server-release.yml` workflow、完全一致するtag ref、OIDC issuer、非self-hosted runnerを必ず検証します。host bootstrapは`gh`が古い場合、GitHub CLI v2.98.0を公式releaseから取得し、arch別に固定したSHA-256を検証して`/usr/local/bin/gh`へ導入します。attestation検証を無効化する設定はありません。
+
 Webでは`/admin/updates/`から更新確認、方針変更、適用、operation確認、rollbackを行います。認証済みのAdmin CLIを使う場合も同じAPIと安全検査を使用します。これが通常の更新経路です。旧Updaterが新しいReleaseのデプロイ処理へ到達する前に失敗する場合だけ、後述のsudo手動更新を使います。
+
+Update Managerは配布物を検証したroot所有の`verified` tree、依存導入とbuildだけを行う非rootの`build` tree、許可した成果物だけを戻したroot所有の`assembly` treeを分離します。rootが実行するデプロイスクリプトは`assembly`側の検証済みコピーで、非root build tree内のスクリプトは実行しません。Cloudflare公開処理などを設定済みdeployment userで行う場合も、controller所有treeを直接渡さず、rootが検査後に固定した一時`deployment-build`コピーを使用します。rollbackも同じ分離を使います。
 
 適用中はAdmin API自身も新しいReleaseで再起動するため、画面が一時的に「Admin APIへ再接続中」となったり、プロキシが短時間502を返したりすることがあります。画面は同じoperation IDへ再接続するので、その間に更新ボタンをもう一度押しません。修正版のデプロイ処理は、アプリ更新が保持しているmutation lockをTeX Runtime復元処理から重ねて取得せず、Image Manager起動時に検証済みの保存状態を復元します。デプロイが途中で失敗した場合も、停止したローカルserviceとtimerを復旧してからoperationを失敗として確定します。
 
@@ -346,11 +357,11 @@ Webでは`/admin/updates/`から更新確認、方針変更、適用、operation
 admin_cli=/opt/latex-renderer/current/apps/admin-cli/dist/index.js
 /usr/local/bin/node "$admin_cli" update status
 /usr/local/bin/node "$admin_cli" update check
-/usr/local/bin/node "$admin_cli" update policy --mode notify --yes
-/usr/local/bin/node "$admin_cli" update apply 1.2.2 --yes
+/usr/local/bin/node "$admin_cli" update policy --mode notify --reason "Keep updates manual" --yes
+/usr/local/bin/node "$admin_cli" update apply 1.3.0 --reason "Apply verified stable release" --yes
 ```
 
-上の`1.2.2`は更新対象versionを明示する例です。利用可能と表示された実在versionだけを指定します。CLIは事前にAdmin API keyを設定し、通常ユーザーとして実行します。Cloudflare profileでAccess Service Authも設定した場合だけservice tokenを追加します。CLIへsudoを付けません。
+上の`1.3.0`は更新対象versionを明示する例です。利用可能と表示された実在versionだけを指定します。CLIは事前にAdmin API keyを設定し、通常ユーザーとして実行します。Cloudflare profileでAccess Service Authも設定した場合だけservice tokenを追加します。CLIへsudoを付けません。
 
 v1.2.0からの更新で、service smoke testと公開route更新が成功した後にOAuth consentの401を理由として失敗表示になった場合、v1.2.0のserviceはすでに稼働しています。同じv1.2.0 operationを繰り返さず、v1.2.2以降を新しい更新として適用してください。v1.2.1はこの最終確認を修正し、v1.2.2は公開Workerへログイン方式を切り替えるJavaScriptを収録します。どちらも新しいdatabase migrationは追加しません。
 
@@ -449,16 +460,18 @@ sudo systemctl start latex-renderer-image-manager.service \
 
 ## バックアップ
 
+既定の暗号化backupは、WALと整合するSQLite snapshotに加え、削除されていないProjectの全revisionが参照するSource ZIPを同じarchiveへ保存します。各SourceはDB snapshotに記録されたサイズとSHA-256を照合し、欠落・symlink・hardlink・内容不一致があればbackup全体を失敗させます。DBだけ成功したように見せることはありません。
+
 最低限、次をReleaseとは別に保全します。
 
-- SQLiteデータベースとWAL整合性を保ったbackup
-- `/var/lib/latex-renderer/storage`
+- SQLiteデータベース、active Project revisionのSource、両者の対応manifestを含む既定の暗号化backup
+- Project外のSource、Job成果物も復元する場合は`/var/lib/latex-renderer/storage`全体の別backup
 - `/var/lib/latex-renderer/image-manager`のdesired／active state
 - `/etc/latex-renderer`
 - Cloudflare profileの場合だけ`/etc/cloudflared`とTunnel、Access、Worker構成を復元できる記録
 - standalone profileの場合はTLS reverse proxyと証明書更新設定を復元できる記録
 
-既定のbackupはageで暗号化します。復元テストを行っていないbackupを、復旧可能なbackupとして扱わないでください。秘密鍵と暗号化backupは同じ障害で失われない場所へ保管します。
+既定のbackupはageで暗号化します。`deploy/scripts/restore-test.mjs`はSQLite整合性だけでなく、Project revision→Source対応、Sourceの通常ファイル性、サイズ、SHA-256も検査します。復元テストを行っていないbackupを、復旧可能なbackupとして扱わないでください。秘密鍵と暗号化backupは同じ障害で失われない場所へ保管します。実際の復旧時はサービスを停止し、archive内の`renderer.sqlite3`と`project-sources/<source_id>/source.zip`をmanifestどおり同じ復旧点として戻します。
 
 ## 問題が起きた場合
 

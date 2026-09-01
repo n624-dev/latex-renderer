@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, truncate, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -75,12 +75,24 @@ describe("Remote MCP HTTP server", () => {
     expect(consentHtml).toContain('class="site-header"');
     expect(consentHtml).not.toContain("<style");
     const setCookie = consent.headers.get("Set-Cookie") as string,
-      csrf = /oauth_csrf=([^;]+)/.exec(setCookie)?.[1] as string,
+      csrf = /oauth_csrf_([A-Za-z0-9_-]{32})=/.exec(setCookie)?.[1] as string,
       browserSession = /test_browser_session=([^;]+)/.exec(
         setCookie,
       )?.[1] as string,
-      cookie = `test_browser_session=${browserSession}; oauth_csrf=${csrf}`,
+      secondConsent = await fixture.app.request(`/oauth/authorize?${query}`, {
+        headers: {
+          Host: "latex.example.com",
+          "Cf-Access-Jwt-Assertion": "access-jwt",
+        },
+      }),
+      secondSetCookie = secondConsent.headers.get("Set-Cookie") as string,
+      secondCsrf = /oauth_csrf_([A-Za-z0-9_-]{32})=/.exec(
+        secondSetCookie,
+      )?.[1] as string,
+      cookie = `test_browser_session=${browserSession}; oauth_csrf_${csrf}=${csrf}; oauth_csrf_${secondCsrf}=${secondCsrf}; oauth_csrf=${secondCsrf}`,
       approval = new URLSearchParams(query);
+    expect(secondConsent.status).toBe(200);
+    expect(secondCsrf).not.toBe(csrf);
     approval.set("csrf", csrf);
     approval.set("decision", "approve");
     const rejectedOrigin = await fixture.app.request("/oauth/authorize", {
@@ -111,6 +123,26 @@ describe("Remote MCP HTTP server", () => {
       body: approval.toString(),
     });
     expect(approved.status).toBe(303);
+    const secondDenial = new URLSearchParams(query);
+    secondDenial.set("csrf", secondCsrf);
+    secondDenial.set("decision", "deny");
+    const deniedSecondTab = await fixture.app.request("/oauth/authorize", {
+      method: "POST",
+      headers: {
+        Host: "latex.example.com",
+        Cookie: `test_browser_session=${browserSession}; oauth_csrf_${secondCsrf}=${secondCsrf}`,
+        Origin: ORIGIN,
+        "Cf-Access-Jwt-Assertion": "access-jwt",
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: secondDenial.toString(),
+    });
+    expect(deniedSecondTab.status).toBe(303);
+    expect(
+      new URL(
+        deniedSecondTab.headers.get("Location") as string,
+      ).searchParams.get("error"),
+    ).toBe("access_denied");
     const redirect = new URL(approved.headers.get("Location") as string),
       tokenForm = new URLSearchParams({
         grant_type: "authorization_code",
@@ -834,6 +866,194 @@ describe("Remote MCP HTTP server", () => {
     });
   });
 
+  it("enforces chunk upload expiry on every append and finalize operation", async () => {
+    const fixture = await createFixture(),
+      identity = { userId: "user_test", scopes: ["mcp:render"] as const },
+      upload = await fixture.renders.beginSourceUpload(
+        identity,
+        4,
+        createHash("sha256").update("test").digest("hex"),
+      );
+    fixture.database.raw
+      .prepare("UPDATE sources SET expires_at=? WHERE id=?")
+      .run(new Date(Date.now() - 1_000).toISOString(), upload.uploadId);
+
+    await expect(
+      fixture.renders.uploadSourceChunk(
+        identity,
+        upload.uploadId,
+        0,
+        Buffer.from("test").toString("base64"),
+      ),
+    ).rejects.toMatchObject({ code: "SOURCE_UPLOAD_EXPIRED", status: 410 });
+    await expect(
+      fixture.renders.finalizeSourceUpload(identity, upload.uploadId),
+    ).rejects.toMatchObject({ code: "SOURCE_UPLOAD_EXPIRED", status: 410 });
+  });
+
+  it("serializes chunk writers through the database lease across service instances", async () => {
+    const fixture = await createFixture(),
+      identity = { userId: "user_test", scopes: ["mcp:render"] as const },
+      second = new RemoteRenderService(
+        fixture.database,
+        fixture.storage,
+        "renderer:test",
+        ORIGIN,
+      ),
+      payload = await testZip([
+        {
+          path: "main.tex",
+          bytes: Buffer.from(
+            "\\documentclass{article}\\begin{document}lease\\end{document}",
+          ),
+        },
+      ]),
+      upload = await fixture.renders.beginSourceUpload(
+        identity,
+        payload.byteLength,
+        createHash("sha256").update(payload).digest("hex"),
+      ),
+      writes = await Promise.allSettled([
+        fixture.renders.uploadSourceChunk(
+          identity,
+          upload.uploadId,
+          0,
+          payload.toString("base64"),
+        ),
+        second.uploadSourceChunk(
+          identity,
+          upload.uploadId,
+          0,
+          payload.toString("base64"),
+        ),
+      ]);
+    expect(
+      writes.filter((result) => result.status === "fulfilled"),
+    ).toHaveLength(1);
+    expect(
+      writes.filter((result) => result.status === "rejected"),
+    ).toHaveLength(1);
+    expect(
+      (
+        writes.find(
+          (result) => result.status === "rejected",
+        ) as PromiseRejectedResult
+      ).reason,
+    ).toMatchObject({ code: "SOURCE_UPLOAD_CONCURRENT", status: 409 });
+    expect(
+      fixture.database.raw
+        .prepare("SELECT upload_received_bytes FROM sources WHERE id=?")
+        .get(upload.uploadId),
+    ).toEqual({ upload_received_bytes: payload.byteLength });
+    await expect(
+      second.finalizeSourceUpload(identity, upload.uploadId),
+    ).resolves.toMatchObject({ id: upload.sourceId, status: "ready" });
+  });
+
+  it("does not overwrite an offset chunk left by an expired writer", async () => {
+    const fixture = await createFixture(),
+      identity = { userId: "user_test", scopes: ["mcp:render"] as const },
+      payload = await testZip([
+        {
+          path: "main.tex",
+          bytes: Buffer.from(
+            "\\documentclass{article}\\begin{document}fenced\\end{document}",
+          ),
+        },
+      ]),
+      upload = await fixture.renders.beginSourceUpload(
+        identity,
+        payload.byteLength,
+        createHash("sha256").update(payload).digest("hex"),
+      );
+    // Model an instance that lost its lease after durably creating its chunk
+    // but before it could advance the DB offset. A new writer must not replace
+    // that content at the same offset.
+    await writeFile(
+      join(fixture.storage, "sources", upload.uploadId, ".chunks", "0"),
+      Buffer.from("stale"),
+    );
+    fixture.database.raw
+      .prepare(
+        "UPDATE sources SET upload_lease_owner='stale',upload_lease_expires_at=? WHERE id=?",
+      )
+      .run(new Date(Date.now() - 1_000).toISOString(), upload.uploadId);
+
+    await expect(
+      fixture.renders.uploadSourceChunk(
+        identity,
+        upload.uploadId,
+        0,
+        payload.toString("base64"),
+      ),
+    ).rejects.toMatchObject({ code: "SOURCE_UPLOAD_CONCURRENT", status: 409 });
+    expect(
+      fixture.database.raw
+        .prepare("SELECT upload_received_bytes FROM sources WHERE id=?")
+        .get(upload.uploadId),
+    ).toEqual({ upload_received_bytes: 0 });
+  });
+
+  it("resumes an identical chunk left by a writer that lost its lease", async () => {
+    const fixture = await createFixture(),
+      identity = { userId: "user_test", scopes: ["mcp:render"] as const },
+      payload = await testZip([
+        {
+          path: "main.tex",
+          bytes: Buffer.from(
+            "\\documentclass{article}\\begin{document}resume\\end{document}",
+          ),
+        },
+      ]),
+      upload = await fixture.renders.beginSourceUpload(
+        identity,
+        payload.byteLength,
+        createHash("sha256").update(payload).digest("hex"),
+      );
+    await writeFile(
+      join(fixture.storage, "sources", upload.uploadId, ".chunks", "0"),
+      payload,
+    );
+    fixture.database.raw
+      .prepare(
+        "UPDATE sources SET upload_lease_owner='stale',upload_lease_expires_at=? WHERE id=?",
+      )
+      .run(new Date(Date.now() - 1_000).toISOString(), upload.uploadId);
+
+    await expect(
+      fixture.renders.uploadSourceChunk(
+        identity,
+        upload.uploadId,
+        0,
+        payload.toString("base64"),
+      ),
+    ).resolves.toMatchObject({ receivedBytes: payload.byteLength });
+    await expect(
+      fixture.renders.finalizeSourceUpload(identity, upload.uploadId),
+    ).resolves.toMatchObject({ id: upload.sourceId, status: "ready" });
+  });
+
+  it("never advertises a Source reference beyond its Source lifetime", async () => {
+    const fixture = await createFixture(),
+      identity = { userId: "user_test", scopes: ["mcp:render"] as const },
+      source = await fixture.renders.createSource(identity, [
+        {
+          path: "main.tex",
+          text: "\\documentclass{article}\\begin{document}ref\\end{document}",
+        },
+      ]),
+      sourceExpiry = new Date(Date.now() + 60_000).toISOString();
+    fixture.database.raw
+      .prepare("UPDATE sources SET expires_at=? WHERE id=?")
+      .run(sourceExpiry, source.id);
+
+    const reference = fixture.renders.createSourceReference(
+      identity,
+      source.id,
+    );
+    expect(reference.expiresAt).toBe(sourceExpiry);
+  });
+
   it("reports renderer, package, and font availability with bounded search", async () => {
     const fixture = await createFixture(),
       token = issueAccessToken(fixture.oauth),
@@ -928,6 +1148,8 @@ describe("Remote MCP HTTP server", () => {
     expect(log.result.contents?.[0]?.text).toContain(
       "sensitive preamble line 1",
     );
+    expect(log.result.contents?.[0]?.text).not.toContain("\u001b");
+    expect(log.result.contents?.[0]?.text).not.toContain("\r");
   });
 
   it("returns direct preview image content and owner-scoped PDF resources", async () => {
@@ -973,6 +1195,33 @@ describe("Remote MCP HTTP server", () => {
     });
   });
 
+  it("rejects artifacts larger than the MCP inline resource cap", async () => {
+    const fixture = await createFixture(),
+      jobIdValue = await seedCompletedRemoteJob(fixture, "succeeded"),
+      relativePath = "large-artifact.bin",
+      path = join(fixture.storage, "jobs", jobIdValue, "output", relativePath),
+      size = 16 * 1024 * 1024 + 1;
+    await writeFile(path, Buffer.alloc(0));
+    await truncate(path, size);
+    fixture.database.artifacts.insert({
+      id: `artifact_${createHash("sha256").update(`${jobIdValue}:${relativePath}`).digest("hex").slice(0, 32)}`,
+      job_id: jobIdValue,
+      type: "svg",
+      relative_path: relativePath,
+      size,
+      sha256: "0".repeat(64),
+      created_at: "2026-08-12T00:01:00.000Z",
+    });
+
+    await expect(
+      fixture.renders.artifact(
+        { userId: "user_test", scopes: ["mcp:read"] },
+        jobIdValue,
+        relativePath,
+      ),
+    ).rejects.toMatchObject({ code: "ARTIFACT_TOO_LARGE", status: 413 });
+  });
+
   it("does not expose another user's artifacts through MCP resources", async () => {
     const fixture = await createFixture(),
       jobIdValue = await seedCompletedRemoteJob(fixture, "succeeded");
@@ -1000,6 +1249,100 @@ describe("Remote MCP HTTP server", () => {
         { sourceId: sourceIdValue, entrypoint: "main.tex" },
       ),
     ).rejects.toThrow("Source does not exist");
+  });
+
+  it("applies maintenance mode before Remote MCP creates Render side effects", async () => {
+    const fixture = await createFixture(),
+      before = fixture.database.sources.list().length;
+    fixture.database.settings.upsert(
+      "maintenance_mode",
+      "read-only",
+      "test",
+      new Date().toISOString(),
+    );
+    await expect(
+      fixture.renders.createRender(
+        { userId: "user_test", scopes: ["mcp:render"] },
+        {
+          inlineSource:
+            "\\documentclass{article}\\begin{document}blocked\\end{document}",
+        },
+      ),
+    ).rejects.toMatchObject({ code: "MAINTENANCE", status: 503 });
+    expect(fixture.database.sources.list()).toHaveLength(before);
+  });
+
+  it("uses live database queue settings and reserves maximum output bytes", async () => {
+    const fixture = await createFixture(),
+      identity = { userId: "user_test", scopes: ["mcp:render"] as const },
+      first = await fixture.renders.createRender(identity, {
+        inlineSource:
+          "\\documentclass{article}\\begin{document}first\\end{document}",
+      });
+    expect(fixture.database.jobs.get(first.id)?.reserved_output_bytes).toBe(
+      200 * 1024 * 1024,
+    );
+    fixture.database.settings.upsert(
+      "max_queue_length",
+      1,
+      "test",
+      new Date().toISOString(),
+    );
+    await expect(
+      fixture.renders.createRender(identity, {
+        sourceId: first.sourceId as string,
+      }),
+    ).rejects.toMatchObject({ code: "QUEUE_FULL", status: 503 });
+  });
+
+  it("counts retained Job outputs in Remote MCP Source quota checks", async () => {
+    const fixture = await createFixture(),
+      identity = { userId: "user_test", scopes: ["mcp:render"] as const },
+      first = await fixture.renders.createRender(identity, {
+        inlineSource:
+          "\\documentclass{article}\\begin{document}quota\\end{document}",
+      }),
+      timestamp = new Date().toISOString();
+    fixture.database.raw
+      .prepare(
+        "UPDATE jobs SET status='succeeded',render_status='succeeded',output_size=100,completed_at=?,updated_at=? WHERE id=?",
+      )
+      .run(timestamp, timestamp, first.id);
+    const sourceBytes = fixture.database.sources.storageUsageForUser(
+      identity.userId,
+    );
+    fixture.database.settings.upsert(
+      "max_user_storage_bytes",
+      sourceBytes + 50,
+      "test",
+      timestamp,
+    );
+    await expect(
+      fixture.renders.beginSourceUpload(identity, 1, "9".repeat(64)),
+    ).rejects.toMatchObject({ code: "USER_STORAGE_QUOTA", status: 429 });
+  });
+
+  it("applies the live Source retention setting without a restart", async () => {
+    const fixture = await createFixture(),
+      before = Date.now();
+    fixture.database.settings.upsert(
+      "source_orphan_retention_minutes",
+      5,
+      "test",
+      new Date().toISOString(),
+    );
+    const source = await fixture.renders.createSource(
+        { userId: "user_test", scopes: ["mcp:render"] },
+        [
+          {
+            path: "main.tex",
+            text: "\\documentclass{article}\\begin{document}retention\\end{document}",
+          },
+        ],
+      ),
+      lifetime = Date.parse(source.expiresAt) - before;
+    expect(lifetime).toBeGreaterThanOrEqual(299_000);
+    expect(lifetime).toBeLessThanOrEqual(301_000);
   });
 
   it("returns tool-level 429 semantics and writes metadata-only audit records", async () => {
@@ -1147,6 +1490,7 @@ async function seedCompletedRemoteJob(
         "Run number 1 of rule 'lualatex'",
         "/work/input/main.tex:164: Paragraph ended before \\tikz@picture was complete.",
         "Fatal error occurred, no output PDF file produced!",
+        "\u001b[31muntrusted terminal control\u001b[0m\rspoofed",
       ].join("\n"),
       diagnostics = JSON.stringify({
         success: false,

@@ -20,35 +20,37 @@ export interface ValidatedArtifact {
   sha256: string;
 }
 
+export interface OutputTreeStats {
+  totalBytes: number;
+  fileCount: number;
+  directoryCount: number;
+}
+
 export async function validateArtifacts(
   config: WorkerConfig,
   directory: string,
   requirePdf: boolean,
   requireSvg = false,
 ): Promise<ValidatedArtifact[]> {
-  const files = await walk(directory),
+  const tree = await scanOutputTree(directory, config),
+    files = tree.files,
     result: ValidatedArtifact[] = [];
   let total = 0,
     previewTotal = 0,
     svgTotal = 0;
-  for (const file of files) {
+  for (const { file, info } of files) {
     const path = relative(directory, file),
-      info = await lstat(file);
-    if (!info.isFile() || info.nlink !== 1)
-      throw new AppError(
-        "UNSAFE_ARTIFACT",
-        "Renderer emitted a non-regular artifact",
-      );
+      size = Number(info.size);
     const type = artifactType(path);
     if (type === undefined) continue;
-    total += info.size;
-    if (type === "preview") previewTotal += info.size;
-    if (type === "svg" || type === "svg_manifest") svgTotal += info.size;
+    total += size;
+    if (type === "preview") previewTotal += size;
+    if (type === "svg" || type === "svg_manifest") svgTotal += size;
     if (
       total > config.maxOutputBytes ||
-      (type === "log" && info.size > config.maxLogBytes) ||
-      (type === "pdf" && info.size > 100 * 1024 * 1024) ||
-      (type === "svg" && info.size > config.maxSvgBytes) ||
+      (type === "log" && size > config.maxLogBytes) ||
+      (type === "pdf" && size > 100 * 1024 * 1024) ||
+      (type === "svg" && size > config.maxSvgBytes) ||
       previewTotal > 150 * 1024 * 1024 ||
       svgTotal > config.maxSvgTotalBytes
     )
@@ -72,7 +74,7 @@ export async function validateArtifacts(
     result.push({
       path,
       type,
-      size: info.size,
+      size,
       sha256: hash.digest("hex"),
     });
   }
@@ -115,15 +117,27 @@ export async function publishArtifacts(
 }
 
 export async function directorySize(directory: string): Promise<number> {
-  try {
-    return (
-      await Promise.all(
-        (await walk(directory)).map(async (file) => (await lstat(file)).size),
-      )
-    ).reduce((left, right) => left + right, 0);
-  } catch {
-    return 0;
-  }
+  return (await scanOutputTree(directory)).totalBytes;
+}
+
+export async function inspectOutputTree(
+  config: WorkerConfig,
+  directory: string,
+): Promise<OutputTreeStats> {
+  const tree = await scanOutputTree(directory, config),
+    compileLog = tree.files.find(
+      ({ file }) => relative(directory, file) === "compile.log",
+    );
+  if (
+    compileLog !== undefined &&
+    Number(compileLog.info.size) > config.maxLogBytes
+  )
+    throw new AppError("OUTPUT_LIMIT", "Renderer log exceeds limit");
+  return {
+    totalBytes: tree.totalBytes,
+    fileCount: tree.fileCount,
+    directoryCount: tree.directoryCount,
+  };
 }
 
 function validateSvg(value: string): void {
@@ -167,10 +181,7 @@ function validateSvg(value: string): void {
           /^data:image\/(?:png|jpeg|gif|webp);base64,/.test(normalized);
       if (name.startsWith("on"))
         throw new AppError("SVG_UNSAFE", "SVG event attributes are forbidden");
-      if (
-        name === "href" &&
-        !safeReference
-      )
+      if (name === "href" && !safeReference)
         throw new AppError(
           "SVG_UNSAFE",
           "SVG external references are forbidden",
@@ -284,8 +295,7 @@ async function validateSvgSet(
       !Number.isSafeInteger(item.page) ||
       Number(item.page) < 1 ||
       !numericCoordinates.every(
-        (key) =>
-          typeof item[key] === "number" && Number.isFinite(item[key]),
+        (key) => typeof item[key] === "number" && Number.isFinite(item[key]),
       ) ||
       Number(item.width) <= 0 ||
       Number(item.height) <= 0
@@ -313,12 +323,78 @@ async function readPrefix(path: string, length: number): Promise<Buffer> {
   }
 }
 
-async function walk(directory: string): Promise<string[]> {
-  const result: string[] = [];
-  for (const entry of await readdir(directory, { withFileTypes: true })) {
-    const path = join(directory, entry.name);
-    if (entry.isDirectory()) result.push(...(await walk(path)));
-    else result.push(path);
+async function scanOutputTree(
+  root: string,
+  limits?: Pick<
+    WorkerConfig,
+    "maxOutputBytes" | "maxOutputFileCount" | "maxOutputDirectoryCount"
+  >,
+): Promise<
+  OutputTreeStats & {
+    files: Array<{ file: string; info: Awaited<ReturnType<typeof lstat>> }>;
   }
-  return result;
+> {
+  const files: Array<{
+      file: string;
+      info: Awaited<ReturnType<typeof lstat>>;
+    }> = [],
+    pending = [root];
+  let totalBytes = 0,
+    fileCount = 0,
+    directoryCount = 0;
+  while (pending.length > 0) {
+    const directory = pending.pop() as string;
+    let entries;
+    try {
+      entries = await readdir(directory, { withFileTypes: true });
+    } catch (error) {
+      if (directory !== root && errorCode(error) === "ENOENT") continue;
+      throw error;
+    }
+    for (const entry of entries) {
+      const file = join(directory, entry.name);
+      let info;
+      try {
+        info = await lstat(file);
+      } catch (error) {
+        if (errorCode(error) === "ENOENT") continue;
+        throw error;
+      }
+      if (info.isDirectory()) {
+        directoryCount += 1;
+        if (
+          limits !== undefined &&
+          directoryCount > limits.maxOutputDirectoryCount
+        )
+          throw new AppError(
+            "OUTPUT_DIRECTORY_LIMIT",
+            "Renderer emitted too many output directories",
+          );
+        pending.push(file);
+        continue;
+      }
+      if (!info.isFile() || info.nlink !== 1)
+        throw new AppError(
+          "UNSAFE_ARTIFACT",
+          "Renderer emitted a non-regular artifact",
+        );
+      fileCount += 1;
+      totalBytes += info.size;
+      if (limits !== undefined && fileCount > limits.maxOutputFileCount)
+        throw new AppError(
+          "OUTPUT_FILE_LIMIT",
+          "Renderer emitted too many output files",
+        );
+      if (limits !== undefined && totalBytes > limits.maxOutputBytes)
+        throw new AppError("OUTPUT_LIMIT", "Renderer output exceeds limit");
+      files.push({ file, info });
+    }
+  }
+  return { files, totalBytes, fileCount, directoryCount };
+}
+
+function errorCode(error: unknown): string | undefined {
+  return typeof error === "object" && error !== null && "code" in error
+    ? String((error as { code?: unknown }).code)
+    : undefined;
 }

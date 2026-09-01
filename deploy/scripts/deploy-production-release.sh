@@ -26,7 +26,28 @@ case "$parent_mutation_lock" in
 esac
 source_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
 cd "$source_root"
+build_root=${LATEX_RENDERER_BUILD_ROOT:-$source_root}
+case "$build_root" in /*) ;; *) echo "LATEX_RENDERER_BUILD_ROOT must be an absolute path" >&2; exit 64 ;; esac
+build_root=$(readlink -f -- "$build_root")
+if [ ! -d "$build_root" ]; then
+  echo "Deployment build root does not exist: $build_root" >&2
+  exit 66
+fi
+if [ "$parent_mutation_lock" = application-update ]; then
+  if [ "$build_root" = "$source_root" ]; then
+    echo "Application Update Manager must use a separate non-root build tree" >&2
+    exit 78
+  fi
+  unsafe_source=$(find "$source_root" -xdev \( ! -user root -o -perm /022 \) -print -quit)
+  if [ -n "$unsafe_source" ]; then
+    echo "Application Update Manager control tree is not sealed: $unsafe_source" >&2
+    exit 78
+  fi
+fi
 temporary_root=$(mktemp -d /tmp/latex-renderer-deploy.XXXXXX)
+admin_local_root=
+client_smoke_root=
+mcpb_verify_root=
 gateway_runtime_config=
 deployment_quiesced=false
 deployment_finished=false
@@ -59,6 +80,9 @@ cleanup() {
   status=$?
   trap - EXIT INT TERM HUP
   [ -z "$gateway_runtime_config" ] || rm -f -- "$gateway_runtime_config"
+  [ -z "$admin_local_root" ] || rm -rf -- "$admin_local_root"
+  [ -z "$client_smoke_root" ] || rm -rf -- "$client_smoke_root"
+  [ -z "$mcpb_verify_root" ] || rm -rf -- "$mcpb_verify_root"
   rm -rf -- "$temporary_root"
   if [ "$deployment_quiesced" = true ] && [ "$deployment_finished" != true ]; then
     restore_services_after_failure
@@ -150,15 +174,17 @@ fi
 sync_path="$sync_pnpm_bin:/usr/local/bin:/usr/bin:/bin"
 sync_group=$(id -gn "$sync_user")
 if [ "$deployment_mode" = cloudflare ]; then
-  gateway_runtime_config=$(mktemp "$source_root/apps/gateway-worker/.wrangler.production.XXXXXX.jsonc")
+  gateway_runtime_config=$(mktemp "$build_root/apps/gateway-worker/.wrangler.production.XXXXXX.jsonc")
   install -o "$sync_user" -g "$sync_group" -m 0600 "$gateway_worker_config" "$gateway_runtime_config"
 fi
 
-runuser -u "$sync_user" -- env HOME="$sync_home" USER="$sync_user" LOGNAME="$sync_user" PNPM_HOME="$sync_pnpm_bin" PATH="$sync_path" \
-  "$sync_pnpm_bin/pnpm" --dir "$source_root" build:production-services
-runuser -u "$sync_user" -- env HOME="$sync_home" USER="$sync_user" LOGNAME="$sync_user" PNPM_HOME="$sync_pnpm_bin" PATH="$sync_path" \
-  "$sync_pnpm_bin/pnpm" --dir "$source_root" build:client
-[ -f "$source_root/client-dist/manifest.json" ] || {
+if [ "$build_root" = "$source_root" ]; then
+  runuser -u "$sync_user" -- env HOME="$sync_home" USER="$sync_user" LOGNAME="$sync_user" PNPM_HOME="$sync_pnpm_bin" PATH="$sync_path" \
+    "$sync_pnpm_bin/pnpm" --dir "$build_root" build:production-services
+  runuser -u "$sync_user" -- env HOME="$sync_home" USER="$sync_user" LOGNAME="$sync_user" PNPM_HOME="$sync_pnpm_bin" PATH="$sync_path" \
+    "$sync_pnpm_bin/pnpm" --dir "$build_root" build:client
+fi
+[ -f "$build_root/client-dist/manifest.json" ] || {
   echo "production client distribution was not generated before release copy" >&2
   exit 70
 }
@@ -185,10 +211,17 @@ fi
 chown root:root /etc/latex-renderer/secrets/update-manager-token
 chmod 0400 /etc/latex-renderer/secrets/update-manager-token
 
-env \
+admin_local_root=$(mktemp -d /tmp/latex-renderer-admin-local.XXXXXX)
+chown latex-renderer:latex-renderer "$admin_local_root"
+chmod 0700 "$admin_local_root"
+install -o latex-renderer -g latex-renderer -m 0400 \
+  /etc/latex-renderer/secrets/api-key-pepper \
+  "$admin_local_root/api-key-pepper"
+runuser -u latex-renderer -- env \
   DATABASE_PATH=/var/lib/latex-renderer/renderer.sqlite3 \
   API_KEY_PEPPER_ID=v1 \
-  API_KEY_PEPPER_FILE=/etc/latex-renderer/secrets/api-key-pepper \
+  API_KEY_PEPPER_FILE="$admin_local_root/api-key-pepper" \
+  LATEX_RENDERER_ADMIN_GID="$(id -g latex-renderer)" \
   /usr/local/bin/node /opt/latex-renderer/current/apps/admin-local/dist/index.js \
   web-principals ensure --yes
 
@@ -235,44 +268,57 @@ done
 if [ "$deployment_mode" = cloudflare ]; then
   systemctl is-active --quiet cloudflared
   runuser -u "$sync_user" -- env HOME="$sync_home" USER="$sync_user" LOGNAME="$sync_user" PNPM_HOME="$sync_pnpm_bin" PATH="$sync_path" \
-    "$sync_pnpm_bin/pnpm" --dir "$source_root" --filter @latex-renderer/gateway-worker exec wrangler deploy --config "$gateway_runtime_config"
+    "$sync_pnpm_bin/pnpm" --dir "$build_root" --filter @latex-renderer/gateway-worker exec wrangler deploy --config "$gateway_runtime_config"
   runuser -u "$sync_user" -- env HOME="$sync_home" USER="$sync_user" LOGNAME="$sync_user" PNPM_HOME="$sync_pnpm_bin" PATH="$sync_path" \
-    "$sync_pnpm_bin/pnpm" --dir "$source_root" --filter @latex-renderer/public-web run deploy
+    "$sync_pnpm_bin/pnpm" --dir "$build_root" --filter @latex-renderer/public-web run deploy
   runuser -u "$sync_user" -- env HOME="$sync_home" USER="$sync_user" LOGNAME="$sync_user" PNPM_HOME="$sync_pnpm_bin" PATH="$sync_path" \
     /usr/local/bin/node "$source_root/deploy/scripts/sync-public-worker-routes.mjs" --apply
 fi
 
 client_base="$public_origin/downloads/client"
 mcpb_base="$public_origin/downloads/mcpb"
-local_manifest_path="$source_root/apps/public-web/dist/downloads/client/manifest.json"
+local_manifest_path="$build_root/apps/public-web/dist/downloads/client/manifest.json"
 archive_path="$temporary_root/client-archive.zip"
 actual_hash=$(/usr/local/bin/node "$source_root/deploy/scripts/verify-public-client-assets.mjs" \
   "$client_base" "$local_manifest_path" "$archive_path" "$release_id")
 unzip -t "$archive_path" >/dev/null
 mcpb_hash=$(/usr/local/bin/node "$source_root/deploy/scripts/verify-public-mcpb-assets.mjs" \
-  "$mcpb_base" "$source_root/apps/public-web/dist/downloads/mcpb/mcpb.json" \
+  "$mcpb_base" "$build_root/apps/public-web/dist/downloads/mcpb/mcpb.json" \
   "$temporary_root/latex-renderer-local.mcpb" "$release_id")
-/usr/local/bin/node "$source_root/client/verify-mcpb.mjs" \
-  "$temporary_root/latex-renderer-local.mcpb"
+mcpb_verify_root=$(mktemp -d /tmp/latex-renderer-mcpb-verify.XXXXXX)
+chown "$sync_user:$sync_group" "$mcpb_verify_root"
+chmod 0700 "$mcpb_verify_root"
+install -o "$sync_user" -g "$sync_group" -m 0600 \
+  "$temporary_root/latex-renderer-local.mcpb" \
+  "$mcpb_verify_root/latex-renderer-local.mcpb"
+runuser -u "$sync_user" -- /usr/local/bin/node \
+  "$source_root/client/verify-mcpb.mjs" \
+  "$mcpb_verify_root/latex-renderer-local.mcpb"
 cache_buster="release=$release_id&fresh=$(date +%s)"
 curl --fail --silent --show-error "$client_base/install.mjs?$cache_buster" | grep -q 'installDistribution'
 curl --fail --silent --show-error "$public_origin/downloads/?$cache_buster" | grep -q '最新版ZIP'
 
+client_smoke_root=$(mktemp -d /tmp/latex-renderer-client-smoke.XXXXXX)
+chown "$sync_user:$sync_group" "$client_smoke_root"
+chmod 0700 "$client_smoke_root"
 curl --fail --silent --show-error \
   "$client_base/install.mjs?$cache_buster" \
-  --output "$temporary_root/client-install.mjs"
+  --output "$client_smoke_root/client-install.mjs"
 curl --fail --silent --show-error \
   "$client_base/uninstall.mjs?$cache_buster" \
-  --output "$temporary_root/client-uninstall.mjs"
-/usr/local/bin/node "$temporary_root/client-install.mjs" \
+  --output "$client_smoke_root/client-uninstall.mjs"
+chown "$sync_user:$sync_group" \
+  "$client_smoke_root/client-install.mjs" \
+  "$client_smoke_root/client-uninstall.mjs"
+runuser -u "$sync_user" -- /usr/local/bin/node "$client_smoke_root/client-install.mjs" \
   --base-uri "$client_base/" \
-  --install-directory "$temporary_root/client" \
-  --bin-directory "$temporary_root/bin" \
+  --install-directory "$client_smoke_root/client" \
+  --bin-directory "$client_smoke_root/bin" \
   --skill-target none \
   --mcp-target none \
-  --json > "$temporary_root/setup.json"
-env PATH="$temporary_root/bin:$PATH" \
-  "$temporary_root/bin/latex-render" doctor --json > "$temporary_root/doctor.json"
+  --json > "$client_smoke_root/setup.json"
+runuser -u "$sync_user" -- env PATH="$client_smoke_root/bin:$PATH" \
+  "$client_smoke_root/bin/latex-render" doctor --json > "$client_smoke_root/doctor.json"
 /usr/local/bin/node -e '
   const fs=require("node:fs");
   for(const file of process.argv.slice(1)){
@@ -280,18 +326,18 @@ env PATH="$temporary_root/bin:$PATH" \
     const serialized=JSON.stringify(value);
     if(value.success!==true||/apiKey|uploadTicket|jobTicket|lrk_/i.test(serialized))process.exit(1);
   }
-' "$temporary_root/setup.json" "$temporary_root/doctor.json"
-/usr/local/bin/node "$temporary_root/client-uninstall.mjs" \
-  --install-directory "$temporary_root/client" \
-  --bin-directory "$temporary_root/bin" \
+' "$client_smoke_root/setup.json" "$client_smoke_root/doctor.json"
+runuser -u "$sync_user" -- /usr/local/bin/node "$client_smoke_root/client-uninstall.mjs" \
+  --install-directory "$client_smoke_root/client" \
+  --bin-directory "$client_smoke_root/bin" \
   --keep-credential \
   --keep-skills \
-  --json > "$temporary_root/remove.json"
+  --json > "$client_smoke_root/remove.json"
 /usr/local/bin/node -e '
   const value=require(process.argv[1]);
   if(value.success!==true||value.command!=="setup.remove"||value.result?.removed!==true)process.exit(1);
-' "$temporary_root/remove.json"
-test ! -e "$temporary_root/client"
+' "$client_smoke_root/remove.json"
+test ! -e "$client_smoke_root/client"
 curl --fail --silent --show-error http://127.0.0.1:3101/ | grep -q 'LaTeXをPDFに変換'
 curl --fail --silent --show-error http://127.0.0.1:3101/admin/ | grep -q 'data-page="dashboard"'
 curl --fail --silent --show-error http://127.0.0.1:3101/admin/tex-environment/ | grep -q 'data-page="tex"'

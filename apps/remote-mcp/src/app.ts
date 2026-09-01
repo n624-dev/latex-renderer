@@ -42,7 +42,10 @@ const registerSchema = z
       .optional(),
     response_types: z.array(z.literal("code")).length(1).optional(),
   })
-  .loose();
+    .loose();
+
+const OAUTH_CSRF_COOKIE = "oauth_csrf";
+const OAUTH_CSRF_TOKEN_PATTERN = /^[A-Za-z0-9_-]{32}$/;
 
 export function createRemoteMcpApp(deps: RemoteMcpAppDependencies) {
   const app = new Hono<{
@@ -160,7 +163,14 @@ export function createRemoteMcpApp(deps: RemoteMcpAppDependencies) {
     appendSetCookies(c.res.headers, session.cookies);
     c.header(
       "Set-Cookie",
-      `oauth_csrf=${csrf}; Path=/oauth/authorize; HttpOnly; Secure; SameSite=Lax; Max-Age=300`,
+      `${oauthCsrfCookieName(csrf)}=${csrf}; Path=/oauth/authorize; HttpOnly; Secure; SameSite=Lax; Max-Age=300`,
+      { append: true },
+    );
+    // Keep the legacy cookie as a compatibility alias. POST validation uses
+    // the state-specific cookie first, so multiple consent tabs are isolated.
+    c.header(
+      "Set-Cookie",
+      `${OAUTH_CSRF_COOKIE}=${csrf}; Path=/oauth/authorize; HttpOnly; Secure; SameSite=Lax; Max-Age=300`,
       { append: true },
     );
     return c.html(
@@ -175,7 +185,12 @@ export function createRemoteMcpApp(deps: RemoteMcpAppDependencies) {
     deps.browserAuth.requireExactOrigin(c.req.raw);
     const body = await readForm(c.req.raw, 16_384),
       csrf = stringField(body.get("csrf")),
-      cookie = parseCookie(c.req.header("Cookie"), "oauth_csrf");
+      cookie = parseCookie(
+        c.req.header("Cookie"),
+        OAUTH_CSRF_TOKEN_PATTERN.test(csrf)
+          ? oauthCsrfCookieName(csrf)
+          : "",
+      ) || parseCookie(c.req.header("Cookie"), OAUTH_CSRF_COOKIE);
     if (!safeEqual(csrf, cookie))
       throw new AppError(
         "OAUTH_CSRF",
@@ -200,7 +215,12 @@ export function createRemoteMcpApp(deps: RemoteMcpAppDependencies) {
       userId = principal.user.id;
     c.header(
       "Set-Cookie",
-      "oauth_csrf=; Path=/oauth/authorize; HttpOnly; Secure; SameSite=Lax; Max-Age=0",
+      `${oauthCsrfCookieName(csrf)}=; Path=/oauth/authorize; HttpOnly; Secure; SameSite=Lax; Max-Age=0`,
+    );
+    c.header(
+      "Set-Cookie",
+      `${OAUTH_CSRF_COOKIE}=; Path=/oauth/authorize; HttpOnly; Secure; SameSite=Lax; Max-Age=0`,
+      { append: true },
     );
     if (body.get("decision") !== "approve") {
       const redirect = new URL(request.redirectUri);
@@ -424,6 +444,10 @@ function parseCookie(header: string | undefined, name: string): string {
     if (key === name) return rest.join("=");
   }
   return "";
+}
+
+function oauthCsrfCookieName(token: string): string {
+  return `${OAUTH_CSRF_COOKIE}_${token}`;
 }
 
 function safeEqual(left: string, right: string): boolean {

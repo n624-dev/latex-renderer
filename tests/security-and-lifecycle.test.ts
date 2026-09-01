@@ -40,17 +40,37 @@ describe("state and credentials", () => {
 
   it("allows exactly one nonce claimant", () => {
     const db = seededDatabase();
+    const ticketExpiry = new Date(Date.now() + 60_000).toISOString(),
+      firstClaimExpiry = new Date(Date.now() + 30_000).toISOString();
     db.raw
       .prepare(
         "INSERT INTO used_nonces(nonce,job_id,state,expires_at) VALUES ('nonce','job_00000000000000000000000000000000','unused',?)",
       )
-      .run(new Date(Date.now() + 60_000).toISOString());
+      .run(ticketExpiry);
     db.claimNonce(
       "nonce",
       "job_00000000000000000000000000000000",
       "first",
-      new Date(Date.now() + 30_000).toISOString(),
+      firstClaimExpiry,
     );
+    expect(
+      db.raw
+        .prepare(
+          "SELECT expires_at,claim_expires_at FROM used_nonces WHERE nonce='nonce'",
+        )
+        .get(),
+    ).toEqual({ expires_at: ticketExpiry, claim_expires_at: firstClaimExpiry });
+    const extended = new Date(Date.now() + 90_000).toISOString();
+    expect(
+      db.extendNonceClaim("nonce", "first", new Date().toISOString(), extended),
+    ).toBe(1);
+    expect(
+      db.raw
+        .prepare(
+          "SELECT expires_at,claim_expires_at FROM used_nonces WHERE nonce='nonce'",
+        )
+        .get(),
+    ).toEqual({ expires_at: ticketExpiry, claim_expires_at: extended });
     expect(() =>
       db.claimNonce(
         "nonce",
@@ -59,6 +79,45 @@ describe("state and credentials", () => {
         new Date(Date.now() + 30_000).toISOString(),
       ),
     ).toThrow(/already in use/);
+  });
+
+  it("prevents an expired upload owner from releasing a recovered claim", () => {
+    const db = seededDatabase(),
+      now = new Date(),
+      future = new Date(now.getTime() + 60_000).toISOString(),
+      expired = new Date(now.getTime() - 1_000).toISOString();
+    db.raw
+      .prepare(
+        "INSERT INTO used_nonces(nonce,job_id,state,expires_at) VALUES ('stale-nonce','job_00000000000000000000000000000000','unused',?)",
+      )
+      .run(future);
+    db.claimNonce(
+      "stale-nonce",
+      "job_00000000000000000000000000000000",
+      "stale-owner",
+      expired,
+    );
+    expect(db.releaseNonce("stale-nonce", "stale-owner")).toBe(0);
+
+    db.raw
+      .prepare(
+        "UPDATE used_nonces SET state='released',claim_owner=NULL,claimed_at=NULL,claim_expires_at=NULL WHERE nonce='stale-nonce'",
+      )
+      .run();
+    db.claimNonce(
+      "stale-nonce",
+      "job_00000000000000000000000000000000",
+      "recovery-owner",
+      future,
+    );
+    expect(db.releaseNonce("stale-nonce", "stale-owner")).toBe(0);
+    expect(
+      db.raw
+        .prepare(
+          "SELECT state,claim_owner FROM used_nonces WHERE nonce='stale-nonce'",
+        )
+        .get(),
+    ).toEqual({ state: "claimed", claim_owner: "recovery-owner" });
   });
 
   it("invalidates an API key and an already-issued ticket when its user is disabled", async () => {
@@ -125,6 +184,32 @@ describe("state and credentials", () => {
     ).rejects.toThrow(/inactive/);
   });
 
+  it("rejects a credential when its prefix-derived kind disagrees with the database kind", () => {
+    const db = seededDatabase();
+    const auth = new ApiKeyService(
+      db,
+      new Map([["v1", Buffer.alloc(32, 7)]]),
+      "v1",
+    );
+    const generated = auth.create("render");
+    db.apiKeys.insert({
+      id: generated.id,
+      serviceAccountId: "sa_seed",
+      name: "kind-mismatch",
+      prefix: generated.prefix,
+      kind: "admin",
+      secretHash: generated.secretHash,
+      pepperId: generated.pepperId,
+      scopes: ["render:create"],
+      createdAt: new Date().toISOString(),
+      createdBy: "test",
+    });
+
+    expect(() => auth.authenticate(generated.token)).toThrow(
+      expect.objectContaining({ code: "INVALID_API_KEY", status: 401 }),
+    );
+  });
+
   it("reports a malformed renderer ticket as an authentication error", async () => {
     const tickets = new TicketService(
       seededDatabase(),
@@ -164,6 +249,7 @@ describe("administrative safety", () => {
       writeEnabled: true,
       storageRoot: "/nonexistent",
       rendererVersion: "sha256:" + "0".repeat(64),
+      maxOutputBytes: 1,
       maxQueueLength: 100,
       maxUserStorageBytes: 1024 * 1024 * 1024,
       minFreeStorageBytes: 1,
@@ -200,6 +286,7 @@ describe("administrative safety", () => {
       writeEnabled: true,
       storageRoot: "/nonexistent",
       rendererVersion: "sha256:" + "0".repeat(64),
+      maxOutputBytes: 1,
       maxQueueLength: 100,
       maxUserStorageBytes: 1024 * 1024 * 1024,
       minFreeStorageBytes: 1,

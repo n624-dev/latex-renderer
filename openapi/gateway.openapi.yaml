@@ -21,11 +21,16 @@ paths:
           application/json:
             schema: { $ref: "#/components/schemas/SourceTicketRequest" }
       responses:
-        "200": { description: Existing ready or idempotent Source }
+        "200":
+          description: Existing ready or idempotent Source
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SourceTicketResponse" }
         "201":
-          {
-            description: Source reserved; upload it when uploadRequired is true,
-          }
+          description: Source reserved; upload it when uploadRequired is true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SourceTicketResponse" }
         "429": { $ref: "#/components/responses/Error" }
   /api/v1/render-tickets:
     post:
@@ -48,6 +53,14 @@ paths:
               sha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
               outputs: [pdf, svg]
       responses:
+        "200":
+          description: Existing idempotent job and freshly issued short-lived tickets
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/TicketResponse" }
+                  - { $ref: "#/components/schemas/SourceRenderResponse" }
         "201":
           description: Job and tickets created
           content:
@@ -104,7 +117,6 @@ components:
       properties:
         size: { type: integer, minimum: 1, maximum: 20971520 }
         sha256: { type: string, pattern: "^[a-f0-9]{64}$" }
-        outputs: { $ref: "#/components/schemas/RenderOutputs" }
     RenderOutputs:
       type: array
       default: [pdf]
@@ -120,6 +132,15 @@ components:
         jobId: { type: string }
         uploadTicket: { type: string }
         jobTicket: { type: string }
+        uploadUrl: { type: string, format: uri }
+        expiresAt: { type: string, format: date-time }
+    SourceTicketResponse:
+      type: object
+      required: [sourceId, uploadRequired, expiresAt]
+      properties:
+        sourceId: { type: string, pattern: "^source_[a-f0-9]{32}$" }
+        uploadRequired: { type: boolean }
+        uploadTicket: { type: string }
         uploadUrl: { type: string, format: uri }
         expiresAt: { type: string, format: date-time }
     SourceRenderResponse:

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: LaTeX Renderer Administrator API
-  version: 1.2.2
+  version: 1.3.0
   description: Administrative API used by the authenticated Web UI and administration CLI. Browser login endpoints are rooted at /auth rather than this server prefix.
 servers:
   - url: /admin/api/v1
@@ -28,6 +28,10 @@ paths:
   /users:
     get:
       summary: List users
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/Query"
       responses:
         "200": { description: Users }
     post:
@@ -125,6 +129,10 @@ paths:
   /service-accounts:
     get:
       summary: List service accounts
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/Query"
       responses:
         "200": { description: Service accounts }
     post:
@@ -145,6 +153,11 @@ paths:
         "200": { description: Service account }
     patch:
       summary: Update a service account
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateServiceAccount" }
       responses:
         "200": { description: Updated }
     delete:
@@ -177,6 +190,10 @@ paths:
   /api-keys:
     get:
       summary: List API keys without secrets
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/Query"
       responses:
         "200": { description: API keys }
   /api-keys/{id}:
@@ -200,6 +217,12 @@ paths:
   /jobs:
     get:
       summary: List render jobs
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/Query"
+        - { in: query, name: status, schema: { type: string } }
+        - { in: query, name: sourceId, schema: { type: string } }
       responses:
         "200": { description: Jobs }
   /jobs/render-targets:
@@ -262,12 +285,22 @@ paths:
           name: Idempotency-Key
           required: true
           schema: { type: string, minLength: 16, maxLength: 200 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AdminSourceTicketRequest" }
       responses:
         "200": { description: Existing ready or idempotent Source }
         "201": { description: Source reserved }
   /jobs/bulk-delete:
     post:
       summary: Mark up to 100 terminal jobs for deletion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BulkDeleteJobsRequest" }
       responses:
         "202": { description: Accepted job IDs }
   /jobs/{id}:
@@ -314,6 +347,19 @@ paths:
       responses:
         "200": { description: Integrity-labelled artifact stream }
         "410": { description: Job artifact retention has expired }
+  /jobs/{id}/archive:
+    get:
+      summary: Stream all retained Job artifacts as a ZIP archive
+      description: The archive is assembled as a bounded stream; artifacts are not aggregated in browser or server memory.
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: ZIP artifact stream
+          content:
+            application/zip: {}
+        "404": { description: No downloadable artifacts exist }
+        "410": { description: Job artifact retention has expired }
   /jobs/{id}/previews/{name}:
     get:
       summary: View or download a retained page preview through the administrator session
@@ -332,6 +378,11 @@ paths:
   /sources:
     get:
       summary: List retained Sources and their related Jobs
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/Query"
+        - { in: query, name: status, schema: { type: string } }
       responses:
         "200": { description: Sources }
   /sources/{id}:
@@ -339,6 +390,9 @@ paths:
       - $ref: "#/components/parameters/Id"
     get:
       summary: Get Source paths, entrypoints, retention, and related Jobs
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/PageSize"
       responses:
         "200": { description: Source }
     delete:
@@ -355,6 +409,11 @@ paths:
           name: Idempotency-Key
           required: true
           schema: { type: string, minLength: 16, maxLength: 200 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SourceRenderRequest" }
       responses:
         "201": { description: Job created }
   /sources/{id}/source-ref:
@@ -362,17 +421,24 @@ paths:
       summary: Issue a short-lived Remote MCP reference for a retained Source
       parameters:
         - $ref: "#/components/parameters/Id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SourceReferenceRequest" }
       responses:
         "201": { description: Source reference issued }
   /tex-environment/state:
     get:
       summary: Read persisted desired, current, previous, and active TeX image state
+      description: Requires admin:tex-environment:read (or emergency compatibility scope admin:*).
       responses:
         "200": { description: TeX environment state }
         "503": { description: Image Manager is not configured or unavailable }
   /tex-environment/images:
     get:
       summary: List available Daily and Weekly GHCR image selectors
+      description: Requires admin:tex-environment:read (or emergency compatibility scope admin:*).
       responses:
         "200":
           {
@@ -382,7 +448,7 @@ paths:
   /tex-environment/languages:
     get:
       summary: List TeX Live language collections in the shared country-aware order
-      description: The server uses its detected country or the persisted country override for ordering only; no language is automatically selected. If live catalog discovery fails, the response sets catalogUnavailable=true and returns persisted choices only.
+      description: Requires admin:tex-environment:read (or emergency compatibility scope admin:*). The server uses its detected country or the persisted country override for ordering only; no language is automatically selected. If live catalog discovery fails, the response sets catalogUnavailable=true and returns persisted choices only.
       responses:
         "200":
           {
@@ -392,6 +458,7 @@ paths:
   /tex-environment/country:
     post:
       summary: Set or clear the persisted country override used for language ordering
+      description: Requires admin:tex-environment:write (or emergency compatibility scope admin:*). This changes ordering only, not the active runtime.
       requestBody:
         required: true
         content:
@@ -408,6 +475,7 @@ paths:
   /tex-environment/apply:
     post:
       summary: Build, validate, and transactionally activate a TeX runtime from a clean selected base
+      description: Requires admin:tex-environment:write and an owner actor. admin:* satisfies the scope check only; a non-empty reason is recorded in audit metadata.
       requestBody:
         required: true
         content:
@@ -419,6 +487,7 @@ paths:
   /tex-environment/operations/{id}:
     get:
       summary: Read image operation progress and retained log output
+      description: Requires admin:tex-environment:read (or emergency compatibility scope admin:*).
       parameters: [{ $ref: "#/components/parameters/Id" }]
       responses:
         "200": { description: Operation state and log }
@@ -426,6 +495,7 @@ paths:
   /tex-environment/inventory/{kind}:
     get:
       summary: Search the current runtime package or font inventory
+      description: Requires admin:tex-environment:read (or emergency compatibility scope admin:*).
       parameters:
         - in: path
           name: kind
@@ -439,32 +509,58 @@ paths:
   /tex-environment/rollback:
     post:
       summary: Validate and activate the previous known-good runtime
+      description: Requires admin:tex-environment:write and an owner actor. admin:* satisfies the scope check only; a non-empty reason is recorded in audit metadata.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AdminMutationReasonRequest" }
       responses:
         "202": { description: Rollback operation accepted }
   /tex-environment/revalidate:
     post:
       summary: Re-run production-equivalent validation for the current runtime
+      description: Requires admin:tex-environment:write and an owner actor. admin:* satisfies the scope check only; a non-empty reason is recorded in audit metadata.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AdminMutationReasonRequest" }
       responses:
         "202": { description: Revalidation operation accepted }
   /tex-environment/cleanup:
     post:
       summary: Remove safe unused locally derived images while preserving current and previous runtimes/bases
+      description: Requires admin:tex-environment:write and an owner actor. admin:* satisfies the scope check only; a non-empty reason is recorded in audit metadata.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AdminMutationReasonRequest" }
       responses:
         "202": { description: Cleanup operation accepted }
   /tex-environment/refresh:
     post:
       summary: Follow a newer validated latest image when automatic following is enabled
+      description: Requires admin:tex-environment:write and an owner actor. admin:* satisfies the scope check only; a non-empty reason is recorded in audit metadata.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AdminMutationReasonRequest" }
       responses:
         "202": { description: Refresh operation accepted }
   /updates/state:
     get:
       summary: Read installed, available, previous, and active application update state
+      description: Requires admin:update:read (or emergency compatibility scope admin:*).
       responses:
         "200": { description: Application update state }
         "503": { description: Update Manager is not configured or unavailable }
   /updates/check:
     post:
       summary: Check and verify an immutable stable GitHub Release
+      description: Requires admin:update:read (or emergency compatibility scope admin:*).
       requestBody:
         content:
           application/json:
@@ -474,6 +570,7 @@ paths:
   /updates/policy:
     post:
       summary: Select notification-only or opt-in automatic stable application updates
+      description: Requires admin:update:write and an owner actor. admin:* satisfies the scope check only; a non-empty reason is recorded in audit metadata.
       requestBody:
         required: true
         content:
@@ -481,38 +578,55 @@ paths:
             schema:
               type: object
               additionalProperties: false
-              required: [mode]
+              required: [mode, reason]
               properties:
                 channel: { type: string, const: stable, default: stable }
                 mode: { type: string, enum: [notify, automatic] }
+                reason: { $ref: "#/components/schemas/AdminMutationReason" }
       responses:
         "200": { description: Persisted update policy }
         "409": { description: An application update operation is active }
   /updates/refresh:
     post:
       summary: Check the stable channel and start an update only when automatic mode is enabled
+      description: Requires admin:update:write and an owner actor. admin:* satisfies the scope check only; a non-empty reason is recorded in audit metadata.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AdminMutationReasonRequest" }
       responses:
         "200":
           { description: Up-to-date, unavailable, available, or started result }
   /updates/apply:
     post:
       summary: Download, verify, stage, and transactionally deploy an immutable application release
+      description: Requires admin:update:write and an owner actor. admin:* satisfies the scope check only; a non-empty reason is recorded in audit metadata.
       requestBody:
+        required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/ApplicationUpdateRequest" }
+            schema:
+              { $ref: "#/components/schemas/ApplicationUpdateApplyRequest" }
       responses:
         "202": { description: Application update operation accepted }
         "409": { description: Another application update operation is active }
   /updates/rollback:
     post:
       summary: Back up current state and redeploy the previous known-good application release
+      description: Requires admin:update:write and an owner actor. admin:* satisfies the scope check only; a non-empty reason is recorded in audit metadata.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AdminMutationReasonRequest" }
       responses:
         "202": { description: Application rollback operation accepted }
         "409": { description: Another application update operation is active }
   /updates/operations/{id}:
     get:
       summary: Read application update progress and retained redacted log output
+      description: Requires admin:update:read (or emergency compatibility scope admin:*).
       parameters: [{ $ref: "#/components/parameters/Id" }]
       responses:
         "200": { description: Application update operation and log }
@@ -529,11 +643,21 @@ paths:
         "200": { description: Configuration }
     patch:
       summary: Update a mutable limit
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateSystemConfigRequest" }
       responses:
         "200": { description: Updated }
   /system/maintenance/enable:
     post:
       summary: Enable maintenance mode
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EnableMaintenanceRequest" }
       responses:
         "200": { description: Mode updated }
   /system/maintenance/disable:
@@ -620,6 +744,19 @@ components:
       name: id
       required: true
       schema: { type: string }
+    Cursor:
+      in: query
+      name: cursor
+      description: Opaque keyset cursor returned by the previous page.
+      schema: { type: string, maxLength: 1024 }
+    PageSize:
+      in: query
+      name: pageSize
+      schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+    Query:
+      in: query
+      name: query
+      schema: { type: string, maxLength: 500 }
   schemas:
     Session:
       type: object
@@ -676,6 +813,14 @@ components:
         name: { type: string, minLength: 1, maxLength: 100 }
         clientType:
           { type: string, enum: [codex, claude-code, mcp, ci, generic] }
+    UpdateServiceAccount:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        clientType:
+          { type: string, enum: [codex, claude-code, mcp, ci, generic] }
     CreateApiKey:
       type: object
       additionalProperties: false
@@ -704,6 +849,10 @@ components:
                 "admin:jobs:write",
                 "admin:system:read",
                 "admin:system:write",
+                "admin:update:read",
+                "admin:update:write",
+                "admin:tex-environment:read",
+                "admin:tex-environment:write",
                 "admin:audit:read",
                 "admin:*",
               ]
@@ -741,7 +890,7 @@ components:
     TexEnvironmentApply:
       type: object
       additionalProperties: false
-      required: [selector, languages, autoUpdate]
+      required: [selector, languages, autoUpdate, reason]
       properties:
         selector: { $ref: "#/components/schemas/TexImageSelector" }
         languages:
@@ -760,6 +909,18 @@ components:
           type: boolean
           default: false
           description: Build a custom-language Runtime locally only after GHCR confirms that the exact prebuilt Runtime tag is absent.
+        reason: { $ref: "#/components/schemas/AdminMutationReason" }
+    AdminMutationReason:
+      type: string
+      minLength: 1
+      maxLength: 500
+      description: Human-readable change reason recorded in audit metadata. Do not include secrets or credentials.
+    AdminMutationReasonRequest:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties:
+        reason: { $ref: "#/components/schemas/AdminMutationReason" }
     ApplicationUpdateRequest:
       type: object
       additionalProperties: false
@@ -768,6 +929,16 @@ components:
           type: string
           pattern: "^v?[0-9]+\\.[0-9]+\\.[0-9]+$"
           description: An explicit immutable release version. Omit to select the latest stable release.
+    ApplicationUpdateApplyRequest:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties:
+        version:
+          type: string
+          pattern: "^v?[0-9]+\\.[0-9]+\\.[0-9]+$"
+          description: An explicit immutable release version. Omit to select the latest stable release.
+        reason: { $ref: "#/components/schemas/AdminMutationReason" }
     RenderTarget:
       type: object
       additionalProperties: false
@@ -805,6 +976,63 @@ components:
             sourceId: { type: string, pattern: "^source_[a-f0-9]{32}$" }
             entrypoint: { type: string, maxLength: 2048, default: main.tex }
             outputs: { $ref: "#/components/schemas/RenderOutputs" }
+    AdminSourceTicketRequest:
+      type: object
+      additionalProperties: false
+      required: [apiKeyId, size, sha256]
+      properties:
+        apiKeyId: { type: string, minLength: 1, maxLength: 128 }
+        size: { type: integer, minimum: 1, maximum: 20971520 }
+        sha256: { type: string, pattern: "^[a-f0-9]{64}$" }
+    BulkDeleteJobsRequest:
+      type: object
+      additionalProperties: false
+      required: [ids]
+      properties:
+        ids:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items: { type: string, pattern: "^job_[a-f0-9]{32}$" }
+    SourceRenderRequest:
+      type: object
+      additionalProperties: false
+      required: [apiKeyId]
+      properties:
+        apiKeyId: { type: string, minLength: 1, maxLength: 128 }
+        entrypoint: { type: string, minLength: 1, maxLength: 240 }
+        outputs: { $ref: "#/components/schemas/RenderOutputs" }
+    SourceReferenceRequest:
+      type: object
+      additionalProperties: false
+      required: [apiKeyId]
+      properties:
+        apiKeyId: { type: string, minLength: 1, maxLength: 128 }
+    UpdateSystemConfigRequest:
+      type: object
+      additionalProperties: false
+      required: [key, value, reason]
+      properties:
+        key:
+          type: string
+          enum:
+            [
+              max_queue_length,
+              max_user_storage_bytes,
+              max_user_active_jobs,
+              source_orphan_retention_minutes,
+            ]
+        value: { type: integer, minimum: 1 }
+        reason: { type: string, minLength: 1, maxLength: 500 }
+    EnableMaintenanceRequest:
+      type: object
+      additionalProperties: false
+      required: [mode, reason]
+      properties:
+        mode:
+          type: string
+          enum: [reject-new-jobs, read-only, lockdown]
+        reason: { type: string, minLength: 1, maxLength: 500 }
     RenderOutputs:
       type: array
       default: [pdf]

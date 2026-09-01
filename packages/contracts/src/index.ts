@@ -180,9 +180,35 @@ export const adminApiScopes = [
   "admin:jobs:write",
   "admin:system:read",
   "admin:system:write",
+  "admin:update:read",
+  "admin:update:write",
+  "admin:tex-environment:read",
+  "admin:tex-environment:write",
   "admin:audit:read",
   "admin:*",
 ] as const;
+export const adminApiScopeLabels: Readonly<
+  Record<(typeof adminApiScopes)[number], string>
+> = {
+  "admin:users:read": "Read users",
+  "admin:users:write": "Change users",
+  "admin:service-accounts:read": "Read service accounts",
+  "admin:service-accounts:write": "Change service accounts",
+  "admin:api-keys:read": "Read API keys",
+  "admin:api-keys:write": "Issue, rotate, and revoke API keys",
+  "admin:jobs:read": "Read jobs",
+  "admin:jobs:write": "Operate jobs",
+  "admin:system:read": "Read system status and settings",
+  "admin:system:write": "Change system settings",
+  "admin:update:read": "Read application update state",
+  "admin:update:write": "Request application update operations (owner only)",
+  "admin:tex-environment:read": "Read TeX environment state",
+  "admin:tex-environment:write": "Request TeX environment operations (owner only for runtime mutations)",
+  "admin:audit:read": "Read audit logs",
+  "admin:*": "All administration operations (owner-only key issuance)",
+};
+export const adminMutationReasonSchema = z.string().trim().min(1).max(500);
+export type AdminMutationReason = z.infer<typeof adminMutationReasonSchema>;
 export const apiKeyScopeSchema = z.enum([
   ...renderApiScopes,
   ...adminApiScopes,

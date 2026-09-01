@@ -1,0 +1,3 @@
+# The non-root Update Manager may invoke only its fixed, argument-free helper.
+# The helper accepts a bounded JSON request and validates verbs and paths.
+latex-renderer-update ALL=(root) NOPASSWD: NOSETENV: /usr/local/libexec/latex-renderer-update-helper

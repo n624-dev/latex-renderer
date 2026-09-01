@@ -1,0 +1,46 @@
+version: 2
+
+# Keep all dependency classes in one public, reviewable update stream.  The
+# repository uses pnpm, but Dependabot's npm ecosystem is the supported lockfile
+# updater for pnpm workspaces.
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "04:00"
+      timezone: Asia/Tokyo
+    open-pull-requests-limit: 10
+    versioning-strategy: increase
+    groups:
+      production-dependencies:
+        dependency-type: production
+      development-dependencies:
+        dependency-type: development
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "04:15"
+      timezone: Asia/Tokyo
+    open-pull-requests-limit: 10
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+
+  - package-ecosystem: docker
+    directory: /renderer
+    schedule:
+      interval: monthly
+      day: "1"
+      time: "04:30"
+      timezone: Asia/Tokyo
+    open-pull-requests-limit: 5
+    groups:
+      renderer-base-images:
+        patterns:
+          - "*"

@@ -10,6 +10,8 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 concurrency:
   group: server-release-${{ inputs.version }}
@@ -35,6 +37,7 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$GITHUB_REF" == "refs/tags/$RELEASE_TAG" ]]
           version=${RELEASE_TAG#v}
           [[ $(node -p 'require("./package.json").version') == "$version" ]]
           [[ $(git tag --points-at HEAD) == *"$RELEASE_TAG"* ]]
@@ -48,6 +51,27 @@ jobs:
           set -euo pipefail
           sh deploy/scripts/build-server-release-assets.sh \
             "$RELEASE_TAG" "$RUNNER_TEMP/release-assets"
+      - name: Attest release assets with Sigstore provenance
+        uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
+        with:
+          subject-checksums: ${{ runner.temp }}/release-assets/SHA256SUMS
+      - name: Verify release attestations before upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          version=${RELEASE_TAG#v}
+          for asset in \
+            "$RUNNER_TEMP/release-assets/latex-renderer-server-$version.tar.gz" \
+            "$RUNNER_TEMP/release-assets/latex-renderer-client-$version.zip" \
+            "$RUNNER_TEMP/release-assets/latex-renderer-local-$version.mcpb"; do
+            gh attestation verify "$asset" \
+              --repo n624-dev/latex-renderer \
+              --signer-workflow n624-dev/latex-renderer/.github/workflows/server-release.yml \
+              --source-ref "refs/tags/$RELEASE_TAG" \
+              --deny-self-hosted-runners
+          done
       # GITHUB_TOKEN can manage draft release assets with contents:write, but
       # cannot read repository Administration settings. The maintainer verifies
       # immutable-release protection before dispatch and again before publish.

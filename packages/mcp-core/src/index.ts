@@ -1,4 +1,5 @@
-import { resolve } from "node:path";
+import { lstat, realpath } from "node:fs/promises";
+import { delimiter, dirname, isAbsolute, relative, resolve } from "node:path";
 import { RendererClient } from "@latex-renderer/api-client";
 import {
   createSourceRenderJob,
@@ -90,8 +91,8 @@ const jobSchema = z
 const localArtifactsSchema = z
   .object({
     pdf: z.string().optional(),
-    errors: z.string(),
-    log: z.string(),
+    errors: z.string().optional(),
+    log: z.string().optional(),
     job: z.string(),
     previews: z.array(z.string()),
   })
@@ -188,9 +189,7 @@ export const deleteRenderOutputSchema = z
 
 export type RenderProjectOutput = z.infer<typeof renderProjectOutputSchema>;
 export type UploadSourceOutput = z.infer<typeof uploadSourceOutputSchema>;
-export type CreateRenderJobOutput = z.infer<
-  typeof createRenderJobOutputSchema
->;
+export type CreateRenderJobOutput = z.infer<typeof createRenderJobOutputSchema>;
 export type GetRenderStatusOutput = z.infer<typeof getRenderStatusOutputSchema>;
 export type DownloadArtifactsOutput = z.infer<
   typeof downloadArtifactsOutputSchema
@@ -228,12 +227,14 @@ export interface McpOperations {
 export interface McpOperationsOptions {
   readonly baseUrl?: string;
   readonly renderTimeoutMs?: number;
+  readonly allowedRoots?: readonly string[];
   readonly clientFactory?: () => Promise<ClientTransport>;
 }
 
 export function createMcpOperations(
   options: McpOperationsOptions = {},
 ): McpOperations {
+  const allowedRoots = lazyAllowedRoots(options.allowedRoots);
   const client =
     options.clientFactory ??
     (async () =>
@@ -242,28 +243,32 @@ export function createMcpOperations(
         await loadCredential(),
       ));
   return {
-    uploadSource: async (path) => ({
-      success: true,
-      operation: "upload_source",
-      result: {
-        source: await uploadProjectSource(await client(), resolve(path)),
-      },
-    }),
+    uploadSource: async (path) => {
+      const localPath = await resolveAllowedMcpPath(path, allowedRoots(), true);
+      return {
+        success: true,
+        operation: "upload_source",
+        result: {
+          source: await uploadProjectSource(await client(), localPath),
+        },
+      };
+    },
     createRenderJob: async (sourceId, entrypoint) => ({
       success: true,
       operation: "create_render_job",
       result: {
         job: summarizeJob(
-          await createSourceRenderJob(
-            await client(),
-            sourceId,
-            entrypoint,
-          ),
+          await createSourceRenderJob(await client(), sourceId, entrypoint),
         ),
       },
     }),
     renderProject: async (directory, entrypoint) => {
-      const rendered = await renderProject(await client(), resolve(directory), {
+      const localDirectory = await resolveAllowedMcpPath(
+        directory,
+        allowedRoots(),
+        true,
+      );
+      const rendered = await renderProject(await client(), localDirectory, {
         entrypoint,
         ...(options.renderTimeoutMs === undefined
           ? {}
@@ -294,10 +299,15 @@ export function createMcpOperations(
       result: { job: summarizeJob(await getJob(await client(), jobId)) },
     }),
     downloadRenderArtifacts: async (jobId, outputDirectory) => {
+      const localOutput = await resolveAllowedMcpPath(
+        outputDirectory,
+        allowedRoots(),
+        false,
+      );
       const downloaded = await downloadJobArtifacts(
         await client(),
         jobId,
-        resolve(outputDirectory),
+        localOutput,
       );
       return {
         success: true,
@@ -377,11 +387,81 @@ function summarizeLocalArtifacts(
 ): z.infer<typeof localArtifactsSchema> {
   return {
     ...(artifacts.pdf === undefined ? {} : { pdf: artifacts.pdf }),
-    errors: artifacts.errors,
-    log: artifacts.log,
+    ...(artifacts.errors === undefined ? {} : { errors: artifacts.errors }),
+    ...(artifacts.log === undefined ? {} : { log: artifacts.log }),
     job: artifacts.job,
     previews: artifacts.previews,
   };
+}
+
+function resolveAllowedRoots(
+  configured: readonly string[] | undefined,
+): Promise<string[]> {
+  const roots =
+    configured ??
+    (process.env.LATEX_RENDER_ALLOWED_ROOTS ?? "")
+      .split(delimiter)
+      .map((value) => value.trim())
+      .filter((value) => value !== "");
+  const selected = roots.length === 0 ? [process.cwd()] : roots;
+  return Promise.all(selected.map((root) => realpath(resolve(root))));
+}
+
+function lazyAllowedRoots(
+  configured: readonly string[] | undefined,
+): () => Promise<readonly string[]> {
+  let result: Promise<readonly string[]> | undefined;
+  return () => (result ??= resolveAllowedRoots(configured));
+}
+
+export async function resolveAllowedMcpPath(
+  value: string,
+  roots: Promise<readonly string[]> | readonly string[],
+  mustExist: boolean,
+): Promise<string> {
+  const requested = resolve(value);
+  let checked: string;
+  if (mustExist || (await lstat(requested).catch(notFoundOnly)) !== undefined) {
+    checked = await realpath(requested);
+  } else {
+    const ancestor = await nearestExistingAncestor(dirname(requested));
+    const realAncestor = await realpath(ancestor);
+    checked = resolve(realAncestor, relative(ancestor, requested));
+  }
+  const allowed = await roots;
+  if (!allowed.some((root) => containsPath(root, checked)))
+    throw new AppError(
+      "OUTSIDE_ALLOWED_ROOT",
+      "Local MCP path is outside LATEX_RENDER_ALLOWED_ROOTS",
+      403,
+    );
+  return checked;
+}
+
+async function nearestExistingAncestor(value: string): Promise<string> {
+  let current = value;
+  for (;;) {
+    if ((await lstat(current).catch(notFoundOnly)) !== undefined)
+      return current;
+    const parent = dirname(current);
+    if (parent === current)
+      throw new AppError(
+        "INVALID_LOCAL_PATH",
+        "Local path has no existing ancestor",
+        400,
+      );
+    current = parent;
+  }
+}
+
+function containsPath(root: string, target: string): boolean {
+  const suffix = relative(root, target);
+  return suffix === "" || (!suffix.startsWith("..") && !isAbsolute(suffix));
+}
+
+function notFoundOnly(error: unknown): undefined {
+  if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+  throw error;
 }
 
 function rendererBaseUrl(): string {

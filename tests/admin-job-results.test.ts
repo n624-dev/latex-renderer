@@ -122,6 +122,30 @@ describe("administrator Job results and Sources", () => {
     );
     expect(svgDownload.headers.get("x-content-type-options")).toBe("nosniff");
     expect(new Uint8Array(await svgDownload.arrayBuffer())).toEqual(svg);
+    const archive = await fixture.app.request(
+      `/admin/api/v1/jobs/${jobId}/archive`,
+      { headers: fixture.headers },
+    );
+    expect(archive.status).toBe(200);
+    expect(archive.headers.get("content-type")).toBe("application/zip");
+    expect(archive.headers.get("cache-control")).toContain("no-store");
+    const archiveBytes = Buffer.from(await archive.arrayBuffer());
+    expect(archiveBytes.subarray(0, 4).toString("hex")).toBe("504b0304");
+    for (const name of [
+      "result.pdf",
+      "compile.log",
+      "errors.json",
+      "svg/objects/math-000001.svg",
+      "previews/page-1.png",
+    ])
+      expect(archiveBytes.includes(Buffer.from(name))).toBe(true);
+    expect(
+      fixture.database.raw
+        .prepare(
+          "SELECT COUNT(*) AS count FROM artifact_download_leases WHERE job_id=?",
+        )
+        .get(jobId),
+    ).toEqual({ count: 0 });
     const inline = await fixture.app.request(
       `/admin/api/v1/jobs/${jobId}/artifacts/result.pdf?disposition=inline`,
       { headers: fixture.headers },
@@ -137,6 +161,7 @@ describe("administrator Job results and Sources", () => {
       expect.arrayContaining([
         "admin.artifact.downloaded",
         "admin.artifact.viewed",
+        "admin.artifacts.archive_downloaded",
       ]),
     );
     fixture.database.raw
@@ -162,17 +187,36 @@ describe("administrator Job results and Sources", () => {
     const fixture = await setup(),
       now = new Date().toISOString(),
       reusable = `source_${"c".repeat(32)}`,
-      removable = `source_${"d".repeat(32)}`;
+      removable = `source_${"d".repeat(32)}`,
+      expiredOnly = `source_${"e".repeat(32)}`;
     seedSource(fixture.database, reusable, now, [
       "main.tex",
       "chapters/one.tex",
     ]);
     seedSource(fixture.database, removable, now, ["main.tex"]);
+    seedSource(fixture.database, expiredOnly, now, ["main.tex"]);
+    fixture.database.jobs.insertReserved({
+      id: `job_${"e".repeat(32)}`,
+      userId: "user_owner",
+      serviceAccountId: "sa_web",
+      apiKeyId: "key_web",
+      rendererVersion: "test",
+      sourceSize: 100,
+      sourceSha256: "1".repeat(64),
+      timestamp: now,
+      sourceId: expiredOnly,
+      reservedOutputBytes: 1,
+    });
+    fixture.database.raw
+      .prepare(
+        "UPDATE jobs SET status='expired',render_status='expired',completed_at=?,updated_at=? WHERE source_id=?",
+      )
+      .run(now, now, expiredOnly);
     const list = await fixture.app.request("/admin/api/v1/sources", {
       headers: fixture.headers,
     });
     expect(list.status).toBe(200);
-    expect(((await list.json()) as { items: unknown[] }).items).toHaveLength(2);
+    expect(((await list.json()) as { items: unknown[] }).items).toHaveLength(3);
     const render = await fixture.app.request(
       `/admin/api/v1/sources/${reusable}/render`,
       {
@@ -229,6 +273,22 @@ describe("administrator Job results and Sources", () => {
     expect(fixture.database.sources.get(removable)).toMatchObject({
       status: "deleting",
     });
+    const expiredDetail = await fixture.app.request(
+      `/admin/api/v1/sources/${expiredOnly}`,
+      { headers: fixture.headers },
+    );
+    await expect(expiredDetail.json()).resolves.toMatchObject({
+      deletable: true,
+      jobs: [{ status: "expired" }],
+    });
+    const expiredDeleted = await fixture.app.request(
+      `/admin/api/v1/sources/${expiredOnly}`,
+      {
+        method: "DELETE",
+        headers: { ...fixture.headers, "X-CSRF-Token": "1" },
+      },
+    );
+    expect(expiredDeleted.status).toBe(202);
   });
 });
 
@@ -282,6 +342,7 @@ async function setup() {
       writeEnabled: true,
       storageRoot: root,
       rendererVersion: "test",
+      maxOutputBytes: 1,
       maxQueueLength: 20,
       maxUserStorageBytes: 1_000_000,
       minFreeStorageBytes: 1,

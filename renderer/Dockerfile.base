@@ -28,9 +28,11 @@ RUN set -eu; \
     apt-get install -y --no-install-recommends ca-certificates; \
     sed -i 's|http://snapshot.debian.org/|https://snapshot.debian.org/|g' /etc/apt/sources.list; \
     apt-get -o Acquire::Check-Valid-Until=false update; \
+    mkdir -p /opt/renderer; \
     apt-get install -y --no-install-recommends \
       ca-certificates curl fontconfig gnupg gpgv imagemagick libfontconfig1 perl \
       poppler-utils qpdf tar xz-utils; \
+    dpkg-query -W -f='${binary:Package}\t${Version}\n' | LC_ALL=C sort > /opt/renderer/debian-packages.txt; \
     rm -rf /var/lib/apt/lists/*
 
 COPY texlive.profile /tmp/texlive.profile
@@ -62,6 +64,7 @@ RUN fc-cache -f \
  && printf '{"texliveRepository":"%s","installerSha512":"%s","profileKind":"%s","baseKind":"texlive-only-v1","debianSnapshot":"%s"}\n' \
       "${TEXLIVE_REPOSITORY}" "${TEXLIVE_INSTALLER_SHA512}" "${TEXLIVE_PROFILE_KIND}" "${DEBIAN_SNAPSHOT}" \
       > /opt/renderer/build-provenance.json \
+ && chmod 0444 /opt/renderer/debian-packages.txt \
  && chmod 0444 /opt/renderer/build-provenance.json \
  && chown -R 10000:10000 /work
 

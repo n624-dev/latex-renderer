@@ -5,7 +5,7 @@ import {
   RemoteOAuthService,
   RemoteRenderService,
 } from "@latex-renderer/remote-mcp-core";
-import { loadResourceLimits, PLATFORM_VERSION } from "@latex-renderer/shared";
+import { loadResourceLimits, PLATFORM_VERSION, positiveBytesEnvironment, positiveIntegerEnvironment, validPortEnvironment } from "@latex-renderer/shared";
 import { createRemoteMcpApp } from "./app.js";
 import { createRemoteMcpHandler } from "./mcp.js";
 
@@ -32,10 +32,11 @@ const oauth = new RemoteOAuthService(
     required("STORAGE_ROOT"),
     required("RENDERER_IMAGE"),
     publicOrigin,
-    Number(process.env.MAX_QUEUE_LENGTH ?? "100"),
-    Number(process.env.MAX_USER_STORAGE_BYTES ?? String(1024 * 1024 * 1024)),
+    positiveIntegerEnvironment(process.env, "MAX_QUEUE_LENGTH", 100),
+    positiveBytesEnvironment(process.env, "MAX_USER_STORAGE_BYTES", 1024 * 1024 * 1024),
     "/var/lib/latex-renderer/environment",
     loadResourceLimits(process.env),
+    positiveBytesEnvironment(process.env, "MAX_OUTPUT_BYTES", 200 * 1024 * 1024),
   ),
   app = createRemoteMcpApp({
     database,
@@ -44,7 +45,7 @@ const oauth = new RemoteOAuthService(
     mcp: createRemoteMcpHandler(renders, PLATFORM_VERSION),
     publicOrigin,
   }),
-  port = Number(process.env.PORT ?? "3104");
+  port = validPortEnvironment(process.env, "PORT", 3104);
 
 serve({ fetch: app.fetch, hostname: "127.0.0.1", port }, (info) => {
   console.log(

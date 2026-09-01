@@ -206,11 +206,17 @@ describe("post-review TeX environment regressions", () => {
 
   it("lets active jobs drain and periodically recovers leases missed at worker startup", () => {
     const worker = read("apps/renderer-worker/src/index.ts");
+    const periodicRecovery = read(
+      "apps/renderer-worker/src/periodic-recovery.ts",
+    );
     const unit = read("deploy/systemd/latex-renderer-worker.service");
     expect(unit).toContain("TimeoutStopSec=15min");
-    expect(worker).toContain("nextLeaseRecoveryAt");
-    expect(worker).toContain("await recoverStaleLeases(database, config)");
-    expect(worker).toContain("renderer_worker.lease_recovery_failed");
+    expect(worker).toContain("await recoverExpiredLeases()");
+    expect(periodicRecovery).toContain("nextRecoveryAt");
+    expect(periodicRecovery).toContain(
+      "await recoverStaleLeases(database, config)",
+    );
+    expect(periodicRecovery).toContain("renderer_worker.lease_recovery_failed");
   });
 
   it("keeps automatic refresh alive long enough to observe the four-hour watchdog recovery", () => {

@@ -1,9 +1,13 @@
-import { chmod, lstat, mkdir, rm } from "node:fs/promises";
+import { chmod, mkdir, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { RendererDatabase, WorkerJobRow } from "@latex-renderer/database";
 import { newId, nowIso } from "@latex-renderer/shared";
 import { validateAndExtract } from "@latex-renderer/zip-validation";
-import { directorySize, publishArtifacts, validateArtifacts } from "./artifact-validator.js";
+import {
+  inspectOutputTree,
+  publishArtifacts,
+  validateArtifacts,
+} from "./artifact-validator.js";
 import type { WorkerConfig } from "./config.js";
 import { dockerStop, spawnRenderer } from "./docker.js";
 import { generateMetadata } from "./metadata.js";
@@ -22,13 +26,26 @@ export async function processJob(
     (subject.expires_at !== null && subject.expires_at <= nowIso())
   ) {
     database.transaction(() => {
-      database.transitionJob(job.id, ["validating"], "rejected", {
-        completed_at: nowIso(),
-        error_code: "ACCOUNT_INACTIVE",
-        error_message: "Job owner, service account, or API key is inactive",
-        lease_owner: null,
-        lease_expires_at: null,
-      });
+      const timestamp = nowIso();
+      if (
+        database.worker.transitionOwned(
+          job.id,
+          config.workerId,
+          job.lease_generation,
+          ["validating"],
+          "rejected",
+          timestamp,
+          {
+            render_status: "rejected",
+            completed_at: timestamp,
+            error_code: "ACCOUNT_INACTIVE",
+            error_message: "Job owner, service account, or API key is inactive",
+            lease_owner: null,
+            lease_expires_at: null,
+          },
+        ) !== 1
+      )
+        return;
       database.audit({
         actorType: "system",
         actorId: config.workerId,
@@ -41,23 +58,44 @@ export async function processJob(
     });
     return;
   }
+  const lease = { lost: false };
+  const leaseIsLost = (): boolean => lease.lost;
+  const renewLease = () => {
+      if (
+        database.worker.heartbeat(
+          job.id,
+          config.workerId,
+          job.lease_generation,
+          nowIso(),
+          new Date(Date.now() + 30_000).toISOString(),
+        ) !== 1
+      )
+        lease.lost = true;
+    },
+    leaseHeartbeat = setInterval(renewLease, 10_000);
+  leaseHeartbeat.unref();
   const root = join(config.storageRoot, "jobs", job.id),
     source =
       job.source_storage_key === null
         ? join(root, "input", "source.zip")
         : join(config.storageRoot, job.source_storage_key),
-    work = join(root, "work"),
+    attempt = join(root, "attempts", String(job.lease_generation)),
+    work = join(attempt, "work"),
     extracted = join(work, "input"),
-    staging = join(root, "staging"),
+    staging = join(attempt, "staging"),
+    candidateOutput = join(attempt, "output"),
     output = join(root, "output");
   try {
     const outputs = renderOutputs(job.outputs_json);
-    await rm(extracted, { recursive: true, force: true });
-    await rm(staging, { recursive: true, force: true });
+    await rm(attempt, { recursive: true, force: true });
     await mkdir(work, { recursive: true, mode: 0o770 });
     await chmod(work, 0o770);
-    await mkdir(staging, { recursive: true, mode: 0o777 });
-    await chmod(staging, 0o777);
+    // The host storage tree carries a default ACL for the rootless renderer
+    // subordinate UID/GID.  Group-private modes keep the path inaccessible to
+    // unrelated host users while still allowing the mapped container user to
+    // write through the bind mount.
+    await mkdir(staging, { recursive: true, mode: 0o770 });
+    await chmod(staging, 0o770);
     await validateAndExtract(
       source,
       extracted,
@@ -71,12 +109,24 @@ export async function processJob(
       },
       job.entrypoint,
     );
-    database.transitionJob(job.id, ["validating"], "running", {
-      started_at: nowIso(),
-    });
+    const startedAt = nowIso();
+    if (
+      leaseIsLost() ||
+      database.worker.transitionOwned(
+        job.id,
+        config.workerId,
+        job.lease_generation,
+        ["validating"],
+        "running",
+        startedAt,
+        { started_at: startedAt },
+      ) !== 1
+    )
+      return;
     const spawned = spawnRenderer(
       config,
       job.id,
+      job.lease_generation,
       extracted,
       staging,
       job.entrypoint,
@@ -88,12 +138,21 @@ export async function processJob(
     spawned.process.stderr.on("data", (chunk: string) => {
       if (stderr.length < 16_384) stderr += chunk;
     });
-    let monitoring = false;
+    let monitoring = false,
+      monitorFailure: unknown,
+      monitorRun: Promise<void> | undefined;
     const monitor = setInterval(() => {
       if (monitoring) return;
       monitoring = true;
-      void monitorJob(database, config, job.id, staging, spawned.containerName)
-        .catch((error: unknown) =>
+      monitorRun = monitorJob(
+        database,
+        config,
+        job,
+        staging,
+        spawned.containerName,
+      )
+        .catch(async (error: unknown) => {
+          monitorFailure ??= error;
           console.error(
             JSON.stringify({
               event: "renderer_worker.monitor_failed",
@@ -103,8 +162,9 @@ export async function processJob(
                   ? error.message
                   : "Unknown monitor error",
             }),
-          ),
-        )
+          );
+          await dockerStop(spawned.containerName).catch(() => undefined);
+        })
         .finally(() => {
           monitoring = false;
         });
@@ -122,31 +182,62 @@ export async function processJob(
       clearInterval(monitor);
       clearTimeout(timeout);
     });
+    await monitorRun;
     const runtime = database.worker.runtimeState(job.id);
     if (runtime === undefined)
       throw new Error("Renderer job disappeared during processing");
+    if (
+      leaseIsLost() ||
+      runtime.lease_owner !== config.workerId ||
+      runtime.lease_generation !== job.lease_generation
+    )
+      return;
+    if (monitorFailure !== undefined)
+      throw monitorFailure instanceof Error
+        ? monitorFailure
+        : new Error("Renderer output monitoring failed");
     if (runtime.cancel_requested_at !== null || runtime.status === "canceled") {
-      database.worker.markCanceled(job.id, nowIso());
+      database.worker.markCanceled(
+        job.id,
+        config.workerId,
+        job.lease_generation,
+        nowIso(),
+      );
       return;
     }
-    await generateMetadata(staging, exitCode);
+    await inspectOutputTree(config, staging);
+    await generateMetadata(staging, exitCode, config.maxLogBytes);
     const artifacts = await validateArtifacts(
       config,
       staging,
       exitCode === 0,
       exitCode === 0 && outputs.includes("svg"),
     );
+    await publishArtifacts(staging, candidateOutput, artifacts);
+    renewLease();
+    if (leaseIsLost()) return;
     await rm(output, { recursive: true, force: true });
-    await publishArtifacts(staging, output, artifacts);
-    const finalized = database.transaction(() => {
+    await rename(candidateOutput, output);
+    database.transaction(() => {
       const finalRuntime = database.worker.runtimeState(job.id);
       if (finalRuntime === undefined)
         throw new Error("Renderer job disappeared during finalization");
       if (
+        leaseIsLost() ||
+        finalRuntime.lease_owner !== config.workerId ||
+        finalRuntime.lease_generation !== job.lease_generation
+      )
+        return false;
+      if (
         finalRuntime.cancel_requested_at !== null ||
         finalRuntime.status === "canceled"
       ) {
-        database.worker.markCanceled(job.id, nowIso());
+        database.worker.markCanceled(
+          job.id,
+          config.workerId,
+          job.lease_generation,
+          nowIso(),
+        );
         return false;
       }
       const timestamp = nowIso();
@@ -166,24 +257,36 @@ export async function processJob(
           : exitCode === 0
             ? "succeeded"
             : "failed";
-      database.transitionJob(job.id, ["running"], finalStatus, {
-        completed_at: timestamp,
-        output_size: total,
-        exit_code: exitCode,
-        error_code: timedOut
-          ? "JOB_TIMEOUT"
-          : exitCode === 0
-            ? null
-            : "LATEX_COMPILE_FAILED",
-        error_message: timedOut
-          ? "The renderer exceeded the overall job timeout"
-          : exitCode === 0
-            ? null
-            : `Renderer exited with ${exitCode}: ${stderr.slice(0, 500)}`,
-        lease_owner: null,
-        lease_expires_at: null,
-        heartbeat_at: timestamp,
-      });
+      if (
+        database.worker.transitionOwned(
+          job.id,
+          config.workerId,
+          job.lease_generation,
+          ["running"],
+          finalStatus,
+          timestamp,
+          {
+            render_status: finalStatus,
+            completed_at: timestamp,
+            output_size: total,
+            exit_code: exitCode,
+            error_code: timedOut
+              ? "JOB_TIMEOUT"
+              : exitCode === 0
+                ? null
+                : "LATEX_COMPILE_FAILED",
+            error_message: timedOut
+              ? "The renderer exceeded the overall job timeout"
+              : exitCode === 0
+                ? null
+                : `Renderer exited with ${exitCode}: ${stderr.slice(0, 500)}`,
+            lease_owner: null,
+            lease_expires_at: null,
+            heartbeat_at: timestamp,
+          },
+        ) !== 1
+      )
+        throw new Error("Worker lease was fenced during finalization");
       database.audit({
         actorType: "system",
         actorId: config.workerId,
@@ -203,10 +306,9 @@ export async function processJob(
       });
       return true;
     });
-    if (!finalized) await rm(output, { recursive: true, force: true });
   } finally {
-    await rm(work, { recursive: true, force: true });
-    await rm(staging, { recursive: true, force: true });
+    clearInterval(leaseHeartbeat);
+    await rm(attempt, { recursive: true, force: true });
   }
 }
 
@@ -229,26 +331,20 @@ function renderOutputs(value: string): string[] {
 async function monitorJob(
   database: RendererDatabase,
   config: WorkerConfig,
-  jobId: string,
+  job: WorkerJobRow,
   staging: string,
   containerName: string,
 ): Promise<void> {
-  const row = database.worker.runtimeState(jobId),
-    size = await directorySize(staging),
-    logSize = await lstat(join(staging, "compile.log"))
-      .then((info) => info.size)
-      .catch(() => 0),
+  const row = database.worker.runtimeState(job.id),
+    output = await inspectOutputTree(config, staging),
     shouldStop =
       row === undefined ||
+      row.lease_owner !== config.workerId ||
+      row.lease_generation !== job.lease_generation ||
       row.cancel_requested_at !== null ||
       row.status !== "running" ||
-      size > config.maxOutputBytes ||
-      logSize > config.maxLogBytes;
-  database.worker.heartbeat(
-    jobId,
-    config.workerId,
-    nowIso(),
-    new Date(Date.now() + 30_000).toISOString(),
-  );
+      output.totalBytes > config.maxOutputBytes ||
+      output.fileCount > config.maxOutputFileCount ||
+      output.directoryCount > config.maxOutputDirectoryCount;
   if (shouldStop) await dockerStop(containerName);
 }

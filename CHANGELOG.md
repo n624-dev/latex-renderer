@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 1.3.0 - 2026-09-01
+
+- Separate application updates into a non-root controller and a short-lived, fixed-command root helper. Release installation now re-verifies immutable GitHub metadata, SHA-256 digests, Sigstore provenance, archive limits, sealed source files, and an allowlisted build-output assembly before privileged deployment.
+- Add forward-only Migrations 008 through 016 for Worker lease generations, cleanup state, admission reservations, upload claims, OAuth authorization security versions, pagination indexes, Project revision outputs, Source upload concurrency, and durable API-key kinds. Restoring a pre-upgrade database backup is required to run a `1.2.x` release again.
+- Include persistent Project revision Sources in backup and restore validation, make audit-export checkpoints atomic, isolate per-item cleanup failures, and preserve completed render status when later storage cleanup fails.
+- Fence stale Workers and concurrent uploads with database compare-and-swap leases, use attempt-specific render staging, reject unsafe or oversized output trees, bound logs and artifact memory, and configure private rootless-container storage ACLs without world-writable directories.
+- Replace fixed-window Job, Source, Project, user, service-account, and API-key scans with indexed cursor pagination and aggregate queries, while making idempotency, retention, quota, retry, and deletion lifecycle transitions atomic.
+- Restrict local clients to approved roots and same-origin credentials, reject symlinked state/output targets and likely credential files by default, and stream large uploads, ZIP downloads, and setup assets within explicit limits.
+- Harden browser and Remote MCP authentication with per-flow CSRF/OIDC cookies, bounded login and session state, security-version checks, atomic authorization-code and refresh rotation, replay rejection, and audited privileged mutation reasons.
+- Improve responsive Web/Admin navigation, active-job polling, accessible preview controls, destructive-operation explanations, TeX cold-build warnings, and public self-hosting/update documentation.
+- Add Dependabot, gitleaks, CodeQL, dependency review/audit, pinned tool and base-image inputs, container/configuration scans, CycloneDX SBOMs, and keyless release provenance verification.
+
 ## 1.2.2 - 2026-08-30
 
 - Publish the browser-login controller with the public Worker assets so Cloudflare Access, OIDC, and password mode selection runs instead of exposing the inactive password form.

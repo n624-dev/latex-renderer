@@ -32,7 +32,8 @@ async function json(
     headers.set("Content-Type", "application/json");
   }
   if (!["GET", "HEAD", "OPTIONS"].includes(method)) {
-    if (mutationCsrf.length === 0) throw new Error("セッションを再読み込みしてください。");
+    if (mutationCsrf.length === 0)
+      throw new Error("セッションを再読み込みしてください。");
     headers.set("X-CSRF-Token", mutationCsrf);
   }
   const response = await fetcher(path, {
@@ -201,7 +202,11 @@ function parseRender(value: unknown) {
   };
 }
 
-async function issueAccess(fetcher: Fetcher, id: string, mutationCsrf = csrfToken) {
+async function issueAccess(
+  fetcher: Fetcher,
+  id: string,
+  mutationCsrf = csrfToken,
+) {
   return parseRender(
     await json(
       fetcher,
@@ -290,6 +295,8 @@ function artifactButton(
   button.className = "secondary";
   button.textContent = label;
   button.onclick = () => {
+    const opensInWindow = label === "PDF" || label === "プレビュー",
+      popup = opensInWindow ? window.open("about:blank", "_blank") : null;
     void (async () => {
       try {
         const current = await tracker.get(),
@@ -308,16 +315,22 @@ function artifactButton(
           );
         const blob = await response.blob(),
           url = URL.createObjectURL(blob);
-        if (label === "PDF" || label === "プレビュー")
-          window.open(url, "_blank", "noopener");
-        else {
+        if (opensInWindow && popup) {
+          // The blank window was opened during the user gesture, so Safari and
+          // other popup blockers do not reject the later blob navigation.
+          popup.opener = null;
+          popup.location.href = url;
+        } else {
           const anchor = document.createElement("a");
           anchor.href = url;
           anchor.download = path.split("/").at(-1) ?? "artifact";
+          document.body.append(anchor);
           anchor.click();
+          anchor.remove();
         }
         setTimeout(() => URL.revokeObjectURL(url), 60_000);
       } catch (error) {
+        popup?.close();
         showError(error);
       }
     })();
@@ -437,21 +450,42 @@ async function followJob(
   }
 }
 
-async function loadJobs(fetcher: Fetcher, container: HTMLElement, limit = 200) {
-  const value = (await json(fetcher, "/app/api/v1/jobs")) as {
-    items: Array<Record<string, unknown>>;
+async function loadJobs(fetcher: Fetcher, container: HTMLElement, limit = 50) {
+  let cursor: string | null = null;
+  const render = (items: Array<Record<string, unknown>>, hasMore: boolean) => {
+    if (items.length === 0) {
+      container.textContent = "変換履歴はありません。";
+      return;
+    }
+    container.innerHTML = `<div class="table-wrap"><table><thead><tr><th>文書</th><th>プロジェクト</th><th>状態</th><th>日時</th><th></th></tr></thead><tbody>${items
+      .map(
+        (item) =>
+          `<tr><td>${escape(item.documentName)}</td><td>${escape(item.projectName ?? "—")}</td><td>${escape(statusLabel(String(item.status)))}</td><td>${escape(new Date(String(item.createdAt)).toLocaleString("ja-JP"))}</td><td><a class="button secondary" href="/app/jobs/${encodeURIComponent(String(item.id))}/">結果</a></td></tr>`,
+      )
+      .join(
+        "",
+      )}</tbody></table></div>${hasMore ? '<div class="actions"><button type="button" class="secondary" id="app-jobs-next">次のページ</button></div>' : ""}`;
+    const next = document.querySelector<HTMLButtonElement>("#app-jobs-next");
+    if (next)
+      next.onclick = () => {
+        next.disabled = true;
+        void loadPage(true).catch(showError);
+      };
   };
-  const items = value.items.slice(0, limit);
-  if (items.length === 0) {
-    container.textContent = "変換履歴はありません。";
-    return;
-  }
-  container.innerHTML = `<div class="table-wrap"><table><thead><tr><th>文書</th><th>プロジェクト</th><th>状態</th><th>日時</th><th></th></tr></thead><tbody>${items
-    .map(
-      (item) =>
-        `<tr><td>${escape(item.documentName)}</td><td>${escape(item.projectName ?? "—")}</td><td>${escape(statusLabel(String(item.status)))}</td><td>${escape(new Date(String(item.createdAt)).toLocaleString("ja-JP"))}</td><td><a class="button secondary" href="/app/jobs/${encodeURIComponent(String(item.id))}/">結果</a></td></tr>`,
-    )
-    .join("")}</tbody></table></div>`;
+  let items: Array<Record<string, unknown>> = [];
+  const loadPage = async (append = false) => {
+    const query = new URLSearchParams({ pageSize: String(limit) });
+    if (cursor) query.set("cursor", cursor);
+    const value = (await json(fetcher, `/app/api/v1/jobs?${query}`)) as {
+      items: Array<Record<string, unknown>>;
+      nextCursor: string | null;
+      hasMore: boolean;
+    };
+    items = append ? [...items, ...value.items] : value.items;
+    cursor = value.nextCursor;
+    render(items, value.hasMore);
+  };
+  await loadPage();
 }
 
 function installRender(fetcher: Fetcher) {
@@ -669,17 +703,35 @@ function installProjects(fetcher: Fetcher) {
     detail = document.querySelector<HTMLElement>("#app-project-detail");
   const load = async () => {
     if (!list) return;
-    const value = (await json(fetcher, "/app/api/v1/projects")) as {
+    let cursor: string | null = null,
       items: Array<{
         id: string;
         displayName: string;
         revisionCount: number;
         updatedAt: string;
-      }>;
+      }> = [];
+    const loadPage = async (append = false) => {
+      const query = new URLSearchParams({ pageSize: "50" });
+      if (cursor) query.set("cursor", cursor);
+      const value = (await json(fetcher, `/app/api/v1/projects?${query}`)) as {
+        items: typeof items;
+        nextCursor: string | null;
+        hasMore: boolean;
+      };
+      items = append ? [...items, ...value.items] : value.items;
+      cursor = value.nextCursor;
+      list.innerHTML = items.length
+        ? `<div class="grid">${items.map((project) => `<article><h2>${escape(project.displayName)}</h2><p>${project.revisionCount} 改訂・${escape(new Date(project.updatedAt).toLocaleString("ja-JP"))}</p><a class="button secondary" href="/app/projects/${encodeURIComponent(project.id)}/">開く</a></article>`).join("")}</div>${value.hasMore ? '<div class="actions"><button type="button" class="secondary" id="app-projects-next">次のページ</button></div>' : ""}`
+        : "プロジェクトはありません。";
+      const next =
+        document.querySelector<HTMLButtonElement>("#app-projects-next");
+      if (next)
+        next.onclick = () => {
+          next.disabled = true;
+          void loadPage(true).catch(showError);
+        };
     };
-    list.innerHTML = value.items.length
-      ? `<div class="grid">${value.items.map((project) => `<article><h2>${escape(project.displayName)}</h2><p>${project.revisionCount} 改訂・${escape(new Date(project.updatedAt).toLocaleString("ja-JP"))}</p><a class="button secondary" href="/app/projects/${encodeURIComponent(project.id)}/">開く</a></article>`).join("")}</div>`
-      : "プロジェクトはありません。";
+    await loadPage();
   };
   if (create) {
     create.onsubmit = (event) => {
@@ -702,96 +754,128 @@ function installProjects(fetcher: Fetcher) {
       location.pathname,
     );
     if (!match) return;
-    void json(fetcher, `/app/api/v1/projects/${match[1]}`)
-      .then((raw) => {
-        const project = raw as {
+    let revisionCursor: string | null = null,
+      project: {
+        displayName: string;
+        revisions: Array<{
+          id: string;
+          revisionNumber: number;
           displayName: string;
-          revisions: Array<{
-            id: string;
-            revisionNumber: number;
-            displayName: string;
-            originalFilename: string;
-            entrypoint: string;
-            createdAt: string;
-            jobs: Array<{ id: string; status: string; createdAt: string }>;
-          }>;
+          originalFilename: string;
+          entrypoint: string;
+          createdAt: string;
+          jobs: Array<{ id: string; status: string; createdAt: string }>;
+          jobCount: number;
+          jobsHasMore: boolean;
+        }>;
+        revisionsHasMore: boolean;
+      } | null = null;
+    const loadDetail = async (append = false) => {
+      const query = new URLSearchParams({ pageSize: "50" });
+      if (revisionCursor) query.set("cursor", revisionCursor);
+      const raw = await json(
+        fetcher,
+        `/app/api/v1/projects/${match[1]}?${query}`,
+      );
+      const value = raw as typeof project & {
+        revisionsNextCursor: string | null;
+        revisionsHasMore: boolean;
+      };
+      if (!append || project === null) project = value;
+      else
+        project = {
+          ...project,
+          revisions: [...project.revisions, ...value.revisions],
         };
-        detail.innerHTML = `<div class="hero"><h1>${escape(project.displayName)}</h1></div>${
-          project.revisions
-            .map(
-              (revision) =>
-                `<section><div class="page-heading"><div><h2>Revision ${revision.revisionNumber}: ${escape(revision.displayName)}</h2><p>${escape(revision.originalFilename)}・${escape(new Date(revision.createdAt).toLocaleString("ja-JP"))}</p></div><button type="button" class="secondary" data-rerender="${escape(revision.id)}">もう一度変換</button></div><ul>${revision.jobs.map((job) => `<li>${escape(statusLabel(job.status))} <a href="/app/jobs/${encodeURIComponent(job.id)}/">${escape(new Date(job.createdAt).toLocaleString("ja-JP"))}</a></li>`).join("") || "<li>変換履歴はありません。</li>"}</ul></section>`,
-            )
-            .join("") || "<section>改訂はありません。</section>"
-        }`;
-        for (const button of detail.querySelectorAll<HTMLButtonElement>(
-          "[data-rerender]",
-        ))
-          button.onclick = () => {
-            button.disabled = true;
-            const revisionId = button.dataset.rerender;
-            if (!revisionId) return;
-            void json(
-              fetcher,
-              `/app/api/v1/projects/${match[1]}/revisions/${encodeURIComponent(revisionId)}/render`,
-              {
-                method: "POST",
-                headers: {
-                  "Idempotency-Key": `app-rerender-${crypto.randomUUID()}`,
-                },
-                body: "{}",
+      revisionCursor = value.revisionsNextCursor;
+      const currentProject = project;
+      detail.innerHTML = `<div class="hero"><h1>${escape(project.displayName)}</h1><p class="notice warning">プロジェクトを削除すると、このプロジェクトの記録だけが一覧から消えます。紐付いたSourceとJobの入力・成果物は各自の保存期限まで残ります。完全削除が必要な場合は管理者へ相談してください。</p></div>${
+        project.revisions
+          .map(
+            (revision) =>
+              `<section><div class="page-heading"><div><h2>Revision ${revision.revisionNumber}: ${escape(revision.displayName)}</h2><p>${escape(revision.originalFilename)}・${escape(new Date(revision.createdAt).toLocaleString("ja-JP"))}</p></div><button type="button" class="secondary" data-rerender="${escape(revision.id)}">もう一度変換</button></div><ul>${revision.jobs.map((job) => `<li>${escape(statusLabel(job.status))} <a href="/app/jobs/${encodeURIComponent(job.id)}/">${escape(new Date(job.createdAt).toLocaleString("ja-JP"))}</a></li>`).join("") || "<li>変換履歴はありません。</li>"}</ul>${revision.jobCount > revision.jobs.length ? `<p class="muted">Job ${revision.jobs.length} / ${revision.jobCount}件を表示中（詳細APIのcursorで続きへ進めます）。</p>` : ""}</section>`,
+          )
+          .join("") || "<section>改訂はありません。</section>"
+      }${project.revisionsHasMore ? '<div class="actions"><button type="button" class="secondary" id="app-revisions-next">次の改訂ページ</button></div>' : ""}`;
+      for (const button of detail.querySelectorAll<HTMLButtonElement>(
+        "[data-rerender]",
+      ))
+        button.onclick = () => {
+          button.disabled = true;
+          const revisionId = button.dataset.rerender;
+          if (!revisionId) return;
+          void json(
+            fetcher,
+            `/app/api/v1/projects/${match[1]}/revisions/${encodeURIComponent(revisionId)}/render`,
+            {
+              method: "POST",
+              headers: {
+                "Idempotency-Key": `app-rerender-${crypto.randomUUID()}`,
               },
-            )
-              .then((value) => {
-                const ticket = parseRender(value);
-                location.assign(
-                  `/app/jobs/${encodeURIComponent(ticket.jobId)}/`,
-                );
-              })
-              .catch((error: unknown) => {
-                button.disabled = false;
-                showError(error);
-              });
-          };
-        const heading = detail.querySelector("h1");
-        if (heading) {
-          const actions = document.createElement("div"),
-            rename = document.createElement("button"),
-            remove = document.createElement("button");
-          actions.className = "actions";
-          rename.type = "button";
-          rename.className = "secondary";
-          rename.textContent = "名前を変更";
-          remove.type = "button";
-          remove.className = "danger";
-          remove.textContent = "プロジェクトを削除";
-          rename.onclick = () => {
-            const next = prompt(
-              "新しいプロジェクト名",
-              project.displayName,
-            )?.trim();
-            if (!next) return;
-            void json(fetcher, `/app/api/v1/projects/${match[1]}`, {
-              method: "PATCH",
-              body: JSON.stringify({ displayName: next }),
-            })
-              .then(() => location.reload())
-              .catch(showError);
-          };
-          remove.onclick = () => {
-            if (!confirm("このプロジェクトを一覧から削除しますか？")) return;
-            void json(fetcher, `/app/api/v1/projects/${match[1]}`, {
-              method: "DELETE",
               body: "{}",
+            },
+          )
+            .then((value) => {
+              const ticket = parseRender(value);
+              location.assign(`/app/jobs/${encodeURIComponent(ticket.jobId)}/`);
             })
-              .then(() => location.assign("/app/projects/"))
-              .catch(showError);
-          };
-          actions.append(rename, remove);
-          heading.parentElement?.append(actions);
-        }
-      })
-      .catch(showError);
+            .catch((error: unknown) => {
+              button.disabled = false;
+              showError(error);
+            });
+        };
+      const heading = detail.querySelector("h1");
+      if (heading) {
+        const actions = document.createElement("div"),
+          rename = document.createElement("button"),
+          remove = document.createElement("button");
+        actions.className = "actions";
+        rename.type = "button";
+        rename.className = "secondary";
+        rename.textContent = "名前を変更";
+        remove.type = "button";
+        remove.className = "danger";
+        remove.textContent = "プロジェクトを削除";
+        rename.onclick = () => {
+          const next = prompt(
+            "新しいプロジェクト名",
+            currentProject.displayName,
+          )?.trim();
+          if (!next) return;
+          void json(fetcher, `/app/api/v1/projects/${match[1]}`, {
+            method: "PATCH",
+            body: JSON.stringify({ displayName: next }),
+          })
+            .then(() => location.reload())
+            .catch(showError);
+        };
+        remove.onclick = () => {
+          if (
+            !confirm(
+              "このプロジェクトを一覧から削除しますか？\n\nプロジェクトの記録だけを削除します。紐付いたSourceとJobの入力・成果物は、各自の保存期限まで残ります。完全削除が必要な場合は管理者へ相談してください。",
+            )
+          )
+            return;
+          void json(fetcher, `/app/api/v1/projects/${match[1]}`, {
+            method: "DELETE",
+            body: "{}",
+          })
+            .then(() => location.assign("/app/projects/"))
+            .catch(showError);
+        };
+        actions.append(rename, remove);
+        heading.parentElement?.append(actions);
+      }
+      const nextRevision = document.querySelector<HTMLButtonElement>(
+        "#app-revisions-next",
+      );
+      if (nextRevision)
+        nextRevision.onclick = () => {
+          nextRevision.disabled = true;
+          void loadDetail(true).catch(showError);
+        };
+    };
+    void loadDetail().catch(showError);
   }
 }
 

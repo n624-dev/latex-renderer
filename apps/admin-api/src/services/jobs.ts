@@ -19,18 +19,20 @@ const RETAINED = new Set([
 
 export class AdminJobsService {
   constructor(private readonly deps: AdminDependencies) {}
-  list(filters: { status?: string; query?: string; sourceId?: string } = {}) {
-    const query = filters.query?.trim().toLowerCase();
-    return this.deps.database.jobs.list().filter((row) => {
-      if (filters.status && row.status !== filters.status) return false;
-      if (filters.sourceId && row.source_id !== filters.sourceId) return false;
-      return (
-        !query ||
-        [row.id, row.source_id, row.entrypoint, row.user_id].some((value) =>
-          value?.toLowerCase().includes(query),
-        )
-      );
-    });
+  list(
+    filters: {
+      status?: string;
+      query?: string;
+      sourceId?: string;
+      cursor?: string | undefined;
+      limit?: number | undefined;
+    } = {},
+  ) {
+    const page = this.deps.database.jobs.listAdminPage(filters);
+    return {
+      ...page,
+      total: this.deps.database.jobs.countAdmin(filters),
+    };
   }
   get(id: string) {
     const row = this.deps.database.jobs.get(id);
@@ -169,6 +171,18 @@ export class AdminJobsService {
           sourceId: string;
           entrypoint?: string | undefined;
           outputs: RenderOutput[];
+          project?:
+            | {
+                projectId: string;
+                displayName: string;
+                originalFilename: string;
+                outputs: RenderOutput[];
+              }
+            | {
+                projectId: string;
+                revisionId: string;
+              }
+            | undefined;
         },
     idempotencyKey: string,
   ) {
@@ -278,6 +292,7 @@ export class AdminJobsService {
           timestamp,
           sourceId,
           outputs: input.outputs,
+          reservedOutputBytes: this.deps.maxOutputBytes,
         });
         this.deps.database.security.insertNonce(nonce, jobId, expiresAt);
         this.deps.database.security.insertIdempotency({
@@ -288,7 +303,7 @@ export class AdminJobsService {
           requestHash,
           resourceId: jobId,
           responseCode: 201,
-          expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+          expiresAt,
           createdAt: timestamp,
         });
         this.deps.database.audit({
@@ -390,19 +405,37 @@ export class AdminJobsService {
       nowIso(),
     );
     if (ready !== undefined) {
-      this.deps.database.transaction(() =>
-        this.deps.database.security.insertIdempotency({
-          actorType: actor.type,
-          actorId: actor.id,
-          operation: "admin.source.create",
+      try {
+        this.deps.database.transaction(() =>
+          this.deps.database.security.insertIdempotency({
+            actorType: actor.type,
+            actorId: actor.id,
+            operation: "admin.source.create",
+            keyHash,
+            requestHash,
+            resourceId: ready.id,
+            responseCode: 200,
+            expiresAt: new Date(
+              Math.min(Date.now() + 86_400_000, Date.parse(ready.expires_at)),
+            ).toISOString(),
+            createdAt: nowIso(),
+          }),
+        );
+      } catch (caught) {
+        const raced = this.deps.database.security.idempotency(
+          actor.type,
+          actor.id,
+          "admin.source.create",
           keyHash,
-          requestHash,
-          resourceId: ready.id,
-          responseCode: 200,
-          expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
-          createdAt: nowIso(),
-        }),
-      );
+          nowIso(),
+        );
+        if (raced?.resource_id && raced.request_hash === requestHash)
+          return {
+            status: 200 as const,
+            value: await this.issueExistingSource(identity, raced.resource_id),
+          };
+        throw caught;
+      }
       return {
         status: 200 as const,
         value: {
@@ -453,7 +486,7 @@ export class AdminJobsService {
           requestHash,
           resourceId: sourceId,
           responseCode: 201,
-          expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+          expiresAt,
           createdAt: timestamp,
         });
         this.deps.database.audit({
@@ -500,6 +533,18 @@ export class AdminJobsService {
       sourceId: string;
       entrypoint?: string | undefined;
       outputs: RenderOutput[];
+      project?:
+        | {
+            projectId: string;
+            displayName: string;
+            originalFilename: string;
+            outputs: RenderOutput[];
+          }
+        | {
+            projectId: string;
+            revisionId: string;
+          }
+        | undefined;
     },
     idempotencyKey: string,
   ) {
@@ -526,11 +571,13 @@ export class AdminJobsService {
             sourceId: input.sourceId,
             entrypoint,
             outputs: input.outputs,
+            ...(input.project === undefined ? {} : { project: input.project }),
           }
         : {
             apiKeyId: input.apiKeyId,
             sourceId: input.sourceId,
             entrypoint,
+            ...(input.project === undefined ? {} : { project: input.project }),
           },
       keyHash = createHash("sha256").update(idempotencyKey).digest("hex"),
       requestHash = createHash("sha256")
@@ -561,11 +608,12 @@ export class AdminJobsService {
         value: await this.issueExistingSourceJob(existing.resource_id),
       };
     }
-    const source = this.deps.database.sources.getOwned(
+    const source = this.deps.database.sources.getOwnedReady(
       input.sourceId,
       identity.user_id,
+      nowIso(),
     );
-    if (source === undefined || source.status !== "ready")
+    if (source === undefined)
       throw new AppError(
         "SOURCE_NOT_READY",
         "Source does not exist or is not ready",
@@ -588,22 +636,60 @@ export class AdminJobsService {
         serviceAccountSecurityVersion:
           identity.service_account_security_version,
       });
+    let createdProjectRevisionId: string | undefined;
     try {
       this.deps.database.transaction(() => {
         this.assertAccepting(identity.user_id, identity.service_account_id, 0);
-        this.deps.database.jobs.insertQueued({
-          id: jobId,
-          userId: identity.user_id,
-          serviceAccountId: identity.service_account_id,
-          apiKeyId: identity.api_key_id,
-          rendererVersion: this.deps.rendererVersion,
-          sourceId: source.id,
-          sourceSize: source.size,
-          sourceSha256: source.sha256,
-          entrypoint,
-          outputs: input.outputs,
+        const currentSource = this.deps.database.sources.getOwnedReady(
+          input.sourceId,
+          identity.user_id,
           timestamp,
-        });
+        );
+        if (currentSource === undefined)
+          throw new AppError(
+            "SOURCE_NOT_READY",
+            "Source does not exist or is not ready",
+            409,
+          );
+        if (
+          !this.deps.database.sources.paths(currentSource).includes(entrypoint)
+        )
+          throw new AppError(
+            "ENTRYPOINT_MISSING",
+            "Source does not contain the requested entrypoint",
+            422,
+          );
+        const resolvedProject =
+            input.project === undefined
+              ? undefined
+              : this.resolveProjectRevision(
+                  actor,
+                  currentSource.id,
+                  entrypoint,
+                  input.project,
+                ),
+          projectRevisionId = resolvedProject?.id;
+        createdProjectRevisionId = projectRevisionId;
+        if (
+          this.deps.database.jobs.insertQueued({
+            id: jobId,
+            userId: identity.user_id,
+            serviceAccountId: identity.service_account_id,
+            apiKeyId: identity.api_key_id,
+            rendererVersion: this.deps.rendererVersion,
+            sourceId: currentSource.id,
+            entrypoint,
+            outputs: resolvedProject?.outputs ?? input.outputs,
+            ...(projectRevisionId === undefined ? {} : { projectRevisionId }),
+            timestamp,
+            reservedOutputBytes: this.deps.maxOutputBytes,
+          }) !== 1
+        )
+          throw new AppError(
+            "SOURCE_NOT_READY",
+            "Source changed while the Render Job was being created",
+            409,
+          );
         this.deps.database.security.insertIdempotency({
           actorType: actor.type,
           actorId: actor.id,
@@ -622,8 +708,25 @@ export class AdminJobsService {
           targetType: "job",
           targetId: jobId,
           result: "success",
-          metadata: { sourceId: source.id, entrypoint },
+          metadata: {
+            sourceId: currentSource.id,
+            entrypoint,
+            ...(projectRevisionId === undefined ? {} : { projectRevisionId }),
+          },
         });
+        if (input.project !== undefined && "revisionId" in input.project)
+          this.deps.database.audit({
+            actorType: actor.type,
+            actorId: actor.id,
+            action: "project.revision_rendered",
+            targetType: "job",
+            targetId: jobId,
+            result: "success",
+            metadata: {
+              projectId: input.project.projectId,
+              revisionId: input.project.revisionId,
+            },
+          });
       });
     } catch (caught) {
       const raced = this.deps.database.security.idempotency(
@@ -645,8 +748,84 @@ export class AdminJobsService {
       value: {
         jobId,
         jobTicket,
+        ...(input.project === undefined
+          ? {}
+          : { projectRevisionId: createdProjectRevisionId }),
         expiresAt: new Date(Date.now() + 1_800_000).toISOString(),
       },
+    };
+  }
+
+  private resolveProjectRevision(
+    actor: AppActor,
+    sourceId: string,
+    entrypoint: string,
+    project:
+      | {
+          projectId: string;
+          displayName: string;
+          originalFilename: string;
+          outputs: RenderOutput[];
+        }
+      | { projectId: string; revisionId: string },
+  ): { id: string; outputs: RenderOutput[] } {
+    const owned = this.deps.database.projects.getOwned(
+      project.projectId,
+      actor.userId,
+    );
+    if (owned === undefined)
+      throw new AppError("PROJECT_NOT_FOUND", "Project does not exist", 404);
+    if ("revisionId" in project) {
+      const revision = this.deps.database.projects.revisionOwned(
+        project.revisionId,
+        actor.userId,
+      );
+      if (
+        revision?.project_id !== owned.id ||
+        revision.source_id !== sourceId ||
+        revision.entrypoint !== entrypoint
+      )
+        throw new AppError(
+          "PROJECT_REVISION_NOT_FOUND",
+          "Project revision does not exist",
+          404,
+        );
+      this.deps.database.projects.touch(owned.id, nowIso());
+      return {
+        id: revision.id,
+        outputs: this.deps.database.projects.renderOutputs(revision),
+      };
+    }
+    let revision = this.deps.database.projects.revisionForSource(
+      owned.id,
+      sourceId,
+      entrypoint,
+    );
+    if (revision === undefined) {
+      revision = this.deps.database.projects.insertRevision({
+        id: newId("revision"),
+        projectId: owned.id,
+        sourceId,
+        displayName: project.displayName,
+        originalFilename: project.originalFilename,
+        entrypoint,
+        outputs: project.outputs,
+        timestamp: nowIso(),
+      });
+      this.deps.database.audit({
+        actorType: actor.type,
+        actorId: actor.id,
+        action: "project.revision_created",
+        targetType: "project_revision",
+        targetId: revision.id,
+        result: "success",
+        metadata: { projectId: owned.id, sourceId },
+      });
+    }
+    this.deps.database.projects.touch(owned.id, nowIso());
+    return {
+      id: revision.id,
+      outputs: this.deps.database.projects.renderOutputs(revision),
     };
   }
 
@@ -672,11 +851,12 @@ export class AdminJobsService {
 
   delete(actor: AppActor, id: string): void {
     this.deps.database.transaction(() => {
-      this.deps.database.transitionJob(
-        id,
-        ["succeeded", "failed", "timeout", "canceled", "rejected", "expired"],
-        "deleting",
-      );
+      if (this.deps.database.jobs.markDeleting(id, nowIso()) !== 1)
+        throw new AppError(
+          "JOB_STATE_CONFLICT",
+          "Job state changed concurrently",
+          409,
+        );
       this.deps.database.audit({
         actorType: actor.type,
         actorId: actor.id,
@@ -735,6 +915,12 @@ export class AdminJobsService {
           "Idempotency-Key was reused with another job",
           409,
         );
+      if (this.deps.database.jobs.get(existing.resource_id) === undefined)
+        throw new AppError(
+          "IDEMPOTENT_RESOURCE_GONE",
+          "The idempotent Retry Job no longer exists",
+          410,
+        );
       return {
         id: existing.resource_id,
         retryOfJobId: sourceJobId,
@@ -757,8 +943,9 @@ export class AdminJobsService {
         "The original source is unavailable",
         410,
       );
-    const shared = this.deps.database.sources.get(source.source_id);
-    if (shared === undefined || shared.status !== "ready")
+    const sourceId = source.source_id;
+    const shared = this.deps.database.sources.getReady(sourceId, nowIso());
+    if (shared === undefined)
       throw new AppError(
         "SOURCE_EXPIRED",
         "The original source is unavailable",
@@ -769,11 +956,22 @@ export class AdminJobsService {
       const timestamp = nowIso();
       this.deps.database.transaction(() => {
         this.assertAccepting(source.user_id, source.service_account_id, 0);
+        const currentSource = this.deps.database.sources.getReady(
+          sourceId,
+          timestamp,
+        );
+        if (currentSource === undefined)
+          throw new AppError(
+            "SOURCE_EXPIRED",
+            "The original source is unavailable",
+            410,
+          );
         this.deps.database.jobs.insertRetry({
           id,
           source,
           rendererVersion: this.deps.rendererVersion,
           timestamp,
+          reservedOutputBytes: this.deps.maxOutputBytes,
         });
         this.deps.database.security.insertIdempotency({
           actorType: actor.type,
@@ -845,12 +1043,22 @@ export class AdminJobsService {
         "Service account pending job limit reached",
         429,
       );
+    const maxUserActiveJobs = this.deps.database.settings.value(
+      "max_user_active_jobs",
+      20,
+    );
+    if (this.deps.database.jobs.countActiveForUser(userId) >= maxUserActiveJobs)
+      throw new AppError(
+        "USER_QUEUE_LIMIT",
+        "User pending job limit reached",
+        429,
+      );
     const maxStorage = this.deps.database.settings.value(
         "max_user_storage_bytes",
         this.deps.maxUserStorageBytes,
       ),
       usedStorage = this.deps.database.jobs.storageUsageForUser(userId);
-    if (requestedBytes > maxStorage - usedStorage)
+    if (requestedBytes + this.deps.maxOutputBytes > maxStorage - usedStorage)
       throw new AppError(
         "USER_STORAGE_QUOTA",
         "User storage quota is exhausted",
@@ -910,23 +1118,31 @@ export class AdminJobsService {
     );
     if (source === undefined)
       throw new AppError("SOURCE_NOT_FOUND", "Source does not exist", 404);
+    if (source.expires_at <= nowIso())
+      throw new AppError(
+        "IDEMPOTENT_RESOURCE_GONE",
+        "Idempotent Source reservation has expired",
+        410,
+      );
     if (source.status === "ready")
       return { sourceId, uploadRequired: false, expiresAt: source.expires_at };
-    const expiresAt = new Date(Date.now() + 600_000).toISOString();
-    let nonce = this.deps.database.security.latestUsableSourceNonce(
+    if (source.status !== "reserved")
+      throw new AppError(
+        "IDEMPOTENCY_IN_PROGRESS",
+        "Original Source upload is already in progress",
+        409,
+      );
+    const expiresAt = source.expires_at;
+    const nonce = this.deps.database.security.latestUsableSourceNonce(
       sourceId,
       nowIso(),
     );
-    if (nonce === undefined) {
-      nonce = randomBytes(24).toString("base64url");
-      this.deps.database.transaction(() =>
-        this.deps.database.security.insertSourceNonce(
-          nonce as string,
-          sourceId,
-          expiresAt,
-        ),
+    if (nonce === undefined)
+      throw new AppError(
+        "IDEMPOTENT_RESOURCE_GONE",
+        "Original Source upload reservation is no longer usable",
+        410,
       );
-    }
     const uploadTicket =
       await this.renderTicketConfig().tickets.issueSourceUpload({
         sourceId,
@@ -956,6 +1172,12 @@ export class AdminJobsService {
         "Idempotent job no longer exists",
         404,
       );
+    if (row.status !== "reserved")
+      throw new AppError(
+        "IDEMPOTENT_RESOURCE_STATE",
+        "Original Render upload is no longer pending",
+        409,
+      );
     const identity = this.deps.database.apiKeys.renderIdentity(
       row.api_key_id,
       nowIso(),
@@ -970,18 +1192,17 @@ export class AdminJobsService {
         "The render target is no longer available",
         409,
       );
-    const expiresAt = new Date(Date.now() + 600_000).toISOString();
-    let nonce = this.deps.database.security.latestUsableNonce(jobId, nowIso());
-    if (nonce === undefined) {
-      nonce = randomBytes(24).toString("base64url");
-      this.deps.database.transaction(() =>
-        this.deps.database.security.insertNonce(
-          nonce as string,
-          jobId,
-          expiresAt,
-        ),
+    const nonceRecord = this.deps.database.security.latestUsableNonceRecord(
+      jobId,
+      nowIso(),
+    );
+    if (nonceRecord === undefined)
+      throw new AppError(
+        "IDEMPOTENT_RESOURCE_GONE",
+        "Original Render upload reservation has expired",
+        410,
       );
-    }
+    const { nonce, expires_at: expiresAt } = nonceRecord;
     const subject = {
         jobId,
         userId: identity.user_id,
@@ -1042,6 +1263,9 @@ export class AdminJobsService {
         serviceAccountSecurityVersion:
           identity.service_account_security_version,
       }),
+      ...(row.project_revision_id === null
+        ? {}
+        : { projectRevisionId: row.project_revision_id }),
       expiresAt: new Date(Date.now() + 1_800_000).toISOString(),
     };
   }

@@ -5,16 +5,20 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=root
+User=latex-renderer-update
 Group=latex-renderer
 WorkingDirectory=/opt/latex-renderer/current
 Environment=UPDATE_MANAGER_SOCKET=/run/latex-renderer/update-manager.sock
 Environment=UPDATE_MANAGER_TOKEN_FILE=%d/update-manager-token
 Environment=UPDATE_MANAGER_STATE_ROOT=/var/lib/latex-renderer/update-manager
+Environment=HOME=/var/lib/latex-renderer/update-manager/gh-home
+Environment=GH_CONFIG_DIR=/var/lib/latex-renderer/update-manager/gh-config
+Environment=GH_PROMPT_DISABLED=1
+Environment=XDG_CACHE_HOME=/var/lib/latex-renderer/update-manager/gh-cache
 EnvironmentFile=-/etc/latex-renderer/update-manager.env
 LoadCredential=update-manager-token:/etc/latex-renderer/secrets/update-manager-token
 RuntimeDirectory=latex-renderer
-RuntimeDirectoryMode=0750
+RuntimeDirectoryMode=0770
 # Image Manager uses the same runtime directory for the cross-manager mutation
 # lock. Keep the directory while either unit restarts so one manager cannot
 # unlink the other manager's live Unix socket.
@@ -24,17 +28,28 @@ Restart=on-failure
 RestartSec=5
 TimeoutStartSec=2min
 TimeoutStopSec=15min
+# The controller has no ambient capabilities and can execute only the fixed
+# argument-free helper allowed by /etc/sudoers.d/latex-renderer-update.  Sudo
+# itself needs setuid; the helper performs all root filesystem/service writes.
 NoNewPrivileges=false
+# The fixed helper is a sudo child and must see the host filesystem namespace
+# in order to perform the narrowly validated release switch.  The controller
+# itself is non-root and owns only its state/staging paths below.
 ProtectSystem=strict
-ProtectHome=false
-PrivateDevices=false
-ProtectKernelTunables=false
-ProtectKernelModules=false
-ProtectControlGroups=false
+ProtectHome=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
 RestrictSUIDSGID=true
 LockPersonality=true
+RestrictRealtime=true
+SystemCallArchitectures=native
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-ReadWritePaths=/opt/latex-renderer /var/lib/latex-renderer /etc/latex-renderer /etc/systemd/system /etc/apparmor.d /run/latex-renderer /tmp
+PrivateTmp=true
+ReadWritePaths=/var/lib/latex-renderer/update-manager /run/latex-renderer
 UMask=0007
 
 [Install]

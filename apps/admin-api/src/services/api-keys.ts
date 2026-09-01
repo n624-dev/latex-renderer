@@ -5,8 +5,12 @@ import type { AdminActor, AdminDependencies } from "../types.js";
 export class AdminApiKeysService {
   constructor(private readonly deps: AdminDependencies) {}
 
-  list() {
-    return this.deps.database.apiKeys.list();
+  list(options: {
+    cursor?: string | undefined;
+    limit?: number | undefined;
+    query?: string | undefined;
+  } = {}) {
+    return this.deps.database.apiKeys.listPage(options);
   }
 
   get(id: string) {
@@ -36,6 +40,7 @@ export class AdminApiKeysService {
         serviceAccountId,
         name: input.name,
         prefix: generated.prefix,
+        kind: generated.kind,
         secretHash: generated.secretHash,
         pepperId: generated.pepperId,
         scopes: input.scopes,
@@ -79,21 +84,42 @@ export class AdminApiKeysService {
     if (old.revoked_at !== null) {
       throw new AppError("API_KEY_NOT_FOUND", "Active API key does not exist", 404);
     }
+    const timestamp = nowIso();
+    if (old.expires_at !== null && old.expires_at <= timestamp) {
+      throw new AppError(
+        "API_KEY_EXPIRED",
+        "Expired API keys cannot be rotated",
+        409,
+      );
+    }
     const scopes = JSON.parse(old.scopes_json) as unknown;
     if (!Array.isArray(scopes) || !scopes.every((scope): scope is string => typeof scope === "string")) {
       throw new AppError("INVALID_SCOPE_DATA", "Stored API key scopes are invalid");
     }
-    const kind = keyKind(scopes);
+    const kind = old.kind;
+    if (keyKind(scopes) !== kind) {
+      throw new AppError(
+        "INVALID_API_KEY_STATE",
+        "Stored API key kind does not match its scopes",
+        500,
+      );
+    }
     if (kind === "admin" && actor.role !== "owner") {
       throw new AppError("OWNER_REQUIRED", "Only an owner can rotate admin keys", 403);
     }
 
     const generated = this.deps.apiKeys.create(kind);
-    const timestamp = nowIso();
     this.deps.database.transaction(() => {
       const fresh = this.get(id);
       if (fresh.revoked_at !== null) {
         throw new AppError("API_KEY_STATE_CONFLICT", "API key changed concurrently", 409);
+      }
+      if (fresh.expires_at !== null && fresh.expires_at <= timestamp) {
+        throw new AppError(
+          "API_KEY_EXPIRED",
+          "Expired API keys cannot be rotated",
+          409,
+        );
       }
       this.deps.database.apiKeys.revoke(id, timestamp);
       this.deps.database.apiKeys.insert({
@@ -101,6 +127,7 @@ export class AdminApiKeysService {
         serviceAccountId: old.service_account_id,
         name: old.name,
         prefix: generated.prefix,
+        kind: generated.kind,
         secretHash: generated.secretHash,
         pepperId: generated.pepperId,
         scopes,

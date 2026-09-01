@@ -9,9 +9,15 @@ fi
 source_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
 database=/var/lib/latex-renderer/renderer.sqlite3
 pepper=/etc/latex-renderer/secrets/api-key-pepper
+smoke_user=latex-renderer
+smoke_group=$(id -gn "$smoke_user")
 admin_cli="$source_root/apps/admin-local/dist/index.js"
 render_cli="$source_root/client-dist/latex-renderer-client/app/latex-render.cjs"
 temporary_root=$(mktemp -d /tmp/latex-renderer-smoke.XXXXXX)
+chown "$smoke_user:$smoke_group" "$temporary_root"
+chmod 0700 "$temporary_root"
+smoke_pepper="$temporary_root/api-key-pepper"
+install -o "$smoke_user" -g "$smoke_group" -m 0400 "$pepper" "$smoke_pepper"
 key_id=
 service_account_id=
 owner_id=${LATEX_RENDER_SMOKE_OWNER_ID:-$(sqlite3 "$database" "SELECT id FROM users WHERE role='owner' AND status='active' ORDER BY created_at,id LIMIT 1;" 2>/dev/null || true)}
@@ -28,7 +34,8 @@ fi
 
 cleanup() {
   if [ -n "$key_id" ] && [ -n "$service_account_id" ]; then
-    env DATABASE_PATH="$database" API_KEY_PEPPER_ID=v1 API_KEY_PEPPER_FILE="$pepper" \
+    runuser -u "$smoke_user" -- env \
+      DATABASE_PATH="$database" API_KEY_PEPPER_ID=v1 API_KEY_PEPPER_FILE="$smoke_pepper" \
       /usr/local/bin/node "$admin_cli" smoke-key revoke \
       --key-id "$key_id" --service-account "$service_account_id" --yes >/dev/null 2>&1 || true
   fi
@@ -36,10 +43,12 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
-env DATABASE_PATH="$database" API_KEY_PEPPER_ID=v1 API_KEY_PEPPER_FILE="$pepper" \
+runuser -u "$smoke_user" -- env \
+  DATABASE_PATH="$database" API_KEY_PEPPER_ID=v1 API_KEY_PEPPER_FILE="$smoke_pepper" \
   /usr/local/bin/node "$admin_cli" smoke-key cleanup-jobs --yes >/dev/null
 
-env DATABASE_PATH="$database" API_KEY_PEPPER_ID=v1 API_KEY_PEPPER_FILE="$pepper" \
+runuser -u "$smoke_user" -- env \
+  DATABASE_PATH="$database" API_KEY_PEPPER_ID=v1 API_KEY_PEPPER_FILE="$smoke_pepper" \
   /usr/local/bin/node "$admin_cli" smoke-key create \
   --owner-id "$owner_id" --yes > "$temporary_root/key.json"
 
@@ -47,7 +56,8 @@ token=$(/usr/local/bin/node -e 'const x=require(process.argv[1]);process.stdout.
 key_id=$(/usr/local/bin/node -e 'const x=require(process.argv[1]);process.stdout.write(x.keyId)' "$temporary_root/key.json")
 service_account_id=$(/usr/local/bin/node -e 'const x=require(process.argv[1]);process.stdout.write(x.serviceAccountId)' "$temporary_root/key.json")
 
-install -d -m 0700 "$temporary_root/config" "$temporary_root/project"
+install -d -o "$smoke_user" -g "$smoke_group" -m 0700 \
+  "$temporary_root/config" "$temporary_root/project"
 printf '%s\n' \
   '\documentclass{ltjsarticle}' \
   '\usepackage{tikz}' \
@@ -60,11 +70,12 @@ printf '%s\n' \
   '\end{tikzpicture}' \
   '\end{document}' > "$temporary_root/project/main.tex"
 
-printf '%s' "$token" | env XDG_CONFIG_HOME="$temporary_root/config" \
+printf '%s' "$token" | runuser -u "$smoke_user" -- env \
+  XDG_CONFIG_HOME="$temporary_root/config" \
   /usr/local/bin/node "$render_cli" auth login --api-key-stdin >/dev/null
 token=
 
-env XDG_CONFIG_HOME="$temporary_root/config" \
+runuser -u "$smoke_user" -- env XDG_CONFIG_HOME="$temporary_root/config" \
   LATEX_RENDER_BASE_URL="$public_origin" \
   /usr/local/bin/node "$render_cli" render "$temporary_root/project" --json | tee "$temporary_root/render.json"
 
@@ -82,7 +93,7 @@ test -s "$temporary_root/project/.render/previews/page-1.png"
 /usr/local/bin/node -e 'const f=require("node:fs");const b=f.readFileSync(process.argv[1]);if(!b.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])))process.exit(1)' "$temporary_root/project/.render/previews/page-1.png"
 /usr/local/bin/node -e 'const x=require(process.argv[1]);if(x.success!==true)process.exit(1)' "$temporary_root/project/.render/errors.json"
 
-env XDG_CONFIG_HOME="$temporary_root/config" \
+runuser -u "$smoke_user" -- env XDG_CONFIG_HOME="$temporary_root/config" \
   LATEX_RENDER_BASE_URL="$public_origin" \
   /usr/local/bin/node "$render_cli" jobs delete "$job_id" --yes >/dev/null
 

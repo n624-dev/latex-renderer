@@ -5,6 +5,7 @@ import {
   mkdir,
   mkdtemp,
   lstat,
+  symlink,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -13,7 +14,6 @@ import type {
   SourceRenderResponse,
   SourceTicketResponse,
 } from "@latex-renderer/contracts";
-import { AppError } from "@latex-renderer/shared";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   downloadJobArtifacts,
@@ -45,6 +45,11 @@ describe("client core", () => {
     "main.synctex.gz",
     ".render/result.pdf",
     ".git/config",
+    ".env",
+    ".env.local",
+    "credentials.json",
+    "private.pem",
+    "node_modules/package/index.js",
   ])("excludes generated project path %s", (path) => {
     expect(shouldExcludeProjectPath(path)).toBe(true);
   });
@@ -90,7 +95,7 @@ describe("client core", () => {
     await expect(readFile(result.artifacts.pdf ?? "", "utf8")).resolves.toBe(
       "result.pdf",
     );
-    await expect(readFile(result.artifacts.errors, "utf8")).resolves.toBe(
+    await expect(readFile(result.artifacts.errors ?? "", "utf8")).resolves.toBe(
       "errors.json",
     );
     expect(result.artifacts.previews).toHaveLength(1);
@@ -181,6 +186,80 @@ describe("client core", () => {
       files: 1,
     });
     expect(client.uploadedSize).toBe(0);
+  });
+
+  it("applies secure defaults and .latexrenderignore before descending", async () => {
+    const root = await temporaryRoot();
+    await writeFile(join(root, "main.tex"), "main");
+    await writeFile(join(root, ".env"), "SECRET=value");
+    await writeFile(join(root, "private.pem"), "secret");
+    await writeFile(
+      join(root, ".latexrenderignore"),
+      "drafts/\n*.csv\n!.env\n",
+    );
+    await mkdir(join(root, "drafts"));
+    await writeFile(join(root, "drafts", "notes.tex"), "draft");
+    await writeFile(join(root, "results.csv"), "data");
+    await mkdir(join(root, "node_modules"));
+    await symlink("/", join(root, "node_modules", "outside"));
+    const client = new FakeClient([]);
+
+    await uploadProjectSource(client, root);
+
+    expect(client.archiveNames).toEqual(["main.tex"]);
+  });
+
+  it("stops project collection as soon as the file limit is exceeded", async () => {
+    const root = await temporaryRoot();
+    await Promise.all(
+      Array.from({ length: 501 }, (_, index) =>
+        writeFile(
+          join(root, `source-${String(index).padStart(3, "0")}.tex`),
+          "x",
+        ),
+      ),
+    );
+    await expect(
+      uploadProjectSource(new FakeClient([], false), root),
+    ).rejects.toMatchObject({
+      code: "TOO_MANY_FILES",
+    });
+  });
+
+  it("returns terminal jobs that do not advertise any artifacts", async () => {
+    const root = await temporaryRoot();
+    const result = await downloadJobArtifacts(
+      new FakeClient([job("canceled")]),
+      "job_test",
+      join(root, "artifacts"),
+    );
+
+    expect(result.job.status).toBe("canceled");
+    expect(result.artifacts).toMatchObject({ previews: [], svg: [] });
+    expect(result.artifacts.pdf).toBeUndefined();
+    expect(result.artifacts.errors).toBeUndefined();
+    expect(result.artifacts.log).toBeUndefined();
+    await expect(readFile(result.artifacts.job, "utf8")).resolves.toContain(
+      '"status": "canceled"',
+    );
+  });
+
+  it("rejects a symlinked job.json without changing its target", async () => {
+    const root = await temporaryRoot(),
+      output = join(root, "artifacts"),
+      victim = join(root, "victim");
+    await mkdir(output, { mode: 0o700 });
+    await writeFile(victim, "keep");
+    await symlink(victim, join(output, "job.json"));
+
+    await expect(
+      downloadJobArtifacts(
+        new FakeClient([job("canceled")]),
+        "job_test",
+        output,
+      ),
+    ).rejects.toMatchObject({ code: "UNSAFE_OUTPUT_PATH" });
+    await expect(readFile(victim, "utf8")).resolves.toBe("keep");
   });
 });
 
@@ -294,14 +373,17 @@ class FakeClient implements ClientTransport {
     destination: string,
   ): Promise<void> {
     void _ticket;
-    if (url === "preview:page-2.png")
-      throw new AppError("NOT_FOUND", "Preview not found", 404);
     await mkdir(dirname(destination), { recursive: true });
     await writeFile(destination, url.replace(/^(?:artifact|preview):/, ""));
   }
 }
 
 function job(status: JobResponse["status"]): JobResponse {
+  const artifacts = [
+    artifact("log", "compile.log"),
+    artifact("errors", "errors.json"),
+    ...(status === "succeeded" ? [artifact("pdf", "result.pdf")] : []),
+  ];
   return {
     id: "job_test",
     status,
@@ -312,8 +394,25 @@ function job(status: JobResponse["status"]): JobResponse {
     errorCode: status === "failed" ? "LATEX_ERROR" : null,
     errorMessage: status === "failed" ? "Compilation failed" : null,
     retentionExpiresAt: "2026-08-12T00:00:00.000Z",
-    artifacts: [],
-    previews: [],
+    artifacts: status === "canceled" ? [] : artifacts,
+    previews:
+      status === "succeeded"
+        ? [artifact("preview", "previews/page-1.png")]
+        : [],
+  };
+}
+
+function artifact(
+  type: string,
+  relativePath: string,
+): JobResponse["artifacts"][number] {
+  return {
+    type,
+    relativePath,
+    size: 1,
+    sha256: "b".repeat(64),
+    createdAt: "2026-08-11T00:00:00.000Z",
+    downloadUrl: `/api/v1/jobs/job_test/artifacts/${relativePath}`,
   };
 }
 
