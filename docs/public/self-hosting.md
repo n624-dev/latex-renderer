@@ -10,9 +10,9 @@ since: "v1.2.0"
 
 ## 現在の提供状況
 
-このページは[`v1.3.0`](https://github.com/n624-dev/latex-renderer/releases/tag/v1.3.0)のサーバー用bundleを対象にします。Cloudflare構成に加えて、通常のTLSリバースプロキシとOIDC／ローカルパスワード認証を選択できます。このReleaseは公開後にタグや配布ファイルを差し替えできない設定で固定され、次を含みます。
+このページは[`v1.3.1`](https://github.com/n624-dev/latex-renderer/releases/tag/v1.3.1)のサーバー用bundleを対象にします。Cloudflare構成に加えて、通常のTLSリバースプロキシとOIDC／ローカルパスワード認証を選択できます。このReleaseは公開後にタグや配布ファイルを差し替えできない設定で固定され、次を含みます。
 
-- `latex-renderer-server-1.3.0.tar.gz`
+- `latex-renderer-server-1.3.1.tar.gz`
 - クライアントZIPとClaude Desktop用MCPB
 - 3つの配布ファイルを検証する`SHA256SUMS`
 - commit、バージョン、Renderer fingerprint、Node.js／pnpm要件を記録したbundle内metadata
@@ -66,7 +66,7 @@ since: "v1.2.0"
 導入後の通常操作では、WebやAdmin APIへsudo権限を渡しません。
 
 - TeX変更はroot所有のImage Managerへ、権限制限されたUnix socket経由で依頼
-- アプリ更新はroot所有のUpdate Managerへ、権限制限されたUnix socket経由で依頼
+- アプリ更新は非rootのUpdate Manager controllerへUnix socket経由で依頼し、固定操作だけを短命root helperへ委譲
 - TeX変更とアプリ更新は同じhost lockで直列化
 - Web／APIから任意のコマンド、パス、URLをrootへ渡さない
 
@@ -89,12 +89,12 @@ since: "v1.2.0"
 
 公開リポジトリの`*.example`ファイルは項目確認のための雛形です。設定済みファイルを雛形へ上書きしてcommitする運用はしません。
 
-## v1.3.0をダウンロードして検証
+## v1.3.1をダウンロードして検証
 
 次のコマンドは、固定されたReleaseであることをGitHub APIで確認し、APIが返すdigestとダウンロードしたbundleを照合します。通常の非rootユーザーで実行します。
 
 ```bash
-version=1.3.0
+version=1.3.1
 repository=n624-dev/latex-renderer
 asset="latex-renderer-server-$version.tar.gz"
 work_dir=$(mktemp -d)
@@ -114,7 +114,15 @@ asset_digest=$(jq -r --arg asset "$asset" '.assets[] | select(.name == $asset) |
 curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error \
   "$asset_url" --output "$work_dir/$asset"
 printf '%s  %s\n' "${asset_digest#sha256:}" "$work_dir/$asset" | sha256sum --check -
+attestation_response="$work_dir/attestations.json"
+attestation_bundle="$work_dir/attestations.jsonl"
+curl --proto '=https' --tlsv1.2 --fail --silent --show-error \
+  "https://api.github.com/repos/$repository/attestations/$asset_digest" \
+  --output "$attestation_response"
+jq -ce '.attestations | length > 0' "$attestation_response" >/dev/null
+jq -c '.attestations[].bundle' "$attestation_response" > "$attestation_bundle"
 gh attestation verify "$work_dir/$asset" \
+  --bundle "$attestation_bundle" \
   --repo "$repository" \
   --signer-workflow "$repository/.github/workflows/server-release.yml" \
   --source-ref "refs/tags/v$version" \
@@ -124,7 +132,7 @@ tar -xzf "$work_dir/$asset" -C "$work_dir"
 bundle_root="$work_dir/latex-renderer-server-$version"
 ```
 
-`OK`が表示されなければ、展開やsudo操作へ進みません。`work_dir`と`bundle_root`は同じシェルで続く手順に使用します。
+`OK`が表示されなければ、展開やsudo操作へ進みません。attestation bundleは公開GitHub APIから取得してoffline検証へ渡すため、host上のGitHubログインやGitHub tokenは不要です。`work_dir`と`bundle_root`は同じシェルで続く手順に使用します。
 
 ## ホストを準備
 
@@ -347,7 +355,7 @@ TeXとアプリケーションは別々に更新します。
 
 Release workflowはtag refそのもの（`refs/tags/vX.Y.Z`）からのみ実行され、各配布assetへGitHub Actionsのkeyless Sigstore provenanceを付けます。Update Managerは保護された`server-release.yml` workflow、完全一致するtag ref、OIDC issuer、非self-hosted runnerを必ず検証します。host bootstrapは`gh`が古い場合、GitHub CLI v2.98.0を公式releaseから取得し、arch別に固定したSHA-256を検証して`/usr/local/bin/gh`へ導入します。attestation検証を無効化する設定はありません。
 
-Webでは`/admin/updates/`から更新確認、方針変更、適用、operation確認、rollbackを行います。認証済みのAdmin CLIを使う場合も同じAPIと安全検査を使用します。これが通常の更新経路です。旧Updaterが新しいReleaseのデプロイ処理へ到達する前に失敗する場合だけ、後述のsudo手動更新を使います。
+Webでは`/admin/updates/`から更新確認、方針変更、適用、operation確認、rollbackを行います。認証済みのAdmin CLIを使う場合も同じAPIと安全検査を使用します。これが通常の更新経路です。v1.2.xのroot Updaterから初回移行する場合だけ、後述の一回限りの専用sudo transitionを使います。
 
 Update Managerは配布物を検証したroot所有の`verified` tree、依存導入とbuildだけを行う非rootの`build` tree、許可した成果物だけを戻したroot所有の`assembly` treeを分離します。rootが実行するデプロイスクリプトは`assembly`側の検証済みコピーで、非root build tree内のスクリプトは実行しません。Cloudflare公開処理などを設定済みdeployment userで行う場合も、controller所有treeを直接渡さず、rootが検査後に固定した一時`deployment-build`コピーを使用します。rollbackも同じ分離を使います。
 
@@ -358,73 +366,36 @@ admin_cli=/opt/latex-renderer/current/apps/admin-cli/dist/index.js
 /usr/local/bin/node "$admin_cli" update status
 /usr/local/bin/node "$admin_cli" update check
 /usr/local/bin/node "$admin_cli" update policy --mode notify --reason "Keep updates manual" --yes
-/usr/local/bin/node "$admin_cli" update apply 1.3.0 --reason "Apply verified stable release" --yes
+/usr/local/bin/node "$admin_cli" update apply 1.3.1 --reason "Apply verified stable release" --yes
 ```
 
-上の`1.3.0`は更新対象versionを明示する例です。利用可能と表示された実在versionだけを指定します。CLIは事前にAdmin API keyを設定し、通常ユーザーとして実行します。Cloudflare profileでAccess Service Authも設定した場合だけservice tokenを追加します。CLIへsudoを付けません。
+上の`1.3.1`は更新対象versionを明示する例です。利用可能と表示された実在versionだけを指定します。CLIは事前にAdmin API keyを設定し、通常ユーザーとして実行します。Cloudflare profileでAccess Service Authも設定した場合だけservice tokenを追加します。CLIへsudoを付けません。
 
 v1.2.0からの更新で、service smoke testと公開route更新が成功した後にOAuth consentの401を理由として失敗表示になった場合、v1.2.0のserviceはすでに稼働しています。同じv1.2.0 operationを繰り返さず、v1.2.2以降を新しい更新として適用してください。v1.2.1はこの最終確認を修正し、v1.2.2は公開Workerへログイン方式を切り替えるJavaScriptを収録します。どちらも新しいdatabase migrationは追加しません。
 
 更新前にはmaintenance mode、実行中jobのdrain、データベースbackupが必要です。データベースschemaを戻す必要がある場合は、アプリだけを強制的にロールバックせず、対応するbackupを復元します。
 
-### Web／CLIの更新がデプロイ前に失敗する場合
+### v1.2.xのroot Updaterから権限分離Updaterへ移行する場合
 
-旧Updaterは、新しいReleaseの修正コードが起動する前に、staging directory、実行時のworking directory、pnpmの起動で失敗することがあります。同じWeb operationを繰り返しても、新Releaseの修正は使われません。この場合はv1.1.0〜v1.1.3のUpdaterを経由せず、検証済みのRelease bundleを公式デプロイスクリプトで直接配置します。Web／APIにsudo権限を与える手順ではありません。
+v1.2.xまでのUpdate Managerはroot daemonです。v1.3.0以降は、長寿命controllerを`latex-renderer-update`ユーザーへ分離し、固定verbだけを受け取る短命root helperを使用します。旧Updaterから初回更新すると`Application Update Manager must use a separate non-root build tree`で停止する場合があります。同じWeb operationを繰り返しません。
 
-最初にこのページの「ダウンロードして検証」を通常のデプロイ用ユーザーで実行し、同じshellの`bundle_root`を使います。失敗したUpdaterのstagingやGit worktreeは再利用しません。bundleに記録されたpnpmをCorepackで用意し、固定lockfileから依存関係を導入します。
+この移行だけは、先にこのページの「ダウンロードして検証」を通常ユーザーで実行し、展開した対象Releaseから次の専用コマンドを一度実行します。`VERSION`は`bundle_root`のReleaseと完全一致させます。通常のデプロイスクリプトをuser所有build treeからsudo実行する旧手順は使用しません。
 
 ```bash
-package_manager=$(jq -r .packageManager "$bundle_root/package.json")
-case "$package_manager" in
-  pnpm@*) ;;
-  *) echo 'Release does not declare a supported pnpm version' >&2; exit 1 ;;
-esac
-pnpm_version=${package_manager#pnpm@}
-pnpm_home="$HOME/.local/share/pnpm/bin"
-install -d -m 0755 "$pnpm_home"
+VERSION=1.3.1
 cd "$bundle_root"
-/usr/local/bin/corepack install --global "$package_manager"
-/usr/local/bin/corepack enable --install-directory "$pnpm_home"
-pnpm="$pnpm_home/pnpm"
-[ "$("$pnpm" --version)" = "$pnpm_version" ]
-"$pnpm" --dir "$bundle_root" install --frozen-lockfile
-release_id=$(jq -r '"v\(.version)-\(.commit[0:12])"' \
-  "$bundle_root/.latex-renderer-release.json")
+sudo sh deploy/scripts/bootstrap-update-manager-transition.sh "$VERSION"
 ```
 
-実行中のTeX変更とアプリ更新がないこと、jobのdrainとbackupが完了したことを確認します。失敗した旧Updaterが残っている場合はUpdate Managerを止め、lockの保持者を確認します。
+専用コマンドはroot側で同じImmutable Releaseを再ダウンロードし、GitHub APIのdigest、固定tag／commit、匿名取得したSigstore bundle、archive上限、埋め込みmetadataを再検証します。その後、root所有の`verified` tree、非rootの`bootstrap-build` tree、許可した成果物だけを含むroot所有の`assembly` treeを作ります。旧managerを止めるのはbuildと検証が終わり、共有mutation lockを取得した後だけです。失敗時は旧managerを再開し、成功時は`User=latex-renderer-update`になったことまで確認します。Web／APIへsudo権限やGitHub tokenを渡しません。
+
+成功後は次だけを確認します。以後の更新はWebまたはAdmin CLIを使用し、このtransitionコマンドは再実行しません。
 
 ```bash
-sudo systemctl stop latex-renderer-update-manager.service
-sudo fuser --verbose /run/latex-renderer/mutation.lock || true
-```
-
-表示されたprocessが、完了済みの更新operationが残した孤立lock helperであると確認できた場合だけ、次を実行します。TeX変更またはアプリ更新が実行中なら、processを終了せず完了を待ちます。lockファイル自体は削除しません。
-
-```bash
-sudo fuser --kill --signal TERM /run/latex-renderer/mutation.lock
-```
-
-固定Release IDを表示して確認し、bundleに含まれる公式デプロイスクリプトをsudoで一度だけ実行します。スクリプトはImage Managerのquiesce、immutable release directoryへの配置、systemd service、Cloudflare Worker／公開Web、health checkとsmoke testを同じ通常デプロイ経路で処理します。
-
-```bash
-printf 'Deploying %s\n' "$release_id"
-sudo sh "$bundle_root/deploy/scripts/deploy-production-release.sh" \
-  "$release_id"
-```
-
-デプロイに成功したら、現在のReleaseと必須serviceを確認します。表示するのは公開済みのbundle metadataとservice stateだけです。
-
-```bash
-active_release=$(readlink -f /opt/latex-renderer/current)
-case "$active_release" in
-  /opt/latex-renderer/releases/*) ;;
-  *) echo 'current release is outside the immutable release root' >&2; exit 1 ;;
-esac
-sudo jq -r '.version + " " + .commit' \
-  "$active_release/.latex-renderer-release.json"
+readlink -f /opt/latex-renderer/current
+systemctl show latex-renderer-update-manager.service \
+  --property=User --property=ActiveState --property=SubState
 systemctl is-active \
-  latex-renderer-update-manager.service \
   latex-renderer-image-manager.service \
   latex-renderer-api.service \
   latex-renderer-admin-api.service \
@@ -432,7 +403,7 @@ systemctl is-active \
   latex-renderer-worker.service
 ```
 
-途中で失敗したら同じコマンドをそのまま再実行せず、最初のエラー、`/opt/latex-renderer/current`の指すRelease、停止中serviceを確認します。設定を復旧できるように、host固有の設定・credential・データベースはRelease外に保持し、bundle、Git、Issue、未編集のlogへコピーしません。
+途中で失敗したら同じコマンドをそのまま再実行せず、最初のエラー、`/opt/latex-renderer/current`の指すRelease、停止中serviceを確認します。host固有の設定・credential・データベースはRelease外に保持し、bundle、Git、Issue、未編集のlogへコピーしません。
 
 ### mutation lockが使用中と表示される場合
 
