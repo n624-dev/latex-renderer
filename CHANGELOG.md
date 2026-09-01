@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 1.3.2 - 2026-09-01
+
+- Create an operation-private Corepack `pnpm` shim for both the one-time v1.2.x transition and normal application updates, so nested workspace builds keep the release-pinned package manager without relying on a user or global pnpm installation.
+- Allow the transition helper to use a sufficiently recent, sealed, root-owned GitHub CLI from the fixed `/usr/local/bin/gh` or `/usr/bin/gh` allowlist, covering legacy hosts before the v1.3 host installer provisions `/usr/local/bin/gh`.
+- Keep failed pre-cutover builds fail-safe: the active v1.2.x release, services, and mutation state remain unchanged, and the operation-private build tree is removed.
+
 ## 1.3.1 - 2026-09-01
 
 - Add a one-time, fail-closed transition from the legacy v1.2.x root Update Manager to the v1.3 privilege-separated controller and short-lived helper. The transition re-downloads and re-verifies the immutable target as root, builds in a separate non-root tree, copies only allowlisted outputs into a sealed assembly, holds the shared mutation lock during cutover, and verifies the new service identity.

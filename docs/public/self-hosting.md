@@ -10,9 +10,9 @@ since: "v1.2.0"
 
 ## 現在の提供状況
 
-このページは[`v1.3.1`](https://github.com/n624-dev/latex-renderer/releases/tag/v1.3.1)のサーバー用bundleを対象にします。Cloudflare構成に加えて、通常のTLSリバースプロキシとOIDC／ローカルパスワード認証を選択できます。このReleaseは公開後にタグや配布ファイルを差し替えできない設定で固定され、次を含みます。
+このページは[`v1.3.2`](https://github.com/n624-dev/latex-renderer/releases/tag/v1.3.2)のサーバー用bundleを対象にします。Cloudflare構成に加えて、通常のTLSリバースプロキシとOIDC／ローカルパスワード認証を選択できます。このReleaseは公開後にタグや配布ファイルを差し替えできない設定で固定され、次を含みます。
 
-- `latex-renderer-server-1.3.1.tar.gz`
+- `latex-renderer-server-1.3.2.tar.gz`
 - クライアントZIPとClaude Desktop用MCPB
 - 3つの配布ファイルを検証する`SHA256SUMS`
 - commit、バージョン、Renderer fingerprint、Node.js／pnpm要件を記録したbundle内metadata
@@ -89,12 +89,12 @@ since: "v1.2.0"
 
 公開リポジトリの`*.example`ファイルは項目確認のための雛形です。設定済みファイルを雛形へ上書きしてcommitする運用はしません。
 
-## v1.3.1をダウンロードして検証
+## v1.3.2をダウンロードして検証
 
 次のコマンドは、固定されたReleaseであることをGitHub APIで確認し、APIが返すdigestとダウンロードしたbundleを照合します。通常の非rootユーザーで実行します。
 
 ```bash
-version=1.3.1
+version=1.3.2
 repository=n624-dev/latex-renderer
 asset="latex-renderer-server-$version.tar.gz"
 work_dir=$(mktemp -d)
@@ -366,10 +366,10 @@ admin_cli=/opt/latex-renderer/current/apps/admin-cli/dist/index.js
 /usr/local/bin/node "$admin_cli" update status
 /usr/local/bin/node "$admin_cli" update check
 /usr/local/bin/node "$admin_cli" update policy --mode notify --reason "Keep updates manual" --yes
-/usr/local/bin/node "$admin_cli" update apply 1.3.1 --reason "Apply verified stable release" --yes
+/usr/local/bin/node "$admin_cli" update apply 1.3.2 --reason "Apply verified stable release" --yes
 ```
 
-上の`1.3.1`は更新対象versionを明示する例です。利用可能と表示された実在versionだけを指定します。CLIは事前にAdmin API keyを設定し、通常ユーザーとして実行します。Cloudflare profileでAccess Service Authも設定した場合だけservice tokenを追加します。CLIへsudoを付けません。
+上の`1.3.2`は更新対象versionを明示する例です。利用可能と表示された実在versionだけを指定します。CLIは事前にAdmin API keyを設定し、通常ユーザーとして実行します。Cloudflare profileでAccess Service Authも設定した場合だけservice tokenを追加します。CLIへsudoを付けません。
 
 v1.2.0からの更新で、service smoke testと公開route更新が成功した後にOAuth consentの401を理由として失敗表示になった場合、v1.2.0のserviceはすでに稼働しています。同じv1.2.0 operationを繰り返さず、v1.2.2以降を新しい更新として適用してください。v1.2.1はこの最終確認を修正し、v1.2.2は公開Workerへログイン方式を切り替えるJavaScriptを収録します。どちらも新しいdatabase migrationは追加しません。
 
@@ -382,12 +382,12 @@ v1.2.xまでのUpdate Managerはroot daemonです。v1.3.0以降は、長寿命c
 この移行だけは、先にこのページの「ダウンロードして検証」を通常ユーザーで実行し、展開した対象Releaseから次の専用コマンドを一度実行します。`VERSION`は`bundle_root`のReleaseと完全一致させます。通常のデプロイスクリプトをuser所有build treeからsudo実行する旧手順は使用しません。
 
 ```bash
-VERSION=1.3.1
+VERSION=1.3.2
 cd "$bundle_root"
 sudo sh deploy/scripts/bootstrap-update-manager-transition.sh "$VERSION"
 ```
 
-専用コマンドはroot側で同じImmutable Releaseを再ダウンロードし、GitHub APIのdigest、固定tag／commit、匿名取得したSigstore bundle、archive上限、埋め込みmetadataを再検証します。その後、root所有の`verified` tree、非rootの`bootstrap-build` tree、許可した成果物だけを含むroot所有の`assembly` treeを作ります。旧managerを止めるのはbuildと検証が終わり、共有mutation lockを取得した後だけです。失敗時は旧managerを再開し、成功時は`User=latex-renderer-update`になったことまで確認します。Web／APIへsudo権限やGitHub tokenを渡しません。
+専用コマンドはroot側で同じImmutable Releaseを再ダウンロードし、GitHub APIのdigest、固定tag／commit、匿名取得したSigstore bundle、archive上限、埋め込みmetadataを再検証します。GitHub CLIはroot所有かつgroup／other書込み不可の`/usr/local/bin/gh`または`/usr/bin/gh`だけを許可します。その後、root所有の`verified` tree、非rootの`bootstrap-build` tree、許可した成果物だけを含むroot所有の`assembly` treeを作ります。pnpmはoperation専用tree内のCorepack shimから固定versionだけを使用し、user／global環境を変更しません。旧managerを止めるのはbuildと検証が終わり、共有mutation lockを取得した後だけです。失敗時は旧managerを再開し、成功時は`User=latex-renderer-update`になったことまで確認します。Web／APIへsudo権限やGitHub tokenを渡しません。
 
 成功後は次だけを確認します。以後の更新はWebまたはAdmin CLIを使用し、このtransitionコマンドは再実行しません。
 

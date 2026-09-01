@@ -61,7 +61,13 @@ describe("application updater privilege boundary", () => {
     );
     expect(helper).toContain("GH_CONFIG_DIR");
     expect(helper).toContain('GH_PROMPT_DISABLED: "1"');
-    expect(helper).toContain('const githubCli = "/usr/local/bin/gh"');
+    expect(helper).toContain(
+      'const githubCliCandidates = ["/usr/local/bin/gh", "/usr/bin/gh"]',
+    );
+    expect(helper).toContain("info.uid !== 0");
+    expect(helper).toContain("(info.mode & 0o022) !== 0");
+    expect(helper).toContain('compareVersions(version, "2.98.0") < 0');
+    expect(helper).toContain('["attestation", "verify", "--help"]');
     expect(helper).toContain('"--source-ref"');
     expect(helper).toContain("`refs/tags/${release.tag}`");
     expect(helper).not.toContain("request.command");
