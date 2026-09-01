@@ -28,11 +28,11 @@ jobs:
         with:
           persist-credentials: false
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@5ba2889ada762081db2c4f32a729827dce632c7b # v3
+        uses: github/codeql-action/init@6f5948dfacef28e207b48d0905cf90c03365536d # v3
         with:
           languages: javascript-typescript
       - name: Analyze with CodeQL
-        uses: github/codeql-action/analyze@5ba2889ada762081db2c4f32a729827dce632c7b # v3
+        uses: github/codeql-action/analyze@6f5948dfacef28e207b48d0905cf90c03365536d # v3
         with:
           category: "/language:javascript-typescript"
   secret-scan:
@@ -44,7 +44,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Scan repository history for secrets
-        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1 # v3
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GITLEAKS_CONFIG: .gitleaks.toml
@@ -108,7 +108,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Generate CycloneDX source SBOM
-        uses: anchore/sbom-action@006b7ce8314066bdf1765b4500370d40fa6917a3 # v0.24.2
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         with:
           path: .
           format: cyclonedx-json

@@ -1,9 +1,24 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const read = (path: string): string => readFileSync(path, "utf8");
 
 describe("public supply-chain controls", () => {
+  it("pins every external GitHub Action to a full commit SHA", () => {
+    for (const name of readdirSync(".github/workflows")) {
+      if (!name.endsWith(".yml") && !name.endsWith(".yaml")) continue;
+      const workflow = read(`.github/workflows/${name}`);
+      for (const match of workflow.matchAll(
+        /^\s*uses:\s*([^\s@]+)@([^\s#]+).*$/gm,
+      )) {
+        const action = match[1],
+          reference = match[2];
+        if (action?.startsWith("./")) continue;
+        expect(reference, `${name}: ${action}`).toMatch(/^[a-f0-9]{40}$/);
+      }
+    }
+  });
+
   it("keeps dependency, action, and container update streams enabled", () => {
     const dependabot = read(".github/dependabot.yml");
     expect(dependabot).toContain("package-ecosystem: npm");
@@ -62,10 +77,16 @@ describe("public supply-chain controls", () => {
     expect(updater).toContain('const githubCli = "/usr/local/bin/gh"');
     expect(updater).toContain('"attestation",');
     expect(updater).toContain('"--predicate-type",');
-    expect(release).toContain('[[ "$GITHUB_REF" == "refs/tags/$RELEASE_TAG" ]]');
+    expect(release).toContain(
+      '[[ "$GITHUB_REF" == "refs/tags/$RELEASE_TAG" ]]',
+    );
     const installer = read("deploy/scripts/install-github-cli.sh");
     expect(installer).toContain("required_version=2.98.0");
-    expect(installer).toContain("3b8ac6b30336802fc1a858d7c084e11cdf24ac1a761ca90b68022d7d729208de");
-    expect(installer).toContain("cf689084f3a3618f7eae4a2420d335d74626d65f5e594b9828d125d69f800d86");
+    expect(installer).toContain(
+      "3b8ac6b30336802fc1a858d7c084e11cdf24ac1a761ca90b68022d7d729208de",
+    );
+    expect(installer).toContain(
+      "cf689084f3a3618f7eae4a2420d335d74626d65f5e594b9828d125d69f800d86",
+    );
   });
 });
