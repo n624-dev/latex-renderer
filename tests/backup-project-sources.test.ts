@@ -13,12 +13,16 @@ import { afterEach, describe, expect, it } from "vitest";
 import { RendererDatabase } from "@latex-renderer/database";
 
 const roots: string[] = [];
+const ageAvailable = ["age", "age-keygen"].every(
+  (command) =>
+    spawnSync(command, ["--version"], { stdio: "ignore" }).status === 0,
+);
 afterEach(() => {
   for (const root of roots.splice(0))
     rmSync(root, { recursive: true, force: true });
 });
 
-describe("Project Source backup boundary", () => {
+describe.runIf(ageAvailable)("Project Source backup boundary", () => {
   it("backs up and restore-tests every Source referenced by an active Project revision", () => {
     const fixture = backupFixture();
     const backup = runBackup(fixture);

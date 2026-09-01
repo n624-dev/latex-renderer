@@ -31,6 +31,10 @@ jobs:
           GITLEAKS_ENABLE_COMMENTS: "false"
       - name: Enable Corepack
         run: corepack enable
+      - name: Install backup integration-test dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes age
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
       - name: Typecheck, test, and lint
