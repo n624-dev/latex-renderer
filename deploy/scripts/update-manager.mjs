@@ -53,15 +53,42 @@ const releaseRoot =
 const currentLink =
   process.env.UPDATE_CURRENT_LINK ?? "/opt/latex-renderer/current";
 const privilegedHelper = "/usr/local/libexec/latex-renderer-update-helper";
-const maxBundleBytes = boundedIntegerEnvironment(process.env, "UPDATE_MAX_BUNDLE_BYTES", 1024 * 1024 * 1024, 1024, 2 * 1024 * 1024 * 1024);
-const maxArchiveEntries = boundedIntegerEnvironment(process.env, "UPDATE_MAX_ARCHIVE_ENTRIES", 50_000, 1, 100_000);
-const maxExpandedBytes = boundedIntegerEnvironment(process.env, "UPDATE_MAX_EXPANDED_BYTES", 2 * 1024 * 1024 * 1024, 1024 * 1024, 8 * 1024 * 1024 * 1024);
-const maxExpandedFileBytes = positiveBytesEnvironment(process.env, "UPDATE_MAX_EXPANDED_FILE_BYTES", 256 * 1024 * 1024, maxExpandedBytes);
-const maxOperationLogBytes = boundedIntegerEnvironment(process.env, "UPDATE_MAX_OPERATION_LOG_BYTES", 4 * 1024 * 1024, 64 * 1024, 64 * 1024 * 1024);
+const maxBundleBytes = boundedIntegerEnvironment(
+  process.env,
+  "UPDATE_MAX_BUNDLE_BYTES",
+  1024 * 1024 * 1024,
+  1024,
+  2 * 1024 * 1024 * 1024,
+);
+const maxArchiveEntries = boundedIntegerEnvironment(
+  process.env,
+  "UPDATE_MAX_ARCHIVE_ENTRIES",
+  50_000,
+  1,
+  100_000,
+);
+const maxExpandedBytes = boundedIntegerEnvironment(
+  process.env,
+  "UPDATE_MAX_EXPANDED_BYTES",
+  2 * 1024 * 1024 * 1024,
+  1024 * 1024,
+  8 * 1024 * 1024 * 1024,
+);
+const maxExpandedFileBytes = positiveBytesEnvironment(
+  process.env,
+  "UPDATE_MAX_EXPANDED_FILE_BYTES",
+  256 * 1024 * 1024,
+  maxExpandedBytes,
+);
+const maxOperationLogBytes = boundedIntegerEnvironment(
+  process.env,
+  "UPDATE_MAX_OPERATION_LOG_BYTES",
+  4 * 1024 * 1024,
+  64 * 1024,
+  64 * 1024 * 1024,
+);
 // Release SHA-256 values protect the transport, while the keyless Sigstore
 // attestation binds the artifact to this repository's protected workflow.
-// Keep verification enabled by default; an explicit false is an operator
-// decision for legacy hosts that have not installed a recent GitHub CLI.
 const githubCli = "/usr/local/bin/gh";
 if (
   !socketPath.startsWith("/run/latex-renderer/") ||
@@ -93,7 +120,10 @@ await mkdir(stateRoot, { recursive: true, mode: 0o750 });
 await mkdir(join(stateRoot, "operations"), { recursive: true, mode: 0o750 });
 await mkdir(stagingRoot, { recursive: true, mode: 0o700 });
 const stagingRootInfo = await lstat(stagingRoot);
-if (!stagingRootInfo.isDirectory() || stagingRootInfo.uid !== process.getuid()) {
+if (
+  !stagingRootInfo.isDirectory() ||
+  stagingRootInfo.uid !== process.getuid()
+) {
   throw new Error("Update staging root must be owned by the controller");
 }
 await chmod(stagingRoot, 0o700);
@@ -276,11 +306,9 @@ async function runPrivileged(operation, request) {
     operation,
     "$ sudo -n -- /usr/local/libexec/latex-renderer-update-helper\n",
   );
-  const child = spawn(
-    "/usr/bin/sudo",
-    ["-n", "--", privilegedHelper],
-    { stdio: ["pipe", "pipe", "pipe"] },
-  );
+  const child = spawn("/usr/bin/sudo", ["-n", "--", privilegedHelper], {
+    stdio: ["pipe", "pipe", "pipe"],
+  });
   child.stdin.end(`${JSON.stringify(request)}\n`);
   let stderr = "";
   const consume = async (stream, isError) => {
@@ -453,7 +481,7 @@ async function fetchRelease(
   const response = await globalThis.fetch(endpoint, {
     headers: {
       Accept: "application/vnd.github+json",
-      "X-GitHub-Api-Version": "2026-03-10",
+      "X-GitHub-Api-Version": "2022-11-28",
       "User-Agent": "latex-renderer-update-manager",
     },
     signal: globalThis.AbortSignal.timeout(30_000),
@@ -513,7 +541,7 @@ async function fetchRelease(
 async function resolveTagCommit(tag) {
   const headers = {
     Accept: "application/vnd.github+json",
-    "X-GitHub-Api-Version": "2026-03-10",
+    "X-GitHub-Api-Version": "2022-11-28",
     "User-Agent": "latex-renderer-update-manager",
   };
   let response = await globalThis.fetch(
@@ -559,6 +587,46 @@ async function checkRelease(
   state.lastError = null;
   await persistState();
   return release;
+}
+
+async function publicAttestationBundle(release, stage) {
+  const response = await globalThis.fetch(
+    `https://api.github.com/repos/${repository}/attestations/${encodeURIComponent(release.digest)}`,
+    {
+      headers: {
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "latex-renderer-update-manager",
+      },
+      signal: globalThis.AbortSignal.timeout(30_000),
+    },
+  );
+  if (!response.ok)
+    throw new Error(
+      `GitHub attestation lookup failed: HTTP ${response.status}`,
+    );
+  const value = await response.json();
+  const bundles = Array.isArray(value?.attestations)
+    ? value.attestations.map((entry) => entry?.bundle).filter(Boolean)
+    : [];
+  if (bundles.length < 1 || bundles.length > 30)
+    throw new Error(
+      "GitHub returned an invalid number of release attestations",
+    );
+  for (const bundle of bundles) {
+    if (typeof bundle !== "object" || bundle === null || Array.isArray(bundle))
+      throw new Error("GitHub returned an invalid release attestation bundle");
+  }
+  const contents = `${bundles.map((bundle) => JSON.stringify(bundle)).join("\n")}\n`;
+  if (Buffer.byteLength(contents) > 8 * 1024 * 1024)
+    throw new Error("GitHub release attestations exceed the size limit");
+  const path = join(stage, "release-attestations.jsonl");
+  await writeFile(path, contents, {
+    encoding: "utf8",
+    mode: 0o600,
+    flag: "wx",
+  });
+  return path;
 }
 
 async function downloadBundle(operation, release, path) {
@@ -607,28 +675,36 @@ async function downloadBundle(operation, release, path) {
   {
     await appendLog(operation, "Verifying the Sigstore release attestation.\n");
     const ghRoot = dirname(path);
-    await runLogged(operation, githubCli, [
-      "attestation",
-      "verify",
-      path,
-      "--repo",
-      repository,
-      "--signer-workflow",
-      `${repository}/.github/workflows/server-release.yml`,
-      "--source-ref",
-      `refs/tags/${release.tag}`,
-      "--predicate-type",
-      "https://slsa.dev/provenance/v1",
-      "--deny-self-hosted-runners",
-    ], {
-      env: {
-        PATH: "/usr/local/bin:/usr/bin:/bin",
-        HOME: join(ghRoot, "gh-home"),
-        GH_CONFIG_DIR: join(ghRoot, "gh-config"),
-        GH_PROMPT_DISABLED: "1",
-        XDG_CACHE_HOME: join(ghRoot, "gh-cache"),
+    const attestationBundle = await publicAttestationBundle(release, ghRoot);
+    await runLogged(
+      operation,
+      githubCli,
+      [
+        "attestation",
+        "verify",
+        path,
+        "--bundle",
+        attestationBundle,
+        "--repo",
+        repository,
+        "--signer-workflow",
+        `${repository}/.github/workflows/server-release.yml`,
+        "--source-ref",
+        `refs/tags/${release.tag}`,
+        "--predicate-type",
+        "https://slsa.dev/provenance/v1",
+        "--deny-self-hosted-runners",
+      ],
+      {
+        env: {
+          PATH: "/usr/local/bin:/usr/bin:/bin",
+          HOME: join(ghRoot, "gh-home"),
+          GH_CONFIG_DIR: join(ghRoot, "gh-config"),
+          GH_PROMPT_DISABLED: "1",
+          XDG_CACHE_HOME: join(ghRoot, "gh-cache"),
+        },
       },
-    });
+    );
   }
   await appendLog(operation, `Verified ${release.name}: ${actual}\n`);
 }
@@ -756,32 +832,35 @@ async function buildAndAssemble(
     pnpmStore,
   ]);
   const pnpmVersion = (
-    await runCapture(
-      corepack,
-      [packageManager, "--version"],
-      { env: deployEnvironment },
-    )
+    await runCapture(corepack, [packageManager, "--version"], {
+      env: deployEnvironment,
+    })
   ).trim();
   if (pnpmVersion !== expectedPnpmVersion)
     throw new Error(
       `Corepack did not activate required pnpm version ${expectedPnpmVersion}`,
     );
-  await runLogged(operation, corepack, [
-    packageManager,
-    "--dir",
-    buildSource,
-    "install",
-    "--frozen-lockfile",
-    "--store-dir",
-    pnpmStore,
-  ], { env: deployEnvironment });
-  for (const script of ["build:production-services", "build:client"])
-    await runLogged(operation, corepack, [
+  await runLogged(
+    operation,
+    corepack,
+    [
       packageManager,
       "--dir",
       buildSource,
-      script,
-    ], { env: deployEnvironment });
+      "install",
+      "--frozen-lockfile",
+      "--store-dir",
+      pnpmStore,
+    ],
+    { env: deployEnvironment },
+  );
+  for (const script of ["build:production-services", "build:client"])
+    await runLogged(
+      operation,
+      corepack,
+      [packageManager, "--dir", buildSource, script],
+      { env: deployEnvironment },
+    );
 
   const assembly = join(stage, "assembly");
   await mkdir(assembly, { mode: 0o700 });

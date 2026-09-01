@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 1.3.1 - 2026-09-01
+
+- Add a one-time, fail-closed transition from the legacy v1.2.x root Update Manager to the v1.3 privilege-separated controller and short-lived helper. The transition re-downloads and re-verifies the immutable target as root, builds in a separate non-root tree, copies only allowlisted outputs into a sealed assembly, holds the shared mutation lock during cutover, and verifies the new service identity.
+- Fetch public GitHub attestation bundles anonymously and pass them to offline `gh attestation verify --bundle` checks in both the controller and root helper, so verified application updates do not require a host GitHub login or token.
+- Replace the legacy manual-update documentation that built and root-executed one writable tree with the dedicated transition command and add regression coverage for the upgrade boundary.
+
 ## 1.3.0 - 2026-09-01
 
 - Separate application updates into a non-root controller and a short-lived, fixed-command root helper. Release installation now re-verifies immutable GitHub metadata, SHA-256 digests, Sigstore provenance, archive limits, sealed source files, and an allowlisted build-output assembly before privileged deployment.

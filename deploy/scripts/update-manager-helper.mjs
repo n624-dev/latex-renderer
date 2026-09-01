@@ -19,9 +19,11 @@ import {
   lstat,
   mkdir,
   mkdtemp,
+  open,
   readFile,
   readlink,
   rm,
+  writeFile,
 } from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import { once } from "node:events";
@@ -33,6 +35,7 @@ import {
 } from "./release-assembly.mjs";
 import { validateReleaseArchive } from "./release-archive.mjs";
 import { rendererRuntimeFingerprint } from "./runtime-image-identity.mjs";
+import { acquireMutationLock } from "./mutation-lock.mjs";
 
 if (process.getuid?.() !== 0) throw new Error("Update helper must run as root");
 
@@ -77,6 +80,15 @@ const maxOutputBytes = positiveInteger(
   64 * 1024 * 1024,
 );
 const githubCli = "/usr/local/bin/gh";
+const helperSource = fileURLToPath(import.meta.url);
+const helperRoot = resolve(dirname(helperSource), "../..");
+const bootstrapControlFiles = [
+  "deploy/scripts/update-manager-helper.mjs",
+  "deploy/scripts/release-assembly.mjs",
+  "deploy/scripts/release-archive.mjs",
+  "deploy/scripts/runtime-image-identity.mjs",
+  "deploy/scripts/mutation-lock.mjs",
+];
 
 function positiveInteger(value, fallback, minimum, maximum) {
   const parsed = value == null ? fallback : Number(value);
@@ -97,11 +109,18 @@ function validStableVersion(value) {
   return value;
 }
 
+function compareVersions(left, right) {
+  const leftParts = validStableVersion(left).split(".").map(Number);
+  const rightParts = validStableVersion(right).split(".").map(Number);
+  for (let index = 0; index < 3; index += 1) {
+    if (leftParts[index] !== rightParts[index])
+      return leftParts[index] < rightParts[index] ? -1 : 1;
+  }
+  return 0;
+}
+
 function validReleaseId(value) {
-  if (
-    typeof value !== "string" ||
-    !/^v\d+\.\d+\.\d+-[a-f0-9]{12}$/.test(value)
-  )
+  if (typeof value !== "string" || !/^v\d+\.\d+\.\d+-[a-f0-9]{12}$/.test(value))
     throw new Error("Release identifier is invalid");
   return value;
 }
@@ -136,7 +155,8 @@ async function writeOutput(value) {
     outputLimitReached = true;
     return;
   }
-  const chunk = bytes.length <= remaining ? bytes : bytes.subarray(0, remaining);
+  const chunk =
+    bytes.length <= remaining ? bytes : bytes.subarray(0, remaining);
   outputBytes += chunk.length;
   if (!process.stdout.write(chunk)) await once(process.stdout, "drain");
   if (chunk.length < bytes.length) {
@@ -177,7 +197,9 @@ function runCapture(command, args, options = {}) {
     child.once("close", (code) => {
       if (captureError) return reject(captureError);
       if (code === 0) return resolvePromise(stdout);
-      return reject(new Error(`${command} exited ${code}: ${redact(stderr.trim())}`));
+      return reject(
+        new Error(`${command} exited ${code}: ${redact(stderr.trim())}`),
+      );
     });
   });
 }
@@ -227,19 +249,22 @@ async function githubJson(url) {
   const response = await globalThis.fetch(url, {
     headers: {
       Accept: "application/vnd.github+json",
-      "X-GitHub-Api-Version": "2026-03-10",
+      "X-GitHub-Api-Version": "2022-11-28",
       "User-Agent": "latex-renderer-update-helper",
     },
     signal: globalThis.AbortSignal.timeout(30_000),
   });
-  if (!response.ok) throw new Error(`GitHub request failed: HTTP ${response.status}`);
+  if (!response.ok)
+    throw new Error(`GitHub request failed: HTTP ${response.status}`);
   return response.json();
 }
 
 async function resolveTagCommit(tag) {
-  let object = (await githubJson(
-    `https://api.github.com/repos/${repository}/git/ref/tags/${encodeURIComponent(tag)}`,
-  ))?.object;
+  let object = (
+    await githubJson(
+      `https://api.github.com/repos/${repository}/git/ref/tags/${encodeURIComponent(tag)}`,
+    )
+  )?.object;
   for (let depth = 0; object?.type === "tag" && depth < 4; depth += 1) {
     if (!/^[a-f0-9]{40}$/.test(object.sha ?? ""))
       throw new Error("GitHub annotated tag object is invalid");
@@ -298,17 +323,90 @@ async function hashFile(path, expectedSize) {
   let bytes = 0;
   for await (const chunk of createReadStream(path)) {
     bytes += chunk.length;
-    if (bytes > maxBundleBytes) throw new Error("Release bundle exceeds the size limit");
+    if (bytes > maxBundleBytes)
+      throw new Error("Release bundle exceeds the size limit");
     hash.update(chunk);
   }
   return `sha256:${hash.digest("hex")}`;
+}
+
+async function fileDigest(path) {
+  const hash = createHash("sha256");
+  for await (const chunk of createReadStream(path)) hash.update(chunk);
+  return hash.digest("hex");
+}
+
+async function downloadReleaseBundle(release, destination) {
+  const response = await globalThis.fetch(release.url, {
+    headers: { "User-Agent": "latex-renderer-update-bootstrap" },
+    redirect: "follow",
+    signal: globalThis.AbortSignal.timeout(120_000),
+  });
+  if (!response.ok || !response.body)
+    throw new Error(`GitHub release download failed: HTTP ${response.status}`);
+  const handle = await open(destination, "wx", 0o600);
+  let bytes = 0;
+  try {
+    for await (const chunk of response.body) {
+      bytes += chunk.length;
+      if (bytes > release.size || bytes > maxBundleBytes)
+        throw new Error("Release bundle exceeds its immutable asset size");
+      let offset = 0;
+      while (offset < chunk.length) {
+        const { bytesWritten } = await handle.write(
+          chunk,
+          offset,
+          chunk.length - offset,
+        );
+        if (bytesWritten < 1)
+          throw new Error("Release bundle download stopped making progress");
+        offset += bytesWritten;
+      }
+    }
+  } finally {
+    await handle.close();
+  }
+  if (bytes !== release.size)
+    throw new Error("Downloaded release bundle size does not match GitHub");
+  if ((await hashFile(destination, release.size)) !== release.digest)
+    throw new Error("Downloaded release bundle digest does not match GitHub");
+}
+
+async function publicAttestationBundle(release, rootStage) {
+  const response = await githubJson(
+    `https://api.github.com/repos/${repository}/attestations/${encodeURIComponent(release.digest)}`,
+  );
+  const bundles = Array.isArray(response?.attestations)
+    ? response.attestations.map((entry) => entry?.bundle).filter(Boolean)
+    : [];
+  if (bundles.length < 1 || bundles.length > 30)
+    throw new Error(
+      "GitHub returned an invalid number of release attestations",
+    );
+  for (const bundle of bundles) {
+    if (typeof bundle !== "object" || bundle === null || Array.isArray(bundle))
+      throw new Error("GitHub returned an invalid release attestation bundle");
+  }
+  const path = join(rootStage, "release-attestations.jsonl");
+  const contents = `${bundles.map((bundle) => JSON.stringify(bundle)).join("\n")}\n`;
+  if (Buffer.byteLength(contents) > 8 * 1024 * 1024)
+    throw new Error("GitHub release attestations exceed the size limit");
+  await writeFile(path, contents, {
+    encoding: "utf8",
+    mode: 0o600,
+    flag: "wx",
+  });
+  return path;
 }
 
 async function assertNoSymlinks(root) {
   const symlinks = (
     await runCapture("find", [root, "-xdev", "-type", "l", "-print", "-quit"])
   ).trim();
-  if (symlinks) throw new Error(`Privileged release tree contains a symbolic link: ${symlinks}`);
+  if (symlinks)
+    throw new Error(
+      `Privileged release tree contains a symbolic link: ${symlinks}`,
+    );
 }
 
 async function verifyExtractedRelease(release, source) {
@@ -316,8 +414,12 @@ async function verifyExtractedRelease(release, source) {
   const manifest = JSON.parse(
     await readFile(join(source, ".latex-renderer-release.json"), "utf8"),
   );
-  const packageJson = JSON.parse(await readFile(join(source, "package.json"), "utf8"));
-  const fingerprint = await rendererRuntimeFingerprint(join(source, "renderer"));
+  const packageJson = JSON.parse(
+    await readFile(join(source, "package.json"), "utf8"),
+  );
+  const fingerprint = await rendererRuntimeFingerprint(
+    join(source, "renderer"),
+  );
   if (
     manifest?.version !== release.version ||
     manifest?.tag !== release.tag ||
@@ -328,7 +430,8 @@ async function verifyExtractedRelease(release, source) {
     typeof manifest?.minimumSourceVersion !== "string" ||
     !/^\d+\.\d+\.\d+$/.test(manifest.minimumSourceVersion) ||
     manifest?.requiredNodeMajor !== 24 ||
-    Number(process.versions.node.split(".")[0]) !== manifest.requiredNodeMajor ||
+    Number(process.versions.node.split(".")[0]) !==
+      manifest.requiredNodeMajor ||
     !/^pnpm@\d+\.\d+\.\d+$/.test(manifest?.packageManager ?? "") ||
     manifest?.packageManager !== packageJson?.packageManager ||
     manifest?.rendererRuntimeFingerprint !== fingerprint ||
@@ -341,24 +444,20 @@ async function verifyExtractedRelease(release, source) {
 
 function directChild(root, name) {
   const candidate = join(root, name);
-  if (resolve(candidate) !== `${root}/${name}`) throw new Error("Path escaped fixed root");
+  if (resolve(candidate) !== `${root}/${name}`)
+    throw new Error("Path escaped fixed root");
   return candidate;
 }
 
-async function prepareTrustedSource(request, rootStage) {
-  const release = await fetchRelease(request.version);
-  const stageName = validStageName(request.stage, release.version);
-  const controllerStage = directChild(controllerStagingRoot, stageName);
-  const bundle = directChild(controllerStage, release.name);
-  const bundleDigest = await hashFile(bundle, release.size);
-  if (bundleDigest !== release.digest)
-    throw new Error("Staged release bundle digest does not match GitHub");
-  const trustedBundle = join(rootStage, release.name);
-  await copyFile(bundle, trustedBundle);
-  await chmod(trustedBundle, 0o600);
-  if ((await hashFile(trustedBundle, release.size)) !== release.digest)
-    throw new Error("Root-owned release bundle digest does not match GitHub");
-  await writeOutput("Verifying the Sigstore release attestation in the root helper.\n");
+async function verifyAndExtractTrustedBundle(
+  release,
+  trustedBundle,
+  rootStage,
+) {
+  await writeOutput(
+    "Verifying the Sigstore release attestation in the root helper.\n",
+  );
+  const attestationBundle = await publicAttestationBundle(release, rootStage);
   for (const directory of ["gh-home", "gh-config", "gh-cache"])
     await mkdir(join(rootStage, directory), { mode: 0o700 });
   await runLogged(
@@ -367,6 +466,8 @@ async function prepareTrustedSource(request, rootStage) {
       "attestation",
       "verify",
       trustedBundle,
+      "--bundle",
+      attestationBundle,
       "--repo",
       repository,
       "--signer-workflow",
@@ -407,12 +508,32 @@ async function prepareTrustedSource(request, rootStage) {
   ]);
   const source = join(verified, topLevel);
   const manifest = await verifyExtractedRelease(release, source);
-  return { release, source, manifest, controllerStage };
+  return { release, source, manifest };
+}
+
+async function prepareTrustedSource(request, rootStage) {
+  const release = await fetchRelease(request.version);
+  const stageName = validStageName(request.stage, release.version);
+  const controllerStage = directChild(controllerStagingRoot, stageName);
+  const bundle = directChild(controllerStage, release.name);
+  const bundleDigest = await hashFile(bundle, release.size);
+  if (bundleDigest !== release.digest)
+    throw new Error("Staged release bundle digest does not match GitHub");
+  const trustedBundle = join(rootStage, release.name);
+  await copyFile(bundle, trustedBundle);
+  await chmod(trustedBundle, 0o600);
+  if ((await hashFile(trustedBundle, release.size)) !== release.digest)
+    throw new Error("Root-owned release bundle digest does not match GitHub");
+  return {
+    ...(await verifyAndExtractTrustedBundle(release, trustedBundle, rootStage)),
+    controllerStage,
+  };
 }
 
 async function ensureBuildSource(stage, version) {
   const stageInfo = await lstat(stage);
-  if (!stageInfo.isDirectory()) throw new Error("Update staging entry is not a directory");
+  if (!stageInfo.isDirectory())
+    throw new Error("Update staging entry is not a directory");
   const buildSource = directChild(stage, "build");
   const info = await lstat(buildSource);
   if (!info.isDirectory()) throw new Error("Build source is not a directory");
@@ -448,6 +569,88 @@ async function deploymentIdentity() {
   return { deployUser, uid, gid };
 }
 
+async function buildBootstrapRelease(
+  rootStage,
+  source,
+  packageManager,
+  identity,
+) {
+  const buildSource = join(rootStage, "bootstrap-build");
+  await mkdir(buildSource, { mode: 0o700 });
+  await runLogged("rsync", ["-a", `${source}/`, `${buildSource}/`]);
+  const toolingRoot = join(buildSource, ".update-tooling");
+  const toolingHome = join(toolingRoot, "home");
+  const corepackHome = join(toolingRoot, "corepack");
+  const pnpmStore = join(toolingRoot, "store");
+  for (const directory of [toolingHome, corepackHome, pnpmStore])
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+  await runLogged("chown", [
+    "-R",
+    `${identity.uid}:${identity.gid}`,
+    buildSource,
+  ]);
+  await runLogged("chown", [`0:${identity.gid}`, rootStage]);
+  await chmod(rootStage, 0o710);
+
+  const expectedPnpmVersion = packageManager.slice("pnpm@".length);
+  if (!/^\d+\.\d+\.\d+$/.test(expectedPnpmVersion))
+    throw new Error("Release package manager version is invalid");
+  const corepack = "/usr/local/bin/corepack";
+  const deployEnvironment = {
+    PATH: "/usr/local/bin:/usr/bin:/bin",
+    HOME: toolingHome,
+    USER: identity.deployUser,
+    LOGNAME: identity.deployUser,
+    COREPACK_HOME: corepackHome,
+    XDG_CACHE_HOME: join(toolingRoot, "cache"),
+    XDG_DATA_HOME: join(toolingRoot, "data"),
+    NPM_CONFIG_CACHE: join(toolingRoot, "npm-cache"),
+  };
+  const userOptions = {
+    cwd: buildSource,
+    env: deployEnvironment,
+    uid: Number(identity.uid),
+    gid: Number(identity.gid),
+  };
+  const pnpmVersion = (
+    await runCapture(corepack, [packageManager, "--version"], userOptions)
+  ).trim();
+  if (pnpmVersion !== expectedPnpmVersion)
+    throw new Error(
+      `Corepack did not activate required pnpm version ${expectedPnpmVersion}`,
+    );
+  await runLogged(
+    corepack,
+    [
+      packageManager,
+      "--dir",
+      buildSource,
+      "install",
+      "--frozen-lockfile",
+      "--store-dir",
+      pnpmStore,
+    ],
+    userOptions,
+  );
+  for (const script of ["build:production-services", "build:client"])
+    await runLogged(
+      corepack,
+      [packageManager, "--dir", buildSource, script],
+      userOptions,
+    );
+
+  const assembly = join(rootStage, "assembly");
+  await mkdir(assembly, { mode: 0o700 });
+  await assembleBuildArtifacts({
+    verifiedSource: source,
+    buildSource,
+    assembly,
+    runCommand: (command, args) => runLogged(command, args),
+  });
+  await runLogged("chown", ["-R", "root:root", assembly]);
+  return assembly;
+}
+
 async function prepareDeploymentTrees(rootStage, assembly) {
   const identity = await deploymentIdentity();
   // The deploy script is executed from the sealed, root-owned assembly.  It
@@ -457,7 +660,11 @@ async function prepareDeploymentTrees(rootStage, assembly) {
   const deploymentBuild = join(rootStage, "deployment-build");
   await mkdir(deploymentBuild, { mode: 0o700 });
   await runLogged("rsync", ["-a", `${assembly}/`, `${deploymentBuild}/`]);
-  await runLogged("chown", ["-R", `${identity.uid}:${identity.gid}`, deploymentBuild]);
+  await runLogged("chown", [
+    "-R",
+    `${identity.uid}:${identity.gid}`,
+    deploymentBuild,
+  ]);
   await chmod(deploymentBuild, 0o700);
 
   await runLogged("chown", ["-R", `0:${identity.gid}`, assembly]);
@@ -467,18 +674,31 @@ async function prepareDeploymentTrees(rootStage, assembly) {
   return { ...identity, deploymentBuild };
 }
 
-async function deployFromAssembly(assembly, deployment, releaseId) {
+async function deployFromAssembly(
+  assembly,
+  deployment,
+  releaseId,
+  { ownsParentMutationLock = true } = {},
+) {
+  const environment = {
+    ...process.env,
+    SUDO_USER: deployment.deployUser,
+    LATEX_RENDERER_BUILD_ROOT: deployment.deploymentBuild,
+  };
+  delete environment.LATEX_RENDERER_PARENT_MUTATION_LOCK;
+  delete environment.LATEX_RENDERER_LEGACY_BOOTSTRAP;
+  if (ownsParentMutationLock)
+    environment.LATEX_RENDERER_PARENT_MUTATION_LOCK = "application-update";
+  else {
+    // The bootstrap runs outside either Manager and must let the deployment
+    // acquire/quiesce the Image Manager normally.
+    delete environment.UPDATE_MANAGER_STATE_ROOT;
+    delete environment.UPDATE_MANAGER_SOCKET;
+  }
   await runLogged(
     "sh",
     [join(assembly, "deploy/scripts/deploy-production-release.sh"), releaseId],
-    {
-      env: {
-        ...process.env,
-        SUDO_USER: deployment.deployUser,
-        LATEX_RENDERER_PARENT_MUTATION_LOCK: "application-update",
-        LATEX_RENDERER_BUILD_ROOT: deployment.deploymentBuild,
-      },
-    },
+    { env: environment },
   );
 }
 
@@ -512,16 +732,145 @@ async function apply(request) {
 async function installedRelease() {
   const current = await readlink(currentLink);
   const absolute = resolve(dirname(currentLink), current);
-  if (dirname(absolute) !== releaseRoot) throw new Error("Current release link escaped release root");
-  const packageJson = JSON.parse(await readFile(join(absolute, "package.json"), "utf8"));
-  return { path: absolute, releaseId: absolute.slice(releaseRoot.length + 1), version: packageJson.version };
+  if (dirname(absolute) !== releaseRoot)
+    throw new Error("Current release link escaped release root");
+  const packageJson = JSON.parse(
+    await readFile(join(absolute, "package.json"), "utf8"),
+  );
+  return {
+    path: absolute,
+    releaseId: absolute.slice(releaseRoot.length + 1),
+    version: packageJson.version,
+  };
+}
+
+async function bootstrapPrivilegeSeparatedUpdater(request) {
+  if (process.env.LATEX_RENDERER_LEGACY_BOOTSTRAP !== "1")
+    throw new Error(
+      "Legacy transition requires the explicit root bootstrap launcher",
+    );
+  const requestedVersion = validStableVersion(request.version);
+  const localPackage = JSON.parse(
+    await readFile(join(helperRoot, "package.json"), "utf8"),
+  );
+  if (localPackage?.version !== requestedVersion)
+    throw new Error(
+      "Bootstrap helper must be run from the exact requested release source",
+    );
+  const unitUser = (
+    await runCapture("systemctl", [
+      "show",
+      "latex-renderer-update-manager.service",
+      "--property=User",
+      "--value",
+    ])
+  ).trim();
+  if (unitUser !== "root")
+    throw new Error(
+      "Legacy transition is allowed only while the installed Update Manager still runs as root",
+    );
+  const before = await installedRelease();
+  if (compareVersions(requestedVersion, before.version) <= 0)
+    throw new Error(
+      "Bootstrap target must be newer than the installed release",
+    );
+
+  const rootStage = await mkdtemp(join(privilegedStagingRoot, "bootstrap-"));
+  let managerStopped = false;
+  let deploymentSucceeded = false;
+  let mutationLock;
+  try {
+    const release = await fetchRelease(requestedVersion);
+    const trustedBundle = join(rootStage, release.name);
+    await downloadReleaseBundle(release, trustedBundle);
+    const prepared = await verifyAndExtractTrustedBundle(
+      release,
+      trustedBundle,
+      rootStage,
+    );
+    for (const relativePath of bootstrapControlFiles) {
+      if (
+        (await fileDigest(join(helperRoot, relativePath))) !==
+        (await fileDigest(join(prepared.source, relativePath)))
+      ) {
+        throw new Error(
+          "Bootstrap control files do not match the attested immutable release",
+        );
+      }
+    }
+    if (
+      compareVersions(before.version, prepared.manifest.minimumSourceVersion) <
+      0
+    )
+      throw new Error(
+        `v${requestedVersion} requires at least v${prepared.manifest.minimumSourceVersion}`,
+      );
+    const identity = await deploymentIdentity();
+    const assembly = await buildBootstrapRelease(
+      rootStage,
+      prepared.source,
+      prepared.manifest.packageManager,
+      identity,
+    );
+    const deployment = await prepareDeploymentTrees(rootStage, assembly);
+    const releaseId = `v${release.version}-${prepared.manifest.commit.slice(0, 12)}`;
+
+    mutationLock = await acquireMutationLock();
+    const current = await installedRelease();
+    if (current.releaseId !== before.releaseId)
+      throw new Error(
+        "Installed release changed while bootstrap was preparing",
+      );
+    await runLogged("systemctl", [
+      "stop",
+      "latex-renderer-update-manager.service",
+    ]);
+    managerStopped = true;
+    await runLogged("systemctl", ["restart", "latex-renderer-backup.service"]);
+    await deployFromAssembly(assembly, deployment, releaseId, {
+      ownsParentMutationLock: true,
+    });
+    const after = await installedRelease();
+    if (after.version !== release.version || after.releaseId !== releaseId)
+      throw new Error(
+        "Bootstrap deployment completed without activating the requested release",
+      );
+    const activeUnitUser = (
+      await runCapture("systemctl", [
+        "show",
+        "latex-renderer-update-manager.service",
+        "--property=User",
+        "--value",
+      ])
+    ).trim();
+    if (activeUnitUser !== "latex-renderer-update")
+      throw new Error("Privilege-separated Update Manager was not activated");
+    deploymentSucceeded = true;
+    await writeOutput(`${JSON.stringify({ ok: true, releaseId })}\n`);
+  } finally {
+    if (managerStopped && !deploymentSucceeded) {
+      try {
+        await runLogged("systemctl", [
+          "start",
+          "latex-renderer-update-manager.service",
+        ]);
+      } catch (error) {
+        await writeOutput(
+          `Failed to restore Update Manager after bootstrap failure: ${error instanceof Error ? error.message : String(error)}\n`,
+        );
+      }
+    }
+    await mutationLock?.release();
+    await rm(rootStage, { recursive: true, force: true });
+  }
 }
 
 async function rollback(request) {
   const releaseId = validReleaseId(request.releaseId);
   const target = directChild(releaseRoot, releaseId);
   const targetInfo = await lstat(target);
-  if (!targetInfo.isDirectory()) throw new Error("Rollback release is not a directory");
+  if (!targetInfo.isDirectory())
+    throw new Error("Rollback release is not a directory");
   const unsafeTarget = (
     await runCapture("find", [
       target,
@@ -542,11 +891,18 @@ async function rollback(request) {
     throw new Error(`Rollback release tree is not sealed: ${unsafeTarget}`);
   await assertContainedSymlinks(target, target);
   const current = await installedRelease();
-  const rootStage = await mkdtemp(join(privilegedStagingRoot, "privileged-rollback-"));
+  const rootStage = await mkdtemp(
+    join(privilegedStagingRoot, "privileged-rollback-"),
+  );
   try {
     const verified = join(rootStage, "verified");
     await mkdir(verified, { mode: 0o700 });
-    await runLogged("rsync", ["-a", "--exclude=.git", `${target}/`, `${verified}/`]);
+    await runLogged("rsync", [
+      "-a",
+      "--exclude=.git",
+      `${target}/`,
+      `${verified}/`,
+    ]);
     await assertContainedSymlinks(verified, verified);
     const trustedDriver = join(
       verified,
@@ -569,8 +925,11 @@ async function rollback(request) {
     await runLogged("systemctl", ["restart", "latex-renderer-backup.service"]);
     await deployFromAssembly(assembly, deployment, releaseId);
     const after = await installedRelease();
-    if (after.releaseId !== releaseId) throw new Error("Rollback did not activate the requested release");
-    await writeOutput(`${JSON.stringify({ ok: true, previousReleaseId: current.releaseId })}\n`);
+    if (after.releaseId !== releaseId)
+      throw new Error("Rollback did not activate the requested release");
+    await writeOutput(
+      `${JSON.stringify({ ok: true, previousReleaseId: current.releaseId })}\n`,
+    );
   } finally {
     await rm(rootStage, { recursive: true, force: true });
   }
@@ -591,9 +950,20 @@ async function scheduleManagerRestart() {
 
 const request = await readRequest();
 switch (request.verb) {
+  case "bootstrap":
+    if (typeof request.version !== "string")
+      throw new Error("Bootstrap version is required");
+    await bootstrapPrivilegeSeparatedUpdater({
+      version: validStableVersion(request.version.replace(/^v/, "")),
+    });
+    break;
   case "apply":
-    if (typeof request.version !== "string") throw new Error("Apply version is required");
-    await apply({ version: validStableVersion(request.version.replace(/^v/, "")), stage: request.stage });
+    if (typeof request.version !== "string")
+      throw new Error("Apply version is required");
+    await apply({
+      version: validStableVersion(request.version.replace(/^v/, "")),
+      stage: request.stage,
+    });
     break;
   case "rollback":
     await rollback(request);

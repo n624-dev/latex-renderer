@@ -308,10 +308,11 @@ host-specific Worker/Tunnel configuration remain outside Git.
 
 ### Updating the application
 
-System installations use a root-owned Update Manager over a permission-restricted
-local Unix socket. The Web/API processes never run `sudo` and never receive a
-general root shell. The one-time `install-host.sh` bootstrap creates the helper,
-its random credential, durable operation state, and the root-owned
+System installations use a non-root Update Manager controller over a
+permission-restricted local Unix socket and a fixed, argument-free sudo
+launcher for a short-lived root helper. The Web/API processes never run `sudo`
+and never receive a general root shell. The one-time `install-host.sh` bootstrap
+creates the helper, its random credential, durable operation state, and the root-owned
 `/etc/latex-renderer/update-manager.env`. Set `UPDATE_DEPLOY_USER` there to the
 non-root account that owns the pnpm and Wrangler login used for deployments.
 The shared `/var/lib/latex-renderer` parent remains root-owned and group-writable
@@ -327,7 +328,7 @@ and rollback from `/admin/updates/` or the equivalent CLI commands:
 latex-render-admin update status
 latex-render-admin update check
 latex-render-admin update policy --mode notify --reason "Keep updates manual" --yes
-latex-render-admin update apply v1.3.0 --reason "Apply verified stable release" --yes
+latex-render-admin update apply v1.3.1 --reason "Apply verified stable release" --yes
 latex-render-admin update rollback --reason "Recover previous known-good release" --yes
 ```
 
@@ -345,7 +346,10 @@ metadata, Node/pnpm requirements, renderer fingerprint, and available staging
 and release filesystem capacity. Caller-supplied URLs, paths, repositories,
 branches, service names, and commands are not accepted. Application and TeX
 mutations share a non-blocking host lock; a concurrent request is rejected
-instead of waiting behind a long-running build or deployment.
+instead of waiting behind a long-running build or deployment. Public Sigstore
+bundles are fetched anonymously from GitHub's attestation API and passed to
+`gh attestation verify --bundle`; production hosts do not need a GitHub login or
+token.
 
 API keys use dedicated `admin:update:read/write` and
 `admin:tex-environment:read/write` scopes; legacy `admin:system:read/write`
@@ -359,10 +363,12 @@ verified manifest pins a different pnpm patch/minor version, the helper updates
 pnpm only in the configured non-root deployment user's pnpm home, verifies the
 resulting version, and then performs the frozen-lockfile install.
 
-After verification, the helper extracts the source as the configured non-root
-deployment user, rejects paths outside the versioned archive root and source
-symlinks, runs `pnpm install --frozen-lockfile` without root, takes the configured
-backup, and invokes the existing guarded production deployment. Releases remain
+After verification, the controller builds in its private non-root tree. The
+root helper independently copies and verifies the bundle into a root-owned
+`verified` tree, allows only production build outputs into a sealed `assembly`,
+and uses a separate deployment-user copy for Cloudflare publishing checks. It
+takes the configured backup and invokes the guarded production deployment only
+from the sealed control tree. Releases remain
 immutable under `/opt/latex-renderer/releases`; configuration, credentials,
 databases, storage, TeX desired state, and host-specific Cloudflare files remain
 outside the bundle and outside Git. A failed deployment attempts to redeploy the
@@ -371,9 +377,15 @@ rollback compatible; every result is recorded in a redacted durable log. For a
 forward-only schema change, follow [MIGRATIONS.md](MIGRATIONS.md) and its backup
 restore procedure instead of forcing an application-only rollback.
 
-For a host where the privileged helper is intentionally unavailable, download
-and verify the immutable server asset manually, then use the existing
-`sudo sh deploy/scripts/deploy-production-release.sh <release-id>` procedure.
+The one-time transition from the v1.2.x root daemon to this split architecture
+cannot use the old Web updater, because that updater cannot construct the new
+control/build boundary. Download and verify the target immutable server bundle,
+then run `sudo sh deploy/scripts/bootstrap-update-manager-transition.sh
+<version>` from that exact extracted release. The transition helper downloads
+and verifies the release again as root, builds only as `UPDATE_DEPLOY_USER`,
+acquires the shared mutation lock, stops the legacy manager, deploys from a
+sealed assembly, and verifies that the active unit now runs as
+`latex-renderer-update`. It refuses to run after the split manager is active.
 Rootless installations can check releases, but service/image activation must be
 performed by their external administrator or orchestrator.
 

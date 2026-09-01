@@ -155,7 +155,9 @@ describe("release-based application updates", () => {
     expect(manager).toContain('const corepack = "/usr/local/bin/corepack"');
     expect(manager).toContain("packageManager");
     expect(manager).toContain("!/^pnpm@\\d+\\.\\d+\\.\\d+$/.test");
-    expect(manager).toContain('const toolingRoot = join(buildSource, ".update-tooling")');
+    expect(manager).toContain(
+      'const toolingRoot = join(buildSource, ".update-tooling")',
+    );
     expect(manager).toContain("NPM_CONFIG_CACHE:");
     expect(manager).not.toContain('"--global"');
     expect(manager).not.toContain('"--install-directory"');
@@ -179,7 +181,9 @@ describe("release-based application updates", () => {
     );
     expect(manager).toContain('releaseRoot !== "/opt/latex-renderer/releases"');
     expect(manager).toContain('currentLink !== "/opt/latex-renderer/current"');
-    expect(helper).toContain('const privilegedStagingRoot = "/opt/latex-renderer/update-staging"');
+    expect(helper).toContain(
+      'const privilegedStagingRoot = "/opt/latex-renderer/update-staging"',
+    );
     expect(helper).toContain('deployUser === "root"');
   });
 
@@ -220,6 +224,8 @@ describe("release-based application updates", () => {
     expect(helper).toContain('case "apply":');
     expect(helper).toContain('case "rollback":');
     expect(helper).toContain('case "schedule-manager-restart":');
+    expect(helper).toContain('case "bootstrap":');
+    expect(manager).not.toContain('verb: "bootstrap"');
     expect(helper).not.toContain("request.command");
     expect(helper).not.toContain("request.path");
     expect(launcher).toContain("does not accept command-line arguments");
@@ -247,7 +253,9 @@ describe("release-based application updates", () => {
     expect(manager).toContain('const verified = join(stage, "verified")');
     expect(manager).toContain('const buildSource = join(stage, "build")');
     expect(helper).toContain('const assembly = join(rootStage, "assembly")');
-    expect(helper).toContain("Privileged release metadata does not match GitHub");
+    expect(helper).toContain(
+      "Privileged release metadata does not match GitHub",
+    );
     expect(assemblyModule).toContain(
       "Build output symlink escapes the release",
     );
@@ -258,19 +266,15 @@ describe("release-based application updates", () => {
     expect(assemblyModule).toContain(
       "Build output contains a special filesystem entry",
     );
-    expect(installHost).toContain(
-      "id latex-renderer-update",
-    );
+    expect(installHost).toContain("id latex-renderer-update");
     expect(installHost).toContain("/usr/local/bin/corepack --version");
-    expect(prepareHost).toContain(
-      "id latex-renderer-update",
-    );
+    expect(prepareHost).toContain("id latex-renderer-update");
     expect(manager).toContain("await cleanupStagingRoot()");
     expect(manager).toContain("24 * 60 * 60 * 1000");
     expect(helper).toContain("await copyFile(");
     expect(helper).toContain("deploymentDriver");
     expect(helper).toContain(
-      'LATEX_RENDERER_PARENT_MUTATION_LOCK: "application-update"',
+      'environment.LATEX_RENDERER_PARENT_MUTATION_LOCK = "application-update"',
     );
     expect(prepareHost).toContain(
       "chmod 0700 /var/lib/latex-renderer/update-manager/staging",
@@ -290,6 +294,60 @@ describe("release-based application updates", () => {
     expect(read("deploy/scripts/deploy-production-release.sh")).toContain(
       "Application Update Manager must use a separate non-root build tree",
     );
+  });
+
+  it("provides a one-time verified transition from the legacy root updater", () => {
+    const helper = read("deploy/scripts/update-manager-helper.mjs");
+    const transition = read(
+      "deploy/scripts/bootstrap-update-manager-transition.sh",
+    );
+    expect(helper).toContain("bootstrapPrivilegeSeparatedUpdater");
+    expect(helper).toContain(
+      "Legacy transition is allowed only while the installed Update Manager still runs as root",
+    );
+    expect(helper).toContain(
+      "Legacy transition requires the explicit root bootstrap launcher",
+    );
+    expect(helper).toContain(
+      'const buildSource = join(rootStage, "bootstrap-build")',
+    );
+    expect(helper).toContain("assembleBuildArtifacts({");
+    expect(helper).toContain(
+      "Bootstrap control files do not match the attested immutable release",
+    );
+    expect(helper).toContain("bootstrapControlFiles");
+    expect(helper).toContain(
+      '"stop",\n      "latex-renderer-update-manager.service"',
+    );
+    expect(helper).toContain("await mutationLock?.release()");
+    expect(
+      helper.indexOf(
+        '"start",\n          "latex-renderer-update-manager.service"',
+      ),
+    ).toBeLessThan(helper.indexOf("await mutationLock?.release()"));
+    expect(helper).toContain('if (activeUnitUser !== "latex-renderer-update")');
+    expect(transition).toContain("must run through sudo");
+    expect(transition).toContain('"verb":"bootstrap"');
+    expect(transition).toContain("LATEX_RENDERER_LEGACY_BOOTSTRAP=1");
+    expect(transition).toContain(
+      "/opt/latex-renderer/update-staging/update-helper.lock",
+    );
+    expect(transition).not.toContain("deploy-production-release.sh");
+  });
+
+  it("verifies public Sigstore bundles without a host GitHub login", () => {
+    const helper = read("deploy/scripts/update-manager-helper.mjs");
+    const manager = read("deploy/scripts/update-manager.mjs");
+    for (const source of [manager, helper]) {
+      expect(source).toContain(
+        `/attestations/\${encodeURIComponent(release.digest)}`,
+      );
+      expect(source).toContain('"release-attestations.jsonl"');
+      expect(source).toContain('"--bundle"');
+      expect(source).toContain("attestationBundle");
+      expect(source).toContain('GH_PROMPT_DISABLED: "1"');
+      expect(source).not.toContain("GH_TOKEN");
+    }
   });
 
   it("never overlays build-user changes to root-executed control scripts", async () => {
@@ -335,12 +393,16 @@ describe("release-based application updates", () => {
     expect(helper).toContain("function directChild(root, name)");
     expect(helper).toContain("ensureBuildSource");
     expect(helper).toContain("prepareDeploymentTrees");
-    expect(helper).toContain('const deploymentBuild = join(rootStage, "deployment-build")');
+    expect(helper).toContain(
+      'const deploymentBuild = join(rootStage, "deployment-build")',
+    );
     expect(helper).toContain(
       "LATEX_RENDERER_BUILD_ROOT: deployment.deploymentBuild",
     );
     expect(helper).not.toContain("assertNoSymlinks(buildSource)");
-    expect(helper).toContain('await runLogged("chown", ["-R", `0:${identity.gid}`, assembly])');
+    expect(helper).toContain(
+      'await runLogged("chown", ["-R", `0:${identity.gid}`, assembly])',
+    );
     expect(helper).toContain("UPDATE_DEPLOY_USER");
     expect(deploy).toContain("source_root=$(CDPATH= cd --");
     expect(deploy).toContain('cd "$source_root"');
@@ -453,13 +515,21 @@ describe("release-based application updates", () => {
       const result = spawnSync("sh", ["-n", path], { encoding: "utf8" });
       expect(result.status, `${path}: ${result.stderr}`).toBe(0);
     }
-    const launcher = spawnSync("sh", ["-n", "deploy/scripts/update-manager-helper-launcher.sh"], {
-      encoding: "utf8",
-    });
+    const launcher = spawnSync(
+      "sh",
+      ["-n", "deploy/scripts/update-manager-helper-launcher.sh"],
+      {
+        encoding: "utf8",
+      },
+    );
     expect(launcher.status, launcher.stderr).toBe(0);
-    const ghInstaller = spawnSync("sh", ["-n", "deploy/scripts/install-github-cli.sh"], {
-      encoding: "utf8",
-    });
+    const ghInstaller = spawnSync(
+      "sh",
+      ["-n", "deploy/scripts/install-github-cli.sh"],
+      {
+        encoding: "utf8",
+      },
+    );
     expect(ghInstaller.status, ghInstaller.stderr).toBe(0);
   });
 });

@@ -52,13 +52,15 @@ describe("Markdown public documentation", () => {
   it("publishes the versioned general-user self-hosting guide", () => {
     const selfHosting = publicDocs.find(({ slug }) => slug === "self-hosting");
     expect(selfHosting).toBeDefined();
-    expect(selfHosting?.html).toContain("latex-renderer-server-1.3.0.tar.gz");
+    expect(selfHosting?.html).toContain("latex-renderer-server-1.3.1.tar.gz");
     expect(selfHosting?.html).toContain("/opt/latex-renderer/update-staging");
-    expect(selfHosting?.html).toContain("install --frozen-lockfile");
     expect(selfHosting?.html).toContain("deploy-production-release.sh");
     expect(selfHosting?.html).toContain(
-      "Web／APIにsudo権限を与える手順ではありません",
+      "bootstrap-update-manager-transition.sh",
     );
+    expect(selfHosting?.html).toContain("bootstrap-build");
+    expect(selfHosting?.html).toContain("GitHub tokenを渡しません");
+    expect(selfHosting?.html).toContain("--bundle");
     expect(selfHosting?.html).not.toContain(
       "chmod 2770 /var/lib/latex-renderer",
     );
@@ -67,7 +69,6 @@ describe("Markdown public documentation", () => {
       "公開後にタグや配布ファイルを差し替えできない",
     );
     expect(selfHosting?.html).toContain("sha256sum --check");
-    expect(selfHosting?.html).toContain("corepack install --global");
     expect(selfHosting?.html).toContain("install-host.sh");
     expect(selfHosting?.html).not.toContain("まだ正式提供前");
     expect(selfHosting?.html).toContain("main");
