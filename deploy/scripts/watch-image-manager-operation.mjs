@@ -2,12 +2,13 @@
 import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { boundedIntegerEnvironment } from "./environment.mjs";
 
 const baseUrl = process.env.IMAGE_MANAGER_URL ?? "http://127.0.0.1:3110";
 const credentialsDirectory = process.env.CREDENTIALS_DIRECTORY;
 const tokenFile = process.env.IMAGE_MANAGER_TOKEN_FILE ??
   (credentialsDirectory ? join(credentialsDirectory, "image-manager-token") : null);
-const maxAgeMs = Number(process.env.IMAGE_OPERATION_MAX_AGE_MS ?? String(4 * 60 * 60 * 1000));
+const maxAgeMs = boundedIntegerEnvironment(process.env, "IMAGE_OPERATION_MAX_AGE_MS", 4 * 60 * 60 * 1000, 10 * 60_000, 12 * 60 * 60_000);
 const rendererConsumers = [
   "latex-renderer-worker.service",
   "latex-renderer-internal-api.service",
@@ -22,8 +23,6 @@ if (
   endpoint.password !== ""
 ) throw new Error("IMAGE_MANAGER_URL must be an unauthenticated loopback HTTP URL");
 if (!tokenFile) throw new Error("Image manager credential path is unavailable");
-if (!Number.isSafeInteger(maxAgeMs) || maxAgeMs < 10 * 60_000 || maxAgeMs > 12 * 60 * 60_000)
-  throw new Error("IMAGE_OPERATION_MAX_AGE_MS must be between 10 minutes and 12 hours");
 
 const token = (await readFile(tokenFile, "utf8")).trim();
 if (token.length < 32) throw new Error("Image manager token is too short");

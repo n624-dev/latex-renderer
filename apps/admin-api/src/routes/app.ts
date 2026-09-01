@@ -1,12 +1,15 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import { RemoteRenderService } from "@latex-renderer/remote-mcp-core";
-import type { JobRow } from "@latex-renderer/database";
+import type { JobRow, OwnedJobListRow } from "@latex-renderer/database";
 import { renderOutputsSchema } from "@latex-renderer/contracts";
-import { AppError, DEFAULT_RESOURCE_LIMITS } from "@latex-renderer/shared";
+import { AppError, DEFAULT_RESOURCE_LIMITS, pageSize } from "@latex-renderer/shared";
 import { validateEntrypointPath } from "@latex-renderer/zip-validation";
 import { requireAppActor } from "../auth/actor.js";
-import { adminArtifactResponse } from "../services/artifacts.js";
+import {
+  adminArtifactResponse,
+  adminArtifactsArchiveResponse,
+} from "../services/artifacts.js";
 import { AdminJobsService } from "../services/jobs.js";
 import { AppProjectsService } from "../services/app-projects.js";
 import type { AdminDependencies, AppActor } from "../types.js";
@@ -48,16 +51,26 @@ export function createAppV1Router(deps: AdminDependencies): Hono {
 
   router.get("/jobs", async (c) => {
     const actor = await requireAppActor(deps, c);
+    const limit = pageSize(c.req.query("pageSize")),
+      page = deps.database.jobs.listOwnedPage(actor.userId, {
+        cursor: c.req.query("cursor"),
+        limit,
+      });
     return c.json({
-      items: deps.database.jobs
-        .listOwned(actor.userId)
-        .map((row) => jobSummary(deps, row)),
+      ...page,
+      items: page.items.map((row) => jobSummary(deps, row)),
     });
   });
   router.get("/jobs/:id", async (c) => {
     const actor = await requireAppActor(deps, c),
       id = parse(jobId, c.req.param("id"));
     return c.json(jobSummary(deps, assertOwnedJob(deps, actor, id)));
+  });
+  router.get("/jobs/:id/archive", async (c) => {
+    const actor = await requireAppActor(deps, c),
+      id = parse(jobId, c.req.param("id"));
+    assertOwnedJob(deps, actor, id);
+    return adminArtifactsArchiveResponse(deps, actor, id);
   });
   router.post("/jobs/:id/access-ticket", async (c) => {
     const actor = await requireAppActor(deps, c),
@@ -148,7 +161,6 @@ export function createAppV1Router(deps: AdminDependencies): Hono {
           .strict(),
         await c.req.json<unknown>(),
       );
-    projects.get(actor, input.projectId);
     const principal = ensureWebPrincipal(deps, actor),
       entrypoint = validateEntrypointPath(input.entrypoint),
       result = await jobs.createRender(
@@ -158,26 +170,43 @@ export function createAppV1Router(deps: AdminDependencies): Hono {
           sourceId: input.sourceId,
           entrypoint,
           outputs: input.outputs,
+          project: {
+            projectId: input.projectId,
+            displayName: input.displayName,
+            originalFilename: input.originalFilename,
+            outputs: input.outputs,
+          },
         },
         key,
-      ),
-      revision = projects.attachRevision(actor, {
-        projectId: input.projectId,
-        sourceId: input.sourceId,
-        jobId: result.value.jobId,
-        displayName: input.displayName,
-        originalFilename: input.originalFilename,
-        entrypoint,
-      });
+      );
+    if (
+      !("projectRevisionId" in result.value) ||
+      result.value.projectRevisionId === undefined
+    )
+      throw new AppError(
+        "PROJECT_REVISION_MISSING",
+        "Project revision was not attached atomically",
+        500,
+      );
+    const revisionId = result.value.projectRevisionId;
     return c.json(
-      { ...result.value, projectId: input.projectId, revisionId: revision.id },
+      {
+        ...result.value,
+        projectId: input.projectId,
+        revisionId,
+      },
       result.status,
     );
   });
 
   router.get("/projects", async (c) => {
     const actor = await requireAppActor(deps, c);
-    return c.json({ items: projects.list(actor) });
+    return c.json(
+      projects.list(actor, {
+        cursor: c.req.query("cursor"),
+        limit: pageSize(c.req.query("pageSize")),
+      }),
+    );
   });
   router.post("/projects", async (c) => {
     const actor = await requireAppActor(deps, c),
@@ -189,7 +218,26 @@ export function createAppV1Router(deps: AdminDependencies): Hono {
   });
   router.get("/projects/:id", async (c) => {
     const actor = await requireAppActor(deps, c);
-    return c.json(projects.get(actor, parse(projectId, c.req.param("id"))));
+    return c.json(
+      projects.get(actor, parse(projectId, c.req.param("id")), {
+        cursor: c.req.query("cursor"),
+        limit: pageSize(c.req.query("pageSize")),
+      }),
+    );
+  });
+  router.get("/projects/:id/revisions/:revisionId/jobs", async (c) => {
+    const actor = await requireAppActor(deps, c),
+      id = parse(projectId, c.req.param("id")),
+      revisionId = parse(
+        z.string().regex(/^revision_[a-f0-9]{32}$/),
+        c.req.param("revisionId"),
+      );
+    return c.json(
+      projects.jobs(actor, id, revisionId, {
+        cursor: c.req.query("cursor"),
+        limit: pageSize(c.req.query("pageSize")),
+      }),
+    );
   });
   router.patch("/projects/:id", async (c) => {
     const actor = await requireAppActor(deps, c),
@@ -223,23 +271,20 @@ export function createAppV1Router(deps: AdminDependencies): Hono {
           apiKeyId: principal.api_key_id,
           sourceId: selected.revision.source_id,
           entrypoint: selected.revision.entrypoint,
-          outputs: ["pdf"],
+          outputs: projects.renderOutputs(selected.revision),
+          project: { projectId: id, revisionId },
         },
         key,
       );
-    deps.database.transaction(() => {
-      deps.database.jobs.attachProjectRevision(result.value.jobId, revisionId);
-      deps.database.projects.touch(id, new Date().toISOString());
-      deps.database.audit({
-        actorType: actor.type,
-        actorId: actor.id,
-        action: "project.revision_rendered",
-        targetType: "job",
-        targetId: result.value.jobId,
-        result: "success",
-        metadata: { projectId: id, revisionId },
-      });
-    });
+    if (
+      !("projectRevisionId" in result.value) ||
+      result.value.projectRevisionId !== revisionId
+    )
+      throw new AppError(
+        "PROJECT_REVISION_CONFLICT",
+        "Render Job belongs to another Project revision",
+        409,
+      );
     return c.json(
       { ...result.value, projectId: id, revisionId },
       result.status,
@@ -327,23 +372,26 @@ function assertOwnedJob(deps: AdminDependencies, actor: AppActor, id: string) {
   return row;
 }
 
-function jobSummary(deps: AdminDependencies, row: JobRow) {
-  const revision = row.project_revision_id
+function jobSummary(deps: AdminDependencies, row: JobRow | OwnedJobListRow) {
+  const joined = "project_name" in row,
+    revision = !joined && row.project_revision_id
       ? deps.database.projects.revisionOwned(
           row.project_revision_id,
           row.user_id,
         )
       : undefined,
-    project = revision
+    project = !joined && revision
       ? deps.database.projects.getOwned(revision.project_id, row.user_id)
       : undefined;
   return {
     id: row.id,
     status: row.status,
-    documentName: revision?.display_name ?? row.entrypoint,
-    projectName: project?.display_name ?? null,
-    projectId: project?.id ?? null,
-    revisionId: revision?.id ?? null,
+    documentName: joined
+      ? row.revision_display_name ?? row.entrypoint
+      : revision?.display_name ?? row.entrypoint,
+    projectName: joined ? row.project_name ?? null : project?.display_name ?? null,
+    projectId: joined ? row.project_id ?? null : project?.id ?? null,
+    revisionId: joined ? row.project_revision_id ?? null : revision?.id ?? null,
     entrypoint: row.entrypoint,
     createdAt: row.created_at,
     updatedAt: row.updated_at,

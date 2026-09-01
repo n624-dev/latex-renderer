@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { Writable } from "node:stream";
 import {
   doctorSetup,
+  fetchDistribution,
   installDistribution,
   removeSetup,
   repairSetup,
@@ -35,6 +36,111 @@ afterEach(async () => {
 });
 
 describe("setup-core", () => {
+  it("rejects oversized manifest and archive responses before buffering them", async () => {
+    const distribution = await clientDistribution();
+    let archiveRequested = false;
+    await expect(
+      fetchDistribution({
+        baseUri: "https://downloads.example.test/client/",
+        fetchImpl: (input) => {
+          if (requestUrl(input).includes("manifest.json"))
+            return Promise.resolve(
+              new Response(JSON.stringify(distribution.manifest), {
+                headers: { "content-length": String(65 * 1024) },
+              }),
+            );
+          archiveRequested = true;
+          return Promise.resolve(
+            new Response(new Uint8Array([0]), {
+              headers: { "content-length": String(26 * 1024 * 1024) },
+            }),
+          );
+        },
+      }),
+    ).rejects.toThrow("Manifest response exceeds");
+    expect(archiveRequested).toBe(false);
+
+    await expect(
+      fetchDistribution({
+        baseUri: "https://downloads.example.test/client/",
+        fetchImpl: (input) => {
+          if (requestUrl(input).includes("manifest.json"))
+            return Promise.resolve(
+              new Response(JSON.stringify(distribution.manifest)),
+            );
+          archiveRequested = true;
+          return Promise.resolve(
+            new Response(new Uint8Array([0]), {
+              headers: { "content-length": String(26 * 1024 * 1024) },
+            }),
+          );
+        },
+      }),
+    ).rejects.toThrow("Archive response exceeds");
+    expect(archiveRequested).toBe(true);
+  });
+
+  it("stops reading an archive stream as soon as the hard size cap is crossed", async () => {
+    const distribution = await clientDistribution();
+    let chunksSent = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (chunksSent >= 26) {
+          controller.close();
+          return;
+        }
+        chunksSent += 1;
+        controller.enqueue(new Uint8Array(1024 * 1024));
+      },
+    });
+    await expect(
+      fetchDistribution({
+        baseUri: "https://downloads.example.test/client/",
+        fetchImpl: (input) =>
+          Promise.resolve(
+            requestUrl(input).includes("manifest.json")
+              ? new Response(JSON.stringify(distribution.manifest))
+              : new Response(body),
+          ),
+      }),
+    ).rejects.toThrow("Archive response exceeds");
+    expect(chunksSent).toBe(26);
+  });
+
+  it("rejects a truncated identity response but permits decoded content encoding", async () => {
+    const distribution = await clientDistribution();
+    await expect(
+      fetchDistribution({
+        baseUri: "https://downloads.example.test/client/",
+        fetchImpl: (input) =>
+          Promise.resolve(
+            requestUrl(input).includes("manifest.json")
+              ? new Response(JSON.stringify(distribution.manifest), {
+                  headers: { "content-length": "999" },
+                })
+              : new Response(Uint8Array.from(distribution.archive)),
+          ),
+      }),
+    ).rejects.toThrow("Manifest response length does not match Content-Length");
+
+    await expect(
+      fetchDistribution({
+        baseUri: "https://downloads.example.test/client/",
+        fetchImpl: (input) =>
+          Promise.resolve(
+            requestUrl(input).includes("manifest.json")
+              ? new Response(JSON.stringify(distribution.manifest), {
+                  headers: {
+                    "content-encoding": "gzip",
+                    "content-length": "12",
+                  },
+                })
+              : new Response(Uint8Array.from(distribution.archive)),
+          ),
+      }),
+    ).resolves.toMatchObject({ manifest: distribution.manifest });
+  });
+
   it("installs once, persists managed state, and treats the same archive as current", async () => {
     const root = await temporaryRoot();
     const paths = testPaths(root);
@@ -289,6 +395,10 @@ const sink = new Writable({
     callback();
   },
 });
+
+function requestUrl(input: string | URL | Request): string {
+  return input instanceof Request ? input.url : input.toString();
+}
 
 function testPaths(root: string): {
   platform: "linux";

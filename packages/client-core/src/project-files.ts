@@ -28,6 +28,24 @@ export function shouldExcludeProjectPath(name: string): boolean {
     normalized.startsWith(".render/") ||
     normalized === ".git" ||
     normalized.startsWith(".git/") ||
+    normalized === ".latexrenderignore" ||
+    normalized === "node_modules" ||
+    normalized.startsWith("node_modules/") ||
+    normalized === ".env" ||
+    normalized.startsWith(".env.") ||
+    normalized === "credentials.json" ||
+    normalized.startsWith("credentials.") ||
+    normalized === ".npmrc" ||
+    normalized === ".netrc" ||
+    normalized === ".aws" ||
+    normalized.startsWith(".aws/") ||
+    normalized === ".ssh" ||
+    normalized.startsWith(".ssh/") ||
+    normalized === ".idea" ||
+    normalized.startsWith(".idea/") ||
+    normalized === ".vscode" ||
+    normalized.startsWith(".vscode/") ||
+    [".pem", ".key", ".p12", ".pfx"].some((suffix) => lower.endsWith(suffix)) ||
     generatedLatexSuffixes.some((suffix) => lower.endsWith(suffix))
   );
 }

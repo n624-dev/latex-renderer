@@ -27,6 +27,7 @@ export const DEFAULT_DISTRIBUTION_URI =
 const PAYLOAD_NAME = "latex-renderer-client";
 const STATE_FILE = ".install-state.json";
 const MAXIMUM_ARCHIVE_BYTES = 25 * 1024 * 1024;
+const MAXIMUM_MANIFEST_BYTES = 64 * 1024;
 const MAXIMUM_EXPANDED_BYTES = 100 * 1024 * 1024;
 const MCP_SERVER_NAME = "latex-renderer";
 
@@ -273,16 +274,80 @@ export async function fetchDistribution({
     throw new Error(
       `Manifest download failed: HTTP ${manifestResponse.status}`,
     );
-  const manifest = validateManifest(await manifestResponse.json());
+  const manifest = validateManifest(
+    JSON.parse(
+      (
+        await readResponseBytes(
+          manifestResponse,
+          MAXIMUM_MANIFEST_BYTES,
+          "Manifest",
+        )
+      ).toString("utf8"),
+    ),
+  );
   const archiveResponse = await fetchImpl(
     new URL(`${manifest.archive}?fresh=${fresh}`, base),
     { cache: "no-store", redirect: "error" },
   );
   if (!archiveResponse.ok)
     throw new Error(`Archive download failed: HTTP ${archiveResponse.status}`);
-  const archive = Buffer.from(await archiveResponse.arrayBuffer());
+  const archive = await readResponseBytes(
+    archiveResponse,
+    MAXIMUM_ARCHIVE_BYTES,
+    "Archive",
+  );
   verifyArchive(manifest, archive);
   return { manifest, archive };
+}
+
+async function readResponseBytes(
+  response: Response,
+  maximumBytes: number,
+  label: "Manifest" | "Archive",
+): Promise<Buffer> {
+  const contentLengthHeader = response.headers.get("content-length");
+  const contentEncoding = response.headers
+    .get("content-encoding")
+    ?.toLowerCase();
+  let expectedBytes: number | undefined;
+  if (contentLengthHeader !== null) {
+    if (!/^\d+$/.test(contentLengthHeader))
+      throw new Error(`${label} response Content-Length is invalid`);
+    expectedBytes = Number(contentLengthHeader);
+    if (!Number.isSafeInteger(expectedBytes) || expectedBytes > maximumBytes)
+      throw new Error(
+        `${label} response exceeds the ${maximumBytes}-byte download limit`,
+      );
+  }
+  const body = response.body;
+  if (body === null) throw new Error(`${label} response body is unavailable`);
+  const reader = body.getReader();
+  const chunks: Buffer[] = [];
+  let receivedBytes = 0;
+  try {
+    for (;;) {
+      const result = await reader.read();
+      if (result.done) break;
+      receivedBytes += result.value.byteLength;
+      if (receivedBytes > maximumBytes)
+        throw new Error(
+          `${label} response exceeds the ${maximumBytes}-byte download limit`,
+        );
+      chunks.push(Buffer.from(result.value));
+    }
+  } catch (error) {
+    await reader.cancel().catch(() => undefined);
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
+  if (
+    expectedBytes !== undefined &&
+    (contentEncoding === undefined || contentEncoding === "identity") &&
+    receivedBytes !== expectedBytes
+  )
+    throw new Error(`${label} response length does not match Content-Length`);
+  return Buffer.concat(chunks, receivedBytes);
 }
 
 export async function installDistribution({

@@ -105,9 +105,16 @@ importers:
       hono:
         specifier: ^4.9.2
         version: 4.13.0
+      yazl:
+        specifier: ^3.3.1
+        version: 3.3.1
       zod:
         specifier: ^4.0.17
         version: 4.4.3
+    devDependencies:
+      '@types/yazl':
+        specifier: ^3.3.0
+        version: 3.3.1
 
   apps/admin-cli:
     dependencies:
@@ -138,6 +145,9 @@ importers:
       '@hono/node-server':
         specifier: ^2.0.12
         version: 2.1.0(hono@4.13.0)
+      '@latex-renderer/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
       gray-matter:
         specifier: 4.0.3
         version: 4.0.3
@@ -216,6 +226,9 @@ importers:
       '@latex-renderer/mcp-core':
         specifier: workspace:*
         version: link:../../packages/mcp-core
+      '@latex-renderer/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
       '@modelcontextprotocol/server':
         specifier: ^2.0.0
         version: 2.0.0
@@ -306,6 +319,9 @@ importers:
       '@latex-renderer/gateway-core':
         specifier: workspace:*
         version: link:../../packages/gateway-core
+      '@latex-renderer/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
       hono:
         specifier: ^4.9.2
         version: 4.13.0
@@ -345,6 +361,9 @@ importers:
       '@latex-renderer/zip-validation':
         specifier: workspace:*
         version: link:../zip-validation
+      ignore:
+        specifier: ^7.0.6
+        version: 7.0.6
       yazl:
         specifier: ^3.3.1
         version: 3.3.1

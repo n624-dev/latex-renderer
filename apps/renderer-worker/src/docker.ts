@@ -4,12 +4,13 @@ import type { WorkerConfig } from "./config.js";
 export function spawnRenderer(
   config: WorkerConfig,
   jobId: string,
+  leaseGeneration: number,
   extracted: string,
   staging: string,
   entrypoint = "main.tex",
   outputs: readonly string[] = ["pdf"],
 ) {
-  const containerName = `latex-render-${jobId}`;
+  const containerName = rendererContainerName(jobId, leaseGeneration);
   const args = rendererRunArguments(
     config,
     jobId,
@@ -17,6 +18,7 @@ export function spawnRenderer(
     staging,
     entrypoint,
     outputs,
+    leaseGeneration,
   );
   return {
     process: spawn("docker", args, {
@@ -33,6 +35,7 @@ export function rendererRunArguments(
   staging: string,
   entrypoint = "main.tex",
   outputs: readonly string[] = ["pdf"],
+  leaseGeneration = 0,
 ): string[] {
   const securityOptions = [
     "--security-opt",
@@ -50,9 +53,11 @@ export function rendererRunArguments(
     "--rm",
     "--init",
     "--name",
-    `latex-render-${jobId}`,
+    rendererContainerName(jobId, leaseGeneration),
     "--label",
     `latex-renderer.job=${jobId}`,
+    "--label",
+    `latex-renderer.lease-generation=${leaseGeneration}`,
     "--network",
     "none",
     "--read-only",
@@ -90,9 +95,26 @@ export function rendererRunArguments(
     config.image,
   ];
 }
+export function rendererContainerName(
+  jobId: string,
+  leaseGeneration: number,
+): string {
+  if (!Number.isSafeInteger(leaseGeneration) || leaseGeneration < 0)
+    throw new Error("Worker lease generation is invalid");
+  return `latex-render-${jobId}-g${leaseGeneration}`;
+}
 export async function dockerStop(name: string): Promise<void> {
   await runDocker(["stop", "--time", "2", name]).catch(() => undefined);
   await runDocker(["kill", name]).catch(() => undefined);
+}
+export async function dockerStopVerified(identifier: string): Promise<void> {
+  await runDocker(["stop", "--time", "2", identifier]).catch(() => undefined);
+  await runDocker(["kill", identifier]).catch(() => undefined);
+  const remaining = (
+    await runDocker(["ps", "-aq", "--filter", `id=${identifier}`])
+  ).trim();
+  if (remaining !== "")
+    throw new Error(`Renderer container could not be stopped: ${identifier}`);
 }
 export async function assertDockerIsolation(
   apparmorProfile: string | undefined,

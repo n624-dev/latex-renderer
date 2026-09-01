@@ -10,7 +10,7 @@ pnpm build
 docker build -t latex-renderer:2026 renderer
 ```
 
-Migration 007 is required by the v1.2 provider-neutral browser authentication model. Before applying it, enter maintenance mode, drain active work, stop every database writer, and take the WAL-consistent encrypted backup required by [MIGRATIONS.md](MIGRATIONS.md). Version 1.1 cannot safely administer the post-migration nullable-email and identity tables, so rollback requires restoring that backup. Releases remain immutable under `/opt/latex-renderer/releases/<release-id>` with `/opt/latex-renderer/current` pointing to the active release.
+Migrations through Migration 016 are required by the v1.3 authentication, lease-fencing, cleanup, admission, upload, pagination, Project-output, and durable API-key invariants. Before applying them, enter maintenance mode, drain active work, stop every database writer, and take the WAL-consistent encrypted backup required by [MIGRATIONS.md](MIGRATIONS.md). Older releases cannot safely enforce the post-migration invariants, so rollback requires restoring that backup. Releases remain immutable under `/opt/latex-renderer/releases/<release-id>` with `/opt/latex-renderer/current` pointing to the active release.
 
 ## Host services
 
@@ -266,6 +266,7 @@ latex-render-admin tex apply \
   --auto-update on \
   --rebuild-if-missing off \
   --runtime-build-if-missing off \
+  --reason "Enable Japanese document support" \
   --yes
 ```
 
@@ -278,6 +279,7 @@ latex-render-admin tex apply \
   --auto-update off \
   --rebuild-if-missing on \
   --runtime-build-if-missing off \
+  --reason "Pin TeX Live for reproducible documents" \
   --yes
 ```
 
@@ -324,14 +326,14 @@ and rollback from `/admin/updates/` or the equivalent CLI commands:
 ```bash
 latex-render-admin update status
 latex-render-admin update check
-latex-render-admin update policy --mode notify --yes
-latex-render-admin update apply v1.2.2 --yes
-latex-render-admin update rollback --yes
+latex-render-admin update policy --mode notify --reason "Keep updates manual" --yes
+latex-render-admin update apply v1.3.0 --reason "Apply verified stable release" --yes
+latex-render-admin update rollback --reason "Recover previous known-good release" --yes
 ```
 
 `latex-renderer-update-refresh.timer` performs the same stable check daily with
 jitter. To opt in to unattended verified updates, use the Web policy control or
-`latex-render-admin update policy --mode automatic --yes`. Return to the safer
+`latex-render-admin update policy --mode automatic --reason "Approve automatic verified updates" --yes`. Return to the safer
 default with `--mode notify`. Automatic mode still refuses mutable releases,
 missing/mismatched assets, invalid upgrade paths, or an already active update.
 
@@ -344,6 +346,13 @@ and release filesystem capacity. Caller-supplied URLs, paths, repositories,
 branches, service names, and commands are not accepted. Application and TeX
 mutations share a non-blocking host lock; a concurrent request is rejected
 instead of waiting behind a long-running build or deployment.
+
+API keys use dedicated `admin:update:read/write` and
+`admin:tex-environment:read/write` scopes; legacy `admin:system:read/write`
+scopes authorize only system endpoints. The runtime-changing TeX operations and
+application update policy, refresh, apply, and rollback require an owner and a
+non-empty reason, retained as audit metadata. Reserve `admin:*` for emergency
+compatibility keys.
 
 The host must already provide the release's required Node major. When the
 verified manifest pins a different pnpm patch/minor version, the helper updates
@@ -417,7 +426,7 @@ a long apply cannot overwrite a concurrently saved country override.
 ## Safe rollout order
 
 1. Enable maintenance mode `reject-new-jobs`, let active work drain, stop the worker, and take the pre-migration database backup.
-2. Verify exact `PUBLIC_ORIGIN`, deployment/authentication mode, root-owned secret files, and the selected external issuer/audience. Apply all pending migrations through Migration 007. Do not start v1.1 against schema 7.
+2. Verify exact `PUBLIC_ORIGIN`, deployment/authentication mode, root-owned secret files, and the selected external issuer/audience. Apply all pending migrations through Migration 016. Do not start an older release against schema 16.
 3. Bootstrap or verify at least one active owner with an explicit provider/issuer/subject identity or password credential. Never claim an account by email. On a clean install, the first deployment defers only the authenticated render smoke test until this bootstrap is complete; run `smoke-test-production.sh` after the TeX environment is ready.
 4. Start the common loopback services and verify their local health. Confirm ports 3100-3105 are unreachable from an external interface.
 5. For Cloudflare, configure `/auth`, `/app`, `/admin`, and `/oauth/authorize` in the intended Access application when Access is the selected authentication mode; deploy the Gateway Worker, reconcile Tunnel paths, preview public Web, and apply only the explicit Worker Routes. For OIDC/password, do not create a conflicting Access policy in front of the login callbacks.
@@ -576,9 +585,9 @@ when the failure mode or Worker version is uncertain.
    routes with `--apply` after the incident is resolved.
 
 4. Restore the prior remote Tunnel and Access configuration.
-5. If rollback crosses Migration 007, stop admission and every database writer and restore the pre-migration backup. Do not run v1.1 against schema 7 or manually rebuild identity/user tables on the live database.
+5. If rollback crosses Migration 007 through Migration 016, stop admission and every database writer and restore the pre-migration backup. Do not run an older release against schema 16 or manually rebuild live tables.
 
-Migration 006 still changes the Job and artifact contracts used by the worker, while Migration 007 changes user and authentication contracts. A public-Worker-only rollback does not require a database restore. Rolling the application back across either incompatible migration requires its pre-migration backup unless the controlled non-production rebuild has been completed. Keep the backups until the rollback paths have been exercised.
+Migration 006 changes the Job and artifact contracts, Migration 007 changes user and authentication contracts, and Migrations 008 through 016 add invariants that older Workers and APIs do not enforce. A public-Worker-only rollback does not require a database restore. Rolling the application back across these incompatible migrations requires its pre-migration backup unless a documented controlled non-production rebuild has been completed. Keep the backups until the rollback paths have been exercised.
 
 ## Health and logs
 

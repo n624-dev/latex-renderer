@@ -6,12 +6,18 @@ import {
   createMcpOperations,
   validateRenderTimeout,
 } from "@latex-renderer/mcp-core";
+import { positiveDurationEnvironment } from "@latex-renderer/shared";
 import { createLatexRendererMcpServer } from "./server.js";
 
 const clientVersion =
   process.env.LATEX_RENDER_CLIENT_VERSION ?? readRepositoryVersion();
 const renderTimeoutMs = validateRenderTimeout(
-  Number(process.env.LATEX_RENDER_MCP_TIMEOUT_MS ?? 10 * 60 * 1000),
+  positiveDurationEnvironment(
+    process.env,
+    "LATEX_RENDER_MCP_TIMEOUT_MS",
+    10 * 60 * 1000,
+    30 * 60 * 1000,
+  ),
 );
 const operations = createMcpOperations({ renderTimeoutMs });
 

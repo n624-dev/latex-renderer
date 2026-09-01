@@ -1,4 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
+import {
+  decodePageCursor,
+  encodePageCursor,
+  type Page,
+} from "@latex-renderer/shared";
 
 export interface UserRow {
   id: string;
@@ -25,6 +30,61 @@ export class UsersRepository {
       FROM users ORDER BY created_at DESC LIMIT ?`,
       )
       .all(limit) as unknown as UserRow[];
+  }
+
+  listPage(
+    options: {
+      cursor?: string | undefined;
+      limit?: number | undefined;
+      query?: string | undefined;
+    } = {},
+  ): Page<UserRow> {
+    const limit = options.limit ?? 50,
+      cursor = decodePageCursor(options.cursor, ["createdAt", "id"]),
+      conditions: string[] = [],
+      params: Array<string | number> = [],
+      query = options.query?.trim().toLowerCase();
+    if (query !== undefined && query !== "") {
+      conditions.push(
+        "(instr(lower(id),?)>0 OR instr(lower(COALESCE(email,'')),?)>0 OR instr(lower(display_name),?)>0 OR instr(lower(COALESCE(access_subject,'')),?)>0)",
+      );
+      params.push(query, query, query, query);
+    }
+    if (cursor !== undefined) {
+      conditions.push("(created_at < ? OR (created_at = ? AND id < ?))");
+      params.push(cursor.createdAt, cursor.createdAt, cursor.id);
+    }
+    params.push(limit + 1);
+    const rows = this.db
+      .prepare(
+        `SELECT id,access_subject,access_subject_linked_at,access_subject_generation,email,display_name,role,status,security_version,created_at,updated_at,last_login_at
+         FROM users${conditions.length ? ` WHERE ${conditions.join(" AND ")}` : ""}
+         ORDER BY created_at DESC,id DESC LIMIT ?`,
+      )
+      .all(...params) as unknown as UserRow[];
+    const filterParams = params.slice(
+        0,
+        params.length - 1 - (cursor === undefined ? 0 : 3),
+      ),
+      total = (
+        this.db
+          .prepare(
+            `SELECT COUNT(*) AS count FROM users${conditions.filter((condition) => !condition.startsWith("(created_at <")).length ? ` WHERE ${conditions.filter((condition) => !condition.startsWith("(created_at <")).join(" AND ")}` : ""}`,
+          )
+          .get(...filterParams) as { count: number }
+      ).count;
+    const hasMore = rows.length > limit;
+    if (hasMore) rows.pop();
+    const last = rows.at(-1);
+    return {
+      items: rows,
+      hasMore,
+      nextCursor:
+        hasMore && last !== undefined
+          ? encodePageCursor({ createdAt: last.created_at, id: last.id })
+          : null,
+      total,
+    };
   }
 
   get(id: string): UserRow | undefined {

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { gatewayRoute } from "@latex-renderer/gateway-core";
 import gatewayApp from "./index.js";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -98,5 +99,74 @@ describe("gateway boundary", () => {
     expect(upstream).toBe(
       "http://internal-api.local/internal/v1/source-tickets",
     );
+  });
+
+  it("proxies a bodyless job-ticket renewal without Content-Length", async () => {
+    let capturedInit: RequestInit | undefined;
+    const internalFetch = vi.fn(
+      (input: string | URL | Request, init?: RequestInit) => {
+        void input;
+        capturedInit = init;
+        return Promise.resolve(
+          Response.json({
+            jobTicket: "ticket",
+            expiresAt: "2026-08-12T00:00:00.000Z",
+          }),
+        );
+      },
+    );
+    const jobId = `job_${"a".repeat(32)}`;
+    const response = await gatewayApp.request(
+      `/api/v1/job-tickets/${jobId}`,
+      {
+        method: "POST",
+        headers: {
+          Authorization:
+            "Bearer lrk_11111111111111111111111111111111_1111111111111111111111111111111111111111111",
+        },
+      },
+      { INTERNAL_API: { fetch: internalFetch } },
+    );
+
+    expect(response.status).toBe(200);
+    expect(internalFetch).toHaveBeenCalledOnce();
+    expect(new Headers(capturedInit?.headers).has("Content-Type")).toBe(false);
+    expect(capturedInit?.body).toBeUndefined();
+    await expect(response.json()).resolves.toMatchObject({
+      jobTicket: "ticket",
+    });
+  });
+
+  it("does not silently discard a body sent to a bodyless endpoint", async () => {
+    const internalFetch = vi.fn(() =>
+      Promise.resolve(Response.json({ ok: true })),
+    );
+    const jobId = `job_${"b".repeat(32)}`;
+    const response = await gatewayApp.request(
+      `/api/v1/job-tickets/${jobId}`,
+      {
+        method: "POST",
+        headers: {
+          Authorization:
+            "Bearer lrk_11111111111111111111111111111111_1111111111111111111111111111111111111111111",
+          "Content-Type": "application/json",
+          "Content-Length": "2",
+        },
+        body: "{}",
+      },
+      { INTERNAL_API: { fetch: internalFetch } },
+    );
+
+    expect(response.status).toBe(400);
+    expect(internalFetch).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: "REQUEST_BODY_NOT_ALLOWED" },
+    });
+  });
+
+  it("marks the bodyless public route correctly at runtime", () => {
+    expect(
+      gatewayRoute("/api/v1/job-tickets/job_" + "a".repeat(32), "POST"),
+    ).toMatchObject({ bodyRequired: false, idempotencyRequired: false });
   });
 });

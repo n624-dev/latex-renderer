@@ -1247,6 +1247,11 @@ function installRenderWorkflow(csrfToken: string): void {
         state = document.createElement("td"),
         job = document.createElement("td"),
         actions = document.createElement("td");
+      name.dataset.label = "文書";
+      state.dataset.label = "状態";
+      job.dataset.label = "ジョブID";
+      actions.dataset.label = "操作";
+      actions.className = "actions-cell";
       name.textContent = task.label;
       state.textContent = task.message ?? jobStatusLabel(task.state);
       job.textContent = task.jobId ?? "—";

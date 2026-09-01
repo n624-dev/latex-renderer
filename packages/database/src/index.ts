@@ -128,14 +128,24 @@ export class RendererDatabase {
         "Source status set cannot be empty",
         500,
       );
-    const set = [
-      "status = ?",
-      "updated_at = ?",
-      ...Object.keys(updates).map((key) => `${key} = ?`),
-    ];
+    const terminal = new Set([
+        "succeeded",
+        "failed",
+        "timeout",
+        "canceled",
+        "rejected",
+        "expired",
+      ]),
+      set = [
+        "status = ?",
+        "updated_at = ?",
+        ...(terminal.has(to) ? ["render_status = ?"] : []),
+        ...Object.keys(updates).map((key) => `${key} = ?`),
+      ];
     const values: SQLInputValue[] = [
       to,
       nowIso(),
+      ...(terminal.has(to) ? [to] : []),
       ...Object.values(updates),
       jobId,
       ...from,
@@ -160,12 +170,13 @@ export class RendererDatabase {
     owner: string,
     claimUntil: string,
   ): void {
-    const result = this.raw
+    const timestamp = nowIso(),
+      result = this.raw
       .prepare(
-        `UPDATE used_nonces SET state='claimed', claim_owner=?, claimed_at=?, expires_at=?
-    WHERE nonce=? AND job_id=? AND state IN ('unused','released')`,
+        `UPDATE used_nonces SET state='claimed',claim_owner=?,claimed_at=?,claim_expires_at=?
+    WHERE nonce=? AND job_id=? AND state IN ('unused','released') AND expires_at>?`,
       )
-      .run(owner, nowIso(), claimUntil, nonce, jobId);
+      .run(owner, timestamp, claimUntil, nonce, jobId, timestamp);
     if (result.changes !== 1)
       throw new AppError(
         "UPLOAD_TICKET_REPLAYED",
@@ -173,21 +184,39 @@ export class RendererDatabase {
         409,
       );
   }
+  extendNonceClaim(
+    nonce: string,
+    owner: string,
+    timestamp: string,
+    claimUntil: string,
+  ): number {
+    return Number(
+      this.raw
+        .prepare(
+          `UPDATE used_nonces SET claim_expires_at=?
+           WHERE nonce=? AND state='claimed' AND claim_owner=? AND claim_expires_at>?`,
+        )
+        .run(claimUntil, nonce, owner, timestamp).changes,
+    );
+  }
   consumeNonce(nonce: string, owner: string): void {
-    const result = this.raw
+    const timestamp = nowIso(),
+      result = this.raw
       .prepare(
-        "UPDATE used_nonces SET state='consumed', used_at=? WHERE nonce=? AND state='claimed' AND claim_owner=?",
+        "UPDATE used_nonces SET state='consumed',used_at=?,claim_expires_at=NULL WHERE nonce=? AND state='claimed' AND claim_owner=? AND claim_expires_at>?",
       )
-      .run(nowIso(), nonce, owner);
+      .run(timestamp, nonce, owner, timestamp);
     if (result.changes !== 1)
       throw new AppError("NONCE_STATE_CONFLICT", "Upload claim was lost", 409);
   }
-  releaseNonce(nonce: string, owner: string): void {
-    this.raw
-      .prepare(
-        "UPDATE used_nonces SET state='released', claim_owner=NULL, claimed_at=NULL WHERE nonce=? AND state='claimed' AND claim_owner=?",
-      )
-      .run(nonce, owner);
+  releaseNonce(nonce: string, owner: string, timestamp = nowIso()): number {
+    return Number(
+      this.raw
+        .prepare(
+          "UPDATE used_nonces SET state='released',claim_owner=NULL,claimed_at=NULL,claim_expires_at=NULL WHERE nonce=? AND state='claimed' AND claim_owner=? AND claim_expires_at>?",
+        )
+        .run(nonce, owner, timestamp).changes,
+    );
   }
   claimSourceNonce(
     nonce: string,
@@ -195,11 +224,13 @@ export class RendererDatabase {
     owner: string,
     claimUntil: string,
   ): void {
-    const result = this.raw
+    const timestamp = nowIso(),
+      result = this.raw
       .prepare(
-        `UPDATE source_upload_nonces SET state='claimed',claim_owner=?,claimed_at=?,expires_at=? WHERE nonce=? AND source_id=? AND state IN ('unused','released')`,
+        `UPDATE source_upload_nonces SET state='claimed',claim_owner=?,claimed_at=?,claim_expires_at=?
+         WHERE nonce=? AND source_id=? AND state IN ('unused','released') AND expires_at>?`,
       )
-      .run(owner, nowIso(), claimUntil, nonce, sourceId);
+      .run(owner, timestamp, claimUntil, nonce, sourceId, timestamp);
     if (result.changes !== 1)
       throw new AppError(
         "UPLOAD_TICKET_REPLAYED",
@@ -207,21 +238,43 @@ export class RendererDatabase {
         409,
       );
   }
+  extendSourceNonceClaim(
+    nonce: string,
+    owner: string,
+    timestamp: string,
+    claimUntil: string,
+  ): number {
+    return Number(
+      this.raw
+        .prepare(
+          `UPDATE source_upload_nonces SET claim_expires_at=?
+           WHERE nonce=? AND state='claimed' AND claim_owner=? AND claim_expires_at>?`,
+        )
+        .run(claimUntil, nonce, owner, timestamp).changes,
+    );
+  }
   consumeSourceNonce(nonce: string, owner: string): void {
-    const result = this.raw
+    const timestamp = nowIso(),
+      result = this.raw
       .prepare(
-        "UPDATE source_upload_nonces SET state='consumed',used_at=? WHERE nonce=? AND state='claimed' AND claim_owner=?",
+        "UPDATE source_upload_nonces SET state='consumed',used_at=?,claim_expires_at=NULL WHERE nonce=? AND state='claimed' AND claim_owner=? AND claim_expires_at>?",
       )
-      .run(nowIso(), nonce, owner);
+      .run(timestamp, nonce, owner, timestamp);
     if (result.changes !== 1)
       throw new AppError("NONCE_STATE_CONFLICT", "Upload claim was lost", 409);
   }
-  releaseSourceNonce(nonce: string, owner: string): void {
-    this.raw
-      .prepare(
-        "UPDATE source_upload_nonces SET state='released',claim_owner=NULL,claimed_at=NULL WHERE nonce=? AND state='claimed' AND claim_owner=?",
-      )
-      .run(nonce, owner);
+  releaseSourceNonce(
+    nonce: string,
+    owner: string,
+    timestamp = nowIso(),
+  ): number {
+    return Number(
+      this.raw
+        .prepare(
+          "UPDATE source_upload_nonces SET state='released',claim_owner=NULL,claimed_at=NULL,claim_expires_at=NULL WHERE nonce=? AND state='claimed' AND claim_owner=? AND claim_expires_at>?",
+        )
+        .run(nonce, owner, timestamp).changes,
+    );
   }
 }
 

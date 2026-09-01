@@ -154,6 +154,17 @@ if [ "$image_fingerprint" != "$current_fingerprint" ]; then
   fi
 
   new_runtime_image=$(rootless_docker image inspect "$new_runtime_ref" --format '{{.Id}}')
+  if [ "$runtime_source" = ghcr ]; then
+    new_runtime_package_ref=$(rootless_docker image inspect "$new_runtime_image" \
+      --format '{{range .RepoDigests}}{{println .}}{{end}}' \
+      | awk -v prefix="$image_repository@sha256:" 'index($0, prefix) == 1 { print; exit }')
+    case "$new_runtime_package_ref" in
+      "$image_repository"@sha256:[0-9a-f][0-9a-f]*) ;;
+      *) echo "Pulled GHCR Runtime has no digest-qualified reference" >&2; exit 78 ;;
+    esac
+    new_runtime_ref=$new_runtime_package_ref
+    runtime_package_ref=$new_runtime_package_ref
+  fi
   new_fingerprint=$(rootless_docker image inspect "$new_runtime_image" \
     --format '{{index .Config.Labels "jp.n624.latex-renderer.renderer-runtime-fingerprint"}}')
   new_identity=$(rootless_docker image inspect "$new_runtime_image" \

@@ -7,9 +7,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { rendererRuntimeFingerprint, runtimeIdentity } from "./runtime-image-identity.mjs";
 import { acquireMutationLock } from "./mutation-lock.mjs";
+import { boundedIntegerEnvironment, validPortEnvironment } from "./environment.mjs";
 
 const host = process.env.IMAGE_MANAGER_HOST ?? "127.0.0.1";
-const port = Number(process.env.IMAGE_MANAGER_PORT ?? "3110");
+const port = validPortEnvironment(process.env, "IMAGE_MANAGER_PORT", 3110);
 const tokenFile = process.env.IMAGE_MANAGER_TOKEN_FILE ?? "/etc/latex-renderer/secrets/image-manager-token";
 const rendererEnv = process.env.RENDERER_ENV_FILE ?? "/etc/latex-renderer/renderer.env";
 const repoRoot = process.env.IMAGE_MANAGER_REPO_ROOT ?? "/opt/latex-renderer/current";
@@ -18,13 +19,12 @@ const dockerConfigRoot = process.env.DOCKER_CONFIG ?? join(stateRoot, "docker-co
 const environmentRoot = process.env.RENDERER_ENVIRONMENT_ROOT ?? "/var/lib/latex-renderer/environment";
 const workerUser = process.env.RENDERER_WORKER_USER ?? "latex-render-worker";
 const imageRepository = process.env.TEXLIVE_IMAGE_REPOSITORY ?? "ghcr.io/n624-dev/latex-renderer-texlive";
-const fetchTimeoutMs = Number(process.env.IMAGE_MANAGER_FETCH_TIMEOUT_MS ?? "30000");
+const fetchTimeoutMs = boundedIntegerEnvironment(process.env, "IMAGE_MANAGER_FETCH_TIMEOUT_MS", 30_000, 1_000, 120_000);
+const maxOperationLogBytes = boundedIntegerEnvironment(process.env, "IMAGE_MANAGER_MAX_OPERATION_LOG_BYTES", 4 * 1024 * 1024, 64 * 1024, 64 * 1024 * 1024);
 const ghcrPath = imageRepository.replace(/^ghcr\.io\//, "");
 const [ghcrOwner, ...ghcrNameParts] = ghcrPath.split("/");
 const ghcrName = ghcrNameParts.join("/");
 if (!["127.0.0.1", "::1"].includes(host)) throw new Error("IMAGE_MANAGER_HOST must be a loopback address");
-if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("Invalid IMAGE_MANAGER_PORT");
-if (!Number.isSafeInteger(fetchTimeoutMs) || fetchTimeoutMs < 1000 || fetchTimeoutMs > 120000) throw new Error("IMAGE_MANAGER_FETCH_TIMEOUT_MS must be between 1000 and 120000");
 if (!ghcrOwner || !ghcrName) throw new Error("TEXLIVE_IMAGE_REPOSITORY must point to ghcr.io/owner/name");
 
 await mkdir(stateRoot, { recursive: true, mode: 0o750 });
@@ -151,21 +151,35 @@ function fetchWithTimeout(url, init = {}) {
 }
 
 function runCapture(command, args, options = {}) {
+  const { maxOutputBytes = 32 * 1024 * 1024, ...spawnOptions } = options;
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
-      ...options,
+      ...spawnOptions,
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
     let stderr = "";
+    let capturedBytes = 0;
+    let captureError = null;
+    const capture = (target, chunk) => {
+      if (captureError) return target;
+      capturedBytes += chunk.length;
+      if (capturedBytes > maxOutputBytes) {
+        captureError = new Error(`${command} output exceeds the configured capture limit`);
+        child.kill("SIGKILL");
+        return target;
+      }
+      return target + String(chunk);
+    };
     child.stdout.on("data", (chunk) => {
-      stdout += String(chunk);
+      stdout = capture(stdout, chunk);
     });
     child.stderr.on("data", (chunk) => {
-      stderr += String(chunk);
+      stderr = capture(stderr, chunk);
     });
     child.on("error", reject);
     child.on("close", (code) => {
+      if (captureError) return reject(captureError);
       if (code === 0) resolve(stdout);
       else reject(new Error(`${command} exited ${code}: ${stderr.trim()}`));
     });
@@ -174,19 +188,24 @@ function runCapture(command, args, options = {}) {
 
 async function runLogged(op, command, args, options = {}) {
   await appendLog(op, `$ ${command} ${args.join(" ")}\n`);
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      ...options,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    child.stdout.on("data", (chunk) => appendLog(op, String(chunk)).catch(() => {}));
-    child.stderr.on("data", (chunk) => appendLog(op, String(chunk)).catch(() => {}));
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`${command} exited with code ${code}`));
-    });
+  const child = spawn(command, args, {
+    ...options,
+    stdio: ["ignore", "pipe", "pipe"],
   });
+  const consume = async (stream) => {
+    for await (const chunk of stream) await appendLog(op, String(chunk));
+  };
+  const closed = new Promise((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", resolve);
+  });
+  try {
+    const [code] = await Promise.all([closed, consume(child.stdout), consume(child.stderr)]);
+    if (code !== 0) throw new Error(`${command} exited with code ${code}`);
+  } catch (error) {
+    child.kill("SIGKILL");
+    throw error;
+  }
 }
 
 function dockerRunuserArgs(args) {
@@ -201,8 +220,34 @@ async function dockerLogged(op, args) {
   return runLogged(op, "runuser", dockerRunuserArgs(args));
 }
 
-async function appendLog(op, text) {
-  await writeFile(op.logPath, text, { flag: "a", mode: 0o640 });
+function redactLog(text) {
+  return String(text)
+    .replace(/((?:authorization|password|secret|token|credential)[=:][ \t]*)[^\s]+/gi, "$1[REDACTED]")
+    .replace(/\b(?:gh[oprsu]_|github_pat_)[A-Za-z0-9_]+\b/g, "[REDACTED]");
+}
+
+function appendLog(op, text) {
+  const write = (op.logWrite ?? Promise.resolve()).then(async () => {
+    const marker = Buffer.from("\n[LOG_LIMIT_REACHED]\n");
+    const bytes = Buffer.from(redactLog(text));
+    const handle = await open(op.logPath, "a+", 0o640);
+    try {
+      const current = (await handle.stat()).size;
+      if (current >= maxOperationLogBytes) return;
+      const remaining = maxOperationLogBytes - current;
+      if (bytes.length <= remaining) {
+        await handle.write(bytes);
+        return;
+      }
+      const prefixLength = Math.max(0, remaining - marker.length);
+      if (prefixLength > 0) await handle.write(bytes.subarray(0, prefixLength));
+      await handle.write(marker.subarray(0, remaining - prefixLength));
+    } finally {
+      await handle.close();
+    }
+  });
+  op.logWrite = write.catch(() => {});
+  return write;
 }
 
 function operationView(op) {
@@ -503,8 +548,12 @@ async function inspectBase(ref) {
   }
   const matchingDigest = Array.isArray(info.RepoDigests) ? info.RepoDigests.find((item) => item.startsWith(`${imageRepository}@`)) : undefined;
   const digest = matchingDigest?.split("@")[1] ?? info.Id;
+  // A tag is only a discovery selector. Carry the registry's
+  // digest-qualified reference into every subsequent build so a later tag
+  // mutation cannot change the Base used by the derived Runtime. Locally
+  // built Bases have no RepoDigest and are addressed by their image ID.
   return {
-    ref,
+    ref: matchingDigest ?? info.Id,
     imageId: info.Id,
     digest,
     repository,
@@ -667,14 +716,21 @@ async function inspectRuntimeCandidate(ref, expected) {
   if (missing.length > 0) {
     throw new Error(`Prebuilt Runtime is missing selected language collections: ${missing.join(",")}`);
   }
+  const matchingDigest = Array.isArray(info.RepoDigests)
+    ? info.RepoDigests.find((item) => item.startsWith(imageRepository + "@"))
+    : undefined;
+  const immutableRef = matchingDigest ?? info.Id;
+  const isPackageReference =
+    ref.startsWith(imageRepository + ":") ||
+    ref.startsWith(imageRepository + "@");
   return {
-    ref,
+    ref: immutableRef,
     imageId: info.Id,
     rendererFingerprint: expected.rendererFingerprint,
     effectiveLanguages: installed,
     identity: expected.digest,
-    source: ref.startsWith(`${imageRepository}:`) ? "ghcr" : "local-build",
-    packageRef: ref.startsWith(`${imageRepository}:`) ? ref : null,
+    source: isPackageReference ? "ghcr" : "local-build",
+    packageRef: isPackageReference ? immutableRef : null,
   };
 }
 

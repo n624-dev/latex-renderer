@@ -8,14 +8,10 @@ export TEXMFVAR=/tmp/texlive/texmf-var
 export TEXMFCNF=/opt/renderer:
 export TEXMFCACHE=/tmp/texlive/texmf-var:/opt/texlive/2026/texmf-var
 
-# The bind mount is owned by the rootless Docker host user, while rendered
-# children use subordinate IDs. The storage root remains group-private; make
-# nested output directories removable by the host cleanup service.
-ensure_cleanup_access() {
-  find /work/output -mindepth 1 -type d -exec chmod a+rwx {} + 2>/dev/null || true
-}
-trap ensure_cleanup_access EXIT
-umask 000
+# The host storage tree supplies a narrowly scoped default ACL for this
+# rootless container's subordinate UID/GID. Keep generated files group-private
+# and never widen the bind mount to every host user.
+umask 0007
 mkdir -p "$HOME" "$TEXMFHOME" "$TEXMFCONFIG" "$TEXMFVAR" /work/output/previews
 mkdir -p "$TEXMFVAR/luatex-cache/generic"
 cp -R /opt/texlive/2026/texmf-var/luatex-cache/generic/names \

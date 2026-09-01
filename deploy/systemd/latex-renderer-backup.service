@@ -16,5 +16,6 @@ ProtectHome=true
 PrivateTmp=true
 PrivateDevices=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-ReadWritePaths=/var/lib/latex-renderer /var/lib/latex-renderer/backups
+ReadOnlyPaths=/var/lib/latex-renderer/renderer.sqlite3 /var/lib/latex-renderer/storage
+ReadWritePaths=/var/lib/latex-renderer/backups
 UMask=0077

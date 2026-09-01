@@ -21,6 +21,7 @@ import { OidcClient, safeReturnTo } from "./oidc.js";
 export const SESSION_COOKIE = "__Host-latex_renderer_session";
 export const CSRF_COOKIE = "__Host-latex_renderer_csrf";
 export const OIDC_STATE_COOKIE = "__Host-latex_renderer_oidc_state";
+const OIDC_STATE_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 export type DeploymentMode = "cloudflare" | "standalone";
 
 const DEFAULT_IDLE_MS = 30 * 60 * 1000;
@@ -29,6 +30,8 @@ const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const LOGIN_BLOCK_MS = 15 * 60 * 1000;
 const LOGIN_FAILURE_LIMIT = 5;
 const MAXIMUM_LOGIN_ATTEMPT_ROWS = 10_000;
+const MAXIMUM_ACTIVE_SESSIONS_PER_USER = 20;
+const MAXIMUM_ACTIVE_SESSIONS_GLOBAL = 10_000;
 const MAXIMUM_PASSWORD_OPERATIONS = 8;
 const DEFAULT_SCRYPT_LOG_N = 17;
 const SCRYPT_R = 8;
@@ -49,6 +52,11 @@ export interface CreatedBrowserSession {
   token: string;
   csrfToken: string;
   cookies: readonly string[];
+}
+
+interface SessionAuditContext {
+  ipAddress?: string | undefined;
+  userAgent?: string | undefined;
 }
 
 export interface BrowserAuthenticationOptions {
@@ -266,6 +274,7 @@ export class BrowserAuthenticationService {
       this.mode,
       principal.identity,
       identity.expiresAt,
+      sessionAuditContext(request),
     );
   }
 
@@ -284,8 +293,9 @@ export class BrowserAuthenticationService {
     this.requireExactOrigin(input.request);
     const normalized = normalizeLoginNameSoft(input.loginName);
     const ip = boundedIdentifier(input.ipAddress, "unknown");
+    const loginRateKey = this.rateKey(`login:${normalized}`);
     const rateKeys = [
-      this.rateKey(`login:${normalized}`),
+      loginRateKey,
       this.rateKey(`ip:${ip}`),
     ];
     this.assertNotRateLimited(rateKeys);
@@ -318,21 +328,19 @@ export class BrowserAuthenticationService {
       );
     }
     this.database.transaction(() => {
-      this.database.browserAuth.clearLoginAttempts(rateKeys);
+      // Keep the address-wide failure history independent from a successful
+      // login to one account. Only the account-specific window is reset.
+      this.database.browserAuth.clearLoginAttempts([loginRateKey]);
       this.database.users.touchLogin(user.id, this.timestamp());
-      this.database.audit({
-        actorType: "user",
-        actorId: user.id,
-        action: "auth.login",
-        targetType: "user",
-        targetId: user.id,
-        result: "success",
-        ipAddress: ip,
-        metadata: { mode: "password" },
-      });
     });
     this.logout(input.request);
-    return this.createSession(user, "password");
+    return this.createSession(
+      user,
+      "password",
+      undefined,
+      undefined,
+      sessionAuditContext(input.request, ip),
+    );
   }
 
   async hashPassword(password: string, loginName: string): Promise<string> {
@@ -357,20 +365,24 @@ export class BrowserAuthenticationService {
     );
   }
 
-  async beginOidc(returnTo?: string) {
+  async beginOidc(returnTo?: string, clientAddress = "unavailable") {
     if (this.mode !== "oidc" || this.oidc === undefined)
       throw new AppError(
         "AUTH_MODE_MISMATCH",
         "OIDC authentication is not enabled",
         404,
       );
-    return this.oidc.begin(safeReturnTo(returnTo ?? "/app/"));
+    return this.oidc.begin(
+      safeReturnTo(returnTo ?? "/app/"),
+      clientAddress,
+    );
   }
 
   async finishOidc(input: {
     code: string;
     state: string;
     stateCookie: string;
+    request?: Request | undefined;
   }): Promise<CreatedBrowserSession & { returnTo: string }> {
     if (this.mode !== "oidc" || this.oidc === undefined)
       throw new AppError(
@@ -386,6 +398,7 @@ export class BrowserAuthenticationService {
         "oidc",
         principal.identity,
         completed.identity.expiresAt,
+        sessionAuditContext(input.request),
       ),
       returnTo: completed.returnTo,
     };
@@ -506,6 +519,7 @@ export class BrowserAuthenticationService {
     mode: BrowserAuthMode,
     identity?: UserIdentityRow,
     capExpiresAt?: string,
+    auditLogin?: SessionAuditContext,
   ): CreatedBrowserSession {
     const now = this.now();
     const token = randomBytes(32).toString("base64url");
@@ -540,9 +554,53 @@ export class BrowserAuthenticationService {
       revoked_at: null,
     };
     this.database.transaction(() => {
-      this.database.browserAuth.deleteExpiredSessions(now.toISOString());
+      const timestamp = now.toISOString();
+      this.database.browserAuth.deleteExpiredSessions(timestamp);
+      const activeForUser =
+        this.database.browserAuth.activeSessionCountForUser(
+          user.id,
+          timestamp,
+        );
+      this.database.browserAuth.revokeOldestActiveSessionsForUser(
+        user.id,
+        timestamp,
+        Math.max(0, activeForUser - MAXIMUM_ACTIVE_SESSIONS_PER_USER + 1),
+      );
+      const activeGlobally = this.database.browserAuth.activeSessionCount(
+        timestamp,
+      );
+      this.database.browserAuth.revokeOldestActiveSessions(
+        timestamp,
+        Math.max(0, activeGlobally - MAXIMUM_ACTIVE_SESSIONS_GLOBAL + 1),
+      );
       this.database.browserAuth.insertSession(row);
-      this.database.users.touchLogin(user.id, now.toISOString());
+      this.database.users.touchLogin(user.id, timestamp);
+      if (auditLogin !== undefined) {
+        this.database.audit({
+          actorType: "user",
+          actorId: user.id,
+          action: "auth.login",
+          targetType: "user",
+          targetId: user.id,
+          result: "success",
+          ...(auditLogin.ipAddress
+            ? { ipAddress: auditLogin.ipAddress }
+            : {}),
+          ...(auditLogin.userAgent
+            ? { userAgent: auditLogin.userAgent }
+            : {}),
+          metadata: {
+            mode,
+            ...(identity
+              ? {
+                  provider: identity.provider,
+                  issuer: identity.issuer,
+                  identityId: identity.id,
+                }
+              : {}),
+          },
+        });
+      }
     });
     const maxAge = Math.max(1, Math.floor((absoluteMs - now.getTime()) / 1000));
     return {
@@ -764,6 +822,12 @@ export function clearCookies(): readonly string[] {
   ];
 }
 
+export function oidcStateCookieName(state: string): string {
+  if (!OIDC_STATE_PATTERN.test(state))
+    throw new AppError("OIDC_STATE_INVALID", "OIDC login state is invalid or expired", 401);
+  return `${OIDC_STATE_COOKIE}_${state}`;
+}
+
 function exactHttpsOrigin(value: string): string {
   const url = new URL(value);
   if (
@@ -818,6 +882,28 @@ function normalizeLoginNameSoft(value: string): string {
 function boundedIdentifier(value: string, fallback: string): string {
   const trimmed = value.trim();
   return trimmed.length > 0 && trimmed.length <= 200 ? trimmed : fallback;
+}
+
+function sessionAuditContext(
+  request: Request | undefined,
+  ipAddress?: string,
+): SessionAuditContext {
+  const resolvedIp =
+    ipAddress ??
+    boundedIdentifier(
+      request?.headers.get("CF-Connecting-IP") ??
+        request?.headers.get("X-Latex-Renderer-Client-IP") ??
+        "",
+      "",
+    );
+  const userAgent = boundedIdentifier(
+    request?.headers.get("User-Agent") ?? "",
+    "",
+  );
+  return {
+    ...(resolvedIp ? { ipAddress: resolvedIp } : {}),
+    ...(userAgent ? { userAgent } : {}),
+  };
 }
 
 function hasControlCharacters(value: string): boolean {

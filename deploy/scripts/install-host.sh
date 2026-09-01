@@ -1,5 +1,6 @@
 #!/bin/sh
 set -eu
+source_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
 if [ "$(id -u)" -ne 0 ]; then echo "install-host.sh must run as root" >&2; exit 77; fi
 if [ ! -x /usr/local/bin/node ] || [ "$(/usr/local/bin/node -p 'process.versions.node.split(".")[0]')" != 24 ]; then
   echo "Node.js 24 must be installed at /usr/local/bin/node before host setup" >&2
@@ -10,7 +11,8 @@ if [ ! -x /usr/local/bin/corepack ] || ! /usr/local/bin/corepack --version >/dev
   exit 69
 fi
 apt-get update
-DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl age apparmor apparmor-utils jq openssl psmisc rsync sqlite3 uidmap dbus-user-session slirp4netns fuse-overlayfs util-linux xz-utils
+DEBIAN_FRONTEND=noninteractive apt-get install -y acl ca-certificates curl age apparmor apparmor-utils jq openssl psmisc rsync sqlite3 uidmap dbus-user-session slirp4netns fuse-overlayfs sudo util-linux xz-utils
+sh "$source_root/deploy/scripts/install-github-cli.sh"
 getent group latex-renderer >/dev/null || groupadd --system latex-renderer
 id latex-renderer >/dev/null 2>&1 || useradd --system --gid latex-renderer --home-dir /var/lib/latex-renderer --shell /usr/sbin/nologin latex-renderer
 id latex-renderer-web >/dev/null 2>&1 || useradd --system --gid latex-renderer --home-dir /nonexistent --shell /usr/sbin/nologin latex-renderer-web
@@ -21,17 +23,25 @@ id latex-render-worker >/dev/null 2>&1 || useradd --system --gid latex-renderer 
 grep -q '^latex-render-worker:' /etc/subuid || usermod --add-subuids 165536-231071 latex-render-worker
 grep -q '^latex-render-worker:' /etc/subgid || usermod --add-subgids 165536-231071 latex-render-worker
 id latex-renderer-backup >/dev/null 2>&1 || useradd --system --gid latex-renderer --home-dir /var/backups/latex-renderer --shell /usr/sbin/nologin latex-renderer-backup
+id latex-renderer-update >/dev/null 2>&1 || useradd --system --gid latex-renderer --home-dir /var/lib/latex-renderer/update-manager --shell /usr/sbin/nologin latex-renderer-update
 id cloudflared >/dev/null 2>&1 || useradd --system --home-dir /var/lib/cloudflared --shell /usr/sbin/nologin cloudflared
 install -d -o root -g latex-renderer -m 2770 /var/lib/latex-renderer
 install -d -o latex-renderer -g latex-renderer -m 2770 /var/lib/latex-renderer/storage
+sh "$source_root/deploy/scripts/configure-renderer-storage-acl.sh" \
+  /var/lib/latex-renderer/storage /etc/latex-renderer/renderer.env
 install -d -o root -g latex-renderer -m 0750 /var/lib/latex-renderer/image-manager /var/lib/latex-renderer/image-manager/tmp /var/lib/latex-renderer/image-manager/operations
-install -d -o root -g latex-renderer -m 0750 /var/lib/latex-renderer/update-manager /var/lib/latex-renderer/update-manager/operations
+install -d -o latex-renderer-update -g latex-renderer -m 0750 /var/lib/latex-renderer/update-manager /var/lib/latex-renderer/update-manager/operations /var/lib/latex-renderer/update-manager/staging
 install -d -o root -g root -m 0711 /opt/latex-renderer/update-staging
 install -d -o root -g latex-renderer -m 0750 /etc/latex-renderer /etc/latex-renderer/secrets
 install -d -o root -g latex-renderer -m 0750 /etc/latex-renderer/ticket-keys
 install -d -o latex-renderer-backup -g latex-renderer -m 0750 /var/lib/latex-renderer/backups
+install -d -o latex-renderer-backup -g latex-renderer -m 0750 /var/lib/latex-renderer/audit
 install -d -o root -g root -m 0755 /opt/latex-renderer/releases
 install -d -o root -g cloudflared -m 0750 /etc/cloudflared
+install -d -o root -g root -m 0755 /usr/local/libexec
+install -o root -g root -m 0755 "$source_root/deploy/scripts/update-manager-helper-launcher.sh" /usr/local/libexec/latex-renderer-update-helper
+install -o root -g root -m 0440 "$source_root/deploy/sudoers.d/latex-renderer-update" /etc/sudoers.d/latex-renderer-update
+visudo -cf /etc/sudoers.d/latex-renderer-update >/dev/null
 if [ ! -f /etc/latex-renderer/secrets/image-manager-token ]; then
   (umask 077; openssl rand -hex 32 > /etc/latex-renderer/secrets/image-manager-token)
 fi
@@ -68,8 +78,9 @@ d /var/lib/latex-renderer/image-manager/tmp 0750 root latex-renderer -
 d /var/lib/latex-renderer/image-manager/operations 0750 root latex-renderer -
 e /var/lib/latex-renderer/image-manager/tmp - - - 1d
 e /var/lib/latex-renderer/image-manager/operations - - - 30d
-d /var/lib/latex-renderer/update-manager 0750 root latex-renderer -
-d /var/lib/latex-renderer/update-manager/operations 0750 root latex-renderer -
+d /var/lib/latex-renderer/update-manager 0750 latex-renderer-update latex-renderer -
+d /var/lib/latex-renderer/update-manager/operations 0750 latex-renderer-update latex-renderer -
+d /var/lib/latex-renderer/update-manager/staging 0700 latex-renderer-update latex-renderer -
 e /var/lib/latex-renderer/update-manager/operations - - - 30d
 EOF
 systemd-tmpfiles --create /etc/tmpfiles.d/latex-renderer-image-manager.conf

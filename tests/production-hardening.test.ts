@@ -25,7 +25,23 @@ describe("production hardening", () => {
     ])
       expect(read(path)).toContain("/var/lib/latex-renderer/backups");
   });
-  it("keeps privileged manager roots below a root-owned group-writable state parent", () => {
+  it("keeps backup and audit exporters inside narrow filesystem boundaries", () => {
+    const backup = read("deploy/systemd/latex-renderer-backup.service"),
+      audit = read("deploy/systemd/latex-renderer-audit-export.service");
+    expect(backup).toContain(
+      "ReadOnlyPaths=/var/lib/latex-renderer/renderer.sqlite3 /var/lib/latex-renderer/storage",
+    );
+    expect(backup).toContain("ReadWritePaths=/var/lib/latex-renderer/backups");
+    expect(audit).toContain(
+      "ReadOnlyPaths=/var/lib/latex-renderer/renderer.sqlite3",
+    );
+    expect(audit).toContain(
+      "ReadWritePaths=/var/lib/latex-renderer/backups /var/lib/latex-renderer/audit",
+    );
+    expect(backup).not.toContain("ReadWritePaths=/var/lib/latex-renderer ");
+    expect(audit).not.toContain("ReadWritePaths=/var/lib/latex-renderer ");
+  });
+  it("keeps manager roots scoped below a root-owned group-writable state parent", () => {
     const install = read("deploy/scripts/install-host.sh"),
       prepare = read("deploy/scripts/prepare-host.sh");
     for (const script of [install, prepare]) {
@@ -48,7 +64,7 @@ describe("production hardening", () => {
       imageManager =
         "d /var/lib/latex-renderer/image-manager 0750 root latex-renderer -",
       updateManager =
-        "d /var/lib/latex-renderer/update-manager 0750 root latex-renderer -";
+        "d /var/lib/latex-renderer/update-manager 0750 latex-renderer-update latex-renderer -";
     expect(tmpfiles.indexOf(parent)).toBeLessThan(
       tmpfiles.indexOf(imageManager),
     );
@@ -58,8 +74,8 @@ describe("production hardening", () => {
     expect(tmpfiles.indexOf(updateManager)).toBeLessThan(
       tmpfiles.indexOf("/var/lib/latex-renderer/update-manager/operations"),
     );
-    expect(tmpfiles).not.toContain(
-      "/var/lib/latex-renderer/update-manager/staging",
+    expect(tmpfiles).toContain(
+      "d /var/lib/latex-renderer/update-manager/staging 0700 latex-renderer-update latex-renderer -",
     );
     expect(install).toContain(
       "install -d -o root -g root -m 0711 /opt/latex-renderer/update-staging",
@@ -177,6 +193,10 @@ describe("production hardening", () => {
     expect(smoke).toContain('render "$temporary_root/project" --json');
     expect(smoke).toContain('value.command!=="render"');
     expect(smoke).toContain("/apiKey|uploadTicket|jobTicket/i");
+    expect(smoke).toContain("smoke_user=latex-renderer");
+    expect(smoke.match(/runuser -u "\$smoke_user"/g)).toHaveLength(6);
+    expect(smoke).toContain('API_KEY_PEPPER_FILE="$smoke_pepper"');
+    expect(smoke).not.toContain('API_KEY_PEPPER_FILE="$pepper"');
   });
   it("exercises the published cross-platform setup lifecycle in an isolated temporary root", () => {
     const deploy = read("deploy/scripts/deploy-production-release.sh");
@@ -186,6 +206,15 @@ describe("production hardening", () => {
     expect(deploy).toContain('latex-render" doctor --json');
     expect(deploy).toContain('value.command!=="setup.remove"');
     expect(deploy).toContain("/apiKey|uploadTicket|jobTicket|lrk_/i");
+  });
+  it("runs dependency-backed MCPB validation without root privileges", () => {
+    const deploy = read("deploy/scripts/deploy-production-release.sh");
+    expect(deploy).toContain(
+      'runuser -u "$sync_user" -- /usr/local/bin/node \\\n  "$source_root/client/verify-mcpb.mjs"',
+    );
+    expect(deploy).not.toContain(
+      '\n/usr/local/bin/node "$source_root/client/verify-mcpb.mjs"',
+    );
   });
   it("proves the VPC-bound Gateway before removing configured legacy routes", () => {
     const deploy = read("deploy/scripts/deploy-production-release.sh"),
@@ -228,7 +257,7 @@ describe("production hardening", () => {
     );
     expect(deploy).toContain('PNPM_HOME="$sync_pnpm_bin" PATH="$sync_path"');
     expect(deploy).toContain('if [ ! -x "$sync_pnpm_bin/pnpm" ]');
-    expect(deploy).toContain('"$sync_pnpm_bin/pnpm" --dir "$source_root"');
+    expect(deploy).toContain('"$sync_pnpm_bin/pnpm" --dir "$build_root"');
     expect(deploy).not.toContain("/usr/local/bin/corepack pnpm");
   });
   it("builds production services and the client distribution before copying the immutable release", () => {
@@ -246,7 +275,7 @@ describe("production hardening", () => {
     expect(deploy).toContain(clientBuild);
     expect(deploy.indexOf(build)).toBeLessThan(deploy.indexOf(clientBuild));
     expect(deploy.indexOf(clientBuild)).toBeLessThan(deploy.indexOf(prepare));
-    expect(deploy).toContain('[ -f "$source_root/client-dist/manifest.json" ]');
+    expect(deploy).toContain('[ -f "$build_root/client-dist/manifest.json" ]');
   });
   it("waits for the privileged Update Manager socket without restarting its caller", () => {
     const deploy = read("deploy/scripts/deploy-production-release.sh"),
@@ -378,13 +407,31 @@ describe("production hardening", () => {
     const prepare = read("deploy/scripts/prepare-host.sh"),
       compile = read("renderer/compile.sh");
     expect(prepare).toContain("-path '*/work*' -exec chmod g+rwx");
-    expect(prepare).toContain("-path '*/output*'");
-    expect(prepare).toContain("-path '*/staging*'");
-    expect(prepare).toContain("-exec chmod a+rwx");
-    expect(compile.indexOf("umask 000")).toBeLessThan(
-      compile.indexOf("/work/output/previews"),
+    expect(prepare).toContain("configure-renderer-storage-acl.sh");
+    expect(prepare).not.toContain("chmod a+rwx");
+    expect(compile).toContain("umask 0007");
+    expect(compile).not.toContain("ensure_cleanup_access");
+    expect(read("deploy/scripts/configure-renderer-storage-acl.sh")).toContain(
+      "setfacl -m",
     );
-    expect(compile).toContain("trap ensure_cleanup_access EXIT");
+    expect(read("deploy/scripts/configure-renderer-storage-acl.sh")).toContain(
+      "subuid_base + container_uid - 1",
+    );
+    expect(read("deploy/scripts/configure-renderer-storage-acl.sh")).toContain(
+      "subgid_base + container_gid - 1",
+    );
+    expect(read("deploy/scripts/configure-renderer-storage-acl.sh")).toContain(
+      '"$container_uid" -gt "$subuid_count"',
+    );
+    expect(read("deploy/scripts/configure-renderer-storage-acl.sh")).toContain(
+      "o::---",
+    );
+    expect(read("deploy/scripts/configure-renderer-storage-acl.sh")).toContain(
+      "d:o::---",
+    );
+    expect(read("deploy/scripts/install-host.sh")).toContain(
+      "apt-get install -y acl",
+    );
     expect(read("packages/zip-validation/src/index.ts")).toContain(
       "chmod(destination, 0o775)",
     );

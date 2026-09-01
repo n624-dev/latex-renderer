@@ -1,6 +1,17 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
-import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
+import {
+  lstat,
+  mkdir,
+  mkdtemp,
+  open,
+  readFile,
+  readdir,
+  realpath,
+  rename,
+  rm,
+  stat,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, extname, join, relative, resolve } from "node:path";
 import { pipeline } from "node:stream/promises";
@@ -10,8 +21,9 @@ import type {
   SourceTicketResponse,
   RenderOutput,
 } from "@latex-renderer/contracts";
-import { AppError } from "@latex-renderer/shared";
+import { AppError, DEFAULT_RESOURCE_LIMITS } from "@latex-renderer/shared";
 import { validateEntrypointPath } from "@latex-renderer/zip-validation";
+import ignore, { type Ignore } from "ignore";
 import yazl from "yazl";
 import { shouldExcludeProjectPath } from "./project-files.js";
 
@@ -67,8 +79,8 @@ export type ClientCoreEvent =
 
 export interface ArtifactPaths {
   pdf?: string;
-  errors: string;
-  log: string;
+  errors?: string;
+  log?: string;
   job: string;
   previews: string[];
   svg: string[];
@@ -347,13 +359,11 @@ export async function createProjectArchive(
     entrypoint === undefined ? undefined : validateEntrypointPath(entrypoint);
   let entrypointFound = false,
     texFound = false;
+  let sourceBytes = 0;
   let ended = false;
   try {
-    for (const path of await walk(root)) {
-      const name = relative(root, path).replaceAll("\\", "/");
-      if (shouldExcludeProjectPath(name)) continue;
-      const info = await stat(path);
-      if (!info.isFile()) continue;
+    const exclusions = await projectIgnore(root);
+    for await (const { path, name, size } of walkProject(root, exclusions)) {
       if (name === requiredEntrypoint) entrypointFound = true;
       if (extname(name).toLowerCase() === ".tex") texFound = true;
       files += 1;
@@ -361,6 +371,13 @@ export async function createProjectArchive(
         throw new AppError(
           "TOO_MANY_FILES",
           "Project has more than 500 files",
+          400,
+        );
+      sourceBytes += size;
+      if (sourceBytes > DEFAULT_RESOURCE_LIMITS.maxExtractedBytes)
+        throw new AppError(
+          "PROJECT_TOO_LARGE",
+          `Project files exceed ${DEFAULT_RESOURCE_LIMITS.maxExtractedBytes} bytes`,
           400,
         );
       zip.addFile(path, name, { mode: 0o600, mtime: new Date(0) });
@@ -441,57 +458,49 @@ async function downloadArtifacts(
   outputDirectory: string,
   options: ClientCoreOptions,
 ): Promise<ArtifactPaths> {
-  await mkdir(outputDirectory, { recursive: true });
-  let pdf: string | undefined;
-  if (job.status === "succeeded") {
-    pdf = join(outputDirectory, "result.pdf");
-    await client.download(
-      client.artifactUrl(job.id, "result.pdf"),
-      jobTicket,
-      pdf,
+  await ensureSecureDirectory(outputDirectory);
+  const paths = new Map(
+    job.artifacts.map((artifact) => [artifact.relativePath, artifact]),
+  );
+  if (paths.size !== job.artifacts.length)
+    throw new AppError(
+      "INVALID_ARTIFACT_PATH",
+      "Server returned duplicate artifact paths",
+      502,
     );
-    options.onEvent?.({
-      type: "artifact.downloaded",
-      name: "result.pdf",
-      path: pdf,
-    });
-  }
-  const previews =
-    job.status === "succeeded"
-      ? await downloadPreviews(
-          client,
-          job.id,
-          jobTicket,
-          outputDirectory,
-          options,
-        )
-      : [];
-  const errors = join(outputDirectory, "errors.json");
-  await client.download(
-    client.artifactUrl(job.id, "errors.json"),
+  const pdf = await downloadNamedArtifact(
+    client,
+    job.id,
     jobTicket,
-    errors,
+    outputDirectory,
+    paths.has("result.pdf") ? "result.pdf" : undefined,
+    options,
   );
-  options.onEvent?.({
-    type: "artifact.downloaded",
-    name: "errors.json",
-    path: errors,
-  });
-  const log = join(outputDirectory, "compile.log");
-  await client.download(
-    client.artifactUrl(job.id, "compile.log"),
+  const errors = await downloadNamedArtifact(
+    client,
+    job.id,
     jobTicket,
-    log,
+    outputDirectory,
+    paths.has("errors.json") ? "errors.json" : undefined,
+    options,
   );
-  options.onEvent?.({
-    type: "artifact.downloaded",
-    name: "compile.log",
-    path: log,
-  });
+  const log = await downloadNamedArtifact(
+    client,
+    job.id,
+    jobTicket,
+    outputDirectory,
+    paths.has("compile.log") ? "compile.log" : undefined,
+    options,
+  );
+  const previews = await downloadPreviews(
+    client,
+    job,
+    jobTicket,
+    outputDirectory,
+    options,
+  );
   const jobPath = join(outputDirectory, "job.json");
-  await writeFile(jobPath, `${JSON.stringify(job, null, 2)}\n`, {
-    mode: 0o600,
-  });
+  await atomicWriteFile(jobPath, `${JSON.stringify(job, null, 2)}\n`);
   options.onEvent?.({
     type: "artifact.downloaded",
     name: "job.json",
@@ -515,7 +524,8 @@ async function downloadArtifacts(
         502,
       );
     const destination = join(outputDirectory, artifact.relativePath);
-    await mkdir(dirname(destination), { recursive: true });
+    await ensureSecureDirectory(dirname(destination));
+    await assertSafeOutputFile(destination);
     await client.download(
       client.artifactUrl(job.id, artifact.relativePath),
       jobTicket,
@@ -530,8 +540,8 @@ async function downloadArtifacts(
   }
   return {
     ...(pdf === undefined ? {} : { pdf }),
-    errors,
-    log,
+    ...(errors === undefined ? {} : { errors }),
+    ...(log === undefined ? {} : { log }),
     job: jobPath,
     previews,
     svg,
@@ -540,51 +550,199 @@ async function downloadArtifacts(
 
 async function downloadPreviews(
   client: ClientTransport,
-  jobId: string,
+  job: JobResponse,
   ticket: string,
   output: string,
   options: ClientCoreOptions,
 ): Promise<string[]> {
+  if (job.previews.length === 0) return [];
+  if (job.previews.length > 100)
+    throw new AppError(
+      "TOO_MANY_PREVIEWS",
+      "Server returned more than 100 previews",
+      502,
+    );
   const directory = join(output, "previews");
-  await mkdir(directory, { recursive: true });
+  await ensureSecureDirectory(directory);
   const previews: string[] = [];
-  for (let page = 1; page <= 100; page += 1) {
-    const name = `page-${page}.png`;
-    const destination = join(directory, name);
-    try {
-      await client.download(
-        client.previewUrl(jobId, name),
-        ticket,
-        destination,
+  const names = new Set<string>();
+  for (const artifact of job.previews) {
+    const match = /^previews\/(page-[1-9][0-9]*\.png)$/.exec(
+      artifact.relativePath,
+    );
+    const name = match?.[1];
+    if (artifact.type !== "preview" || name === undefined || names.has(name))
+      throw new AppError(
+        "INVALID_ARTIFACT_PATH",
+        "Server returned an unsafe preview path",
+        502,
       );
-      previews.push(destination);
-      options.onEvent?.({
-        type: "artifact.downloaded",
-        name: `previews/${name}`,
-        path: destination,
-      });
-    } catch (error) {
-      if (error instanceof AppError && error.status === 404) break;
-      throw error;
-    }
+    names.add(name);
+    const destination = join(directory, name);
+    await assertSafeOutputFile(destination);
+    await client.download(client.previewUrl(job.id, name), ticket, destination);
+    previews.push(destination);
+    options.onEvent?.({
+      type: "artifact.downloaded",
+      name: `previews/${name}`,
+      path: destination,
+    });
   }
   return previews;
 }
 
-async function walk(directory: string): Promise<string[]> {
-  const result: string[] = [];
-  for (const entry of await readdir(directory, { withFileTypes: true })) {
+async function downloadNamedArtifact(
+  client: ClientTransport,
+  jobId: string,
+  ticket: string,
+  output: string,
+  name: string | undefined,
+  options: ClientCoreOptions,
+): Promise<string | undefined> {
+  if (name === undefined) return undefined;
+  const destination = join(output, name);
+  await assertSafeOutputFile(destination);
+  await client.download(client.artifactUrl(jobId, name), ticket, destination);
+  options.onEvent?.({ type: "artifact.downloaded", name, path: destination });
+  return destination;
+}
+
+async function projectIgnore(root: string): Promise<Ignore> {
+  const ignorePath = join(root, ".latexrenderignore");
+  const info = await lstat(ignorePath).catch((error: unknown) => {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  });
+  if (info !== undefined && (!info.isFile() || info.isSymbolicLink()))
+    throw new AppError(
+      "INVALID_IGNORE_FILE",
+      ".latexrenderignore must be a regular file, not a symbolic link",
+      400,
+    );
+  if (info !== undefined && info.size > 1024 * 1024)
+    throw new AppError(
+      "INVALID_IGNORE_FILE",
+      ".latexrenderignore must not exceed 1 MiB",
+      400,
+    );
+  const custom = info === undefined ? "" : await readFile(ignorePath, "utf8");
+  const matcher = ignore();
+  if (custom !== "") matcher.add(custom);
+  matcher.add([
+    ".git/",
+    ".render/",
+    "node_modules/",
+    "**/.env",
+    "**/.env.*",
+    "**/credentials.json",
+    "**/credentials.*",
+    "**/*.pem",
+    "**/*.key",
+    "**/*.p12",
+    "**/*.pfx",
+    "**/.npmrc",
+    "**/.netrc",
+    "**/.aws/",
+    "**/.ssh/",
+    "**/.idea/",
+    "**/.vscode/",
+    ".latexrenderignore",
+  ]);
+  return matcher;
+}
+
+async function* walkProject(
+  root: string,
+  exclusions: Ignore,
+  directory = root,
+): AsyncGenerator<{ path: string; name: string; size: number }> {
+  const entries = await readdir(directory, { withFileTypes: true });
+  entries.sort((left, right) => left.name.localeCompare(right.name));
+  for (const entry of entries) {
     const path = join(directory, entry.name);
-    if (entry.isSymbolicLink())
+    const name = relative(root, path).replaceAll("\\", "/");
+    const ignored =
+      shouldExcludeProjectPath(name) ||
+      exclusions.ignores(entry.isDirectory() ? `${name}/` : name);
+    if (ignored) continue;
+    const info = await lstat(path);
+    if (info.isSymbolicLink())
       throw new AppError(
         "SYMLINK_REJECTED",
-        `Symlink is not allowed: ${entry.name}`,
+        `Symlink is not allowed: ${name}`,
         400,
       );
-    if (entry.isDirectory()) result.push(...(await walk(path)));
-    else result.push(path);
+    if (info.isDirectory()) {
+      yield* walkProject(root, exclusions, path);
+      continue;
+    }
+    if (!info.isFile())
+      throw new AppError(
+        "UNSUPPORTED_PROJECT_ENTRY",
+        `Project entry is not a regular file: ${name}`,
+        400,
+      );
+    yield { path, name, size: info.size };
   }
-  return result;
+}
+
+async function ensureSecureDirectory(directory: string): Promise<void> {
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  const info = await lstat(directory);
+  const currentUser = process.getuid?.();
+  if (
+    info.isSymbolicLink() ||
+    !info.isDirectory() ||
+    (currentUser !== undefined && info.uid !== currentUser) ||
+    (info.mode & 0o022) !== 0
+  )
+    throw new AppError(
+      "UNSAFE_OUTPUT_DIRECTORY",
+      "Artifact output directory must be owned by the current user and not group/world writable",
+      400,
+    );
+}
+
+async function assertSafeOutputFile(path: string): Promise<void> {
+  const info = await lstat(path).catch((error: unknown) => {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  });
+  if (
+    info !== undefined &&
+    (info.isSymbolicLink() || !info.isFile() || info.nlink !== 1)
+  )
+    throw new AppError(
+      "UNSAFE_OUTPUT_PATH",
+      "Artifact output path must be a regular, single-link file",
+      400,
+    );
+}
+
+async function atomicWriteFile(path: string, contents: string): Promise<void> {
+  await assertSafeOutputFile(path);
+  const parent = dirname(path),
+    expectedParent = await realpath(parent);
+  const temporary = join(parent, `.job-${randomUUID()}.tmp`);
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    handle = await open(temporary, "wx", 0o600);
+    await handle.writeFile(contents, "utf8");
+    await handle.sync();
+    await handle.close();
+    handle = undefined;
+    if ((await realpath(parent)) !== expectedParent)
+      throw new AppError(
+        "UNSAFE_OUTPUT_DIRECTORY",
+        "Artifact output directory changed while writing",
+        400,
+      );
+    await rename(temporary, path);
+  } catch (error) {
+    await handle?.close().catch(() => undefined);
+    await rm(temporary, { force: true }).catch(() => undefined);
+    throw error;
+  }
 }
 
 function delay(milliseconds: number): Promise<void> {

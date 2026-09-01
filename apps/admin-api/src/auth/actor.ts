@@ -50,6 +50,21 @@ export async function requireActor(
   return { type: "user", id: row.id, role: row.role, userId: row.id };
 }
 
+export async function requireOwnerActor(
+  deps: AdminDependencies,
+  c: Context,
+  scope: string,
+): Promise<AdminActor> {
+  const actor = await requireActor(deps, c, scope);
+  if (actor.role !== "owner")
+    throw new AppError(
+      "OWNER_REQUIRED",
+      "Only an owner can perform this operation",
+      403,
+    );
+  return actor;
+}
+
 export async function requireAppActor(
   deps: AdminDependencies,
   c: Context,

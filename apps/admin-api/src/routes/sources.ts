@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import { renderOutputsSchema } from "@latex-renderer/contracts";
-import { AppError } from "@latex-renderer/shared";
+import { AppError, pageSize } from "@latex-renderer/shared";
 import { requireActor } from "../auth/actor.js";
 import { AdminSourcesService } from "../services/sources.js";
 import type { AdminDependencies } from "../types.js";
@@ -14,16 +14,21 @@ export function createSourcesRouter(deps: AdminDependencies): Hono {
     await requireActor(deps, c, "admin:jobs:read");
     const query = c.req.query("query"),
       status = c.req.query("status");
-    return c.json({
-      items: service.list({
+    return c.json(service.list({
         ...(query === undefined ? {} : { query }),
         ...(status === undefined ? {} : { status }),
-      }),
-    });
+        cursor: c.req.query("cursor"),
+        limit: pageSize(c.req.query("pageSize")),
+      }));
   });
   router.get("/:id", async (c) => {
     await requireActor(deps, c, "admin:jobs:read");
-    return c.json(service.get(c.req.param("id")));
+    return c.json(
+      service.get(c.req.param("id"), {
+        cursor: c.req.query("cursor"),
+        limit: pageSize(c.req.query("pageSize")),
+      }),
+    );
   });
   router.post("/:id/render", async (c) => {
     const actor = await requireActor(deps, c, "admin:jobs:write"),

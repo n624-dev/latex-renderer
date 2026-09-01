@@ -8,6 +8,7 @@ import {
   gatewayRoute,
   proxyGatewayJson,
 } from "@latex-renderer/gateway-core";
+import { validPortEnvironment } from "@latex-renderer/shared";
 
 if (process.env.DEPLOYMENT_MODE !== "standalone")
   throw new Error("Standalone Gateway requires DEPLOYMENT_MODE=standalone");
@@ -37,6 +38,7 @@ app.all("*", async (c) => {
       requestId,
       upstreamPath: route.upstreamPath,
       idempotencyRequired: route.idempotencyRequired,
+      bodyRequired: route.bodyRequired,
       fetchUpstream: (input, init) => {
         const url = new URL(input);
         url.protocol = upstream.protocol;
@@ -60,7 +62,7 @@ app.all("*", async (c) => {
 serve({
   fetch: app.fetch,
   hostname: "127.0.0.1",
-  port: Number(process.env.PORT ?? "3105"),
+  port: validPortEnvironment(process.env, "PORT", 3105),
 });
 
 function exactInternalOrigin(value: string): URL {

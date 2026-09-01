@@ -2,6 +2,7 @@
 import { readFile } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { URL } from "node:url";
+import { boundedIntegerEnvironment } from "./environment.mjs";
 
 if (process.getuid?.() !== 0) {
   console.error("reconcile-managed-runtime.mjs must run as root");
@@ -24,10 +25,13 @@ const tokenFile =
 const token = (await readFile(tokenFile, "utf8")).trim();
 if (token.length < 32) throw new Error("Image manager token is too short");
 
-const timeoutMs = Number(process.env.IMAGE_RECONCILE_TIMEOUT_MS ?? "21600000");
-if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1000 || timeoutMs > 21600000) {
-  throw new Error("IMAGE_RECONCILE_TIMEOUT_MS must be between 1000 and 21600000");
-}
+const timeoutMs = boundedIntegerEnvironment(
+  process.env,
+  "IMAGE_RECONCILE_TIMEOUT_MS",
+  21_600_000,
+  1_000,
+  21_600_000,
+);
 
 async function request(path, init = {}) {
   const response = await globalThis.fetch(new URL(path, endpoint), {

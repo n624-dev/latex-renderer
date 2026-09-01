@@ -59,6 +59,7 @@ describe("administrator Web render jobs", () => {
       writeEnabled: true,
       storageRoot: "/tmp",
       rendererVersion: "test",
+      maxOutputBytes: 1,
       maxQueueLength: 5,
       maxUserStorageBytes: 1024,
       minFreeStorageBytes: 1,

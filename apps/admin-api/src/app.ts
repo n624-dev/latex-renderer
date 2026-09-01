@@ -30,7 +30,10 @@ export function createAdminApp(deps: AdminDependencies): Hono {
   app.get("/health", (c) => c.json({ status: "ok" }));
   app.get("/health/rendering", (c) => {
     const health = new AdminSystemService(deps).renderingHealth();
-    return health.operational ? c.json(health) : c.json(health, 503);
+    const publicHealth = { operational: health.operational };
+    return health.operational
+      ? c.json(publicHealth)
+      : c.json(publicHealth, 503);
   });
   app.onError((error, c) => {
     const safe = safeError(error);

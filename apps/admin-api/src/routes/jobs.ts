@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import { AppError } from "@latex-renderer/shared";
+import { AppError, pageSize } from "@latex-renderer/shared";
 import {
   legacyRenderTicketRequestSchema,
   renderOutputsSchema,
@@ -9,7 +9,10 @@ import {
 } from "@latex-renderer/contracts";
 import { requireActor } from "../auth/actor.js";
 import { AdminJobsService } from "../services/jobs.js";
-import { adminArtifactResponse } from "../services/artifacts.js";
+import {
+  adminArtifactResponse,
+  adminArtifactsArchiveResponse,
+} from "../services/artifacts.js";
 import type { AdminDependencies } from "../types.js";
 import { parse } from "./helpers.js";
 
@@ -21,13 +24,13 @@ export function createJobsRouter(deps: AdminDependencies): Hono {
     const status = c.req.query("status"),
       query = c.req.query("query"),
       sourceId = c.req.query("sourceId");
-    return c.json({
-      items: service.list({
+    return c.json(service.list({
         ...(status === undefined ? {} : { status }),
         ...(query === undefined ? {} : { query }),
         ...(sourceId === undefined ? {} : { sourceId }),
-      }),
-    });
+        cursor: c.req.query("cursor"),
+        limit: pageSize(c.req.query("pageSize")),
+      }));
   });
   r.get("/render-targets", async (c) => {
     await requireActor(deps, c, "admin:jobs:write");
@@ -96,7 +99,7 @@ export function createJobsRouter(deps: AdminDependencies): Hono {
             .array(z.string().regex(/^job_[a-f0-9]{32}$/))
             .min(1)
             .max(100),
-        }),
+        }).strict(),
         await c.req.json<unknown>(),
       );
     return c.json({ accepted: service.bulkDelete(actor, input.ids) }, 202);
@@ -104,6 +107,10 @@ export function createJobsRouter(deps: AdminDependencies): Hono {
   r.get("/:id", async (c) => {
     await requireActor(deps, c, "admin:jobs:read");
     return c.json(service.get(c.req.param("id")));
+  });
+  r.get("/:id/archive", async (c) => {
+    const actor = await requireActor(deps, c, "admin:jobs:read");
+    return adminArtifactsArchiveResponse(deps, actor, c.req.param("id"));
   });
   r.get("/:id/artifacts/*", async (c) => {
     const actor = await requireActor(deps, c, "admin:jobs:read");

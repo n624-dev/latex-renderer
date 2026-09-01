@@ -1,16 +1,20 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   mkdir,
   mkdtemp,
+  link,
   open,
   readFile,
   readdir,
+  rename,
   rm,
   stat,
   writeFile,
 } from "node:fs/promises";
+import { createReadStream, createWriteStream } from "node:fs";
 import { dirname, join } from "node:path";
-import { PassThrough } from "node:stream";
+import { once } from "node:events";
+import { PassThrough, Readable, Transform } from "node:stream";
 import type {
   JobRow,
   RemoteMcpAuthorizationCodeRow,
@@ -46,6 +50,10 @@ export type RemoteMcpScope = (typeof REMOTE_MCP_SCOPES)[number];
 
 const ACCESS_TOKEN_MS = 10 * 60_000;
 const REFRESH_TOKEN_MS = 30 * 86_400_000;
+// A second request that was already in flight when rotation committed may
+// arrive just after the first response. Keep that short retry window from
+// revoking the family; a later replay still triggers strict reuse detection.
+const REFRESH_REPLAY_GRACE_MS = 5_000;
 const AUTHORIZATION_CODE_MS = 5 * 60_000;
 const SOURCE_REF_MS = 15 * 60_000;
 const INLINE_SOURCE_MAX_BYTES = 64 * 1024;
@@ -54,9 +62,19 @@ const DIRECT_SOURCE_MAX_FILE_BYTES = 1024 * 1024;
 const DIRECT_SOURCE_MAX_FILES = 100;
 const SOURCE_UPLOAD_CHUNK_MAX_BYTES = 512 * 1024;
 const SOURCE_UPLOAD_MS = 10 * 60_000;
+const SOURCE_UPLOAD_LEASE_MS = 60_000;
 const SOURCE_RETENTION_MS = 60 * 60_000;
 const OAUTH_CLIENT_LIMIT = 10_000;
 const UNUSED_OAUTH_CLIENT_MS = 24 * 60 * 60_000;
+const ENVIRONMENT_INDEX_TTL_MS = 30_000;
+/**
+ * MCP Resource responses are encoded as a single blob/text value.  Keep this
+ * well below the renderer's output limit so a client cannot turn a large
+ * artifact into an unbounded Buffer + base64/string allocation.
+ */
+export const REMOTE_MCP_MAX_INLINE_ARTIFACT_BYTES = 16 * 1024 * 1024;
+const REMOTE_MCP_MAX_INLINE_ARTIFACT_BYTES_IN_FLIGHT = 64 * 1024 * 1024;
+const ARTIFACT_READ_CHUNK_BYTES = 64 * 1024;
 const ZIP_LIMITS = {
   maxExtractedBytes: DEFAULT_RESOURCE_LIMITS.maxExtractedBytes,
   maxFileBytes: DEFAULT_RESOURCE_LIMITS.maxUploadBytes,
@@ -205,6 +223,7 @@ export class RemoteOAuthService {
       codeHash: sha256Hex(code),
       clientId: input.clientId,
       userId,
+      userSecurityVersion: user.security_version,
       redirectUri: input.redirectUri,
       scopes: input.scopes,
       resource: input.resource,
@@ -240,12 +259,18 @@ export class RemoteOAuthService {
     const codeHash = sha256Hex(input.code),
       code = this.database.remoteMcp.authorizationCode(codeHash);
     this.validateCode(code, input, timestamp);
-    const user = this.database.users.get(code.user_id);
-    if (user === undefined || user.status !== "active")
-      throw new AppError("INVALID_GRANT", "User is inactive", 400);
     const familyId = newId("oauth_family"),
       scopes = normalizeStoredScopes(code.scopes_json);
     const response = this.database.transaction(() => {
+      // Re-read the user while holding BEGIN IMMEDIATE so a security-version
+      // bump cannot race the code consumption and token-family creation.
+      const user = this.database.users.get(code.user_id);
+      if (
+        user === undefined ||
+        user.status !== "active" ||
+        user.security_version !== code.user_security_version
+      )
+        throw new AppError("INVALID_GRANT", "User authorization changed", 400);
       if (
         this.database.remoteMcp.consumeAuthorizationCode(
           codeHash,
@@ -267,9 +292,12 @@ export class RemoteOAuthService {
         timestamp,
         expiresAt: this.after(REFRESH_TOKEN_MS),
       });
-      return this.issueTokens(familyId, scopes, 0, timestamp);
+      const tokens = this.issueTokens(familyId, scopes, 0, timestamp);
+      // Client activity is part of the grant commit. A failure here rolls
+      // back the consumed code and both newly issued token rows.
+      this.database.remoteMcp.touchClient(code.client_id, timestamp);
+      return tokens;
     });
-    this.database.remoteMcp.touchClient(code.client_id, timestamp);
     return response;
   }
 
@@ -280,69 +308,73 @@ export class RemoteOAuthService {
   }): OAuthTokenResponse {
     const timestamp = this.now();
     this.cleanupOAuth(timestamp);
-    const token = this.database.remoteMcp.token(sha256Hex(input.refreshToken));
-    if (token === undefined || token.token_type !== "refresh")
-      throw new AppError("INVALID_GRANT", "Refresh token is invalid", 400);
-    if (token.used_at !== null) {
-      this.database.remoteMcp.revokeFamily(token.family_id, timestamp);
-      throw new AppError(
-        "INVALID_GRANT",
-        "Refresh token reuse revoked the grant",
-        400,
-      );
-    }
-    if (!this.isActiveToken(token, timestamp))
-      throw new AppError(
-        "INVALID_GRANT",
-        "Refresh token is expired or revoked",
-        400,
-      );
-    if (token.client_id !== input.clientId || token.resource !== input.resource)
-      throw new AppError(
-        "INVALID_GRANT",
-        "Refresh token binding is invalid",
-        400,
-      );
-    const user = this.database.users.get(token.user_id);
-    if (
-      user === undefined ||
-      user.status !== "active" ||
-      user.security_version !== token.user_security_version
-    ) {
-      this.database.remoteMcp.revokeFamily(token.family_id, timestamp);
-      throw new AppError("INVALID_GRANT", "User authorization changed", 400);
-    }
-    try {
-      return this.database.transaction(() => {
-        if (
-          this.database.remoteMcp.consumeRefresh(
-            token.token_hash,
-            timestamp,
-          ) !== 1
-        )
-          throw new AppError(
-            "REFRESH_REUSE",
-            "Refresh token is no longer valid",
-            400,
-          );
-        return this.issueTokens(
+    const tokenHash = sha256Hex(input.refreshToken);
+    const result = this.database.transaction(() => {
+      // Re-read while holding BEGIN IMMEDIATE. A caller that fetched the old
+      // row before another rotation must observe the committed CAS result.
+      const token = this.database.remoteMcp.token(tokenHash);
+      if (token === undefined || token.token_type !== "refresh")
+        return {
+          kind: "invalid",
+          message: "Refresh token is invalid",
+        } as const;
+      // Check binding before reuse handling so an unrelated caller cannot
+      // revoke a grant merely by presenting a token hash.
+      if (
+        token.client_id !== input.clientId ||
+        token.resource !== input.resource
+      )
+        return {
+          kind: "invalid",
+          message: "Refresh token binding is invalid",
+        } as const;
+      if (token.used_at !== null) {
+        if (withinRefreshReplayGrace(token.used_at, timestamp))
+          return {
+            kind: "invalid",
+            message: "Refresh token is already being retried",
+          } as const;
+        this.database.remoteMcp.revokeFamily(token.family_id, timestamp);
+        return {
+          kind: "invalid",
+          message: "Refresh token reuse revoked the grant",
+        } as const;
+      }
+      if (!this.isActiveToken(token, timestamp))
+        return {
+          kind: "invalid",
+          message: "Refresh token is expired or revoked",
+        } as const;
+      const user = this.database.users.get(token.user_id);
+      if (
+        user === undefined ||
+        user.status !== "active" ||
+        user.security_version !== token.user_security_version
+      ) {
+        this.database.remoteMcp.revokeFamily(token.family_id, timestamp);
+        return {
+          kind: "invalid",
+          message: "User authorization changed",
+        } as const;
+      }
+      if (this.database.remoteMcp.consumeRefresh(tokenHash, timestamp) !== 1)
+        return {
+          kind: "invalid",
+          message: "Refresh token is already being retried",
+        } as const;
+      return {
+        kind: "issued",
+        response: this.issueTokens(
           token.family_id,
           normalizeStoredScopes(token.scopes_json),
           token.sequence + 1,
           timestamp,
-        );
-      });
-    } catch (error) {
-      if (error instanceof AppError && error.code === "REFRESH_REUSE") {
-        this.database.remoteMcp.revokeFamily(token.family_id, timestamp);
-        throw new AppError(
-          "INVALID_GRANT",
-          "Refresh token reuse revoked the grant",
-          400,
-        );
-      }
-      throw error;
-    }
+        ),
+      } as const;
+    });
+    if (result.kind !== "issued")
+      throw new AppError("INVALID_GRANT", result.message, 400);
+    return result.response;
   }
 
   verifyAccessToken(value: string): RemoteAccess {
@@ -588,9 +620,21 @@ export interface RemoteEnvironmentSearch {
 }
 
 export class RemoteRenderService {
-  private readonly activeUploads = new Set<string>();
   private environmentIndexPromise:
     Promise<{ packages: string[]; fonts: string[] }> | undefined;
+  private environmentIndexCache:
+    | {
+        fingerprint: string;
+        expiresAt: number;
+        value: { packages: string[]; fonts: string[] };
+      }
+    | undefined;
+  private readonly maxInlineArtifactBytes: number;
+  private inlineArtifactBytesInFlight = 0;
+  private readonly inlineArtifactWaiters: Array<{
+    bytes: number;
+    resolve: (release: () => void) => void;
+  }> = [];
 
   constructor(
     private readonly database: RendererDatabase,
@@ -601,7 +645,19 @@ export class RemoteRenderService {
     private readonly maxUserStorageBytes = 1024 * 1024 * 1024,
     private readonly environmentRoot = "/var/lib/latex-renderer/environment",
     private readonly resourceLimits: Readonly<ResourceLimits> = DEFAULT_RESOURCE_LIMITS,
-  ) {}
+    private readonly maxOutputBytes = 200 * 1024 * 1024,
+  ) {
+    this.maxInlineArtifactBytes = Math.min(
+      REMOTE_MCP_MAX_INLINE_ARTIFACT_BYTES,
+      Number.isSafeInteger(maxOutputBytes) && maxOutputBytes > 0
+        ? maxOutputBytes
+        : REMOTE_MCP_MAX_INLINE_ARTIFACT_BYTES,
+    );
+  }
+
+  get maxInlineResourceBytes(): number {
+    return this.maxInlineArtifactBytes;
+  }
 
   get maxSourceUploadBytes(): number {
     return this.resourceLimits.maxUploadBytes;
@@ -614,12 +670,18 @@ export class RemoteRenderService {
     sourceRef: string;
     expiresAt: string;
   } {
-    const source = this.database.sources.getOwned(sourceId, userId),
+    const source = this.database.sources.getOwnedReady(
+        sourceId,
+        userId,
+        nowIso(),
+      ),
       timestamp = nowIso();
-    if (source?.status !== "ready")
+    if (source === undefined)
       throw new AppError("SOURCE_NOT_READY", "Source is not ready", 409);
     const sourceRef = newId("source_ref"),
-      expiresAt = new Date(Date.now() + SOURCE_REF_MS).toISOString();
+      expiresAt = new Date(
+        Math.min(Date.now() + SOURCE_REF_MS, Date.parse(source.expires_at)),
+      ).toISOString();
     this.database.remoteMcp.insertSourceRef({
       id: sourceRef,
       source_id: sourceId,
@@ -750,30 +812,38 @@ export class RemoteRenderService {
       path = join(this.storageRoot, storageKey),
       timestamp = nowIso(),
       expiresAt = new Date(Date.now() + SOURCE_UPLOAD_MS).toISOString();
-    await mkdir(dirname(path), { recursive: true, mode: 0o770 });
-    await writeFile(path, Buffer.alloc(0), { flag: "wx", mode: 0o660 });
+    this.database.transaction(() => {
+      this.assertStorageQuota(identity.userId, expectedBytes);
+      this.database.sources.insertReserved({
+        id: sourceId,
+        ownerUserId: identity.userId,
+        size: expectedBytes,
+        sha256,
+        storageKey,
+        timestamp,
+        expiresAt,
+        dedupeEligible: false,
+      });
+    });
     try {
+      await mkdir(dirname(path), { recursive: true, mode: 0o770 });
+      await writeFile(path, Buffer.alloc(0), { flag: "wx", mode: 0o660 });
+      // Chunks are immutable, offset-addressed files.  They prevent a writer
+      // whose DB lease expired mid-I/O from overwriting a newer writer's bytes.
+      await mkdir(join(dirname(path), ".chunks"), { mode: 0o770 });
       this.database.transaction(() => {
-        this.assertStorageQuota(identity.userId, expectedBytes);
-        this.database.sources.insertReserved({
-          id: sourceId,
-          ownerUserId: identity.userId,
-          size: expectedBytes,
-          sha256,
-          storageKey,
-          timestamp,
-          expiresAt,
-          dedupeEligible: false,
-        });
-        this.database.sources.transition(
+        this.database.sources.transitionBeforeExpiry(
           sourceId,
           ["reserved"],
           "uploading",
-          timestamp,
+          nowIso(),
         );
       });
     } catch (error) {
       await rm(dirname(path), { recursive: true, force: true });
+      this.database.transaction(() => {
+        this.database.sources.discardReservation(sourceId);
+      });
       throw error;
     }
     return {
@@ -793,23 +863,7 @@ export class RemoteRenderService {
     base64: string,
   ): Promise<RemoteSourceUpload> {
     requireScope(identity.scopes, "mcp:render");
-    if (this.activeUploads.has(uploadId))
-      throw new AppError(
-        "SOURCE_UPLOAD_CONCURRENT",
-        "Another chunk is being written to this upload",
-        409,
-      );
-    this.activeUploads.add(uploadId);
-    try {
-      return await this.appendSourceChunk(
-        identity.userId,
-        uploadId,
-        offset,
-        base64,
-      );
-    } finally {
-      this.activeUploads.delete(uploadId);
-    }
+    return this.appendSourceChunk(identity.userId, uploadId, offset, base64);
   }
 
   async finalizeSourceUpload(
@@ -817,18 +871,7 @@ export class RemoteRenderService {
     uploadId: string,
   ): Promise<RemoteSourceSummary> {
     requireScope(identity.scopes, "mcp:render");
-    if (this.activeUploads.has(uploadId))
-      throw new AppError(
-        "SOURCE_UPLOAD_CONCURRENT",
-        "Another operation is using this upload",
-        409,
-      );
-    this.activeUploads.add(uploadId);
-    try {
-      return await this.completeSourceUpload(identity.userId, uploadId);
-    } finally {
-      this.activeUploads.delete(uploadId);
-    }
+    return this.completeSourceUpload(identity.userId, uploadId);
   }
 
   async updateSourceFile(
@@ -848,10 +891,14 @@ export class RemoteRenderService {
       file.text === undefined
         ? decodeBase64(file.base64 as string)
         : Buffer.from(file.text, "utf8");
-    if (bytes.byteLength > 20 * 1024 * 1024)
+    const maxRevisionFileBytes = Math.min(
+      20 * 1024 * 1024,
+      this.resourceLimits.maxUploadBytes,
+    );
+    if (bytes.byteLength > maxRevisionFileBytes)
       throw new AppError(
         "SOURCE_FILE_SIZE",
-        "Source file exceeds the 20 MiB limit",
+        "Source file exceeds the configured revision file limit",
         400,
       );
     return this.reviseSource(identity.userId, sourceId, async (root) => {
@@ -904,6 +951,7 @@ export class RemoteRenderService {
         },
   ): Promise<RemoteJobSummary> {
     requireScope(identity.scopes, "mcp:render");
+    this.assertMaintenance();
     const entrypoint = validateEntrypointPath(input.entrypoint ?? "main.tex"),
       outputs = normalizeRenderOutputs(input.outputs),
       principal = this.ensurePrincipal(identity.userId),
@@ -926,20 +974,43 @@ export class RemoteRenderService {
     const jobId = newId("job"),
       timestamp = nowIso();
     this.database.transaction(() => {
-      this.assertQueue(principal.service_account_id);
-      this.database.jobs.insertQueued({
-        id: jobId,
-        userId: identity.userId,
-        serviceAccountId: principal.service_account_id,
-        apiKeyId: principal.api_key_id,
-        rendererVersion: this.rendererVersion,
-        sourceId: source.id,
-        sourceSize: source.size,
-        sourceSha256: source.sha256,
-        entrypoint,
-        outputs,
+      this.assertQueue(identity.userId, principal.service_account_id);
+      const currentSource = this.database.sources.getOwnedReady(
+        source.id,
+        identity.userId,
         timestamp,
-      });
+      );
+      if (currentSource === undefined)
+        throw new AppError(
+          "SOURCE_NOT_READY",
+          "Source does not exist or is not ready",
+          409,
+        );
+      if (!this.database.sources.paths(currentSource).includes(entrypoint))
+        throw new AppError(
+          "ENTRYPOINT_MISSING",
+          "Source does not contain the requested entrypoint",
+          422,
+        );
+      if (
+        this.database.jobs.insertQueued({
+          id: jobId,
+          userId: identity.userId,
+          serviceAccountId: principal.service_account_id,
+          apiKeyId: principal.api_key_id,
+          rendererVersion: this.rendererVersion,
+          sourceId: currentSource.id,
+          entrypoint,
+          outputs,
+          timestamp,
+          reservedOutputBytes: this.maxOutputBytes,
+        }) !== 1
+      )
+        throw new AppError(
+          "SOURCE_NOT_READY",
+          "Source changed while the Render Job was being created",
+          409,
+        );
       this.database.audit({
         actorType: "oauth",
         actorId: identity.userId,
@@ -947,7 +1018,7 @@ export class RemoteRenderService {
         targetType: "job",
         targetId: jobId,
         result: "success",
-        metadata: { sourceId: source.id, entrypoint, outputs },
+        metadata: { sourceId: currentSource.id, entrypoint, outputs },
       });
     });
     const created = this.database.jobs.get(jobId);
@@ -958,6 +1029,7 @@ export class RemoteRenderService {
 
   retryRender(identity: RemoteMcpIdentity, jobId: string): RemoteJobSummary {
     requireScope(identity.scopes, "mcp:render");
+    this.assertMaintenance();
     const previous = this.assertOwned(identity.userId, jobId);
     if (
       ![
@@ -980,16 +1052,25 @@ export class RemoteRenderService {
         "The previous Job has no reusable Source",
         409,
       );
-    this.resolveOwnedSource(identity.userId, previous.source_id);
+    const sourceId = previous.source_id;
+    this.resolveOwnedSource(identity.userId, sourceId);
     const retryId = newId("job"),
       timestamp = nowIso();
     this.database.transaction(() => {
-      this.assertQueue(previous.service_account_id);
+      this.assertQueue(identity.userId, previous.service_account_id);
+      const currentSource = this.database.sources.getReady(sourceId, timestamp);
+      if (currentSource === undefined)
+        throw new AppError(
+          "SOURCE_NOT_READY",
+          "The previous Job Source is not ready",
+          409,
+        );
       this.database.jobs.insertRetry({
         id: retryId,
         source: previous,
         rendererVersion: this.rendererVersion,
         timestamp,
+        reservedOutputBytes: this.maxOutputBytes,
       });
       this.database.audit({
         actorType: "oauth",
@@ -1095,14 +1176,33 @@ export class RemoteRenderService {
     );
     if (artifact === undefined)
       throw new AppError("ARTIFACT_NOT_FOUND", "Artifact does not exist", 404);
-    return {
-      jobId,
-      relativePath,
-      mimeType: artifactMimeType(artifact.type),
-      size: artifact.size,
-      sha256: artifact.sha256,
-      bytes: await readFile(this.artifactPath(jobId, relativePath)),
-    };
+    if (
+      !Number.isSafeInteger(artifact.size) ||
+      artifact.size < 0 ||
+      artifact.size > this.maxInlineArtifactBytes
+    )
+      throw new AppError(
+        "ARTIFACT_TOO_LARGE",
+        `Artifact exceeds the ${this.maxInlineArtifactBytes}-byte MCP inline resource limit; use the protected Web result instead`,
+        413,
+      );
+    const release = await this.acquireInlineArtifactBytes(artifact.size);
+    try {
+      return {
+        jobId,
+        relativePath,
+        mimeType: artifactMimeType(artifact.type),
+        size: artifact.size,
+        sha256: artifact.sha256,
+        bytes: await readBoundedArtifact(
+          this.artifactPath(jobId, relativePath),
+          artifact.size,
+          this.maxInlineArtifactBytes,
+        ),
+      };
+    } finally {
+      release();
+    }
   }
 
   capabilities(identity: RemoteMcpIdentity): RemoteRendererCapabilities {
@@ -1231,6 +1331,12 @@ export class RemoteRenderService {
     base64: string,
   ): Promise<RemoteSourceUpload> {
     const source = this.assertOwnedSource(userId, uploadId);
+    if (source.expires_at <= nowIso())
+      throw new AppError(
+        "SOURCE_UPLOAD_EXPIRED",
+        "Source upload has expired",
+        410,
+      );
     if (source.status === "ready")
       return {
         uploadId: source.id,
@@ -1262,36 +1368,88 @@ export class RemoteRenderService {
         "Chunk must contain between 1 byte and 512 KiB",
         400,
       );
-    const path = this.sourcePath(source),
-      current = await stat(path);
-    if (current.size !== offset)
+    const leaseOwner = `remote-mcp:${process.pid}:${randomUUID()}`,
+      timestamp = nowIso(),
+      leaseExpiresAt = new Date(
+        Date.now() + SOURCE_UPLOAD_LEASE_MS,
+      ).toISOString(),
+      leased = this.database.sources.claimUploadLease(
+        uploadId,
+        userId,
+        leaseOwner,
+        timestamp,
+        leaseExpiresAt,
+      );
+    if (leased === undefined)
       throw new AppError(
-        "SOURCE_UPLOAD_OFFSET",
-        "Chunk offset does not match received bytes",
+        "SOURCE_UPLOAD_CONCURRENT",
+        "Another chunk or finalize operation is using this upload",
         409,
-        { expectedOffset: current.size },
       );
-    if (offset + bytes.byteLength > source.size)
-      throw new AppError(
-        "SOURCE_UPLOAD_OVERFLOW",
-        "Chunk exceeds the declared Source size",
-        400,
-      );
-    const handle = await open(path, "r+");
     try {
-      await handle.write(bytes, 0, bytes.byteLength, offset);
-      await handle.sync();
+      const path = this.sourcePath(leased),
+        current = await stat(path),
+        chunks = this.sourceUploadChunkRoot(leased),
+        expectedOffset = leased.upload_received_bytes;
+      // Pre-v15 partial uploads were written in place and cannot safely be
+      // fenced after an upgrade. Fail closed rather than letting a stale
+      // writer race a new instance; clients can begin a fresh upload.
+      if (current.size !== 0)
+        throw new AppError(
+          "SOURCE_UPLOAD_STATE",
+          "Source upload uses an unsafe legacy staging format; start a new upload",
+          409,
+        );
+      try {
+        if (!(await stat(chunks)).isDirectory())
+          throw new Error("not a directory");
+      } catch {
+        throw new AppError(
+          "SOURCE_UPLOAD_STATE",
+          "Source upload uses an unsafe legacy staging format; start a new upload",
+          409,
+        );
+      }
+      if (offset !== expectedOffset)
+        throw new AppError(
+          "SOURCE_UPLOAD_OFFSET",
+          "Chunk offset does not match received bytes",
+          409,
+          { expectedOffset },
+        );
+      if (offset + bytes.byteLength > leased.size)
+        throw new AppError(
+          "SOURCE_UPLOAD_OVERFLOW",
+          "Chunk exceeds the declared Source size",
+          400,
+        );
+      await writeUploadChunk(chunks, offset, bytes);
+      const nextOffset = offset + bytes.byteLength;
+      if (
+        this.database.sources.commitUploadOffset(
+          uploadId,
+          leaseOwner,
+          expectedOffset,
+          nextOffset,
+          nowIso(),
+        ) !== 1
+      )
+        throw new AppError(
+          "SOURCE_UPLOAD_CONCURRENT",
+          "Source upload lease expired or changed while writing",
+          409,
+        );
+      return {
+        uploadId: leased.id,
+        sourceId: leased.id,
+        expectedBytes: leased.size,
+        receivedBytes: nextOffset,
+        expiresAt: leased.expires_at,
+        maxChunkBytes: SOURCE_UPLOAD_CHUNK_MAX_BYTES,
+      };
     } finally {
-      await handle.close();
+      this.database.sources.releaseUploadLease(uploadId, leaseOwner);
     }
-    return {
-      uploadId: source.id,
-      sourceId: source.id,
-      expectedBytes: source.size,
-      receivedBytes: offset + bytes.byteLength,
-      expiresAt: source.expires_at,
-      maxChunkBytes: SOURCE_UPLOAD_CHUNK_MAX_BYTES,
-    };
   }
 
   private async completeSourceUpload(
@@ -1299,6 +1457,12 @@ export class RemoteRenderService {
     uploadId: string,
   ): Promise<RemoteSourceSummary> {
     const source = this.assertOwnedSource(userId, uploadId);
+    if (source.expires_at <= nowIso())
+      throw new AppError(
+        "SOURCE_UPLOAD_EXPIRED",
+        "Source upload has expired",
+        410,
+      );
     if (source.status === "ready") return this.summarizeSource(source, null);
     if (source.status !== "uploading")
       throw new AppError(
@@ -1306,43 +1470,142 @@ export class RemoteRenderService {
         "Source upload is not active",
         409,
       );
-    const path = this.sourcePath(source),
-      bytes = await readFile(path);
-    if (bytes.byteLength !== source.size || sha256Hex(bytes) !== source.sha256)
+    const leaseOwner = `remote-mcp:${process.pid}:${randomUUID()}`,
+      leased = this.database.sources.claimUploadLease(
+        uploadId,
+        userId,
+        leaseOwner,
+        nowIso(),
+        new Date(Date.now() + SOURCE_UPLOAD_LEASE_MS).toISOString(),
+      );
+    if (leased === undefined)
       throw new AppError(
-        "SOURCE_UPLOAD_MISMATCH",
-        "Uploaded Source size or SHA-256 does not match",
-        422,
+        "SOURCE_UPLOAD_CONCURRENT",
+        "Another chunk or finalize operation is using this upload",
+        409,
       );
-    const inspection = await mkdtemp(
-      join(this.storageRoot, `.remote-source-${source.id}-`),
-    );
-    try {
-      const result = await validateAndExtract(
-          path,
-          inspection,
-          this.zipLimits(),
-          "",
-        ),
-        timestamp = nowIso(),
-        expiresAt = new Date(Date.now() + SOURCE_RETENTION_MS).toISOString();
-      this.database.sources.transition(
-        source.id,
-        ["uploading"],
-        "ready",
-        timestamp,
-        {
-          uploaded_at: timestamp,
-          expires_at: expiresAt,
-          paths_json: JSON.stringify([...result.paths].sort()),
+    const heartbeatState: { error?: AppError } = {};
+    const assertHeartbeat = (): void => {
+      if (heartbeatState.error !== undefined) throw heartbeatState.error;
+    };
+    const renewLease = (): void => {
+        const timestamp = nowIso();
+        if (
+          this.database.sources.extendUploadLease(
+            uploadId,
+            leaseOwner,
+            timestamp,
+            new Date(Date.now() + SOURCE_UPLOAD_LEASE_MS).toISOString(),
+          ) !== 1
+        )
+          throw new AppError(
+            "SOURCE_UPLOAD_CONCURRENT",
+            "Source upload lease expired or changed while finalizing",
+            409,
+          );
+      },
+      heartbeat = setInterval(
+        () => {
+          if (heartbeatState.error !== undefined) return;
+          try {
+            renewLease();
+          } catch (error) {
+            heartbeatState.error =
+              error instanceof AppError
+                ? error
+                : new AppError(
+                    "SOURCE_UPLOAD_CONCURRENT",
+                    "Source upload lease could not be renewed",
+                    409,
+                  );
+          }
         },
+        Math.floor(SOURCE_UPLOAD_LEASE_MS / 3),
       );
-      const ready = this.database.sources.get(source.id);
-      if (ready === undefined)
-        throw new AppError("SOURCE_CREATE_FAILED", "Source creation failed");
-      return this.summarizeSource(ready, null);
+    heartbeat.unref();
+    try {
+      const path = this.sourcePath(leased),
+        current = await stat(path);
+      if (!current.isFile() || leased.upload_received_bytes !== leased.size)
+        throw new AppError(
+          "SOURCE_UPLOAD_MISMATCH",
+          "Uploaded Source size does not match the durable upload offset",
+          422,
+        );
+      if (current.size !== 0 && current.size !== leased.size)
+        throw new AppError(
+          "SOURCE_UPLOAD_MISMATCH",
+          "Source upload storage does not match the durable upload offset",
+          422,
+        );
+      const assembled =
+          current.size === leased.size
+            ? path
+            : await assembleUploadChunks(
+                this.sourceUploadChunkRoot(leased),
+                path,
+                leaseOwner,
+                leased.size,
+              ),
+        digest = await sha256File(assembled),
+        verified = await stat(assembled);
+      assertHeartbeat();
+      renewLease();
+      if (verified.size !== leased.size || digest !== leased.sha256)
+        throw new AppError(
+          "SOURCE_UPLOAD_MISMATCH",
+          "Uploaded Source size or SHA-256 does not match",
+          422,
+        );
+      const inspection = await mkdtemp(
+        join(this.storageRoot, `.remote-source-${leased.id}-`),
+      );
+      try {
+        const result = await validateAndExtract(
+            assembled,
+            inspection,
+            this.zipLimits(),
+            "",
+          ),
+          timestamp = nowIso(),
+          expiresAt = this.sourceRetentionExpiresAt();
+        assertHeartbeat();
+        renewLease();
+        if (assembled !== path) {
+          await rename(assembled, path);
+          await syncDirectory(dirname(path));
+        }
+        if (
+          this.database.sources.completeUpload(
+            leased.id,
+            leaseOwner,
+            timestamp,
+            expiresAt,
+            JSON.stringify([...result.paths].sort()),
+          ) !== 1
+        )
+          throw new AppError(
+            "SOURCE_UPLOAD_CONCURRENT",
+            "Source upload lease expired or changed while finalizing",
+            409,
+          );
+        clearInterval(heartbeat);
+        await rm(this.sourceUploadChunkRoot(leased), {
+          recursive: true,
+          force: true,
+        });
+        const ready = this.database.sources.get(leased.id);
+        if (ready === undefined)
+          throw new AppError("SOURCE_CREATE_FAILED", "Source creation failed");
+        return this.summarizeSource(ready, null);
+      } finally {
+        // The temporary assembled archive is only promoted after all checks.
+        if (assembled !== path) await rm(assembled, { force: true });
+        await rm(inspection, { recursive: true, force: true });
+      }
     } finally {
-      await rm(inspection, { recursive: true, force: true });
+      clearInterval(heartbeat);
+      this.database.sources.releaseUploadLease(uploadId, leaseOwner);
     }
   }
 
@@ -1363,34 +1626,122 @@ export class RemoteRenderService {
       storageKey = `sources/${sourceId}/source.zip`,
       path = join(this.storageRoot, storageKey),
       timestamp = nowIso(),
-      expiresAt = new Date(Date.now() + SOURCE_RETENTION_MS).toISOString();
-    await mkdir(dirname(path), { recursive: true, mode: 0o770 });
-    await writeFile(path, archive, { flag: "wx", mode: 0o660 });
+      expiresAt = this.sourceRetentionExpiresAt(),
+      stagingExpiresAt = new Date(Date.now() + SOURCE_UPLOAD_MS).toISOString();
+    this.database.transaction(() => {
+      this.assertStorageQuota(userId, archive.byteLength);
+      this.database.sources.insertReserved({
+        id: sourceId,
+        ownerUserId: userId,
+        size: archive.byteLength,
+        sha256,
+        storageKey,
+        timestamp,
+        expiresAt: stagingExpiresAt,
+      });
+    });
     try {
+      await mkdir(dirname(path), { recursive: true, mode: 0o770 });
+      await writeFile(path, archive, { flag: "wx", mode: 0o660 });
       this.database.transaction(() => {
-        this.assertStorageQuota(userId, archive.byteLength);
-        this.database.sources.insertReserved({
-          id: sourceId,
-          ownerUserId: userId,
-          size: archive.byteLength,
-          sha256,
-          storageKey,
-          timestamp,
-          expiresAt,
-        });
-        this.database.sources.transition(
+        this.database.sources.transitionBeforeExpiry(
           sourceId,
           ["reserved"],
           "ready",
-          timestamp,
+          nowIso(),
           {
-            uploaded_at: timestamp,
+            uploaded_at: nowIso(),
+            expires_at: expiresAt,
             paths_json: JSON.stringify(paths),
           },
         );
       });
     } catch (error) {
       await rm(dirname(path), { recursive: true, force: true });
+      this.database.transaction(() => {
+        this.database.sources.discardReservation(sourceId);
+      });
+      throw error;
+    }
+    const source = this.database.sources.get(sourceId);
+    if (source === undefined)
+      throw new AppError("SOURCE_CREATE_FAILED", "Source creation failed");
+    return source;
+  }
+
+  /** Promote a revision archive that was streamed to local storage. */
+  private async storeReadySourceArchive(
+    userId: string,
+    archive: string,
+    paths: readonly string[],
+  ): Promise<SourceRow> {
+    const metadata = await stat(archive);
+    if (
+      !metadata.isFile() ||
+      !Number.isSafeInteger(metadata.size) ||
+      metadata.size < 1 ||
+      metadata.size > this.resourceLimits.maxUploadBytes
+    )
+      throw new AppError(
+        "SOURCE_ARCHIVE_SIZE",
+        "Source archive size is invalid",
+        422,
+      );
+    const sha256 = await sha256File(archive),
+      verified = await stat(archive);
+    if (!verified.isFile() || verified.size !== metadata.size)
+      throw new AppError(
+        "SOURCE_FILE_CHANGED",
+        "Source changed while its revision was being archived",
+        409,
+      );
+    const existing = this.database.sources.findReady(
+      userId,
+      sha256,
+      metadata.size,
+      nowIso(),
+    );
+    if (existing !== undefined) return existing;
+    const sourceId = newId("source"),
+      storageKey = `sources/${sourceId}/source.zip`,
+      path = join(this.storageRoot, storageKey),
+      timestamp = nowIso(),
+      expiresAt = this.sourceRetentionExpiresAt(),
+      stagingExpiresAt = new Date(Date.now() + SOURCE_UPLOAD_MS).toISOString();
+    this.database.transaction(() => {
+      this.assertStorageQuota(userId, metadata.size);
+      this.database.sources.insertReserved({
+        id: sourceId,
+        ownerUserId: userId,
+        size: metadata.size,
+        sha256,
+        storageKey,
+        timestamp,
+        expiresAt: stagingExpiresAt,
+      });
+    });
+    try {
+      await mkdir(dirname(path), { recursive: true, mode: 0o770 });
+      await rename(archive, path);
+      await syncDirectory(dirname(path));
+      this.database.transaction(() => {
+        this.database.sources.transitionBeforeExpiry(
+          sourceId,
+          ["reserved"],
+          "ready",
+          nowIso(),
+          {
+            uploaded_at: nowIso(),
+            expires_at: expiresAt,
+            paths_json: JSON.stringify(paths),
+          },
+        );
+      });
+    } catch (error) {
+      await rm(dirname(path), { recursive: true, force: true });
+      this.database.transaction(() => {
+        this.database.sources.discardReservation(sourceId);
+      });
       throw error;
     }
     const source = this.database.sources.get(sourceId);
@@ -1416,18 +1767,34 @@ export class RemoteRenderService {
         "",
       );
       await mutation(root);
-      const files = (await readDirectoryFiles(root)).sort((left, right) =>
-        left.path.localeCompare(right.path),
-      );
-      assertSourceFileLimits(files);
-      assertTexSource(files.map((file) => file.path));
-      const archive = await zipFiles(files),
-        revision = await this.storeReadySource(
+      const files = (
+          await readDirectoryFiles(root, "", {
+            files: 0,
+            bytes: 0,
+            maxFiles: this.resourceLimits.maxFileCount,
+            maxBytes: this.resourceLimits.maxExtractedBytes,
+            maxFileBytes: this.resourceLimits.maxUploadBytes,
+          })
+        ).sort((left, right) => left.path.localeCompare(right.path)),
+        paths = files.map((file) => file.path),
+        archiveRoot = await mkdtemp(join(this.storageRoot, ".remote-archive-")),
+        archive = join(archiveRoot, "source.zip");
+      try {
+        assertTexSource(paths);
+        await writeZipFiles(files, archive, {
+          maxArchiveBytes: this.resourceLimits.maxUploadBytes,
+          maxExtractedBytes: this.resourceLimits.maxExtractedBytes,
+          maxFileBytes: this.resourceLimits.maxUploadBytes,
+        });
+        const revision = await this.storeReadySourceArchive(
           userId,
           archive,
-          files.map((file) => file.path),
+          paths,
         );
-      return this.summarizeSource(revision, source.id);
+        return this.summarizeSource(revision, source.id);
+      } finally {
+        await rm(archiveRoot, { recursive: true, force: true });
+      }
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -1452,8 +1819,11 @@ export class RemoteRenderService {
   private assertStorageQuota(userId: string, bytes: number): void {
     if (
       bytes >
-      this.maxUserStorageBytes -
-        this.database.sources.storageUsageForUser(userId)
+      this.database.settings.value(
+        "max_user_storage_bytes",
+        this.maxUserStorageBytes,
+      ) -
+        this.database.jobs.storageUsageForUser(userId)
     )
       throw new AppError(
         "USER_STORAGE_QUOTA",
@@ -1499,12 +1869,45 @@ export class RemoteRenderService {
     return join(this.storageRoot, source.storage_key);
   }
 
+  private sourceUploadChunkRoot(source: SourceRow): string {
+    return join(dirname(this.sourcePath(source)), ".chunks");
+  }
+
   private environmentIndex(): Promise<{ packages: string[]; fonts: string[] }> {
-    this.environmentIndexPromise ??= Promise.all([
+    if (this.environmentIndexPromise !== undefined)
+      return this.environmentIndexPromise;
+    this.environmentIndexPromise = this.loadEnvironmentIndex().finally(() => {
+      this.environmentIndexPromise = undefined;
+    });
+    return this.environmentIndexPromise;
+  }
+
+  private async loadEnvironmentIndex(): Promise<{
+    packages: string[];
+    fonts: string[];
+  }> {
+    const fingerprint = await environmentFingerprint(
+      this.environmentRoot,
+      this.rendererVersion,
+    );
+    const cached = this.environmentIndexCache;
+    if (
+      cached !== undefined &&
+      cached.fingerprint === fingerprint &&
+      cached.expiresAt > Date.now()
+    )
+      return cached.value;
+    const [packages, fonts] = await Promise.all([
       readEnvironmentList(join(this.environmentRoot, "packages.txt")),
       readEnvironmentList(join(this.environmentRoot, "fonts.txt")),
-    ]).then(([packages, fonts]) => ({ packages, fonts }));
-    return this.environmentIndexPromise;
+    ]);
+    const value = { packages, fonts };
+    this.environmentIndexCache = {
+      fingerprint,
+      expiresAt: Date.now() + ENVIRONMENT_INDEX_TTL_MS,
+      value,
+    };
+    return value;
   }
 
   private ensurePrincipal(userId: string): RemoteMcpPrincipalRow {
@@ -1531,6 +1934,7 @@ export class RemoteRenderService {
           serviceAccountId: principal.service_account_id,
           name: "Remote MCP accounting principal",
           prefix: `oauth_${principal.api_key_id.slice(4)}`,
+          kind: "render",
           secretHash: "0".repeat(64),
           pepperId: "oauth-principal",
           scopes: ["oauth:mcp"],
@@ -1559,8 +1963,12 @@ export class RemoteRenderService {
         "Source reference is invalid",
         404,
       );
-    const source = this.database.sources.getOwned(reference.source_id, userId);
-    if (source?.status !== "ready")
+    const source = this.database.sources.getOwnedReady(
+      reference.source_id,
+      userId,
+      nowIso(),
+    );
+    if (source === undefined)
       throw new AppError(
         "SOURCE_NOT_READY",
         "Referenced Source is not ready",
@@ -1594,34 +2002,41 @@ export class RemoteRenderService {
       storageKey = `sources/${sourceId}/source.zip`,
       path = join(this.storageRoot, storageKey),
       timestamp = nowIso(),
-      expiresAt = new Date(Date.now() + 60 * 60_000).toISOString();
-    await mkdir(dirname(path), { recursive: true, mode: 0o770 });
-    await writeFile(path, archive, { flag: "wx", mode: 0o660 });
+      expiresAt = this.sourceRetentionExpiresAt(),
+      stagingExpiresAt = new Date(Date.now() + SOURCE_UPLOAD_MS).toISOString();
+    this.database.transaction(() => {
+      this.assertStorageQuota(userId, archive.byteLength);
+      this.database.sources.insertReserved({
+        id: sourceId,
+        ownerUserId: userId,
+        size: archive.byteLength,
+        sha256,
+        storageKey,
+        timestamp,
+        expiresAt: stagingExpiresAt,
+      });
+    });
     try {
+      await mkdir(dirname(path), { recursive: true, mode: 0o770 });
+      await writeFile(path, archive, { flag: "wx", mode: 0o660 });
       this.database.transaction(() => {
-        this.assertStorageQuota(userId, archive.byteLength);
-        this.database.sources.insertReserved({
-          id: sourceId,
-          ownerUserId: userId,
-          size: archive.byteLength,
-          sha256,
-          storageKey,
-          timestamp,
-          expiresAt,
-        });
-        this.database.sources.transition(
+        this.database.sources.transitionBeforeExpiry(
           sourceId,
           ["reserved"],
           "ready",
-          timestamp,
+          nowIso(),
           {
-            uploaded_at: timestamp,
+            uploaded_at: nowIso(),
+            expires_at: expiresAt,
             paths_json: JSON.stringify([entrypoint]),
           },
         );
       });
     } catch (error) {
       await rm(dirname(path), { recursive: true, force: true });
+      this.database.transaction(() => {
+        this.database.sources.discardReservation(sourceId);
+      });
       throw error;
     }
     const source = this.database.sources.get(sourceId);
@@ -1630,8 +2045,13 @@ export class RemoteRenderService {
     return source;
   }
 
-  private assertQueue(serviceAccountId: string): void {
-    if (this.database.jobs.countActive() >= this.maxQueueLength)
+  private assertQueue(userId: string, serviceAccountId: string): void {
+    this.assertMaintenance();
+    const maxQueueLength = this.database.settings.value(
+      "max_queue_length",
+      this.maxQueueLength,
+    );
+    if (this.database.jobs.countActive() >= maxQueueLength)
       throw new AppError("QUEUE_FULL", "Render queue is full", 503);
     if (this.database.jobs.countActiveForServiceAccount(serviceAccountId) >= 5)
       throw new AppError(
@@ -1639,6 +2059,38 @@ export class RemoteRenderService {
         "Remote MCP pending job limit reached",
         429,
       );
+    const maxUserActiveJobs = this.database.settings.value(
+      "max_user_active_jobs",
+      20,
+    );
+    if (this.database.jobs.countActiveForUser(userId) >= maxUserActiveJobs)
+      throw new AppError(
+        "USER_QUEUE_LIMIT",
+        "User pending job limit reached",
+        429,
+      );
+    this.assertStorageQuota(userId, this.maxOutputBytes);
+  }
+
+  private assertMaintenance(): void {
+    if (
+      this.database.settings.value<
+        "normal" | "reject-new-jobs" | "read-only" | "lockdown"
+      >("maintenance_mode", "normal") !== "normal"
+    )
+      throw new AppError(
+        "MAINTENANCE",
+        "New jobs are temporarily unavailable",
+        503,
+      );
+  }
+
+  private sourceRetentionExpiresAt(): string {
+    const minutes = this.database.settings.value(
+      "source_orphan_retention_minutes",
+      SOURCE_RETENTION_MS / 60_000,
+    );
+    return new Date(Date.now() + minutes * 60_000).toISOString();
   }
 
   private assertOwned(userId: string, jobId: string): JobRow {
@@ -1699,6 +2151,38 @@ export class RemoteRenderService {
   private artifactPath(jobId: string, relativePath: string): string {
     return join(this.storageRoot, "jobs", jobId, "output", relativePath);
   }
+
+  private acquireInlineArtifactBytes(bytes: number): Promise<() => void> {
+    if (
+      this.inlineArtifactBytesInFlight + bytes <=
+      REMOTE_MCP_MAX_INLINE_ARTIFACT_BYTES_IN_FLIGHT
+    ) {
+      this.inlineArtifactBytesInFlight += bytes;
+      return Promise.resolve(() => this.releaseInlineArtifactBytes(bytes));
+    }
+    return new Promise((resolve) => {
+      this.inlineArtifactWaiters.push({ bytes, resolve });
+    });
+  }
+
+  private releaseInlineArtifactBytes(bytes: number): void {
+    this.inlineArtifactBytesInFlight = Math.max(
+      0,
+      this.inlineArtifactBytesInFlight - bytes,
+    );
+    while (this.inlineArtifactWaiters.length > 0) {
+      const index = this.inlineArtifactWaiters.findIndex(
+        (waiter) =>
+          this.inlineArtifactBytesInFlight + waiter.bytes <=
+          REMOTE_MCP_MAX_INLINE_ARTIFACT_BYTES_IN_FLIGHT,
+      );
+      if (index < 0) return;
+      const waiter = this.inlineArtifactWaiters.splice(index, 1)[0];
+      if (waiter === undefined) return;
+      this.inlineArtifactBytesInFlight += waiter.bytes;
+      waiter.resolve(() => this.releaseInlineArtifactBytes(waiter.bytes));
+    }
+  }
 }
 
 function artifactMimeType(type: string): string {
@@ -1713,6 +2197,80 @@ function artifactMimeType(type: string): string {
       svg_manifest: "application/json",
     }[type] ?? "application/octet-stream"
   );
+}
+
+function withinRefreshReplayGrace(usedAt: string, timestamp: string): boolean {
+  const used = Date.parse(usedAt),
+    now = Date.parse(timestamp);
+  return (
+    Number.isFinite(used) &&
+    Number.isFinite(now) &&
+    Math.abs(now - used) <= REFRESH_REPLAY_GRACE_MS
+  );
+}
+
+async function readBoundedArtifact(
+  path: string,
+  expectedSize: number,
+  maximumBytes: number,
+): Promise<Buffer> {
+  let handle;
+  try {
+    handle = await open(path, "r");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT")
+      throw new AppError("ARTIFACT_NOT_FOUND", "Artifact does not exist", 404);
+    throw error;
+  }
+  try {
+    const initial = await handle.stat();
+    if (
+      !initial.isFile() ||
+      !Number.isSafeInteger(initial.size) ||
+      initial.size !== expectedSize
+    )
+      throw new AppError(
+        "ARTIFACT_UNAVAILABLE",
+        "Artifact metadata does not match the stored file",
+        503,
+      );
+    if (initial.size > maximumBytes)
+      throw new AppError(
+        "ARTIFACT_TOO_LARGE",
+        "Artifact exceeds the MCP inline resource limit",
+        413,
+      );
+
+    const bytes = Buffer.allocUnsafe(initial.size);
+    let offset = 0;
+    while (offset < initial.size) {
+      const length = Math.min(ARTIFACT_READ_CHUNK_BYTES, initial.size - offset);
+      const result = await handle.read(bytes, offset, length, offset);
+      if (result.bytesRead <= 0)
+        throw new AppError(
+          "ARTIFACT_UNAVAILABLE",
+          "Artifact ended before its recorded size",
+          503,
+        );
+      offset += result.bytesRead;
+      if (offset > maximumBytes)
+        throw new AppError(
+          "ARTIFACT_TOO_LARGE",
+          "Artifact exceeds the MCP inline resource limit",
+          413,
+        );
+    }
+    const final = await handle.stat();
+    if (final.size !== expectedSize)
+      throw new AppError(
+        "ARTIFACT_UNAVAILABLE",
+        "Artifact changed while it was being read",
+        503,
+      );
+    return bytes;
+  } finally {
+    await handle.close();
+  }
 }
 
 function normalizeRenderOutputs(
@@ -1933,48 +2491,358 @@ async function zipInline(entrypoint: string, content: string): Promise<Buffer> {
   return zipFiles([{ path: entrypoint, bytes: Buffer.from(content, "utf8") }]);
 }
 
+async function sha256File(path: string): Promise<string> {
+  const hash = createHash("sha256");
+  for await (const chunk of createReadStream(path) as AsyncIterable<Buffer>)
+    hash.update(chunk);
+  return hash.digest("hex");
+}
+
+async function writeUploadChunk(
+  root: string,
+  offset: number,
+  bytes: Buffer,
+): Promise<void> {
+  const temporary = join(root, `.pending-${randomUUID()}`),
+    target = join(root, String(offset));
+  try {
+    const handle = await open(temporary, "wx", 0o660);
+    try {
+      let written = 0;
+      while (written < bytes.byteLength) {
+        const result = await handle.write(
+          bytes,
+          written,
+          bytes.byteLength - written,
+          written,
+        );
+        if (result.bytesWritten <= 0)
+          throw new AppError(
+            "SOURCE_UPLOAD_IO",
+            "Failed to write Source chunk",
+            503,
+          );
+        written += result.bytesWritten;
+      }
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    try {
+      // link(2) is create-only: unlike rename it cannot replace a chunk left
+      // by a stale writer whose lease has expired.
+      await link(temporary, target);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+        // A writer may have linked the exact same chunk just before losing
+        // its lease. Its DB CAS will fail, but an identical client retry can
+        // safely adopt those immutable bytes and advance the durable offset.
+        const existing = await readFile(target);
+        if (existing.byteLength !== bytes.byteLength || !existing.equals(bytes))
+          throw new AppError(
+            "SOURCE_UPLOAD_CONCURRENT",
+            "Source upload chunk was written by another instance",
+            409,
+          );
+      } else {
+        throw error;
+      }
+    }
+    await syncDirectory(root);
+  } finally {
+    await rm(temporary, { force: true });
+  }
+}
+
+async function syncDirectory(path: string): Promise<void> {
+  const handle = await open(path, "r");
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
+async function assembleUploadChunks(
+  root: string,
+  sourcePath: string,
+  leaseOwner: string,
+  expectedBytes: number,
+): Promise<string> {
+  const archive = `${sourcePath}.finalizing-${leaseOwner}`,
+    output = createWriteStream(archive, { flags: "wx", mode: 0o660 });
+  let offset = 0;
+  try {
+    while (offset < expectedBytes) {
+      const path = join(root, String(offset)),
+        metadata = await stat(path);
+      if (
+        !metadata.isFile() ||
+        !Number.isSafeInteger(metadata.size) ||
+        metadata.size < 1 ||
+        metadata.size > SOURCE_UPLOAD_CHUNK_MAX_BYTES ||
+        offset + metadata.size > expectedBytes
+      )
+        throw new AppError(
+          "SOURCE_UPLOAD_MISMATCH",
+          "Uploaded Source chunks do not match the durable offset",
+          422,
+        );
+      for await (const chunk of createReadStream(path)) {
+        if (!output.write(chunk)) await once(output, "drain");
+      }
+      offset += metadata.size;
+    }
+    output.end();
+    await once(output, "finish");
+    const handle = await open(archive, "r");
+    try {
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    return archive;
+  } catch (error) {
+    output.destroy();
+    await rm(archive, { force: true });
+    throw error;
+  }
+}
+
 async function zipFiles(
-  files: readonly { path: string; bytes: Buffer }[],
+  files: readonly {
+    path: string;
+    bytes?: Buffer | undefined;
+    absolutePath?: string | undefined;
+    size?: number | undefined;
+  }[],
 ): Promise<Buffer> {
   const zip = new yazl.ZipFile(),
     stream = new PassThrough(),
     chunks: Buffer[] = [];
+  addZipFiles(zip, files, ZIP_LIMITS);
   stream.on("data", (chunk: Buffer) => chunks.push(chunk));
   const completed = new Promise<void>((resolve, reject) => {
     stream.once("end", resolve);
     stream.once("error", reject);
     zip.outputStream.once("error", reject);
+    zip.once("error", reject);
   });
   zip.outputStream.pipe(stream);
-  for (const file of [...files].sort((left, right) =>
-    left.path.localeCompare(right.path),
-  ))
-    zip.addBuffer(file.bytes, file.path, {
-      mode: 0o600,
-      mtime: new Date(0),
-    });
   zip.end();
   await completed;
+  await assertZipInputsUnchanged(files);
   return Buffer.concat(chunks);
+}
+
+/** Build a revision ZIP on disk, bounded by configured archive limits. */
+async function writeZipFiles(
+  files: readonly {
+    path: string;
+    bytes?: Buffer | undefined;
+    absolutePath?: string | undefined;
+    size?: number | undefined;
+  }[],
+  destination: string,
+  limits: {
+    maxArchiveBytes: number;
+    maxExtractedBytes: number;
+    maxFileBytes: number;
+  },
+): Promise<void> {
+  const zip = new yazl.ZipFile(),
+    output = createWriteStream(destination, { flags: "wx", mode: 0o660 });
+  let totalBytes = 0;
+  const bound = new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      totalBytes += chunk.byteLength;
+      if (totalBytes > limits.maxArchiveBytes) {
+        callback(
+          new AppError(
+            "SOURCE_ARCHIVE_SIZE",
+            "Source archive exceeds the configured upload limit",
+            422,
+          ),
+        );
+        return;
+      }
+      callback(null, chunk);
+    },
+  });
+  addZipFiles(zip, files, {
+    maxExtractedBytes: limits.maxExtractedBytes,
+    maxFileBytes: limits.maxFileBytes,
+  });
+  const completed = new Promise<void>((resolve, reject) => {
+    output.once("finish", resolve);
+    output.once("error", reject);
+    bound.once("error", reject);
+    zip.outputStream.once("error", reject);
+    zip.once("error", reject);
+  });
+  zip.outputStream.pipe(bound).pipe(output);
+  zip.end();
+  try {
+    await completed;
+    await assertZipInputsUnchanged(files);
+  } catch (error) {
+    await rm(destination, { force: true });
+    throw error;
+  }
+}
+
+function addZipFiles(
+  zip: yazl.ZipFile,
+  files: readonly {
+    path: string;
+    bytes?: Buffer | undefined;
+    absolutePath?: string | undefined;
+    size?: number | undefined;
+  }[],
+  limits: Pick<typeof ZIP_LIMITS, "maxExtractedBytes" | "maxFileBytes">,
+): void {
+  let totalBytes = 0;
+  for (const file of files) {
+    const size = file.bytes?.byteLength ?? file.size ?? -1;
+    if (!Number.isSafeInteger(size) || size < 0)
+      throw new AppError(
+        "SOURCE_FILE_SIZE",
+        "Source file size is invalid",
+        422,
+      );
+    if (size > limits.maxFileBytes)
+      throw new AppError(
+        "ZIP_FILE_TOO_LARGE",
+        "Source file exceeds limit",
+        422,
+      );
+    totalBytes += size;
+    if (totalBytes > limits.maxExtractedBytes)
+      throw new AppError("ZIP_BOMB", "Source content exceeds limit", 422);
+  }
+  for (const file of [...files].sort((left, right) =>
+    left.path.localeCompare(right.path),
+  )) {
+    if (file.bytes !== undefined)
+      zip.addBuffer(file.bytes, file.path, {
+        mode: 0o600,
+        mtime: new Date(0),
+      });
+    else if (file.absolutePath !== undefined) {
+      const size = file.size;
+      if (typeof size !== "number" || !Number.isSafeInteger(size) || size < 0)
+        throw new AppError(
+          "SOURCE_FILE_SIZE",
+          "Source file size is invalid",
+          422,
+        );
+      zip.addReadStreamLazy(
+        file.path,
+        {
+          mode: 0o600,
+          mtime: new Date(0),
+          // Bound the stream to the size checked by readDirectoryFiles.  A
+          // file that grows while the archive is being built cannot make the
+          // archive exceed the extracted-byte limit.
+          size,
+        },
+        (callback) => {
+          if (size === 0) {
+            callback(null, Readable.from([]));
+            return;
+          }
+          callback(
+            null,
+            createReadStream(file.absolutePath as string, {
+              start: 0,
+              end: size - 1,
+            }),
+          );
+        },
+      );
+    } else throw new Error(`Source file has no readable content: ${file.path}`);
+  }
+}
+
+async function assertZipInputsUnchanged(
+  files: readonly {
+    absolutePath?: string | undefined;
+    size?: number | undefined;
+  }[],
+): Promise<void> {
+  for (const file of files) {
+    if (file.absolutePath === undefined) continue;
+    const metadata = await stat(file.absolutePath);
+    if (!metadata.isFile() || metadata.size !== file.size)
+      throw new AppError(
+        "SOURCE_FILE_CHANGED",
+        "Source changed while its revision was being archived",
+        409,
+      );
+  }
 }
 
 async function readDirectoryFiles(
   root: string,
   relative = "",
-): Promise<Array<{ path: string; bytes: Buffer }>> {
+  state: {
+    files: number;
+    bytes: number;
+    maxFiles: number;
+    maxBytes: number;
+    maxFileBytes: number;
+  } = {
+    files: 0,
+    bytes: 0,
+    maxFiles: ZIP_LIMITS.maxFiles,
+    maxBytes: ZIP_LIMITS.maxExtractedBytes,
+    maxFileBytes: ZIP_LIMITS.maxFileBytes,
+  },
+): Promise<Array<{ path: string; absolutePath: string; size: number }>> {
   const directory = join(root, ...relative.split("/").filter(Boolean)),
     entries = await readdir(directory, { withFileTypes: true }),
-    files: Array<{ path: string; bytes: Buffer }> = [];
+    files: Array<{ path: string; absolutePath: string; size: number }> = [];
   for (const entry of entries) {
     const path = relative === "" ? entry.name : `${relative}/${entry.name}`;
     if (entry.isDirectory())
-      files.push(...(await readDirectoryFiles(root, path)));
-    else if (entry.isFile())
+      files.push(...(await readDirectoryFiles(root, path, state)));
+    else if (entry.isFile()) {
+      const absolutePath = join(root, ...path.split("/")),
+        metadata = await stat(absolutePath);
+      if (!metadata.isFile())
+        throw new AppError(
+          "SOURCE_FILE_TYPE",
+          "Source contains an unsupported file type",
+          422,
+        );
+      if (!Number.isSafeInteger(metadata.size) || metadata.size < 0)
+        throw new AppError(
+          "SOURCE_FILE_SIZE",
+          "Source file size is invalid",
+          422,
+        );
+      state.files += 1;
+      if (state.files > state.maxFiles)
+        throw new AppError(
+          "ZIP_TOO_MANY_FILES",
+          "Source file count exceeds limit",
+          422,
+        );
+      if (metadata.size > state.maxFileBytes)
+        throw new AppError(
+          "ZIP_FILE_TOO_LARGE",
+          "Source file exceeds limit",
+          422,
+        );
+      state.bytes += metadata.size;
+      if (state.bytes > state.maxBytes)
+        throw new AppError("ZIP_BOMB", "Source content exceeds limit", 422);
       files.push({
         path: validateSourceFilePath(path),
-        bytes: await readFile(join(root, ...path.split("/"))),
+        absolutePath,
+        size: metadata.size,
       });
-    else
+    } else
       throw new AppError(
         "SOURCE_FILE_TYPE",
         "Source contains an unsupported file type",
@@ -1991,29 +2859,6 @@ function assertTexSource(paths: readonly string[]): void {
       "Source must contain at least one .tex file",
       422,
     );
-}
-
-function assertSourceFileLimits(
-  files: readonly { path: string; bytes: Buffer }[],
-): void {
-  if (files.length > ZIP_LIMITS.maxFiles)
-    throw new AppError(
-      "ZIP_TOO_MANY_FILES",
-      "Source file count exceeds limit",
-      422,
-    );
-  let total = 0;
-  for (const file of files) {
-    if (file.bytes.byteLength > ZIP_LIMITS.maxFileBytes)
-      throw new AppError(
-        "ZIP_FILE_TOO_LARGE",
-        "Source file exceeds limit",
-        422,
-      );
-    total += file.bytes.byteLength;
-  }
-  if (total > ZIP_LIMITS.maxExtractedBytes)
-    throw new AppError("ZIP_BOMB", "Source content exceeds limit", 422);
 }
 
 function decodeBase64(value: string): Buffer {
@@ -2052,6 +2897,25 @@ async function readEnvironmentList(path: string): Promise<string[]> {
         .filter(Boolean),
     ),
   ].sort((left, right) => left.localeCompare(right));
+}
+
+async function environmentFingerprint(
+  root: string,
+  rendererVersion: string,
+): Promise<string> {
+  const entries = await Promise.all(
+    ["packages.txt", "fonts.txt"].map(async (name) => {
+      try {
+        const info = await stat(join(root, name));
+        return `${name}:${info.dev}:${info.ino}:${info.size}:${info.mtimeMs}`;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT")
+          return `${name}:missing`;
+        throw error;
+      }
+    }),
+  );
+  return `${rendererVersion}|${entries.join("|")}`;
 }
 
 function checkEnvironmentNames(

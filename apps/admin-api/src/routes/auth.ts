@@ -1,5 +1,9 @@
 import { Hono } from "hono";
-import { appendSetCookies, OIDC_STATE_COOKIE } from "@latex-renderer/auth";
+import {
+  appendSetCookies,
+  OIDC_STATE_COOKIE,
+  oidcStateCookieName,
+} from "@latex-renderer/auth";
 import { AppError } from "@latex-renderer/shared";
 import { z } from "zod";
 import type { AdminDependencies } from "../types.js";
@@ -45,10 +49,22 @@ export function createAuthenticationRouter(deps: AdminDependencies): Hono {
   });
 
   router.get("/oidc/start", async (c) => {
-    const started = await deps.browserAuth.beginOidc(c.req.query("return_to"));
+    const started = await deps.browserAuth.beginOidc(
+      c.req.query("return_to"),
+      clientAddress(deps, c.req.raw),
+    );
+    const stateCookie = oidcStateCookieName(started.state);
+    c.header(
+      "Set-Cookie",
+      `${stateCookie}=${started.state}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=300`,
+    );
+    // Keep the legacy name for clients that started a flow before the
+    // per-flow cookie was introduced. Callback validation prefers the
+    // state-specific cookie, so concurrent tabs do not overwrite one another.
     c.header(
       "Set-Cookie",
       `${OIDC_STATE_COOKIE}=${started.state}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=300`,
+      { append: true },
     );
     return c.redirect(started.authorizationUrl, 302);
   });
@@ -61,9 +77,12 @@ export function createAuthenticationRouter(deps: AdminDependencies): Hono {
         "OIDC login was not completed",
         401,
       );
-    const state = requiredQuery(c.req.query("state"), "OIDC state");
+    const state = requiredState(c.req.query("state"));
     const code = requiredQuery(c.req.query("code"), "OIDC authorization code");
-    const stateCookie = singleCookie(c.req.header("Cookie"), OIDC_STATE_COOKIE);
+    const stateCookieName = oidcStateCookieName(state);
+    const stateCookie =
+      singleCookie(c.req.header("Cookie"), stateCookieName) ??
+      singleCookie(c.req.header("Cookie"), OIDC_STATE_COOKIE);
     if (stateCookie === undefined)
       throw new AppError(
         "OIDC_STATE_INVALID",
@@ -74,9 +93,11 @@ export function createAuthenticationRouter(deps: AdminDependencies): Hono {
       code,
       state,
       stateCookie,
+      request: c.req.raw,
     });
     deps.browserAuth.logout(c.req.raw);
     appendSetCookies(c.res.headers, [
+      `${stateCookieName}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`,
       `${OIDC_STATE_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`,
       ...completed.cookies,
     ]);
@@ -130,6 +151,13 @@ function requiredQuery(value: string | undefined, label: string): string {
   if (value === undefined || value.length < 1 || value.length > 4096)
     throw new AppError("OIDC_CALLBACK_INVALID", `${label} is invalid`, 400);
   return value;
+}
+
+function requiredState(value: string | undefined): string {
+  const state = requiredQuery(value, "OIDC state");
+  if (!/^[A-Za-z0-9_-]{43}$/.test(state))
+    throw new AppError("OIDC_CALLBACK_INVALID", "OIDC state is invalid", 400);
+  return state;
 }
 
 function singleCookie(

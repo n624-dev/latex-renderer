@@ -84,6 +84,12 @@ async function uploadSharedSource(
       nowIso(),
     );
   });
+  const heartbeat = startUploadClaimHeartbeat(
+    deps,
+    context.nonceKind,
+    nonce,
+    claimOwner,
+  );
   const finalPath = join(deps.storageRoot, source.storage_key),
     directory = finalPath.slice(0, finalPath.lastIndexOf("/"));
   await mkdir(directory, { recursive: true, mode: 0o770 });
@@ -114,6 +120,7 @@ async function uploadSharedSource(
     const handle = await open(temporaryPath, constants.O_RDONLY);
     await handle.sync();
     await handle.close();
+    heartbeat.assertOwned();
     await rename(temporaryPath, finalPath);
     const timestamp = nowIso(),
       orphanRetentionMinutes = deps.database.settings.value(
@@ -158,24 +165,33 @@ async function uploadSharedSource(
     });
   } catch (error) {
     await rm(temporaryPath, { force: true });
-    await rm(finalPath, { force: true });
-    deps.database.transaction(() => {
-      if (context.nonceKind === "source")
-        deps.database.releaseSourceNonce(nonce, claimOwner);
-      else deps.database.releaseNonce(nonce, claimOwner);
-      deps.database.raw
-        .prepare(
-          "UPDATE sources SET status='reserved',updated_at=? WHERE id=? AND status='uploading'",
-        )
-        .run(nowIso(), sourceId);
-      if (context.nonceKind === "job")
-        deps.database.jobs.restoreReservedAfterUploadFailure(
-          context.jobId,
-          nowIso(),
-        );
-    });
+    // A timed-out writer must never remove an archive or reset state owned by
+    // a recovery/retry writer. Retain the durable claim before touching shared
+    // state; otherwise leave recovery to the scheduled cleanup process.
+    if (heartbeat.tryRetain()) {
+      await rm(finalPath, { force: true });
+      deps.database.transaction(() => {
+        const timestamp = nowIso(),
+          released =
+            context.nonceKind === "source"
+              ? deps.database.releaseSourceNonce(nonce, claimOwner, timestamp)
+              : deps.database.releaseNonce(nonce, claimOwner, timestamp);
+        if (released !== 1) return;
+        deps.database.raw
+          .prepare(
+            "UPDATE sources SET status='reserved',updated_at=? WHERE id=? AND status='uploading'",
+          )
+          .run(timestamp, sourceId);
+        if (context.nonceKind === "job")
+          deps.database.jobs.restoreReservedAfterUploadFailure(
+            context.jobId,
+            timestamp,
+          );
+      });
+    }
     throw error;
   } finally {
+    heartbeat.stop();
     await rm(inspectionPath, { recursive: true, force: true });
   }
 }
@@ -203,6 +219,12 @@ async function uploadLegacyJobSource(
     );
     deps.database.transitionJob(jobId, ["reserved"], "uploading");
   });
+  const heartbeat = startUploadClaimHeartbeat(
+    deps,
+    "job",
+    claims.nonce as string,
+    claimOwner,
+  );
   await mkdir(join(deps.storageRoot, "jobs", jobId, "input"), {
     recursive: true,
     mode: 0o770,
@@ -219,6 +241,7 @@ async function uploadLegacyJobSource(
     const handle = await open(temporaryPath, constants.O_RDONLY);
     await handle.sync();
     await handle.close();
+    heartbeat.assertOwned();
     await rename(temporaryPath, finalPath);
     deps.database.transaction(() => {
       deps.database.consumeNonce(claims.nonce as string, claimOwner);
@@ -228,12 +251,79 @@ async function uploadLegacyJobSource(
     });
   } catch (error) {
     await rm(temporaryPath, { force: true });
-    deps.database.transaction(() => {
-      deps.database.releaseNonce(claims.nonce as string, claimOwner);
-      deps.database.jobs.restoreReservedAfterUploadFailure(jobId, nowIso());
-    });
+    if (heartbeat.tryRetain()) {
+      await rm(finalPath, { force: true });
+      deps.database.transaction(() => {
+        const timestamp = nowIso();
+        if (
+          deps.database.releaseNonce(
+            claims.nonce as string,
+            claimOwner,
+            timestamp,
+          ) === 1
+        )
+          deps.database.jobs.restoreReservedAfterUploadFailure(
+            jobId,
+            timestamp,
+          );
+      });
+    }
     throw error;
+  } finally {
+    heartbeat.stop();
   }
+}
+
+function startUploadClaimHeartbeat(
+  deps: RendererApiDependencies,
+  kind: "job" | "source",
+  nonce: string,
+  owner: string,
+): { assertOwned(): void; tryRetain(): boolean; stop(): void } {
+  let lost = false;
+  const extend = (): boolean => {
+      if (lost) return false;
+      const timestamp = nowIso(),
+        claimUntil = new Date(Date.now() + 120_000).toISOString();
+      try {
+        const changed =
+          kind === "source"
+            ? deps.database.extendSourceNonceClaim(
+                nonce,
+                owner,
+                timestamp,
+                claimUntil,
+              )
+            : deps.database.extendNonceClaim(
+                nonce,
+                owner,
+                timestamp,
+                claimUntil,
+              );
+        if (changed !== 1) lost = true;
+      } catch {
+        lost = true;
+      }
+      return !lost;
+    },
+    timer = setInterval(extend, 30_000);
+  timer.unref();
+  return {
+    assertOwned() {
+      if (!extend())
+        throw new AppError(
+          "UPLOAD_CLAIM_LOST",
+          "Upload ownership was lost and the upload must be retried",
+          409,
+        );
+    },
+    tryRetain() {
+      return extend();
+    },
+    stop() {
+      clearInterval(timer);
+    },
+  };
 }
 
 function assertUploadClaims(

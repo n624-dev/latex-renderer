@@ -50,6 +50,44 @@ The SQL is `deploy/migrations/007_browser_auth.sql`, and successful application 
 
 Migration 007 is forward-only in production. Version 1.1 cannot safely administer the nullable-email and provider-neutral identity model. Before upgrading, enter maintenance mode, drain Jobs, stop every SQLite writer, and take a WAL-consistent encrypted backup. To return to 1.1, stop admission and all writers and restore that backup; do not merely point `current` at an older release. The non-production inspection and rebuild notes are in `deploy/migrations/007_browser_auth.rollback.md`.
 
+## Migration 008: Worker lease fencing
+
+Migration 008 adds `jobs.lease_generation`, which is incremented whenever a Worker or recovery claimant takes ownership. Every heartbeat, transition, artifact publication, failure, and recovery update must match both the owner and generation. This prevents a stale Worker from changing a Job after a replacement Worker has recovered it.
+
+## Migration 009: Cleanup state
+
+Migration 009 separates the terminal Render result from physical deletion state for Jobs and Sources. It adds retry count, bounded error, and next-attempt fields plus indexes for cleanup retries. A failed filesystem deletion no longer rewrites a successful Render result, and one permanently bad item no longer blocks later cleanup candidates.
+
+## Migration 010: Admission reservations
+
+Migration 010 adds `jobs.reserved_output_bytes` and a user-active-Job index. Admission now reserves the configured maximum future output size and enforces a user-wide active Job limit across service accounts. Existing terminal Jobs are backfilled with no reservation.
+
+## Migration 011: Upload claim leases
+
+Migration 011 gives Job and Source upload nonces an independently renewable `claim_expires_at`. Slow uploads heartbeat the claim, and cleanup can recover an abandoned claim after its lease expires without extending the ticket's original lifetime.
+
+## Migration 012: OAuth authorization security version
+
+Migration 012 records the user's `security_version` on every Remote MCP authorization code. Code exchange atomically rechecks that version before consuming the code and issuing a token family, so disabling a user or changing security state invalidates already issued codes.
+
+## Migration 013: Keyset pagination indexes
+
+Migration 013 adds deterministic timestamp-and-ID indexes for user, service-account, API-key, Job, Source, Project, revision, and related-Job pages. List/search endpoints use keyset cursors and database-side counts rather than fixed recent-row windows.
+
+## Migration 014: Project revision outputs
+
+Migration 014 persists each Project revision's requested output formats in `project_revisions.outputs_json`. Re-rendering an existing revision therefore preserves optional SVG output instead of silently reverting to PDF-only.
+
+## Migration 015: Source upload concurrency
+
+Migration 015 stores the durable received-byte offset and renewable writer lease for Remote MCP chunk uploads. Chunk creation is immutable, append/finalize operations are fenced across processes, and a crashed instance can be recovered after the short lease expires.
+
+## Migration 016: Durable API key kind
+
+Migration 016 adds the validated `api_keys.kind` invariant. Existing `lra_` keys are backfilled once as admin keys; all other existing keys remain render keys. Authentication and rotation thereafter require the credential prefix, stored prefix, stored kind, and allowed scopes to agree instead of inferring authority solely from attacker-presented credential text.
+
+Migrations 008 through 016 are additive but change the ownership, cleanup, admission, OAuth, upload, pagination, Project output, and credential invariants used by v1.2. Apply them only through the application migrator after the normal maintenance/drain/backup sequence. Treat the combined upgrade as forward-only: an older release does not enforce these invariants and must not be started on schema 16. Rollback requires stopping admission and every database writer, then restoring the WAL-consistent encrypted pre-migration backup.
+
 ## Administrative API migration for 0.3
 
 This release changes administrative HTTP routes but does not require an additional database migration beyond the schema migrations documented above.

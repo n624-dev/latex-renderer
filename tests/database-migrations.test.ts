@@ -37,6 +37,43 @@ const browserAuthMigration = readFileSync(
   new URL("../deploy/migrations/007_browser_auth.sql", import.meta.url),
   "utf8",
 );
+const workerLeaseFencingMigration = readFileSync(
+  new URL("../deploy/migrations/008_worker_lease_fencing.sql", import.meta.url),
+  "utf8",
+);
+const cleanupStateMigration = readFileSync(
+  new URL("../deploy/migrations/009_cleanup_state.sql", import.meta.url),
+  "utf8",
+);
+const admissionReservationsMigration = readFileSync(
+  new URL(
+    "../deploy/migrations/010_admission_reservations.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
+const uploadClaimLeasesMigration = readFileSync(
+  new URL("../deploy/migrations/011_upload_claim_leases.sql", import.meta.url),
+  "utf8",
+);
+const projectRevisionOutputsMigration = readFileSync(
+  new URL(
+    "../deploy/migrations/014_project_revision_outputs.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
+const sourceUploadConcurrencyMigration = readFileSync(
+  new URL(
+    "../deploy/migrations/015_source_upload_concurrency.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
+const apiKeyKindMigration = readFileSync(
+  new URL("../deploy/migrations/016_api_key_kind.sql", import.meta.url),
+  "utf8",
+);
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true });
@@ -76,15 +113,9 @@ describe("database migration 002", () => {
       migrated.raw
         .prepare("SELECT version FROM schema_migrations ORDER BY version")
         .all(),
-    ).toEqual([
-      { version: 1 },
-      { version: 2 },
-      { version: 3 },
-      { version: 4 },
-      { version: 5 },
-      { version: 6 },
-      { version: 7 },
-    ]);
+    ).toEqual(
+      Array.from({ length: 16 }, (_, index) => ({ version: index + 1 })),
+    );
 
     expect(() => migrated.migrate()).not.toThrow();
     migrated.close();
@@ -311,18 +342,300 @@ describe("database migration 002", () => {
       `INSERT INTO local_credentials
        (user_id,login_name,password_hash,password_updated_at)
        VALUES ('user_no_email','local-owner',?,?)`,
-    ).run("$scrypt$ln=17,r=8,p=1$" + "a".repeat(44) + "$" + "b".repeat(44), "2026-08-30T00:00:00Z");
+    ).run(
+      "$scrypt$ln=17,r=8,p=1$" + "a".repeat(44) + "$" + "b".repeat(44),
+      "2026-08-30T00:00:00Z",
+    );
     expect(() =>
-      db.prepare(
-        `INSERT INTO user_identities
+      db
+        .prepare(
+          `INSERT INTO user_identities
          (id,user_id,provider,issuer,subject,linked_at,last_seen_at)
          VALUES ('identity_duplicate','user_disabled','oidc','https://id.example.test','stable-subject',?,?)`,
-      ).run("2026-08-30T00:00:00Z", "2026-08-30T00:00:00Z"),
+        )
+        .run("2026-08-30T00:00:00Z", "2026-08-30T00:00:00Z"),
     ).toThrow(/UNIQUE constraint failed/);
     expect(db.prepare("PRAGMA integrity_check").get()).toEqual({
       integrity_check: "ok",
     });
     expect(db.prepare("PRAGMA foreign_key_check").all()).toHaveLength(0);
+    db.close();
+  });
+
+  it("adds a monotonic Worker lease fencing generation", () => {
+    const { db } = legacyDatabase();
+    seedLegacyUsers(db);
+    for (const migration of [
+      deploymentMigration,
+      sourcesMigration,
+      remoteMcpMigration,
+      webAppMigration,
+      svgOutputsMigration,
+      browserAuthMigration,
+      workerLeaseFencingMigration,
+    ])
+      db.exec(migration);
+
+    const generation = db
+      .prepare("PRAGMA table_info(jobs)")
+      .all()
+      .find((column) => column.name === "lease_generation");
+    expect(generation).toMatchObject({ notnull: 1, dflt_value: "0" });
+    expect(
+      db
+        .prepare("SELECT version FROM schema_migrations ORDER BY version")
+        .all(),
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8].map((version) => ({ version })));
+    db.close();
+  });
+
+  it("separates render results from cleanup retry state", () => {
+    const { db } = legacyDatabase();
+    seedLegacyUsers(db);
+    for (const migration of [
+      deploymentMigration,
+      sourcesMigration,
+      remoteMcpMigration,
+      webAppMigration,
+      svgOutputsMigration,
+      browserAuthMigration,
+      workerLeaseFencingMigration,
+      cleanupStateMigration,
+    ])
+      db.exec(migration);
+
+    const jobColumns = Object.fromEntries(
+        db
+          .prepare("PRAGMA table_info(jobs)")
+          .all()
+          .map((column) => [String(column.name), column]),
+      ),
+      sourceColumns = Object.fromEntries(
+        db
+          .prepare("PRAGMA table_info(sources)")
+          .all()
+          .map((column) => [String(column.name), column]),
+      );
+    expect(jobColumns.render_status).toBeDefined();
+    expect(jobColumns.deletion_status).toMatchObject({
+      notnull: 1,
+      dflt_value: "'retained'",
+    });
+    expect(jobColumns.deletion_attempts).toMatchObject({
+      notnull: 1,
+      dflt_value: "0",
+    });
+    expect(sourceColumns.deletion_status).toMatchObject({
+      notnull: 1,
+      dflt_value: "'retained'",
+    });
+    expect(sourceColumns.deletion_next_attempt_at).toBeDefined();
+    expect(
+      db
+        .prepare("SELECT version FROM schema_migrations ORDER BY version")
+        .all(),
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9].map((version) => ({ version })));
+    expect(db.prepare("PRAGMA integrity_check").get()).toEqual({
+      integrity_check: "ok",
+    });
+    db.close();
+  });
+
+  it("adds output reservations and a user-wide active Job policy", () => {
+    const { db } = legacyDatabase();
+    seedLegacyUsers(db);
+    for (const migration of [
+      deploymentMigration,
+      sourcesMigration,
+      remoteMcpMigration,
+      webAppMigration,
+      svgOutputsMigration,
+      browserAuthMigration,
+      workerLeaseFencingMigration,
+      cleanupStateMigration,
+    ])
+      db.exec(migration);
+    const timestamp = "2026-08-30T00:00:00.000Z";
+    db.prepare(
+      "INSERT INTO service_accounts(id,owner_user_id,name,client_type,status,security_version,created_at,updated_at) VALUES ('sa_active','user_owner','active','generic','active',1,?,?)",
+    ).run(timestamp, timestamp);
+    db.prepare(
+      "INSERT INTO api_keys(id,service_account_id,name,prefix,secret_hash,pepper_id,scopes_json,created_at,created_by) VALUES ('key_active','sa_active','active','active-prefix','hash','v1','[]',?,'test')",
+    ).run(timestamp);
+    db.prepare(
+      `INSERT INTO jobs(id,user_id,service_account_id,api_key_id,status,renderer_version,
+       source_size,source_sha256,created_at,updated_at)
+       VALUES ('job_active00000000000000000000000000','user_owner','sa_active','key_active','queued','test',1,?,?,?)`,
+    ).run("0".repeat(64), timestamp, timestamp);
+    db.exec(admissionReservationsMigration);
+
+    expect(
+      db
+        .prepare(
+          "SELECT reserved_output_bytes FROM jobs WHERE id='job_active00000000000000000000000000'",
+        )
+        .get(),
+    ).toEqual({ reserved_output_bytes: 209_715_200 });
+    expect(
+      db
+        .prepare(
+          "SELECT value_json FROM system_settings WHERE key='max_user_active_jobs'",
+        )
+        .get(),
+    ).toEqual({ value_json: "20" });
+    expect(
+      db
+        .prepare("SELECT version FROM schema_migrations ORDER BY version")
+        .all(),
+    ).toEqual(
+      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((version) => ({ version })),
+    );
+    db.close();
+  });
+
+  it("separates upload ticket expiry from the active claim lease", () => {
+    const { db } = legacyDatabase();
+    seedLegacyUsers(db);
+    for (const migration of [
+      deploymentMigration,
+      sourcesMigration,
+      remoteMcpMigration,
+      webAppMigration,
+      svgOutputsMigration,
+      browserAuthMigration,
+      workerLeaseFencingMigration,
+      cleanupStateMigration,
+      admissionReservationsMigration,
+      uploadClaimLeasesMigration,
+    ])
+      db.exec(migration);
+
+    for (const table of ["used_nonces", "source_upload_nonces"]) {
+      const claimExpiry = db
+        .prepare(`PRAGMA table_info(${table})`)
+        .all()
+        .find((column) => column.name === "claim_expires_at");
+      expect(claimExpiry).toMatchObject({ notnull: 0 });
+    }
+    expect(
+      db
+        .prepare("SELECT version FROM schema_migrations ORDER BY version")
+        .all(),
+    ).toEqual(
+      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map((version) => ({ version })),
+    );
+    db.close();
+  });
+
+  it("stores the output selection on each Project revision", () => {
+    const { db } = legacyDatabase();
+    seedLegacyUsers(db);
+    for (const migration of [
+      deploymentMigration,
+      sourcesMigration,
+      remoteMcpMigration,
+      webAppMigration,
+      projectRevisionOutputsMigration,
+    ])
+      db.exec(migration);
+
+    const outputs = db
+      .prepare("PRAGMA table_info(project_revisions)")
+      .all()
+      .find((column) => column.name === "outputs_json");
+    expect(outputs).toMatchObject({ notnull: 1, dflt_value: "'[\"pdf\"]'" });
+    expect(
+      db
+        .prepare("SELECT version FROM schema_migrations ORDER BY version")
+        .all(),
+    ).toEqual([1, 2, 3, 4, 5, 14].map((version) => ({ version })));
+    db.close();
+  });
+
+  it("adds upload leases and API-key kinds to a legacy database", () => {
+    const { db, path } = legacyDatabase();
+    seedLegacyUsers(db);
+    db.exec(deploymentMigration);
+    db.exec(sourcesMigration);
+    const timestamp = "2026-08-31T00:00:00.000Z";
+    db.prepare(
+      "INSERT INTO service_accounts(id,owner_user_id,name,client_type,status,security_version,created_at,updated_at) VALUES ('sa_kind','user_owner','kind','generic','active',1,?,?)",
+    ).run(timestamp, timestamp);
+    db.prepare(
+      "INSERT INTO api_keys(id,service_account_id,name,prefix,secret_hash,pepper_id,scopes_json,created_at,created_by) VALUES ('key_kind','sa_kind','kind','lra_legacy','hash','v1','[\"admin:*\"]',?,'test')",
+    ).run(timestamp);
+
+    db.exec(sourceUploadConcurrencyMigration);
+    db.exec(apiKeyKindMigration);
+
+    const sourceColumns = Object.fromEntries(
+      db
+        .prepare("PRAGMA table_info(sources)")
+        .all()
+        .map((column) => [String(column.name), column]),
+    );
+    expect(sourceColumns.upload_received_bytes).toMatchObject({
+      notnull: 1,
+      dflt_value: "0",
+    });
+    expect(sourceColumns.upload_lease_owner).toBeDefined();
+    expect(sourceColumns.upload_lease_expires_at).toBeDefined();
+    expect(
+      db
+        .prepare("SELECT kind FROM api_keys WHERE id='key_kind'")
+        .get(),
+    ).toEqual({ kind: "admin" });
+    expect(
+      db
+        .prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_sources_upload_lease'")
+        .get(),
+    ).toEqual({ name: "idx_sources_upload_lease" });
+    expect(
+      db
+        .prepare("SELECT version FROM schema_migrations ORDER BY version")
+        .all(),
+    ).toEqual([
+      { version: 1 },
+      { version: 2 },
+      { version: 3 },
+      { version: 15 },
+      { version: 16 },
+    ]);
+    expect(db.prepare("PRAGMA integrity_check").get()).toEqual({
+      integrity_check: "ok",
+    });
+    expect(db.prepare("PRAGMA foreign_key_check").all()).toHaveLength(0);
+    db.prepare("UPDATE api_keys SET kind='render' WHERE id='key_kind'").run();
+    db.close();
+
+    const reopened = new RendererDatabase(path);
+    reopened.migrate();
+    expect(
+      reopened.raw
+        .prepare("SELECT kind FROM api_keys WHERE id='key_kind'")
+        .get(),
+    ).toEqual({ kind: "render" });
+    reopened.close();
+  });
+
+  it("creates the new columns on a fresh runtime database before applying them again", () => {
+    const db = new RendererDatabase(":memory:");
+    db.migrate();
+    expect(
+      db
+        .raw
+        .prepare("PRAGMA table_info(sources)")
+        .all()
+        .some((column) => column.name === "upload_received_bytes"),
+    ).toBe(true);
+    expect(
+      db
+        .raw
+        .prepare("PRAGMA table_info(api_keys)")
+        .all()
+        .some((column) => column.name === "kind"),
+    ).toBe(true);
+    expect(() => db.migrate()).not.toThrow();
     db.close();
   });
 });

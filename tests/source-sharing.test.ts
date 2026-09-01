@@ -108,7 +108,9 @@ describe("immutable shared Sources", () => {
       source_id: reserved.value.sourceId,
       entrypoint: "nested/b.tex",
     });
-    expect(database.jobs.storageUsageForUser(actor.userId)).toBe(bytes.length);
+    expect(database.jobs.storageUsageForUser(actor.userId)).toBe(
+      bytes.length + 2,
+    );
     await expect(
       renderService.create(
         actor,
@@ -264,6 +266,7 @@ async function fixture() {
       tickets,
       rendererPublicUrl: "https://latex.example.com",
       rendererVersion: "test",
+      maxOutputBytes: 1,
       maxQueueLength: 20,
       maxUserStorageBytes: 20 * 1024 * 1024,
     };

@@ -5,7 +5,7 @@ image=${1:-latex-renderer:base-ci}
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
 output=$(mktemp -d)
 trap 'rm -rf "$output"' EXIT HUP INT TERM
-chmod 0777 "$output"
+chmod 0770 "$output"
 
 # The published base must remain renderer-code-free. It is a TeX Live substrate,
 # not an executable latex-renderer runtime.
@@ -19,6 +19,7 @@ docker run --rm --network none --read-only --entrypoint /bin/sh "$image" -c '
 '
 
 docker run --rm \
+  --user "$(id -u):$(id -g)" \
   --network none \
   --read-only \
   --cap-drop ALL \

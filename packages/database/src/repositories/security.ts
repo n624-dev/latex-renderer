@@ -62,14 +62,18 @@ export class SecurityRepository {
       .run(nonce, jobId, expiresAt);
   }
   latestUsableNonce(jobId: string, now: string): string | undefined {
-    return (
-      this.db
-        .prepare(
-          `SELECT nonce FROM used_nonces
+    return this.latestUsableNonceRecord(jobId, now)?.nonce;
+  }
+  latestUsableNonceRecord(
+    jobId: string,
+    now: string,
+  ): { nonce: string; expires_at: string } | undefined {
+    return this.db
+      .prepare(
+        `SELECT nonce,expires_at FROM used_nonces
     WHERE job_id=? AND state IN ('unused','released') AND expires_at>? ORDER BY expires_at DESC LIMIT 1`,
-        )
-        .get(jobId, now) as { nonce: string } | undefined
-    )?.nonce;
+      )
+      .get(jobId, now) as { nonce: string; expires_at: string } | undefined;
   }
   insertSourceNonce(nonce: string, sourceId: string, expiresAt: string): void {
     this.db

@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import { createUserSchema } from "@latex-renderer/contracts";
+import { pageSize } from "@latex-renderer/shared";
 import { requireActor } from "../auth/actor.js";
 import { UsersService } from "../services/users.js";
 import type { AdminDependencies } from "../types.js";
@@ -12,7 +13,13 @@ export function createUsersRouter(deps: AdminDependencies): Hono {
 
   router.get("/", async (c) => {
     await requireActor(deps, c, "admin:users:read");
-    return c.json({ items: service.list() });
+    return c.json(
+      service.list({
+        cursor: c.req.query("cursor"),
+        limit: pageSize(c.req.query("pageSize")),
+        query: c.req.query("query"),
+      }),
+    );
   });
 
   router.get("/:id", async (c) => {

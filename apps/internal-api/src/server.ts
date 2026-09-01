@@ -4,7 +4,7 @@ import { serve } from "@hono/node-server";
 import { ApiKeyService } from "@latex-renderer/auth";
 import { RendererDatabase } from "@latex-renderer/database";
 import { loadSigningKeyRing, TicketService } from "@latex-renderer/ticket";
-import { loadResourceLimits } from "@latex-renderer/shared";
+import { loadResourceLimits, positiveBytesEnvironment, positiveIntegerEnvironment, validPortEnvironment } from "@latex-renderer/shared";
 import { createInternalApp } from "./app.js";
 
 function required(name: string): string {
@@ -29,11 +29,12 @@ const app = createInternalApp({
   rendererPublicUrl: required("RENDERER_PUBLIC_URL"),
   rendererVersion: process.env.RENDERER_IMAGE ?? "latex-renderer:development",
   maxUploadBytes: loadResourceLimits(process.env).maxUploadBytes,
-  maxQueueLength: Number(process.env.MAX_QUEUE_LENGTH ?? "100"),
-  maxUserStorageBytes: Number(process.env.MAX_USER_STORAGE_BYTES ?? String(1024*1024*1024)),
+  maxOutputBytes: positiveBytesEnvironment(process.env,"MAX_OUTPUT_BYTES",200*1024*1024),
+  maxQueueLength: positiveIntegerEnvironment(process.env,"MAX_QUEUE_LENGTH",100),
+  maxUserStorageBytes: positiveBytesEnvironment(process.env,"MAX_USER_STORAGE_BYTES",1024*1024*1024),
 });
 
-const port = Number(process.env.PORT ?? "3103");
+const port = validPortEnvironment(process.env,"PORT",3103);
 serve({ fetch: app.fetch, hostname: "127.0.0.1", port }, (info) => {
   console.log(JSON.stringify({ event: "internal_api.started", address: info.address, port: info.port }));
 });

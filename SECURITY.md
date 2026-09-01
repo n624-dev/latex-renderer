@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Security fixes are provided for the latest `1.2.x` release. Deployments should follow the immutable image and dependency pins in the latest release rather than a mutable branch or image tag.
+Security fixes are provided for the latest `1.3.x` release. Deployments should follow the immutable image and dependency pins in the latest release rather than a mutable branch or image tag.
 
 ## Reporting a vulnerability
 

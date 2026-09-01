@@ -1,12 +1,33 @@
 import { AppError } from "@latex-renderer/shared";
-import { describe, expect, it } from "vitest";
+import {
+  mkdtemp,
+  mkdir,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   MCP_TOOL_NAMES,
   assertValidMcpOutput,
   mcpFailure,
   renderProjectOutputSchema,
+  resolveAllowedMcpPath,
   validateRenderTimeout,
 } from "./index.js";
+
+const temporaryRoots: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(
+    temporaryRoots
+      .splice(0)
+      .map((root) => rm(root, { recursive: true, force: true })),
+  );
+});
 
 describe("MCP core", () => {
   it("exposes Source and entrypoint tools alongside stable job tools", () => {
@@ -47,5 +68,38 @@ describe("MCP core", () => {
     expect(() => validateRenderTimeout(0)).toThrow(
       "MCP render timeout must be a positive integer",
     );
+  });
+
+  it("keeps MCP read and write paths inside real allowed roots", async () => {
+    const base = await mkdtemp(join(tmpdir(), "mcp-path-test-"));
+    temporaryRoots.push(base);
+    const allowed = join(base, "allowed"),
+      outside = join(base, "outside");
+    await mkdir(allowed);
+    await mkdir(outside);
+    await writeFile(join(allowed, "main.tex"), "test");
+    await symlink(outside, join(allowed, "escape"));
+    const roots = [await realpath(allowed)];
+
+    await expect(
+      resolveAllowedMcpPath(join(allowed, "main.tex"), roots, true),
+    ).resolves.toBe(join(allowed, "main.tex"));
+    await expect(
+      resolveAllowedMcpPath(
+        join(allowed, ".render", "result.pdf"),
+        roots,
+        false,
+      ),
+    ).resolves.toBe(join(allowed, ".render", "result.pdf"));
+    await expect(
+      resolveAllowedMcpPath(join(outside, "secret.tex"), roots, false),
+    ).rejects.toMatchObject({ code: "OUTSIDE_ALLOWED_ROOT" });
+    await expect(
+      resolveAllowedMcpPath(
+        join(allowed, "escape", "secret.tex"),
+        roots,
+        false,
+      ),
+    ).rejects.toMatchObject({ code: "OUTSIDE_ALLOWED_ROOT" });
   });
 });

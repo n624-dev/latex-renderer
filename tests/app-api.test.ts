@@ -63,7 +63,7 @@ describe("user Web application API", () => {
       .run(
         JSON.stringify(["chapters/report.tex"]),
         now,
-        new Date(Date.now() - 1_000).toISOString(),
+        new Date(Date.now() + 60 * 60 * 1000).toISOString(),
         source.sourceId,
       );
 
@@ -76,6 +76,7 @@ describe("user Web application API", () => {
         projectId: project.id,
         displayName: "第1稿",
         originalFilename: "research.zip",
+        outputs: ["pdf", "svg"],
       }),
     });
     expect(render.status).toBe(201);
@@ -89,7 +90,91 @@ describe("user Web application API", () => {
       user_id: "user_one",
       status: "queued",
       project_revision_id: rendered.revisionId,
+      outputs_json: '["pdf","svg"]',
     });
+    const reused = await fixture.app.request("/app/api/v1/render-tickets", {
+      method: "POST",
+      headers: { ...headers, "Idempotency-Key": "web-render-1234567890" },
+      body: JSON.stringify({
+        sourceId: source.sourceId,
+        entrypoint: "chapters/report.tex",
+        projectId: project.id,
+        displayName: "第1稿",
+        originalFilename: "research.zip",
+        outputs: ["pdf", "svg"],
+      }),
+    });
+    expect(reused.status).toBe(200);
+    await expect(reused.json()).resolves.toMatchObject({
+      jobId: rendered.jobId,
+      revisionId: rendered.revisionId,
+    });
+
+    const secondProjectResponse = await fixture.app.request(
+      "/app/api/v1/projects",
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ displayName: "別プロジェクト" }),
+      },
+    );
+    const secondProject = (await secondProjectResponse.json()) as {
+      id: string;
+    };
+    const crossProjectReuse = await fixture.app.request(
+      "/app/api/v1/render-tickets",
+      {
+        method: "POST",
+        headers: { ...headers, "Idempotency-Key": "web-render-1234567890" },
+        body: JSON.stringify({
+          sourceId: source.sourceId,
+          entrypoint: "chapters/report.tex",
+          projectId: secondProject.id,
+          displayName: "第1稿",
+          originalFilename: "research.zip",
+        }),
+      },
+    );
+    expect(crossProjectReuse.status).toBe(409);
+    await expect(crossProjectReuse.json()).resolves.toMatchObject({
+      error: { code: "IDEMPOTENCY_CONFLICT" },
+    });
+    expect(fixture.database.jobs.get(rendered.jobId)?.project_revision_id).toBe(
+      rendered.revisionId,
+    );
+
+    const jobsBeforeFailedProject = (
+      fixture.database.raw
+        .prepare("SELECT COUNT(*) AS count FROM jobs")
+        .get() as {
+        count: number;
+      }
+    ).count;
+    const failedProject = await fixture.app.request(
+      "/app/api/v1/render-tickets",
+      {
+        method: "POST",
+        headers: {
+          ...headers,
+          "Idempotency-Key": "web-render-invalid-project",
+        },
+        body: JSON.stringify({
+          sourceId: source.sourceId,
+          entrypoint: "chapters/report.tex",
+          projectId: `project_${"f".repeat(32)}`,
+          displayName: "存在しないProject",
+          originalFilename: "research.zip",
+        }),
+      },
+    );
+    expect(failedProject.status).toBe(404);
+    expect(
+      (
+        fixture.database.raw
+          .prepare("SELECT COUNT(*) AS count FROM jobs")
+          .get() as { count: number }
+      ).count,
+    ).toBe(jobsBeforeFailedProject);
     const principal = fixture.database.webPrincipals.get("user_one");
     expect(principal).toBeDefined();
     if (principal === undefined)
@@ -141,6 +226,7 @@ describe("user Web application API", () => {
     expect(fixture.database.jobs.get(rerendered.jobId)).toMatchObject({
       project_revision_id: rendered.revisionId,
       source_id: source.sourceId,
+      outputs_json: '["pdf","svg"]',
     });
     const old = new Date(Date.now() - 2 * 86_400_000).toISOString();
     fixture.database.raw
@@ -264,6 +350,7 @@ function setup() {
       storageRoot: root,
       environmentRoot,
       rendererVersion: "test",
+      maxOutputBytes: 1,
       maxQueueLength: 20,
       maxUserStorageBytes: 1024 * 1024,
       minFreeStorageBytes: 1,

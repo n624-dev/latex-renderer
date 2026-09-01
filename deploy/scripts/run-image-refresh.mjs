@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { boundedIntegerEnvironment } from "./environment.mjs";
 
 const baseUrl = process.env.IMAGE_MANAGER_URL ?? "http://127.0.0.1:3110";
 const credentialsDirectory = process.env.CREDENTIALS_DIRECTORY;
@@ -9,8 +10,8 @@ const tokenFile = process.env.IMAGE_MANAGER_TOKEN_FILE ??
 // The watchdog declares operations stale after four hours. Wait beyond that
 // boundary so a watchdog restart can settle the operation to failed/succeeded
 // instead of reporting a timeout while the mutation is still running.
-const maxWaitMs = Number(process.env.IMAGE_REFRESH_MAX_WAIT_MS ?? String(4.5 * 60 * 60 * 1000));
-const pollMs = Number(process.env.IMAGE_REFRESH_POLL_MS ?? "5000");
+const maxWaitMs = boundedIntegerEnvironment(process.env, "IMAGE_REFRESH_MAX_WAIT_MS", 4.5 * 60 * 60 * 1000, 60_000, 12 * 60 * 60 * 1000);
+const pollMs = boundedIntegerEnvironment(process.env, "IMAGE_REFRESH_POLL_MS", 5_000, 1_000, 60_000);
 
 const endpoint = new globalThis.URL(baseUrl);
 if (
@@ -20,10 +21,6 @@ if (
   endpoint.password !== ""
 ) throw new Error("IMAGE_MANAGER_URL must be an unauthenticated loopback HTTP URL");
 if (!tokenFile) throw new Error("Image manager credential path is unavailable");
-if (!Number.isSafeInteger(maxWaitMs) || maxWaitMs < 60_000 || maxWaitMs > 12 * 60 * 60 * 1000)
-  throw new Error("IMAGE_REFRESH_MAX_WAIT_MS must be between 1 minute and 12 hours");
-if (!Number.isSafeInteger(pollMs) || pollMs < 1_000 || pollMs > 60_000)
-  throw new Error("IMAGE_REFRESH_POLL_MS must be between 1 and 60 seconds");
 
 const token = (await readFile(tokenFile, "utf8")).trim();
 if (token.length < 32) throw new Error("Image manager token is too short");

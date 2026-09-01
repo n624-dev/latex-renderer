@@ -120,6 +120,9 @@ describe("admin API cleanup", () => {
       new Date().toISOString(),
     );
     expect((await app.request("/health/rendering")).status).toBe(200);
+    await expect(
+      (await app.request("/health/rendering")).json(),
+    ).resolves.toEqual({ operational: true });
     database.settings.upsert(
       "worker_heartbeat",
       {
@@ -323,6 +326,13 @@ describe("public and administrative Web", () => {
     expect(adminScript).toContain('name="target"');
     expect(adminScript).toContain('name="from"');
     expect(adminScript).toContain('name="to"');
+    expect(adminScript).toContain("watchAdminJob");
+    expect(adminScript).toContain('aria-label="前のページ"');
+    expect(adminScript).toContain('aria-label="次のページ"');
+    expect(adminScript).toContain("img.alt='PDF '+(previewIndex+1)");
+    expect(adminScript).toContain("cold build");
+    expect(adminScript).toContain("responsive-table");
+    expect(adminScript).toContain("システム状態");
   });
 });
 
@@ -377,6 +387,7 @@ function adminApp(): {
     writeEnabled: true,
     storageRoot: "/nonexistent",
     rendererVersion: "sha256:" + "0".repeat(64),
+    maxOutputBytes: 1,
     maxQueueLength: 100,
     maxUserStorageBytes: 1024 * 1024 * 1024,
     minFreeStorageBytes: 1,

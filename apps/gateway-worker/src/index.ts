@@ -36,6 +36,7 @@ app.all("*", async (c) => {
       requestId: c.get("requestId"),
       upstreamPath: route.upstreamPath,
       idempotencyRequired: route.idempotencyRequired,
+      bodyRequired: route.bodyRequired,
       fetchUpstream: (input, init) => c.env.INTERNAL_API.fetch(input, init),
     });
   } catch (error) {

@@ -185,6 +185,8 @@ function config(storageRoot: string): WorkerConfig {
     maxFileCount: 500,
     maxZipEntries: 1_000,
     maxOutputBytes: 200 * 1024 * 1024,
+    maxOutputFileCount: 2_000,
+    maxOutputDirectoryCount: 200,
     maxLogBytes: 10 * 1024 * 1024,
     maxSvgObjects: 200,
     maxSvgBytes: 10 * 1024 * 1024,

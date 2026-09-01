@@ -48,19 +48,37 @@ export class SourceTicketsService {
       now,
     );
     if (ready !== undefined) {
-      this.deps.database.transaction(() =>
-        this.deps.database.security.insertIdempotency({
-          actorType: "service_account",
-          actorId: actor.serviceAccountId,
-          operation: "source.create",
+      try {
+        this.deps.database.transaction(() =>
+          this.deps.database.security.insertIdempotency({
+            actorType: "service_account",
+            actorId: actor.serviceAccountId,
+            operation: "source.create",
+            keyHash,
+            requestHash,
+            resourceId: ready.id,
+            responseCode: 200,
+            expiresAt: new Date(
+              Math.min(Date.now() + 86_400_000, Date.parse(ready.expires_at)),
+            ).toISOString(),
+            createdAt: now,
+          }),
+        );
+      } catch (caught) {
+        const raced = this.deps.database.security.idempotency(
+          "service_account",
+          actor.serviceAccountId,
+          "source.create",
           keyHash,
-          requestHash,
-          resourceId: ready.id,
-          responseCode: 200,
-          expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
-          createdAt: now,
-        }),
-      );
+          nowIso(),
+        );
+        if (raced?.resource_id && raced.request_hash === requestHash)
+          return {
+            status: 200 as const,
+            value: await this.issueExisting(actor, raced.resource_id),
+          };
+        throw caught;
+      }
       return {
         status: 200 as const,
         value: {
@@ -105,7 +123,7 @@ export class SourceTicketsService {
           requestHash,
           resourceId: sourceId,
           responseCode: 201,
-          expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+          expiresAt,
           createdAt: timestamp,
         });
         this.deps.database.audit({
@@ -165,23 +183,31 @@ export class SourceTicketsService {
     const source = this.deps.database.sources.getOwned(sourceId, actor.userId);
     if (source === undefined)
       throw new AppError("SOURCE_NOT_FOUND", "Source does not exist", 404);
+    if (source.expires_at <= nowIso())
+      throw new AppError(
+        "IDEMPOTENT_RESOURCE_GONE",
+        "Idempotent Source reservation has expired",
+        410,
+      );
     if (source.status === "ready")
       return { sourceId, uploadRequired: false, expiresAt: source.expires_at };
-    let nonce = this.deps.database.security.latestUsableSourceNonce(
+    if (source.status !== "reserved")
+      throw new AppError(
+        "IDEMPOTENCY_IN_PROGRESS",
+        "Original Source upload is already in progress",
+        409,
+      );
+    const nonce = this.deps.database.security.latestUsableSourceNonce(
       sourceId,
       nowIso(),
     );
-    const expiresAt = new Date(Date.now() + 600_000).toISOString();
-    if (nonce === undefined) {
-      nonce = randomBytes(24).toString("base64url");
-      this.deps.database.transaction(() =>
-        this.deps.database.security.insertSourceNonce(
-          nonce as string,
-          sourceId,
-          expiresAt,
-        ),
+    const expiresAt = source.expires_at;
+    if (nonce === undefined)
+      throw new AppError(
+        "IDEMPOTENT_RESOURCE_GONE",
+        "Original Source upload reservation is no longer usable",
+        410,
       );
-    }
     return {
       sourceId,
       uploadRequired: true,

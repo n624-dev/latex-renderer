@@ -6,6 +6,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { Command } from "commander";
 import { ADMIN_API_PREFIX, AppError, CLIENT_VERSION, PUBLIC_ORIGIN } from "@latex-renderer/shared";
+import { adminApiBaseUrl } from "./base-url.js";
 
 const program = new Command().name("latex-render-admin").version(CLIENT_VERSION);
 program.command("auth").command("login").requiredOption("--api-key-stdin").action(async () => {
@@ -74,8 +75,9 @@ tex.command("apply")
   .requiredOption("--auto-update <on|off>")
   .option("--rebuild-if-missing <on|off>", "rebuild an unavailable dated image locally", "on")
   .option("--runtime-build-if-missing <on|off>", "build a missing custom-language Runtime locally", "off")
+  .requiredOption("--reason <reason>", "reason recorded in the audit log")
   .requiredOption("--yes")
-  .action(async (o: { image: string; language?: string[]; allLanguages?: boolean; clearLanguages?: boolean; autoUpdate: string; rebuildIfMissing: string; runtimeBuildIfMissing: string }) => {
+  .action(async (o: { image: string; language?: string[]; allLanguages?: boolean; clearLanguages?: boolean; autoUpdate: string; rebuildIfMissing: string; runtimeBuildIfMissing: string; reason: string }) => {
     const selectionModes = Number(Boolean(o.allLanguages)) + Number(Boolean(o.clearLanguages)) + Number((o.language?.length ?? 0) > 0);
     if (selectionModes !== 1)
       throw new AppError("INVALID_OPTION", "Choose exactly one of --language, --all-languages, or --clear-languages", 400);
@@ -99,6 +101,7 @@ tex.command("apply")
       autoUpdate: parseOnOff(o.autoUpdate, "auto-update"),
       rebuildIfMissing: parseOnOff(o.rebuildIfMissing, "rebuild-if-missing"),
       runtimeBuildIfMissing: parseOnOff(o.runtimeBuildIfMissing, "runtime-build-if-missing"),
+      reason: o.reason,
     });
   });
 tex.command("operation").argument("<id>").action(async (id: string) => print(await request("GET", `/tex-environment/operations/${encodeURIComponent(id)}`)));
@@ -108,7 +111,7 @@ for (const [action, path] of [
   ["cleanup", "/tex-environment/cleanup"],
   ["refresh", "/tex-environment/refresh"],
 ] as const)
-  tex.command(action).requiredOption("--yes").action(async () => runTexMutation(path, {}));
+  tex.command(action).requiredOption("--reason <reason>", "reason recorded in the audit log").requiredOption("--yes").action(async (o: { reason: string }) => runTexMutation(path, { reason: o.reason }));
 tex.command("packages").argument("[query]").action(async (query?: string) => print(await request("GET", `/tex-environment/inventory/packages${query ? `?q=${encodeURIComponent(query)}` : ""}`)));
 tex.command("fonts").argument("[query]").action(async (query?: string) => print(await request("GET", `/tex-environment/inventory/fonts${query ? `?q=${encodeURIComponent(query)}` : ""}`)));
 
@@ -117,21 +120,24 @@ update.command("status").action(async () => print(await request("GET", "/updates
 update.command("check").argument("[version]").action(async (version?: string) => print(await request("POST", "/updates/check", version ? { version } : {})));
 update.command("policy")
   .requiredOption("--mode <notify|automatic>")
+  .requiredOption("--reason <reason>", "reason recorded in the audit log")
   .requiredOption("--yes")
-  .action(async (options: { mode: string }) => {
+  .action(async (options: { mode: string; reason: string }) => {
     if (!(["notify", "automatic"] as const).includes(options.mode as "notify" | "automatic")) {
       throw new AppError("INVALID_OPTION", "mode must be notify or automatic", 400);
     }
-    print(await request("POST", "/updates/policy", { channel: "stable", mode: options.mode }));
+    print(await request("POST", "/updates/policy", { channel: "stable", mode: options.mode, reason: options.reason }));
   });
-update.command("refresh").requiredOption("--yes").action(async () => print(await request("POST", "/updates/refresh", {})));
+update.command("refresh").requiredOption("--reason <reason>", "reason recorded in the audit log").requiredOption("--yes").action(async (options: { reason: string }) => print(await request("POST", "/updates/refresh", { reason: options.reason })));
 update.command("apply")
   .argument("[version]")
+  .requiredOption("--reason <reason>", "reason recorded in the audit log")
   .requiredOption("--yes")
-  .action(async (version?: string) => runUpdateMutation("/updates/apply", version ? { version } : {}));
+  .action(async (version: string | undefined, options: { reason: string }) => runUpdateMutation("/updates/apply", { ...(version ? { version } : {}), reason: options.reason }));
 update.command("rollback")
+  .requiredOption("--reason <reason>", "reason recorded in the audit log")
   .requiredOption("--yes")
-  .action(async () => runUpdateMutation("/updates/rollback", {}));
+  .action(async (options: { reason: string }) => runUpdateMutation("/updates/rollback", { reason: options.reason }));
 update.command("operation").argument("<id>").action(async (id: string) => print(await request("GET", `/updates/operations/${encodeURIComponent(id)}`)));
 
 await program.parseAsync().catch((error: unknown) => {
@@ -140,7 +146,11 @@ await program.parseAsync().catch((error: unknown) => {
 });
 
 async function request(method: string, path: string, body?: unknown, extraHeaders: Readonly<Record<string, string>> = {}): Promise<unknown> {
-  const base = process.env.LATEX_RENDER_BASE_URL ?? process.env.LATEX_RENDER_ADMIN_API_URL ?? PUBLIC_ORIGIN;
+  const base = adminApiBaseUrl(
+    process.env.LATEX_RENDER_BASE_URL ?? process.env.LATEX_RENDER_ADMIN_API_URL,
+    PUBLIC_ORIGIN,
+    process.env.LATEX_RENDER_TRUSTED_ADMIN_ORIGINS,
+  );
   const response = await fetch(new URL(`${ADMIN_API_PREFIX}${path}`, base), {
     method,
     headers: {
