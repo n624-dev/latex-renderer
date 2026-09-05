@@ -23,11 +23,16 @@ import {
 } from "./runtime-image-identity.mjs";
 import { acquireMutationLock } from "./mutation-lock.mjs";
 import {
+  eligibleManagedImage,
+  imageCleanupPolicy,
+} from "./image-cleanup-policy.mjs";
+import {
   boundedIntegerEnvironment,
   validPortEnvironment,
 } from "./environment.mjs";
 
 const host = process.env.IMAGE_MANAGER_HOST ?? "127.0.0.1";
+const cleanupPolicy = imageCleanupPolicy(process.env);
 const port = validPortEnvironment(process.env, "IMAGE_MANAGER_PORT", 3110);
 const tokenFile =
   process.env.IMAGE_MANAGER_TOKEN_FILE ??
@@ -1275,7 +1280,7 @@ async function revalidate(op) {
   await writeInventory(await collectInventory(state.current.runtimeImageId));
 }
 
-async function cleanup(op) {
+async function cleanup(op, automatic = false) {
   const protectedIds = new Set(
     [
       state.current?.runtimeImageId,
@@ -1283,6 +1288,21 @@ async function cleanup(op) {
       state.previous?.runtimeImageId,
       state.previous?.baseImageId,
     ].filter(Boolean),
+  );
+  // Protect the actually configured renderer as well as persisted rollback state.
+  const configured = rendererImageFromEnv(await readFile(rendererEnv, "utf8"));
+  if (!configured)
+    throw new Error("Cannot clean images without the configured renderer");
+  protectedIds.add(
+    (
+      await dockerCapture([
+        "image",
+        "inspect",
+        configured,
+        "--format",
+        "{{.Id}}",
+      ])
+    ).trim(),
   );
   const ids = [
     ...new Set(
@@ -1306,17 +1326,14 @@ async function cleanup(op) {
       );
       continue;
     }
-    const labels = info.Config?.Labels ?? {};
-    const managedRuntime = Boolean(
-      labels["jp.n624.latex-renderer.base-image-id"] &&
-      labels["jp.n624.latex-renderer.renderer-runtime-fingerprint"],
-    );
-    const managedBase =
-      labels["org.opencontainers.image.title"] === "latex-renderer-texlive" &&
-      labels["jp.n624.latex-renderer.texlive.profile-kind"] ===
-        "language-neutral-maximal" &&
-      labels["jp.n624.latex-renderer.base-kind"] === "texlive-only-v1";
-    if (!managedRuntime && !managedBase) continue;
+    if (
+      !eligibleManagedImage(
+        info,
+        protectedIds,
+        automatic ? cleanupPolicy.retentionHours : 0,
+      )
+    )
+      continue;
     await dockerLogged(op, ["image", "rm", "--force", id])
       .then(() => {
         removed += 1;
@@ -1340,9 +1357,21 @@ async function cleanup(op) {
       `builder cache cleanup warning: ${error instanceof Error ? error.message : String(error)}\n`,
     );
   });
+  // Age-only pruning leaves recently touched or shared cache records behind.
+  // Bound unused cache independently of age; Docker preserves image layers.
+  await dockerLogged(op, [
+    "builder",
+    "prune",
+    "--all",
+    "--force",
+    "--keep-storage",
+    String(cleanupPolicy.cacheMaxGiB * 1024 ** 3),
+  ]);
+  state.lastCleanupAt = new Date().toISOString();
+  await persistState();
   await appendLog(
     op,
-    `Removed ${removed} unused managed image(s); protected ${protectedIds.size} current/rollback image ID(s). Build cache older than 7 days was pruned when possible.\n`,
+    `Removed ${removed} unused managed image(s); protected ${protectedIds.size} current/rollback/configured image ID(s). Unused build cache was pruned with a ${cleanupPolicy.cacheMaxGiB} GiB retention target.\n`,
   );
 }
 
@@ -1767,3 +1796,32 @@ server.listen(port, host, () => {
     JSON.stringify({ event: "image_manager.started", host, port, dockerHost }),
   );
 });
+
+if (cleanupPolicy.intervalHours > 0) {
+  const timer = globalThis.setInterval(() => {
+    const last = Date.parse(state.lastCleanupAt ?? "");
+    if (
+      Number.isFinite(last) &&
+      Date.now() - last < cleanupPolicy.intervalHours * 3_600_000
+    )
+      return;
+    void startOperation("cleanup", (op) => cleanup(op, true)).catch((error) => {
+      // Shared mutation locking also excludes application deployments.
+      if (
+        [
+          "MUTATION_LOCK_BUSY",
+          "IMAGE_OPERATION_ACTIVE",
+          "IMAGE_MANAGER_QUIESCING",
+        ].includes(error?.code)
+      )
+        return;
+      console.error(
+        JSON.stringify({
+          event: "image_cleanup.schedule_failed",
+          message: error instanceof Error ? error.message : String(error),
+        }),
+      );
+    });
+  }, 5 * 60_000);
+  timer.unref();
+}

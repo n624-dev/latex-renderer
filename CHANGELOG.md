@@ -4,6 +4,8 @@
 
 ## 1.3.3-rc.1 - 2026-09-02
 
+- Add configurable daily managed-image cleanup with protected active/rollback images and an unused build-cache retention target. See the public self-hosting guide for settings.
+
 - Treat root-owned pnpm workspace symlinks as sealed only when every link remains inside the immutable assembly, while continuing to reject non-root owners, writable regular entries, filesystem-boundary crossings, broken/escaping links, and special files.
 - Add strict `X.Y.Z-rc.N` support for explicit, audited installation of immutable GitHub prereleases. Latest checks and automatic updates remain stable-only, and a stable release compares newer than every RC with the same core version.
 - Require the server release workflow to publish and validate an immutable RC on the production validation host before a stable tag can be built. Stable promotion refuses executable changes beyond the exact RC-to-stable version replacement.

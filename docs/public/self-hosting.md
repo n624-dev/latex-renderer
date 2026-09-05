@@ -325,6 +325,20 @@ Daily workflowは、候補Base自体を検査し、そのBaseから英語／日�
 
 画面を閉じても開始済みoperationは継続します。Webへ再接続できない場合は、Admin CLIまたはsystemd journalからoperation IDを確認します。
 
+### 自動容量整理
+
+Image Managerは既定で24時間ごとに未使用の管理対象イメージを整理します。現行・直前のロールバック用Base／Runtimeと、Renderer設定が参照するイメージは保護します。それ以外の管理対象イメージは作成から24時間後に削除対象となり、未使用ビルドキャッシュは2GiBを目安に整理します。使用中イメージや共有レイヤーを含むDocker全体の容量上限ではありません。
+
+`/etc/latex-renderer/renderer.env`に次を設定し、作業中のTeX更新がないときに`sudo systemctl restart latex-renderer-image-manager.service`で反映できます。
+
+```dotenv
+IMAGE_CLEANUP_INTERVAL_HOURS=24
+IMAGE_CLEANUP_RETENTION_HOURS=24
+IMAGE_BUILD_CACHE_MAX_GIB=2
+```
+
+実行間隔は0で自動整理を無効化、1〜720で時間指定できます。保持期間は0〜8760時間、キャッシュは0〜1024GiBです。起動5分後から5分ごとに期限を確認し、前回成功時刻を保存します。更新・ビルド・デプロイ中は共通ロックで延期します。Web／CLIの手動Cleanupは保護対象以外の管理イメージを保持期間を待たずに整理します。削除したイメージ・キャッシュは必要時に再取得・再構築します。設定済みの環境ファイルはGitに登録しません。
+
 ## 導入完了の確認
 
 Owner登録とTeX環境の初期設定が終わったら、初回配置で延期された認証済み本番smoke testを実行します。これは一時的な最小権限API keyを作成し、公開origin経由で実際にレンダリングした後、keyを失効させます。credential自体は標準出力やjournalへ記録しません。
