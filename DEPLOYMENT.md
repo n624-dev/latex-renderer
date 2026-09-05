@@ -150,6 +150,15 @@ an email-based recovery link.
 
 ## Managed TeX Live images
 
+CI and image publication use GitHub-hosted runners; no self-hosted runner is
+required. TeX Docker layers are not exported to GitHub Actions caches because
+each snapshot consumes several GiB. The `actions-cache-cleanup` workflow deletes
+disposable Actions caches after CI workflows complete and daily as a fallback;
+it can also be dispatched manually. It has only Actions write permission and
+never checks out or executes triggering PR code. Concurrent jobs may have cache
+misses and download dependencies again. GHCR packages, release assets and SBOM
+artifacts are separate and are not deleted by this cleanup.
+
 The public repository contains the reproducible Base and local Runtime builders,
 language-profile generator, registry helpers, renderer smoke tests, and the
 scheduled GHCR publication workflow. Pull-request image validation and daily
