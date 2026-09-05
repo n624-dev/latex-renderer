@@ -266,7 +266,6 @@ describe("admin route contract", () => {
       languages: [],
       autoUpdate: false,
       rebuildIfMissing: true,
-      runtimeBuildIfMissing: false,
     });
     expect(authenticate).toHaveBeenCalledWith(
       "test-token",

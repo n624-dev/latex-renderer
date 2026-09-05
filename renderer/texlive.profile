@@ -17,8 +17,6 @@ collection-fontutils 1
 collection-formatsextra 1
 collection-games 1
 collection-humanities 1
-collection-langenglish 1
-collection-langjapanese 1
 collection-latex 1
 collection-latexextra 1
 collection-latexrecommended 1

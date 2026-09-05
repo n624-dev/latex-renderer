@@ -92,16 +92,14 @@ describe("application updater privilege boundary", () => {
     expect(helper).toContain("assembleBuildArtifacts");
     expect(helper).toContain("verifiedSource: prepared.source");
     expect(helper).toContain("buildSource,");
-    expect(helper).toContain(
-      'await runLogged("chown", ["-R", "root:root", assembly])',
-    );
+    expect(helper).toContain("await sealControlTree(assembly, 0)");
     expect(assembly).toContain("--include=/apps/*/dist/***");
     expect(assembly).toContain("--include=/packages/*/dist/***");
     expect(assembly).toContain("Build output symlink escapes the release");
     expect(assembly).toContain(
       "Build output contains a special filesystem entry",
     );
-    expect(helper).toContain('["-R", "u=rwX,g=rX,o=", assembly]');
-    expect(helper).toContain("Rollback release tree is not sealed");
+    expect(helper).toContain('["-R", "u=rwX,g=rX,o=", root]');
+    expect(helper).toContain("assertSealedControlTree(target)");
   });
 });

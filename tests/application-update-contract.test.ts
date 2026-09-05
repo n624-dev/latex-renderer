@@ -4,6 +4,8 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
+  chmodSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -16,12 +18,13 @@ import {
 import { adminScript } from "../apps/admin-web/src/assets/admin-script.js";
 import {
   assembleBuildArtifacts,
+  assertSealedControlTree,
   requiredProductionBuildOutputs,
 } from "../deploy/scripts/release-assembly.mjs";
 
 const read = (path: string): string => readFileSync(path, "utf8");
 
-describe("pull-first Runtime delivery", () => {
+describe("Base-only package and local Runtime delivery", () => {
   it("derives a stable identity from Base, renderer, snapshot, and normalized languages", () => {
     const input = {
       baseImageId: `sha256:${"a".repeat(64)}`,
@@ -48,53 +51,46 @@ describe("pull-first Runtime delivery", () => {
     ]);
   });
 
-  it("publishes and anonymously verifies language-neutral and English/Japanese Runtime presets", () => {
+  it("publishes only a Base after a local English/Japanese Runtime passes", () => {
     const workflow = read(".github/workflows/renderer-image-daily.yml");
-    expect(workflow).toContain("validated-runtime-tags");
-    expect(workflow).toContain("runtime_neutral");
-    expect(workflow).toContain("runtime_default");
-    expect(workflow).toContain('docker push "$runtime_ref"');
+    expect(workflow).toContain("validation_runtime");
     expect(workflow).toContain(
-      'docker pull "$IMAGE_REPOSITORY@$runtime_digest"',
+      "collection-langenglish collection-langjapanese",
     );
     expect(workflow).toContain(
-      'smoke-test-renderer-basic.sh "$IMAGE_REPOSITORY@$runtime_digest"',
+      'smoke-test-renderer-en-jp.sh "$validation_runtime"',
     );
-    expect(workflow).toContain("Verify local Runtime builder");
-    expect(workflow).toContain("docker buildx build --builder default --load");
+    expect(workflow).toContain(
+      'smoke-test-renderer-svg.sh "$validation_runtime"',
+    );
+    expect(workflow).toContain('docker push "$dated_ref"');
+    expect(workflow).not.toContain('docker push "$runtime_ref"');
+    expect(workflow).not.toContain("validated-runtime-tags");
+    expect(workflow).not.toContain("runtime_digests");
     expect(workflow.indexOf("RUNTIME_BUILDX_BUILDER=default")).toBeLessThan(
       workflow.indexOf("sh deploy/scripts/build-language-runtime.sh"),
     );
     expect(read("deploy/scripts/build-language-runtime.sh")).toContain(
       'set -- docker buildx build --builder "$RUNTIME_BUILDX_BUILDER"',
     );
-    const neutralBuild = workflow.indexOf(
-      '"$base" "$TEXLIVE_REPOSITORY" "$runtime_neutral"',
+    expect(read("deploy/scripts/smoke-test-renderer-en-jp.sh")).toContain(
+      "tests/fixtures/smoke",
     );
-    const defaultBuild = workflow.indexOf(
-      '"$base" "$TEXLIVE_REPOSITORY" "$runtime_default"',
-    );
-    const fullSvgSmoke = workflow.indexOf(
-      'smoke-test-renderer-svg.sh "$runtime_default"',
-    );
-    expect(neutralBuild).toBeGreaterThan(0);
-    expect(workflow.slice(neutralBuild, defaultBuild)).not.toContain(
-      "smoke-test-renderer-svg.sh",
-    );
-    expect(fullSvgSmoke).toBeGreaterThan(defaultBuild);
   });
 
-  it("checkpoints a validated dated Base while keeping latest behind Runtime publication", () => {
+  it("keeps dated and latest Base publication behind all Runtime smoke tests", () => {
     const workflow = read(".github/workflows/renderer-image-daily.yml");
     const baseSmoke = workflow.indexOf('smoke-test-texlive-base.sh "$base"');
-    const checkpoint = workflow.indexOf("base_source=published-checkpoint");
-    const runtimePush = workflow.indexOf('docker push "$runtime_ref"');
+    const languageSmoke = workflow.indexOf(
+      'smoke-test-renderer-en-jp.sh "$validation_runtime"',
+    );
+    const datedPush = workflow.indexOf('docker push "$dated_ref"');
     const latestPromotion = workflow.indexOf(
       '--tag "$IMAGE_REPOSITORY:latest"',
     );
-    expect(checkpoint).toBeGreaterThan(baseSmoke);
-    expect(checkpoint).toBeLessThan(runtimePush);
-    expect(latestPromotion).toBeGreaterThan(runtimePush);
+    expect(languageSmoke).toBeGreaterThan(baseSmoke);
+    expect(datedPush).toBeGreaterThan(languageSmoke);
+    expect(latestPromotion).toBeGreaterThan(languageSmoke);
   });
 
   it("proves GHCR push scope before starting the expensive image build", () => {
@@ -116,24 +112,18 @@ describe("pull-first Runtime delivery", () => {
     expect(accessWorkflow).not.toContain("docker push");
   });
 
-  it("uses exact local, public package, and explicit local-build fallback in that order", () => {
+  it("reuses an exact local Runtime or builds one locally from the verified Base", () => {
     const manager = read("deploy/scripts/image-manager.mjs");
-    const local = manager.indexOf("Reusing exact local TeX Runtime");
-    const pulled = manager.indexOf("Using verified prebuilt TeX Runtime");
-    const built = manager.indexOf(
-      "building the requested custom TeX Runtime locally",
-    );
+    const local = manager.indexOf("Reusing the verified local TeX Runtime");
+    const built = manager.indexOf("Building a local TeX Runtime");
     expect(local).toBeGreaterThan(0);
-    expect(pulled).toBeGreaterThan(local);
-    expect(built).toBeGreaterThan(pulled);
-    expect(manager).toContain("runtimeBuildIfMissing: false");
-    expect(manager).toContain(
-      "refusing local build because the pull failure was not proven",
+    expect(built).toBeGreaterThan(local);
+    expect(manager).not.toContain("Using verified prebuilt TeX Runtime");
+    expect(manager).not.toContain("runtimeBuildIfMissing:");
+    expect(read("apps/admin-cli/src/index.ts")).not.toContain(
+      "--runtime-build-if-missing",
     );
-    expect(read("apps/admin-cli/src/index.ts")).toContain(
-      "--runtime-build-if-missing <on|off>",
-    );
-    expect(adminScript).toContain("tex-runtime-build-missing");
+    expect(adminScript).not.toContain("tex-runtime-build-missing");
   });
 });
 
@@ -266,10 +256,10 @@ describe("release-based application updates", () => {
     expect(assemblyModule).toContain(
       "Build output symlink escapes the release",
     );
-    expect(helper).toContain('["-R", "root:root", assembly]');
+    expect(helper).toContain("sealControlTree(assembly, 0)");
     expect(helper).toContain("prepareDeploymentTrees(rootStage, assembly)");
-    expect(helper).toContain('["-R", "u=rwX,g=rX,o=", assembly]');
-    expect(helper).toContain('"-perm",\n      "/022"');
+    expect(helper).toContain('["-R", "u=rwX,g=rX,o=", root]');
+    expect(helper).toContain("await assertSealedControlTree(root)");
     expect(assemblyModule).toContain(
       "Build output contains a special filesystem entry",
     );
@@ -398,6 +388,100 @@ describe("release-based application updates", () => {
     }
   });
 
+  it("seals contained pnpm-style symlinks without trusting writable entries", async () => {
+    const root = mkdtempSync(join(tmpdir(), "latex-sealed-tree-test-"));
+    const outside = `${root}-outside`;
+    const uid = process.getuid?.();
+    if (uid === undefined) return;
+    try {
+      mkdirSync(
+        join(root, "packages", "database", "node_modules", "@latex-renderer"),
+        {
+          recursive: true,
+        },
+      );
+      mkdirSync(join(root, "packages", "shared"), { recursive: true });
+      for (const directory of [
+        "packages",
+        "packages/database",
+        "packages/database/node_modules",
+        "packages/database/node_modules/@latex-renderer",
+        "packages/shared",
+      ])
+        chmodSync(join(root, directory), 0o755);
+      const target = join(root, "packages", "shared", "index.js");
+      writeFileSync(target, "export {};\n", { mode: 0o644 });
+      symlinkSync(
+        "../../../shared",
+        join(
+          root,
+          "packages",
+          "database",
+          "node_modules",
+          "@latex-renderer",
+          "shared",
+        ),
+      );
+
+      await expect(assertSealedControlTree(root, uid)).resolves.toBeUndefined();
+
+      chmodSync(target, 0o664);
+      await expect(assertSealedControlTree(root, uid)).rejects.toThrow(
+        "group/world-writable",
+      );
+      chmodSync(target, 0o644);
+
+      symlinkSync(
+        "../../../../../../outside",
+        join(
+          root,
+          "packages",
+          "database",
+          "node_modules",
+          "@latex-renderer",
+          "escape",
+        ),
+      );
+      await expect(assertSealedControlTree(root, uid)).rejects.toThrow(
+        "symlink escapes",
+      );
+      await expect(assertSealedControlTree(root, uid + 1)).rejects.toThrow(
+        "unexpected owner",
+      );
+
+      rmSync(
+        join(
+          root,
+          "packages",
+          "database",
+          "node_modules",
+          "@latex-renderer",
+          "escape",
+        ),
+      );
+      mkdirSync(outside);
+      writeFileSync(join(outside, "payload.js"), "outside\n", { mode: 0o644 });
+      symlinkSync(outside, join(root, "packages", "shared", "redirect"));
+      symlinkSync(
+        "../../../shared/redirect/payload.js",
+        join(
+          root,
+          "packages",
+          "database",
+          "node_modules",
+          "@latex-renderer",
+          "chained-escape",
+        ),
+      );
+      await expect(assertSealedControlTree(root, uid)).rejects.toThrow(
+        "symlink escapes",
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
   it("runs deployment-user commands from the private stage instead of the protected service cwd", () => {
     const manager = read("deploy/scripts/update-manager.mjs");
     const helper = read("deploy/scripts/update-manager-helper.mjs");
@@ -414,9 +498,7 @@ describe("release-based application updates", () => {
       "LATEX_RENDERER_BUILD_ROOT: deployment.deploymentBuild",
     );
     expect(helper).not.toContain("assertNoSymlinks(buildSource)");
-    expect(helper).toContain(
-      'await runLogged("chown", ["-R", `0:${identity.gid}`, assembly])',
-    );
+    expect(helper).toContain("await sealControlTree(assembly, identity.gid)");
     expect(helper).toContain("UPDATE_DEPLOY_USER");
     expect(deploy).toContain("source_root=$(CDPATH= cd --");
     expect(deploy).toContain('cd "$source_root"');
@@ -500,7 +582,15 @@ describe("release-based application updates", () => {
     expect(workflow).toContain("latex-renderer-local-$version.mcpb");
     expect(workflow).toContain("SHA256SUMS");
     expect(workflow).toContain(".isDraft == true");
-    expect(workflow).toContain("^v[0-9]+\\.[0-9]+\\.[0-9]+$");
+    expect(workflow).toContain("release_kind:");
+    expect(workflow).toContain("candidate_tag:");
+    expect(workflow).toContain("-rc\\.[1-9][0-9]*$");
+    expect(workflow).toContain("verify-release-candidate-promotion.mjs");
+    expect(workflow).toContain(".prerelease == true");
+    expect(workflow).toContain(".immutable == true");
+    expect(workflow).toContain("candidate_digest=$(jq -r");
+    expect(workflow).toContain('gh release download "$CANDIDATE_TAG"');
+    expect(workflow).toContain('--source-ref "refs/tags/$CANDIDATE_TAG"');
     const builder = read("deploy/scripts/build-server-release-assets.sh");
     expect(builder).toContain('readlink "$admin_web_unit"');
     expect(builder).toContain('find "$stage" -type l');
@@ -512,6 +602,8 @@ describe("release-based application updates", () => {
       "deploy/scripts/update-manager.mjs",
       "deploy/scripts/update-manager-helper.mjs",
       "deploy/scripts/release-assembly.mjs",
+      "deploy/scripts/release-version.mjs",
+      "deploy/scripts/verify-release-candidate-promotion.mjs",
       "deploy/scripts/runtime-image-identity.mjs",
       "deploy/scripts/image-manager.mjs",
     ]) {
@@ -525,6 +617,7 @@ describe("release-based application updates", () => {
       "deploy/scripts/build-language-runtime.sh",
       "deploy/scripts/restore-managed-runtime.sh",
       "deploy/scripts/deploy-production-release.sh",
+      "deploy/scripts/bootstrap-update-manager-transition.sh",
     ]) {
       const result = spawnSync("sh", ["-n", path], { encoding: "utf8" });
       expect(result.status, `${path}: ${result.stderr}`).toBe(0);

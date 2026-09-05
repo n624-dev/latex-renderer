@@ -150,7 +150,7 @@ an email-based recovery link.
 
 ## Managed TeX Live images
 
-The public repository contains the reproducible Base and Runtime Dockerfiles,
+The public repository contains the reproducible Base and local Runtime builders,
 language-profile generator, registry helpers, renderer smoke tests, and the
 scheduled GHCR publication workflow. Pull-request image validation and daily
 publication both use ephemeral GitHub-hosted runners. Pull requests receive
@@ -174,13 +174,22 @@ After changing package access, run the `ghcr-publish-access` workflow first. It
 performs only the token-scope check and does not build or push an image. Start
 `renderer-image-daily` only after that short workflow succeeds.
 
-The public package is `ghcr.io/n624-dev/latex-renderer-texlive`. Its Base is
-built from `renderer/Dockerfile.base` and intentionally excludes application
-renderer files. The daily workflow also publishes both the language-neutral and
-English/Japanese supported Runtime presets. Their immutable identities bind the exact Base image ID, renderer runtime
-fingerprint, and normalized language collection set. Production validates its
-OCI identity labels and PDF behavior under the production seccomp profile before
-activation.
+The public package is `ghcr.io/n624-dev/latex-renderer-texlive`. It contains
+only the language-neutral Base built from `renderer/Dockerfile.base`; the Base
+intentionally excludes optional language collections and application renderer
+files. Before publishing a Base, the daily workflow derives an English/Japanese
+Runtime inside the hosted runner and requires its PDF, PNG, standard renderer,
+and SVG smoke tests to pass. That Runtime is a temporary validation artifact: it
+is never pushed to GHCR and is removed during job cleanup.
+
+Legacy `runtime-v1-*` package versions are preserved during the transition so
+an older server is not broken by the publication change. After every server
+using the package has successfully upgraded to the Base-only/local-Runtime
+release, and its application update has replaced the old public Runtime with a
+locally derived Runtime from the same verified Base, manually dispatch
+`renderer-image-daily` for `latest` with publication enabled and
+`purge_legacy_runtimes=true`. Never enable that cleanup before the last older
+server has moved away from public Runtime pulls and passed rendering checks.
 
 Both the Debian substrate and TeX Live inputs are pinned. Registry consumers
 should select a dated tag or digest; `latest` is convenient for discovery but
@@ -199,10 +208,10 @@ second unless already present, and remaining collections alphabetically. Nothing
 is checked automatically. The country can be persistently overridden or cleared
 from either Web UI or CLI; neither client has a private locale heuristic.
 
-When applying a new image or language set, the Image Manager first reuses an
-exact local Runtime, then pulls the exact prebuilt Runtime from public GHCR. It
-builds from the clean selected Base only when no matching Runtime tag exists and
-the administrator explicitly enabled the custom-language local-build fallback.
+When applying a new image or language set, the Image Manager reuses an exact
+local Runtime when one exists; otherwise it always builds the Runtime locally
+from the clean selected Base, selected optional languages, and currently
+installed renderer code. Derived Runtimes are not registry packages.
 It does not accumulate `tlmgr install`/`remove` mutations in the active runtime. Language collection identifiers
 are schema/syntax-validated before privileged execution, then `tlmgr` verifies
 each requested collection against the **exact selected TeX Live snapshot** before
@@ -234,8 +243,8 @@ smoke-tested and its package/font inventory is generated.
 A Runtime always contains the **currently installed renderer code** over the
 selected TeX Live Base, even when zero optional languages are selected. A normal
 application deployment compares the renderer runtime fingerprint, resolves the
-exact Runtime identity, and uses the same local-cache/GHCR/explicit-local-fallback
-order before renderer consumers start. The production release command then
+exact local Runtime identity, and either reuses that local cache or rebuilds it
+from the persisted Base before renderer consumers start. The production release command then
 reconciles the saved desired selector through the same Image Manager operation
 used by Web and CLI. It does not build or activate a separate fixed bootstrap
 image.
@@ -265,7 +274,6 @@ latex-render-admin tex apply \
   --language collection-langenglish collection-langjapanese \
   --auto-update on \
   --rebuild-if-missing off \
-  --runtime-build-if-missing off \
   --reason "Enable Japanese document support" \
   --yes
 ```
@@ -278,7 +286,6 @@ latex-render-admin tex apply \
   --language collection-langenglish collection-langjapanese \
   --auto-update off \
   --rebuild-if-missing on \
-  --runtime-build-if-missing off \
   --reason "Pin TeX Live for reproducible documents" \
   --yes
 ```
@@ -288,10 +295,9 @@ resolved digest. For a date, it pulls the matching dated GHCR tag when present.
 With `--rebuild-if-missing on`, it starts the long local archive build only
 after a successful registry listing proves that the dated tag is absent; a
 registry or network failure does not silently trigger that fallback. Weekly and
-digest selectors are pull-only. `--runtime-build-if-missing off` keeps Runtime
-selection pull-only. Enable it only for a custom language combination that is
-not one of the documented prebuilt presets; the Image Manager still requires a
-successful GHCR absence check before building locally. Use the operation ID returned by `apply` to
+digest selectors are pull-only. After the Base is resolved, the selected Runtime
+is always an exact local reuse or local build; no derived Runtime is downloaded
+from or uploaded to GHCR. Use the operation ID returned by `apply` to
 inspect a long-running change:
 
 ```bash
@@ -391,15 +397,51 @@ Rootless installations can check releases, but service/image activation must be
 performed by their external administrator or orchestrator.
 
 Maintainers must enable GitHub **immutable releases** before publishing an
-updater-compatible release. Run the `server-release` workflow for an existing
-protected `v*` tag; it validates the source and uploads the server bundle,
-client ZIP, signed MCPB, and combined checksums to one draft. Review every asset
-and the generated notes before publishing the draft, because publication locks
-its tag and assets. The workflow's repository-scoped token cannot read the
-administrative immutable-release setting, so a maintainer must verify that
-setting with repository administration access before dispatch and again before
-publication. The updater deliberately rejects older mutable releases, including
-v1.0.0; v1.1.0 is the first updater-compatible server release.
+updater-compatible release. A stable server release is gated by an immutable
+`vX.Y.Z-rc.N` prerelease that has already completed a real update on the
+production validation host. GitHub permits only the title and notes of an
+immutable published release to change, so the RC is never relabelled as stable;
+the stable tag is a separate promotion whose executable source may differ only
+by the exact RC-to-stable version replacement.
+
+Use this release order:
+
+1. Merge the reviewed candidate with package version `X.Y.Z-rc.N`, create the
+   protected tag, and run `server-release` with `release_kind=candidate` and no
+   `candidate_tag`.
+2. Independently verify all four draft assets and their attestations, verify the
+   repository immutable-release setting, then publish the draft as a
+   **prerelease** with Latest disabled. Confirm the API reports
+   `immutable=true`, `prerelease=true`, and `draft=false`.
+3. Put the validation host in maintenance mode, drain active jobs, and take the
+   encrypted pre-update backup. Apply the exact RC explicitly; never enable an
+   RC through the stable policy. A legacy v1.2.x host uses the one-time
+   transition command, while a split-manager host uses
+   `latex-render-admin update apply X.Y.Z-rc.N --reason "Validate release candidate" --yes`.
+4. On that host, verify the active release and non-root Update Manager identity,
+   all services and timers, database migrations and backup, Japanese/English
+   PDF and PNG rendering, client/MCPB downloads, browser authentication and
+   Admin UI, public/private route boundaries, TeX state restoration, and a
+   follow-up stable update check. Do not create the stable tag if any check
+   fails.
+5. Promote by replacing `X.Y.Z-rc.N` with `X.Y.Z` and updating documentation;
+   do not change executable behavior. Create the protected stable tag and run
+   `server-release` with `release_kind=stable` and the tested RC in
+   `candidate_tag`. The workflow verifies that the RC is a published immutable
+   prerelease, is an ancestor of the stable tag, shares the same version core,
+   and has no executable difference other than the exact version replacement.
+6. Independently verify the new draft and immutable-release setting again, then
+   publish Stable/Latest. The server bundle records `validatedCandidateTag` in
+   `.latex-renderer-release.json`.
+
+Both workflow modes upload the server bundle, client ZIP, signed MCPB, and
+combined checksums to a draft first. Publication locks the tag and assets. The
+workflow's repository-scoped token cannot read the administrative
+immutable-release setting, so a maintainer verifies that setting before every
+candidate or stable publication. Latest checks and automatic policy deliberately
+ignore prereleases; RC installation requires its exact version and an audited
+owner action. The updater rejects older mutable releases, including v1.0.0;
+v1.1.0 is the first updater-compatible server release.
 
 The previous runtime is retained for rollback, including the legacy runtime that
 was active before the first managed switch. Managed rollback re-derives the

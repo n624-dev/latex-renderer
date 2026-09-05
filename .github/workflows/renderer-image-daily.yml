@@ -16,6 +16,11 @@ on:
         required: true
         default: true
         type: boolean
+      purge_legacy_runtimes:
+        description: "After every server is upgraded, remove legacy public runtime-v1 images"
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -62,6 +67,13 @@ jobs:
         with:
           node-version: "24"
 
+      - name: Validate legacy Runtime cleanup request
+        if: github.event_name == 'workflow_dispatch' && inputs.purge_legacy_runtimes == true
+        run: |
+          set -euo pipefail
+          [[ "$PUBLISH_REQUESTED" == true ]]
+          [[ "$REQUESTED_DATE" == latest ]]
+
       - name: Verify GHCR package write access
         if: env.PUBLISH_REQUESTED == 'true'
         env:
@@ -75,19 +87,6 @@ jobs:
           name: latex-renderer-ghcr
           driver: docker-container
           cleanup: true
-
-      - name: Verify local Runtime builder
-        run: |
-          set -euo pipefail
-          probe_base="latex-renderer:local-builder-probe-base"
-          probe_runtime="latex-renderer:local-builder-probe-runtime"
-          printf 'FROM scratch\nLABEL probe=base\n' \
-            | docker buildx build --builder default --load --tag "$probe_base" -
-          printf 'ARG BASE_IMAGE\nFROM ${BASE_IMAGE}\nLABEL probe=runtime\n' \
-            | docker buildx build --builder default --load \
-                --build-arg "BASE_IMAGE=$probe_base" --tag "$probe_runtime" -
-          [[ $(docker image inspect "$probe_runtime" --format '{{index .Config.Labels "probe"}}') == runtime ]]
-          docker image rm "$probe_runtime" "$probe_base"
 
       - name: Resolve TeX Live snapshot
         id: snapshot
@@ -106,8 +105,7 @@ jobs:
         run: |
           set -euo pipefail
           base="latex-renderer:base-$SNAPSHOT_DATE"
-          runtime_neutral="latex-renderer:validation-neutral-$SNAPSHOT_DATE"
-          runtime_default="latex-renderer:validation-en-jp-$SNAPSHOT_DATE"
+          validation_runtime="latex-renderer:validation-en-jp-$SNAPSHOT_DATE"
           dated_ref="$IMAGE_REPOSITORY:$SNAPSHOT_DATE"
 
           printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
@@ -147,54 +145,33 @@ jobs:
           [[ $(docker image inspect "$base" --format '{{index .Config.Labels "jp.n624.latex-renderer.texlive.installer-sha512"}}') == "$TEXLIVE_INSTALLER_SHA512" ]]
           sh deploy/scripts/smoke-test-texlive-base.sh "$base"
 
-          # Checkpoint the independently validated immutable Base before the
-          # Runtime matrix. A failed Runtime smoke test can then retry without
-          # rebuilding the full TeX Live snapshot. Do not promote latest until
-          # every Runtime below has passed and been published.
-          if [[ "$base_source" == cold-built && "$PUBLISH_REQUESTED" == true ]]; then
-            [[ $(node deploy/scripts/ghcr-tag-status.mjs "$SNAPSHOT_DATE") == absent ]]
-            local_id=$(docker image inspect "$base" --format '{{.Id}}')
-            docker tag "$base" "$dated_ref"
-            docker push "$dated_ref"
-            checkpoint_digest=$(docker buildx imagetools inspect "$dated_ref" | awk '$1 == "Digest:" { print $2; exit }')
-            [[ "$checkpoint_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-            docker pull "$IMAGE_REPOSITORY@$checkpoint_digest" >/dev/null
-            [[ $(docker image inspect "$IMAGE_REPOSITORY@$checkpoint_digest" --format '{{.Id}}') == "$local_id" ]]
-            base_source=published-checkpoint
-          fi
-
+          # A Base is publishable only after the normal local Runtime path can
+          # add English and Japanese and render with them. This derived image
+          # is a CI-only validation artifact and is never pushed to GHCR.
           RUNTIME_BUILDX_BUILDER=default \
             RENDERER_RUNTIME_SOURCE="$GITHUB_WORKSPACE/renderer" \
             sh deploy/scripts/build-language-runtime.sh \
-              "$base" "$TEXLIVE_REPOSITORY" "$runtime_neutral"
-          sh deploy/scripts/smoke-test-renderer-basic.sh "$runtime_neutral"
-
-          RUNTIME_BUILDX_BUILDER=default \
-            RENDERER_RUNTIME_SOURCE="$GITHUB_WORKSPACE/renderer" \
-            sh deploy/scripts/build-language-runtime.sh \
-              "$base" "$TEXLIVE_REPOSITORY" "$runtime_default" \
+              "$base" "$TEXLIVE_REPOSITORY" "$validation_runtime" \
               collection-langenglish collection-langjapanese
-          sh deploy/scripts/smoke-test-renderer-basic.sh "$runtime_default"
-          sh deploy/scripts/smoke-test-renderer-svg.sh "$runtime_default"
+          [[ $(docker image inspect "$validation_runtime" --format '{{index .Config.Labels "jp.n624.latex-renderer.languages"}}') == collection-langenglish,collection-langjapanese ]]
+          [[ $(docker image inspect "$validation_runtime" --format '{{index .Config.Labels "jp.n624.latex-renderer.runtime-kind"}}') == managed-local-v1 ]]
+          sh deploy/scripts/smoke-test-renderer-basic.sh "$validation_runtime"
+          sh deploy/scripts/smoke-test-renderer-en-jp.sh "$validation_runtime"
+          sh deploy/scripts/smoke-test-renderer-svg.sh "$validation_runtime"
 
-          runtime_neutral_tag=$(node deploy/scripts/runtime-image-identity.mjs \
-            --format tag "$base")
-          runtime_default_tag=$(node deploy/scripts/runtime-image-identity.mjs \
-            --format tag "$base" \
-            collection-langenglish collection-langjapanese)
+          docker tag "$base" "latex-renderer:validated-base-$SNAPSHOT_DATE"
+
           printf '%s\n' "$base" > "$RUNNER_TEMP/validated-base-image"
           printf '%s\n' "$base_source" > "$RUNNER_TEMP/validated-base-source"
-          printf '%s\n' "$runtime_neutral" "$runtime_default" > "$RUNNER_TEMP/validated-runtime-images"
-          printf '%s\n' "$runtime_neutral_tag" "$runtime_default_tag" > "$RUNNER_TEMP/validated-runtime-tags"
 
-      - name: Generate CycloneDX SBOM for the validated Runtime
+      - name: Generate CycloneDX SBOM for the validated Base
         if: steps.validate.outcome == 'success'
         uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         with:
-          image: latex-renderer:validation-en-jp-${{ steps.snapshot.outputs.date }}
+          image: latex-renderer:validated-base-${{ steps.snapshot.outputs.date }}
           format: cyclonedx-json
-          output-file: latex-renderer-runtime.cdx.json
-          artifact-name: latex-renderer-runtime.cdx.json
+          output-file: latex-renderer-texlive-base.cdx.json
+          artifact-name: latex-renderer-texlive-base.cdx.json
           upload-artifact: true
           dependency-snapshot: false
 
@@ -210,12 +187,19 @@ jobs:
           set -euo pipefail
           base=$(cat "$RUNNER_TEMP/validated-base-image")
           base_source=$(cat "$RUNNER_TEMP/validated-base-source")
-          mapfile -t runtimes < "$RUNNER_TEMP/validated-runtime-images"
-          mapfile -t runtime_tags < "$RUNNER_TEMP/validated-runtime-tags"
           dated_ref="$IMAGE_REPOSITORY:$SNAPSHOT_DATE"
           printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
 
-          if [[ "$base_source" == published-checkpoint || "$base_source" == reused-existing ]]; then
+          if [[ "$base_source" == cold-built ]]; then
+            [[ $(node deploy/scripts/ghcr-tag-status.mjs "$SNAPSHOT_DATE") == absent ]]
+            local_id=$(docker image inspect "$base" --format '{{.Id}}')
+            docker tag "$base" "$dated_ref"
+            docker push "$dated_ref"
+            digest=$(docker buildx imagetools inspect "$dated_ref" | awk '$1 == "Digest:" { print $2; exit }')
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+            docker pull "$IMAGE_REPOSITORY@$digest" >/dev/null
+            [[ $(docker image inspect "$IMAGE_REPOSITORY@$digest" --format '{{.Id}}') == "$local_id" ]]
+          elif [[ "$base_source" == reused-existing ]]; then
             digest=$(docker buildx imagetools inspect "$dated_ref" | awk '$1 == "Digest:" { print $2; exit }')
             [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           else
@@ -223,25 +207,6 @@ jobs:
             exit 65
           fi
 
-          runtime_digests=()
-          for index in "${!runtimes[@]}"; do
-            runtime=${runtimes[$index]}
-            runtime_ref="$IMAGE_REPOSITORY:${runtime_tags[$index]}"
-            runtime_local_id=$(docker image inspect "$runtime" --format '{{.Id}}')
-            runtime_tag_status=$(node deploy/scripts/ghcr-tag-status.mjs "${runtime_tags[$index]}")
-            if [[ "$runtime_tag_status" == present ]]; then
-              echo "Runtime tag ${runtime_tags[$index]} already exists; refusing to overwrite an immutable publication" >&2
-              exit 65
-            fi
-            [[ "$runtime_tag_status" == absent ]]
-            docker tag "$runtime" "$runtime_ref"
-            docker push "$runtime_ref"
-            runtime_digest=$(docker buildx imagetools inspect "$runtime_ref" | awk '$1 == "Digest:" { print $2; exit }')
-            [[ "$runtime_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-            docker pull "$IMAGE_REPOSITORY@$runtime_digest" >/dev/null
-            [[ $(docker image inspect "$IMAGE_REPOSITORY@$runtime_digest" --format '{{.Id}}') == "$runtime_local_id" ]]
-            runtime_digests+=("$runtime_digest")
-          done
           if [[ "$REQUESTED_DATE" == latest ]]; then
             docker buildx imagetools create \
               --prefer-index=false \
@@ -251,34 +216,27 @@ jobs:
             [[ "$latest_digest" == "$digest" ]]
           fi
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
-          runtime_digest_csv=$(IFS=,; printf '%s' "${runtime_digests[*]}")
-          echo "runtime_digests=$runtime_digest_csv" >> "$GITHUB_OUTPUT"
 
       - name: Verify anonymous pull
         if: steps.publish.outcome == 'success'
         env:
           IMAGE_DIGEST: ${{ steps.publish.outputs.digest }}
-          RUNTIME_IMAGE_DIGESTS: ${{ steps.publish.outputs.runtime_digests }}
         run: |
           set -euo pipefail
           docker logout ghcr.io >/dev/null
           docker image rm "$IMAGE_REPOSITORY@$IMAGE_DIGEST" >/dev/null 2>&1 || true
           docker pull "$IMAGE_REPOSITORY@$IMAGE_DIGEST"
-          IFS=, read -ra runtime_digests <<< "$RUNTIME_IMAGE_DIGESTS"
-          for runtime_digest in "${runtime_digests[@]}"; do
-            docker image rm "$IMAGE_REPOSITORY@$runtime_digest" >/dev/null 2>&1 || true
-            docker pull "$IMAGE_REPOSITORY@$runtime_digest"
-            sh deploy/scripts/smoke-test-renderer-basic.sh "$IMAGE_REPOSITORY@$runtime_digest"
-          done
+          sh deploy/scripts/smoke-test-texlive-base.sh "$IMAGE_REPOSITORY@$IMAGE_DIGEST"
 
       - name: Registry maintenance
         if: steps.publish.outcome == 'success' && env.REQUESTED_DATE == 'latest'
-        continue-on-error: true
+        continue-on-error: ${{ github.event_name != 'workflow_dispatch' || inputs.purge_legacy_runtimes != true }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GHCR_OWNER: n624-dev
           GHCR_PACKAGE: latex-renderer-texlive
           GHCR_REPOSITORY: ghcr.io/n624-dev/latex-renderer-texlive
+          GHCR_PURGE_LEGACY_RUNTIMES: ${{ github.event_name == 'workflow_dispatch' && inputs.purge_legacy_runtimes == true }}
         run: node deploy/scripts/ghcr-retention.mjs
 
       - name: Clean local image state
@@ -289,7 +247,7 @@ jobs:
         run: |
           set +e
           docker image rm \
-            "latex-renderer:validation-neutral-${SNAPSHOT_DATE:-unknown}" \
+            "latex-renderer:validated-base-${SNAPSHOT_DATE:-unknown}" \
             "latex-renderer:validation-en-jp-${SNAPSHOT_DATE:-unknown}" \
             "$IMAGE_REPOSITORY:${SNAPSHOT_DATE:-unknown}" \
             "$IMAGE_REPOSITORY:latest" \

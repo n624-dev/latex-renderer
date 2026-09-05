@@ -57,7 +57,13 @@ describe("managed TeX Live image pipeline", () => {
     expect(workflow).not.toContain("source_ref");
     expect(workflow).toContain("smoke-test-texlive-base.sh");
     expect(workflow).toContain("smoke-test-renderer-basic.sh");
+    expect(workflow).toContain("smoke-test-renderer-en-jp.sh");
     expect(workflow).toContain("smoke-test-renderer-svg.sh");
+    expect(workflow).toContain(
+      "collection-langenglish collection-langjapanese",
+    );
+    expect(workflow).toContain('docker push "$dated_ref"');
+    expect(workflow).not.toContain('docker push "$runtime_ref"');
     expect(workflow).toContain("Verify anonymous pull");
   });
 
@@ -147,7 +153,7 @@ describe("managed TeX Live image pipeline", () => {
     expect(manager).toContain("activation-journal.json");
     expect(manager).toContain("async function recoverPendingActivation");
     expect(manager).toContain("async function activateAndPersistState");
-    expect(manager).toContain("await writeAtomic(activationJournalPath");
+    expect(manager).toMatch(/await writeAtomic\(\s*activationJournalPath/);
     expect(manager).toContain("await restoreActivation(snapshot)");
     expect(manager).toContain(
       '"image", "ls", "--all", "--no-trunc", "--quiet"',
@@ -163,8 +169,8 @@ describe("managed TeX Live image pipeline", () => {
       "Image manager restarted while this operation was running",
     );
     expect(manager).toContain("deploy/scripts/build-language-runtime.sh");
-    expect(manager).toContain(
-      '"builder", "prune", "--force", "--filter", "until=168h"',
+    expect(manager).toMatch(
+      /"builder",\s*"prune",\s*"--force",\s*"--filter",\s*"until=168h"/,
     );
     expect(manager).not.toContain("tlmgr remove");
   });
@@ -196,11 +202,15 @@ describe("managed TeX Live image pipeline", () => {
       "Refusing to fall back silently to the legacy renderer image",
     );
     expect(restore).toContain(
-      "Renderer code changed; pulled the matching public Runtime",
+      "Managed Runtime refresh: reusing the exact locally built Runtime",
     );
     expect(restore).toContain(
-      "GHCR confirms the Runtime is absent; building the custom language Runtime locally",
+      "Managed Runtime refresh: building the selected language Runtime locally from the verified Base",
     );
+    expect(restore).toContain('[ "$image_runtime_kind" != managed-local-v1 ]');
+    expect(restore).toContain('[ "$local_identity" = "$runtime_identity" ]');
+    expect(restore).toContain('[ "$reuse_local" = true ]');
+    expect(restore).not.toContain("matching public Runtime");
     expect(restore).toContain(
       "tmp_root=${TMPDIR:-/var/lib/latex-renderer/image-manager/tmp}",
     );
@@ -305,6 +315,7 @@ describe("managed TeX Live image pipeline", () => {
       "deploy/scripts/resolve-texlive-snapshot.sh",
       "deploy/scripts/restore-managed-runtime.sh",
       "deploy/scripts/smoke-test-renderer-basic.sh",
+      "deploy/scripts/smoke-test-renderer-en-jp.sh",
       "deploy/scripts/smoke-test-texlive-base.sh",
       "deploy/scripts/start-image-manager.sh",
       "deploy/scripts/wait-image-manager-http.sh",
@@ -371,11 +382,11 @@ describe("Web and CLI TeX environment parity", () => {
 
   it("provides the same language search and explicit select-all/clear-all behavior", () => {
     const cli = read("apps/admin-cli/src/index.ts");
-    expect(cli).toContain('.option("--search <query>"');
+    expect(cli).toMatch(/\.option\(\s*"--search <query>"/);
     expect(cli).not.toContain("--country <country>");
     expect(cli).not.toContain('.option("--selected"');
-    expect(cli).toContain('.option("--all-languages"');
-    expect(cli).toContain('.option("--clear-languages"');
+    expect(cli).toMatch(/\.option\(\s*"--all-languages"/);
+    expect(cli).toMatch(/\.option\(\s*"--clear-languages"/);
     expect(cli).toContain(
       "Choose exactly one of --language, --all-languages, or --clear-languages",
     );
@@ -407,7 +418,7 @@ describe("Web and CLI TeX environment parity", () => {
     const cli = read("apps/admin-cli/src/index.ts");
     expect(cli).toContain("waitTexOperation");
     expect(cli).toContain("reconnecting to Admin API");
-    expect(cli).toContain('tex.command("operation")');
+    expect(cli).toMatch(/tex\s*\.command\("operation"\)/);
     expect(adminScript).toContain("effectiveLanguageCollections");
     expect(adminScript).toContain("依存言語collection");
     expect(adminScript).toContain("watchTexOperation");

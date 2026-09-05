@@ -2,45 +2,93 @@
 import { timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
-import { chmod, chown, cp, mkdir, mkdtemp, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  chown,
+  cp,
+  mkdir,
+  mkdtemp,
+  open,
+  readFile,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { rendererRuntimeFingerprint, runtimeIdentity } from "./runtime-image-identity.mjs";
+import {
+  rendererRuntimeFingerprint,
+  runtimeIdentity,
+} from "./runtime-image-identity.mjs";
 import { acquireMutationLock } from "./mutation-lock.mjs";
-import { boundedIntegerEnvironment, validPortEnvironment } from "./environment.mjs";
+import {
+  boundedIntegerEnvironment,
+  validPortEnvironment,
+} from "./environment.mjs";
 
 const host = process.env.IMAGE_MANAGER_HOST ?? "127.0.0.1";
 const port = validPortEnvironment(process.env, "IMAGE_MANAGER_PORT", 3110);
-const tokenFile = process.env.IMAGE_MANAGER_TOKEN_FILE ?? "/etc/latex-renderer/secrets/image-manager-token";
-const rendererEnv = process.env.RENDERER_ENV_FILE ?? "/etc/latex-renderer/renderer.env";
-const repoRoot = process.env.IMAGE_MANAGER_REPO_ROOT ?? "/opt/latex-renderer/current";
-const stateRoot = process.env.IMAGE_MANAGER_STATE_ROOT ?? "/var/lib/latex-renderer/image-manager";
-const dockerConfigRoot = process.env.DOCKER_CONFIG ?? join(stateRoot, "docker-config");
-const environmentRoot = process.env.RENDERER_ENVIRONMENT_ROOT ?? "/var/lib/latex-renderer/environment";
+const tokenFile =
+  process.env.IMAGE_MANAGER_TOKEN_FILE ??
+  "/etc/latex-renderer/secrets/image-manager-token";
+const rendererEnv =
+  process.env.RENDERER_ENV_FILE ?? "/etc/latex-renderer/renderer.env";
+const repoRoot =
+  process.env.IMAGE_MANAGER_REPO_ROOT ?? "/opt/latex-renderer/current";
+const stateRoot =
+  process.env.IMAGE_MANAGER_STATE_ROOT ??
+  "/var/lib/latex-renderer/image-manager";
+const dockerConfigRoot =
+  process.env.DOCKER_CONFIG ?? join(stateRoot, "docker-config");
+const environmentRoot =
+  process.env.RENDERER_ENVIRONMENT_ROOT ??
+  "/var/lib/latex-renderer/environment";
 const workerUser = process.env.RENDERER_WORKER_USER ?? "latex-render-worker";
-const imageRepository = process.env.TEXLIVE_IMAGE_REPOSITORY ?? "ghcr.io/n624-dev/latex-renderer-texlive";
-const fetchTimeoutMs = boundedIntegerEnvironment(process.env, "IMAGE_MANAGER_FETCH_TIMEOUT_MS", 30_000, 1_000, 120_000);
-const maxOperationLogBytes = boundedIntegerEnvironment(process.env, "IMAGE_MANAGER_MAX_OPERATION_LOG_BYTES", 4 * 1024 * 1024, 64 * 1024, 64 * 1024 * 1024);
+const imageRepository =
+  process.env.TEXLIVE_IMAGE_REPOSITORY ??
+  "ghcr.io/n624-dev/latex-renderer-texlive";
+const fetchTimeoutMs = boundedIntegerEnvironment(
+  process.env,
+  "IMAGE_MANAGER_FETCH_TIMEOUT_MS",
+  30_000,
+  1_000,
+  120_000,
+);
+const maxOperationLogBytes = boundedIntegerEnvironment(
+  process.env,
+  "IMAGE_MANAGER_MAX_OPERATION_LOG_BYTES",
+  4 * 1024 * 1024,
+  64 * 1024,
+  64 * 1024 * 1024,
+);
 const ghcrPath = imageRepository.replace(/^ghcr\.io\//, "");
 const [ghcrOwner, ...ghcrNameParts] = ghcrPath.split("/");
 const ghcrName = ghcrNameParts.join("/");
-if (!["127.0.0.1", "::1"].includes(host)) throw new Error("IMAGE_MANAGER_HOST must be a loopback address");
-if (!ghcrOwner || !ghcrName) throw new Error("TEXLIVE_IMAGE_REPOSITORY must point to ghcr.io/owner/name");
+if (!["127.0.0.1", "::1"].includes(host))
+  throw new Error("IMAGE_MANAGER_HOST must be a loopback address");
+if (!ghcrOwner || !ghcrName)
+  throw new Error("TEXLIVE_IMAGE_REPOSITORY must point to ghcr.io/owner/name");
 
 await mkdir(stateRoot, { recursive: true, mode: 0o750 });
 await mkdir(environmentRoot, { recursive: true, mode: 0o750 });
 const token = (await readFile(tokenFile, "utf8")).trim();
 if (token.length < 32) throw new Error("Image manager token is too short");
 const workerUid = Number((await runCapture("id", ["-u", workerUser])).trim());
-if (!Number.isInteger(workerUid) || workerUid < 1) throw new Error("Could not resolve renderer worker uid");
+if (!Number.isInteger(workerUid) || workerUid < 1)
+  throw new Error("Could not resolve renderer worker uid");
 const workerGid = Number((await runCapture("id", ["-g", workerUser])).trim());
-if (!Number.isInteger(workerGid) || workerGid < 1) throw new Error("Could not resolve renderer worker gid");
+if (!Number.isInteger(workerGid) || workerGid < 1)
+  throw new Error("Could not resolve renderer worker gid");
 await mkdir(dockerConfigRoot, { recursive: true, mode: 0o700 });
 await chown(dockerConfigRoot, workerUid, workerGid);
 await chmod(dockerConfigRoot, 0o700);
-const workerPasswd = (await runCapture("getent", ["passwd", workerUser])).trim().split(":");
+const workerPasswd = (await runCapture("getent", ["passwd", workerUser]))
+  .trim()
+  .split(":");
 const workerHome = workerPasswd[5];
-if (!workerHome?.startsWith("/")) throw new Error("Could not resolve renderer worker home");
+if (!workerHome?.startsWith("/"))
+  throw new Error("Could not resolve renderer worker home");
 const runtimeDir = `/run/user/${workerUid}`;
 const dockerHost = `unix://${runtimeDir}/docker.sock`;
 const statePath = join(stateRoot, "state.json");
@@ -55,7 +103,6 @@ const emptyState = () => ({
     selector: { mode: "latest", value: null },
     languages: [],
     autoUpdate: false,
-    runtimeBuildIfMissing: false,
     countryOverride: null,
   },
   current: null,
@@ -78,10 +125,15 @@ await seedCurrentRuntimeIfNeeded();
 async function loadState() {
   try {
     const parsed = JSON.parse(await readFile(statePath, "utf8"));
+    const desired = { ...emptyState().desired, ...(parsed.desired ?? {}) };
+    // v1.2.x could require a separately published derived Runtime and stored
+    // this opt-in fallback.  Derived Runtimes are now always local, so do not
+    // expose or persist the obsolete setting after loading old state.
+    delete desired.runtimeBuildIfMissing;
     return {
       ...emptyState(),
       ...parsed,
-      desired: { ...emptyState().desired, ...(parsed.desired ?? {}) },
+      desired,
     };
   } catch (error) {
     if (error?.code !== "ENOENT") throw error;
@@ -165,7 +217,9 @@ function runCapture(command, args, options = {}) {
       if (captureError) return target;
       capturedBytes += chunk.length;
       if (capturedBytes > maxOutputBytes) {
-        captureError = new Error(`${command} output exceeds the configured capture limit`);
+        captureError = new Error(
+          `${command} output exceeds the configured capture limit`,
+        );
         child.kill("SIGKILL");
         return target;
       }
@@ -200,7 +254,11 @@ async function runLogged(op, command, args, options = {}) {
     child.once("close", resolve);
   });
   try {
-    const [code] = await Promise.all([closed, consume(child.stdout), consume(child.stderr)]);
+    const [code] = await Promise.all([
+      closed,
+      consume(child.stdout),
+      consume(child.stderr),
+    ]);
     if (code !== 0) throw new Error(`${command} exited with code ${code}`);
   } catch (error) {
     child.kill("SIGKILL");
@@ -209,7 +267,17 @@ async function runLogged(op, command, args, options = {}) {
 }
 
 function dockerRunuserArgs(args) {
-  return ["-u", workerUser, "--", "env", `HOME=${workerHome}`, `XDG_RUNTIME_DIR=${runtimeDir}`, `DOCKER_HOST=${dockerHost}`, "docker", ...args];
+  return [
+    "-u",
+    workerUser,
+    "--",
+    "env",
+    `HOME=${workerHome}`,
+    `XDG_RUNTIME_DIR=${runtimeDir}`,
+    `DOCKER_HOST=${dockerHost}`,
+    "docker",
+    ...args,
+  ];
 }
 
 async function dockerCapture(args) {
@@ -222,7 +290,10 @@ async function dockerLogged(op, args) {
 
 function redactLog(text) {
   return String(text)
-    .replace(/((?:authorization|password|secret|token|credential)[=:][ \t]*)[^\s]+/gi, "$1[REDACTED]")
+    .replace(
+      /((?:authorization|password|secret|token|credential)[=:][ \t]*)[^\s]+/gi,
+      "$1[REDACTED]",
+    )
     .replace(/\b(?:gh[oprsu]_|github_pat_)[A-Za-z0-9_]+\b/g, "[REDACTED]");
 }
 
@@ -266,7 +337,11 @@ function operationMetaPath(id) {
 }
 
 async function saveOperation(op) {
-  await writeAtomic(operationMetaPath(op.id), `${JSON.stringify(operationView(op), null, 2)}\n`, 0o640);
+  await writeAtomic(
+    operationMetaPath(op.id),
+    `${JSON.stringify(operationView(op), null, 2)}\n`,
+    0o640,
+  );
 }
 
 async function loadOperation(id) {
@@ -289,7 +364,12 @@ async function readLogTail(path, maxBytes = 100_000) {
     const handle = await open(path, "r");
     try {
       const buffer = Buffer.alloc(length);
-      const { bytesRead } = await handle.read(buffer, 0, length, Math.max(0, info.size - length));
+      const { bytesRead } = await handle.read(
+        buffer,
+        0,
+        length,
+        Math.max(0, info.size - length),
+      );
       return buffer.subarray(0, bytesRead).toString("utf8");
     } finally {
       await handle.close();
@@ -316,7 +396,13 @@ async function recoverPendingActivation() {
     if (error?.code === "ENOENT") return null;
     throw error;
   }
-  if (journal?.version !== 1 || typeof journal?.newImageId !== "string" || !journal.previousState || !journal.nextState || typeof journal.oldEnv !== "string")
+  if (
+    journal?.version !== 1 ||
+    typeof journal?.newImageId !== "string" ||
+    !journal.previousState ||
+    !journal.nextState ||
+    typeof journal.oldEnv !== "string"
+  )
     throw new Error("Image activation journal is invalid");
 
   const configured = rendererImageFromEnv(await readFile(rendererEnv, "utf8"));
@@ -339,23 +425,32 @@ async function recoverPendingActivation() {
     await rm(activationJournalPath, { force: true });
     return { operationId: journal.operationId ?? null, committed: false };
   }
-  throw new Error(`Image activation recovery refused an unexpected RENDERER_IMAGE: ${configured || "missing"}`);
+  throw new Error(
+    `Image activation recovery refused an unexpected RENDERER_IMAGE: ${configured || "missing"}`,
+  );
 }
 
 async function recoverInterruptedOperation(activationOutcome = null) {
   if (!state.lastOperationId) return;
   const op = await loadOperation(state.lastOperationId);
   if (!op || op.status !== "running") return;
-  const recoveredCommit = activationOutcome?.operationId === op.id && activationOutcome.committed === true;
+  const recoveredCommit =
+    activationOutcome?.operationId === op.id &&
+    activationOutcome.committed === true;
   op.status = recoveredCommit ? "succeeded" : "failed";
-  op.error = recoveredCommit ? null : "Image manager restarted while this operation was running";
+  op.error = recoveredCommit
+    ? null
+    : "Image manager restarted while this operation was running";
   op.finishedAt = new Date().toISOString();
   await saveOperation(op);
   state.lastApplyError = op.error;
   await persistState();
-  await appendLog(op, recoveredCommit ? "\nImage activation was recovered and committed after Image Manager restart.\n" : "\nERROR: Image Manager restarted before this operation completed.\n").catch(
-    () => {},
-  );
+  await appendLog(
+    op,
+    recoveredCommit
+      ? "\nImage activation was recovered and committed after Image Manager restart.\n"
+      : "\nERROR: Image Manager restarted before this operation completed.\n",
+  ).catch(() => {});
 }
 
 async function finishOperationSucceeded(op) {
@@ -364,10 +459,16 @@ async function finishOperationSucceeded(op) {
     op.finishedAt = new Date().toISOString();
     state.lastApplyError = null;
     await saveOperation(op).catch(async (error) => {
-      await appendLog(op, `\nWARNING: operation completed, but completion metadata could not be saved: ${error instanceof Error ? error.message : String(error)}\n`).catch(() => {});
+      await appendLog(
+        op,
+        `\nWARNING: operation completed, but completion metadata could not be saved: ${error instanceof Error ? error.message : String(error)}\n`,
+      ).catch(() => {});
     });
     await persistState().catch(async (error) => {
-      await appendLog(op, `\nWARNING: operation completed, but housekeeping state could not be saved: ${error instanceof Error ? error.message : String(error)}\n`).catch(() => {});
+      await appendLog(
+        op,
+        `\nWARNING: operation completed, but housekeeping state could not be saved: ${error instanceof Error ? error.message : String(error)}\n`,
+      ).catch(() => {});
     });
     activeOperationId = null;
   });
@@ -389,10 +490,18 @@ async function finishOperationFailed(op, error) {
 async function startOperation(type, task) {
   return serializeMutation(async () => {
     if (quiescing) {
-      throw httpError(503, "IMAGE_MANAGER_QUIESCING", "Image Manager is quiescing for deployment");
+      throw httpError(
+        503,
+        "IMAGE_MANAGER_QUIESCING",
+        "Image Manager is quiescing for deployment",
+      );
     }
     if (activeOperationId) {
-      throw httpError(409, "IMAGE_OPERATION_ACTIVE", "Another image operation is already running");
+      throw httpError(
+        409,
+        "IMAGE_OPERATION_ACTIVE",
+        "Another image operation is already running",
+      );
     }
     let mutationLock;
     try {
@@ -448,11 +557,16 @@ function httpError(status, code, message) {
 }
 
 function validateLanguages(value) {
-  if (!Array.isArray(value)) throw httpError(400, "INVALID_LANGUAGES", "languages must be an array");
+  if (!Array.isArray(value))
+    throw httpError(400, "INVALID_LANGUAGES", "languages must be an array");
   const unique = [...new Set(value.map(String))];
   for (const language of unique) {
     if (!/^collection-lang[A-Za-z0-9._-]+$/.test(language)) {
-      throw httpError(400, "INVALID_LANGUAGE", `Invalid language collection: ${language}`);
+      throw httpError(
+        400,
+        "INVALID_LANGUAGE",
+        `Invalid language collection: ${language}`,
+      );
     }
   }
   return unique.sort();
@@ -461,7 +575,9 @@ function validateLanguages(value) {
 function validDate(value) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value ?? "")) return false;
   const date = new Date(`${value}T00:00:00Z`);
-  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+  return (
+    !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value
+  );
 }
 
 function validIsoWeek(value) {
@@ -472,30 +588,39 @@ function validIsoWeek(value) {
 }
 
 function validateSelector(value) {
-  if (!value || typeof value !== "object") throw httpError(400, "INVALID_SELECTOR", "selector is required");
+  if (!value || typeof value !== "object")
+    throw httpError(400, "INVALID_SELECTOR", "selector is required");
   const mode = value.mode;
   const raw = value.value == null ? null : String(value.value);
   if (mode === "latest") return { mode, value: null };
   if (mode === "date" && validDate(raw)) return { mode, value: raw };
   if (mode === "weekly" && validIsoWeek(raw)) return { mode, value: raw };
-  if (mode === "digest" && /^sha256:[a-f0-9]{64}$/.test(raw ?? "")) return { mode, value: raw };
+  if (mode === "digest" && /^sha256:[a-f0-9]{64}$/.test(raw ?? ""))
+    return { mode, value: raw };
   throw httpError(400, "INVALID_SELECTOR", "Invalid image selector");
 }
 
 function selectorReference(selector) {
   if (selector.mode === "latest") return `${imageRepository}:latest`;
   if (selector.mode === "date") return `${imageRepository}:${selector.value}`;
-  if (selector.mode === "weekly") return `${imageRepository}:weekly-${selector.value}`;
+  if (selector.mode === "weekly")
+    return `${imageRepository}:weekly-${selector.value}`;
   return `${imageRepository}@${selector.value}`;
 }
 
 function snapshotDateFromRepository(repository) {
-  const match = /tlnet-archive\/(\d{4})\/(\d{2})\/(\d{2})\/tlnet/.exec(repository ?? "");
+  const match = /tlnet-archive\/(\d{4})\/(\d{2})\/(\d{2})\/tlnet/.exec(
+    repository ?? "",
+  );
   return match ? `${match[1]}-${match[2]}-${match[3]}` : null;
 }
 
 async function resolveSnapshot(requested, op) {
-  const output = await runCapture("sh", [join(repoRoot, "deploy/scripts/resolve-texlive-snapshot.sh"), requested], { env: process.env });
+  const output = await runCapture(
+    "sh",
+    [join(repoRoot, "deploy/scripts/resolve-texlive-snapshot.sh"), requested],
+    { env: process.env },
+  );
   if (op) await appendLog(op, output);
   return Object.fromEntries(
     output
@@ -515,7 +640,10 @@ async function pullOrRebuildBase(op, selector, rebuildIfMissing) {
       try {
         await listImages();
       } catch (registryError) {
-        await appendLog(op, `GHCR access check failed after pull error: ${registryError instanceof Error ? registryError.message : String(registryError)}\n`);
+        await appendLog(
+          op,
+          `GHCR access check failed after pull error: ${registryError instanceof Error ? registryError.message : String(registryError)}\n`,
+        );
         throw registryError;
       }
       throw pullError;
@@ -524,29 +652,53 @@ async function pullOrRebuildBase(op, selector, rebuildIfMissing) {
     try {
       images = await listImages();
     } catch (discoveryError) {
-      await appendLog(op, `Registry discovery failed after pull error; refusing local rebuild: ${discoveryError instanceof Error ? discoveryError.message : String(discoveryError)}\n`);
+      await appendLog(
+        op,
+        `Registry discovery failed after pull error; refusing local rebuild: ${discoveryError instanceof Error ? discoveryError.message : String(discoveryError)}\n`,
+      );
       throw discoveryError;
     }
     if (images.daily.includes(selector.value)) {
-      await appendLog(op, `Registry still reports ${selector.value}; refusing local rebuild because the pull failure was not proven to be a missing tag.\n`);
+      await appendLog(
+        op,
+        `Registry still reports ${selector.value}; refusing local rebuild because the pull failure was not proven to be a missing tag.\n`,
+      );
       throw pullError;
     }
-    await appendLog(op, `GHCR confirms ${selector.value} is absent; rebuilding locally from the dated TeX Live archive.\n`);
+    await appendLog(
+      op,
+      `GHCR confirms ${selector.value} is absent; rebuilding locally from the dated TeX Live archive.\n`,
+    );
     return rebuildDatedBase(op, selector.value);
   }
 }
 
 async function inspectBase(ref) {
-  const raw = await dockerCapture(["image", "inspect", ref, "--format", "{{json .}}"]);
+  const raw = await dockerCapture([
+    "image",
+    "inspect",
+    ref,
+    "--format",
+    "{{json .}}",
+  ]);
   const info = JSON.parse(raw);
   const labels = info.Config?.Labels ?? {};
   const repository = labels["jp.n624.latex-renderer.texlive.repository"];
   const profileKind = labels["jp.n624.latex-renderer.texlive.profile-kind"];
   const baseKind = labels["jp.n624.latex-renderer.base-kind"];
-  if (labels["org.opencontainers.image.title"] !== "latex-renderer-texlive" || !repository || profileKind !== "language-neutral-maximal" || baseKind !== "texlive-only-v1") {
-    throw new Error("Selected image is not a validated renderer-free language-neutral latex-renderer TeX Live base");
+  if (
+    labels["org.opencontainers.image.title"] !== "latex-renderer-texlive" ||
+    !repository ||
+    profileKind !== "language-neutral-maximal" ||
+    baseKind !== "texlive-only-v1"
+  ) {
+    throw new Error(
+      "Selected image is not a validated renderer-free language-neutral latex-renderer TeX Live base",
+    );
   }
-  const matchingDigest = Array.isArray(info.RepoDigests) ? info.RepoDigests.find((item) => item.startsWith(`${imageRepository}@`)) : undefined;
+  const matchingDigest = Array.isArray(info.RepoDigests)
+    ? info.RepoDigests.find((item) => item.startsWith(`${imageRepository}@`))
+    : undefined;
   const digest = matchingDigest?.split("@")[1] ?? info.Id;
   // A tag is only a discovery selector. Carry the registry's
   // digest-qualified reference into every subsequent build so a later tag
@@ -567,7 +719,11 @@ async function rebuildDatedBase(op, date) {
   const context = join(work, "renderer");
   try {
     await cp(join(repoRoot, "renderer"), context, { recursive: true });
-    await runLogged(op, "sh", [join(repoRoot, "deploy/scripts/generate-texlive-profile.sh"), snapshot.repository, join(context, "texlive.profile")]);
+    await runLogged(op, "sh", [
+      join(repoRoot, "deploy/scripts/generate-texlive-profile.sh"),
+      snapshot.repository,
+      join(context, "texlive.profile"),
+    ]);
     await runLogged(op, "chmod", ["-R", "a+rX", work]);
     const tag = `latex-renderer:base-${date}-local`;
     await dockerLogged(op, [
@@ -627,10 +783,17 @@ async function seedCurrentRuntimeIfNeeded() {
   if (!configured) return;
 
   try {
-    const raw = await dockerCapture(["image", "inspect", configured, "--format", "{{json .}}"]);
+    const raw = await dockerCapture([
+      "image",
+      "inspect",
+      configured,
+      "--format",
+      "{{json .}}",
+    ]);
     const info = JSON.parse(raw);
     const labels = info.Config?.Labels ?? {};
-    const repository = labels["jp.n624.latex-renderer.texlive.repository"] ?? null;
+    const repository =
+      labels["jp.n624.latex-renderer.texlive.repository"] ?? null;
     const snapshotDate = snapshotDateFromRepository(repository);
     const languages = await installedLanguageCollections(info.Id);
     const migrateLanguages = await legacyLanguageMigrationRequested();
@@ -663,7 +826,9 @@ async function seedCurrentRuntimeIfNeeded() {
 }
 
 async function buildRuntime(op, base, languages) {
-  const rendererFingerprint = await rendererRuntimeFingerprint(join(repoRoot, "renderer"));
+  const rendererFingerprint = await rendererRuntimeFingerprint(
+    join(repoRoot, "renderer"),
+  );
   const identity = runtimeIdentity({
     baseImageId: base.imageId,
     rendererFingerprint,
@@ -671,16 +836,41 @@ async function buildRuntime(op, base, languages) {
     snapshotDate: base.snapshotDate,
   });
   const tag = `latex-renderer:${identity.tag}`;
-  await runLogged(op, "sh", [join(repoRoot, "deploy/scripts/build-language-runtime.sh"), base.ref, base.repository, tag, ...languages], { env: rootlessEnv() });
-  const imageId = (await dockerCapture(["image", "inspect", tag, "--format", "{{.Id}}"])).trim();
+  await runLogged(
+    op,
+    "sh",
+    [
+      join(repoRoot, "deploy/scripts/build-language-runtime.sh"),
+      base.ref,
+      base.repository,
+      tag,
+      ...languages,
+    ],
+    { env: rootlessEnv() },
+  );
+  const imageId = (
+    await dockerCapture(["image", "inspect", tag, "--format", "{{.Id}}"])
+  ).trim();
   const installed = await installedLanguageCollections(tag);
   const missing = languages.filter((language) => !installed.includes(language));
   if (missing.length > 0) {
-    throw new Error(`Selected language collections were not installed: ${missing.join(",")}`);
+    throw new Error(
+      `Selected language collections were not installed: ${missing.join(",")}`,
+    );
   }
-  const builtRendererFingerprint = (await dockerCapture(["image", "inspect", tag, "--format", '{{index .Config.Labels "jp.n624.latex-renderer.renderer-runtime-fingerprint"}}'])).trim();
+  const builtRendererFingerprint = (
+    await dockerCapture([
+      "image",
+      "inspect",
+      tag,
+      "--format",
+      '{{index .Config.Labels "jp.n624.latex-renderer.renderer-runtime-fingerprint"}}',
+    ])
+  ).trim();
   if (builtRendererFingerprint !== rendererFingerprint) {
-    throw new Error("Derived runtime is missing the current renderer runtime fingerprint");
+    throw new Error(
+      "Derived runtime is missing the current renderer runtime fingerprint",
+    );
   }
   return {
     ref: tag,
@@ -694,7 +884,13 @@ async function buildRuntime(op, base, languages) {
 }
 
 async function inspectRuntimeCandidate(ref, expected) {
-  const raw = await dockerCapture(["image", "inspect", ref, "--format", "{{json .}}"]);
+  const raw = await dockerCapture([
+    "image",
+    "inspect",
+    ref,
+    "--format",
+    "{{json .}}",
+  ]);
   const info = JSON.parse(raw);
   const labels = info.Config?.Labels ?? {};
   const languages = validateLanguages(
@@ -703,86 +899,72 @@ async function inspectRuntimeCandidate(ref, expected) {
       .filter(Boolean),
   );
   if (
-    labels["jp.n624.latex-renderer.runtime-kind"] !== "prebuilt-v1" ||
+    labels["jp.n624.latex-renderer.runtime-kind"] !== "managed-local-v1" ||
     labels["jp.n624.latex-renderer.runtime-identity"] !== expected.digest ||
     labels["jp.n624.latex-renderer.base-image-id"] !== expected.baseImageId ||
-    labels["jp.n624.latex-renderer.renderer-runtime-fingerprint"] !== expected.rendererFingerprint ||
+    labels["jp.n624.latex-renderer.renderer-runtime-fingerprint"] !==
+      expected.rendererFingerprint ||
     !sameLanguages(languages, expected.languages)
   ) {
-    throw new Error(`Runtime image identity metadata does not match the requested environment: ${ref}`);
+    throw new Error(
+      `Runtime image identity metadata does not match the requested environment: ${ref}`,
+    );
   }
   const installed = await installedLanguageCollections(ref);
-  const missing = expected.languages.filter((language) => !installed.includes(language));
+  const missing = expected.languages.filter(
+    (language) => !installed.includes(language),
+  );
   if (missing.length > 0) {
-    throw new Error(`Prebuilt Runtime is missing selected language collections: ${missing.join(",")}`);
+    throw new Error(
+      `Local Runtime is missing selected language collections: ${missing.join(",")}`,
+    );
   }
-  const matchingDigest = Array.isArray(info.RepoDigests)
-    ? info.RepoDigests.find((item) => item.startsWith(imageRepository + "@"))
-    : undefined;
-  const immutableRef = matchingDigest ?? info.Id;
-  const isPackageReference =
-    ref.startsWith(imageRepository + ":") ||
-    ref.startsWith(imageRepository + "@");
   return {
-    ref: immutableRef,
+    ref: info.Id,
     imageId: info.Id,
     rendererFingerprint: expected.rendererFingerprint,
     effectiveLanguages: installed,
     identity: expected.digest,
-    source: isPackageReference ? "ghcr" : "local-build",
-    packageRef: isPackageReference ? immutableRef : null,
+    source: "local-build",
+    packageRef: null,
   };
 }
 
-async function acquireRuntime(op, base, languages, runtimeBuildIfMissing) {
+async function acquireRuntime(op, base, languages) {
   const expected = runtimeIdentity({
     baseImageId: base.imageId,
-    rendererFingerprint: await rendererRuntimeFingerprint(join(repoRoot, "renderer")),
+    rendererFingerprint: await rendererRuntimeFingerprint(
+      join(repoRoot, "renderer"),
+    ),
     languages,
     snapshotDate: base.snapshotDate,
   });
   const localRef = `latex-renderer:${expected.tag}`;
-  const packageRef = `${imageRepository}:${expected.tag}`;
-  for (const ref of [packageRef, localRef]) {
-    try {
-      const runtime = await inspectRuntimeCandidate(ref, expected);
-      await appendLog(op, `Reusing exact local TeX Runtime ${ref}.\n`);
-      return runtime;
-    } catch {
-      // A missing or stale local tag is not authoritative; try the public package.
-    }
-  }
-
-  let pullError;
   try {
-    await dockerLogged(op, ["pull", packageRef]);
-    const runtime = await inspectRuntimeCandidate(packageRef, expected);
-    await appendLog(op, `Using verified prebuilt TeX Runtime ${packageRef}.\n`);
+    const runtime = await inspectRuntimeCandidate(localRef, expected);
+    await appendLog(
+      op,
+      `Reusing the verified local TeX Runtime for ${base.snapshotDate ?? "the selected Base"} with ${expected.languages.length} optional language collection(s).\n`,
+    );
     return runtime;
-  } catch (error) {
-    pullError = error;
+  } catch {
+    // A missing or stale local cache entry is not authoritative. Rebuild the
+    // derived Runtime from the already verified, immutable Base below.
   }
-
-  let tagStatus;
-  try {
-    tagStatus = await registryTagStatus(expected.tag);
-  } catch (registryError) {
-    await appendLog(op, `Registry discovery failed after Runtime pull error; refusing local build: ${registryError instanceof Error ? registryError.message : String(registryError)}\n`);
-    throw registryError;
-  }
-  if (tagStatus === "present") {
-    await appendLog(op, `GHCR still reports ${expected.tag}; refusing local build because the pull failure was not proven to be a missing tag.\n`);
-    throw pullError;
-  }
-  if (!runtimeBuildIfMissing) {
-    throw new Error(`No matching prebuilt TeX Runtime is published for ${expected.tag}. Enable the explicit Runtime local-build fallback for a custom language set.`);
-  }
-  await appendLog(op, `GHCR confirms ${expected.tag} is absent; building the requested custom TeX Runtime locally.\n`);
+  await appendLog(
+    op,
+    `Building a local TeX Runtime from the verified ${base.snapshotDate ?? "selected"} Base with ${expected.languages.length} optional language collection(s).\n`,
+  );
   return buildRuntime(op, base, languages);
 }
 
 async function validateRuntime(op, runtimeRef) {
-  await runLogged(op, "sh", [join(repoRoot, "deploy/scripts/smoke-test-renderer-basic.sh"), runtimeRef], { env: rootlessEnv() });
+  await runLogged(
+    op,
+    "sh",
+    [join(repoRoot, "deploy/scripts/smoke-test-renderer-basic.sh"), runtimeRef],
+    { env: rootlessEnv() },
+  );
 }
 
 async function collectInventory(runtimeRef) {
@@ -810,7 +992,8 @@ async function collectInventory(runtimeRef) {
     "-c",
     "{ fc-list --format '%{family}\\n'; find /opt/texlive/2026/texmf-dist/fonts -type f \\( -name '*.otf' -o -name '*.ttf' \\) -print0 | xargs -0 -r fc-scan --format '%{family}\\n'; } | tr ',' '\\n' | sed '/^[[:space:]]*$/d' | LC_ALL=C sort -fu",
   ]);
-  if (!packages.trim() || !fonts.trim()) throw new Error("Renderer environment inventory generation failed");
+  if (!packages.trim() || !fonts.trim())
+    throw new Error("Renderer environment inventory generation failed");
   return { packages, fonts };
 }
 
@@ -818,7 +1001,10 @@ async function readInventorySnapshot() {
   const result = {};
   for (const name of ["packages", "fonts"]) {
     try {
-      result[name] = await readFile(join(environmentRoot, `${name}.txt`), "utf8");
+      result[name] = await readFile(
+        join(environmentRoot, `${name}.txt`),
+        "utf8",
+      );
     } catch (error) {
       if (error?.code !== "ENOENT") throw error;
       result[name] = null;
@@ -828,7 +1014,11 @@ async function readInventorySnapshot() {
 }
 
 async function writeInventory(inventory) {
-  await writeAtomic(join(environmentRoot, "packages.txt"), inventory.packages, 0o640);
+  await writeAtomic(
+    join(environmentRoot, "packages.txt"),
+    inventory.packages,
+    0o640,
+  );
   await writeAtomic(join(environmentRoot, "fonts.txt"), inventory.fonts, 0o640);
 }
 
@@ -842,12 +1032,19 @@ async function restoreInventory(snapshot) {
 
 function rendererEnvWithImage(contents, imageId) {
   const line = `RENDERER_IMAGE=${imageId}`;
-  return /^RENDERER_IMAGE=.*$/m.test(contents) ? contents.replace(/^RENDERER_IMAGE=.*$/m, line) : `${contents.replace(/\s*$/, "")}\n${line}\n`;
+  return /^RENDERER_IMAGE=.*$/m.test(contents)
+    ? contents.replace(/^RENDERER_IMAGE=.*$/m, line)
+    : `${contents.replace(/\s*$/, "")}\n${line}\n`;
 }
 
 async function restartRendererConsumers() {
   await runCapture("systemctl", ["restart", "latex-renderer-worker.service"]);
-  await runCapture("systemctl", ["try-restart", "latex-renderer-internal-api.service", "latex-renderer-admin-api.service", "latex-renderer-remote-mcp.service"]);
+  await runCapture("systemctl", [
+    "try-restart",
+    "latex-renderer-internal-api.service",
+    "latex-renderer-admin-api.service",
+    "latex-renderer-remote-mcp.service",
+  ]);
 }
 
 async function restoreActivation(snapshot) {
@@ -857,24 +1054,37 @@ async function restoreActivation(snapshot) {
     await writeAtomic(rendererEnv, snapshot.oldEnv, 0o640);
   } catch (error) {
     envRestored = false;
-    failures.push(`renderer.env: ${error instanceof Error ? error.message : String(error)}`);
+    failures.push(
+      `renderer.env: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
   if (snapshot.envChanged && envRestored) {
     try {
       await restartRendererConsumers();
     } catch (error) {
-      failures.push(`service restart: ${error instanceof Error ? error.message : String(error)}`);
+      failures.push(
+        `service restart: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
   try {
     await restoreInventory(snapshot.oldInventory);
   } catch (error) {
-    failures.push(`inventory: ${error instanceof Error ? error.message : String(error)}`);
+    failures.push(
+      `inventory: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
   if (failures.length > 0) throw new Error(failures.join("; "));
 }
 
-async function activateAndPersistState(op, previousState, nextState, imageId, inventory, context) {
+async function activateAndPersistState(
+  op,
+  previousState,
+  nextState,
+  imageId,
+  inventory,
+  context,
+) {
   await dockerCapture(["image", "inspect", imageId]);
   const oldEnv = await readFile(rendererEnv, "utf8");
   const oldInventory = await readInventorySnapshot();
@@ -890,7 +1100,11 @@ async function activateAndPersistState(op, previousState, nextState, imageId, in
     nextState,
     preparedAt: new Date().toISOString(),
   };
-  await writeAtomic(activationJournalPath, `${JSON.stringify(journal, null, 2)}\n`, 0o640);
+  await writeAtomic(
+    activationJournalPath,
+    `${JSON.stringify(journal, null, 2)}\n`,
+    0o640,
+  );
 
   try {
     if (newEnv !== oldEnv) {
@@ -910,16 +1124,32 @@ async function activateAndPersistState(op, previousState, nextState, imageId, in
       restoreError = inner;
     }
     await persistState(previousState).catch(() => {});
-    if (restoreError === undefined) await rm(activationJournalPath, { force: true }).catch(() => {});
+    if (restoreError === undefined)
+      await rm(activationJournalPath, { force: true }).catch(() => {});
     if (restoreError !== undefined) {
-      const restoreMessage = restoreError instanceof Error ? restoreError.message : String(restoreError);
-      await appendLog(op, `${context} failed; previous Runtime restoration was incomplete: ${restoreMessage}\n`).catch(() => {});
-      throw new Error(`${context} failed and previous Runtime restoration was incomplete: ${restoreMessage}; original error: ${error instanceof Error ? error.message : String(error)}`, {
-        cause: error,
-      });
+      const restoreMessage =
+        restoreError instanceof Error
+          ? restoreError.message
+          : String(restoreError);
+      await appendLog(
+        op,
+        `${context} failed; previous Runtime restoration was incomplete: ${restoreMessage}\n`,
+      ).catch(() => {});
+      throw new Error(
+        `${context} failed and previous Runtime restoration was incomplete: ${restoreMessage}; original error: ${error instanceof Error ? error.message : String(error)}`,
+        {
+          cause: error,
+        },
+      );
     }
-    await appendLog(op, `${context} failed; previous Runtime was restored\n`).catch(() => {});
-    throw new Error(`${context} failed and the previous Runtime was restored: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+    await appendLog(
+      op,
+      `${context} failed; previous Runtime was restored\n`,
+    ).catch(() => {});
+    throw new Error(
+      `${context} failed and the previous Runtime was restored: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    );
   }
 }
 
@@ -927,11 +1157,14 @@ async function applyRuntime(op, input, resolvedBase = null) {
   const selector = validateSelector(input.selector);
   const languages = validateLanguages(input.languages ?? []);
   const autoUpdate = Boolean(input.autoUpdate);
-  const runtimeBuildIfMissing = input.runtimeBuildIfMissing === true;
   const rebuildIfMissing = input.rebuildIfMissing !== false;
-  await appendLog(op, `Applying ${JSON.stringify({ selector, languages, autoUpdate, runtimeBuildIfMissing })}\n`);
-  const base = resolvedBase ?? (await pullOrRebuildBase(op, selector, rebuildIfMissing));
-  const runtime = await acquireRuntime(op, base, languages, runtimeBuildIfMissing);
+  await appendLog(
+    op,
+    `Applying ${JSON.stringify({ selector, languages, autoUpdate })}\n`,
+  );
+  const base =
+    resolvedBase ?? (await pullOrRebuildBase(op, selector, rebuildIfMissing));
+  const runtime = await acquireRuntime(op, base, languages);
   await validateRuntime(op, runtime.ref);
   const inventory = await collectInventory(runtime.ref);
   const previousState = cloneState();
@@ -943,7 +1176,6 @@ async function applyRuntime(op, input, resolvedBase = null) {
       selector,
       languages,
       autoUpdate,
-      runtimeBuildIfMissing,
     },
     current: {
       selector,
@@ -963,12 +1195,20 @@ async function applyRuntime(op, input, resolvedBase = null) {
       legacy: false,
     },
   };
-  await activateAndPersistState(op, previousState, nextState, runtime.imageId, inventory, "Runtime apply");
+  await activateAndPersistState(
+    op,
+    previousState,
+    nextState,
+    runtime.imageId,
+    inventory,
+    "Runtime apply",
+  );
 }
 
 async function rollback(op) {
   const target = state.previous;
-  if (!target?.runtimeImageId) throw new Error("No previous known-good runtime is available");
+  if (!target?.runtimeImageId)
+    throw new Error("No previous known-good runtime is available");
   const previousState = cloneState();
   const current = previousState.current;
   let nextCurrent;
@@ -984,7 +1224,7 @@ async function rollback(op) {
   } else {
     const base = await inspectBase(target.baseImageId);
     const languages = validateLanguages(target.languages ?? []);
-    const runtime = await acquireRuntime(op, base, languages, state.desired.runtimeBuildIfMissing === true);
+    const runtime = await acquireRuntime(op, base, languages);
     await validateRuntime(op, runtime.ref);
     imageId = runtime.imageId;
     inventory = await collectInventory(runtime.ref);
@@ -1018,33 +1258,63 @@ async function rollback(op) {
       autoUpdate: false,
     },
   };
-  await activateAndPersistState(op, previousState, nextState, imageId, inventory, "Runtime rollback");
+  await activateAndPersistState(
+    op,
+    previousState,
+    nextState,
+    imageId,
+    inventory,
+    "Runtime rollback",
+  );
 }
 
 async function revalidate(op) {
-  if (!state.current?.runtimeImageId) throw new Error("No managed runtime is active");
+  if (!state.current?.runtimeImageId)
+    throw new Error("No managed runtime is active");
   await validateRuntime(op, state.current.runtimeImageId);
   await writeInventory(await collectInventory(state.current.runtimeImageId));
 }
 
 async function cleanup(op) {
-  const protectedIds = new Set([state.current?.runtimeImageId, state.current?.baseImageId, state.previous?.runtimeImageId, state.previous?.baseImageId].filter(Boolean));
-  const ids = [...new Set((await dockerCapture(["image", "ls", "--all", "--no-trunc", "--quiet"])).split(/\r?\n/).filter(Boolean))];
+  const protectedIds = new Set(
+    [
+      state.current?.runtimeImageId,
+      state.current?.baseImageId,
+      state.previous?.runtimeImageId,
+      state.previous?.baseImageId,
+    ].filter(Boolean),
+  );
+  const ids = [
+    ...new Set(
+      (await dockerCapture(["image", "ls", "--all", "--no-trunc", "--quiet"]))
+        .split(/\r?\n/)
+        .filter(Boolean),
+    ),
+  ];
   let removed = 0;
   for (const id of ids) {
     if (protectedIds.has(id)) continue;
     let info;
     try {
-      info = JSON.parse(await dockerCapture(["image", "inspect", id, "--format", "{{json .}}"]));
+      info = JSON.parse(
+        await dockerCapture(["image", "inspect", id, "--format", "{{json .}}"]),
+      );
     } catch (error) {
-      await appendLog(op, `cleanup warning: could not inspect ${id}: ${error instanceof Error ? error.message : String(error)}\n`);
+      await appendLog(
+        op,
+        `cleanup warning: could not inspect ${id}: ${error instanceof Error ? error.message : String(error)}\n`,
+      );
       continue;
     }
     const labels = info.Config?.Labels ?? {};
-    const managedRuntime = Boolean(labels["jp.n624.latex-renderer.base-image-id"] && labels["jp.n624.latex-renderer.renderer-runtime-fingerprint"]);
+    const managedRuntime = Boolean(
+      labels["jp.n624.latex-renderer.base-image-id"] &&
+      labels["jp.n624.latex-renderer.renderer-runtime-fingerprint"],
+    );
     const managedBase =
       labels["org.opencontainers.image.title"] === "latex-renderer-texlive" &&
-      labels["jp.n624.latex-renderer.texlive.profile-kind"] === "language-neutral-maximal" &&
+      labels["jp.n624.latex-renderer.texlive.profile-kind"] ===
+        "language-neutral-maximal" &&
       labels["jp.n624.latex-renderer.base-kind"] === "texlive-only-v1";
     if (!managedRuntime && !managedBase) continue;
     await dockerLogged(op, ["image", "rm", "--force", id])
@@ -1052,19 +1322,37 @@ async function cleanup(op) {
         removed += 1;
       })
       .catch(async (error) => {
-        await appendLog(op, `cleanup warning: ${error instanceof Error ? error.message : String(error)}\n`);
+        await appendLog(
+          op,
+          `cleanup warning: ${error instanceof Error ? error.message : String(error)}\n`,
+        );
       });
   }
-  await dockerLogged(op, ["builder", "prune", "--force", "--filter", "until=168h"]).catch(async (error) => {
-    await appendLog(op, `builder cache cleanup warning: ${error instanceof Error ? error.message : String(error)}\n`);
+  await dockerLogged(op, [
+    "builder",
+    "prune",
+    "--force",
+    "--filter",
+    "until=168h",
+  ]).catch(async (error) => {
+    await appendLog(
+      op,
+      `builder cache cleanup warning: ${error instanceof Error ? error.message : String(error)}\n`,
+    );
   });
-  await appendLog(op, `Removed ${removed} unused managed image(s); protected ${protectedIds.size} current/rollback image ID(s). Build cache older than 7 days was pruned when possible.\n`);
+  await appendLog(
+    op,
+    `Removed ${removed} unused managed image(s); protected ${protectedIds.size} current/rollback image ID(s). Build cache older than 7 days was pruned when possible.\n`,
+  );
 }
 
 function sameLanguages(a, b) {
   const left = validateLanguages(a ?? []);
   const right = validateLanguages(b ?? []);
-  return left.length === right.length && left.every((item, index) => item === right[index]);
+  return (
+    left.length === right.length &&
+    left.every((item, index) => item === right[index])
+  );
 }
 
 function sameSelector(a, b) {
@@ -1075,12 +1363,12 @@ async function reconcileDesired(op) {
   const selector = validateSelector(state.desired.selector);
   const languages = validateLanguages(state.desired.languages ?? []);
   const autoUpdate = Boolean(state.desired.autoUpdate);
-  const runtimeBuildIfMissing = state.desired.runtimeBuildIfMissing === true;
   const currentMatches =
     state.current?.legacy !== true &&
     sameSelector(selector, state.current?.selector) &&
     sameLanguages(languages, state.current?.languages) &&
-    state.current?.rendererRuntimeFingerprint === (await rendererRuntimeFingerprint(join(repoRoot, "renderer")));
+    state.current?.rendererRuntimeFingerprint ===
+      (await rendererRuntimeFingerprint(join(repoRoot, "renderer")));
 
   if (selector.mode === "latest") {
     const latest = await pullOrRebuildBase(op, selector, false);
@@ -1094,7 +1382,6 @@ async function reconcileDesired(op) {
         selector,
         languages,
         autoUpdate,
-        runtimeBuildIfMissing,
         rebuildIfMissing: false,
       },
       latest,
@@ -1110,7 +1397,6 @@ async function reconcileDesired(op) {
     selector,
     languages,
     autoUpdate,
-    runtimeBuildIfMissing,
     rebuildIfMissing: selector.mode === "date",
   });
 }
@@ -1120,13 +1406,21 @@ async function refreshLatest(op) {
     await appendLog(op, "Automatic latest following is disabled.\n");
     return;
   }
-  const latest = await pullOrRebuildBase(op, { mode: "latest", value: null }, false);
+  const latest = await pullOrRebuildBase(
+    op,
+    { mode: "latest", value: null },
+    false,
+  );
   const runtimeDrift =
     state.current?.selector?.mode !== "latest" ||
     !sameLanguages(state.desired.languages, state.current?.languages) ||
-    state.current?.rendererRuntimeFingerprint !== (await rendererRuntimeFingerprint(join(repoRoot, "renderer")));
+    state.current?.rendererRuntimeFingerprint !==
+      (await rendererRuntimeFingerprint(join(repoRoot, "renderer")));
   if (state.current?.baseImageId === latest.imageId && !runtimeDrift) {
-    await appendLog(op, "Already using the latest validated base with the desired language set.\n");
+    await appendLog(
+      op,
+      "Already using the latest validated base with the desired language set.\n",
+    );
     return;
   }
   await applyRuntime(
@@ -1135,7 +1429,6 @@ async function refreshLatest(op) {
       selector: { mode: "latest", value: null },
       languages: state.desired.languages,
       autoUpdate: true,
-      runtimeBuildIfMissing: state.desired.runtimeBuildIfMissing === true,
       rebuildIfMissing: false,
     },
     latest,
@@ -1145,13 +1438,25 @@ async function refreshLatest(op) {
 async function setCountryOverride(country) {
   return serializeMutation(async () => {
     if (quiescing) {
-      throw httpError(503, "IMAGE_MANAGER_QUIESCING", "Image Manager is quiescing for deployment");
+      throw httpError(
+        503,
+        "IMAGE_MANAGER_QUIESCING",
+        "Image Manager is quiescing for deployment",
+      );
     }
     if (activeOperationId) {
-      throw httpError(409, "IMAGE_OPERATION_ACTIVE", "Country override cannot change while an image operation is running");
+      throw httpError(
+        409,
+        "IMAGE_OPERATION_ACTIVE",
+        "Country override cannot change while an image operation is running",
+      );
     }
     if (country !== null && !/^[A-Z]{2}$/.test(country)) {
-      throw httpError(400, "INVALID_COUNTRY", "country must be a two-letter ISO code or null");
+      throw httpError(
+        400,
+        "INVALID_COUNTRY",
+        "country must be a two-letter ISO code or null",
+      );
     }
     state.desired.countryOverride = country;
     await persistState();
@@ -1161,7 +1466,11 @@ async function setCountryOverride(country) {
 async function quiesceManager() {
   return serializeMutation(async () => {
     if (activeOperationId) {
-      throw httpError(409, "IMAGE_OPERATION_ACTIVE", "Cannot quiesce while an image operation is running");
+      throw httpError(
+        409,
+        "IMAGE_OPERATION_ACTIVE",
+        "Cannot quiesce while an image operation is running",
+      );
     }
     quiescing = true;
     return { quiescing: true };
@@ -1170,7 +1479,10 @@ async function quiesceManager() {
 
 async function listRegistryTags() {
   const registryToken = await registryPullToken();
-  const response = await fetchWithTimeout(`https://ghcr.io/v2/${ghcrOwner}/${ghcrName}/tags/list?n=1000`, { headers: { Authorization: `Bearer ${registryToken}` } });
+  const response = await fetchWithTimeout(
+    `https://ghcr.io/v2/${ghcrOwner}/${ghcrName}/tags/list?n=1000`,
+    { headers: { Authorization: `Bearer ${registryToken}` } },
+  );
   assertPublicRegistryResponse(response);
   if (!response.ok) throw new Error(`GHCR tag list failed: ${response.status}`);
   const tags = (await response.json()).tags ?? [];
@@ -1181,39 +1493,26 @@ async function listRegistryTags() {
 }
 
 async function registryPullToken() {
-  const tokenResponse = await fetchWithTimeout(`https://ghcr.io/token?service=ghcr.io&scope=${encodeURIComponent(`repository:${ghcrOwner}/${ghcrName}:pull`)}`);
+  const tokenResponse = await fetchWithTimeout(
+    `https://ghcr.io/token?service=ghcr.io&scope=${encodeURIComponent(`repository:${ghcrOwner}/${ghcrName}:pull`)}`,
+  );
   assertPublicRegistryResponse(tokenResponse);
-  if (!tokenResponse.ok) throw new Error(`GHCR token request failed: ${tokenResponse.status}`);
+  if (!tokenResponse.ok)
+    throw new Error(`GHCR token request failed: ${tokenResponse.status}`);
   const tokenBody = await tokenResponse.json();
-  const registryToken = typeof tokenBody?.token === "string" ? tokenBody.token : "";
-  if (!registryToken) throw new Error("GHCR token response did not include a registry token");
+  const registryToken =
+    typeof tokenBody?.token === "string" ? tokenBody.token : "";
+  if (!registryToken)
+    throw new Error("GHCR token response did not include a registry token");
   return registryToken;
 }
 
 function assertPublicRegistryResponse(response) {
   if (response.status === 401 || response.status === 403) {
-    throw new Error("GHCR Base is not publicly readable. Set the container package visibility to Public before applying it.");
+    throw new Error(
+      "GHCR Base is not publicly readable. Set the container package visibility to Public before applying it.",
+    );
   }
-}
-
-async function registryTagStatus(tag) {
-  const registryToken = await registryPullToken();
-  const response = await fetchWithTimeout(`https://ghcr.io/v2/${ghcrOwner}/${ghcrName}/manifests/${encodeURIComponent(tag)}`, {
-    method: "HEAD",
-    headers: {
-      Authorization: `Bearer ${registryToken}`,
-      Accept: [
-        "application/vnd.oci.image.index.v1+json",
-        "application/vnd.oci.image.manifest.v1+json",
-        "application/vnd.docker.distribution.manifest.list.v2+json",
-        "application/vnd.docker.distribution.manifest.v2+json",
-      ].join(", "),
-    },
-  });
-  assertPublicRegistryResponse(response);
-  if (response.ok) return "present";
-  if (response.status === 404) return "absent";
-  throw new Error(`GHCR manifest check failed: ${response.status}`);
 }
 
 async function listImages() {
@@ -1234,7 +1533,8 @@ async function listImages() {
 }
 
 async function languageCatalog() {
-  if (languageCache && Date.now() - languageCache.createdAt < 15 * 60_000) return languageCache.items;
+  if (languageCache && Date.now() - languageCache.createdAt < 15 * 60_000)
+    return languageCache.items;
   const snapshot = await resolveSnapshot("latest");
   const work = await mkdtemp(join(tmpdir(), "texlive-languages-"));
   const compressed = join(work, "tlpdb.xz");
@@ -1262,8 +1562,13 @@ async function languageCatalog() {
     const magic = Buffer.alloc(6);
     try {
       const { bytesRead } = await handle.read(magic, 0, magic.length, 0);
-      if (bytesRead !== magic.length || magic.toString("hex") !== "fd377a585a00") {
-        throw new Error("TeX Live package database response is not an XZ archive");
+      if (
+        bytesRead !== magic.length ||
+        magic.toString("hex") !== "fd377a585a00"
+      ) {
+        throw new Error(
+          "TeX Live package database response is not an XZ archive",
+        );
       }
     } finally {
       await handle.close();
@@ -1275,7 +1580,9 @@ async function languageCatalog() {
       if (line.startsWith("name ")) {
         if (current) items.push(current);
         const name = line.slice(5).trim();
-        current = name.startsWith("collection-lang") ? { id: name, name: name.replace(/^collection-lang/, "") } : null;
+        current = name.startsWith("collection-lang")
+          ? { id: name, name: name.replace(/^collection-lang/, "") }
+          : null;
       } else if (current && line.startsWith("shortdesc ")) {
         current.description = line.slice(10).trim();
       }
@@ -1299,7 +1606,9 @@ async function inventory(name, query) {
   }
   const q = (query ?? "").trim().toLocaleLowerCase("en");
   const all = text.split(/\r?\n/).filter(Boolean);
-  const items = q ? all.filter((item) => item.toLocaleLowerCase("en").includes(q)) : all;
+  const items = q
+    ? all.filter((item) => item.toLocaleLowerCase("en").includes(q))
+    : all;
   return {
     items: items.slice(0, 500),
     total: items.length,
@@ -1313,7 +1622,8 @@ async function readJson(req) {
   for await (const chunk of req) {
     const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     size += bytes.length;
-    if (size > 64 * 1024) throw httpError(413, "BODY_TOO_LARGE", "Request body is too large");
+    if (size > 64 * 1024)
+      throw httpError(413, "BODY_TOO_LARGE", "Request body is too large");
     chunks.push(bytes);
   }
   if (chunks.length === 0) return {};
@@ -1352,16 +1662,31 @@ const server = createServer(async (req, res) => {
       return send(res, 200, { items: await languageCatalog() });
     }
     if (req.method === "GET" && url.pathname === "/v1/inventory/packages") {
-      return send(res, 200, await inventory("packages", url.searchParams.get("q")));
+      return send(
+        res,
+        200,
+        await inventory("packages", url.searchParams.get("q")),
+      );
     }
     if (req.method === "GET" && url.pathname === "/v1/inventory/fonts") {
-      return send(res, 200, await inventory("fonts", url.searchParams.get("q")));
+      return send(
+        res,
+        200,
+        await inventory("fonts", url.searchParams.get("q")),
+      );
     }
 
-    const operationMatch = /^\/v1\/operations\/([A-Za-z0-9_-]+)$/.exec(url.pathname);
+    const operationMatch = /^\/v1\/operations\/([A-Za-z0-9_-]+)$/.exec(
+      url.pathname,
+    );
     if (req.method === "GET" && operationMatch) {
       const op = await loadOperation(operationMatch[1]);
-      if (!op) throw httpError(404, "OPERATION_NOT_FOUND", "Image operation was not found");
+      if (!op)
+        throw httpError(
+          404,
+          "OPERATION_NOT_FOUND",
+          "Image operation was not found",
+        );
       return send(res, 200, await operationWithLog(op));
     }
 
@@ -1370,7 +1695,11 @@ const server = createServer(async (req, res) => {
     }
     if (req.method === "POST" && url.pathname === "/v1/country") {
       const body = await readJson(req);
-      await setCountryOverride(body.country == null || body.country === "" ? null : String(body.country).toUpperCase());
+      await setCountryOverride(
+        body.country == null || body.country === ""
+          ? null
+          : String(body.country).toUpperCase(),
+      );
       return send(res, 200, { countryOverride: state.desired.countryOverride });
     }
 
@@ -1380,7 +1709,11 @@ const server = createServer(async (req, res) => {
       const languages = validateLanguages(body.languages ?? []);
       const autoUpdate = Boolean(body.autoUpdate);
       if (autoUpdate && selector.mode !== "latest") {
-        throw httpError(400, "INVALID_AUTO_UPDATE", "autoUpdate is only available with the latest selector");
+        throw httpError(
+          400,
+          "INVALID_AUTO_UPDATE",
+          "autoUpdate is only available with the latest selector",
+        );
       }
       const operation = await startOperation("apply", async (op) => {
         await applyRuntime(op, { ...body, selector, languages, autoUpdate });
@@ -1389,7 +1722,11 @@ const server = createServer(async (req, res) => {
     }
 
     if (req.method === "POST" && url.pathname === "/v1/reconcile") {
-      return send(res, 202, await startOperation("reconcile", reconcileDesired));
+      return send(
+        res,
+        202,
+        await startOperation("reconcile", reconcileDesired),
+      );
     }
 
     if (req.method === "POST" && url.pathname === "/v1/rollback") {
@@ -1426,5 +1763,7 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(port, host, () => {
-  console.log(JSON.stringify({ event: "image_manager.started", host, port, dockerHost }));
+  console.log(
+    JSON.stringify({ event: "image_manager.started", host, port, dockerHost }),
+  );
 });

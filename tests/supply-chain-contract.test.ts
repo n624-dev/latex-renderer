@@ -52,18 +52,15 @@ describe("public supply-chain controls", () => {
     }
   });
 
-  it("never uses a GHCR tag as the Base/Runtime build authority", () => {
+  it("locks Base by digest and never publishes a derived Runtime", () => {
     const manager = read("deploy/scripts/image-manager.mjs");
     expect(manager).toContain("ref: matchingDigest ?? info.Id");
-    expect(manager).toContain("const immutableRef = matchingDigest ?? info.Id");
     const workflow = read(".github/workflows/renderer-image-daily.yml");
-    expect(workflow).toContain('ghcr-tag-status.mjs "${runtime_tags[$index]}"');
-    expect(workflow).toContain(
-      "refusing to overwrite an immutable publication",
-    );
-    expect(workflow).toContain(
-      'docker pull "$IMAGE_REPOSITORY@$runtime_digest"',
-    );
+    expect(workflow).toContain('docker pull "$IMAGE_REPOSITORY@$digest"');
+    expect(workflow).toContain("validation_runtime");
+    expect(workflow).not.toContain('docker push "$runtime_ref"');
+    expect(manager).toContain('source: "local-build"');
+    expect(manager).toContain("packageRef: null");
   });
 
   it("binds releases to the protected keyless attestation workflow", () => {
