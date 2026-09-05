@@ -4,15 +4,15 @@ category: セルフホスト
 title: 自分のサーバーに構築
 description: 対応するサーバー構成、導入前の準備、初期設定、更新とバックアップを説明します。
 navOrder: 18
-updated: "2026-09-01"
+updated: "2026-09-02"
 since: "v1.2.0"
 ---
 
 ## 現在の提供状況
 
-このページは[`v1.3.2`](https://github.com/n624-dev/latex-renderer/releases/tag/v1.3.2)のサーバー用bundleを対象にします。Cloudflare構成に加えて、通常のTLSリバースプロキシとOIDC／ローカルパスワード認証を選択できます。このReleaseは公開後にタグや配布ファイルを差し替えできない設定で固定され、次を含みます。
+このページは[`v1.3.3-rc.1`](https://github.com/n624-dev/latex-renderer/releases/tag/v1.3.3-rc.1)のサーバーbundleを対象にします。バージョンが`-rc.N`のReleaseは指定された検証hostだけへ明示適用し、一般利用者はStableを使用してください。Cloudflare構成に加えて、通常のTLSリバースプロキシとOIDC／ローカルパスワード認証を選択できます。このReleaseは公開後にタグや配布ファイルを差し替えできない設定で固定され、次を含みます。
 
-- `latex-renderer-server-1.3.2.tar.gz`
+- `latex-renderer-server-1.3.3-rc.1.tar.gz`
 - クライアントZIPとClaude Desktop用MCPB
 - 3つの配布ファイルを検証する`SHA256SUMS`
 - commit、バージョン、Renderer fingerprint、Node.js／pnpm要件を記録したbundle内metadata
@@ -33,7 +33,7 @@ since: "v1.2.0"
 | ブラウザ認証     | `cloudflare-access`、標準OIDC、またはローカルパスワード               |
 | Renderer         | 専用system userのrootless Docker、networkless／read-only sandbox      |
 | アプリケーション | Node.js 24、pnpm 11、バージョン固定されたRelease                      |
-| TeX              | 公開GHCRの検証済みBase／Runtimeをdigestで固定                         |
+| TeX              | 公開GHCRの検証済み言語なしBase＋サーバー内Runtime                     |
 | 管理             | `/admin/`、Admin CLI、root所有のImage／Update Manager                 |
 
 `standalone`ではNginx、Caddy、Apacheの検証可能な設定例を収録しています。Kubernetes、複数ホスト、平文HTTPでの公開、Admin APIや内部serviceの直接公開はサポート対象外です。
@@ -89,12 +89,12 @@ since: "v1.2.0"
 
 公開リポジトリの`*.example`ファイルは項目確認のための雛形です。設定済みファイルを雛形へ上書きしてcommitする運用はしません。
 
-## v1.3.2をダウンロードして検証
+## v1.3.3-rc.1をダウンロードして検証
 
 次のコマンドは、固定されたReleaseであることをGitHub APIで確認し、APIが返すdigestとダウンロードしたbundleを照合します。通常の非rootユーザーで実行します。
 
 ```bash
-version=1.3.2
+version=1.3.3-rc.1
 repository=n624-dev/latex-renderer
 asset="latex-renderer-server-$version.tar.gz"
 work_dir=$(mktemp -d)
@@ -310,19 +310,34 @@ shred -u "$password_file"
 
 初期設定は`/admin/tex-environment/`から行います。一般的な英語／日本語環境では次を推奨します。
 
-| 項目                         | 推奨値                                              |
-| ---------------------------- | --------------------------------------------------- |
-| Image                        | `latest`                                            |
-| Languages                    | `collection-langenglish`、`collection-langjapanese` |
-| Automatic image update       | On                                                  |
-| Base local build fallback    | Off                                                 |
-| Runtime local build fallback | Off                                                 |
+| 項目                      | 推奨値                                              |
+| ------------------------- | --------------------------------------------------- |
+| Image                     | `latest`                                            |
+| Languages                 | `collection-langenglish`、`collection-langjapanese` |
+| Automatic image update    | On                                                  |
+| Base local build fallback | Off                                                 |
 
-この設定では、完全一致するローカルRuntime、公開GHCR Runtimeの順に再利用します。Packageが存在しない場合でも、長いローカルビルドを暗黙には開始しません。独自言語構成が必要な管理者だけが、GHCRで該当Runtimeが存在しないことを確認したうえでfallbackを明示的に有効にします。
+公開GHCR Packageに保存するのは言語collectionを含まないBaseだけです。初回は、そのBaseに選択した言語と現在のRendererコードを重ねたRuntimeをこのサーバーで構築します。同じBase、Renderer、言語構成の完全一致Runtimeがローカルに残っていれば再利用します。RuntimeをGHCRから取得したり公開したりはしません。
 
-GHCRの公開Packageは、dated tag・Runtime tagの上書きを禁止するimmutable tags設定を有効にしてください。公開workflowは既存dated tagへのpushを拒否し、push後にmanifest digestと匿名pullを照合します。ホスト側は`latest`や日付tagを検出用に一度だけ使い、取得後は`@sha256:...`（ローカルではDocker image ID）へ固定してBase／Runtimeをbuild・実行します。GHCRでtag immutabilityを設定できない場合は、dated tagを本番のauthorityにしないでください。
+Daily workflowは、候補Base自体を検査し、そのBaseから英語／日本語入りRuntimeをCI内だけで構築してPDF、PNG、通常描画、SVGのsmoke testを通した後に、合格したBaseだけを公開します。検査用Runtimeはpushせず終了時に削除します。GHCRの公開Packageはdated Base tagの上書きを禁止するimmutable tags設定を有効にしてください。公開workflowは既存dated tagへのpushを拒否し、push後にmanifest digestと匿名pullを照合します。ホスト側は`latest`や日付tagを検出用に一度だけ使い、取得後は`@sha256:...`（ローカルではDocker image ID）へ固定してRuntimeをbuild・実行します。GHCRでtag immutabilityを設定できない場合は、dated tagを本番のauthorityにしないでください。
+
+旧版が参照する既存の`runtime-v1-*` Packageは移行中に自動削除しません。このBase-only対応版へのアプリ更新時には、稼働中の旧Runtimeを同じ検証済みBaseから作るローカルRuntimeへ自動移行します。同じPackageを利用する全サーバーで更新と描画を確認した後だけ、`renderer-image-daily`を`latest`、公開On、`purge_legacy_runtimes` Onで手動実行して旧Runtimeを整理します。
 
 画面を閉じても開始済みoperationは継続します。Webへ再接続できない場合は、Admin CLIまたはsystemd journalからoperation IDを確認します。
+
+### 自動容量整理
+
+Image Managerは既定で24時間ごとに未使用の管理対象イメージを整理します。現行・直前のロールバック用Base／Runtimeと、Renderer設定が参照するイメージは保護します。それ以外の管理対象イメージは作成から24時間後に削除対象となり、未使用ビルドキャッシュは2GiBを目安に整理します。使用中イメージや共有レイヤーを含むDocker全体の容量上限ではありません。
+
+`/etc/latex-renderer/renderer.env`に次を設定し、作業中のTeX更新がないときに`sudo systemctl restart latex-renderer-image-manager.service`で反映できます。
+
+```dotenv
+IMAGE_CLEANUP_INTERVAL_HOURS=24
+IMAGE_CLEANUP_RETENTION_HOURS=24
+IMAGE_BUILD_CACHE_MAX_GIB=2
+```
+
+実行間隔は0で自動整理を無効化、1〜720で時間指定できます。保持期間は0〜8760時間、キャッシュは0〜1024GiBです。起動5分後から5分ごとに期限を確認し、前回成功時刻を保存します。更新・ビルド・デプロイ中は共通ロックで延期します。Web／CLIの手動Cleanupは保護対象以外の管理イメージを保持期間を待たずに整理します。削除したイメージ・キャッシュは必要時に再取得・再構築します。設定済みの環境ファイルはGitに登録しません。
 
 ## 導入完了の確認
 
@@ -353,7 +368,9 @@ TeXとアプリケーションは別々に更新します。
 
 アプリ更新は、公開後に差し替えできない固定リリース、固定tag／commit、サーバー用bundleのdigest、埋め込みmetadata、Renderer fingerprint、Node／pnpm要件を検証します。`v1.1.0`以降がこの更新経路に対応します。`v1.0.0`はサーバー用bundleと差し替え禁止設定がないため、Update Managerでは適用できません。
 
-Release workflowはtag refそのもの（`refs/tags/vX.Y.Z`）からのみ実行され、各配布assetへGitHub Actionsのkeyless Sigstore provenanceを付けます。Update Managerは保護された`server-release.yml` workflow、完全一致するtag ref、OIDC issuer、非self-hosted runnerを必ず検証します。host bootstrapは`gh`が古い場合、GitHub CLI v2.98.0を公式releaseから取得し、arch別に固定したSHA-256を検証して`/usr/local/bin/gh`へ導入します。attestation検証を無効化する設定はありません。
+Release workflowはtag refそのもの（Stableの`refs/tags/vX.Y.Z`または保守検証用の`refs/tags/vX.Y.Z-rc.N`）からのみ実行され、各配布assetへGitHub Actionsのkeyless Sigstore provenanceを付けます。Update Managerは保護された`server-release.yml` workflow、完全一致するtag ref、OIDC issuer、非self-hosted runnerを必ず検証します。host bootstrapは`gh`が古い場合、GitHub CLI v2.98.0を公式releaseから取得し、arch別に固定したSHA-256を検証して`/usr/local/bin/gh`へ導入します。attestation検証を無効化する設定はありません。
+
+通常利用者はRelease Candidateを適用しません。`-rc.N`は公開後に変更できないPrereleaseとして、管理者が完全なversionを明示し、監査理由を入力した場合だけ検証用hostへ適用できます。空欄の更新確認、`latest`、通知、自動更新は常にStableだけを対象にします。正式版は、この検証用hostで実更新・全service・日本語／英語PDFとPNG・認証・公開境界を確認したRCと実装が一致する場合だけ公開されます。
 
 Webでは`/admin/updates/`から更新確認、方針変更、適用、operation確認、rollbackを行います。認証済みのAdmin CLIを使う場合も同じAPIと安全検査を使用します。これが通常の更新経路です。v1.2.xのroot Updaterから初回移行する場合だけ、後述の一回限りの専用sudo transitionを使います。
 
@@ -382,7 +399,7 @@ v1.2.xまでのUpdate Managerはroot daemonです。v1.3.0以降は、長寿命c
 この移行だけは、先にこのページの「ダウンロードして検証」を通常ユーザーで実行し、展開した対象Releaseから次の専用コマンドを一度実行します。`VERSION`は`bundle_root`のReleaseと完全一致させます。通常のデプロイスクリプトをuser所有build treeからsudo実行する旧手順は使用しません。
 
 ```bash
-VERSION=1.3.2
+VERSION=1.3.3-rc.1
 cd "$bundle_root"
 sudo sh deploy/scripts/bootstrap-update-manager-transition.sh "$VERSION"
 ```

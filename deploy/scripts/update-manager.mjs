@@ -28,6 +28,13 @@ import {
 import { assembleBuildArtifacts } from "./release-assembly.mjs";
 import { validateReleaseArchive } from "./release-archive.mjs";
 import { rendererRuntimeFingerprint } from "./runtime-image-identity.mjs";
+import {
+  assertValidatedCandidateTag,
+  compareReleaseVersions as compareVersions,
+  isReleaseCandidate,
+  validReleaseVersion,
+  validStableVersion,
+} from "./release-version.mjs";
 
 if (process.getuid?.() === 0)
   throw new Error("Update Manager controller must not run as root");
@@ -149,7 +156,7 @@ async function cleanupStagingRoot() {
   for (const entry of await readdir(stagingRoot, { withFileTypes: true })) {
     if (
       !entry.isDirectory() ||
-      !/^(?:v\d+\.\d+\.\d+|rollback-[A-Za-z0-9._-]+)-[A-Za-z0-9]{6}$/.test(
+      !/^(?:v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-rc\.[1-9][0-9]*)?|rollback-[A-Za-z0-9._-]+)-[A-Za-z0-9]{6}$/.test(
         entry.name,
       )
     )
@@ -429,7 +436,7 @@ async function installedRelease() {
     if (!/^[A-Za-z0-9._-]+$/.test(releaseId))
       throw new Error("Current release identifier is invalid");
     return {
-      version: validVersion(packageJson.version),
+      version: validReleaseVersion(packageJson.version),
       releaseId,
       path: absolute,
     };
@@ -439,34 +446,6 @@ async function installedRelease() {
   }
 }
 
-function validVersion(value) {
-  if (
-    typeof value !== "string" ||
-    !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(value)
-  ) {
-    throw new Error("Release version is invalid");
-  }
-  return value;
-}
-
-function validStableVersion(value) {
-  if (typeof value !== "string" || !/^\d+\.\d+\.\d+$/.test(value)) {
-    throw new Error("Stable release version must use X.Y.Z");
-  }
-  return value;
-}
-
-function compareVersions(left, right) {
-  const parse = (value) =>
-    validVersion(value).split("-")[0].split(".").map(Number);
-  const a = parse(left),
-    b = parse(right);
-  for (let index = 0; index < 3; index += 1) {
-    if (a[index] !== b[index]) return a[index] - b[index];
-  }
-  return 0;
-}
-
 async function fetchRelease(
   requestedVersion = null,
   requireInstallable = false,
@@ -474,7 +453,7 @@ async function fetchRelease(
   const version =
     requestedVersion === null
       ? null
-      : validStableVersion(requestedVersion.replace(/^v/, ""));
+      : validReleaseVersion(requestedVersion.replace(/^v/, ""));
   const endpoint = version
     ? `https://api.github.com/repos/${repository}/releases/tags/v${version}`
     : `https://api.github.com/repos/${repository}/releases/latest`;
@@ -489,13 +468,24 @@ async function fetchRelease(
   if (!response.ok)
     throw new Error(`GitHub release lookup failed: HTTP ${response.status}`);
   const release = await response.json();
-  if (release?.draft === true || release?.prerelease === true)
-    throw new Error("Only published stable releases can be installed");
+  if (release?.draft !== false)
+    throw new Error("Draft releases cannot be installed");
   const tag = typeof release?.tag_name === "string" ? release.tag_name : "";
-  const releaseVersion = validStableVersion(tag.replace(/^v/, ""));
+  const releaseVersion =
+    version === null
+      ? validStableVersion(tag.replace(/^v/, ""))
+      : validReleaseVersion(tag.replace(/^v/, ""));
   if (tag !== `v${releaseVersion}` || (version && version !== releaseVersion)) {
     throw new Error(
       "GitHub release tag does not match the requested semantic version",
+    );
+  }
+  const candidate = isReleaseCandidate(releaseVersion);
+  if (release?.prerelease !== candidate) {
+    throw new Error(
+      candidate
+        ? "Release candidate tag must be published as a prerelease"
+        : "Stable release tag must not be published as a prerelease",
     );
   }
   const commit = await resolveTagCommit(tag);
@@ -533,6 +523,7 @@ async function fetchRelease(
     publishedAt: release.published_at ?? null,
     htmlUrl: release.html_url ?? null,
     commit,
+    channel: candidate ? "candidate" : "stable",
     installable: unavailableReason === null,
     unavailableReason,
   };
@@ -771,6 +762,10 @@ async function prepareRelease(operation, release) {
       throw new Error(
         "Release bundle metadata does not match the immutable GitHub release",
       );
+    assertValidatedCandidateTag(
+      manifest.validatedCandidateTag,
+      release.version,
+    );
     const symlinks = (
       await runCapture("find", [verifiedSource, "-type", "l", "-print"])
     ).trim();
@@ -1229,7 +1224,7 @@ const server = createServer(async (request, response) => {
         body.version == null || body.version === ""
           ? null
           : String(body.version);
-      if (version !== null) validVersion(version.replace(/^v/, ""));
+      if (version !== null) validReleaseVersion(version.replace(/^v/, ""));
       return send(
         response,
         202,

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 1.3.3-rc.1 - 2026-09-02
+
+- Add configurable daily managed-image cleanup with protected active/rollback images and an unused build-cache retention target. See the public self-hosting guide for settings.
+
+- Treat root-owned pnpm workspace symlinks as sealed only when every link remains inside the immutable assembly, while continuing to reject non-root owners, writable regular entries, filesystem-boundary crossings, broken/escaping links, and special files.
+- Add strict `X.Y.Z-rc.N` support for explicit, audited installation of immutable GitHub prereleases. Latest checks and automatic updates remain stable-only, and a stable release compares newer than every RC with the same core version.
+- Require the server release workflow to publish and validate an immutable RC on the production validation host before a stable tag can be built. Stable promotion refuses executable changes beyond the exact RC-to-stable version replacement.
+- Record the validated candidate tag in stable server metadata and document the candidate verification, service/smoke-test checklist, and same-source promotion gate.
+- Publish only the language-neutral TeX Live Base to GHCR. Daily publication now derives an English/Japanese Runtime solely as a CI validation artifact and requires PDF, PNG, standard renderer, and SVG smoke tests before publishing the Base.
+- Reuse exact derived Runtimes only from the server's local cache and otherwise build them locally from the verified Base, selected language collections, and current renderer code; remove the obsolete public-Runtime fallback from Web, CLI, API, and operations documentation.
+
 ## 1.3.2 - 2026-09-01
 
 - Create an operation-private Corepack `pnpm` shim for both the one-time v1.2.x transition and normal application updates, so nested workspace builds keep the release-pinned package manager without relying on a user or global pnpm installation.

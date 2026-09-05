@@ -28,8 +28,8 @@ ExecStart=/bin/sh deploy/scripts/start-image-manager.sh
 ExecStartPost=/bin/sh deploy/scripts/wait-image-manager-http.sh
 Restart=on-failure
 RestartSec=5
-# ExecStartPre may need to pull a matching Runtime, or explicitly build a custom
-# language Runtime when that persisted fallback is enabled. Rootless-Docker
+# ExecStartPre may need to build the selected language Runtime locally.
+# Rootless-Docker
 # readiness has its own bounded wait; Runtime validation may take longer.
 TimeoutStartSec=1h
 # The manager deliberately drops from root to latex-render-worker with runuser

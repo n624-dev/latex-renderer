@@ -7,6 +7,7 @@ on:
       - "deploy/security/seccomp.json"
       - "deploy/scripts/smoke-test-renderer-svg.sh"
       - "tests/fixtures/svg/**"
+      - ".github/workflows/renderer-image.yml"
   push:
     branches: [main]
     paths:
@@ -14,6 +15,7 @@ on:
       - "deploy/security/seccomp.json"
       - "deploy/scripts/smoke-test-renderer-svg.sh"
       - "tests/fixtures/svg/**"
+      - ".github/workflows/renderer-image.yml"
   workflow_dispatch:
 
 permissions:
@@ -39,8 +41,8 @@ jobs:
           load: true
           push: false
           tags: latex-renderer:ci
-          cache-from: type=gha,scope=renderer-image-texlive-2026
-          cache-to: type=gha,mode=min,scope=renderer-image-texlive-2026,ignore-error=true
+          # TeX layers are several GiB each. Keep build cache on the ephemeral
+          # hosted runner instead of exporting it to Actions cache storage.
       - name: Scan renderer image for known vulnerabilities
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:

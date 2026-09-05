@@ -69,10 +69,8 @@ function isMcpbManifest(
   if (typeof value !== "object" || value === null) return false;
   const item = value as Record<string, unknown>;
   return (
-    typeof item.version === "string" &&
-    /^\d+\.\d+\.\d+$/.test(item.version) &&
-    typeof item.archive === "string" &&
-    /^latex-renderer-local-\d+\.\d+\.\d+\.mcpb$/.test(item.archive) &&
+    isReleaseVersion(item.version) &&
+    item.archive === `latex-renderer-local-${item.version}.mcpb` &&
     typeof item.sha256 === "string" &&
     /^[a-f0-9]{64}$/.test(item.sha256) &&
     typeof item.size === "number" &&
@@ -110,14 +108,21 @@ function isManifest(
   if (typeof value !== "object" || value === null) return false;
   const item = value as Record<string, unknown>;
   return (
-    typeof item.version === "string" &&
-    /^[0-9]+\.[0-9]+\.[0-9]+$/.test(item.version) &&
-    typeof item.archive === "string" &&
-    /^latex-renderer-client-[0-9]+\.[0-9]+\.[0-9]+\.zip$/.test(item.archive) &&
+    isReleaseVersion(item.version) &&
+    item.archive === `latex-renderer-client-${item.version}.zip` &&
     typeof item.sha256 === "string" &&
     /^[a-f0-9]{64}$/.test(item.sha256) &&
     typeof item.size === "number" &&
     Number.isSafeInteger(item.size) &&
     item.size > 0
+  );
+}
+
+function isReleaseVersion(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-rc\.[1-9]\d*)?$/.test(
+      value,
+    )
   );
 }

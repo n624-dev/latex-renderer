@@ -114,11 +114,13 @@ function createFixture(): {
 }
 
 function manifestFor(archive: Buffer): {
+  version: string;
   archive: string;
   sha256: string;
   size: number;
 } {
   return {
+    version: "0.2.0",
     archive: "latex-renderer-client-0.2.0.zip",
     sha256: createHash("sha256").update(archive).digest("hex"),
     size: archive.byteLength,

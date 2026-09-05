@@ -1,0 +1,30 @@
+name: actions-cache-cleanup
+
+on:
+  schedule:
+    - cron: "23 19 * * *"
+  workflow_dispatch:
+  workflow_run:
+    workflows:
+      [ci, renderer-image, renderer-image-daily, security, mcpb, server-release]
+    types: [completed]
+
+permissions:
+  actions: write
+
+concurrency:
+  group: actions-cache-cleanup
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      # No checkout, artifacts or code from the triggering workflow are used.
+      # Caches are disposable; this does not delete GHCR images/release assets.
+      - name: Remove disposable Actions caches
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh cache delete --all --succeed-on-no-caches

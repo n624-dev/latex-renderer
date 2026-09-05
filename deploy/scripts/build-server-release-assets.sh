@@ -1,17 +1,39 @@
 #!/bin/sh
 set -eu
 
-if [ "$#" -ne 2 ]; then
-  echo "usage: build-server-release-assets.sh RELEASE_TAG OUTPUT_DIRECTORY" >&2
+if [ "$#" -lt 2 ] || [ "$#" -gt 3 ]; then
+  echo "usage: build-server-release-assets.sh RELEASE_TAG OUTPUT_DIRECTORY [VALIDATED_CANDIDATE_TAG]" >&2
   exit 64
 fi
 
 release_tag=$1
 output_directory=$2
-if ! printf '%s\n' "$release_tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
-  echo "release tag must use vX.Y.Z" >&2
+validated_candidate_tag=${3:-}
+if ! printf '%s\n' "$release_tag" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.[1-9][0-9]*)?$'; then
+  echo "release tag must use vX.Y.Z or vX.Y.Z-rc.N" >&2
   exit 64
 fi
+if [ -n "$validated_candidate_tag" ]; then
+  if ! printf '%s\n' "$validated_candidate_tag" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-rc\.[1-9][0-9]*$' ||
+     [ "${validated_candidate_tag%-rc.*}" != "$release_tag" ]; then
+    echo "validated candidate tag must match the stable release core" >&2
+    exit 64
+  fi
+fi
+case "$release_tag" in
+  *-rc.*)
+    if [ -n "$validated_candidate_tag" ]; then
+      echo "release candidate assets must not declare a validated candidate" >&2
+      exit 64
+    fi
+    ;;
+  *)
+    if [ -z "$validated_candidate_tag" ]; then
+      echo "stable release assets require the validated release candidate tag" >&2
+      exit 64
+    fi
+    ;;
+esac
 case "$output_directory" in
   /*) ;;
   *) echo "output directory must be absolute" >&2; exit 64 ;;
@@ -59,7 +81,7 @@ if [ -n "$(find "$stage" -type l -print -quit)" ]; then
 fi
 
 renderer_fingerprint=$(node "$repository_root/deploy/scripts/runtime-image-identity.mjs" --renderer-fingerprint)
-node - "$stage/.latex-renderer-release.json" "$stage/deploy/release-policy.json" "$stage/package.json" "$version" "$release_tag" "$commit" "$renderer_fingerprint" <<'NODE'
+node - "$stage/.latex-renderer-release.json" "$stage/deploy/release-policy.json" "$stage/package.json" "$version" "$release_tag" "$commit" "$renderer_fingerprint" "$validated_candidate_tag" <<'NODE'
 const fs = require("node:fs");
 const policy = JSON.parse(fs.readFileSync(process.argv[3], "utf8"));
 const packageJson = JSON.parse(fs.readFileSync(process.argv[4], "utf8"));
@@ -74,6 +96,7 @@ fs.writeFileSync(process.argv[2], `${JSON.stringify({
   requiredNodeMajor: 24,
   packageManager: packageJson.packageManager,
   rendererRuntimeFingerprint: process.argv[8],
+  validatedCandidateTag: process.argv[9] || null,
   provenance: "github-artifact-attestation",
 }, null, 2)}\n`, { mode: 0o644 });
 NODE

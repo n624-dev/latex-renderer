@@ -146,7 +146,7 @@ fi
   --label "jp.n624.latex-renderer.languages=$(printf '%s' "$languages" | sed 's/ /,/g')" \
   --label "jp.n624.latex-renderer.base-image-id=$base_image_id" \
   --label "jp.n624.latex-renderer.renderer-runtime-fingerprint=$runtime_fingerprint" \
-  --label "jp.n624.latex-renderer.runtime-kind=prebuilt-v1" \
+  --label "jp.n624.latex-renderer.runtime-kind=managed-local-v1" \
   --label "jp.n624.latex-renderer.runtime-identity=$runtime_identity" \
   --label "org.opencontainers.image.source=https://github.com/n624-dev/latex-renderer" \
   --tag "$output_tag" \

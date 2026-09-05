@@ -3,7 +3,12 @@ import { readFile, writeFile } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 
-const archivePattern = /^latex-renderer-client-[0-9]+\.[0-9]+\.[0-9]+\.zip$/;
+const releaseVersionPattern =
+  "(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-rc\\.[1-9][0-9]*)?";
+const archivePattern = new RegExp(
+  `^latex-renderer-client-${releaseVersionPattern}\\.zip$`,
+);
+const versionPattern = new RegExp(`^${releaseVersionPattern}$`);
 const hashPattern = /^[a-f0-9]{64}$/;
 
 export async function waitForPublishedClientAssets(options) {
@@ -80,14 +85,21 @@ function parseManifest(text, source) {
   if (
     value === null ||
     typeof value !== "object" ||
+    !versionPattern.test(value.version) ||
     !archivePattern.test(value.archive) ||
+    value.archive !== `latex-renderer-client-${value.version}.zip` ||
     !hashPattern.test(value.sha256) ||
     !Number.isSafeInteger(value.size) ||
     value.size <= 0
   ) {
     throw new Error(`${source} client manifest is invalid`);
   }
-  return { archive: value.archive, sha256: value.sha256, size: value.size };
+  return {
+    version: value.version,
+    archive: value.archive,
+    sha256: value.sha256,
+    size: value.size,
+  };
 }
 
 function requestOptions() {
