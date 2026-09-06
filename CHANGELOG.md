@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 1.3.3 - 2026-09-06
+
+- Promote the immutable v1.3.3-rc.6 candidate after a successful complete Update Manager upgrade and production checks on the validation host. Executable changes are limited to the exact version replacement.
+- Publish only language-neutral TeX Live Base images; derive selected-language Runtimes locally and reuse the exact local cache. Daily Base publication is gated by English/Japanese rendering tests without publishing that test Runtime.
+- Add configurable managed-image/build-cache retention and strict explicit RC installation with a same-source Stable promotion gate.
+- Fix non-root deployment dependency preparation, Cloudflare authentication context, storage ACL inheritance, published MCPB verification, and bodyless client job-ticket renewal. Validate production rendering, deletion, client distribution and public boundaries before declaring an update successful.
+
 ## 1.3.3-rc.6 - 2026-09-06
 
 - Validate the publicly rebuilt MCPB against its matching published metadata, instead of the older sealed assembly metadata, while retaining SHA-256 and detached-signature checks.
