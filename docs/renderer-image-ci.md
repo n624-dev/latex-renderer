@@ -64,3 +64,16 @@ The command-level failure tests use isolated fake Docker/smoke commands, never
 production images. Real rendering still requires the GitHub-hosted image CI.
 Run a non-publishing Daily dispatch to exercise registry reuse; run PR image CI
 to exercise a cold build. Long image CI is not continuously monitored.
+## Smoke-test output isolation
+
+Renderer and Base smoke fixtures use a temporary Docker-managed output volume,
+not a host bind mount whose ownership assumes identical host/container UIDs.
+This supports the root caller of Image Manager with rootless Docker as well as
+rootful GitHub-hosted CI. A restricted initialization container owns only that
+new output volume; actual rendering runs as UID/GID 10000 with the existing
+read-only filesystem, network, capability, seccomp, and resource restrictions.
+Results are copied back for PDF/PNG/SVG validation and failure diagnostics.
+The temporary containers and output volume are removed on success and failure;
+failure to remove them fails the smoke test rather than reporting success.
+Base fixtures also copy input to their temporary workspace, so Docker does not
+need access to a caller's private checkout directory.
