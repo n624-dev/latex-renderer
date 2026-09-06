@@ -1,3 +1,4 @@
+export function authenticationToken(): string;
 export interface TunnelIngressRule {
   hostname?: string;
   path?: string;

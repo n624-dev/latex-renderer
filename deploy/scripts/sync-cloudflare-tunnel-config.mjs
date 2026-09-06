@@ -131,14 +131,14 @@ async function apiRequest(configurationUrl, token, method = "GET", body) {
   return payload.result;
 }
 
-function authenticationToken() {
+export function authenticationToken() {
   if (process.env.CLOUDFLARE_API_TOKEN) return process.env.CLOUDFLARE_API_TOKEN;
   try {
     const output = execFileSync(
       "pnpm",
       ["exec", "wrangler", "auth", "token", "--json"],
       {
-        cwd: repositoryRoot,
+        cwd: process.env.LATEX_RENDERER_BUILD_ROOT || repositoryRoot,
         encoding: "utf8",
         stdio: ["ignore", "pipe", "ignore"],
       },

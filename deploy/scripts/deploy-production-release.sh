@@ -180,10 +180,18 @@ sync_path="$sync_pnpm_bin:/usr/local/bin:/usr/bin:/bin"
 sync_group=$(id -gn "$sync_user")
 run_deployment_pnpm() {
   runuser -u "$sync_user" -- env HOME="$sync_home" USER="$sync_user" LOGNAME="$sync_user" PNPM_HOME="$sync_pnpm_bin" PATH="$sync_path" \
+    LATEX_RENDERER_BUILD_ROOT="$build_root" \
     sh "$source_root/deploy/scripts/deployment-pnpm.sh" "$build_root" "$sync_pnpm_bin/pnpm" "$@"
 }
 # Reconcile relocated dependencies before any service stop or activation.
 run_deployment_pnpm install --frozen-lockfile
+# Probe the same OAuth fallback and API read permissions used after cutover.
+# Without --apply these commands only inspect and plan route synchronization.
+# Exit 2 means a valid plan has changes; authentication/API errors still abort.
+if [ "$deployment_mode" = cloudflare ]; then
+  run_deployment_pnpm exec node "$source_root/deploy/scripts/sync-public-worker-routes.mjs" || [ "$?" -eq 2 ]
+  run_deployment_pnpm exec node "$source_root/deploy/scripts/sync-cloudflare-tunnel-config.mjs" || [ "$?" -eq 2 ]
+fi
 if [ "$deployment_mode" = cloudflare ]; then
   gateway_runtime_config=$(mktemp "$build_root/apps/gateway-worker/.wrangler.production.XXXXXX.jsonc")
   install -o "$sync_user" -g "$sync_group" -m 0600 "$gateway_worker_config" "$gateway_runtime_config"
@@ -278,8 +286,7 @@ if [ "$deployment_mode" = cloudflare ]; then
   systemctl is-active --quiet cloudflared
   run_deployment_pnpm --filter @latex-renderer/gateway-worker exec wrangler deploy --config "$gateway_runtime_config"
   run_deployment_pnpm --filter @latex-renderer/public-web run deploy
-  runuser -u "$sync_user" -- env HOME="$sync_home" USER="$sync_user" LOGNAME="$sync_user" PNPM_HOME="$sync_pnpm_bin" PATH="$sync_path" \
-    /usr/local/bin/node "$source_root/deploy/scripts/sync-public-worker-routes.mjs" --apply
+  run_deployment_pnpm exec node "$source_root/deploy/scripts/sync-public-worker-routes.mjs" --apply
 fi
 
 client_base="$public_origin/downloads/client"
@@ -365,8 +372,7 @@ else
   echo "No active owner exists yet; authenticated render smoke is deferred until owner bootstrap."
 fi
 if [ "$deployment_mode" = cloudflare ]; then
-  runuser -u "$sync_user" -- env HOME="$sync_home" USER="$sync_user" LOGNAME="$sync_user" PNPM_HOME="$sync_pnpm_bin" PATH="$sync_path" \
-    /usr/local/bin/node "$source_root/deploy/scripts/sync-cloudflare-tunnel-config.mjs" --apply
+  run_deployment_pnpm exec node "$source_root/deploy/scripts/sync-cloudflare-tunnel-config.mjs" --apply
   LATEX_RENDER_BASE_URL="$public_origin" \
     "$source_root/deploy/scripts/smoke-test-public-worker-boundary.sh"
 fi
