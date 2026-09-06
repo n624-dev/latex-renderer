@@ -51,7 +51,7 @@ if [ ! -f "$release_marker" ]; then
   rsync -a --exclude=.git "$source_root/" "$release_root/"
   : > "$release_marker"
 fi
-chown -R root:latex-renderer "$release_root"
+chown -hR root:latex-renderer "$release_root"
 chmod -R u=rwX,g=rX,o= "$release_root"
 ln -sfn "$release_root" /opt/latex-renderer/current
 if [ -n "$previous_release" ] && [ "$previous_release" != "$release_root" ]; then

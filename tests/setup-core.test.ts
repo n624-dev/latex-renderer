@@ -184,6 +184,45 @@ describe("setup-core", () => {
     ).toBe(true);
   });
 
+  it("accepts an exact RC client manifest and rejects a mismatched archive name", async () => {
+    const root = await temporaryRoot();
+    const distribution = await clientDistribution();
+    const candidate = {
+      ...distribution,
+      manifest: {
+        ...distribution.manifest,
+        version: "7.8.9-rc.1",
+        archive: "latex-renderer-client-7.8.9-rc.1.zip",
+      },
+    };
+    await expect(
+      installDistribution({
+        ...candidate,
+        ...testPaths(root),
+        skillTarget: "none",
+        mcpTarget: "none",
+        output: sink,
+        warning: sink,
+      }),
+    ).resolves.toMatchObject({ version: "7.8.9-rc.1" });
+
+    await expect(
+      installDistribution({
+        ...distribution,
+        manifest: {
+          ...distribution.manifest,
+          version: "7.8.9-rc.1",
+          archive: "latex-renderer-client-7.8.9.zip",
+        },
+        ...testPaths(await temporaryRoot()),
+        skillTarget: "none",
+        mcpTarget: "none",
+        output: sink,
+        warning: sink,
+      }),
+    ).rejects.toThrow("Client manifest is invalid");
+  });
+
   it("refuses to replace a directory without valid managed ownership", async () => {
     const root = await temporaryRoot();
     const paths = testPaths(root);

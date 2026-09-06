@@ -12,8 +12,8 @@ fi
 
 source_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
 version=${1:-$(/usr/local/bin/node -p "require('$source_root/package.json').version")}
-if ! printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-  echo "bootstrap version must use X.Y.Z" >&2
+if ! printf '%s\n' "$version" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.[1-9][0-9]*)?$'; then
+  echo "bootstrap version must use X.Y.Z or X.Y.Z-rc.N" >&2
   exit 64
 fi
 package_version=$(/usr/local/bin/node -p "require('$source_root/package.json').version")

@@ -27,7 +27,6 @@ const applySchema = z
     languages: z.array(languageSchema).max(100),
     autoUpdate: z.boolean(),
     rebuildIfMissing: z.boolean().default(true),
-    runtimeBuildIfMissing: z.boolean().default(false),
     reason: adminMutationReasonSchema,
   })
   .strict()
@@ -369,7 +368,6 @@ export function createTexEnvironmentRouter(deps: AdminDependencies): Hono {
         languages: input.languages,
         autoUpdate: input.autoUpdate,
         rebuildIfMissing: input.rebuildIfMissing,
-        runtimeBuildIfMissing: input.runtimeBuildIfMissing,
         reason,
       },
     );

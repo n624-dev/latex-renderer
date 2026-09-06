@@ -6,7 +6,6 @@ type ApplyInput = {
   languages?: string[];
   autoUpdate?: boolean;
   rebuildIfMissing?: boolean;
-  runtimeBuildIfMissing?: boolean;
   [key: string]: unknown;
 };
 type ImagesResponse = { daily?: string[] };
@@ -15,7 +14,6 @@ type ManagerStateResponse = {
     selector?: ImageSelector;
     languages?: string[];
     autoUpdate?: boolean;
-    runtimeBuildIfMissing?: boolean;
   };
   current?: {
     selector?: ImageSelector | null;
@@ -37,7 +35,9 @@ export class ImageManagerClient {
       endpoint.username !== "" ||
       endpoint.password !== ""
     ) {
-      throw new Error("IMAGE_MANAGER_URL must be an unauthenticated loopback HTTP URL");
+      throw new Error(
+        "IMAGE_MANAGER_URL must be an unauthenticated loopback HTTP URL",
+      );
     }
     if (token.length < 32) throw new Error("Image manager token is too short");
     this.endpoint = endpoint;
@@ -58,7 +58,11 @@ export class ImageManagerClient {
   }
   operation(id: string): Promise<unknown> {
     if (!/^[A-Za-z0-9_-]+$/.test(id))
-      throw new AppError("INVALID_OPERATION_ID", "Invalid image operation id", 400);
+      throw new AppError(
+        "INVALID_OPERATION_ID",
+        "Invalid image operation id",
+        400,
+      );
     return this.request("GET", `/v1/operations/${encodeURIComponent(id)}`);
   }
   country(country: string | null): Promise<unknown> {
@@ -84,7 +88,9 @@ export class ImageManagerClient {
           503,
         );
       }
-      const exists = Array.isArray(images.daily) && images.daily.includes(value.selector.value);
+      const exists =
+        Array.isArray(images.daily) &&
+        images.daily.includes(value.selector.value);
       value.rebuildIfMissing = !exists;
     }
     return this.request("POST", "/v1/apply", value);
@@ -108,13 +114,14 @@ export class ImageManagerClient {
       const runtimeDrift =
         current?.selector?.mode !== "latest" ||
         desiredLanguages.length !== currentLanguages.length ||
-        desiredLanguages.some((language, index) => language !== currentLanguages[index]);
+        desiredLanguages.some(
+          (language, index) => language !== currentLanguages[index],
+        );
       if (runtimeDrift) {
         return this.apply({
           selector: { mode: "latest", value: null },
           languages: desiredLanguages,
           autoUpdate: true,
-          runtimeBuildIfMissing: desired.runtimeBuildIfMissing === true,
           rebuildIfMissing: false,
         });
       }
@@ -146,13 +153,14 @@ export class ImageManagerClient {
         503,
       );
     }
-    const value = (await response.json().catch(() => null)) as
-      | { error?: { code?: string; message?: string } }
-      | null;
+    const value = (await response.json().catch(() => null)) as {
+      error?: { code?: string; message?: string };
+    } | null;
     if (!response.ok) {
       throw new AppError(
         value?.error?.code ?? "IMAGE_MANAGER_ERROR",
-        value?.error?.message ?? `Image manager returned HTTP ${response.status}`,
+        value?.error?.message ??
+          `Image manager returned HTTP ${response.status}`,
         response.status,
       );
     }

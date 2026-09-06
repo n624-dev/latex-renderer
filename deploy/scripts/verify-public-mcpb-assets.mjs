@@ -62,7 +62,10 @@ function parseMetadata(text) {
   if (
     typeof value !== "object" ||
     value === null ||
-    !/^latex-renderer-local-\d+\.\d+\.\d+\.mcpb$/.test(value.archive) ||
+    !/^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-rc\.[1-9][0-9]*)?$/.test(
+      value.version,
+    ) ||
+    value.archive !== `latex-renderer-local-${value.version}.mcpb` ||
     !/^[a-f0-9]{64}$/.test(value.sha256) ||
     !Number.isSafeInteger(value.size) ||
     value.size <= 0

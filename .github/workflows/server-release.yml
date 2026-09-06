@@ -4,8 +4,20 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Existing release tag, for example v1.1.6"
+        description: "Existing release tag, for example vX.Y.Z-rc.N or vX.Y.Z"
         required: true
+        type: string
+      release_kind:
+        description: "Candidate is tested on the production host; stable requires that validated candidate"
+        required: true
+        default: candidate
+        type: choice
+        options:
+          - candidate
+          - stable
+      candidate_tag:
+        description: "Required for stable: immutable prerelease tag with the same X.Y.Z core"
+        required: false
         type: string
 
 permissions:
@@ -25,6 +37,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ inputs.version }}
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
@@ -33,10 +46,55 @@ jobs:
         run: corepack enable
       - name: Validate tag and source
         env:
+          CANDIDATE_TAG: ${{ inputs.candidate_tag }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_KIND: ${{ inputs.release_kind }}
           RELEASE_TAG: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          case "$RELEASE_KIND" in
+            candidate)
+              [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-rc\.[1-9][0-9]*$ ]]
+              [[ -z "$CANDIDATE_TAG" ]]
+              ;;
+            stable)
+              [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+              [[ "$CANDIDATE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-rc\.[1-9][0-9]*$ ]]
+              [[ "${CANDIDATE_TAG%-rc.*}" == "$RELEASE_TAG" ]]
+              candidate_json=$(gh api "repos/n624-dev/latex-renderer/releases/tags/$CANDIDATE_TAG")
+              candidate_version=${CANDIDATE_TAG#v}
+              jq -e --arg tag "$CANDIDATE_TAG" '
+                .tag_name == $tag and
+                .draft == false and
+                .prerelease == true and
+                .immutable == true
+              ' <<<"$candidate_json" >/dev/null
+              candidate_asset="latex-renderer-server-$candidate_version.tar.gz"
+              jq -e --arg asset "$candidate_asset" \
+                '[.assets[].name] | any(. == $asset)' \
+                <<<"$candidate_json" >/dev/null
+              candidate_digest=$(jq -r --arg asset "$candidate_asset" \
+                '.assets[] | select(.name == $asset) | .digest' \
+                <<<"$candidate_json")
+              [[ "$candidate_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+              candidate_dir="$RUNNER_TEMP/validated-candidate"
+              mkdir -p "$candidate_dir"
+              gh release download "$CANDIDATE_TAG" \
+                --repo n624-dev/latex-renderer \
+                --pattern "$candidate_asset" \
+                --dir "$candidate_dir"
+              [[ $(sha256sum "$candidate_dir/$candidate_asset" | cut -d' ' -f1) == "${candidate_digest#sha256:}" ]]
+              gh attestation verify "$candidate_dir/$candidate_asset" \
+                --repo n624-dev/latex-renderer \
+                --signer-workflow n624-dev/latex-renderer/.github/workflows/server-release.yml \
+                --source-ref "refs/tags/$CANDIDATE_TAG" \
+                --predicate-type https://slsa.dev/provenance/v1 \
+                --deny-self-hosted-runners
+              node deploy/scripts/verify-release-candidate-promotion.mjs \
+                "$CANDIDATE_TAG" "$RELEASE_TAG"
+              ;;
+            *) exit 64 ;;
+          esac
           [[ "$GITHUB_REF" == "refs/tags/$RELEASE_TAG" ]]
           version=${RELEASE_TAG#v}
           [[ $(node -p 'require("./package.json").version') == "$version" ]]
@@ -46,11 +104,12 @@ jobs:
           pnpm build:client
       - name: Build versioned server source bundle
         env:
+          CANDIDATE_TAG: ${{ inputs.candidate_tag }}
           RELEASE_TAG: ${{ inputs.version }}
         run: |
           set -euo pipefail
           sh deploy/scripts/build-server-release-assets.sh \
-            "$RELEASE_TAG" "$RUNNER_TEMP/release-assets"
+            "$RELEASE_TAG" "$RUNNER_TEMP/release-assets" "$CANDIDATE_TAG"
       - name: Attest release assets with Sigstore provenance
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
         with:
@@ -104,4 +163,8 @@ jobs:
             --json isDraft \
             --jq 'select(.isDraft == true) | .isDraft' \
             | grep -qx true
-          echo "Server and client assets uploaded to the draft. Review every asset and the generated notes, then publish the draft to make it immutable."
+          if [[ "${{ inputs.release_kind }}" == candidate ]]; then
+            echo "Review every asset, then publish as an immutable prerelease with latest disabled. Apply it explicitly to the validation host before creating the stable tag."
+          else
+            echo "The immutable candidate and source-equivalence gate passed. Review every asset and notes, then publish the stable draft."
+          fi

@@ -32,10 +32,17 @@ import { fileURLToPath } from "node:url";
 import {
   assembleBuildArtifacts,
   assertContainedSymlinks,
+  assertSealedControlTree,
 } from "./release-assembly.mjs";
 import { validateReleaseArchive } from "./release-archive.mjs";
 import { rendererRuntimeFingerprint } from "./runtime-image-identity.mjs";
 import { acquireMutationLock } from "./mutation-lock.mjs";
+import {
+  assertValidatedCandidateTag,
+  compareReleaseVersions as compareVersions,
+  isReleaseCandidate,
+  validReleaseVersion,
+} from "./release-version.mjs";
 
 if (process.getuid?.() !== 0) throw new Error("Update helper must run as root");
 
@@ -88,6 +95,7 @@ const bootstrapControlFiles = [
   "deploy/scripts/release-archive.mjs",
   "deploy/scripts/runtime-image-identity.mjs",
   "deploy/scripts/mutation-lock.mjs",
+  "deploy/scripts/release-version.mjs",
 ];
 
 function positiveInteger(value, fallback, minimum, maximum) {
@@ -103,24 +111,13 @@ function positiveInteger(value, fallback, minimum, maximum) {
   return parsed;
 }
 
-function validStableVersion(value) {
-  if (typeof value !== "string" || !/^\d+\.\d+\.\d+$/.test(value))
-    throw new Error("Stable release version must use X.Y.Z");
-  return value;
-}
-
-function compareVersions(left, right) {
-  const leftParts = validStableVersion(left).split(".").map(Number);
-  const rightParts = validStableVersion(right).split(".").map(Number);
-  for (let index = 0; index < 3; index += 1) {
-    if (leftParts[index] !== rightParts[index])
-      return leftParts[index] < rightParts[index] ? -1 : 1;
-  }
-  return 0;
-}
-
 function validReleaseId(value) {
-  if (typeof value !== "string" || !/^v\d+\.\d+\.\d+-[a-f0-9]{12}$/.test(value))
+  if (
+    typeof value !== "string" ||
+    !/^v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-rc\.[1-9]\d*)?-[a-f0-9]{12}$/.test(
+      value,
+    )
+  )
     throw new Error("Release identifier is invalid");
   return value;
 }
@@ -310,15 +307,22 @@ async function resolveTagCommit(tag) {
 }
 
 async function fetchRelease(requestedVersion) {
-  const version = validStableVersion(requestedVersion);
+  const version = validReleaseVersion(requestedVersion);
   const tag = `v${version}`;
   const release = await githubJson(
     `https://api.github.com/repos/${repository}/releases/tags/${tag}`,
   );
-  if (release?.draft === true || release?.prerelease === true)
-    throw new Error("Only published stable releases can be installed");
+  if (release?.draft !== false)
+    throw new Error("Draft releases cannot be installed");
+  const candidate = isReleaseCandidate(version);
+  if (release?.prerelease !== candidate)
+    throw new Error(
+      candidate
+        ? "Release candidate tag must be published as a prerelease"
+        : "Stable release tag must not be published as a prerelease",
+    );
   if (release?.tag_name !== tag || release?.immutable !== true)
-    throw new Error("Release is not an immutable stable release");
+    throw new Error("Release is not an immutable published release");
   const name = `latex-renderer-server-${version}.tar.gz`;
   const expectedUrl = `https://github.com/${repository}/releases/download/${tag}/${name}`;
   const asset = Array.isArray(release.assets)
@@ -469,6 +473,7 @@ async function verifyExtractedRelease(release, source) {
   ) {
     throw new Error("Privileged release metadata does not match GitHub");
   }
+  assertValidatedCandidateTag(manifest.validatedCandidateTag, release.version);
   return manifest;
 }
 
@@ -685,8 +690,17 @@ async function buildBootstrapRelease(
     assembly,
     runCommand: (command, args) => runLogged(command, args),
   });
-  await runLogged("chown", ["-R", "root:root", assembly]);
+  await sealControlTree(assembly, 0);
   return assembly;
+}
+
+async function sealControlTree(root, groupId) {
+  const group = String(groupId);
+  if (!/^(?:0|[1-9]\d*)$/.test(group))
+    throw new Error("Control tree group identity is invalid");
+  await runLogged("chown", ["-hR", `0:${group}`, root]);
+  await runLogged("chmod", ["-R", "u=rwX,g=rX,o=", root]);
+  await assertSealedControlTree(root);
 }
 
 async function prepareDeploymentTrees(rootStage, assembly) {
@@ -699,14 +713,13 @@ async function prepareDeploymentTrees(rootStage, assembly) {
   await mkdir(deploymentBuild, { mode: 0o700 });
   await runLogged("rsync", ["-a", `${assembly}/`, `${deploymentBuild}/`]);
   await runLogged("chown", [
-    "-R",
+    "-hR",
     `${identity.uid}:${identity.gid}`,
     deploymentBuild,
   ]);
   await chmod(deploymentBuild, 0o700);
 
-  await runLogged("chown", ["-R", `0:${identity.gid}`, assembly]);
-  await runLogged("chmod", ["-R", "u=rwX,g=rX,o=", assembly]);
+  await sealControlTree(assembly, identity.gid);
   await runLogged("chown", [`0:${identity.gid}`, rootStage]);
   await chmod(rootStage, 0o710);
   return { ...identity, deploymentBuild };
@@ -756,7 +769,7 @@ async function apply(request) {
       assembly,
       runCommand: (command, args) => runLogged(command, args),
     });
-    await runLogged("chown", ["-R", "root:root", assembly]);
+    await sealControlTree(assembly, 0);
     const deployment = await prepareDeploymentTrees(rootStage, assembly);
     const releaseId = `v${prepared.release.version}-${prepared.manifest.commit.slice(0, 12)}`;
     await runLogged("systemctl", ["restart", "latex-renderer-backup.service"]);
@@ -787,7 +800,7 @@ async function bootstrapPrivilegeSeparatedUpdater(request) {
     throw new Error(
       "Legacy transition requires the explicit root bootstrap launcher",
     );
-  const requestedVersion = validStableVersion(request.version);
+  const requestedVersion = validReleaseVersion(request.version);
   const localPackage = JSON.parse(
     await readFile(join(helperRoot, "package.json"), "utf8"),
   );
@@ -909,25 +922,7 @@ async function rollback(request) {
   const targetInfo = await lstat(target);
   if (!targetInfo.isDirectory())
     throw new Error("Rollback release is not a directory");
-  const unsafeTarget = (
-    await runCapture("find", [
-      target,
-      "-xdev",
-      "(",
-      "!",
-      "-user",
-      "root",
-      "-o",
-      "-perm",
-      "/022",
-      ")",
-      "-print",
-      "-quit",
-    ])
-  ).trim();
-  if (unsafeTarget)
-    throw new Error(`Rollback release tree is not sealed: ${unsafeTarget}`);
-  await assertContainedSymlinks(target, target);
+  await assertSealedControlTree(target);
   const current = await installedRelease();
   const rootStage = await mkdtemp(
     join(privilegedStagingRoot, "privileged-rollback-"),
@@ -948,8 +943,7 @@ async function rollback(request) {
     );
     await rm(trustedDriver, { force: true });
     await copyFile(deploymentDriver, trustedDriver);
-    await runLogged("chown", ["-R", "root:root", verified]);
-    await assertContainedSymlinks(verified, verified);
+    await sealControlTree(verified, 0);
     const assembly = join(rootStage, "assembly");
     await mkdir(assembly, { mode: 0o700 });
     await assembleBuildArtifacts({
@@ -958,7 +952,7 @@ async function rollback(request) {
       assembly,
       runCommand: (command, args) => runLogged(command, args),
     });
-    await runLogged("chown", ["-R", "root:root", assembly]);
+    await sealControlTree(assembly, 0);
     const deployment = await prepareDeploymentTrees(rootStage, assembly);
     await runLogged("systemctl", ["restart", "latex-renderer-backup.service"]);
     await deployFromAssembly(assembly, deployment, releaseId);
@@ -992,14 +986,14 @@ switch (request.verb) {
     if (typeof request.version !== "string")
       throw new Error("Bootstrap version is required");
     await bootstrapPrivilegeSeparatedUpdater({
-      version: validStableVersion(request.version.replace(/^v/, "")),
+      version: validReleaseVersion(request.version.replace(/^v/, "")),
     });
     break;
   case "apply":
     if (typeof request.version !== "string")
       throw new Error("Apply version is required");
     await apply({
-      version: validStableVersion(request.version.replace(/^v/, "")),
+      version: validReleaseVersion(request.version.replace(/^v/, "")),
       stage: request.stage,
     });
     break;

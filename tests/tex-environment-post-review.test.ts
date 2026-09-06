@@ -13,6 +13,14 @@ describe("post-review TeX environment regressions", () => {
     expect(tagStatus).toContain("AbortSignal.timeout");
     expect(tagStatus).toContain("X-GitHub-Api-Version");
     expect(retention).toContain('"--prefer-index=false"');
+    expect(retention).toContain("GHCR_PURGE_LEGACY_RUNTIMES");
+    expect(retention).toContain("if (!purgeLegacyRuntimes) continue");
+    expect(read(".github/workflows/renderer-image-daily.yml")).toContain(
+      "inputs.purge_legacy_runtimes != true",
+    );
+    expect(read(".github/workflows/renderer-image-daily.yml")).toContain(
+      '[[ "$REQUESTED_DATE" == latest ]]',
+    );
     expect(retention).not.toContain("CLOUDFLARE");
   });
 
@@ -59,11 +67,15 @@ describe("post-review TeX environment regressions", () => {
     );
     expect(manager).toContain("async function recoverPendingActivation()");
     expect(manager).toContain("async function activateAndPersistState");
-    expect(manager).toContain("await writeAtomic(activationJournalPath");
-    expect(manager).toContain("await writeAtomic(rendererEnv, newEnv");
-    expect(
-      manager.indexOf("await writeAtomic(activationJournalPath"),
-    ).toBeLessThan(manager.indexOf("await writeAtomic(rendererEnv, newEnv"));
+    const journalWrite = manager.search(
+      /await writeAtomic\(\s*activationJournalPath/,
+    );
+    const rendererWrite = manager.search(
+      /await writeAtomic\(\s*rendererEnv,\s*newEnv/,
+    );
+    expect(journalWrite).toBeGreaterThanOrEqual(0);
+    expect(rendererWrite).toBeGreaterThanOrEqual(0);
+    expect(journalWrite).toBeLessThan(rendererWrite);
     expect(manager).toContain("journal.nextState");
     expect(manager).toContain("journal.previousState");
     expect(manager).toContain("Image activation was recovered and committed");
@@ -189,8 +201,8 @@ describe("post-review TeX environment regressions", () => {
     expect(manager).toContain("async function readLogTail");
     expect(manager).toContain("const length = Math.min(info.size, maxBytes)");
     expect(manager).toContain("Math.max(0, info.size - length)");
-    expect(manager).toContain(
-      '"builder", "prune", "--force", "--filter", "until=168h"',
+    expect(manager).toMatch(
+      /"builder",\s*"prune",\s*"--force",\s*"--filter",\s*"until=168h"/,
     );
   });
 

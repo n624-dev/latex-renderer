@@ -38,9 +38,10 @@ if [ "$parent_mutation_lock" = application-update ]; then
     echo "Application Update Manager must use a separate non-root build tree" >&2
     exit 78
   fi
-  unsafe_source=$(find "$source_root" -xdev \( ! -user root -o -perm /022 \) -print -quit)
-  if [ -n "$unsafe_source" ]; then
-    echo "Application Update Manager control tree is not sealed: $unsafe_source" >&2
+  if ! /usr/local/bin/node \
+    "$source_root/deploy/scripts/release-assembly.mjs" \
+    --assert-sealed-control-tree "$source_root"; then
+    echo "Application Update Manager control tree is not sealed" >&2
     exit 78
   fi
 fi

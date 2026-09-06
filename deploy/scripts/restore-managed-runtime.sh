@@ -29,7 +29,6 @@ for (const value of [
   current.snapshotDate ?? 'custom',
   languages.join(' '),
   state.previous?.runtimeImageId ?? '',
-  state.desired?.runtimeBuildIfMissing === true ? 'true' : 'false',
 ]) process.stdout.write(`${value}\n`);
 NODE
 ) || {
@@ -43,7 +42,6 @@ runtime_ref=$(printf '%s\n' "$state_values" | sed -n '3p')
 snapshot_date=$(printf '%s\n' "$state_values" | sed -n '4p')
 languages=$(printf '%s\n' "$state_values" | sed -n '5p')
 previous_runtime=$(printf '%s\n' "$state_values" | sed -n '6p')
-runtime_build_if_missing=$(printf '%s\n' "$state_values" | sed -n '7p')
 [ -n "$runtime_image" ] || exit 0
 [ -n "$base_image" ] || {
   echo "Managed TeX runtime has no clean base image recorded" >&2
@@ -87,8 +85,11 @@ current_fingerprint=$(
 )
 image_fingerprint=$(rootless_docker image inspect "$runtime_image" \
   --format '{{index .Config.Labels "jp.n624.latex-renderer.renderer-runtime-fingerprint"}}' 2>/dev/null || true)
+image_runtime_kind=$(rootless_docker image inspect "$runtime_image" \
+  --format '{{index .Config.Labels "jp.n624.latex-renderer.runtime-kind"}}' 2>/dev/null || true)
 
-if [ "$image_fingerprint" != "$current_fingerprint" ]; then
+if [ "$image_fingerprint" != "$current_fingerprint" ] || \
+   [ "$image_runtime_kind" != managed-local-v1 ]; then
   repository=$(rootless_docker image inspect "$base_image" \
     --format '{{index .Config.Labels "jp.n624.latex-renderer.texlive.repository"}}')
   case "$repository" in
@@ -104,45 +105,34 @@ if [ "$image_fingerprint" != "$current_fingerprint" ]; then
   runtime_identity=$(HOME="$worker_home" XDG_RUNTIME_DIR="$runtime_dir" DOCKER_HOST="$docker_host" \
     RENDERER_RUNTIME_SOURCE="$repo_root/renderer" /usr/local/bin/node \
     "$repo_root/deploy/scripts/runtime-image-identity.mjs" --format digest "$base_image" $languages)
-  image_repository=${TEXLIVE_IMAGE_REPOSITORY:-ghcr.io/n624-dev/latex-renderer-texlive}
-  package_ref="$image_repository:$runtime_tag"
   local_ref="latex-renderer:$runtime_tag"
   new_runtime_ref=
-  runtime_source=
+  runtime_source=local-build
   runtime_package_ref=
 
-  if rootless_docker image inspect "$package_ref" >/dev/null 2>&1; then
-    new_runtime_ref=$package_ref
-    runtime_source=ghcr
-    runtime_package_ref=$package_ref
-    echo "Renderer code changed; reusing the exact locally cached public Runtime."
-  elif rootless_docker image inspect "$local_ref" >/dev/null 2>&1; then
+  reuse_local=false
+  if rootless_docker image inspect "$local_ref" >/dev/null 2>&1; then
+    local_fingerprint=$(rootless_docker image inspect "$local_ref" \
+      --format '{{index .Config.Labels "jp.n624.latex-renderer.renderer-runtime-fingerprint"}}' 2>/dev/null || true)
+    local_identity=$(rootless_docker image inspect "$local_ref" \
+      --format '{{index .Config.Labels "jp.n624.latex-renderer.runtime-identity"}}' 2>/dev/null || true)
+    local_kind=$(rootless_docker image inspect "$local_ref" \
+      --format '{{index .Config.Labels "jp.n624.latex-renderer.runtime-kind"}}' 2>/dev/null || true)
+    local_base=$(rootless_docker image inspect "$local_ref" \
+      --format '{{index .Config.Labels "jp.n624.latex-renderer.base-image-id"}}' 2>/dev/null || true)
+    if [ "$local_fingerprint" = "$current_fingerprint" ] && \
+       [ "$local_identity" = "$runtime_identity" ] && \
+       [ "$local_kind" = managed-local-v1 ] && \
+       [ "$local_base" = "$base_image" ]; then
+      reuse_local=true
+    fi
+  fi
+  if [ "$reuse_local" = true ]; then
     new_runtime_ref=$local_ref
-    runtime_source=local-build
-    echo "Renderer code changed; reusing the exact locally built Runtime."
-  elif rootless_docker pull "$package_ref"; then
-    new_runtime_ref=$package_ref
-    runtime_source=ghcr
-    runtime_package_ref=$package_ref
-    echo "Renderer code changed; pulled the matching public Runtime."
+    echo "Managed Runtime refresh: reusing the exact locally built Runtime."
   else
-    tag_status=$(GHCR_REPOSITORY="$image_repository" /usr/local/bin/node \
-      "$repo_root/deploy/scripts/ghcr-tag-status.mjs" "$runtime_tag")
-    if [ "$tag_status" = present ]; then
-      echo "Matching Runtime exists in GHCR but could not be pulled; refusing a local build." >&2
-      exit 78
-    fi
-    if [ "$tag_status" != absent ]; then
-      echo "Could not confirm whether the matching Runtime exists in GHCR." >&2
-      exit 78
-    fi
-    if [ "$runtime_build_if_missing" != true ]; then
-      echo "No matching prebuilt Runtime is published. Enable the explicit Runtime local-build fallback for a custom language set." >&2
-      exit 78
-    fi
     new_runtime_ref=$local_ref
-    runtime_source=local-build
-    echo "GHCR confirms the Runtime is absent; building the custom language Runtime locally."
+    echo "Managed Runtime refresh: building the selected language Runtime locally from the verified Base."
     env \
     TMPDIR="$tmp_root" \
     HOME="$worker_home" \
@@ -154,17 +144,6 @@ if [ "$image_fingerprint" != "$current_fingerprint" ]; then
   fi
 
   new_runtime_image=$(rootless_docker image inspect "$new_runtime_ref" --format '{{.Id}}')
-  if [ "$runtime_source" = ghcr ]; then
-    new_runtime_package_ref=$(rootless_docker image inspect "$new_runtime_image" \
-      --format '{{range .RepoDigests}}{{println .}}{{end}}' \
-      | awk -v prefix="$image_repository@sha256:" 'index($0, prefix) == 1 { print; exit }')
-    case "$new_runtime_package_ref" in
-      "$image_repository"@sha256:[0-9a-f][0-9a-f]*) ;;
-      *) echo "Pulled GHCR Runtime has no digest-qualified reference" >&2; exit 78 ;;
-    esac
-    new_runtime_ref=$new_runtime_package_ref
-    runtime_package_ref=$new_runtime_package_ref
-  fi
   new_fingerprint=$(rootless_docker image inspect "$new_runtime_image" \
     --format '{{index .Config.Labels "jp.n624.latex-renderer.renderer-runtime-fingerprint"}}')
   new_identity=$(rootless_docker image inspect "$new_runtime_image" \
@@ -175,7 +154,7 @@ if [ "$image_fingerprint" != "$current_fingerprint" ]; then
     --format '{{index .Config.Labels "jp.n624.latex-renderer.base-image-id"}}')
   if [ "$new_fingerprint" != "$current_fingerprint" ] || \
      [ "$new_identity" != "$runtime_identity" ] || \
-     [ "$new_kind" != prebuilt-v1 ] || \
+     [ "$new_kind" != managed-local-v1 ] || \
      [ "$new_base" != "$base_image" ]; then
     echo "Selected managed Runtime identity does not match the current renderer and clean Base" >&2
     exit 78

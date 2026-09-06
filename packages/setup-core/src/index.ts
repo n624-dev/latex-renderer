@@ -30,6 +30,8 @@ const MAXIMUM_ARCHIVE_BYTES = 25 * 1024 * 1024;
 const MAXIMUM_MANIFEST_BYTES = 64 * 1024;
 const MAXIMUM_EXPANDED_BYTES = 100 * 1024 * 1024;
 const MCP_SERVER_NAME = "latex-renderer";
+const RELEASE_VERSION_PATTERN =
+  /^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-rc\.[1-9][0-9]*)?$/;
 
 export type SkillTarget = "both" | "codex" | "claude" | "none";
 export type McpTarget = "both" | "codex" | "claude" | "none";
@@ -1014,7 +1016,7 @@ function normalizeState(
     value.format === 2 &&
     value.product === "latex-renderer-client" &&
     typeof value.version === "string" &&
-    /^\d+\.\d+\.\d+$/.test(value.version) &&
+    RELEASE_VERSION_PATTERN.test(value.version) &&
     typeof value.archiveSha256 === "string" &&
     /^[a-f0-9]{64}$/.test(value.archiveSha256) &&
     value.platform === paths.platform &&
@@ -1038,7 +1040,7 @@ function normalizeState(
   if (
     value.format === 1 &&
     typeof value.version === "string" &&
-    /^\d+\.\d+\.\d+$/.test(value.version) &&
+    RELEASE_VERSION_PATTERN.test(value.version) &&
     value.platform === paths.platform &&
     typeof value.installedAt === "string"
   )
@@ -1512,9 +1514,9 @@ function validateManifest(value: unknown): ClientManifest {
   if (
     !isRecord(value) ||
     typeof value.version !== "string" ||
-    !/^\d+\.\d+\.\d+$/.test(value.version) ||
+    !RELEASE_VERSION_PATTERN.test(value.version) ||
     typeof value.archive !== "string" ||
-    !/^latex-renderer-client-\d+\.\d+\.\d+\.zip$/.test(value.archive) ||
+    value.archive !== `latex-renderer-client-${value.version}.zip` ||
     typeof value.sha256 !== "string" ||
     !/^[a-f0-9]{64}$/.test(value.sha256) ||
     !Number.isSafeInteger(value.size) ||
