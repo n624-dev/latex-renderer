@@ -552,7 +552,7 @@ smokeKey
       database.raw
         .prepare(
           `INSERT INTO api_keys(id,service_account_id,name,prefix,kind,secret_hash,pepper_id,scopes_json,expires_at,created_at,created_by)
-      VALUES (?,?,?,?,?,?,?,?,?,'local-smoke-test')`,
+      VALUES (?,?,?,?,?,?,?,?,?,?,'local-smoke-test')`,
         )
         .run(
           generated.id,

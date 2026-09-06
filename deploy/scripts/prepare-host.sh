@@ -52,7 +52,7 @@ if [ -e "$release_root" ] && [ "$(find "$release_root" -mindepth 1 -maxdepth 1 -
 fi
 install -d -o root -g root -m 0755 "$release_root"
 if [ ! -f "$release_marker" ]; then
-  rsync -a --exclude=.git "$source_root/" "$release_root/"
+  rsync -a --exclude=.git --exclude=/.deployment-tooling/ "$source_root/" "$release_root/"
   : > "$release_marker"
 fi
 chown -hR root:latex-renderer "$release_root"

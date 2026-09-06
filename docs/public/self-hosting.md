@@ -10,9 +10,9 @@ since: "v1.2.0"
 
 ## 現在の提供状況
 
-このページは[`v1.3.3-rc.3`](https://github.com/n624-dev/latex-renderer/releases/tag/v1.3.3-rc.3)のサーバーbundleを対象にします。バージョンが`-rc.N`のReleaseは指定された検証hostだけへ明示適用し、一般利用者はStableを使用してください。Cloudflare構成に加えて、通常のTLSリバースプロキシとOIDC／ローカルパスワード認証を選択できます。このReleaseは公開後にタグや配布ファイルを差し替えできない設定で固定され、次を含みます。
+このページは[`v1.3.3-rc.4`](https://github.com/n624-dev/latex-renderer/releases/tag/v1.3.3-rc.4)のサーバーbundleを対象にします。バージョンが`-rc.N`のReleaseは指定された検証hostだけへ明示適用し、一般利用者はStableを使用してください。Cloudflare構成に加えて、通常のTLSリバースプロキシとOIDC／ローカルパスワード認証を選択できます。このReleaseは公開後にタグや配布ファイルを差し替えできない設定で固定され、次を含みます。
 
-- `latex-renderer-server-1.3.3-rc.3.tar.gz`
+- `latex-renderer-server-1.3.3-rc.4.tar.gz`
 - クライアントZIPとClaude Desktop用MCPB
 - 3つの配布ファイルを検証する`SHA256SUMS`
 - commit、バージョン、Renderer fingerprint、Node.js／pnpm要件を記録したbundle内metadata
@@ -89,12 +89,12 @@ since: "v1.2.0"
 
 公開リポジトリの`*.example`ファイルは項目確認のための雛形です。設定済みファイルを雛形へ上書きしてcommitする運用はしません。
 
-## v1.3.3-rc.3をダウンロードして検証
+## v1.3.3-rc.4をダウンロードして検証
 
 次のコマンドは、固定されたReleaseであることをGitHub APIで確認し、APIが返すdigestとダウンロードしたbundleを照合します。通常の非rootユーザーで実行します。
 
 ```bash
-version=1.3.3-rc.3
+version=1.3.3-rc.4
 repository=n624-dev/latex-renderer
 asset="latex-renderer-server-$version.tar.gz"
 work_dir=$(mktemp -d)
@@ -387,6 +387,12 @@ Update Managerは配布物を検証したroot所有の`verified` tree、依存�
 
 適用中はAdmin API自身も新しいReleaseで再起動するため、画面が一時的に「Admin APIへ再接続中」となったり、プロキシが短時間502を返したりすることがあります。画面は同じoperation IDへ再接続するので、その間に更新ボタンをもう一度押しません。修正版のデプロイ処理は、アプリ更新が保持しているmutation lockをTeX Runtime復元処理から重ねて取得せず、Image Manager起動時に検証済みの保存状態を復元します。デプロイが途中で失敗した場合も、停止したローカルserviceとtimerを復旧してからoperationを失敗として確定します。
 
+Web更新・コマンド更新ともに、サービス停止前に非rootの書込み可能なビルド領域で`pnpm install --frozen-lockfile`を非対話実行します。コピー元の絶対パスが残った依存関係はこの段階で再構成し、以後のネストしたコマンドも同じstoreを使います。デプロイ中の依存関係の自動再インストールはせず、不整合はエラーとして停止します。ビルド専用の`.deployment-tooling`キャッシュは固定Releaseへコピーしません。
+
+更新時は既存storage配下のディレクトリにもrootlessコンテナ用の継承ACLを適用します。storage最上位だけにACLがある状態では、以前から存在する`jobs`配下へ新しいジョブの書込み権限が継承されず、描画に失敗します。修復のためにstorageを`chmod 777`へ変更する必要はありません。
+
+serviceが`active`、または配置済みバージョンが新しくなったことだけでは更新成功とは判定しません。operationの成功、本番API経由の日本語・英語PDF／PNG描画、公開配布ファイルと認証境界の確認まで必要です。RC更新が失敗した場合はStableを公開せず、同じRCを繰り返し適用したり、migration済みdatabaseに対してコードだけを戻したりしないでください。
+
 ```bash
 admin_cli=/opt/latex-renderer/current/apps/admin-cli/dist/index.js
 /usr/local/bin/node "$admin_cli" update status
@@ -408,7 +414,7 @@ v1.2.xまでのUpdate Managerはroot daemonです。v1.3.0以降は、長寿命c
 この移行だけは、先にこのページの「ダウンロードして検証」を通常ユーザーで実行し、展開した対象Releaseから次の専用コマンドを一度実行します。`VERSION`は`bundle_root`のReleaseと完全一致させます。通常のデプロイスクリプトをuser所有build treeからsudo実行する旧手順は使用しません。
 
 ```bash
-VERSION=1.3.3-rc.3
+VERSION=1.3.3-rc.4
 cd "$bundle_root"
 sudo sh deploy/scripts/bootstrap-update-manager-transition.sh "$VERSION"
 ```

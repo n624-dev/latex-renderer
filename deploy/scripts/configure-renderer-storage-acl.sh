@@ -63,7 +63,10 @@ case "$cleanup_gid" in
 esac
 
 setfacl -m "u:${mapped_uid}:rwx,g:${mapped_gid}:rwx,g:${cleanup_gid}:rwx,m::rwx,o::---" "$storage_root"
-setfacl -m "d:u:${mapped_uid}:rwx,d:g:${mapped_gid}:rwx,d:g:${cleanup_gid}:rwx,d:m::rwx,d:o::---" "$storage_root"
+# Existing directories (especially storage/jobs on upgraded hosts) must also
+# inherit the default ACL. Setting it only on storage_root fixes fresh installs
+# but leaves every future job beneath pre-existing parents inaccessible.
+find "$storage_root" -type d -exec setfacl -m "d:u:${mapped_uid}:rwx,d:g:${mapped_gid}:rwx,d:g:${cleanup_gid}:rwx,d:m::rwx,d:o::---" {} +
 find "$storage_root" -type d -exec setfacl -m "u:${mapped_uid}:rwx,g:${mapped_gid}:rwx,g:${cleanup_gid}:rwx,m::rwx,o::---" {} +
 find "$storage_root" -type f -exec setfacl -m "u:${mapped_uid}:rw-,g:${mapped_gid}:rw-,g:${cleanup_gid}:rw-,m::rw-,o::---" {} +
 

@@ -194,9 +194,20 @@ describe("production hardening", () => {
     expect(smoke).toContain('value.command!=="render"');
     expect(smoke).toContain("/apiKey|uploadTicket|jobTicket/i");
     expect(smoke).toContain("smoke_user=latex-renderer");
-    expect(smoke.match(/runuser -u "\$smoke_user"/g)).toHaveLength(6);
+    expect(smoke.match(/runuser -u "\$smoke_user"/g)).toHaveLength(4);
+    expect(smoke).toContain('LATEX_RENDERER_ADMIN_GID="$smoke_gid"');
+    for (const command of ["create", "revoke", "cleanup-jobs"])
+      expect(smoke).toContain(`run_smoke_admin ${command}`);
     expect(smoke).toContain('API_KEY_PEPPER_FILE="$smoke_pepper"');
     expect(smoke).not.toContain('API_KEY_PEPPER_FILE="$pepper"');
+    expect(smoke).toContain(
+      'install -o "$smoke_user" -g "$smoke_group" -m 0400',
+    );
+    expect(smoke).toContain(
+      '"$temporary_root/main.tex" "$temporary_root/project/main.tex"',
+    );
+    expect(smoke).not.toContain('> "$temporary_root/project/main.tex"');
+    expect(smoke).toContain("Production smoke credential revocation failed");
   });
   it("exercises the published cross-platform setup lifecycle in an isolated temporary root", () => {
     const deploy = read("deploy/scripts/deploy-production-release.sh");
@@ -257,7 +268,13 @@ describe("production hardening", () => {
     );
     expect(deploy).toContain('PNPM_HOME="$sync_pnpm_bin" PATH="$sync_path"');
     expect(deploy).toContain('if [ ! -x "$sync_pnpm_bin/pnpm" ]');
-    expect(deploy).toContain('"$sync_pnpm_bin/pnpm" --dir "$build_root"');
+    expect(deploy).toContain('"$build_root" "$sync_pnpm_bin/pnpm" "$@"');
+    expect(deploy).toContain("run_deployment_pnpm install --frozen-lockfile");
+    expect(deploy.indexOf("run_deployment_pnpm install")).toBeLessThan(
+      deploy.indexOf(
+        'sh "$source_root/deploy/scripts/quiesce-image-manager.sh"',
+      ),
+    );
     expect(deploy).not.toContain("/usr/local/bin/corepack pnpm");
   });
   it("builds production services and the client distribution before copying the immutable release", () => {

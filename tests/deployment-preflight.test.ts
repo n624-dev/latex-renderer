@@ -11,6 +11,47 @@ import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 
 describe("deployment prerequisite failure boundary", () => {
+  it.skipIf(process.platform !== "linux")(
+    "installs smoke input explicitly under umask 077",
+    () => {
+      const root = mkdtempSync(join(tmpdir(), "renderer-smoke-input-"));
+      try {
+        const script = readFileSync(
+          "deploy/scripts/smoke-test-production.sh",
+          "utf8",
+        );
+        const start = script.indexOf('install -d -o "$smoke_user"');
+        const end = script.indexOf("printf '%s' \"$token\"");
+        expect(start).toBeGreaterThan(0);
+        expect(end).toBeGreaterThan(start);
+        const result = spawnSync(
+          "sh",
+          [
+            "-c",
+            `
+        set -eu
+        umask 077
+        temporary_root=$1
+        smoke_user=$(id -un)
+        smoke_group=$(id -gn)
+        ${script.slice(start, end)}
+        stat -c '%a:%u' "$temporary_root/project/main.tex"
+      `,
+            "smoke-input-test",
+            root,
+          ],
+          { encoding: "utf8" },
+        );
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout.trim()).toBe(`400:${process.getuid?.()}`);
+        expect(readFileSync(join(root, "project/main.tex"), "utf8")).toContain(
+          "日本語",
+        );
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
   it.skipIf(process.platform === "win32")(
     "runs the runtime identity CLI through a current symlink",
     () => {
