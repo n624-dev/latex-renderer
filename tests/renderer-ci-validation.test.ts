@@ -12,7 +12,8 @@ describe("Base-only CI validation failure boundaries", () => {
         "../deploy/scripts/ghcr-tag-status.mjs",
         import.meta.url,
       ).href;
-      const code = `let calls=0; globalThis.fetch=()=>Promise.resolve(++calls===1 ? Response.json({token:'synthetic-token'}) : new Response(null,{status:${status}})); process.argv[2]='2026-09-05'; await import(${JSON.stringify(script)});`;
+      // Pass fixture data separately; never interpolate it into executable code.
+      const code = `let calls=0; globalThis.fetch=()=>Promise.resolve(++calls===1 ? Response.json({token:'synthetic-token'}) : new Response(null,{status:Number(process.env.TEST_REGISTRY_STATUS)})); process.argv[2]='2026-09-05'; await import(process.env.TEST_REGISTRY_SCRIPT);`;
       const result = spawnSync(
         process.execPath,
         ["--input-type=module", "-e", code],
@@ -22,6 +23,8 @@ describe("Base-only CI validation failure boundaries", () => {
             ...process.env,
             GITHUB_TOKEN: "",
             GHCR_REPOSITORY: "ghcr.io/test-owner/test-image",
+            TEST_REGISTRY_STATUS: String(status),
+            TEST_REGISTRY_SCRIPT: script,
           },
         },
       );
