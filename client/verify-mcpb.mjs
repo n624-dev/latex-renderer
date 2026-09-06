@@ -15,7 +15,14 @@ import { fileURLToPath } from "node:url";
 
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), ".."),
   outputRoot = join(repository, "client-dist"),
-  metadata = JSON.parse(readFileSync(join(outputRoot, "mcpb.json"), "utf8")),
+  metadata = JSON.parse(
+    readFileSync(
+      process.argv[3] === undefined
+        ? join(outputRoot, "mcpb.json")
+        : resolve(process.argv[3]),
+      "utf8",
+    ),
+  ),
   archive =
     process.argv[2] === undefined
       ? join(outputRoot, metadata.archive)
