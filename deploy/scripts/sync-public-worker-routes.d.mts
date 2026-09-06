@@ -1,3 +1,4 @@
+export function authenticationToken(): string;
 export interface WorkerRoute {
   id: string;
   pattern: string;

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.3.3-rc.5 - 2026-09-06
+
+- Run Cloudflare OAuth credential lookup and route synchronization from the prepared non-root build context, including its pinned pnpm store. Preflight both public Worker and Tunnel route plans before stopping services, while accepting valid plans that need changes and rejecting authentication/API failures.
+
 ## 1.3.3-rc.4 - 2026-09-06
 
 - Prepare relocated deployment dependencies noninteractively with the release-pinned pnpm and a build-local store before stopping services. Preserve the frozen lockfile, propagate the same store into nested builds, and reject dependency drift instead of implicitly reinstalling during deployment.
