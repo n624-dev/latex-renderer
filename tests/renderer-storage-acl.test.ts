@@ -11,6 +11,22 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 describe("upgraded renderer storage ACL inheritance", () => {
+  it("provisions ACL tools in every workflow running the full suite", () => {
+    for (const workflow of [
+      "ci.yml",
+      "server-release.yml",
+      "renderer-image-daily.yml",
+    ]) {
+      const source = readFileSync(`.github/workflows/${workflow}`, "utf8");
+      const prerequisites = source.indexOf(
+        "sudo apt-get install --no-install-recommends --yes age acl",
+      );
+      expect(prerequisites, workflow).toBeGreaterThan(0);
+      expect(prerequisites, workflow).toBeLessThan(
+        source.indexOf("pnpm check"),
+      );
+    }
+  });
   it.skipIf(process.platform !== "linux")(
     "repairs existing parents and grants mapped access to future jobs without public access",
     () => {

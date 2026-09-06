@@ -42,6 +42,10 @@ jobs:
           node-version: "24"
       - name: Enable Corepack
         run: corepack enable
+      - name: Install integration-test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes age acl
       - name: Install and validate source
         run: |
           pnpm install --frozen-lockfile
