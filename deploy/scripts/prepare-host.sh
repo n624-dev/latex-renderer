@@ -17,6 +17,10 @@ case "$release_id" in
 esac
 
 source_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
+if ! command -v setfacl >/dev/null 2>&1; then
+  echo "setfacl is required; install the acl package before preparing the host" >&2
+  exit 69
+fi
 sh "$source_root/deploy/scripts/install-github-cli.sh"
 release_root="/opt/latex-renderer/releases/$release_id"
 release_marker="$release_root/.host-prepare-source-complete"
@@ -53,7 +57,6 @@ if [ ! -f "$release_marker" ]; then
 fi
 chown -hR root:latex-renderer "$release_root"
 chmod -R u=rwX,g=rX,o= "$release_root"
-ln -sfn "$release_root" /opt/latex-renderer/current
 if [ -n "$previous_release" ] && [ "$previous_release" != "$release_root" ]; then
   chmod o-rwx "$previous_release"
 fi
@@ -214,6 +217,9 @@ while [ ! -S "$runtime_dir/docker.sock" ]; do
   sleep 1
 done
 
+# Activate only after host preparation succeeds. Failure recovery must not
+# start new application code against old service definitions.
+ln -sfn "$release_root" /opt/latex-renderer/current
 echo "Host preparation complete."
 echo "Release: $release_root"
 echo "Rootless Docker: $rootless_socket"

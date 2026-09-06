@@ -25,6 +25,10 @@ case "$parent_mutation_lock" in
   *) echo "LATEX_RENDERER_PARENT_MUTATION_LOCK is invalid" >&2; exit 64 ;;
 esac
 source_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
+if ! command -v setfacl >/dev/null 2>&1; then
+  echo "setfacl is required; install the acl package before starting deployment" >&2
+  exit 69
+fi
 cd "$source_root"
 build_root=${LATEX_RENDERER_BUILD_ROOT:-$source_root}
 case "$build_root" in /*) ;; *) echo "LATEX_RENDERER_BUILD_ROOT must be an absolute path" >&2; exit 64 ;; esac
