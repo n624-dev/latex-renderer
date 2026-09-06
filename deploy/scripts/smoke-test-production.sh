@@ -109,6 +109,10 @@ test -s "$temporary_root/project/.render/previews/page-1.png"
 
 runuser -u "$smoke_user" -- env XDG_CONFIG_HOME="$temporary_root/config" \
   LATEX_RENDER_BASE_URL="$public_origin" \
-  /usr/local/bin/node "$render_cli" jobs delete "$job_id" --yes >/dev/null
+  /usr/local/bin/node "$render_cli" jobs delete "$job_id" --yes --json > "$temporary_root/delete.json" || {
+    echo "Production smoke job deletion failed" >&2
+    exit 1
+  }
+/usr/local/bin/node -e 'const x=require(process.argv[1]);if(x.success!==true||x.command!=="jobs.delete")process.exit(1)' "$temporary_root/delete.json"
 
 echo "Production smoke test passed: Japanese/English PDF and PNG preview were rendered."

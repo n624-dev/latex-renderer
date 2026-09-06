@@ -173,8 +173,7 @@ export class RendererClient {
       new URL(`${PUBLIC_API_PREFIX}/job-tickets/${jobId}`, this.#baseUrl),
       {
         method: "POST",
-        headers: this.headers({ "Content-Type": "application/json" }),
-        body: "{}",
+        headers: this.headers(),
         redirect: "error",
       },
     );

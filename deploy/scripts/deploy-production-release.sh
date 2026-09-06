@@ -307,7 +307,8 @@ install -o "$sync_user" -g "$sync_group" -m 0600 \
   "$mcpb_verify_root/latex-renderer-local.mcpb"
 runuser -u "$sync_user" -- /usr/local/bin/node \
   "$source_root/client/verify-mcpb.mjs" \
-  "$mcpb_verify_root/latex-renderer-local.mcpb"
+  "$mcpb_verify_root/latex-renderer-local.mcpb" \
+  "$build_root/apps/public-web/dist/downloads/mcpb/mcpb.json"
 cache_buster="release=$release_id&fresh=$(date +%s)"
 curl --fail --silent --show-error "$client_base/install.mjs?$cache_buster" | grep -q 'installDistribution'
 curl --fail --silent --show-error "$public_origin/downloads/?$cache_buster" | grep -q '最新版ZIP'
