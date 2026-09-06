@@ -3,8 +3,15 @@ set -eu
 
 image=${1:-latex-renderer:base-ci}
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
-output=$(mktemp -d)
-trap 'rm -rf "$output"' EXIT HUP INT TERM
+. "$repo_root/deploy/scripts/smoke-container.sh"
+smoke_root=$(mktemp -d)
+input="$smoke_root/input"
+output="$smoke_root/output"
+trap 'rm -rf "$smoke_root"' EXIT HUP INT TERM
+chmod 0755 "$smoke_root"
+mkdir "$input" "$output"
+cp -R "$repo_root/tests/fixtures/runtime-basic/." "$input/"
+chmod -R a+rX "$input"
 chmod 0770 "$output"
 
 # The published base must remain renderer-code-free. It is a TeX Live substrate,
@@ -18,8 +25,7 @@ docker run --rm --network none --read-only --entrypoint /bin/sh "$image" -c '
   kpsewhich pgfplots.sty >/dev/null
 '
 
-docker run --rm \
-  --user "$(id -u):$(id -g)" \
+run_smoke_container "$image" "$output" \
   --network none \
   --read-only \
   --cap-drop ALL \
@@ -28,8 +34,7 @@ docker run --rm \
   --memory 1g \
   --cpus 1.5 \
   --tmpfs /tmp:rw,noexec,nosuid,nodev,size=512m \
-  --mount "type=bind,src=$repo_root/tests/fixtures/runtime-basic,dst=/work/input,readonly" \
-  --mount "type=bind,src=$output,dst=/work/output" \
+  --mount "type=bind,src=$input,dst=/work/input,readonly" \
   --entrypoint /bin/sh \
   "$image" -c \
   'lualatex -no-shell-escape -interaction=nonstopmode -halt-on-error -file-line-error -output-directory=/work/output /work/input/main.tex'

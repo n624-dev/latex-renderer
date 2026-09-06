@@ -2,6 +2,7 @@
 set -eu
 
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+. "$repo_root/deploy/scripts/smoke-container.sh"
 image=${1:-latex-renderer:ci}
 smoke_root=$(mktemp -d)
 input="$smoke_root/input"
@@ -14,8 +15,7 @@ chmod -R a+rX "$input"
 chmod 0770 "$output"
 
 set +e
-docker run --rm \
-  --user "$(id -u):$(id -g)" \
+run_smoke_container "$image" "$output" \
   --network none \
   --read-only \
   --cap-drop ALL \
@@ -28,7 +28,6 @@ docker run --rm \
   --env LATEX_OUTPUTS=pdf,svg \
   --env MAX_SVG_OBJECTS=50 \
   --mount "type=bind,src=$input,dst=/work/input,readonly" \
-  --mount "type=bind,src=$output,dst=/work/output" \
   "$image"
 renderer_status=$?
 set -e

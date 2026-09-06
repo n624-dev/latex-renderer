@@ -3,6 +3,7 @@ set -eu
 
 image=${1:-latex-renderer:ci}
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+. "$repo_root/deploy/scripts/smoke-container.sh"
 smoke_root=$(mktemp -d)
 input="$smoke_root/input"
 output="$smoke_root/output"
@@ -14,8 +15,7 @@ chmod -R a+rX "$input"
 chmod 0770 "$output"
 
 set +e
-docker run --rm \
-  --user "$(id -u):$(id -g)" \
+run_smoke_container "$image" "$output" \
   --network none \
   --read-only \
   --cap-drop ALL \
@@ -27,7 +27,6 @@ docker run --rm \
   --env LATEX_ENTRYPOINT=main.tex \
   --env LATEX_OUTPUTS=pdf \
   --mount "type=bind,src=$input,dst=/work/input,readonly" \
-  --mount "type=bind,src=$output,dst=/work/output" \
   "$image"
 renderer_status=$?
 set -e
