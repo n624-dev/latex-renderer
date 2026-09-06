@@ -10,9 +10,9 @@ since: "v1.2.0"
 
 ## 現在の提供状況
 
-このページは[`v1.3.3-rc.1`](https://github.com/n624-dev/latex-renderer/releases/tag/v1.3.3-rc.1)のサーバーbundleを対象にします。バージョンが`-rc.N`のReleaseは指定された検証hostだけへ明示適用し、一般利用者はStableを使用してください。Cloudflare構成に加えて、通常のTLSリバースプロキシとOIDC／ローカルパスワード認証を選択できます。このReleaseは公開後にタグや配布ファイルを差し替えできない設定で固定され、次を含みます。
+このページは[`v1.3.3-rc.2`](https://github.com/n624-dev/latex-renderer/releases/tag/v1.3.3-rc.2)のサーバーbundleを対象にします。バージョンが`-rc.N`のReleaseは指定された検証hostだけへ明示適用し、一般利用者はStableを使用してください。Cloudflare構成に加えて、通常のTLSリバースプロキシとOIDC／ローカルパスワード認証を選択できます。このReleaseは公開後にタグや配布ファイルを差し替えできない設定で固定され、次を含みます。
 
-- `latex-renderer-server-1.3.3-rc.1.tar.gz`
+- `latex-renderer-server-1.3.3-rc.2.tar.gz`
 - クライアントZIPとClaude Desktop用MCPB
 - 3つの配布ファイルを検証する`SHA256SUMS`
 - commit、バージョン、Renderer fingerprint、Node.js／pnpm要件を記録したbundle内metadata
@@ -89,12 +89,12 @@ since: "v1.2.0"
 
 公開リポジトリの`*.example`ファイルは項目確認のための雛形です。設定済みファイルを雛形へ上書きしてcommitする運用はしません。
 
-## v1.3.3-rc.1をダウンロードして検証
+## v1.3.3-rc.2をダウンロードして検証
 
 次のコマンドは、固定されたReleaseであることをGitHub APIで確認し、APIが返すdigestとダウンロードしたbundleを照合します。通常の非rootユーザーで実行します。
 
 ```bash
-version=1.3.3-rc.1
+version=1.3.3-rc.2
 repository=n624-dev/latex-renderer
 asset="latex-renderer-server-$version.tar.gz"
 work_dir=$(mktemp -d)
@@ -135,6 +135,15 @@ bundle_root="$work_dir/latex-renderer-server-$version"
 `OK`が表示されなければ、展開やsudo操作へ進みません。attestation bundleは公開GitHub APIから取得してoffline検証へ渡すため、host上のGitHubログインやGitHub tokenは不要です。`work_dir`と`bundle_root`は同じシェルで続く手順に使用します。
 
 ## ホストを準備
+
+新規導入・旧版からの更新ともに、ストレージ権限設定用の`setfacl`が必要です。Ubuntu／Debianでは、サービスを停止する前に次を実行して確認します。
+
+```bash
+sudo apt-get install --no-install-recommends acl
+command -v setfacl
+```
+
+RC.1以前でこの不足により更新が失敗した場合、`current`だけが新版へ切り替わり、新旧のサービス設定が混在している可能性があります。同じ更新コマンドを再実行せず、稼働サービス・DB migration・バックアップの状態を先に確認してください。DBが更新済みならコードだけを旧版へ戻してはいけません。
 
 導入スクリプトの前に、Node.js 24、`/usr/local/bin/node`、`/usr/local/bin/corepack`、Docker Engineのrootless用toolを準備します。`cloudflare` profileだけはcloudflaredも必要です。Update Managerはbundle metadataに記録されたpnpmをCorepackでデプロイ用ユーザーへ導入し、実行前に版を照合します。インストール元はそれぞれの公式ドキュメントを使用し、第三者の非公式スクリプトをrootで実行しません。
 
@@ -399,7 +408,7 @@ v1.2.xまでのUpdate Managerはroot daemonです。v1.3.0以降は、長寿命c
 この移行だけは、先にこのページの「ダウンロードして検証」を通常ユーザーで実行し、展開した対象Releaseから次の専用コマンドを一度実行します。`VERSION`は`bundle_root`のReleaseと完全一致させます。通常のデプロイスクリプトをuser所有build treeからsudo実行する旧手順は使用しません。
 
 ```bash
-VERSION=1.3.3-rc.1
+VERSION=1.3.3-rc.2
 cd "$bundle_root"
 sudo sh deploy/scripts/bootstrap-update-manager-transition.sh "$VERSION"
 ```
