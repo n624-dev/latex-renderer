@@ -144,8 +144,8 @@ export class RendererClient {
   }
   async job(
     ...args:
-      | [jobId: string, jobTicket: string, options?: RendererRequestOptions]
-      | [rendererUrl: string, jobId: string, jobTicket: string, options?: RendererRequestOptions]
+      | [jobId: string, jobTicket: string, options?: RendererRequestOptions | undefined]
+      | [rendererUrl: string, jobId: string, jobTicket: string, options?: RendererRequestOptions | undefined]
   ): Promise<JobResponse> {
     let base: string, jobId: string, ticket: string, path: string;
     let options: RendererRequestOptions | undefined;

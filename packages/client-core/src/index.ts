@@ -351,7 +351,7 @@ export async function createProjectArchive(
   // never cause us to remove a destination belonging to the caller.
   const handle = await open(destination, "wx", 0o600);
   const output = handle.createWriteStream();
-  zip.on("error", (error: Error) => zip.outputStream.destroy(error));
+  zip.on("error", (error: Error) => output.destroy(error));
   const completion = pipeline(zip.outputStream, output);
   // Observe early stream failures while the project directory is being walked.
   void completion.catch(() => undefined);
