@@ -14,7 +14,8 @@ export async function pollUntilTerminal(
 ): Promise<{ job: JobResponse; jobTicket: string }> {
   const interval = options.pollIntervalMs ?? 1000,
     timeout = options.pollTimeoutMs,
-    now = options.now ?? Date.now;
+    now = options.now ?? Date.now,
+    customSleep = options.sleep;
   if (timeout !== undefined && (!Number.isSafeInteger(timeout) || timeout <= 0))
     throw new AppError("INVALID_POLL_TIMEOUT", "Poll timeout must be a positive integer", 400);
   if (!Number.isSafeInteger(interval) || interval < 0 || interval > 2_147_483_647)
@@ -73,8 +74,8 @@ export async function pollUntilTerminal(
       assertDeadline();
       options.onEvent?.({ type: "job.status", jobId: ticket.jobId, status: job.status });
       if (terminalStatuses.has(job.status)) return { job, jobTicket };
-      if (options.sleep !== undefined) {
-        await abortable(controller.signal, () => (options.sleep as NonNullable<RenderOptions["sleep"]>)(interval));
+      if (customSleep !== undefined) {
+        await abortable(controller.signal, () => customSleep(interval));
       } else {
         await sleep(interval, controller.signal);
       }
@@ -84,11 +85,16 @@ export async function pollUntilTerminal(
   }
 }
 
+function abortReason(signal: AbortSignal): Error {
+  const reason: unknown = signal.reason;
+  return reason instanceof Error ? reason : new Error("Polling aborted");
+}
+
 async function abortable<T>(signal: AbortSignal, operation: () => Promise<T>): Promise<T> {
   signal.throwIfAborted();
   let onAbort: () => void = () => undefined;
   const aborted = new Promise<never>((_resolve, reject) => {
-    onAbort = () => reject(signal.reason as unknown);
+    onAbort = () => reject(abortReason(signal));
     signal.addEventListener("abort", onAbort, { once: true });
   });
   try {
@@ -104,7 +110,7 @@ function sleep(milliseconds: number, signal: AbortSignal): Promise<void> {
     const onAbort = () => {
       clearTimeout(timer);
       signal.removeEventListener("abort", onAbort);
-      reject(signal.reason as unknown);
+      reject(abortReason(signal));
     };
     const timer = setTimeout(() => {
       signal.removeEventListener("abort", onAbort);
