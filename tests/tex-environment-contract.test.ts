@@ -23,7 +23,7 @@ describe("managed TeX Live image pipeline", () => {
     expect(workflow).not.toContain("self-hosted");
     expect(workflow).not.toContain("packages: write");
     expect(workflow).toContain("push: false");
-    expect(workflow).toContain("smoke-test-renderer-svg.sh");
+    expect(workflow).toContain("ci-validate-texlive-base.sh");
     expect(retention).toContain('"--prefer-index=false"');
 
     expect(baseDockerfile).toContain(
@@ -55,11 +55,19 @@ describe("managed TeX Live image pipeline", () => {
     expect(workflow).toContain("packages: write");
     expect(workflow).toContain("persist-credentials: false");
     expect(workflow).not.toContain("source_ref");
-    expect(workflow).toContain("smoke-test-texlive-base.sh");
-    expect(workflow).toContain("smoke-test-renderer-basic.sh");
-    expect(workflow).toContain("smoke-test-renderer-en-jp.sh");
-    expect(workflow).toContain("smoke-test-renderer-svg.sh");
-    expect(workflow).toContain(
+    expect(read("deploy/scripts/ci-validate-texlive-base.sh")).toContain(
+      "smoke-test-texlive-base.sh",
+    );
+    expect(read("deploy/scripts/ci-validate-texlive-base.sh")).toContain(
+      "smoke-test-renderer-basic.sh",
+    );
+    expect(read("deploy/scripts/ci-validate-texlive-base.sh")).toContain(
+      "smoke-test-renderer-en-jp.sh",
+    );
+    expect(read("deploy/scripts/ci-validate-texlive-base.sh")).toContain(
+      "smoke-test-renderer-svg.sh",
+    );
+    expect(read("deploy/scripts/ci-validate-texlive-base.sh")).toContain(
       "collection-langenglish collection-langjapanese",
     );
     expect(workflow).toContain('docker push "$dated_ref"');

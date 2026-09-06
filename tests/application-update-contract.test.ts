@@ -53,22 +53,23 @@ describe("Base-only package and local Runtime delivery", () => {
 
   it("publishes only a Base after a local English/Japanese Runtime passes", () => {
     const workflow = read(".github/workflows/renderer-image-daily.yml");
-    expect(workflow).toContain("validation_runtime");
-    expect(workflow).toContain(
+    const validation = read("deploy/scripts/ci-validate-texlive-base.sh");
+    expect(workflow).toContain("ci-validate-texlive-base.sh");
+    expect(validation).toContain(
       "collection-langenglish collection-langjapanese",
     );
-    expect(workflow).toContain(
-      'smoke-test-renderer-en-jp.sh "$validation_runtime"',
+    expect(validation).toContain(
+      'smoke-test-renderer-en-jp.sh" "$validation_runtime"',
     );
-    expect(workflow).toContain(
-      'smoke-test-renderer-svg.sh "$validation_runtime"',
+    expect(validation).toContain(
+      'smoke-test-renderer-svg.sh" "$validation_runtime"',
     );
     expect(workflow).toContain('docker push "$dated_ref"');
     expect(workflow).not.toContain('docker push "$runtime_ref"');
     expect(workflow).not.toContain("validated-runtime-tags");
     expect(workflow).not.toContain("runtime_digests");
-    expect(workflow.indexOf("RUNTIME_BUILDX_BUILDER=default")).toBeLessThan(
-      workflow.indexOf("sh deploy/scripts/build-language-runtime.sh"),
+    expect(validation.indexOf("RUNTIME_BUILDX_BUILDER=default")).toBeLessThan(
+      validation.indexOf('sh "$script_root/build-language-runtime.sh"'),
     );
     expect(read("deploy/scripts/build-language-runtime.sh")).toContain(
       'set -- docker buildx build --builder "$RUNTIME_BUILDX_BUILDER"',
@@ -80,17 +81,23 @@ describe("Base-only package and local Runtime delivery", () => {
 
   it("keeps dated and latest Base publication behind all Runtime smoke tests", () => {
     const workflow = read(".github/workflows/renderer-image-daily.yml");
-    const baseSmoke = workflow.indexOf('smoke-test-texlive-base.sh "$base"');
-    const languageSmoke = workflow.indexOf(
-      'smoke-test-renderer-en-jp.sh "$validation_runtime"',
+    const validation = read("deploy/scripts/ci-validate-texlive-base.sh");
+    const baseSmoke = validation.indexOf('smoke-test-texlive-base.sh" "$base"');
+    const languageSmoke = validation.indexOf(
+      'smoke-test-renderer-en-jp.sh" "$validation_runtime"',
+    );
+    const validationCall = workflow.indexOf(
+      "sh deploy/scripts/ci-validate-texlive-base.sh",
     );
     const datedPush = workflow.indexOf('docker push "$dated_ref"');
     const latestPromotion = workflow.indexOf(
       '--tag "$IMAGE_REPOSITORY:latest"',
     );
     expect(languageSmoke).toBeGreaterThan(baseSmoke);
-    expect(datedPush).toBeGreaterThan(languageSmoke);
-    expect(latestPromotion).toBeGreaterThan(languageSmoke);
+    expect(datedPush).toBeGreaterThan(validationCall);
+    expect(latestPromotion).toBeGreaterThan(
+      workflow.indexOf("Verify anonymous pull"),
+    );
   });
 
   it("proves GHCR push scope before starting the expensive image build", () => {

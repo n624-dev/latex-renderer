@@ -137,6 +137,12 @@ if [ -n "${RUNTIME_BUILDX_BUILDER:-}" ]; then
   set -- docker buildx build --builder "$RUNTIME_BUILDX_BUILDER"
 fi
 
+case "${RUNTIME_NO_CACHE:-false}" in
+  true) set -- "$@" --no-cache ;;
+  false) ;;
+  *) echo "RUNTIME_NO_CACHE must be true or false" >&2; exit 64 ;;
+esac
+
 "$@" \
   --load \
   --build-arg "BASE_IMAGE=$base_lock_ref" \

@@ -57,7 +57,7 @@ describe("public supply-chain controls", () => {
     expect(manager).toContain("ref: matchingDigest ?? info.Id");
     const workflow = read(".github/workflows/renderer-image-daily.yml");
     expect(workflow).toContain('docker pull "$IMAGE_REPOSITORY@$digest"');
-    expect(workflow).toContain("validation_runtime");
+    expect(workflow).toContain("ci-validate-texlive-base.sh");
     expect(workflow).not.toContain('docker push "$runtime_ref"');
     expect(manager).toContain('source: "local-build"');
     expect(manager).toContain("packageRef: null");

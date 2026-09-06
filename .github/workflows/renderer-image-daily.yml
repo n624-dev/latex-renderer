@@ -104,15 +104,17 @@ jobs:
           GHCR_PACKAGE: latex-renderer-texlive
         run: |
           set -euo pipefail
+          sh deploy/scripts/ci-renderer-disk.sh before-base-build 12
           base="latex-renderer:base-$SNAPSHOT_DATE"
-          validation_runtime="latex-renderer:validation-en-jp-$SNAPSHOT_DATE"
           dated_ref="$IMAGE_REPOSITORY:$SNAPSHOT_DATE"
 
           printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
-          tag_status=$(node deploy/scripts/ghcr-tag-status.mjs "$SNAPSHOT_DATE")
+          tag_status=$(GITHUB_TOKEN= node deploy/scripts/ghcr-tag-status.mjs "$SNAPSHOT_DATE")
           if [[ "$tag_status" == present ]]; then
-            docker pull "$dated_ref"
-            base="$dated_ref"
+            reused_digest=$(docker buildx imagetools inspect "$dated_ref" | awk '$1 == "Digest:" { print $2; exit }')
+            [[ "$reused_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+            base="$IMAGE_REPOSITORY@$reused_digest"
+            docker pull "$base"
             base_source=reused-existing
           elif [[ "$tag_status" == absent ]]; then
             sh deploy/scripts/generate-texlive-profile.sh \
@@ -143,21 +145,7 @@ jobs:
           [[ $(docker image inspect "$base" --format '{{index .Config.Labels "jp.n624.latex-renderer.base-kind"}}') == texlive-only-v1 ]]
           [[ $(docker image inspect "$base" --format '{{index .Config.Labels "jp.n624.latex-renderer.texlive.repository"}}') == "$TEXLIVE_REPOSITORY" ]]
           [[ $(docker image inspect "$base" --format '{{index .Config.Labels "jp.n624.latex-renderer.texlive.installer-sha512"}}') == "$TEXLIVE_INSTALLER_SHA512" ]]
-          sh deploy/scripts/smoke-test-texlive-base.sh "$base"
-
-          # A Base is publishable only after the normal local Runtime path can
-          # add English and Japanese and render with them. This derived image
-          # is a CI-only validation artifact and is never pushed to GHCR.
-          RUNTIME_BUILDX_BUILDER=default \
-            RENDERER_RUNTIME_SOURCE="$GITHUB_WORKSPACE/renderer" \
-            sh deploy/scripts/build-language-runtime.sh \
-              "$base" "$TEXLIVE_REPOSITORY" "$validation_runtime" \
-              collection-langenglish collection-langjapanese
-          [[ $(docker image inspect "$validation_runtime" --format '{{index .Config.Labels "jp.n624.latex-renderer.languages"}}') == collection-langenglish,collection-langjapanese ]]
-          [[ $(docker image inspect "$validation_runtime" --format '{{index .Config.Labels "jp.n624.latex-renderer.runtime-kind"}}') == managed-local-v1 ]]
-          sh deploy/scripts/smoke-test-renderer-basic.sh "$validation_runtime"
-          sh deploy/scripts/smoke-test-renderer-en-jp.sh "$validation_runtime"
-          sh deploy/scripts/smoke-test-renderer-svg.sh "$validation_runtime"
+          sh deploy/scripts/ci-validate-texlive-base.sh "$base" "$TEXLIVE_REPOSITORY"
 
           docker tag "$base" "latex-renderer:validated-base-$SNAPSHOT_DATE"
 
@@ -191,7 +179,7 @@ jobs:
           printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
 
           if [[ "$base_source" == cold-built ]]; then
-            [[ $(node deploy/scripts/ghcr-tag-status.mjs "$SNAPSHOT_DATE") == absent ]]
+            [[ $(GITHUB_TOKEN= node deploy/scripts/ghcr-tag-status.mjs "$SNAPSHOT_DATE") == absent ]]
             local_id=$(docker image inspect "$base" --format '{{.Id}}')
             docker tag "$base" "$dated_ref"
             docker push "$dated_ref"
@@ -202,19 +190,12 @@ jobs:
           elif [[ "$base_source" == reused-existing ]]; then
             digest=$(docker buildx imagetools inspect "$dated_ref" | awk '$1 == "Digest:" { print $2; exit }')
             [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+            [[ "$base" == "$IMAGE_REPOSITORY@$digest" ]]
           else
             echo "Unexpected validated base source: $base_source" >&2
             exit 65
           fi
 
-          if [[ "$REQUESTED_DATE" == latest ]]; then
-            docker buildx imagetools create \
-              --prefer-index=false \
-              --tag "$IMAGE_REPOSITORY:latest" \
-              "$IMAGE_REPOSITORY@$digest"
-            latest_digest=$(docker buildx imagetools inspect "$IMAGE_REPOSITORY:latest" | awk '$1 == "Digest:" { print $2; exit }')
-            [[ "$latest_digest" == "$digest" ]]
-          fi
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
       - name: Verify anonymous pull
@@ -227,6 +208,19 @@ jobs:
           docker image rm "$IMAGE_REPOSITORY@$IMAGE_DIGEST" >/dev/null 2>&1 || true
           docker pull "$IMAGE_REPOSITORY@$IMAGE_DIGEST"
           sh deploy/scripts/smoke-test-texlive-base.sh "$IMAGE_REPOSITORY@$IMAGE_DIGEST"
+
+      - name: Promote latest only after anonymous verification
+        if: steps.publish.outcome == 'success' && env.REQUESTED_DATE == 'latest'
+        env:
+          IMAGE_DIGEST: ${{ steps.publish.outputs.digest }}
+          GHCR_TOKEN: ${{ github.token }}
+          GHCR_ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_ACTOR" --password-stdin
+          docker buildx imagetools create --prefer-index=false --tag "$IMAGE_REPOSITORY:latest" "$IMAGE_REPOSITORY@$IMAGE_DIGEST"
+          latest_digest=$(docker buildx imagetools inspect "$IMAGE_REPOSITORY:latest" | awk '$1 == "Digest:" { print $2; exit }')
+          [[ "$latest_digest" == "$IMAGE_DIGEST" ]]
 
       - name: Registry maintenance
         if: steps.publish.outcome == 'success' && env.REQUESTED_DATE == 'latest'
@@ -248,7 +242,7 @@ jobs:
           set +e
           docker image rm \
             "latex-renderer:validated-base-${SNAPSHOT_DATE:-unknown}" \
-            "latex-renderer:validation-en-jp-${SNAPSHOT_DATE:-unknown}" \
+            "latex-renderer:ci-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
             "$IMAGE_REPOSITORY:${SNAPSHOT_DATE:-unknown}" \
             "$IMAGE_REPOSITORY:latest" \
             "latex-renderer:base-${SNAPSHOT_DATE:-unknown}" \
