@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.3.4-rc.1 - 2026-09-07
+
 - Return decoded maintenance/worker modes from the Admin system status API, with the same defaults used by runtime enforcement. Fix the dashboard incorrectly showing attention required for an unset running worker or rendering setting records as objects, without changing production settings.
 
 ## 1.3.3 - 2026-09-06
