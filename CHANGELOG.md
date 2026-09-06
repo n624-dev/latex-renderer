@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Return decoded maintenance/worker modes from the Admin system status API, with the same defaults used by runtime enforcement. Fix the dashboard incorrectly showing attention required for an unset running worker or rendering setting records as objects, without changing production settings.
+
 ## 1.3.3 - 2026-09-06
 
 - Promote the immutable v1.3.3-rc.6 candidate after a successful complete Update Manager upgrade and production checks on the validation host. Executable changes are limited to the exact version replacement.
