@@ -17,6 +17,149 @@ afterEach(() => {
 });
 
 describe("user Web application API", () => {
+  it("retains Project Sources and records output changes per Job without changing revisions", async () => {
+    const { app, database } = setup(),
+      headers = mutation("user");
+    const project = (await (
+      await app.request("/app/api/v1/projects", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ displayName: "Outputs" }),
+      })
+    ).json()) as { id: string };
+    const source = (await (
+      await app.request("/app/api/v1/source-tickets", {
+        method: "POST",
+        headers: { ...headers, "Idempotency-Key": "outputs-source-123456" },
+        body: JSON.stringify({ size: 123, sha256: "b".repeat(64) }),
+      })
+    ).json()) as { sourceId: string };
+    database.raw
+      .prepare(
+        `UPDATE sources SET status='ready',paths_json='["main.tex"]' WHERE id=?`,
+      )
+      .run(source.sourceId);
+    const render = async (key: string, outputs: string[]) =>
+      app.request("/app/api/v1/render-tickets", {
+        method: "POST",
+        headers: { ...headers, "Idempotency-Key": key },
+        body: JSON.stringify({
+          sourceId: source.sourceId,
+          entrypoint: "main.tex",
+          projectId: project.id,
+          displayName: "Original",
+          originalFilename: "main.tex",
+          outputs,
+        }),
+      });
+    const firstResponse = await render("outputs-first-123456", ["pdf"]);
+    expect(firstResponse.status).toBe(201);
+    const first = (await firstResponse.json()) as {
+      jobId: string;
+      revisionId: string;
+    };
+    database.raw
+      .prepare(
+        "UPDATE sources SET expires_at='2000-01-01T00:00:00.000Z' WHERE id=?",
+      )
+      .run(source.sourceId);
+    const secondResponse = await render("outputs-second-123456", [
+      "pdf",
+      "svg",
+    ]);
+    expect(secondResponse.status).toBe(201);
+    const second = (await secondResponse.json()) as {
+      jobId: string;
+      revisionId: string;
+    };
+    expect(second.revisionId).toBe(first.revisionId);
+    expect(database.jobs.get(first.jobId)?.outputs_json).toBe('["pdf"]');
+    expect(database.jobs.get(second.jobId)?.outputs_json).toBe('["pdf","svg"]');
+    expect(database.projects.revisionCount(project.id)).toBe(1);
+    for (let retry = 0; retry < 2; retry++) {
+      const reused = await app.request("/app/api/v1/source-tickets", {
+        method: "POST",
+        headers: {
+          ...headers,
+          "Idempotency-Key": "retained-source-reuse-123456",
+        },
+        body: JSON.stringify({ size: 123, sha256: "b".repeat(64) }),
+      });
+      expect(reused.status).toBe(200);
+      expect(await reused.json()).toMatchObject({
+        sourceId: source.sourceId,
+        uploadRequired: false,
+      });
+    }
+    const url = `/app/api/v1/projects/${project.id}/revisions/${first.revisionId}/render`;
+    for (const [index, body, expected] of [
+      [0, {}, '["pdf"]'],
+      [1, { outputs: ["pdf", "svg"] }, '["pdf","svg"]'],
+      [2, undefined, '["pdf"]'],
+    ] as const) {
+      const response = await app.request(url, {
+        method: "POST",
+        headers: {
+          ...headers,
+          "Idempotency-Key": `outputs-rerender-123456-${index}`,
+        },
+        body: JSON.stringify(body),
+      });
+      expect(response.status).toBe(201);
+      const job = (await response.json()) as { jobId: string };
+      expect(database.jobs.get(job.jobId)).toMatchObject({
+        project_revision_id: first.revisionId,
+        outputs_json: expected,
+      });
+    }
+    expect(
+      (
+        await app.request(url, {
+          method: "POST",
+          headers: { ...headers, "Idempotency-Key": "invalid-outputs-123456" },
+          body: '{"outputs":["exe"]}',
+        })
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await app.request(url, {
+          method: "POST",
+          headers: {
+            ...mutation("other"),
+            "Idempotency-Key": "other-outputs-123456",
+          },
+          body: "{}",
+        })
+      ).status,
+    ).toBe(404);
+    const detail = (await (
+      await app.request(`/app/api/v1/projects/${project.id}`, {
+        headers: assertion("user"),
+      })
+    ).json()) as { revisions: { jobs: { id: string; outputs: string[] }[] }[] };
+    expect(detail.revisions[0]?.jobs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: first.jobId, outputs: ["pdf"] }),
+        expect.objectContaining({ id: second.jobId, outputs: ["pdf", "svg"] }),
+      ]),
+    );
+    expect(database.sources.storageUsageForUser("user_one")).toBe(123);
+    database.projects.softDelete(
+      project.id,
+      "user_one",
+      new Date().toISOString(),
+    );
+    expect(
+      database.sources.getOwnedReady(
+        source.sourceId,
+        "user_one",
+        new Date().toISOString(),
+      ),
+    ).toBeUndefined();
+    expect((await render("outputs-deleted-123456", ["pdf"])).status).toBe(409);
+  });
+
   it("uses a fixed secretless principal and owns Projects, revisions, Jobs, and renewed tickets", async () => {
     const fixture = setup(),
       headers = mutation("user"),

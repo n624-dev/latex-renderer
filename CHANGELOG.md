@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Keep ready Sources reusable while an active owned Project references them, including after Job cleanup; release retention protection when the last Project is deleted. Record PDF/SVG choices per Job without adding revisions, and allow explicit output selection when rerendering from the Web.
+
 - Fix upload claim/heartbeat cleanup and Remote MCP temporary-archive handling on filesystem and verification failures; preserve archives owned by another writer.
 - Support retained zero-padded preview names across clients and result views, link Remote MCP results to the user-facing page, and correctly paginate Project selection and revisions.
 - Preserve exact OIDC issuer identifiers and apply the specification's default only when token endpoint authentication metadata is omitted. Keep password session creation consistent with credential changes and support the documented scrypt cost boundary.

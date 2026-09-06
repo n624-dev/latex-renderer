@@ -785,7 +785,12 @@ function installProjects(fetcher: Fetcher) {
           originalFilename: string;
           entrypoint: string;
           createdAt: string;
-          jobs: Array<{ id: string; status: string; createdAt: string }>;
+          jobs: Array<{
+            id: string;
+            status: string;
+            createdAt: string;
+            outputs?: string[];
+          }>;
           jobCount: number;
           jobsHasMore: boolean;
         }>;
@@ -815,7 +820,7 @@ function installProjects(fetcher: Fetcher) {
         project.revisions
           .map(
             (revision) =>
-              `<section><div class="page-heading"><div><h2>Revision ${revision.revisionNumber}: ${escape(revision.displayName)}</h2><p>${escape(revision.originalFilename)}・${escape(new Date(revision.createdAt).toLocaleString("ja-JP"))}</p></div><button type="button" class="secondary" data-rerender="${escape(revision.id)}">もう一度変換</button></div><ul>${revision.jobs.map((job) => `<li>${escape(statusLabel(job.status))} <a href="/app/jobs/${encodeURIComponent(job.id)}/">${escape(new Date(job.createdAt).toLocaleString("ja-JP"))}</a></li>`).join("") || "<li>変換履歴はありません。</li>"}</ul>${revision.jobCount > revision.jobs.length ? `<p class="muted">Job ${revision.jobs.length} / ${revision.jobCount}件を表示中（詳細APIのcursorで続きへ進めます）。</p>` : ""}</section>`,
+              `<section><div class="page-heading"><div><h2>Revision ${revision.revisionNumber}: ${escape(revision.displayName)}</h2><p>${escape(revision.originalFilename)}・${escape(new Date(revision.createdAt).toLocaleString("ja-JP"))}</p></div><label>出力形式<select id="outputs-${escape(revision.id)}"><option value="">初回の設定</option><option value="pdf">PDF</option><option value="svg">PDF＋SVG</option></select></label><button type="button" class="secondary" data-rerender="${escape(revision.id)}">もう一度変換</button></div><ul>${revision.jobs.map((job) => `<li>${escape(statusLabel(job.status))}・${escape((job.outputs ?? []).join("＋").toUpperCase())} <a href="/app/jobs/${encodeURIComponent(job.id)}/">${escape(new Date(job.createdAt).toLocaleString("ja-JP"))}</a></li>`).join("") || "<li>変換履歴はありません。</li>"}</ul>${revision.jobCount > revision.jobs.length ? `<p class="muted">Job ${revision.jobs.length} / ${revision.jobCount}件を表示中（詳細APIのcursorで続きへ進めます）。</p>` : ""}</section>`,
           )
           .join("") || "<section>改訂はありません。</section>"
       }${project.revisionsHasMore ? '<div class="actions"><button type="button" class="secondary" id="app-revisions-next">次の改訂ページ</button></div>' : ""}`;
@@ -826,6 +831,9 @@ function installProjects(fetcher: Fetcher) {
           button.disabled = true;
           const revisionId = button.dataset.rerender;
           if (!revisionId) return;
+          const output = detail.querySelector<HTMLSelectElement>(
+            `#outputs-${CSS.escape(revisionId)}`,
+          )?.value;
           void json(
             fetcher,
             `/app/api/v1/projects/${match[1]}/revisions/${encodeURIComponent(revisionId)}/render`,
@@ -834,7 +842,11 @@ function installProjects(fetcher: Fetcher) {
               headers: {
                 "Idempotency-Key": `app-rerender-${crypto.randomUUID()}`,
               },
-              body: "{}",
+              body: JSON.stringify(
+                output
+                  ? { outputs: output === "svg" ? ["pdf", "svg"] : ["pdf"] }
+                  : {},
+              ),
             },
           )
             .then((value) => {

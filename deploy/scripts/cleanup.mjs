@@ -174,7 +174,9 @@ for (const record of jobs) {
     if (source?.source_id)
       db.prepare(
         `UPDATE sources SET expires_at=?,updated_at=? WHERE id=? AND status='ready'
-      AND NOT EXISTS (SELECT 1 FROM jobs WHERE source_id=? AND status NOT IN ('deleted','expired'))`,
+      AND NOT EXISTS (SELECT 1 FROM jobs WHERE source_id=? AND status NOT IN ('deleted','expired'))
+      AND NOT EXISTS (SELECT 1 FROM project_revisions r JOIN projects p ON p.id=r.project_id
+                      WHERE r.source_id=sources.id AND p.deleted_at IS NULL)`,
       ).run(now, now, String(source.source_id), String(source.source_id));
     db.exec("COMMIT");
     artifactsDeleted += 1;

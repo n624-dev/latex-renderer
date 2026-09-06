@@ -7,6 +7,9 @@ class Element {
   textContent = "";
   value = "";
   children: Element[] = [];
+  dataset: Record<string, string> = {};
+  disabled = false;
+  selectors = new Map<string, Element>();
   onclick: (() => void) | undefined;
   append(...children: Element[]) {
     this.children.push(...children);
@@ -14,25 +17,30 @@ class Element {
   replaceChildren() {
     this.children = [];
   }
-  querySelector() {
-    return null;
+  querySelector(selector: string) {
+    return this.selectors.get(selector) ?? null;
   }
   querySelectorAll() {
-    return [];
+    return this.children;
   }
 }
-type Fetcher = (input: RequestInfo | URL) => Promise<Response>;
+type Fetcher = (
+  input: RequestInfo | URL,
+  init?: RequestInit,
+) => Promise<Response>;
 function harness(elements: Map<string, Element>, pathname = "/app/render/") {
   const context = {
     Headers,
     URLSearchParams,
     URL,
     setTimeout,
+    crypto,
+    CSS: { escape: (value: string) => value },
     document: {
       querySelector: (selector: string) => elements.get(selector) ?? null,
       createElement: () => new Element(),
     },
-    location: { pathname },
+    location: { pathname, assign: vi.fn() },
     hooks: undefined as unknown as {
       installRender(fetcher: Fetcher): void;
       installProjects(fetcher: Fetcher): void;
@@ -43,13 +51,65 @@ function harness(elements: Map<string, Element>, pathname = "/app/render/") {
   expect(end).toBeGreaterThan(0);
   runInNewContext(
     appScript.slice(0, end) +
-      "globalThis.hooks = {installRender, installProjects, renderJobResult};})();",
+      'csrfToken = "test-csrf"; globalThis.hooks = {installRender, installProjects, renderJobResult};})();',
     context,
   );
   return context.hooks;
 }
 
 describe("audit Web pagination and retained previews", () => {
+  it("sends the selected rerender outputs and displays per-Job formats", async () => {
+    const detail = new Element(),
+      button = new Element(),
+      select = new Element();
+    button.dataset.rerender = "revision_test";
+    select.value = "svg";
+    detail.children.push(button);
+    detail.selectors.set("#outputs-revision_test", select);
+    let submitted: unknown;
+    harness(
+      new Map([["#app-project-detail", detail]]),
+      `/app/projects/project_${"a".repeat(32)}/`,
+    ).installProjects((_input, init) => {
+      if (init?.method === "POST") {
+        if (typeof init.body !== "string") throw new Error("Expected JSON body");
+        submitted = JSON.parse(init.body);
+        return Promise.resolve(Response.json({}));
+      }
+      return Promise.resolve(
+        Response.json({
+          displayName: "Project",
+          revisionsHasMore: false,
+          revisionsNextCursor: null,
+          revisions: [
+            {
+              id: "revision_test",
+              revisionNumber: 1,
+              displayName: "Original",
+              originalFilename: "main.tex",
+              createdAt: "2026-01-01",
+              jobs: [
+                {
+                  id: "job_test",
+                  status: "succeeded",
+                  createdAt: "2026-01-01",
+                  outputs: ["pdf", "svg"],
+                },
+              ],
+              jobCount: 1,
+            },
+          ],
+        }),
+      );
+    });
+    await vi.waitFor(() => expect(button.onclick).toBeTypeOf("function"));
+    expect(detail.innerHTML).toContain("PDF＋SVG");
+    button.onclick?.();
+    await vi.waitFor(() =>
+      expect(submitted).toEqual({ outputs: ["pdf", "svg"] }),
+    );
+  });
+
   it("adds later Project pages to the render selector", async () => {
     const elements = new Map(
       [

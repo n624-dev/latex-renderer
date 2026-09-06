@@ -679,7 +679,9 @@ export class RemoteRenderService {
       throw new AppError("SOURCE_NOT_READY", "Source is not ready", 409);
     const sourceRef = newId("source_ref"),
       expiresAt = new Date(
-        Math.min(Date.now() + SOURCE_REF_MS, Date.parse(source.expires_at)),
+        this.database.sources.isProjectRetained(source.id)
+          ? Date.now() + SOURCE_REF_MS
+          : Math.min(Date.now() + SOURCE_REF_MS, Date.parse(source.expires_at)),
       ).toISOString();
     this.database.remoteMcp.insertSourceRef({
       id: sourceRef,
@@ -1867,7 +1869,10 @@ export class RemoteRenderService {
 
   private resolveOwnedSource(userId: string, sourceId: string): SourceRow {
     const source = this.assertOwnedSource(userId, sourceId);
-    if (source.status !== "ready" || source.expires_at <= nowIso())
+    if (
+      this.database.sources.getOwnedReady(source.id, userId, nowIso()) ===
+      undefined
+    )
       throw new AppError("SOURCE_NOT_READY", "Source is not ready", 409);
     return source;
   }

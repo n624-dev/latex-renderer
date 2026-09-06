@@ -225,6 +225,7 @@ export class AppProjectsService {
         updatedAt: job.updated_at,
         retryOfJobId: job.retry_of_job_id,
         errorCode: job.error_code,
+        outputs: this.deps.database.jobs.outputs(job),
       })),
       jobCount,
       jobsHasMore: jobCount > jobs.length,

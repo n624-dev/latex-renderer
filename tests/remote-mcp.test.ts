@@ -1137,6 +1137,53 @@ describe("Remote MCP HTTP server", () => {
     ).resolves.toMatchObject({ id: upload.sourceId, status: "ready" });
   });
 
+  it("issues usable references for Project-retained Sources without reviving deleted Projects", async () => {
+    const fixture = await createFixture(),
+      identity = { userId: "user_test", scopes: ["mcp:render"] as const },
+      source = await fixture.renders.createSource(identity, [
+        { path: "main.tex", text: "retained" },
+      ]),
+      timestamp = new Date().toISOString();
+    fixture.database.projects.insert({
+      id: "project_retained",
+      ownerUserId: identity.userId,
+      displayName: "Retained",
+      timestamp,
+    });
+    fixture.database.projects.insertRevision({
+      id: "revision_retained",
+      projectId: "project_retained",
+      sourceId: source.id,
+      displayName: "Retained",
+      originalFilename: "main.tex",
+      entrypoint: "main.tex",
+      timestamp,
+    });
+    fixture.database.raw
+      .prepare(
+        "UPDATE sources SET expires_at='2000-01-01T00:00:00.000Z' WHERE id=?",
+      )
+      .run(source.id);
+    const reference = fixture.renders.createSourceReference(
+      identity,
+      source.id,
+    );
+    expect(Date.parse(reference.expiresAt)).toBeGreaterThan(Date.now());
+    await expect(
+      fixture.renders.createRender(identity, {
+        sourceRef: reference.sourceRef,
+      }),
+    ).resolves.toMatchObject({ sourceId: source.id });
+    fixture.database.projects.softDelete(
+      "project_retained",
+      identity.userId,
+      timestamp,
+    );
+    expect(() =>
+      fixture.renders.createSourceReference(identity, source.id),
+    ).toThrow();
+  });
+
   it("never advertises a Source reference beyond its Source lifetime", async () => {
     const fixture = await createFixture(),
       identity = { userId: "user_test", scopes: ["mcp:render"] as const },

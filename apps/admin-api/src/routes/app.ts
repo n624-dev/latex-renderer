@@ -264,6 +264,13 @@ export function createAppV1Router(deps: AdminDependencies): Hono {
       ),
       key = idempotencyKey(c.req.header("Idempotency-Key")),
       selected = projects.revision(actor, id, revisionId),
+      body = await c.req.text(),
+      input = parse(
+        z
+          .object({ outputs: renderOutputsSchema.unwrap().optional() })
+          .strict(),
+        body === "" ? {} : (JSON.parse(body) as unknown),
+      ),
       principal = ensureWebPrincipal(deps, actor),
       result = await jobs.createRender(
         actor,
@@ -271,7 +278,7 @@ export function createAppV1Router(deps: AdminDependencies): Hono {
           apiKeyId: principal.api_key_id,
           sourceId: selected.revision.source_id,
           entrypoint: selected.revision.entrypoint,
-          outputs: projects.renderOutputs(selected.revision),
+          outputs: input.outputs ?? projects.renderOutputs(selected.revision),
           project: { projectId: id, revisionId },
         },
         key,
