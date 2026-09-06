@@ -56,7 +56,9 @@ describe("admin system status and dashboard contract", () => {
           database,
           writeEnabled,
         } as never);
-        const status = JSON.parse(JSON.stringify(service.status()));
+        const status = JSON.parse(
+          JSON.stringify(service.status()),
+        ) as ReturnType<AdminSystemService["status"]>;
         expect(status.maintenance).toBe(maintenance ?? "normal");
         expect(status.worker).toBe(worker ?? "running");
         expect(status.worker).toBe(status.rendering.mode);
@@ -69,8 +71,10 @@ describe("admin system status and dashboard contract", () => {
         const out = { innerHTML: "" };
         await new Script(`${dashboard}\ndashboard()`).runInNewContext({
           out,
-          request: async (path: string) =>
-            path === "/system/status" ? status : { items: [], total: 0 },
+          request: (path: string) =>
+            Promise.resolve(
+              path === "/system/status" ? status : { items: [], total: 0 },
+            ),
           esc: (value: unknown) => String(value),
           section: () => "",
           table: () => "",
