@@ -22,9 +22,9 @@ cd /work/input
 entrypoint=${LATEX_ENTRYPOINT:-main.tex}
 case "$entrypoint" in /*|*\\*) printf '%s\n' 'renderer: invalid entrypoint' >> /work/output/compile.log; exit 78 ;; esac
 case "/$entrypoint/" in */../*|*/./*|*//*) printf '%s\n' 'renderer: invalid entrypoint' >> /work/output/compile.log; exit 78 ;; esac
-case "$entrypoint" in *.tex) ;; *) printf '%s\n' 'renderer: invalid entrypoint' >> /work/output/compile.log; exit 78 ;; esac
+case "$entrypoint" in *.[tT][eE][xX]) ;; *) printf '%s\n' 'renderer: invalid entrypoint' >> /work/output/compile.log; exit 78 ;; esac
 output_name=${entrypoint##*/}
-output_name=${output_name%.tex}.pdf
+output_name=${output_name%.*}.pdf
 outputs=${LATEX_OUTPUTS:-pdf}
 case "$outputs" in
   pdf) svg_requested=false ;;
@@ -75,14 +75,19 @@ if [ ! -f "/work/output/$output_name" ]; then
   exit 70
 fi
 
-mv "/work/output/$output_name" /work/output/result.pdf
+# result.tex already produces the canonical name; mv would fail on itself.
+if [ "$output_name" != result.pdf ]; then
+  mv "/work/output/$output_name" /work/output/result.pdf
+fi
 synctex_name=${output_name%.pdf}.synctex.gz
 if [ "$svg_requested" = true ]; then
   if [ ! -f "/work/output/$synctex_name" ]; then
     printf '%s\n' 'renderer: SyncTeX map was not produced' >> /work/output/compile.log
     exit 79
   fi
-  mv "/work/output/$synctex_name" /work/output/result.synctex.gz
+  if [ "$synctex_name" != result.synctex.gz ]; then
+    mv "/work/output/$synctex_name" /work/output/result.synctex.gz
+  fi
 fi
 pages=$(timeout -s TERM -k 2 10 pdfinfo /work/output/result.pdf | awk '/^Pages:/ {print $2}')
 case "$pages" in
@@ -94,6 +99,21 @@ if [ "$pages" -gt 100 ]; then
 fi
 
 timeout -s TERM -k 2 60 pdftoppm -png -r 150 /work/output/result.pdf /work/output/previews/page
+
+# Poppler pads page numbers to the document's page-count width. Keep the
+# public preview names independent of page count (page-1.png, not page-01.png).
+for preview in /work/output/previews/page-*.png; do
+  [ -f "$preview" ] || continue
+  number=${preview##*/}
+  number=${number#page-}
+  number=${number%.png}
+  number=$(printf '%s\n' "$number" | sed 's/^0*//')
+  case "$number" in ''|*[!0-9]*) exit 72 ;; esac
+  target="/work/output/previews/page-$number.png"
+  if [ "$preview" != "$target" ]; then
+    mv "$preview" "$target"
+  fi
+done
 
 if [ "$svg_requested" = true ]; then
   capture=/tmp/svg-capture
