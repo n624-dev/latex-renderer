@@ -8,7 +8,10 @@ export const ticketRevocationMinimumSeconds=35*60;
 export class AdminSystemService {
   constructor(private readonly deps:AdminDependencies){}
 
-  status(){return{writeEnabled:this.deps.writeEnabled,maintenance:this.deps.database.settings.get("maintenance_mode"),worker:this.deps.database.settings.get("worker_mode"),rendering:this.renderingHealth(),jobs:this.deps.database.jobs.statusCounts()};}
+  status(){
+    const rendering=this.renderingHealth();
+    return{writeEnabled:this.deps.writeEnabled,maintenance:this.deps.database.settings.value<MaintenanceMode>("maintenance_mode","normal"),worker:rendering.mode,rendering,jobs:this.deps.database.jobs.statusCounts()};
+  }
   config(){return this.deps.database.settings.listMutable();}
   audit(query:AuditLogQuery){return this.deps.database.auditLogs.search(query);}
   ticketKeys(){return{activeKid:this.deps.activeTicketKid,verificationKids:this.deps.verificationTicketKids,minRevocationSeconds:ticketRevocationMinimumSeconds};}
