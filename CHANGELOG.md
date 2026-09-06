@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.3.3-rc.6 - 2026-09-06
+
 - Validate the publicly rebuilt MCPB against its matching published metadata, instead of the older sealed assembly metadata, while retaining SHA-256 and detached-signature checks.
 - Send job-ticket renewal requests without a JSON body, matching the strict Gateway contract so CLI job lookup, cancellation, deletion, and downloads can renew their operation tickets.
 - Report production smoke job-deletion failures explicitly and verify the deletion result before declaring deployment successful.
