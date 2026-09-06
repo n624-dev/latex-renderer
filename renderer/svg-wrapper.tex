@@ -66,7 +66,7 @@
   local unsafe = path and (
     path:find(string.char(10), 1, true) or path:find(string.char(13), 1, true)
   )
-  if not path or path:sub(1, 12) ~= "/work/input/" or path:sub(-4) ~= ".tex" or unsafe then
+  if not path or path:sub(1, 12) ~= "/work/input/" or path:sub(-4):lower() ~= ".tex" or unsafe then
     tex.error("renderer: invalid SVG entrypoint")
   end
   tex.sprint("\\input{")

@@ -149,12 +149,18 @@ sub synctex_placement {
       %current = ();
       next;
     }
-    $current{page} = 0 + $1 if $row =~ /^Page:(\d+)/;
+    # One begin/end block can contain multiple Output/Page records. Flush
+    # the previous candidate before reading the next, rather than overwriting it.
+    if ($row =~ /^Page:(\d+)/) {
+      push @matches, { %current } if defined $current{page};
+      %current = (page => 0 + $1);
+      next;
+    }
     $current{x} = 0 + $1 if $row =~ /^x:([-0-9.]+)/;
     $current{y} = 0 + $1 if $row =~ /^y:([-0-9.]+)/;
     $current{lineWidth} = 0 + $1 if $row =~ /^W:([-0-9.]+)/;
   }
-  close $pipe;
+  close $pipe or die "renderer: synctex query failed\n";
   push @matches, { %current } if defined $current{page};
   die "renderer: no canonical PDF placement for $source:$line\n" unless @matches;
   my $match = $matches[$occurrence] // $matches[-1];
