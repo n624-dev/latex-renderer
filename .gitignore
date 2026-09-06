@@ -3,6 +3,8 @@ node_modules/
 dist/
 **/dist/
 client-dist/
+.deployment-tooling/
+.update-tooling/
 coverage/
 .wrangler/
 **/.wrangler/

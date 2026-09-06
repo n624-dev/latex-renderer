@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 1.3.3-rc.4 - 2026-09-06
+
+- Prepare relocated deployment dependencies noninteractively with the release-pinned pnpm and a build-local store before stopping services. Preserve the frozen lockfile, propagate the same store into nested builds, and reject dependency drift instead of implicitly reinstalling during deployment.
+- Fix production smoke credential creation against the current database schema and pass the service account's actual recovery group to every smoke administration command, including credential revocation.
+- Install the production smoke input with explicit service-account ownership so it remains readable under a restrictive root umask, and fail the smoke check if credential revocation fails.
+- Apply renderer storage default ACLs to existing directories as well as the root, so future jobs on upgraded hosts inherit access for the mapped rootless container identity.
+- Exclude deployment-only package caches from installed releases and clean temporary smoke credentials when preflight checks fail.
+
 ## 1.3.3-rc.1 - 2026-09-02
 
 - Add configurable daily managed-image cleanup with protected active/rollback images and an unused build-cache retention target. See the public self-hosting guide for settings.

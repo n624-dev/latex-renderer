@@ -4,6 +4,18 @@ import { describe, expect, it } from "vitest";
 const read = (path: string) => readFileSync(path, "utf8");
 
 describe("application updater privilege boundary", () => {
+  it("keeps nested normal and bootstrap builds on their operation-local frozen store", () => {
+    for (const file of [
+      "deploy/scripts/update-manager.mjs",
+      "deploy/scripts/update-manager-helper.mjs",
+    ]) {
+      const script = read(file);
+      expect(script).toContain('CI: "true"');
+      expect(script).toContain("PNPM_CONFIG_STORE_DIR: pnpmStore");
+      expect(script).toContain('PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "error"');
+      expect(script).toContain('PNPM_CONFIG_FROZEN_LOCKFILE: "true"');
+    }
+  });
   it("keeps the controller non-root and limits its privileged IPC to one helper", () => {
     const manager = read("deploy/scripts/update-manager.mjs");
     const unit = read("deploy/systemd/latex-renderer-update-manager.service");

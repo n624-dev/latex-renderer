@@ -178,16 +178,20 @@ if [ ! -x "$sync_pnpm_bin/pnpm" ]; then
 fi
 sync_path="$sync_pnpm_bin:/usr/local/bin:/usr/bin:/bin"
 sync_group=$(id -gn "$sync_user")
+run_deployment_pnpm() {
+  runuser -u "$sync_user" -- env HOME="$sync_home" USER="$sync_user" LOGNAME="$sync_user" PNPM_HOME="$sync_pnpm_bin" PATH="$sync_path" \
+    sh "$source_root/deploy/scripts/deployment-pnpm.sh" "$build_root" "$sync_pnpm_bin/pnpm" "$@"
+}
+# Reconcile relocated dependencies before any service stop or activation.
+run_deployment_pnpm install --frozen-lockfile
 if [ "$deployment_mode" = cloudflare ]; then
   gateway_runtime_config=$(mktemp "$build_root/apps/gateway-worker/.wrangler.production.XXXXXX.jsonc")
   install -o "$sync_user" -g "$sync_group" -m 0600 "$gateway_worker_config" "$gateway_runtime_config"
 fi
 
 if [ "$build_root" = "$source_root" ]; then
-  runuser -u "$sync_user" -- env HOME="$sync_home" USER="$sync_user" LOGNAME="$sync_user" PNPM_HOME="$sync_pnpm_bin" PATH="$sync_path" \
-    "$sync_pnpm_bin/pnpm" --dir "$build_root" build:production-services
-  runuser -u "$sync_user" -- env HOME="$sync_home" USER="$sync_user" LOGNAME="$sync_user" PNPM_HOME="$sync_pnpm_bin" PATH="$sync_path" \
-    "$sync_pnpm_bin/pnpm" --dir "$build_root" build:client
+  run_deployment_pnpm build:production-services
+  run_deployment_pnpm build:client
 fi
 [ -f "$build_root/client-dist/manifest.json" ] || {
   echo "production client distribution was not generated before release copy" >&2
@@ -272,10 +276,8 @@ done
 
 if [ "$deployment_mode" = cloudflare ]; then
   systemctl is-active --quiet cloudflared
-  runuser -u "$sync_user" -- env HOME="$sync_home" USER="$sync_user" LOGNAME="$sync_user" PNPM_HOME="$sync_pnpm_bin" PATH="$sync_path" \
-    "$sync_pnpm_bin/pnpm" --dir "$build_root" --filter @latex-renderer/gateway-worker exec wrangler deploy --config "$gateway_runtime_config"
-  runuser -u "$sync_user" -- env HOME="$sync_home" USER="$sync_user" LOGNAME="$sync_user" PNPM_HOME="$sync_pnpm_bin" PATH="$sync_path" \
-    "$sync_pnpm_bin/pnpm" --dir "$build_root" --filter @latex-renderer/public-web run deploy
+  run_deployment_pnpm --filter @latex-renderer/gateway-worker exec wrangler deploy --config "$gateway_runtime_config"
+  run_deployment_pnpm --filter @latex-renderer/public-web run deploy
   runuser -u "$sync_user" -- env HOME="$sync_home" USER="$sync_user" LOGNAME="$sync_user" PNPM_HOME="$sync_pnpm_bin" PATH="$sync_path" \
     /usr/local/bin/node "$source_root/deploy/scripts/sync-public-worker-routes.mjs" --apply
 fi

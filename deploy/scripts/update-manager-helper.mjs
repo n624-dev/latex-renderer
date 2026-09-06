@@ -643,6 +643,10 @@ async function buildBootstrapRelease(
     XDG_DATA_HOME: join(toolingRoot, "data"),
     NPM_CONFIG_CACHE: join(toolingRoot, "npm-cache"),
     PNPM_HOME: pnpmBin,
+    CI: "true",
+    PNPM_CONFIG_STORE_DIR: pnpmStore,
+    PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "error",
+    PNPM_CONFIG_FROZEN_LOCKFILE: "true",
   };
   const userOptions = {
     cwd: buildSource,

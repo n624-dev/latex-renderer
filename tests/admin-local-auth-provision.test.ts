@@ -12,6 +12,93 @@ afterEach(() => {
 });
 
 describe("local authentication-mode recovery", () => {
+  it("creates an expiring smoke key and revokes only that credential", () => {
+    const root = mkdtempSync(join(tmpdir(), "latex-renderer-smoke-key-"));
+    roots.push(root);
+    const databasePath = join(root, "renderer.sqlite3");
+    const environment = {
+      ...process.env,
+      DATABASE_PATH: databasePath,
+      API_KEY_PEPPER_ID: "v1",
+      API_KEY_PEPPER_FILE: privateFile(root, "api-pepper", "a".repeat(32)),
+      LATEX_RENDERER_ADMIN_GID: String(process.getgid?.() ?? 0),
+    };
+    const bootstrap = runAdminLocal(
+      [
+        "bootstrap",
+        "--auth-mode",
+        "oidc",
+        "--display-name",
+        "Smoke owner",
+        "--issuer",
+        "https://identity.example/",
+        "--subject",
+        "smoke-owner",
+      ],
+      environment,
+    );
+    expect(bootstrap.status, bootstrap.stderr).toBe(0);
+    const created = runAdminLocal(
+      ["smoke-key", "create", "--owner-id", bootstrap.stdout.trim(), "--yes"],
+      environment,
+    );
+    expect(created.status, created.stderr).toBe(0);
+    const key = JSON.parse(created.stdout) as {
+      keyId: string;
+      serviceAccountId: string;
+      token: string;
+      expiresAt: string;
+    };
+    expect(Date.parse(key.expiresAt)).toBeGreaterThan(Date.now());
+    expect(Date.parse(key.expiresAt)).toBeLessThanOrEqual(
+      Date.now() + 3_600_000,
+    );
+    const database = new RendererDatabase(databasePath);
+    try {
+      const row = database.raw
+        .prepare("SELECT * FROM api_keys WHERE id=?")
+        .get(key.keyId);
+      expect(row).toMatchObject({
+        service_account_id: key.serviceAccountId,
+        kind: "render",
+        created_by: "local-smoke-test",
+        expires_at: key.expiresAt,
+        scopes_json: JSON.stringify(["render:create", "render:read:own"]),
+        revoked_at: null,
+      });
+      expect(JSON.stringify(row)).not.toContain(key.token);
+      const revoked = runAdminLocal(
+        [
+          "smoke-key",
+          "revoke",
+          "--key-id",
+          key.keyId,
+          "--service-account",
+          key.serviceAccountId,
+          "--yes",
+        ],
+        environment,
+      );
+      expect(revoked.status, revoked.stderr).toBe(0);
+      expect(
+        database.raw
+          .prepare("SELECT revoked_at FROM api_keys WHERE id=?")
+          .get(key.keyId)?.revoked_at,
+      ).toEqual(expect.any(String));
+      expect(
+        database.raw
+          .prepare("SELECT status FROM service_accounts WHERE id=?")
+          .get(key.serviceAccountId)?.status,
+      ).toBe("disabled");
+      const cleanup = runAdminLocal(
+        ["smoke-key", "cleanup-jobs", "--yes"],
+        environment,
+      );
+      expect(cleanup.status, cleanup.stderr).toBe(0);
+    } finally {
+      database.close();
+    }
+  });
   it("provisions a new owner method once and revokes existing sessions", () => {
     const root = mkdtempSync(join(tmpdir(), "latex-renderer-auth-provision-"));
     roots.push(root);

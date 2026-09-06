@@ -11,17 +11,44 @@ database=/var/lib/latex-renderer/renderer.sqlite3
 pepper=/etc/latex-renderer/secrets/api-key-pepper
 smoke_user=latex-renderer
 smoke_group=$(id -gn "$smoke_user")
+smoke_gid=$(id -g "$smoke_user")
 admin_cli="$source_root/apps/admin-local/dist/index.js"
 render_cli="$source_root/client-dist/latex-renderer-client/app/latex-render.cjs"
 temporary_root=$(mktemp -d /tmp/latex-renderer-smoke.XXXXXX)
-chown "$smoke_user:$smoke_group" "$temporary_root"
-chmod 0700 "$temporary_root"
 smoke_pepper="$temporary_root/api-key-pepper"
-install -o "$smoke_user" -g "$smoke_group" -m 0400 "$pepper" "$smoke_pepper"
 key_id=
 service_account_id=
-owner_id=${LATEX_RENDER_SMOKE_OWNER_ID:-$(sqlite3 "$database" "SELECT id FROM users WHERE role='owner' AND status='active' ORDER BY created_at,id LIMIT 1;" 2>/dev/null || true)}
 
+run_smoke_admin() {
+  runuser -u "$smoke_user" -- env \
+    LATEX_RENDERER_ADMIN_GID="$smoke_gid" \
+    DATABASE_PATH="$database" API_KEY_PEPPER_ID=v1 API_KEY_PEPPER_FILE="$smoke_pepper" \
+    /usr/local/bin/node "$admin_cli" smoke-key "$@"
+}
+
+cleanup() {
+  status=$?
+  trap - EXIT HUP INT TERM
+  if [ -n "$key_id" ] && [ -n "$service_account_id" ]; then
+    if ! run_smoke_admin revoke \
+      --key-id "$key_id" --service-account "$service_account_id" --yes >/dev/null 2>&1; then
+      echo "Production smoke credential revocation failed" >&2
+      status=1
+    fi
+  fi
+  rm -rf -- "$temporary_root"
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+chown "$smoke_user:$smoke_group" "$temporary_root"
+chmod 0700 "$temporary_root"
+install -o "$smoke_user" -g "$smoke_group" -m 0400 "$pepper" "$smoke_pepper"
+
+owner_id=${LATEX_RENDER_SMOKE_OWNER_ID:-$(sqlite3 "$database" "SELECT id FROM users WHERE role='owner' AND status='active' ORDER BY created_at,id LIMIT 1;" 2>/dev/null || true)}
 if [ -z "$owner_id" ]; then
   echo "an active owner or LATEX_RENDER_SMOKE_OWNER_ID is required" >&2
   exit 64
@@ -32,24 +59,9 @@ if [ -z "$public_origin" ]; then
   exit 65
 fi
 
-cleanup() {
-  if [ -n "$key_id" ] && [ -n "$service_account_id" ]; then
-    runuser -u "$smoke_user" -- env \
-      DATABASE_PATH="$database" API_KEY_PEPPER_ID=v1 API_KEY_PEPPER_FILE="$smoke_pepper" \
-      /usr/local/bin/node "$admin_cli" smoke-key revoke \
-      --key-id "$key_id" --service-account "$service_account_id" --yes >/dev/null 2>&1 || true
-  fi
-  rm -rf "$temporary_root"
-}
-trap cleanup EXIT HUP INT TERM
+run_smoke_admin cleanup-jobs --yes >/dev/null
 
-runuser -u "$smoke_user" -- env \
-  DATABASE_PATH="$database" API_KEY_PEPPER_ID=v1 API_KEY_PEPPER_FILE="$smoke_pepper" \
-  /usr/local/bin/node "$admin_cli" smoke-key cleanup-jobs --yes >/dev/null
-
-runuser -u "$smoke_user" -- env \
-  DATABASE_PATH="$database" API_KEY_PEPPER_ID=v1 API_KEY_PEPPER_FILE="$smoke_pepper" \
-  /usr/local/bin/node "$admin_cli" smoke-key create \
+run_smoke_admin create \
   --owner-id "$owner_id" --yes > "$temporary_root/key.json"
 
 token=$(/usr/local/bin/node -e 'const x=require(process.argv[1]);process.stdout.write(x.token)' "$temporary_root/key.json")
@@ -68,7 +80,9 @@ printf '%s\n' \
   '\draw[blue,thick] (0,0) rectangle (4,1);' \
   '\node at (2,0.5) {日本語 / English};' \
   '\end{tikzpicture}' \
-  '\end{document}' > "$temporary_root/project/main.tex"
+  '\end{document}' > "$temporary_root/main.tex"
+install -o "$smoke_user" -g "$smoke_group" -m 0400 \
+  "$temporary_root/main.tex" "$temporary_root/project/main.tex"
 
 printf '%s' "$token" | runuser -u "$smoke_user" -- env \
   XDG_CONFIG_HOME="$temporary_root/config" \

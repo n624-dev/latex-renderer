@@ -34,7 +34,7 @@ jobs:
       - name: Install backup integration-test dependency
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends --yes age
+          sudo apt-get install --no-install-recommends --yes age acl
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
       - name: Typecheck, test, and lint
