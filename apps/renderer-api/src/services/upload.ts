@@ -4,7 +4,12 @@ import { isAbsolute, join } from "node:path";
 import { mkdir, open, rename, rm, statfs } from "node:fs/promises";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import { AppError, DEFAULT_RESOURCE_LIMITS, newId, nowIso } from "@latex-renderer/shared";
+import {
+  AppError,
+  DEFAULT_RESOURCE_LIMITS,
+  newId,
+  nowIso,
+} from "@latex-renderer/shared";
 import type { SourceTicketClaims, TicketClaims } from "@latex-renderer/ticket";
 import { validateAndExtract } from "@latex-renderer/zip-validation";
 import type { RendererApiDependencies } from "../types.js";
@@ -92,10 +97,10 @@ async function uploadSharedSource(
   );
   const finalPath = join(deps.storageRoot, source.storage_key),
     directory = finalPath.slice(0, finalPath.lastIndexOf("/"));
-  await mkdir(directory, { recursive: true, mode: 0o770 });
   const temporaryPath = `${finalPath}.${claimOwner}.tmp`,
     inspectionPath = join(directory, `.inspect-${claimOwner}`);
   try {
+    await mkdir(directory, { recursive: true, mode: 0o770 });
     await writeVerifiedBody(
       deps,
       request,
@@ -164,12 +169,12 @@ async function uploadSharedSource(
       });
     });
   } catch (error) {
-    await rm(temporaryPath, { force: true });
+    await rm(temporaryPath, { force: true }).catch(() => {});
     // A timed-out writer must never remove an archive or reset state owned by
     // a recovery/retry writer. Retain the durable claim before touching shared
     // state; otherwise leave recovery to the scheduled cleanup process.
     if (heartbeat.tryRetain()) {
-      await rm(finalPath, { force: true });
+      await rm(finalPath, { force: true }).catch(() => {});
       deps.database.transaction(() => {
         const timestamp = nowIso(),
           released =
@@ -192,7 +197,7 @@ async function uploadSharedSource(
     throw error;
   } finally {
     heartbeat.stop();
-    await rm(inspectionPath, { recursive: true, force: true });
+    await rm(inspectionPath, { recursive: true, force: true }).catch(() => {});
   }
 }
 
@@ -225,12 +230,12 @@ async function uploadLegacyJobSource(
     claims.nonce as string,
     claimOwner,
   );
-  await mkdir(join(deps.storageRoot, "jobs", jobId, "input"), {
-    recursive: true,
-    mode: 0o770,
-  });
   const temporaryPath = `${finalPath}.${claimOwner}.tmp`;
   try {
+    await mkdir(join(deps.storageRoot, "jobs", jobId, "input"), {
+      recursive: true,
+      mode: 0o770,
+    });
     await writeVerifiedBody(
       deps,
       request,
@@ -250,9 +255,9 @@ async function uploadLegacyJobSource(
       });
     });
   } catch (error) {
-    await rm(temporaryPath, { force: true });
+    await rm(temporaryPath, { force: true }).catch(() => {});
     if (heartbeat.tryRetain()) {
-      await rm(finalPath, { force: true });
+      await rm(finalPath, { force: true }).catch(() => {});
       deps.database.transaction(() => {
         const timestamp = nowIso();
         if (

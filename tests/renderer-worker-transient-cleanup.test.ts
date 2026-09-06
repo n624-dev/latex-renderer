@@ -1,7 +1,13 @@
 import { mkdtemp, mkdir, rm, stat, writeFile } from "node:fs/promises";
+import * as fs from "node:fs/promises";
+import { spawn } from "node:child_process";
+import * as docker from "../apps/renderer-worker/src/docker.js";
+import yazl from "yazl";
+import { pipeline } from "node:stream/promises";
+import { createWriteStream, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { RendererDatabase } from "@latex-renderer/database";
 import { recordFailure } from "../apps/renderer-worker/src/failure.js";
 import { processJob } from "../apps/renderer-worker/src/job-processor.js";
@@ -9,15 +15,75 @@ import type { WorkerConfig } from "../apps/renderer-worker/src/config.js";
 import { directorySize } from "../apps/renderer-worker/src/artifact-validator.js";
 
 const databases: RendererDatabase[] = [];
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual, rename: vi.fn(actual.rename) };
+});
 const temporaryRoots: string[] = [];
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   for (const database of databases.splice(0)) database.close();
   for (const root of temporaryRoots.splice(0))
     await rm(root, { recursive: true, force: true });
 });
 
 describe("renderer transient workspace cleanup", () => {
+  it("accounts for output published just before cancellation and fences stale writers", async () => {
+    const { database, config, root, jobId } = await fixture("validating");
+    const input = join(root, "jobs", jobId, "input");
+    await mkdir(input, { recursive: true });
+    const archive = new yazl.ZipFile();
+    const writing = pipeline(
+      archive.outputStream,
+      createWriteStream(join(input, "source.zip")),
+    );
+    archive.addBuffer(Buffer.from("test"), "main.tex");
+    archive.end();
+    await writing;
+    vi.spyOn(docker, "spawnRenderer").mockImplementation(
+      (_config, _id, _generation, _extracted, staging) => {
+        writeFileSync(
+          join(staging, "compile.log"),
+          "fixture renderer failed\n",
+        );
+        return {
+          containerName: "fixture",
+          process: spawn(process.execPath, ["-e", "process.exit(1)"], {
+            stdio: ["ignore", "pipe", "pipe"],
+          }),
+        };
+      },
+    );
+    const { rename } =
+      await vi.importActual<typeof import("node:fs/promises")>(
+        "node:fs/promises",
+      );
+    vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+      await rename(from, to);
+      if (to === join(root, "jobs", jobId, "output"))
+        database.raw
+          .prepare("UPDATE jobs SET cancel_requested_at=? WHERE id=?")
+          .run(new Date().toISOString(), jobId);
+    });
+    await processJob(database, config, workerJob(jobId));
+    const bytes = await directorySize(join(root, "jobs", jobId, "output"));
+    expect(bytes).toBeGreaterThan(0);
+    expect(database.jobs.get(jobId)).toMatchObject({
+      status: "canceled",
+      output_size: bytes,
+    });
+    expect(
+      database.worker.markCanceled(
+        jobId,
+        "stale-worker",
+        0,
+        new Date().toISOString(),
+        0,
+      ),
+    ).toBe(0);
+    expect(database.jobs.get(jobId)?.output_size).toBe(bytes);
+  });
   it("removes extracted work and staging when ZIP validation fails", async () => {
     const { database, config, root, jobId } = await fixture("validating");
     const input = join(root, "jobs", jobId, "input");

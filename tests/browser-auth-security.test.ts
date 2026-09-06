@@ -14,12 +14,158 @@ import { RendererDatabase } from "@latex-renderer/database";
 import { createAdminApp } from "../apps/admin-api/src/app.js";
 
 const databases: RendererDatabase[] = [];
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
 afterEach(() => {
   for (const database of databases.splice(0)) database.close();
   vi.unstubAllGlobals();
 });
 
 describe("strict browser authentication", () => {
+  it("supports the documented upper scrypt cost and rejects invalid costs", async () => {
+    const database = databaseFixture();
+    const options = {
+      database,
+      mode: "password" as const,
+      publicOrigin: "https://latex.example.com",
+      passwordPepper: Buffer.alloc(32, 7),
+    };
+    for (const scryptLogN of [11, 19, 12.5, NaN, Infinity])
+      expect(
+        () => new BrowserAuthenticationService({ ...options, scryptLogN }),
+      ).toThrow("scrypt log N");
+    const service = new BrowserAuthenticationService({
+      ...options,
+      scryptLogN: 18,
+    });
+    const encoded = await service.hashPassword(
+      "correct boundary password 2026",
+      "owner",
+    );
+    await expect(
+      service.verifyPassword("correct boundary password 2026", encoded),
+    ).resolves.toBe(true);
+    await expect(
+      service.verifyPassword("a different password 2026", encoded),
+    ).resolves.toBe(false);
+  });
+  it.each([
+    undefined,
+    ["client_secret_basic"],
+    ["client_secret_post"],
+    null,
+    "client_secret_basic",
+    [],
+  ])(
+    "defaults only omitted OIDC token auth metadata, not malformed or unsupported values: %j",
+    async (methods) => {
+      const issuer = "https://id.example.test";
+      const oidc = new OidcClient({
+        issuer,
+        clientId: "test",
+        clientSecret: "a-long-test-secret-value",
+        publicOrigin: "https://latex.example.com",
+        fetchImpl: () =>
+          Promise.resolve(
+            Response.json({
+              issuer,
+              authorization_endpoint: `${issuer}/authorize`,
+              token_endpoint: `${issuer}/token`,
+              jwks_uri: `${issuer}/jwks`,
+              response_types_supported: ["code"],
+              code_challenge_methods_supported: ["S256"],
+              ...(methods === undefined
+                ? {}
+                : { token_endpoint_auth_methods_supported: methods }),
+            }),
+          ),
+      });
+      if (
+        methods === undefined ||
+        (Array.isArray(methods) && methods.includes("client_secret_basic"))
+      )
+        await expect(oidc.begin()).resolves.toHaveProperty("authorizationUrl");
+      else await expect(oidc.begin()).rejects.toThrow("client_secret_basic");
+    },
+  );
+  it.each(["reset", "credential-only", "disable"] as const)(
+    "rejects password verification invalidated while awaiting derivation: %s",
+    async (change) => {
+      const { database, browserAuth } = await passwordFixture();
+      const replacement = "a different valid password 2026";
+      const replacementHash = await browserAuth.hashPassword(
+        replacement,
+        "owner",
+      );
+      const entered = deferred(),
+        resume = deferred();
+      const verify = browserAuth.verifyPassword.bind(browserAuth);
+      const spy = vi
+        .spyOn(browserAuth, "verifyPassword")
+        .mockImplementationOnce(async (...args) => {
+          const valid = await verify(...args);
+          entered.resolve();
+          await resume.promise;
+          return valid;
+        });
+      const input = {
+        loginName: "owner",
+        password: "correct horse battery staple 2026",
+        ipAddress: "192.0.2.10",
+        request: new Request("https://latex.example.com/auth/password/login", {
+          headers: { Origin: "https://latex.example.com" },
+        }),
+      };
+      const pending = browserAuth.loginPassword(input);
+      await entered.promise;
+      database.transaction(() => {
+        const timestamp = new Date().toISOString();
+        if (change === "disable")
+          database.users.setStatus("user_owner", "disabled", timestamp);
+        else {
+          database.browserAuth.upsertCredential({
+            user_id: "user_owner",
+            login_name: "owner",
+            password_hash: replacementHash,
+            password_updated_at: timestamp,
+          });
+          if (change === "reset") {
+            database.users.incrementSecurityVersion("user_owner", timestamp);
+            database.browserAuth.revokeUserSessions("user_owner", timestamp);
+          }
+        }
+      });
+      resume.resolve();
+      await expect(pending).rejects.toMatchObject({
+        code: "INVALID_CREDENTIALS",
+        status: 401,
+      });
+      expect(
+        database.raw
+          .prepare("SELECT count(*) AS count FROM web_sessions")
+          .get(),
+      ).toMatchObject({ count: 0 });
+      spy.mockRestore();
+      if (change !== "disable") {
+        const session = await browserAuth.loginPassword({
+          ...input,
+          password: replacement,
+        });
+        expect(
+          browserAuth.authenticateSession(
+            new Request("https://latex.example.com/app/", {
+              headers: { Cookie: `${SESSION_COOKIE}=${session.token}` },
+            }),
+          )?.user.id,
+        ).toBe("user_owner");
+      }
+    },
+  );
   it("stores only session hashes and enforces exact Origin plus per-session CSRF", async () => {
     const { app, database } = await passwordFixture();
     const login = await app.request("/auth/password/login", {
@@ -436,97 +582,102 @@ describe("strict browser authentication", () => {
     ).rejects.toMatchObject({ code: "INVALID_ACCESS_TOKEN" });
   });
 
-  it("completes OIDC code+PKCE with exact issuer, state, nonce, and an asymmetric allowlist", async () => {
-    const issuer = "https://id.example.test/tenant";
-    const { publicKey, privateKey } = await generateKeyPair("RS256");
-    const jwk = await exportJWK(publicKey);
-    Object.assign(jwk, { kid: "test-key", alg: "RS256", use: "sig" });
-    let nonce = "";
-    const fetchMock = vi.fn(
-      async (input: string | URL | Request, init?: RequestInit) => {
-        const url = new URL(
-          input instanceof Request ? input.url : input.toString(),
-        );
-        if (url.pathname.endsWith("/.well-known/openid-configuration"))
-          return Response.json({
-            issuer,
-            authorization_endpoint: `${issuer}/authorize`,
-            token_endpoint: `${issuer}/token`,
-            jwks_uri: `${issuer}/jwks`,
-            response_types_supported: ["code"],
-            code_challenge_methods_supported: ["S256"],
-            token_endpoint_auth_methods_supported: ["client_secret_basic"],
-          });
-        if (url.pathname.endsWith("/token")) {
-          expect(new Headers(init?.headers).get("Authorization")).toMatch(
-            /^Basic /,
+  it.each([
+    "https://id.example.test",
+    "https://id.example.test/",
+    "https://id.example.test/tenant",
+  ])(
+    "completes OIDC code+PKCE with exact issuer %s, state, nonce, and an asymmetric allowlist",
+    async (issuer) => {
+      const { publicKey, privateKey } = await generateKeyPair("RS256");
+      const jwk = await exportJWK(publicKey);
+      Object.assign(jwk, { kid: "test-key", alg: "RS256", use: "sig" });
+      let nonce = "";
+      const fetchMock = vi.fn(
+        async (input: string | URL | Request, init?: RequestInit) => {
+          const url = new URL(
+            input instanceof Request ? input.url : input.toString(),
           );
-          const now = Math.floor(Date.now() / 1000);
-          const token = await new SignJWT({
-            nonce,
-            email: "verified@example.test",
-            email_verified: true,
-            preferred_username: "verified-user",
-          })
-            .setProtectedHeader({ alg: "RS256", kid: "test-key" })
-            .setIssuer(issuer)
-            .setAudience("latex-renderer")
-            .setSubject("stable-oidc-subject")
-            .setIssuedAt(now)
-            .setExpirationTime(now + 300)
-            .sign(privateKey);
-          return Response.json({ id_token: token });
-        }
-        if (url.pathname.endsWith("/jwks"))
-          return Response.json({ keys: [jwk] });
-        throw new Error(`Unexpected OIDC request: ${url}`);
-      },
-    );
-    vi.stubGlobal("fetch", fetchMock);
-    const client = new OidcClient({
-      issuer,
-      clientId: "latex-renderer",
-      clientSecret: "strict-test-client-secret",
-      publicOrigin: "https://latex.example.com",
-      fetchImpl: fetchMock,
-    });
-    const started = await client.begin("/app/projects/?page=2");
-    const authorization = new URL(started.authorizationUrl);
-    nonce = authorization.searchParams.get("nonce") ?? "";
-    expect(authorization.searchParams.get("code_challenge_method")).toBe(
-      "S256",
-    );
-    expect(authorization.searchParams.get("code_challenge")).toMatch(
-      /^[A-Za-z0-9_-]{43}$/,
-    );
-    await expect(
-      client.callback({
+          if (url.pathname.endsWith("/.well-known/openid-configuration"))
+            return Response.json({
+              issuer,
+              authorization_endpoint: `${issuer}/authorize`,
+              token_endpoint: `${issuer}/token`,
+              jwks_uri: `${issuer}/jwks`,
+              response_types_supported: ["code"],
+              code_challenge_methods_supported: ["S256"],
+            });
+          if (url.pathname.endsWith("/token")) {
+            expect(new Headers(init?.headers).get("Authorization")).toMatch(
+              /^Basic /,
+            );
+            const now = Math.floor(Date.now() / 1000);
+            const token = await new SignJWT({
+              nonce,
+              email: "verified@example.test",
+              email_verified: true,
+              preferred_username: "verified-user",
+            })
+              .setProtectedHeader({ alg: "RS256", kid: "test-key" })
+              .setIssuer(issuer)
+              .setAudience("latex-renderer")
+              .setSubject("stable-oidc-subject")
+              .setIssuedAt(now)
+              .setExpirationTime(now + 300)
+              .sign(privateKey);
+            return Response.json({ id_token: token });
+          }
+          if (url.pathname.endsWith("/jwks"))
+            return Response.json({ keys: [jwk] });
+          throw new Error(`Unexpected OIDC request: ${url}`);
+        },
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const client = new OidcClient({
+        issuer,
+        clientId: "latex-renderer",
+        clientSecret: "strict-test-client-secret",
+        publicOrigin: "https://latex.example.com",
+        fetchImpl: fetchMock,
+      });
+      const started = await client.begin("/app/projects/?page=2");
+      const authorization = new URL(started.authorizationUrl);
+      nonce = authorization.searchParams.get("nonce") ?? "";
+      expect(authorization.searchParams.get("code_challenge_method")).toBe(
+        "S256",
+      );
+      expect(authorization.searchParams.get("code_challenge")).toMatch(
+        /^[A-Za-z0-9_-]{43}$/,
+      );
+      await expect(
+        client.callback({
+          code: "code",
+          state: started.state,
+          stateCookie: "wrong",
+        }),
+      ).rejects.toMatchObject({ code: "OIDC_STATE_INVALID" });
+
+      const completed = await client.callback({
         code: "code",
         state: started.state,
-        stateCookie: "wrong",
-      }),
-    ).rejects.toMatchObject({ code: "OIDC_STATE_INVALID" });
-
-    const completed = await client.callback({
-      code: "code",
-      state: started.state,
-      stateCookie: started.state,
-    });
-    expect(completed.returnTo).toBe("/app/projects/?page=2");
-    expect(completed.identity).toMatchObject({
-      provider: "oidc",
-      issuer,
-      subject: "stable-oidc-subject",
-      email: "verified@example.test",
-    });
-    await expect(
-      client.callback({
-        code: "replay",
-        state: started.state,
         stateCookie: started.state,
-      }),
-    ).rejects.toMatchObject({ code: "OIDC_STATE_INVALID" });
-  });
+      });
+      expect(completed.returnTo).toBe("/app/projects/?page=2");
+      expect(completed.identity).toMatchObject({
+        provider: "oidc",
+        issuer,
+        subject: "stable-oidc-subject",
+        email: "verified@example.test",
+      });
+      await expect(
+        client.callback({
+          code: "replay",
+          state: started.state,
+          stateCookie: started.state,
+        }),
+      ).rejects.toMatchObject({ code: "OIDC_STATE_INVALID" });
+    },
+  );
 });
 
 async function passwordFixture() {

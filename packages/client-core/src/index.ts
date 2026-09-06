@@ -669,7 +669,7 @@ async function ensureSecureDirectory(directory: string): Promise<void> {
     info.isSymbolicLink() ||
     !info.isDirectory() ||
     (currentUser !== undefined && info.uid !== currentUser) ||
-    (info.mode & 0o022) !== 0
+    (process.platform !== "win32" && (info.mode & 0o022) !== 0)
   )
     throw new AppError(
       "UNSAFE_OUTPUT_DIRECTORY",
@@ -719,4 +719,3 @@ async function atomicWriteFile(path: string, contents: string): Promise<void> {
     throw error;
   }
 }
-

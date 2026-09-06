@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Fix upload claim/heartbeat cleanup and Remote MCP temporary-archive handling on filesystem and verification failures; preserve archives owned by another writer.
+- Support retained zero-padded preview names across clients and result views, link Remote MCP results to the user-facing page, and correctly paginate Project selection and revisions.
+- Preserve exact OIDC issuer identifiers and apply the specification's default only when token endpoint authentication metadata is omitted. Keep password session creation consistent with credential changes and support the documented scrypt cost boundary.
+- Apply POSIX directory mode checks only on POSIX clients, preserve the final active Owner while allowing disabled-Owner demotion, and account for output published immediately before cancellation.
+
 ## 1.3.4-rc.1 - 2026-09-07
 
 - Return decoded maintenance/worker modes from the Admin system status API, with the same defaults used by runtime enforcement. Fix the dashboard incorrectly showing attention required for an unset running worker or rendering setting records as objects, without changing production settings.

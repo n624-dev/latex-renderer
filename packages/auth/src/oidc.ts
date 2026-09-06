@@ -69,7 +69,11 @@ export class OidcClient {
   private jwks?: ReturnType<typeof createRemoteJWKSet>;
 
   constructor(options: OidcClientOptions) {
-    this.issuer = strictHttpsUrl(options.issuer, "OIDC issuer");
+    strictHttpsUrl(options.issuer, "OIDC issuer");
+    if (/[\s\\]/u.test(options.issuer))
+      throw new Error("OIDC issuer must be an exact HTTPS identifier");
+    // URL validation must not change the identifier used for discovery/iss.
+    this.issuer = options.issuer;
     this.clientId = bounded(options.clientId, "OIDC client id", 1, 500);
     this.clientSecret = bounded(
       options.clientSecret,
@@ -296,7 +300,9 @@ export class OidcClient {
       !arrayIncludes(value.response_types_supported, "code") ||
       !arrayIncludes(value.code_challenge_methods_supported, "S256") ||
       !arrayIncludes(
-        value.token_endpoint_auth_methods_supported,
+        value.token_endpoint_auth_methods_supported === undefined
+          ? ["client_secret_basic"]
+          : value.token_endpoint_auth_methods_supported,
         "client_secret_basic",
       )
     )

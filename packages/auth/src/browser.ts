@@ -37,7 +37,9 @@ const DEFAULT_SCRYPT_LOG_N = 17;
 const SCRYPT_R = 8;
 const SCRYPT_P = 1;
 const SCRYPT_KEY_BYTES = 32;
-const SCRYPT_MAX_MEMORY = 256 * 1024 * 1024;
+// The supported N=2^18 boundary needs 256 MiB plus scrypt's overhead.
+// Keep a bounded budget without lowering password derivation parameters.
+const SCRYPT_MAX_MEMORY = 288 * 1024 * 1024;
 const LOGIN_NAME = /^[a-z0-9][a-z0-9._-]{2,63}$/;
 
 export interface BrowserPrincipal {
@@ -107,7 +109,11 @@ export class BrowserAuthenticationService {
       "session absolute duration",
     );
     this.scryptLogN = options.scryptLogN ?? DEFAULT_SCRYPT_LOG_N;
-    if (this.scryptLogN < 12 || this.scryptLogN > 18)
+    if (
+      !Number.isInteger(this.scryptLogN) ||
+      this.scryptLogN < 12 ||
+      this.scryptLogN > 18
+    )
       throw new Error("scrypt log N must be between 12 and 18");
     this.now = options.now ?? (() => new Date());
 
@@ -294,22 +300,58 @@ export class BrowserAuthenticationService {
     const normalized = normalizeLoginNameSoft(input.loginName);
     const ip = boundedIdentifier(input.ipAddress, "unknown");
     const loginRateKey = this.rateKey(`login:${normalized}`);
-    const rateKeys = [
-      loginRateKey,
-      this.rateKey(`ip:${ip}`),
-    ];
+    const rateKeys = [loginRateKey, this.rateKey(`ip:${ip}`)];
     this.assertNotRateLimited(rateKeys);
-    const credential = LOGIN_NAME.test(normalized)
-      ? this.database.browserAuth.getCredentialByLogin(normalized)
-      : undefined;
+    const { credential, user } = this.database.transaction(() => {
+      const credential = LOGIN_NAME.test(normalized)
+        ? this.database.browserAuth.getCredentialByLogin(normalized)
+        : undefined;
+      return {
+        credential,
+        user:
+          credential === undefined
+            ? undefined
+            : this.database.users.get(credential.user_id),
+      };
+    });
     const candidateHash =
       credential?.password_hash ?? this.dummyPasswordHash ?? "";
     const valid = await this.verifyPassword(input.password, candidateHash);
-    const user =
-      credential === undefined
-        ? undefined
-        : this.database.users.get(credential.user_id);
-    if (!valid || user === undefined || user.status !== "active") {
+    let session: CreatedBrowserSession | undefined;
+    if (valid && user?.status === "active" && credential !== undefined) {
+      try {
+        session = this.createSession(
+          user,
+          "password",
+          undefined,
+          undefined,
+          sessionAuditContext(input.request, ip),
+          () => {
+            const currentUser = this.database.users.get(user.id);
+            const currentCredential =
+              this.database.browserAuth.getCredentialByLogin(normalized);
+            if (
+              currentUser?.status !== "active" ||
+              currentUser.security_version !== user.security_version ||
+              currentCredential?.user_id !== user.id ||
+              currentCredential.password_hash !== candidateHash
+            )
+              throw new AppError(
+                "INVALID_CREDENTIALS",
+                "Login name or password is invalid",
+                401,
+              );
+          },
+        );
+      } catch (error) {
+        if (
+          !(error instanceof AppError) ||
+          error.code !== "INVALID_CREDENTIALS"
+        )
+          throw error;
+      }
+    }
+    if (session === undefined) {
       this.recordLoginFailure(rateKeys);
       this.database.audit({
         actorType: "password",
@@ -331,16 +373,9 @@ export class BrowserAuthenticationService {
       // Keep the address-wide failure history independent from a successful
       // login to one account. Only the account-specific window is reset.
       this.database.browserAuth.clearLoginAttempts([loginRateKey]);
-      this.database.users.touchLogin(user.id, this.timestamp());
     });
     this.logout(input.request);
-    return this.createSession(
-      user,
-      "password",
-      undefined,
-      undefined,
-      sessionAuditContext(input.request, ip),
-    );
+    return session;
   }
 
   async hashPassword(password: string, loginName: string): Promise<string> {
@@ -372,10 +407,7 @@ export class BrowserAuthenticationService {
         "OIDC authentication is not enabled",
         404,
       );
-    return this.oidc.begin(
-      safeReturnTo(returnTo ?? "/app/"),
-      clientAddress,
-    );
+    return this.oidc.begin(safeReturnTo(returnTo ?? "/app/"), clientAddress);
   }
 
   async finishOidc(input: {
@@ -520,6 +552,7 @@ export class BrowserAuthenticationService {
     identity?: UserIdentityRow,
     capExpiresAt?: string,
     auditLogin?: SessionAuditContext,
+    beforeInsert?: () => void,
   ): CreatedBrowserSession {
     const now = this.now();
     const token = randomBytes(32).toString("base64url");
@@ -554,21 +587,22 @@ export class BrowserAuthenticationService {
       revoked_at: null,
     };
     this.database.transaction(() => {
+      // Revalidate asynchronous password verification under the same write
+      // transaction as session insertion, including concurrent reset/disable.
+      beforeInsert?.();
       const timestamp = now.toISOString();
       this.database.browserAuth.deleteExpiredSessions(timestamp);
-      const activeForUser =
-        this.database.browserAuth.activeSessionCountForUser(
-          user.id,
-          timestamp,
-        );
+      const activeForUser = this.database.browserAuth.activeSessionCountForUser(
+        user.id,
+        timestamp,
+      );
       this.database.browserAuth.revokeOldestActiveSessionsForUser(
         user.id,
         timestamp,
         Math.max(0, activeForUser - MAXIMUM_ACTIVE_SESSIONS_PER_USER + 1),
       );
-      const activeGlobally = this.database.browserAuth.activeSessionCount(
-        timestamp,
-      );
+      const activeGlobally =
+        this.database.browserAuth.activeSessionCount(timestamp);
       this.database.browserAuth.revokeOldestActiveSessions(
         timestamp,
         Math.max(0, activeGlobally - MAXIMUM_ACTIVE_SESSIONS_GLOBAL + 1),
@@ -583,12 +617,8 @@ export class BrowserAuthenticationService {
           targetType: "user",
           targetId: user.id,
           result: "success",
-          ...(auditLogin.ipAddress
-            ? { ipAddress: auditLogin.ipAddress }
-            : {}),
-          ...(auditLogin.userAgent
-            ? { userAgent: auditLogin.userAgent }
-            : {}),
+          ...(auditLogin.ipAddress ? { ipAddress: auditLogin.ipAddress } : {}),
+          ...(auditLogin.userAgent ? { userAgent: auditLogin.userAgent } : {}),
           metadata: {
             mode,
             ...(identity
@@ -824,7 +854,11 @@ export function clearCookies(): readonly string[] {
 
 export function oidcStateCookieName(state: string): string {
   if (!OIDC_STATE_PATTERN.test(state))
-    throw new AppError("OIDC_STATE_INVALID", "OIDC login state is invalid or expired", 401);
+    throw new AppError(
+      "OIDC_STATE_INVALID",
+      "OIDC login state is invalid or expired",
+      401,
+    );
   return `${OIDC_STATE_COOKIE}_${state}`;
 }
 

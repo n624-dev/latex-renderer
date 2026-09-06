@@ -354,12 +354,22 @@ function renderJobResult(
   heading.textContent = title;
   state.textContent = `${statusLabel(job.status)}${connection === "connected" ? "" : " — 接続が切れました。再接続しています…"}`;
   actions.className = "actions";
-  for (const [path, label] of [
+  const firstPreview = job.previews
+    .filter((artifact) =>
+      /^previews\/page-0*[1-9][0-9]*\.png$/.test(artifact.relativePath),
+    )
+    .sort(
+      (left, right) =>
+        Number(left.relativePath.match(/\d+/)?.[0]) -
+        Number(right.relativePath.match(/\d+/)?.[0]),
+    )[0]?.relativePath;
+  const links: Array<readonly [string, string]> = [
     ["result.pdf", "PDF"],
-    ["previews/page-1.png", "プレビュー"],
+    ...(firstPreview ? [[firstPreview, "プレビュー"] as const] : []),
     ["compile.log", "ログ"],
     ["errors.json", "エラー詳細"],
-  ] as const) {
+  ];
+  for (const [path, label] of links) {
     const button = artifactButton(fetcher, tracker, job, path, label);
     if (button) actions.append(button);
   }
@@ -596,10 +606,16 @@ function installRender(fetcher: Fetcher) {
   projectSelect.onchange = () => {
     projectNameField.hidden = projectSelect.value !== "";
   };
-  void json(fetcher, "/app/api/v1/projects")
-    .then((raw) => {
-      const value = raw as {
+  void (async () => {
+    let cursor: string | null = null;
+    const seen = new Set<string>();
+    do {
+      const query = new URLSearchParams({ pageSize: "100" });
+      if (cursor) query.set("cursor", cursor);
+      const value = (await json(fetcher, `/app/api/v1/projects?${query}`)) as {
         items: Array<{ id: string; displayName: string }>;
+        hasMore: boolean;
+        nextCursor: string | null;
       };
       for (const project of value.items) {
         const option = document.createElement("option");
@@ -607,8 +623,13 @@ function installRender(fetcher: Fetcher) {
         option.textContent = project.displayName;
         projectSelect.append(option);
       }
-    })
-    .catch(showError);
+      if (!value.hasMore) break;
+      if (!value.nextCursor || seen.has(value.nextCursor))
+        throw new Error("Project pagination did not advance");
+      cursor = value.nextCursor;
+      seen.add(cursor);
+    } while (cursor);
+  })().catch(showError);
   if (drop) {
     drop.ondragover = (event) => event.preventDefault();
     drop.ondrop = (event) => {
@@ -771,8 +792,9 @@ function installProjects(fetcher: Fetcher) {
         revisionsHasMore: boolean;
       } | null = null;
     const loadDetail = async (append = false) => {
+      if (append && (!project?.revisionsHasMore || !revisionCursor)) return;
       const query = new URLSearchParams({ pageSize: "50" });
-      if (revisionCursor) query.set("cursor", revisionCursor);
+      if (append && revisionCursor) query.set("cursor", revisionCursor);
       const raw = await json(
         fetcher,
         `/app/api/v1/projects/${match[1]}?${query}`,
@@ -784,7 +806,7 @@ function installProjects(fetcher: Fetcher) {
       if (!append || project === null) project = value;
       else
         project = {
-          ...project,
+          ...value,
           revisions: [...project.revisions, ...value.revisions],
         };
       revisionCursor = value.revisionsNextCursor;

@@ -13,6 +13,30 @@ afterEach(() => {
 });
 
 describe("administrator user provisioning", () => {
+  it("can demote an already disabled owner while preserving the last active owner", async () => {
+    const { app, database } = adminApp();
+    seedUser(database, {
+      id: "disabled_owner",
+      subject: null,
+      email: "disabled@example.test",
+      role: "owner",
+      status: "disabled",
+    });
+    const response = await app.request("/admin/api/v1/users/disabled_owner", {
+      method: "PATCH",
+      headers: mutationHeaders("subject-owner"),
+      body: JSON.stringify({ role: "user" }),
+    });
+    expect(response.status).toBe(200);
+    expect(database.users.get("disabled_owner")?.role).toBe("user");
+    expect(database.users.countActiveOwners()).toBe(1);
+    const denied = await app.request("/admin/api/v1/users/user_owner", {
+      method: "PATCH",
+      headers: mutationHeaders("subject-owner"),
+      body: JSON.stringify({ role: "user" }),
+    });
+    await expectError(denied, 409, "LAST_OWNER");
+  });
   it("lets an admin provision an active administrator identity", async () => {
     const { app, database } = adminApp();
     const response = await createUser(app, "subject-admin", {

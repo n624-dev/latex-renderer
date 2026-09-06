@@ -1,5 +1,14 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, rm, truncate, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  truncate,
+  writeFile,
+} from "node:fs/promises";
+import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -32,6 +41,101 @@ afterEach(async () => {
 });
 
 describe("Remote MCP HTTP server", () => {
+  it.each(["hash", "missing-chunk", "existing-archive"] as const)(
+    "cleans up failed finalization without losing another writer's data: %s",
+    async (failure) => {
+      const fixture = await createFixture();
+      const identity = { userId: "user_test", scopes: ["mcp:render"] as const };
+      const payload = await testZip([
+        { path: "main.tex", bytes: Buffer.from("test") },
+      ]);
+      const upload = await fixture.renders.beginSourceUpload(
+        identity,
+        payload.length,
+        failure === "hash"
+          ? "0".repeat(64)
+          : createHash("sha256").update(payload).digest("hex"),
+      );
+      await fixture.renders.uploadSourceChunk(
+        identity,
+        upload.uploadId,
+        0,
+        payload.toString("base64"),
+      );
+      const directory = join(fixture.storage, "sources", upload.uploadId);
+      let existing: string | undefined;
+      if (failure === "missing-chunk")
+        await rm(join(directory, ".chunks", "0"));
+      if (failure === "existing-archive") {
+        const original = fixture.database.sources.claimUploadLease.bind(
+          fixture.database.sources,
+        );
+        vi.spyOn(
+          fixture.database.sources,
+          "claimUploadLease",
+        ).mockImplementation((...args) => {
+          existing = join(directory, `source.zip.finalizing-${args[2]}`);
+          writeFileSync(existing, "other-writer", { flag: "wx" });
+          return original(...args);
+        });
+      }
+      await expect(
+        fixture.renders.finalizeSourceUpload(identity, upload.uploadId),
+      ).rejects.toMatchObject({
+        code:
+          failure === "hash"
+            ? "SOURCE_UPLOAD_MISMATCH"
+            : failure === "missing-chunk"
+              ? "ENOENT"
+              : "EEXIST",
+      });
+      expect(
+        fixture.database.sources.get(upload.uploadId)?.upload_lease_owner,
+      ).toBeNull();
+      const leftovers = (await readdir(directory)).filter((name) =>
+        name.includes(".finalizing-"),
+      );
+      if (existing) {
+        expect(leftovers).toHaveLength(1);
+        expect(await readFile(existing, "utf8")).toBe("other-writer");
+      } else expect(leftovers).toEqual([]);
+    },
+  );
+
+  it("resolves padded preview paths, rejects aliases and links users to their result view", async () => {
+    const fixture = await createFixture();
+    const id = await seedCompletedRemoteJob(fixture, "succeeded");
+    const identity = { userId: "user_test", scopes: ["mcp:read"] as const };
+    fixture.database.raw
+      .prepare("DELETE FROM artifacts WHERE job_id=? AND type='preview'")
+      .run(id);
+    await seedRemoteArtifact(
+      fixture,
+      id,
+      "preview",
+      "previews/page-01.png",
+      TEST_PNG,
+    );
+    await expect(
+      fixture.renders.artifact(identity, id, "previews/page-1.png"),
+    ).resolves.toMatchObject({
+      relativePath: "previews/page-01.png",
+      bytes: TEST_PNG,
+    });
+    await seedRemoteArtifact(
+      fixture,
+      id,
+      "preview",
+      "previews/page-1.png",
+      TEST_PNG,
+    );
+    await expect(
+      fixture.renders.artifact(identity, id, "previews/page-1.png"),
+    ).rejects.toMatchObject({ code: "INVALID_PREVIEW" });
+    expect(fixture.renders.job(identity, id).webResultUrl).toBe(
+      `${ORIGIN}/app/jobs/${id}/`,
+    );
+  });
   it("completes dynamic registration, Access consent, PKCE, and token exchange", async () => {
     const fixture = await createFixture(),
       registrationBody = JSON.stringify({
@@ -677,7 +781,7 @@ describe("Remote MCP HTTP server", () => {
     expect(resourceLink?.type).toBe("resource_link");
     expect(typeof resourceLink?.uri).toBe("string");
     if (typeof resourceLink?.uri === "string")
-      expect(resourceLink.uri).toContain("/admin/jobs/?job=job_");
+      expect(resourceLink.uri).toContain("/app/jobs/job_");
     const serialized = JSON.stringify(created);
     expect(serialized).not.toContain("mcp_at_");
     expect(serialized).not.toContain("mcp_rt_");
