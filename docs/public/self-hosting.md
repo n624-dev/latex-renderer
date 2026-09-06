@@ -10,9 +10,9 @@ since: "v1.2.0"
 
 ## 現在の提供状況
 
-このページは[`v1.3.4-rc.1`](https://github.com/n624-dev/latex-renderer/releases/tag/v1.3.4-rc.1)のサーバーbundleを対象にします。バージョンが`-rc.N`のReleaseは指定された検証hostだけへ明示適用し、一般利用者はStableを使用してください。Cloudflare構成に加えて、通常のTLSリバースプロキシとOIDC／ローカルパスワード認証を選択できます。このReleaseは公開後にタグや配布ファイルを差し替えできない設定で固定され、次を含みます。
+このページは[`v1.3.4-rc.2`](https://github.com/n624-dev/latex-renderer/releases/tag/v1.3.4-rc.2)のサーバーbundleを対象にします。バージョンが`-rc.N`のReleaseは指定された検証hostだけへ明示適用し、一般利用者はStableを使用してください。Cloudflare構成に加えて、通常のTLSリバースプロキシとOIDC／ローカルパスワード認証を選択できます。このReleaseは公開後にタグや配布ファイルを差し替えできない設定で固定され、次を含みます。
 
-- `latex-renderer-server-1.3.4-rc.1.tar.gz`
+- `latex-renderer-server-1.3.4-rc.2.tar.gz`
 - クライアントZIPとClaude Desktop用MCPB
 - 3つの配布ファイルを検証する`SHA256SUMS`
 - commit、バージョン、Renderer fingerprint、Node.js／pnpm要件を記録したbundle内metadata
@@ -89,12 +89,12 @@ since: "v1.2.0"
 
 公開リポジトリの`*.example`ファイルは項目確認のための雛形です。設定済みファイルを雛形へ上書きしてcommitする運用はしません。
 
-## v1.3.4-rc.1をダウンロードして検証
+## v1.3.4-rc.2をダウンロードして検証
 
 次のコマンドは、固定されたReleaseであることをGitHub APIで確認し、APIが返すdigestとダウンロードしたbundleを照合します。通常の非rootユーザーで実行します。
 
 ```bash
-version=1.3.4-rc.1
+version=1.3.4-rc.2
 repository=n624-dev/latex-renderer
 asset="latex-renderer-server-$version.tar.gz"
 work_dir=$(mktemp -d)
@@ -348,6 +348,8 @@ IMAGE_BUILD_CACHE_MAX_GIB=2
 
 実行間隔は0で自動整理を無効化、1〜720で時間指定できます。保持期間は0〜8760時間、キャッシュは0〜1024GiBです。起動5分後から5分ごとに期限を確認し、前回成功時刻を保存します。更新・ビルド・デプロイ中は共通ロックで延期します。Web／CLIの手動Cleanupは保護対象以外の管理イメージを保持期間を待たずに整理します。削除したイメージ・キャッシュは必要時に再取得・再構築します。設定済みの環境ファイルはGitに登録しません。
 
+`1.3.4-rc.2`以降は、非rootで実行するDockerクライアントのBuildxメタデータをワーカーのホーム配下の`.docker/buildx-worker`へ分離します。rootで実行したビルドが作るメタデータの権限により清掃が失敗する問題を防ぎます。既存の認証情報や清掃の保護対象は変更しません。旧構成のイメージや手動復旧用ディレクトリは自動削除の対象外です。不要と確認した対象だけを個別に削除し、Dockerのデータディレクトリを直接削除しないでください。
+
 ## 導入完了の確認
 
 Owner登録とTeX環境の初期設定が終わったら、初回配置で延期された認証済み本番smoke testを実行します。これは一時的な最小権限API keyを作成し、公開origin経由で実際にレンダリングした後、keyを失効させます。credential自体は標準出力やjournalへ記録しません。
@@ -416,7 +418,7 @@ v1.2.xまでのUpdate Managerはroot daemonです。v1.3.0以降は、長寿命c
 この移行だけは、先にこのページの「ダウンロードして検証」を通常ユーザーで実行し、展開した対象Releaseから次の専用コマンドを一度実行します。`VERSION`は`bundle_root`のReleaseと完全一致させます。通常のデプロイスクリプトをuser所有build treeからsudo実行する旧手順は使用しません。
 
 ```bash
-VERSION=1.3.4-rc.1
+VERSION=1.3.4-rc.2
 cd "$bundle_root"
 sudo sh deploy/scripts/bootstrap-update-manager-transition.sh "$VERSION"
 ```
