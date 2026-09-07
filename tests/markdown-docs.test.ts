@@ -53,7 +53,7 @@ describe("Markdown public documentation", () => {
     const selfHosting = publicDocs.find(({ slug }) => slug === "self-hosting");
     expect(selfHosting).toBeDefined();
     expect(selfHosting?.html).toContain(
-      "latex-renderer-server-1.3.4-rc.2.tar.gz",
+      "latex-renderer-server-1.3.4-rc.3.tar.gz",
     );
     expect(selfHosting?.html).toContain("/opt/latex-renderer/update-staging");
     expect(selfHosting?.html).toContain("deploy-production-release.sh");

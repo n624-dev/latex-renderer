@@ -15,6 +15,126 @@ afterEach(async () => {
 });
 
 describe("scheduled cleanup", () => {
+  it("keeps Project input reusable after final Job cleanup, then collects it after Project deletion", async () => {
+    const root = await mkdtemp(join(tmpdir(), "latex-project-retention-"));
+    roots.push(root);
+    const databasePath = join(root, "renderer.sqlite3"),
+      storageRoot = join(root, "storage"),
+      sourceId = `source_${"c".repeat(32)}`,
+      jobId = `job_${"d".repeat(32)}`,
+      old = "2000-01-01T00:00:00.000Z";
+    const db = new RendererDatabase(databasePath);
+    db.migrate();
+    try {
+      db.raw
+        .prepare(
+          `INSERT INTO users(id,access_subject,email,display_name,role,status,security_version,created_by,created_at,updated_at)
+        VALUES ('user_retained','retained','retained@example.test','Retained','user','active',1,'test',?,?)`,
+        )
+        .run(old, old);
+      db.webPrincipals.ensureAll();
+      const principal = db.raw
+        .prepare("SELECT * FROM web_principals WHERE user_id='user_retained'")
+        .get() as { service_account_id: string; api_key_id: string };
+      db.sources.insertReserved({
+        id: sourceId,
+        ownerUserId: "user_retained",
+        size: 1,
+        sha256: "c".repeat(64),
+        storageKey: `jobs/${jobId}/input/source.zip`,
+        timestamp: old,
+        expiresAt: old,
+      });
+      db.raw
+        .prepare(
+          `UPDATE sources SET status='ready',paths_json='["main.tex"]' WHERE id=?`,
+        )
+        .run(sourceId);
+      db.projects.insert({
+        id: "project_retained",
+        ownerUserId: "user_retained",
+        displayName: "Retained",
+        timestamp: old,
+      });
+      db.projects.insertRevision({
+        id: "revision_retained",
+        projectId: "project_retained",
+        sourceId,
+        displayName: "Retained",
+        originalFilename: "main.tex",
+        entrypoint: "main.tex",
+        timestamp: old,
+      });
+      expect(
+        db.jobs.insertQueued({
+          id: jobId,
+          userId: "user_retained",
+          serviceAccountId: principal.service_account_id,
+          apiKeyId: principal.api_key_id,
+          rendererVersion: "test",
+          sourceId,
+          entrypoint: "main.tex",
+          timestamp: new Date().toISOString(),
+          reservedOutputBytes: 0,
+        }),
+      ).toBe(1);
+      db.raw
+        .prepare(
+          "UPDATE jobs SET status='succeeded',completed_at=?,updated_at=? WHERE id=?",
+        )
+        .run(old, old, jobId);
+      const sourcePath = join(
+        storageRoot,
+        "jobs",
+        jobId,
+        "input",
+        "source.zip",
+      );
+      await mkdir(join(sourcePath, ".."), { recursive: true });
+      await writeFile(sourcePath, "x");
+      const cleanup = () =>
+        execFileAsync(
+          process.execPath,
+          [join(process.cwd(), "deploy/scripts/cleanup.mjs")],
+          {
+            env: {
+              ...process.env,
+              DATABASE_PATH: databasePath,
+              STORAGE_ROOT: storageRoot,
+            },
+          },
+        );
+      await cleanup();
+      expect(db.jobs.get(jobId)?.status).toBe("deleted");
+      expect(db.sources.get(sourceId)).toMatchObject({
+        status: "ready",
+        expires_at: old,
+      });
+      expect(
+        db.sources.getOwnedReady(
+          sourceId,
+          "user_retained",
+          new Date().toISOString(),
+        )?.id,
+      ).toBe(sourceId);
+      expect((await stat(sourcePath)).size).toBe(1);
+      expect(db.sources.storageUsageForUser("user_retained")).toBe(1);
+      await cleanup();
+      expect((await stat(sourcePath)).size).toBe(1);
+      db.projects.softDelete(
+        "project_retained",
+        "user_retained",
+        new Date().toISOString(),
+      );
+      await cleanup();
+      expect(db.sources.get(sourceId)?.status).toBe("deleted");
+      await expect(stat(sourcePath)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(db.sources.storageUsageForUser("user_retained")).toBe(0);
+    } finally {
+      db.close();
+    }
+  });
+
   it("prunes only retained audit rows covered by the export checkpoint", async () => {
     const root = await mkdtemp(join(tmpdir(), "latex-renderer-audit-prune-"));
     roots.push(root);

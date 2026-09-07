@@ -237,6 +237,7 @@ export async function processJob(
           config.workerId,
           job.lease_generation,
           nowIso(),
+          artifacts.reduce((sum, item) => sum + item.size, 0),
         );
         return false;
       }

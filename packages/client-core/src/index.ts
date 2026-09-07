@@ -26,18 +26,10 @@ import { validateEntrypointPath } from "@latex-renderer/zip-validation";
 import ignore, { type Ignore } from "ignore";
 import yazl from "yazl";
 import { shouldExcludeProjectPath } from "./project-files.js";
+import { pollUntilTerminal } from "./polling.js";
+import { pruneGeneratedArtifacts } from "./artifact-cleanup.js";
 
 export { shouldExcludeProjectPath } from "./project-files.js";
-
-const terminalStatuses = new Set([
-  "succeeded",
-  "failed",
-  "timeout",
-  "canceled",
-  "rejected",
-  "deleted",
-  "expired",
-]);
 
 export interface ClientTransport {
   createSource(
@@ -56,9 +48,10 @@ export interface ClientTransport {
     idempotencyKey: string,
     outputs?: readonly RenderOutput[],
   ): Promise<SourceRenderResponse>;
-  job(jobId: string, jobTicket: string): Promise<JobResponse>;
+  job(jobId: string, jobTicket: string, options?: { signal?: AbortSignal | undefined }): Promise<JobResponse>;
   renewJobTicket(
     jobId: string,
+    options?: { signal?: AbortSignal | undefined },
   ): Promise<{ jobTicket: string; expiresAt: string }>;
   action(
     jobId: string,
@@ -146,14 +139,14 @@ export async function renderProject(
       options.outputs,
     );
     options.onEvent?.({ type: "job.queued", jobId: ticket.jobId });
-    const job = await pollJob(client, ticket.jobId, ticket.jobTicket, options);
+    const { job, jobTicket } = await pollUntilTerminal(client, ticket, options);
     const outputDirectory = resolve(
       options.outputDirectory ?? join(prepared.outputRoot, ".render"),
     );
     const artifacts = await downloadArtifacts(
       client,
       job,
-      ticket.jobTicket,
+      jobTicket,
       outputDirectory,
       options,
     );
@@ -213,12 +206,12 @@ export async function renderSource(
       options.outputs,
     );
   options.onEvent?.({ type: "job.queued", jobId: ticket.jobId });
-  const job = await pollJob(client, ticket.jobId, ticket.jobTicket, options),
+  const { job, jobTicket } = await pollUntilTerminal(client, ticket, options),
     outputDirectory = resolve(options.outputDirectory ?? ".render"),
     artifacts = await downloadArtifacts(
       client,
       job,
-      ticket.jobTicket,
+      jobTicket,
       outputDirectory,
       options,
     );
@@ -351,12 +344,18 @@ export async function createProjectArchive(
   destination: string,
   entrypoint?: string,
 ): Promise<{ size: number; sha256: string; files: number }> {
-  const zip = new yazl.ZipFile();
-  const output = createWriteStream(destination, { flags: "wx", mode: 0o600 });
-  const completion = pipeline(zip.outputStream, output);
-  let files = 0;
   const requiredEntrypoint =
     entrypoint === undefined ? undefined : validateEntrypointPath(entrypoint);
+  const zip = new yazl.ZipFile();
+  // Await exclusive creation before entering cleanup: an EEXIST failure must
+  // never cause us to remove a destination belonging to the caller.
+  const handle = await open(destination, "wx", 0o600);
+  const output = handle.createWriteStream();
+  zip.on("error", (error: Error) => output.destroy(error));
+  const completion = pipeline(zip.outputStream, output);
+  // Observe early stream failures while the project directory is being walked.
+  void completion.catch(() => undefined);
+  let files = 0;
   let entrypointFound = false,
     texFound = false;
   let sourceBytes = 0;
@@ -403,6 +402,8 @@ export async function createProjectArchive(
     await completion.catch(() => undefined);
     await rm(destination, { force: true });
     throw error;
+  } finally {
+    await handle.close().catch(() => undefined);
   }
   const info = await stat(destination);
   return { size: info.size, sha256: await hashFile(destination), files };
@@ -413,42 +414,6 @@ export async function hashFile(path: string): Promise<string> {
   for await (const chunk of createReadStream(path))
     hash.update(chunk as Buffer);
   return hash.digest("hex");
-}
-
-async function pollJob(
-  client: ClientTransport,
-  jobId: string,
-  jobTicket: string,
-  options: ClientCoreOptions & {
-    pollIntervalMs?: number;
-    pollTimeoutMs?: number;
-    now?: () => number;
-    sleep?: (milliseconds: number) => Promise<void>;
-  },
-): Promise<JobResponse> {
-  const sleep = options.sleep ?? delay;
-  const interval = options.pollIntervalMs ?? 1000;
-  const timeout = options.pollTimeoutMs;
-  if (timeout !== undefined && (!Number.isSafeInteger(timeout) || timeout <= 0))
-    throw new AppError(
-      "INVALID_POLL_TIMEOUT",
-      "Poll timeout must be a positive integer",
-      400,
-    );
-  const now = options.now ?? Date.now;
-  const startedAt = now();
-  for (;;) {
-    const job = await client.job(jobId, jobTicket);
-    options.onEvent?.({ type: "job.status", jobId, status: job.status });
-    if (terminalStatuses.has(job.status)) return job;
-    if (timeout !== undefined && now() - startedAt >= timeout)
-      throw new AppError(
-        "RENDER_POLL_TIMEOUT",
-        "Render did not reach a terminal state before the local timeout",
-        504,
-      );
-    await sleep(interval);
-  }
 }
 
 async function downloadArtifacts(
@@ -499,13 +464,6 @@ async function downloadArtifacts(
     outputDirectory,
     options,
   );
-  const jobPath = join(outputDirectory, "job.json");
-  await atomicWriteFile(jobPath, `${JSON.stringify(job, null, 2)}\n`);
-  options.onEvent?.({
-    type: "artifact.downloaded",
-    name: "job.json",
-    path: jobPath,
-  });
   const svg: string[] = [];
   for (const artifact of job.artifacts.filter(
     (item) => item.type === "svg" || item.type === "svg_manifest",
@@ -538,6 +496,21 @@ async function downloadArtifacts(
       path: destination,
     });
   }
+  // Commit the new job metadata only once its advertised artifacts have been
+  // downloaded and leftovers from the previous render have been removed.
+  const keep = new Set(
+    [pdf, errors, log, ...previews, ...svg]
+      .filter((path): path is string => path !== undefined)
+      .map((path) => relative(outputDirectory, path).replaceAll("\\", "/")),
+  );
+  await pruneGeneratedArtifacts(outputDirectory, keep);
+  const jobPath = join(outputDirectory, "job.json");
+  await atomicWriteFile(jobPath, `${JSON.stringify(job, null, 2)}\n`);
+  options.onEvent?.({
+    type: "artifact.downloaded",
+    name: "job.json",
+    path: jobPath,
+  });
   return {
     ...(pdf === undefined ? {} : { pdf }),
     ...(errors === undefined ? {} : { errors }),
@@ -567,24 +540,26 @@ async function downloadPreviews(
   const previews: string[] = [];
   const names = new Set<string>();
   for (const artifact of job.previews) {
-    const match = /^previews\/(page-[1-9][0-9]*\.png)$/.exec(
+    const match = /^previews\/(page-(0*[1-9][0-9]*)\.png)$/.exec(
       artifact.relativePath,
     );
-    const name = match?.[1];
-    if (artifact.type !== "preview" || name === undefined || names.has(name))
+    const name = match?.[1], page = Number(match?.[2]),
+      canonicalName = `page-${page}.png`;
+    if (artifact.type !== "preview" || name === undefined ||
+        !Number.isSafeInteger(page) || page < 1 || page > 100 || names.has(canonicalName))
       throw new AppError(
         "INVALID_ARTIFACT_PATH",
         "Server returned an unsafe preview path",
         502,
       );
-    names.add(name);
-    const destination = join(directory, name);
+    names.add(canonicalName);
+    const destination = join(directory, canonicalName);
     await assertSafeOutputFile(destination);
     await client.download(client.previewUrl(job.id, name), ticket, destination);
     previews.push(destination);
     options.onEvent?.({
       type: "artifact.downloaded",
-      name: `previews/${name}`,
+      name: `previews/${canonicalName}`,
       path: destination,
     });
   }
@@ -694,7 +669,7 @@ async function ensureSecureDirectory(directory: string): Promise<void> {
     info.isSymbolicLink() ||
     !info.isDirectory() ||
     (currentUser !== undefined && info.uid !== currentUser) ||
-    (info.mode & 0o022) !== 0
+    (process.platform !== "win32" && (info.mode & 0o022) !== 0)
   )
     throw new AppError(
       "UNSAFE_OUTPUT_DIRECTORY",
@@ -743,8 +718,4 @@ async function atomicWriteFile(path: string, contents: string): Promise<void> {
     await rm(temporary, { force: true }).catch(() => undefined);
     throw error;
   }
-}
-
-function delay(milliseconds: number): Promise<void> {
-  return new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds));
 }

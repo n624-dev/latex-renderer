@@ -144,15 +144,21 @@ export class RendererClient {
   }
   async job(
     ...args:
-      | [jobId: string, jobTicket: string]
-      | [rendererUrl: string, jobId: string, jobTicket: string]
+      | [jobId: string, jobTicket: string, options?: RendererRequestOptions | undefined]
+      | [rendererUrl: string, jobId: string, jobTicket: string, options?: RendererRequestOptions | undefined]
   ): Promise<JobResponse> {
     let base: string, jobId: string, ticket: string, path: string;
-    if (args.length === 3) {
-      [base, jobId, ticket] = args;
+    let options: RendererRequestOptions | undefined;
+    // A third options object is not the legacy three-string overload.
+    if (typeof args[2] === "string") {
+      base = args[0];
+      jobId = args[1];
+      ticket = args[2];
+      options = args[3];
       path = `/v1/jobs/${jobId}`;
     } else {
       [jobId, ticket] = args;
+      options = args[2];
       base = this.#baseUrl.toString();
       path = `${PUBLIC_API_PREFIX}/jobs/${jobId}`;
     }
@@ -162,12 +168,14 @@ export class RendererClient {
         headers: noStoreRequestHeaders({ Authorization: `Bearer ${ticket}` }),
         cache: "no-store",
         redirect: "error",
+        ...(options?.signal === undefined ? {} : { signal: options.signal }),
       },
     );
     return jobResponseSchema.parse(await responseJson(response));
   }
   async renewJobTicket(
     jobId: string,
+    options?: RendererRequestOptions,
   ): Promise<{ jobTicket: string; expiresAt: string }> {
     const response = await fetch(
       new URL(`${PUBLIC_API_PREFIX}/job-tickets/${jobId}`, this.#baseUrl),
@@ -175,6 +183,7 @@ export class RendererClient {
         method: "POST",
         headers: this.headers(),
         redirect: "error",
+        ...(options?.signal === undefined ? {} : { signal: options.signal }),
       },
     );
     return ticketRenewalSchema.parse(await responseJson(response));
@@ -277,6 +286,9 @@ export class RendererClient {
   ): Record<string, string> {
     return { Authorization: `Bearer ${this.apiKey}`, ...extra };
   }
+}
+export interface RendererRequestOptions {
+  readonly signal?: AbortSignal | undefined;
 }
 export interface RendererClientOptions {
   readonly trustedRendererOrigins?: readonly string[];

@@ -329,6 +329,7 @@ export class UsersService {
         }
         if (
           target.role === "owner" &&
+          target.status === "active" &&
           input.role !== "owner" &&
           this.deps.database.users.countActiveOwners() <= 1
         ) {

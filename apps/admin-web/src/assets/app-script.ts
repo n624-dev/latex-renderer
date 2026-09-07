@@ -354,12 +354,22 @@ function renderJobResult(
   heading.textContent = title;
   state.textContent = `${statusLabel(job.status)}${connection === "connected" ? "" : " — 接続が切れました。再接続しています…"}`;
   actions.className = "actions";
-  for (const [path, label] of [
+  const firstPreview = job.previews
+    .filter((artifact) =>
+      /^previews\/page-0*[1-9][0-9]*\.png$/.test(artifact.relativePath),
+    )
+    .sort(
+      (left, right) =>
+        Number(left.relativePath.match(/\d+/)?.[0]) -
+        Number(right.relativePath.match(/\d+/)?.[0]),
+    )[0]?.relativePath;
+  const links: Array<readonly [string, string]> = [
     ["result.pdf", "PDF"],
-    ["previews/page-1.png", "プレビュー"],
+    ...(firstPreview ? [[firstPreview, "プレビュー"] as const] : []),
     ["compile.log", "ログ"],
     ["errors.json", "エラー詳細"],
-  ] as const) {
+  ];
+  for (const [path, label] of links) {
     const button = artifactButton(fetcher, tracker, job, path, label);
     if (button) actions.append(button);
   }
@@ -596,10 +606,16 @@ function installRender(fetcher: Fetcher) {
   projectSelect.onchange = () => {
     projectNameField.hidden = projectSelect.value !== "";
   };
-  void json(fetcher, "/app/api/v1/projects")
-    .then((raw) => {
-      const value = raw as {
+  void (async () => {
+    let cursor: string | null = null;
+    const seen = new Set<string>();
+    do {
+      const query = new URLSearchParams({ pageSize: "100" });
+      if (cursor) query.set("cursor", cursor);
+      const value = (await json(fetcher, `/app/api/v1/projects?${query}`)) as {
         items: Array<{ id: string; displayName: string }>;
+        hasMore: boolean;
+        nextCursor: string | null;
       };
       for (const project of value.items) {
         const option = document.createElement("option");
@@ -607,8 +623,13 @@ function installRender(fetcher: Fetcher) {
         option.textContent = project.displayName;
         projectSelect.append(option);
       }
-    })
-    .catch(showError);
+      if (!value.hasMore) break;
+      if (!value.nextCursor || seen.has(value.nextCursor))
+        throw new Error("Project pagination did not advance");
+      cursor = value.nextCursor;
+      seen.add(cursor);
+    } while (cursor);
+  })().catch(showError);
   if (drop) {
     drop.ondragover = (event) => event.preventDefault();
     drop.ondrop = (event) => {
@@ -764,15 +785,21 @@ function installProjects(fetcher: Fetcher) {
           originalFilename: string;
           entrypoint: string;
           createdAt: string;
-          jobs: Array<{ id: string; status: string; createdAt: string }>;
+          jobs: Array<{
+            id: string;
+            status: string;
+            createdAt: string;
+            outputs?: string[];
+          }>;
           jobCount: number;
           jobsHasMore: boolean;
         }>;
         revisionsHasMore: boolean;
       } | null = null;
     const loadDetail = async (append = false) => {
+      if (append && (!project?.revisionsHasMore || !revisionCursor)) return;
       const query = new URLSearchParams({ pageSize: "50" });
-      if (revisionCursor) query.set("cursor", revisionCursor);
+      if (append && revisionCursor) query.set("cursor", revisionCursor);
       const raw = await json(
         fetcher,
         `/app/api/v1/projects/${match[1]}?${query}`,
@@ -784,7 +811,7 @@ function installProjects(fetcher: Fetcher) {
       if (!append || project === null) project = value;
       else
         project = {
-          ...project,
+          ...value,
           revisions: [...project.revisions, ...value.revisions],
         };
       revisionCursor = value.revisionsNextCursor;
@@ -793,7 +820,7 @@ function installProjects(fetcher: Fetcher) {
         project.revisions
           .map(
             (revision) =>
-              `<section><div class="page-heading"><div><h2>Revision ${revision.revisionNumber}: ${escape(revision.displayName)}</h2><p>${escape(revision.originalFilename)}・${escape(new Date(revision.createdAt).toLocaleString("ja-JP"))}</p></div><button type="button" class="secondary" data-rerender="${escape(revision.id)}">もう一度変換</button></div><ul>${revision.jobs.map((job) => `<li>${escape(statusLabel(job.status))} <a href="/app/jobs/${encodeURIComponent(job.id)}/">${escape(new Date(job.createdAt).toLocaleString("ja-JP"))}</a></li>`).join("") || "<li>変換履歴はありません。</li>"}</ul>${revision.jobCount > revision.jobs.length ? `<p class="muted">Job ${revision.jobs.length} / ${revision.jobCount}件を表示中（詳細APIのcursorで続きへ進めます）。</p>` : ""}</section>`,
+              `<section><div class="page-heading"><div><h2>Revision ${revision.revisionNumber}: ${escape(revision.displayName)}</h2><p>${escape(revision.originalFilename)}・${escape(new Date(revision.createdAt).toLocaleString("ja-JP"))}</p></div><label>出力形式<select id="outputs-${escape(revision.id)}"><option value="">初回の設定</option><option value="pdf">PDF</option><option value="svg">PDF＋SVG</option></select></label><button type="button" class="secondary" data-rerender="${escape(revision.id)}">もう一度変換</button></div><ul>${revision.jobs.map((job) => `<li>${escape(statusLabel(job.status))}・${escape((job.outputs ?? []).join("＋").toUpperCase())} <a href="/app/jobs/${encodeURIComponent(job.id)}/">${escape(new Date(job.createdAt).toLocaleString("ja-JP"))}</a></li>`).join("") || "<li>変換履歴はありません。</li>"}</ul>${revision.jobCount > revision.jobs.length ? `<p class="muted">Job ${revision.jobs.length} / ${revision.jobCount}件を表示中（詳細APIのcursorで続きへ進めます）。</p>` : ""}</section>`,
           )
           .join("") || "<section>改訂はありません。</section>"
       }${project.revisionsHasMore ? '<div class="actions"><button type="button" class="secondary" id="app-revisions-next">次の改訂ページ</button></div>' : ""}`;
@@ -804,6 +831,9 @@ function installProjects(fetcher: Fetcher) {
           button.disabled = true;
           const revisionId = button.dataset.rerender;
           if (!revisionId) return;
+          const output = detail.querySelector<HTMLSelectElement>(
+            `#outputs-${CSS.escape(revisionId)}`,
+          )?.value;
           void json(
             fetcher,
             `/app/api/v1/projects/${match[1]}/revisions/${encodeURIComponent(revisionId)}/render`,
@@ -812,7 +842,11 @@ function installProjects(fetcher: Fetcher) {
               headers: {
                 "Idempotency-Key": `app-rerender-${crypto.randomUUID()}`,
               },
-              body: "{}",
+              body: JSON.stringify(
+                output
+                  ? { outputs: output === "svg" ? ["pdf", "svg"] : ["pdf"] }
+                  : {},
+              ),
             },
           )
             .then((value) => {

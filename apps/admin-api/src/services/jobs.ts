@@ -416,7 +416,12 @@ export class AdminJobsService {
             resourceId: ready.id,
             responseCode: 200,
             expiresAt: new Date(
-              Math.min(Date.now() + 86_400_000, Date.parse(ready.expires_at)),
+              this.deps.database.sources.isProjectRetained(ready.id)
+                ? Date.now() + 86_400_000
+                : Math.min(
+                    Date.now() + 86_400_000,
+                    Date.parse(ready.expires_at),
+                  ),
             ).toISOString(),
             createdAt: nowIso(),
           }),
@@ -679,7 +684,7 @@ export class AdminJobsService {
             rendererVersion: this.deps.rendererVersion,
             sourceId: currentSource.id,
             entrypoint,
-            outputs: resolvedProject?.outputs ?? input.outputs,
+            outputs: input.outputs,
             ...(projectRevisionId === undefined ? {} : { projectRevisionId }),
             timestamp,
             reservedOutputBytes: this.deps.maxOutputBytes,
@@ -768,7 +773,7 @@ export class AdminJobsService {
           outputs: RenderOutput[];
         }
       | { projectId: string; revisionId: string },
-  ): { id: string; outputs: RenderOutput[] } {
+  ): { id: string } {
     const owned = this.deps.database.projects.getOwned(
       project.projectId,
       actor.userId,
@@ -793,7 +798,6 @@ export class AdminJobsService {
       this.deps.database.projects.touch(owned.id, nowIso());
       return {
         id: revision.id,
-        outputs: this.deps.database.projects.renderOutputs(revision),
       };
     }
     let revision = this.deps.database.projects.revisionForSource(
@@ -825,7 +829,6 @@ export class AdminJobsService {
     this.deps.database.projects.touch(owned.id, nowIso());
     return {
       id: revision.id,
-      outputs: this.deps.database.projects.renderOutputs(revision),
     };
   }
 
@@ -1118,7 +1121,14 @@ export class AdminJobsService {
     );
     if (source === undefined)
       throw new AppError("SOURCE_NOT_FOUND", "Source does not exist", 404);
-    if (source.expires_at <= nowIso())
+    if (
+      source.expires_at <= nowIso() &&
+      this.deps.database.sources.getOwnedReady(
+        sourceId,
+        identity.user_id,
+        nowIso(),
+      ) === undefined
+    )
       throw new AppError(
         "IDEMPOTENT_RESOURCE_GONE",
         "Idempotent Source reservation has expired",

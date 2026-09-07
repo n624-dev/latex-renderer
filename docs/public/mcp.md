@@ -4,11 +4,22 @@ category: AI・MCP
 title: Remote MCP・Local MCP
 description: OAuthで接続するRemote MCPと、ローカルファイルを扱うLocal MCPの使い分けです。
 navOrder: 45
-updated: "2026-08-29"
+updated: "2026-09-07"
 since: "v1.0.0"
 ---
 
 ## 通常はRemote MCPを使う
+
+Remote MCPは特定のAIサービスのドメインに限定していません。OAuth認可コードフロー・
+PKCE（S256）と対応するMCP HTTP通信を実装するクライアントから接続できます。
+新しいAIサービスでも、対応方式が同じならサーバー側へサービス名を追加する必要はありません。
+ただし各サービス側のMCP対応状況や利用制限によっては接続できない場合があります。
+
+接続許可はLaTeX Renderer自身のページを通常のブラウザーで開いて行います。
+承認画面で `Origin is not allowed` が出た場合は、サーバーを承認フォームの修正版へ
+更新したうえで、古い承認タブを閉じてAI側から接続をやり直してください。
+管理画面の許可OriginへAIのドメインを追加したり、Origin・CSRF検証を無効にしたりする
+必要はありません。埋め込み画面ではなく、外部ブラウザーで認可してください。
 
 Remote MCPはクライアントのインストールやAPIキーの入力を必要とせず、ClaudeのWeb、Desktop、モバイルから同じ接続を利用できます。Claudeの「Customize → Connectors」でカスタムコネクタを追加し、URLへ次を指定します。
 

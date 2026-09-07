@@ -8,6 +8,57 @@ afterEach(() => {
 });
 
 describe("Render Source and Project atomicity", () => {
+  it("expires orphan Sources but retains ready Sources until the last owned Project is deleted", () => {
+    const fixture = setup(),
+      { database, sourceId, userId, now } = fixture;
+    database.raw
+      .prepare(
+        "UPDATE sources SET expires_at='2000-01-01T00:00:00.000Z' WHERE id=?",
+      )
+      .run(sourceId);
+    expect(database.sources.getReady(sourceId, now)).toBeUndefined();
+    expect(insertQueued(fixture)).toBe(0);
+    for (const id of ["project_first", "project_second"]) {
+      database.projects.insert({
+        id,
+        ownerUserId: userId,
+        displayName: id,
+        timestamp: now,
+      });
+      database.projects.insertRevision({
+        id: `revision_${id}`,
+        projectId: id,
+        sourceId,
+        displayName: id,
+        originalFilename: "main.tex",
+        entrypoint: "main.tex",
+        timestamp: now,
+      });
+    }
+    expect(
+      database.sources.getOwnedReady(sourceId, "another_user", now),
+    ).toBeUndefined();
+    expect(database.sources.getReady(sourceId, now)?.id).toBe(sourceId);
+    expect(
+      database.sources.findReady(userId, "a".repeat(64), 10, now)?.id,
+    ).toBe(sourceId);
+    expect(database.sources.markDeleting(sourceId, now)).toBe(0);
+    database.projects.softDelete("project_first", userId, now);
+    expect(database.sources.getOwnedReady(sourceId, userId, now)?.id).toBe(
+      sourceId,
+    );
+    expect(insertQueued(fixture)).toBe(1);
+    database.raw
+      .prepare("UPDATE sources SET status='deleting' WHERE id=?")
+      .run(sourceId);
+    expect(database.sources.getReady(sourceId, now)).toBeUndefined();
+    database.raw
+      .prepare("UPDATE sources SET status='ready' WHERE id=?")
+      .run(sourceId);
+    database.projects.softDelete("project_second", userId, now);
+    expect(database.sources.getReady(sourceId, now)).toBeUndefined();
+  });
+
   it("refuses a queued Job after the Source leaves ready state", () => {
     const fixture = setup();
     expect(

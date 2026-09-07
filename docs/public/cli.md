@@ -57,6 +57,8 @@ latex-render render [directory-or-zip] [--entrypoint main.tex] [--output .render
 
 同じディレクトリまたはZIPから複数文書を作る場合は、Sourceを1回だけアップロードして使い回します。各Jobの出力先は重ならないよう指定してください。
 
+同じ出力先を再利用するときは、前回の`job.json`に記録された生成物のうち、今回存在しないPDF・プレビュー・SVGを整理します。無関係な利用者ファイルは削除しません。保存先のリンクは拒否します。POSIX環境では所有者とgroup／otherの書込み権限も検査しますが、WindowsにはPOSIXのmodeビット判定を適用しません。
+
 ```text
 latex-render source upload ./project.zip --json
 latex-render render --source source_... --entrypoint reports/a.tex --output .render/a

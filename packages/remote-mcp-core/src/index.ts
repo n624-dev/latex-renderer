@@ -13,7 +13,6 @@ import {
 } from "node:fs/promises";
 import { createReadStream, createWriteStream } from "node:fs";
 import { dirname, join } from "node:path";
-import { once } from "node:events";
 import { PassThrough, Readable, Transform } from "node:stream";
 import type {
   JobRow,
@@ -680,7 +679,9 @@ export class RemoteRenderService {
       throw new AppError("SOURCE_NOT_READY", "Source is not ready", 409);
     const sourceRef = newId("source_ref"),
       expiresAt = new Date(
-        Math.min(Date.now() + SOURCE_REF_MS, Date.parse(source.expires_at)),
+        this.database.sources.isProjectRetained(source.id)
+          ? Date.now() + SOURCE_REF_MS
+          : Math.min(Date.now() + SOURCE_REF_MS, Date.parse(source.expires_at)),
       ).toISOString();
     this.database.remoteMcp.insertSourceRef({
       id: sourceRef,
@@ -1170,10 +1171,21 @@ export class RemoteRenderService {
   ): Promise<RemoteArtifactContent> {
     requireScope(identity.scopes, "mcp:read");
     this.assertOwned(identity.userId, jobId);
-    const artifact = this.database.artifacts.getDownloadable(
-      jobId,
-      relativePath,
-    );
+    let artifact = this.database.artifacts.getDownloadable(jobId, relativePath);
+    const page = /^previews\/page-[1-9][0-9]*\.png$/.test(relativePath)
+      ? previewPage(relativePath)
+      : null;
+    if (page !== null) {
+      const candidates = this.database.artifacts
+        .listDownloadable(jobId)
+        .filter(
+          (item) =>
+            item.type === "preview" && previewPage(item.relative_path) === page,
+        );
+      if (candidates.length > 1)
+        throw new AppError("INVALID_PREVIEW", "Preview page is ambiguous", 409);
+      artifact = candidates[0];
+    }
     if (artifact === undefined)
       throw new AppError("ARTIFACT_NOT_FOUND", "Artifact does not exist", 404);
     if (
@@ -1190,12 +1202,12 @@ export class RemoteRenderService {
     try {
       return {
         jobId,
-        relativePath,
+        relativePath: artifact.relative_path,
         mimeType: artifactMimeType(artifact.type),
         size: artifact.size,
         sha256: artifact.sha256,
         bytes: await readBoundedArtifact(
-          this.artifactPath(jobId, relativePath),
+          this.artifactPath(jobId, artifact.relative_path),
           artifact.size,
           this.maxInlineArtifactBytes,
         ),
@@ -1539,28 +1551,29 @@ export class RemoteRenderService {
           422,
         );
       const assembled =
-          current.size === leased.size
-            ? path
-            : await assembleUploadChunks(
-                this.sourceUploadChunkRoot(leased),
-                path,
-                leaseOwner,
-                leased.size,
-              ),
-        digest = await sha256File(assembled),
-        verified = await stat(assembled);
-      assertHeartbeat();
-      renewLease();
-      if (verified.size !== leased.size || digest !== leased.sha256)
-        throw new AppError(
-          "SOURCE_UPLOAD_MISMATCH",
-          "Uploaded Source size or SHA-256 does not match",
-          422,
-        );
-      const inspection = await mkdtemp(
-        join(this.storageRoot, `.remote-source-${leased.id}-`),
-      );
+        current.size === leased.size
+          ? path
+          : await assembleUploadChunks(
+              this.sourceUploadChunkRoot(leased),
+              path,
+              leaseOwner,
+              leased.size,
+            );
+      let inspection: string | undefined;
       try {
+        const digest = await sha256File(assembled),
+          verified = await stat(assembled);
+        assertHeartbeat();
+        renewLease();
+        if (verified.size !== leased.size || digest !== leased.sha256)
+          throw new AppError(
+            "SOURCE_UPLOAD_MISMATCH",
+            "Uploaded Source size or SHA-256 does not match",
+            422,
+          );
+        inspection = await mkdtemp(
+          join(this.storageRoot, `.remote-source-${leased.id}-`),
+        );
         const result = await validateAndExtract(
             assembled,
             inspection,
@@ -1600,8 +1613,12 @@ export class RemoteRenderService {
         return this.summarizeSource(ready, null);
       } finally {
         // The temporary assembled archive is only promoted after all checks.
-        if (assembled !== path) await rm(assembled, { force: true });
-        await rm(inspection, { recursive: true, force: true });
+        await Promise.all([
+          ...(assembled !== path ? [rm(assembled, { force: true })] : []),
+          ...(inspection !== undefined
+            ? [rm(inspection, { recursive: true, force: true })]
+            : []),
+        ]);
       }
     } finally {
       clearInterval(heartbeat);
@@ -1852,7 +1869,10 @@ export class RemoteRenderService {
 
   private resolveOwnedSource(userId: string, sourceId: string): SourceRow {
     const source = this.assertOwnedSource(userId, sourceId);
-    if (source.status !== "ready" || source.expires_at <= nowIso())
+    if (
+      this.database.sources.getOwnedReady(source.id, userId, nowIso()) ===
+      undefined
+    )
       throw new AppError("SOURCE_NOT_READY", "Source is not ready", 409);
     return source;
   }
@@ -2142,7 +2162,7 @@ export class RemoteRenderService {
         resourceUri: resourceUri(row.id, artifact.relative_path),
       })),
       webResultUrl: new URL(
-        `/admin/jobs/?job=${encodeURIComponent(row.id)}`,
+        `/app/jobs/${encodeURIComponent(row.id)}/`,
         this.publicOrigin,
       ).toString(),
     };
@@ -2570,40 +2590,38 @@ async function assembleUploadChunks(
   expectedBytes: number,
 ): Promise<string> {
   const archive = `${sourcePath}.finalizing-${leaseOwner}`,
-    output = createWriteStream(archive, { flags: "wx", mode: 0o660 });
+    // Acquire ownership before cleanup can remove the destination. A failed
+    // exclusive open must never unlink another writer's archive.
+    output = await open(archive, "wx", 0o660);
   let offset = 0;
   try {
-    while (offset < expectedBytes) {
-      const path = join(root, String(offset)),
-        metadata = await stat(path);
-      if (
-        !metadata.isFile() ||
-        !Number.isSafeInteger(metadata.size) ||
-        metadata.size < 1 ||
-        metadata.size > SOURCE_UPLOAD_CHUNK_MAX_BYTES ||
-        offset + metadata.size > expectedBytes
-      )
-        throw new AppError(
-          "SOURCE_UPLOAD_MISMATCH",
-          "Uploaded Source chunks do not match the durable offset",
-          422,
-        );
-      for await (const chunk of createReadStream(path)) {
-        if (!output.write(chunk)) await once(output, "drain");
-      }
-      offset += metadata.size;
-    }
-    output.end();
-    await once(output, "finish");
-    const handle = await open(archive, "r");
     try {
-      await handle.sync();
+      while (offset < expectedBytes) {
+        const path = join(root, String(offset)),
+          metadata = await stat(path);
+        if (
+          !metadata.isFile() ||
+          !Number.isSafeInteger(metadata.size) ||
+          metadata.size < 1 ||
+          metadata.size > SOURCE_UPLOAD_CHUNK_MAX_BYTES ||
+          offset + metadata.size > expectedBytes
+        )
+          throw new AppError(
+            "SOURCE_UPLOAD_MISMATCH",
+            "Uploaded Source chunks do not match the durable offset",
+            422,
+          );
+        for await (const chunk of createReadStream(path)) {
+          await output.writeFile(chunk as Buffer);
+        }
+        offset += metadata.size;
+      }
+      await output.sync();
     } finally {
-      await handle.close();
+      await output.close();
     }
     return archive;
   } catch (error) {
-    output.destroy();
     await rm(archive, { force: true });
     throw error;
   }

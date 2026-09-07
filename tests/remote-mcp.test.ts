@@ -1,5 +1,14 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, rm, truncate, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  truncate,
+  writeFile,
+} from "node:fs/promises";
+import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -32,142 +41,265 @@ afterEach(async () => {
 });
 
 describe("Remote MCP HTTP server", () => {
-  it("completes dynamic registration, Access consent, PKCE, and token exchange", async () => {
-    const fixture = await createFixture(),
-      registrationBody = JSON.stringify({
-        client_name: "Claude compatibility",
-        redirect_uris: ["http://127.0.0.1:49152/callback"],
-        token_endpoint_auth_method: "none",
-      }),
-      registered = await fixture.app.request("/oauth/register", {
-        method: "POST",
-        headers: {
-          Host: "latex.example.com",
-          Origin: "https://claude.ai",
-          "Content-Type": "application/json",
-        },
-        body: registrationBody,
-      }),
-      client = (await registered.json()) as { client_id: string },
-      verifier = "v".repeat(64),
-      challenge = createHash("sha256").update(verifier).digest("base64url"),
-      query = new URLSearchParams({
-        response_type: "code",
-        client_id: client.client_id,
-        redirect_uri: "http://127.0.0.1:49152/callback",
-        scope: "mcp:render mcp:read",
-        resource: RESOURCE,
-        code_challenge: challenge,
-        code_challenge_method: "S256",
-        state: "opaque-state",
-      }),
-      consent = await fixture.app.request(`/oauth/authorize?${query}`, {
-        headers: {
-          Host: "latex.example.com",
-          "Cf-Access-Jwt-Assertion": "access-jwt",
-        },
+  it.each(["hash", "missing-chunk", "existing-archive"] as const)(
+    "cleans up failed finalization without losing another writer's data: %s",
+    async (failure) => {
+      const fixture = await createFixture();
+      const identity = { userId: "user_test", scopes: ["mcp:render"] as const };
+      const payload = await testZip([
+        { path: "main.tex", bytes: Buffer.from("test") },
+      ]);
+      const upload = await fixture.renders.beginSourceUpload(
+        identity,
+        payload.length,
+        failure === "hash"
+          ? "0".repeat(64)
+          : createHash("sha256").update(payload).digest("hex"),
+      );
+      await fixture.renders.uploadSourceChunk(
+        identity,
+        upload.uploadId,
+        0,
+        payload.toString("base64"),
+      );
+      const directory = join(fixture.storage, "sources", upload.uploadId);
+      let existing: string | undefined;
+      if (failure === "missing-chunk")
+        await rm(join(directory, ".chunks", "0"));
+      if (failure === "existing-archive") {
+        const original = fixture.database.sources.claimUploadLease.bind(
+          fixture.database.sources,
+        );
+        vi.spyOn(
+          fixture.database.sources,
+          "claimUploadLease",
+        ).mockImplementation((...args) => {
+          existing = join(directory, `source.zip.finalizing-${args[2]}`);
+          writeFileSync(existing, "other-writer", { flag: "wx" });
+          return original(...args);
+        });
+      }
+      await expect(
+        fixture.renders.finalizeSourceUpload(identity, upload.uploadId),
+      ).rejects.toMatchObject({
+        code:
+          failure === "hash"
+            ? "SOURCE_UPLOAD_MISMATCH"
+            : failure === "missing-chunk"
+              ? "ENOENT"
+              : "EEXIST",
       });
-    expect(registered.status).toBe(201);
-    expect(consent.status).toBe(200);
-    const consentHtml = await consent.text();
-    expect(consentHtml).toContain("Claude compatibility");
-    expect(consentHtml).toContain('href="/assets/styles.css"');
-    expect(consentHtml).toContain('class="site-header"');
-    expect(consentHtml).not.toContain("<style");
-    const setCookie = consent.headers.get("Set-Cookie") as string,
-      csrf = /oauth_csrf_([A-Za-z0-9_-]{32})=/.exec(setCookie)?.[1] as string,
-      browserSession = /test_browser_session=([^;]+)/.exec(
-        setCookie,
-      )?.[1] as string,
-      secondConsent = await fixture.app.request(`/oauth/authorize?${query}`, {
-        headers: {
-          Host: "latex.example.com",
-          "Cf-Access-Jwt-Assertion": "access-jwt",
-        },
-      }),
-      secondSetCookie = secondConsent.headers.get("Set-Cookie") as string,
-      secondCsrf = /oauth_csrf_([A-Za-z0-9_-]{32})=/.exec(
-        secondSetCookie,
-      )?.[1] as string,
-      cookie = `test_browser_session=${browserSession}; oauth_csrf_${csrf}=${csrf}; oauth_csrf_${secondCsrf}=${secondCsrf}; oauth_csrf=${secondCsrf}`,
-      approval = new URLSearchParams(query);
-    expect(secondConsent.status).toBe(200);
-    expect(secondCsrf).not.toBe(csrf);
-    approval.set("csrf", csrf);
-    approval.set("decision", "approve");
-    const rejectedOrigin = await fixture.app.request("/oauth/authorize", {
-      method: "POST",
-      headers: {
-        Host: "latex.example.com",
-        Cookie: cookie,
-        Origin: "https://claude.ai",
-        "Cf-Access-Jwt-Assertion": "access-jwt",
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      body: approval.toString(),
+      expect(
+        fixture.database.sources.get(upload.uploadId)?.upload_lease_owner,
+      ).toBeNull();
+      const leftovers = (await readdir(directory)).filter((name) =>
+        name.includes(".finalizing-"),
+      );
+      if (existing) {
+        expect(leftovers).toHaveLength(1);
+        expect(await readFile(existing, "utf8")).toBe("other-writer");
+      } else expect(leftovers).toEqual([]);
+    },
+  );
+
+  it("resolves padded preview paths, rejects aliases and links users to their result view", async () => {
+    const fixture = await createFixture();
+    const id = await seedCompletedRemoteJob(fixture, "succeeded");
+    const identity = { userId: "user_test", scopes: ["mcp:read"] as const };
+    fixture.database.raw
+      .prepare("DELETE FROM artifacts WHERE job_id=? AND type='preview'")
+      .run(id);
+    await seedRemoteArtifact(
+      fixture,
+      id,
+      "preview",
+      "previews/page-01.png",
+      TEST_PNG,
+    );
+    await expect(
+      fixture.renders.artifact(identity, id, "previews/page-1.png"),
+    ).resolves.toMatchObject({
+      relativePath: "previews/page-01.png",
+      bytes: TEST_PNG,
     });
-    expect(rejectedOrigin.status).toBe(403);
-    await expect(rejectedOrigin.json()).resolves.toMatchObject({
-      error: "server_error",
-      error_description: "Origin is not allowed",
-    });
-    const approved = await fixture.app.request("/oauth/authorize", {
-      method: "POST",
-      headers: {
-        Host: "latex.example.com",
-        Cookie: cookie,
-        Origin: ORIGIN,
-        "Cf-Access-Jwt-Assertion": "access-jwt",
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      body: approval.toString(),
-    });
-    expect(approved.status).toBe(303);
-    const secondDenial = new URLSearchParams(query);
-    secondDenial.set("csrf", secondCsrf);
-    secondDenial.set("decision", "deny");
-    const deniedSecondTab = await fixture.app.request("/oauth/authorize", {
-      method: "POST",
-      headers: {
-        Host: "latex.example.com",
-        Cookie: `test_browser_session=${browserSession}; oauth_csrf_${secondCsrf}=${secondCsrf}`,
-        Origin: ORIGIN,
-        "Cf-Access-Jwt-Assertion": "access-jwt",
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      body: secondDenial.toString(),
-    });
-    expect(deniedSecondTab.status).toBe(303);
-    expect(
-      new URL(
-        deniedSecondTab.headers.get("Location") as string,
-      ).searchParams.get("error"),
-    ).toBe("access_denied");
-    const redirect = new URL(approved.headers.get("Location") as string),
-      tokenForm = new URLSearchParams({
-        grant_type: "authorization_code",
-        code: redirect.searchParams.get("code") as string,
-        client_id: client.client_id,
-        redirect_uri: "http://127.0.0.1:49152/callback",
-        code_verifier: verifier,
-        resource: RESOURCE,
-      }).toString(),
-      tokenResponse = await fixture.app.request("/oauth/token", {
+    await seedRemoteArtifact(
+      fixture,
+      id,
+      "preview",
+      "previews/page-1.png",
+      TEST_PNG,
+    );
+    await expect(
+      fixture.renders.artifact(identity, id, "previews/page-1.png"),
+    ).rejects.toMatchObject({ code: "INVALID_PREVIEW" });
+    expect(fixture.renders.job(identity, id).webResultUrl).toBe(
+      `${ORIGIN}/app/jobs/${id}/`,
+    );
+  });
+  it.each([
+    "https://chatgpt.com",
+    "https://claude.ai",
+    "https://future-ai.example",
+  ])(
+    "completes registration, same-origin consent, PKCE and exchange for %s",
+    async (clientOrigin) => {
+      const fixture = await createFixture(),
+        registrationBody = JSON.stringify({
+          client_name: "Generic MCP compatibility",
+          redirect_uris: ["http://127.0.0.1:49152/callback"],
+          token_endpoint_auth_method: "none",
+        }),
+        registered = await fixture.app.request("/oauth/register", {
+          method: "POST",
+          headers: {
+            Host: "latex.example.com",
+            Origin: clientOrigin,
+            "Content-Type": "application/json",
+          },
+          body: registrationBody,
+        }),
+        client = (await registered.json()) as { client_id: string },
+        verifier = "v".repeat(64),
+        challenge = createHash("sha256").update(verifier).digest("base64url"),
+        query = new URLSearchParams({
+          response_type: "code",
+          client_id: client.client_id,
+          redirect_uri: "http://127.0.0.1:49152/callback",
+          scope: "mcp:render mcp:read",
+          resource: RESOURCE,
+          code_challenge: challenge,
+          code_challenge_method: "S256",
+          state: "opaque-state",
+        }),
+        consent = await fixture.app.request(`/oauth/authorize?${query}`, {
+          headers: {
+            Host: "latex.example.com",
+            "Cf-Access-Jwt-Assertion": "access-jwt",
+          },
+        });
+      expect(registered.status).toBe(201);
+      expect(consent.status).toBe(200);
+      expect(consent.headers.get("Referrer-Policy")).toBe("same-origin");
+      expect(consent.headers.get("X-Frame-Options")).toBe("SAMEORIGIN");
+      const consentHtml = await consent.text();
+      expect(consentHtml).toContain("Generic MCP compatibility");
+      expect(consentHtml).toContain('href="/assets/styles.css"');
+      expect(consentHtml).toContain('class="site-header"');
+      expect(consentHtml).not.toContain("<style");
+      const setCookie = consent.headers.get("Set-Cookie") as string,
+        csrf = /oauth_csrf_([A-Za-z0-9_-]{32})=/.exec(setCookie)?.[1] as string,
+        browserSession = /test_browser_session=([^;]+)/.exec(
+          setCookie,
+        )?.[1] as string,
+        secondConsent = await fixture.app.request(`/oauth/authorize?${query}`, {
+          headers: {
+            Host: "latex.example.com",
+            "Cf-Access-Jwt-Assertion": "access-jwt",
+          },
+        }),
+        secondSetCookie = secondConsent.headers.get("Set-Cookie") as string,
+        secondCsrf = /oauth_csrf_([A-Za-z0-9_-]{32})=/.exec(
+          secondSetCookie,
+        )?.[1] as string,
+        cookie = `test_browser_session=${browserSession}; oauth_csrf_${csrf}=${csrf}; oauth_csrf_${secondCsrf}=${secondCsrf}; oauth_csrf=${secondCsrf}`,
+        approval = new URLSearchParams(query);
+      expect(secondConsent.status).toBe(200);
+      expect(secondCsrf).not.toBe(csrf);
+      approval.set("csrf", csrf);
+      approval.set("decision", "approve");
+      for (const invalidOrigin of [clientOrigin, "null", undefined]) {
+        const rejectedOrigin = await fixture.app.request("/oauth/authorize", {
+          method: "POST",
+          headers: {
+            Host: "latex.example.com",
+            Cookie: cookie,
+            ...(invalidOrigin === undefined ? {} : { Origin: invalidOrigin }),
+            "Cf-Access-Jwt-Assertion": "access-jwt",
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+          body: approval.toString(),
+        });
+        expect(rejectedOrigin.status).toBe(403);
+        await expect(rejectedOrigin.json()).resolves.toMatchObject({
+          error: "server_error",
+          error_description: "Origin is not allowed",
+        });
+      }
+      const invalidCsrf = new URLSearchParams(approval);
+      invalidCsrf.set("csrf", "x".repeat(32));
+      const rejectedCsrf = await fixture.app.request("/oauth/authorize", {
         method: "POST",
         headers: {
           Host: "latex.example.com",
-          Origin: "https://claude.ai",
+          Cookie: cookie,
+          Origin: ORIGIN,
           "Content-Type": "application/x-www-form-urlencoded",
         },
-        body: tokenForm,
+        body: invalidCsrf.toString(),
       });
-    expect(tokenResponse.status).toBe(200);
-    await expect(tokenResponse.json()).resolves.toMatchObject({
-      token_type: "Bearer",
-      expires_in: 600,
-      scope: "mcp:render mcp:read",
-    });
-  });
+      expect(rejectedCsrf.status).toBe(403);
+      expect(await rejectedCsrf.json()).toMatchObject({
+        error_description: "Authorization confirmation expired",
+      });
+      const approved = await fixture.app.request("/oauth/authorize", {
+        method: "POST",
+        headers: {
+          Host: "latex.example.com",
+          Cookie: cookie,
+          Origin: ORIGIN,
+          "Cf-Access-Jwt-Assertion": "access-jwt",
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: approval.toString(),
+      });
+      expect(approved.status).toBe(303);
+      expect(approved.headers.get("Referrer-Policy")).toBe("no-referrer");
+      const secondDenial = new URLSearchParams(query);
+      secondDenial.set("csrf", secondCsrf);
+      secondDenial.set("decision", "deny");
+      const deniedSecondTab = await fixture.app.request("/oauth/authorize", {
+        method: "POST",
+        headers: {
+          Host: "latex.example.com",
+          Cookie: `test_browser_session=${browserSession}; oauth_csrf_${secondCsrf}=${secondCsrf}`,
+          Origin: ORIGIN,
+          "Cf-Access-Jwt-Assertion": "access-jwt",
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: secondDenial.toString(),
+      });
+      expect(deniedSecondTab.status).toBe(303);
+      expect(
+        new URL(
+          deniedSecondTab.headers.get("Location") as string,
+        ).searchParams.get("error"),
+      ).toBe("access_denied");
+      const redirect = new URL(approved.headers.get("Location") as string),
+        tokenForm = new URLSearchParams({
+          grant_type: "authorization_code",
+          code: redirect.searchParams.get("code") as string,
+          client_id: client.client_id,
+          redirect_uri: "http://127.0.0.1:49152/callback",
+          code_verifier: verifier,
+          resource: RESOURCE,
+        }).toString(),
+        tokenResponse = await fixture.app.request("/oauth/token", {
+          method: "POST",
+          headers: {
+            Host: "latex.example.com",
+            Origin: clientOrigin,
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+          body: tokenForm,
+        });
+      expect(tokenResponse.status).toBe(200);
+      await expect(tokenResponse.json()).resolves.toMatchObject({
+        token_type: "Bearer",
+        expires_in: 600,
+        scope: "mcp:render mcp:read",
+      });
+    },
+  );
 
   it("allows OAuth and MCP client origins while requiring a browser session for consent", async () => {
     const fixture = await createFixture(),
@@ -677,7 +809,7 @@ describe("Remote MCP HTTP server", () => {
     expect(resourceLink?.type).toBe("resource_link");
     expect(typeof resourceLink?.uri).toBe("string");
     if (typeof resourceLink?.uri === "string")
-      expect(resourceLink.uri).toContain("/admin/jobs/?job=job_");
+      expect(resourceLink.uri).toContain("/app/jobs/job_");
     const serialized = JSON.stringify(created);
     expect(serialized).not.toContain("mcp_at_");
     expect(serialized).not.toContain("mcp_rt_");
@@ -1031,6 +1163,53 @@ describe("Remote MCP HTTP server", () => {
     await expect(
       fixture.renders.finalizeSourceUpload(identity, upload.uploadId),
     ).resolves.toMatchObject({ id: upload.sourceId, status: "ready" });
+  });
+
+  it("issues usable references for Project-retained Sources without reviving deleted Projects", async () => {
+    const fixture = await createFixture(),
+      identity = { userId: "user_test", scopes: ["mcp:render"] as const },
+      source = await fixture.renders.createSource(identity, [
+        { path: "main.tex", text: "retained" },
+      ]),
+      timestamp = new Date().toISOString();
+    fixture.database.projects.insert({
+      id: "project_retained",
+      ownerUserId: identity.userId,
+      displayName: "Retained",
+      timestamp,
+    });
+    fixture.database.projects.insertRevision({
+      id: "revision_retained",
+      projectId: "project_retained",
+      sourceId: source.id,
+      displayName: "Retained",
+      originalFilename: "main.tex",
+      entrypoint: "main.tex",
+      timestamp,
+    });
+    fixture.database.raw
+      .prepare(
+        "UPDATE sources SET expires_at='2000-01-01T00:00:00.000Z' WHERE id=?",
+      )
+      .run(source.id);
+    const reference = fixture.renders.createSourceReference(
+      identity,
+      source.id,
+    );
+    expect(Date.parse(reference.expiresAt)).toBeGreaterThan(Date.now());
+    await expect(
+      fixture.renders.createRender(identity, {
+        sourceRef: reference.sourceRef,
+      }),
+    ).resolves.toMatchObject({ sourceId: source.id });
+    fixture.database.projects.softDelete(
+      "project_retained",
+      identity.userId,
+      timestamp,
+    );
+    expect(() =>
+      fixture.renders.createSourceReference(identity, source.id),
+    ).toThrow();
   });
 
   it("never advertises a Source reference beyond its Source lifetime", async () => {

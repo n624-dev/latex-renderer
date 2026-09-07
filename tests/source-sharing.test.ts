@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
 import { createWriteStream } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pipeline } from "node:stream/promises";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import yazl from "yazl";
 import type { AuthenticatedServiceAccount } from "@latex-renderer/auth";
 import { RendererDatabase } from "@latex-renderer/database";
@@ -16,12 +16,94 @@ import { SourceTicketsService } from "../apps/internal-api/src/services/source-t
 const databases: RendererDatabase[] = [],
   roots: string[] = [];
 afterEach(async () => {
+  vi.useRealTimers();
   for (const db of databases.splice(0)) db.close();
   for (const root of roots.splice(0))
     await rm(root, { recursive: true, force: true });
 });
 
 describe("immutable shared Sources", () => {
+  it.each(["source", "legacy"] as const)(
+    "releases claims and stops heartbeats after mkdir fails (%s)",
+    async (kind) => {
+      const {
+        database,
+        actor,
+        tickets,
+        sourceService,
+        renderService,
+        storageRoot,
+      } = await fixture();
+      const bytes = await zip([["main.tex", "test"]]);
+      const sha256 = createHash("sha256").update(bytes).digest("hex");
+      let path: string, token: string, id: string;
+      if (kind === "source") {
+        const reserved = await sourceService.create(
+          actor,
+          { size: bytes.length, sha256 },
+          "failed-source-mkdir-123",
+        );
+        id = reserved.value.sourceId;
+        if (!reserved.value.uploadTicket)
+          throw new Error("Missing upload ticket");
+        token = reserved.value.uploadTicket;
+        path = `/api/v1/sources/${id}/content`;
+      } else {
+        const created = await renderService.create(
+          actor,
+          { size: bytes.length, sha256 },
+          "failed-job-mkdir-12345",
+        );
+        if (!("uploadTicket" in created.value))
+          throw new Error("Upload ticket missing");
+        id = created.value.jobId;
+        token = created.value.uploadTicket as string;
+        database.raw
+          .prepare("UPDATE jobs SET source_id=NULL WHERE id=?")
+          .run(id);
+        path = `/api/v1/jobs/${id}/source`;
+      }
+      await writeFile(
+        join(storageRoot, kind === "source" ? "sources" : "jobs"),
+        "not-a-directory",
+      );
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+      const app = createRendererApp({
+        database,
+        tickets,
+        storageRoot,
+        maxUploadBytes: 20 * 1024 * 1024,
+        minFreeStorageBytes: 1,
+        artifactRetentionHours: 24,
+      });
+      const response = await app.request(path, {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/zip",
+          "Content-Length": String(bytes.length),
+        },
+        body: new Uint8Array(bytes).slice().buffer,
+      });
+      expect(response.status).toBe(500);
+      expect(vi.getTimerCount()).toBe(0);
+      const table = kind === "source" ? "source_upload_nonces" : "used_nonces";
+      expect(
+        database.raw
+          .prepare(`SELECT state,claim_owner,claim_expires_at FROM ${table}`)
+          .get(),
+      ).toMatchObject({
+        state: "released",
+        claim_owner: null,
+        claim_expires_at: null,
+      });
+      expect(
+        kind === "source"
+          ? database.sources.get(id)?.status
+          : database.jobs.get(id)?.status,
+      ).toBe("reserved");
+    },
+  );
   it("uploads one ZIP, validates entrypoints, deduplicates per owner, and queues independent jobs", async () => {
     const {
         database,

@@ -71,6 +71,7 @@ export type RevisionJobSummary = Pick<
   | "updated_at"
   | "retry_of_job_id"
   | "error_code"
+  | "outputs_json"
 >;
 
 export type SourceJobSummary = Pick<
@@ -415,7 +416,10 @@ export class JobsRepository {
           `INSERT INTO jobs(id,user_id,service_account_id,api_key_id,status,renderer_version,source_size,source_sha256,
       created_at,updated_at,queued_at,retry_of_job_id,source_id,entrypoint,project_revision_id,outputs_json,reserved_output_bytes)
       SELECT ?,?,?,?,'queued',?,s.size,s.sha256,?,?,?,?,s.id,?,?,?,?
-      FROM sources s WHERE s.id=? AND s.owner_user_id=? AND s.status='ready' AND s.expires_at>?`,
+      FROM sources s WHERE s.id=? AND s.owner_user_id=? AND s.status='ready'
+      AND (s.expires_at>? OR EXISTS (
+        SELECT 1 FROM project_revisions r JOIN projects p ON p.id=r.project_id
+        WHERE r.source_id=s.id AND p.deleted_at IS NULL AND p.owner_user_id=s.owner_user_id))`,
         )
         .run(
           input.id,
@@ -544,7 +548,7 @@ export class JobsRepository {
     const rows = this.db
       .prepare(
         `WITH ranked AS (
-           SELECT j.id,j.project_revision_id,j.status,j.created_at,j.updated_at,j.retry_of_job_id,j.error_code,
+           SELECT j.id,j.project_revision_id,j.status,j.created_at,j.updated_at,j.retry_of_job_id,j.error_code,j.outputs_json,
              ROW_NUMBER() OVER (
                PARTITION BY j.project_revision_id
                ORDER BY j.created_at DESC,j.id DESC
@@ -552,7 +556,7 @@ export class JobsRepository {
            FROM jobs j
            WHERE j.project_revision_id IN (${placeholders}) AND j.deleted_at IS NULL
          )
-         SELECT id,project_revision_id,status,created_at,updated_at,retry_of_job_id,error_code
+         SELECT id,project_revision_id,status,created_at,updated_at,retry_of_job_id,error_code,outputs_json
          FROM ranked WHERE row_number<=?
          ORDER BY project_revision_id,created_at DESC,id DESC`,
       )
@@ -568,6 +572,7 @@ export class JobsRepository {
         updated_at: row.updated_at,
         retry_of_job_id: row.retry_of_job_id,
         error_code: row.error_code,
+        outputs_json: row.outputs_json,
       });
       result.set(row.project_revision_id, list);
     }
@@ -606,7 +611,7 @@ export class JobsRepository {
         : [revisionId, limit + 1],
       rows = this.db
         .prepare(
-          `SELECT id,status,created_at,updated_at,retry_of_job_id,error_code
+          `SELECT id,status,created_at,updated_at,retry_of_job_id,error_code,outputs_json
            FROM jobs WHERE project_revision_id=? AND deleted_at IS NULL${condition}
            ORDER BY created_at DESC,id DESC LIMIT ?`,
         )

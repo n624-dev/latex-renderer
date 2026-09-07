@@ -346,6 +346,8 @@ function normalizeEntry(name: string, limits: ZipLimits): string {
       );
     if (
       Array.from(part).length > limits.maxNameLength ||
+      // Linux filename components are byte-limited, not character-limited.
+      Buffer.byteLength(part, "utf8") > 255 ||
       /[ .]$/.test(part) ||
       windowsReserved.test(part)
     ) {

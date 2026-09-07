@@ -110,15 +110,17 @@ export class WorkerRepository {
     workerId: string,
     leaseGeneration: number,
     now: string,
+    publishedBytes?: number,
   ): number {
     return Number(
       this.db
         .prepare(
-          `UPDATE jobs SET status='canceled',render_status='canceled',completed_at=?,updated_at=?,lease_owner=NULL,lease_expires_at=NULL
+          `UPDATE jobs SET status='canceled',render_status='canceled',completed_at=?,updated_at=?,output_size=COALESCE(?,output_size),lease_owner=NULL,lease_expires_at=NULL
          WHERE id=? AND lease_owner=? AND lease_generation=?
          AND status IN ('validating','running','canceled')`,
         )
-        .run(now, now, jobId, workerId, leaseGeneration).changes,
+        .run(now, now, publishedBytes ?? null, jobId, workerId, leaseGeneration)
+        .changes,
     );
   }
 

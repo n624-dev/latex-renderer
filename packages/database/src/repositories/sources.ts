@@ -63,9 +63,15 @@ export class SourcesRepository {
     ownerUserId: string,
     timestamp: string,
   ): SourceRow | undefined {
+    // expires_at is the orphan deadline. An active owned Project pins ready
+    // input, but never revives uploading, deleting, deleted or expired rows.
     return this.db
       .prepare(
-        "SELECT * FROM sources WHERE id=? AND owner_user_id=? AND status='ready' AND expires_at>?",
+        `SELECT * FROM sources WHERE id=? AND owner_user_id=? AND status='ready'
+         AND (expires_at>? OR EXISTS (
+           SELECT 1 FROM project_revisions r JOIN projects p ON p.id=r.project_id
+           WHERE r.source_id=sources.id AND p.deleted_at IS NULL
+             AND p.owner_user_id=sources.owner_user_id))`,
       )
       .get(id, ownerUserId, timestamp) as unknown as SourceRow | undefined;
   }
@@ -73,9 +79,25 @@ export class SourcesRepository {
   getReady(id: string, timestamp: string): SourceRow | undefined {
     return this.db
       .prepare(
-        "SELECT * FROM sources WHERE id=? AND status='ready' AND expires_at>?",
+        `SELECT * FROM sources WHERE id=? AND status='ready'
+         AND (expires_at>? OR EXISTS (
+           SELECT 1 FROM project_revisions r JOIN projects p ON p.id=r.project_id
+           WHERE r.source_id=sources.id AND p.deleted_at IS NULL
+             AND p.owner_user_id=sources.owner_user_id))`,
       )
       .get(id, timestamp) as unknown as SourceRow | undefined;
+  }
+
+  isProjectRetained(id: string): boolean {
+    return (
+      this.db
+        .prepare(
+          `SELECT 1 FROM sources s JOIN project_revisions r ON r.source_id=s.id
+       JOIN projects p ON p.id=r.project_id
+       WHERE s.id=? AND p.deleted_at IS NULL AND p.owner_user_id=s.owner_user_id LIMIT 1`,
+        )
+        .get(id) !== undefined
+    );
   }
 
   list(limit = 500): SourceRow[] {
@@ -193,7 +215,10 @@ export class SourcesRepository {
     return this.db
       .prepare(
         `SELECT * FROM sources WHERE owner_user_id=? AND sha256=? AND size=?
-      AND status='ready' AND expires_at>? ORDER BY created_at DESC LIMIT 1`,
+      AND status='ready' AND (expires_at>? OR EXISTS (
+        SELECT 1 FROM project_revisions r JOIN projects p ON p.id=r.project_id
+        WHERE r.source_id=sources.id AND p.deleted_at IS NULL
+          AND p.owner_user_id=sources.owner_user_id)) ORDER BY created_at DESC LIMIT 1`,
       )
       .get(ownerUserId, sha256, size, now) as unknown as SourceRow | undefined;
   }
