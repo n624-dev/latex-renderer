@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.3.4-rc.3 - 2026-09-07
+
+- Candidate only: preserve RC.2 cleanup fixes and validate this combined audit/OAuth update on the designated host before any Stable promotion.
+
 - Fix OAuth consent form submissions sending `Origin: null` because of `no-referrer`. Use `same-origin` only on the consent document, retaining strict Origin/CSRF checks and preventing cross-origin referrer leakage without AI-vendor allowlists.
 
 - Keep ready Sources reusable while an active owned Project references them, including after Job cleanup; release retention protection when the last Project is deleted. Record PDF/SVG choices per Job without adding revisions, and allow explicit output selection when rerendering from the Web.
