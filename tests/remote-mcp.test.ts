@@ -136,142 +136,170 @@ describe("Remote MCP HTTP server", () => {
       `${ORIGIN}/app/jobs/${id}/`,
     );
   });
-  it("completes dynamic registration, Access consent, PKCE, and token exchange", async () => {
-    const fixture = await createFixture(),
-      registrationBody = JSON.stringify({
-        client_name: "Claude compatibility",
-        redirect_uris: ["http://127.0.0.1:49152/callback"],
-        token_endpoint_auth_method: "none",
-      }),
-      registered = await fixture.app.request("/oauth/register", {
+  it.each([
+    "https://chatgpt.com",
+    "https://claude.ai",
+    "https://future-ai.example",
+  ])(
+    "completes registration, same-origin consent, PKCE and exchange for %s",
+    async (clientOrigin) => {
+      const fixture = await createFixture(),
+        registrationBody = JSON.stringify({
+          client_name: "Generic MCP compatibility",
+          redirect_uris: ["http://127.0.0.1:49152/callback"],
+          token_endpoint_auth_method: "none",
+        }),
+        registered = await fixture.app.request("/oauth/register", {
+          method: "POST",
+          headers: {
+            Host: "latex.example.com",
+            Origin: clientOrigin,
+            "Content-Type": "application/json",
+          },
+          body: registrationBody,
+        }),
+        client = (await registered.json()) as { client_id: string },
+        verifier = "v".repeat(64),
+        challenge = createHash("sha256").update(verifier).digest("base64url"),
+        query = new URLSearchParams({
+          response_type: "code",
+          client_id: client.client_id,
+          redirect_uri: "http://127.0.0.1:49152/callback",
+          scope: "mcp:render mcp:read",
+          resource: RESOURCE,
+          code_challenge: challenge,
+          code_challenge_method: "S256",
+          state: "opaque-state",
+        }),
+        consent = await fixture.app.request(`/oauth/authorize?${query}`, {
+          headers: {
+            Host: "latex.example.com",
+            "Cf-Access-Jwt-Assertion": "access-jwt",
+          },
+        });
+      expect(registered.status).toBe(201);
+      expect(consent.status).toBe(200);
+      expect(consent.headers.get("Referrer-Policy")).toBe("same-origin");
+      expect(consent.headers.get("X-Frame-Options")).toBe("SAMEORIGIN");
+      const consentHtml = await consent.text();
+      expect(consentHtml).toContain("Generic MCP compatibility");
+      expect(consentHtml).toContain('href="/assets/styles.css"');
+      expect(consentHtml).toContain('class="site-header"');
+      expect(consentHtml).not.toContain("<style");
+      const setCookie = consent.headers.get("Set-Cookie") as string,
+        csrf = /oauth_csrf_([A-Za-z0-9_-]{32})=/.exec(setCookie)?.[1] as string,
+        browserSession = /test_browser_session=([^;]+)/.exec(
+          setCookie,
+        )?.[1] as string,
+        secondConsent = await fixture.app.request(`/oauth/authorize?${query}`, {
+          headers: {
+            Host: "latex.example.com",
+            "Cf-Access-Jwt-Assertion": "access-jwt",
+          },
+        }),
+        secondSetCookie = secondConsent.headers.get("Set-Cookie") as string,
+        secondCsrf = /oauth_csrf_([A-Za-z0-9_-]{32})=/.exec(
+          secondSetCookie,
+        )?.[1] as string,
+        cookie = `test_browser_session=${browserSession}; oauth_csrf_${csrf}=${csrf}; oauth_csrf_${secondCsrf}=${secondCsrf}; oauth_csrf=${secondCsrf}`,
+        approval = new URLSearchParams(query);
+      expect(secondConsent.status).toBe(200);
+      expect(secondCsrf).not.toBe(csrf);
+      approval.set("csrf", csrf);
+      approval.set("decision", "approve");
+      for (const invalidOrigin of [clientOrigin, "null", undefined]) {
+        const rejectedOrigin = await fixture.app.request("/oauth/authorize", {
+          method: "POST",
+          headers: {
+            Host: "latex.example.com",
+            Cookie: cookie,
+            ...(invalidOrigin === undefined ? {} : { Origin: invalidOrigin }),
+            "Cf-Access-Jwt-Assertion": "access-jwt",
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+          body: approval.toString(),
+        });
+        expect(rejectedOrigin.status).toBe(403);
+        await expect(rejectedOrigin.json()).resolves.toMatchObject({
+          error: "server_error",
+          error_description: "Origin is not allowed",
+        });
+      }
+      const invalidCsrf = new URLSearchParams(approval);
+      invalidCsrf.set("csrf", "x".repeat(32));
+      const rejectedCsrf = await fixture.app.request("/oauth/authorize", {
         method: "POST",
         headers: {
           Host: "latex.example.com",
-          Origin: "https://claude.ai",
-          "Content-Type": "application/json",
-        },
-        body: registrationBody,
-      }),
-      client = (await registered.json()) as { client_id: string },
-      verifier = "v".repeat(64),
-      challenge = createHash("sha256").update(verifier).digest("base64url"),
-      query = new URLSearchParams({
-        response_type: "code",
-        client_id: client.client_id,
-        redirect_uri: "http://127.0.0.1:49152/callback",
-        scope: "mcp:render mcp:read",
-        resource: RESOURCE,
-        code_challenge: challenge,
-        code_challenge_method: "S256",
-        state: "opaque-state",
-      }),
-      consent = await fixture.app.request(`/oauth/authorize?${query}`, {
-        headers: {
-          Host: "latex.example.com",
-          "Cf-Access-Jwt-Assertion": "access-jwt",
-        },
-      });
-    expect(registered.status).toBe(201);
-    expect(consent.status).toBe(200);
-    const consentHtml = await consent.text();
-    expect(consentHtml).toContain("Claude compatibility");
-    expect(consentHtml).toContain('href="/assets/styles.css"');
-    expect(consentHtml).toContain('class="site-header"');
-    expect(consentHtml).not.toContain("<style");
-    const setCookie = consent.headers.get("Set-Cookie") as string,
-      csrf = /oauth_csrf_([A-Za-z0-9_-]{32})=/.exec(setCookie)?.[1] as string,
-      browserSession = /test_browser_session=([^;]+)/.exec(
-        setCookie,
-      )?.[1] as string,
-      secondConsent = await fixture.app.request(`/oauth/authorize?${query}`, {
-        headers: {
-          Host: "latex.example.com",
-          "Cf-Access-Jwt-Assertion": "access-jwt",
-        },
-      }),
-      secondSetCookie = secondConsent.headers.get("Set-Cookie") as string,
-      secondCsrf = /oauth_csrf_([A-Za-z0-9_-]{32})=/.exec(
-        secondSetCookie,
-      )?.[1] as string,
-      cookie = `test_browser_session=${browserSession}; oauth_csrf_${csrf}=${csrf}; oauth_csrf_${secondCsrf}=${secondCsrf}; oauth_csrf=${secondCsrf}`,
-      approval = new URLSearchParams(query);
-    expect(secondConsent.status).toBe(200);
-    expect(secondCsrf).not.toBe(csrf);
-    approval.set("csrf", csrf);
-    approval.set("decision", "approve");
-    const rejectedOrigin = await fixture.app.request("/oauth/authorize", {
-      method: "POST",
-      headers: {
-        Host: "latex.example.com",
-        Cookie: cookie,
-        Origin: "https://claude.ai",
-        "Cf-Access-Jwt-Assertion": "access-jwt",
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      body: approval.toString(),
-    });
-    expect(rejectedOrigin.status).toBe(403);
-    await expect(rejectedOrigin.json()).resolves.toMatchObject({
-      error: "server_error",
-      error_description: "Origin is not allowed",
-    });
-    const approved = await fixture.app.request("/oauth/authorize", {
-      method: "POST",
-      headers: {
-        Host: "latex.example.com",
-        Cookie: cookie,
-        Origin: ORIGIN,
-        "Cf-Access-Jwt-Assertion": "access-jwt",
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      body: approval.toString(),
-    });
-    expect(approved.status).toBe(303);
-    const secondDenial = new URLSearchParams(query);
-    secondDenial.set("csrf", secondCsrf);
-    secondDenial.set("decision", "deny");
-    const deniedSecondTab = await fixture.app.request("/oauth/authorize", {
-      method: "POST",
-      headers: {
-        Host: "latex.example.com",
-        Cookie: `test_browser_session=${browserSession}; oauth_csrf_${secondCsrf}=${secondCsrf}`,
-        Origin: ORIGIN,
-        "Cf-Access-Jwt-Assertion": "access-jwt",
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      body: secondDenial.toString(),
-    });
-    expect(deniedSecondTab.status).toBe(303);
-    expect(
-      new URL(
-        deniedSecondTab.headers.get("Location") as string,
-      ).searchParams.get("error"),
-    ).toBe("access_denied");
-    const redirect = new URL(approved.headers.get("Location") as string),
-      tokenForm = new URLSearchParams({
-        grant_type: "authorization_code",
-        code: redirect.searchParams.get("code") as string,
-        client_id: client.client_id,
-        redirect_uri: "http://127.0.0.1:49152/callback",
-        code_verifier: verifier,
-        resource: RESOURCE,
-      }).toString(),
-      tokenResponse = await fixture.app.request("/oauth/token", {
-        method: "POST",
-        headers: {
-          Host: "latex.example.com",
-          Origin: "https://claude.ai",
+          Cookie: cookie,
+          Origin: ORIGIN,
           "Content-Type": "application/x-www-form-urlencoded",
         },
-        body: tokenForm,
+        body: invalidCsrf.toString(),
       });
-    expect(tokenResponse.status).toBe(200);
-    await expect(tokenResponse.json()).resolves.toMatchObject({
-      token_type: "Bearer",
-      expires_in: 600,
-      scope: "mcp:render mcp:read",
-    });
-  });
+      expect(rejectedCsrf.status).toBe(403);
+      expect(await rejectedCsrf.json()).toMatchObject({
+        error_description: "Authorization confirmation expired",
+      });
+      const approved = await fixture.app.request("/oauth/authorize", {
+        method: "POST",
+        headers: {
+          Host: "latex.example.com",
+          Cookie: cookie,
+          Origin: ORIGIN,
+          "Cf-Access-Jwt-Assertion": "access-jwt",
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: approval.toString(),
+      });
+      expect(approved.status).toBe(303);
+      expect(approved.headers.get("Referrer-Policy")).toBe("no-referrer");
+      const secondDenial = new URLSearchParams(query);
+      secondDenial.set("csrf", secondCsrf);
+      secondDenial.set("decision", "deny");
+      const deniedSecondTab = await fixture.app.request("/oauth/authorize", {
+        method: "POST",
+        headers: {
+          Host: "latex.example.com",
+          Cookie: `test_browser_session=${browserSession}; oauth_csrf_${secondCsrf}=${secondCsrf}`,
+          Origin: ORIGIN,
+          "Cf-Access-Jwt-Assertion": "access-jwt",
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: secondDenial.toString(),
+      });
+      expect(deniedSecondTab.status).toBe(303);
+      expect(
+        new URL(
+          deniedSecondTab.headers.get("Location") as string,
+        ).searchParams.get("error"),
+      ).toBe("access_denied");
+      const redirect = new URL(approved.headers.get("Location") as string),
+        tokenForm = new URLSearchParams({
+          grant_type: "authorization_code",
+          code: redirect.searchParams.get("code") as string,
+          client_id: client.client_id,
+          redirect_uri: "http://127.0.0.1:49152/callback",
+          code_verifier: verifier,
+          resource: RESOURCE,
+        }).toString(),
+        tokenResponse = await fixture.app.request("/oauth/token", {
+          method: "POST",
+          headers: {
+            Host: "latex.example.com",
+            Origin: clientOrigin,
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+          body: tokenForm,
+        });
+      expect(tokenResponse.status).toBe(200);
+      await expect(tokenResponse.json()).resolves.toMatchObject({
+        token_type: "Bearer",
+        expires_in: 600,
+        scope: "mcp:render mcp:read",
+      });
+    },
+  );
 
   it("allows OAuth and MCP client origins while requiring a browser session for consent", async () => {
     const fixture = await createFixture(),

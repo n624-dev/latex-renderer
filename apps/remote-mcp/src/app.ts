@@ -55,6 +55,14 @@ export function createRemoteMcpApp(deps: RemoteMcpAppDependencies) {
     }>(),
     registrationLimiter = new AnonymousRegistrationLimiter();
   app.use("*", requestId());
+  // Run after secureHeaders on the response: no-referrer makes native form
+  // POSTs send Origin: null. Only the consent document needs same-origin;
+  // external callbacks still receive no Referer, and Origin/CSRF stay strict.
+  app.use("/oauth/authorize", async (c, next) => {
+    await next();
+    if (c.req.method === "GET" && c.res.status === 200)
+      c.header("Referrer-Policy", "same-origin");
+  });
   app.use("*", secureHeaders());
   app.use("*", async (c, next) => {
     c.header("Cache-Control", "private, no-store, no-cache, max-age=0");
