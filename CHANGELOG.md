@@ -11,6 +11,11 @@
 - Preserve exact OIDC issuer identifiers and apply the specification's default only when token endpoint authentication metadata is omitted. Keep password session creation consistent with credential changes and support the documented scrypt cost boundary.
 - Apply POSIX directory mode checks only on POSIX clients, preserve the final active Owner while allowing disabled-Owner demotion, and account for output published immediately before cancellation.
 
+## 1.3.4-rc.2 - 2026-09-07
+
+- Isolate the non-root Image Manager Docker client's Buildx metadata from root-run build scripts. Prevent root-owned Buildx files from blocking managed-image/build-cache cleanup; preserve current and rollback images and existing retention settings.
+- Candidate release only; validate an actual host update before Stable promotion.
+
 ## 1.3.4-rc.1 - 2026-09-07
 
 - Return decoded maintenance/worker modes from the Admin system status API, with the same defaults used by runtime enforcement. Fix the dashboard incorrectly showing attention required for an unset running worker or rendering setting records as objects, without changing production settings.

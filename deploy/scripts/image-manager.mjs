@@ -280,6 +280,9 @@ function dockerRunuserArgs(args) {
     `HOME=${workerHome}`,
     `XDG_RUNTIME_DIR=${runtimeDir}`,
     `DOCKER_HOST=${dockerHost}`,
+    // Root-run build scripts share registry credentials, but their Buildx
+    // metadata must not make the worker's cleanup client inaccessible.
+    `BUILDX_CONFIG=${join(workerHome, ".docker", "buildx-worker")}`,
     "docker",
     ...args,
   ];
