@@ -450,13 +450,24 @@ class MirrorTest(unittest.TestCase):
 
     def test_delete_crash_state_is_reconciled(self):
         old, _ = self.publish(1, hours_ago=100)
-        self.publish(2)
+        latest, _ = self.publish(2)
         old_path = self.root / "snapshots" / old
         old_path.chmod(0o700)
         state = mirror.load_state(self.config)
         state["snapshots"][old]["status"] = "deleting"
         mirror.save_state(self.config, state)
-        mirror.reconcile_state(self.config, mirror.load_state(self.config))
+        # The last enumerated directory must not accidentally become the
+        # chmod target when a different snapshot's deletion is recovered.
+        original_iterdir = Path.iterdir
+        snapshot_root = self.root / "snapshots"
+
+        def ordered_iterdir(path):
+            if path == snapshot_root:
+                return iter([old_path, snapshot_root / latest])
+            return original_iterdir(path)
+
+        with mock.patch.object(Path, "iterdir", ordered_iterdir):
+            mirror.reconcile_state(self.config, mirror.load_state(self.config))
         self.assertEqual(old_path.stat().st_mode & 0o777, 0o555)
         result = mirror.gc(self.config, dt.datetime(2026, 9, 7, tzinfo=dt.timezone.utc))
         self.assertIn(old, result["deletedSnapshots"])

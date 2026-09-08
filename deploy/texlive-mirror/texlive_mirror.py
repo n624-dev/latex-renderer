@@ -1327,7 +1327,7 @@ def reconcile_state(config: Config, state: dict[str, Any]) -> None:
         elif record.get("status") == "deleting" and snapshot_id in disk_ids:
             # Crash before the snapshots->trash rename: restore visibility and
             # let a fresh locked GC decision choose it again.
-            path.chmod(0o555)
+            (snapshot_root / snapshot_id).chmod(0o555)
             record["status"] = "published"
         elif record.get("status") == "published" and snapshot_id not in disk_ids:
             raise StateError(f"published snapshot is missing: {snapshot_id}")
