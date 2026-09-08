@@ -98,7 +98,7 @@ jobs:
 
       - name: Install pinned cloudflared client when mirror credentials are available
         env:
-          TEXLIVE_CI_HOST: ${{ vars.TEXLIVE_CI_HOST }}
+          TEXLIVE_CI_HOST: ${{ secrets.TEXLIVE_CI_HOST }}
           TEXLIVE_CI_SSH_KEY: ${{ secrets.TEXLIVE_CI_SSH_KEY }}
           TEXLIVE_CI_KNOWN_HOSTS: ${{ secrets.TEXLIVE_CI_KNOWN_HOSTS }}
           TEXLIVE_CI_ACCESS_CLIENT_ID: ${{ secrets.TEXLIVE_CI_ACCESS_CLIENT_ID }}
@@ -117,8 +117,8 @@ jobs:
       - name: Reserve exact CI mirror snapshot when credentials are available
         id: mirror
         env:
-          TEXLIVE_CI_HOST: ${{ vars.TEXLIVE_CI_HOST }}
-          TEXLIVE_CI_USER: ${{ vars.TEXLIVE_CI_USER }}
+          TEXLIVE_CI_HOST: ${{ secrets.TEXLIVE_CI_HOST }}
+          TEXLIVE_CI_USER: ${{ secrets.TEXLIVE_CI_USER }}
           TEXLIVE_CI_SSH_KEY: ${{ secrets.TEXLIVE_CI_SSH_KEY }}
           TEXLIVE_CI_KNOWN_HOSTS: ${{ secrets.TEXLIVE_CI_KNOWN_HOSTS }}
           TEXLIVE_CI_ACCESS_CLIENT_ID: ${{ secrets.TEXLIVE_CI_ACCESS_CLIENT_ID }}
@@ -303,8 +303,8 @@ jobs:
       - name: Release CI mirror reservation
         if: always() && steps.mirror.outputs.token != ''
         env:
-          TEXLIVE_CI_HOST: ${{ vars.TEXLIVE_CI_HOST }}
-          TEXLIVE_CI_USER: ${{ vars.TEXLIVE_CI_USER }}
+          TEXLIVE_CI_HOST: ${{ secrets.TEXLIVE_CI_HOST }}
+          TEXLIVE_CI_USER: ${{ secrets.TEXLIVE_CI_USER }}
           TEXLIVE_CI_SSH_KEY: ${{ secrets.TEXLIVE_CI_SSH_KEY }}
           TEXLIVE_CI_KNOWN_HOSTS: ${{ secrets.TEXLIVE_CI_KNOWN_HOSTS }}
           TEXLIVE_CI_ACCESS_CLIENT_ID: ${{ secrets.TEXLIVE_CI_ACCESS_CLIENT_ID }}

@@ -135,16 +135,17 @@ exact Cloudflare release, verifies the release API's published SHA-256 digest,
 and adds it to the job path without root access. Store the Access pair as
 `TEXLIVE_CI_ACCESS_CLIENT_ID` and `TEXLIVE_CI_ACCESS_CLIENT_SECRET`, the private
 SSH key as `TEXLIVE_CI_SSH_KEY`, and the pinned host key text as
-`TEXLIVE_CI_KNOWN_HOSTS`. Set repository variables
-`TEXLIVE_CI_HOST=texlive-ci-lease.example.invalid` and
-`TEXLIVE_CI_USER=texlive-ci-lease`. The helper passes the Access pair through
+`TEXLIVE_CI_KNOWN_HOSTS`. Store `TEXLIVE_CI_HOST` and `TEXLIVE_CI_USER` as
+secrets too, so private connection metadata is not exposed as repository
+variables. Use `texlive-ci-lease.example.invalid` and `texlive-ci-lease` only
+as placeholder values in copied examples. The helper passes the Access pair through
 the native `TUNNEL_SERVICE_TOKEN_ID` and `TUNNEL_SERVICE_TOKEN_SECRET`
 environment variables, never as command-line arguments. It verifies that the reserved
 snapshot has the exact canonical date and installer hash already selected by
 CI. A reservation failure never switches to another snapshot. Workflows must
 release in an `always()` step and retain a job timeout below eight hours.
-Fork/untrusted PRs receive none of the three credentials and continue to use the
-canonical archive even though repository variables remain visible. If only
+Fork/untrusted PRs receive none of the connection secrets and continue to use the
+canonical archive. If only
 some credentials are present, trusted workflows fail closed as a partial
 configuration instead of bypassing Access. The mirror remains optional rather
 than a requirement for existing users.
