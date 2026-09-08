@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 1.3.4-rc.4 - 2026-09-09
+
+- Candidate only: retain RC.3 fixes and validate an explicit update on the designated host before Stable promotion. This release does not deploy or reconfigure a host automatically.
+- Add opt-in CI-only immutable TeX Live snapshots with authenticated leases, hardlink reuse, bounded retention and capacity-aware garbage collection. Preserve canonical archive fallback and Base-only image publication.
+- Enable persistent LWP HTTPS downloads and four verified prefetch workers with a twenty-archive, 256MiB lookahead budget. Refill during extraction without parallel package installation or Actions build caches.
+- Complete the mirror package selection, fail incomplete Base installations, and verify English/Japanese Runtime dependencies and files with one bounded recovery attempt. Preserve standalone fonts and documentation-disabled man links without downloading documentation payloads.
+
 ## 1.3.4-rc.3 - 2026-09-07
 
 - Candidate only: preserve RC.2 cleanup fixes and validate this combined audit/OAuth update on the designated host before any Stable promotion.
