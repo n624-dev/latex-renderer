@@ -20,12 +20,20 @@ run_lease_ssh() {
   known_hosts=$2
   shift
   shift
-  ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
-    -o ConnectTimeout=30 -o ConnectionAttempts=3 \
-    -o StrictHostKeyChecking=yes \
-    -o UserKnownHostsFile="$known_hosts" \
-    -o "ProxyCommand=cloudflared access ssh --hostname %h" \
-    "${TEXLIVE_CI_USER:-texlive-ci-lease}@$TEXLIVE_CI_HOST" "$@"
+  attempt=1
+  while :; do
+    if ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+      -o ConnectTimeout=30 -o ConnectionAttempts=1 \
+      -o StrictHostKeyChecking=yes \
+      -o UserKnownHostsFile="$known_hosts" \
+      -o "ProxyCommand=cloudflared access ssh --hostname %h" \
+      "${TEXLIVE_CI_USER:-texlive-ci-lease}@$TEXLIVE_CI_HOST" "$@"; then
+      return 0
+    fi
+    [ "$attempt" -lt 3 ] || return 255
+    attempt=$((attempt + 1))
+    sleep 5
+  done
 }
 
 case "$operation" in
