@@ -104,6 +104,9 @@ describe("managed TeX Live image pipeline", () => {
     const validation = read("deploy/scripts/ci-validate-texlive-base.sh");
     expect(validation).toContain('docker history --no-trunc "$base"');
     expect(validation).toContain("CI mirror URL remains in image filesystem");
+    expect(validation).toContain(
+      "--tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m",
+    );
   });
 
   it("pins every derived runtime to a clean base and validates languages in that exact snapshot", () => {
@@ -177,6 +180,9 @@ describe("managed TeX Live image pipeline", () => {
     expect(manager).not.toContain("installed.length !== languages.length");
     expect(restore).toContain("effectiveLanguageCollections");
     expect(restore).toContain("effective_languages=$(rootless_docker run");
+    expect(restore).toContain(
+      "--tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m",
+    );
     expect(manager).toContain(
       "desired: {\n      ...previousState.desired,\n      selector,\n      languages,\n      autoUpdate,",
     );
