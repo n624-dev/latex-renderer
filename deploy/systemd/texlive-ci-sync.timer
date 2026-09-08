@@ -1,0 +1,11 @@
+[Unit]
+Description=Synchronize the TeX Live CI mirror daily
+
+[Timer]
+OnCalendar=*-*-* 02:30:00 UTC
+Persistent=true
+RandomizedDelaySec=10min
+Unit=texlive-ci-sync.service
+
+[Install]
+WantedBy=timers.target

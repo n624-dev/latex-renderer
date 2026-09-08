@@ -1,0 +1,12 @@
+[Unit]
+Description=Update cloudflared from the signed Cloudflare APT repository
+Documentation=https://developers.cloudflare.com/tunnel/downloads/update-cloudflared/
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/cloudflared-update
+PrivateTmp=true
+ProtectHome=true
+NoNewPrivileges=true

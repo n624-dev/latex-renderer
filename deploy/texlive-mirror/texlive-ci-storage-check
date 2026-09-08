@@ -1,0 +1,22 @@
+#!/bin/sh
+set -eu
+root=${1:?managed root required}
+minimum_os_free_bytes=${2:?minimum OS free bytes required}
+
+case "$root" in /*) ;; *) echo "managed root must be absolute" >&2; exit 64;; esac
+[ "$root" != / ] || { echo "managed root must not be /" >&2; exit 64; }
+case "$minimum_os_free_bytes" in ''|*[!0-9]*) echo "minimum free bytes must be an integer" >&2; exit 64;; esac
+
+[ -d "$root" ] || { echo "managed root does not exist: $root" >&2; exit 1; }
+[ ! -L "$root" ] || { echo "managed root must not be a symlink" >&2; exit 1; }
+resolved=$(readlink -f "$root")
+[ "$resolved" = "$root" ] || { echo "managed root is not canonical: $root" >&2; exit 1; }
+
+free_bytes=$(df -B1 --output=avail / | awk 'NR == 2 { print $1 }')
+case "$free_bytes" in ''|*[!0-9]*) echo "cannot measure OS filesystem free space" >&2; exit 1;; esac
+[ "$free_bytes" -ge "$minimum_os_free_bytes" ] || {
+  echo "OS filesystem free space is below the configured minimum" >&2
+  exit 1
+}
+
+printf 'application-enforced storage guard: root=%s os_free_bytes=%s\n' "$root" "$free_bytes"

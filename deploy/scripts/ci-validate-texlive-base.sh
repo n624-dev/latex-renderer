@@ -2,7 +2,8 @@
 set -eu
 [ "${GITHUB_ACTIONS:-}" = true ] && [ "${RUNNER_ENVIRONMENT:-}" = github-hosted ] || exit 77
 base=${1:?Base image required}
-repository=${2:?snapshot repository required}
+repository=${2:?download repository required}
+canonical_repository=${3:-$repository}
 script_root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 validation_runtime="latex-renderer:ci-validation-${GITHUB_RUN_ID:?}-${GITHUB_RUN_ATTEMPT:?}"
 cleanup() {
@@ -15,6 +16,26 @@ trap 'exit 143' TERM HUP
 # Remove any previous attempt's tag, not just its cached build layers.
 docker image rm "$validation_runtime" >/dev/null 2>&1 || true
 sh "$script_root/smoke-test-texlive-base.sh" "$base"
+if [ "$repository" != "$canonical_repository" ]; then
+  if docker history --no-trunc "$base" | grep -F -- "$repository" >/dev/null; then
+    echo "CI mirror URL remains in image history" >&2
+    exit 65
+  fi
+  docker run --rm --network none --read-only \
+    --env "PRIVATE_TEXLIVE_REPOSITORY=$repository" \
+    --entrypoint /bin/sh "$base" -c '
+      if grep -R -l -F -- "${PRIVATE_TEXLIVE_REPOSITORY}" /opt/texlive /opt/renderer; then
+        echo "CI mirror URL remains in image filesystem" >&2
+        exit 65
+      fi
+    '
+fi
+docker run --rm --network none --read-only \
+  --env "EXPECTED_TEXLIVE_REPOSITORY=$canonical_repository" \
+  --entrypoint /bin/sh "$base" -c '
+    grep -F "\"texliveRepository\":\"${EXPECTED_TEXLIVE_REPOSITORY}\"" /opt/renderer/build-provenance.json >/dev/null
+    tlmgr option repository | grep -F -- "${EXPECTED_TEXLIVE_REPOSITORY}" >/dev/null
+  '
 # The Base has been loaded. Its now-redundant BuildKit export state need not
 # coexist with the language layer build. Only this job's builder is pruned.
 if [ -n "${BUILDX_BUILDER:-}" ]; then

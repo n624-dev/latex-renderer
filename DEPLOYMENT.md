@@ -150,6 +150,11 @@ an email-based recovery link.
 
 ## Managed TeX Live images
 
+The optional capacity-bounded CI distribution mirror is documented separately
+in [docs/texlive-ci-mirror.md](docs/texlive-ci-mirror.md). It supplies immutable
+snapshot URLs to trusted image jobs only; it does not change end-user repository
+fallbacks or GHCR retention.
+
 CI and image publication use GitHub-hosted runners; no self-hosted runner is
 required. TeX Docker layers are not exported to GitHub Actions caches because
 each snapshot consumes several GiB. The `actions-cache-cleanup` workflow deletes

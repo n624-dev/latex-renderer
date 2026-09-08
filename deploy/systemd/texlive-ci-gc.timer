@@ -1,0 +1,12 @@
+[Unit]
+Description=Run TeX Live CI mirror GC every 15 minutes and after downtime
+
+[Timer]
+OnBootSec=1min
+OnCalendar=*:0/15
+Persistent=true
+RandomizedDelaySec=30
+Unit=texlive-ci-gc.service
+
+[Install]
+WantedBy=timers.target

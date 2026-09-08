@@ -12,6 +12,17 @@ function expectShellSyntax(path: string): void {
 }
 
 describe("managed TeX Live image pipeline", () => {
+  it("keeps production mirror hostnames out of tracked examples", () => {
+    for (const path of [
+      "deploy/nginx/texlive-ci-mirror.conf",
+      "deploy/texlive-mirror/config.example.json",
+      "docs/texlive-ci-mirror.md",
+      "tests/ci_texlive_mirror_lease_test.py",
+    ]) {
+      expect(read(path), path).not.toContain(".n624.jp");
+    }
+  });
+
   it("keeps public image CI isolated from package publishing and self-hosted runners", () => {
     const workflow = read(".github/workflows/renderer-image.yml");
     const retention = read("deploy/scripts/ghcr-retention.mjs");
@@ -34,10 +45,10 @@ describe("managed TeX Live image pipeline", () => {
       "snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}",
     );
     expect(baseDockerfile).toContain(
-      "TEXLIVE_KEY_FINGERPRINT=C78B82D8C79512F79CC0D7C80D5E5D9106BAB6BC",
+      "TEXLIVE_SIGNING_FINGERPRINT=C78B82D8C79512F79CC0D7C80D5E5D9106BAB6BC",
     );
     expect(baseDockerfile).toContain(
-      "by-fingerprint/${TEXLIVE_KEY_FINGERPRINT}",
+      "by-fingerprint/${TEXLIVE_SIGNING_FINGERPRINT}",
     );
     expect(baseDockerfile).toContain("gpgv --keyring /tmp/texlive.gpg");
     expect(baseDockerfile).not.toContain("COPY texmf.cnf latexmkrc compile.sh");
@@ -49,6 +60,7 @@ describe("managed TeX Live image pipeline", () => {
 
   it("publishes daily images transparently from a separate hosted-only workflow", () => {
     const workflow = read(".github/workflows/renderer-image-daily.yml");
+    const baseDockerfile = read("renderer/Dockerfile.base");
     expect(workflow).toContain("schedule:");
     expect(workflow).toContain("runs-on: ubuntu-24.04");
     expect(workflow).not.toContain("self-hosted");
@@ -73,6 +85,25 @@ describe("managed TeX Live image pipeline", () => {
     expect(workflow).toContain('docker push "$dated_ref"');
     expect(workflow).not.toContain('docker push "$runtime_ref"');
     expect(workflow).toContain("Verify anonymous pull");
+    expect(workflow).toContain(
+      "TEXLIVE_REPOSITORY: ${{ steps.snapshot.outputs.repository }}",
+    );
+    expect(workflow).toContain(
+      "TEXLIVE_DOWNLOAD_REPOSITORY: ${{ steps.mirror.outputs.repository }}",
+    );
+    expect(workflow).toContain(
+      "--secret id=texlive_download_repository,env=TEXLIVE_DOWNLOAD_REPOSITORY",
+    );
+    expect(baseDockerfile).toContain(
+      "--mount=type=secret,id=texlive_download_repository,required=false",
+    );
+    expect(baseDockerfile).toContain(
+      'tlmgr option repository "${TEXLIVE_REPOSITORY}"',
+    );
+    expect(baseDockerfile).toContain("/opt/texlive/2026/install-tl.log");
+    const validation = read("deploy/scripts/ci-validate-texlive-base.sh");
+    expect(validation).toContain('docker history --no-trunc "$base"');
+    expect(validation).toContain("CI mirror URL remains in image filesystem");
   });
 
   it("pins every derived runtime to a clean base and validates languages in that exact snapshot", () => {

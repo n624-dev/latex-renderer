@@ -1,0 +1,27 @@
+[Unit]
+Description=Create a verified immutable TeX Live CI snapshot
+After=network-online.target texlive-ci-gc.service
+Wants=network-online.target
+RequiresMountsFor=/srv/texlive-ci
+
+[Service]
+Type=oneshot
+User=texlive-ci
+Group=texlive-ci
+ExecStartPre=/usr/local/libexec/texlive-ci-storage-check /srv/texlive-ci 3221225472
+ExecStart=/usr/local/libexec/texlive-mirror --config /etc/texlive-ci/config.json sync --date latest
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/texlive-ci
+Environment=TMPDIR=/srv/texlive-ci/staging
+InaccessiblePaths=/tmp /var/tmp
+TimeoutStartSec=3h
+MemoryMax=768M
+KillSignal=SIGTERM
+StandardOutput=journal
+StandardError=journal
+LogNamespace=texlive-ci
+LogRateLimitIntervalSec=6h
+LogRateLimitBurst=200

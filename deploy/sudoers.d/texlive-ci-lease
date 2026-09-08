@@ -1,0 +1,2 @@
+Defaults:texlive-ci-lease env_keep += "SSH_ORIGINAL_COMMAND"
+texlive-ci-lease ALL=(texlive-ci) NOPASSWD: /usr/local/libexec/texlive-ci-ssh
