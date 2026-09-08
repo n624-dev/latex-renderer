@@ -81,7 +81,8 @@ if [ -n "$(find "$stage" -type l -print -quit)" ]; then
 fi
 
 renderer_fingerprint=$(node "$repository_root/deploy/scripts/runtime-image-identity.mjs" --renderer-fingerprint)
-node - "$stage/.latex-renderer-release.json" "$stage/deploy/release-policy.json" "$stage/package.json" "$version" "$release_tag" "$commit" "$renderer_fingerprint" "$validated_candidate_tag" <<'NODE'
+legacy_fingerprint=$(node "$repository_root/deploy/scripts/runtime-image-identity.mjs" --release-legacy-fingerprint)
+node - "$stage/.latex-renderer-release.json" "$stage/deploy/release-policy.json" "$stage/package.json" "$version" "$release_tag" "$commit" "$legacy_fingerprint" "$validated_candidate_tag" "$renderer_fingerprint" <<'NODE'
 const fs = require("node:fs");
 const policy = JSON.parse(fs.readFileSync(process.argv[3], "utf8"));
 const packageJson = JSON.parse(fs.readFileSync(process.argv[4], "utf8"));
@@ -96,6 +97,7 @@ fs.writeFileSync(process.argv[2], `${JSON.stringify({
   requiredNodeMajor: 24,
   packageManager: packageJson.packageManager,
   rendererRuntimeFingerprint: process.argv[8],
+  rendererRuntimeIdentity: { schemaVersion: 2, fingerprint: process.argv[10] },
   validatedCandidateTag: process.argv[9] || null,
   provenance: "github-artifact-attestation",
 }, null, 2)}\n`, { mode: 0o644 });

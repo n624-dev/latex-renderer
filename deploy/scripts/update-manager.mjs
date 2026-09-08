@@ -27,7 +27,7 @@ import {
 } from "./environment.mjs";
 import { assembleBuildArtifacts } from "./release-assembly.mjs";
 import { validateReleaseArchive } from "./release-archive.mjs";
-import { rendererRuntimeFingerprint } from "./runtime-image-identity.mjs";
+import { validatedReleaseRendererFingerprint } from "./runtime-image-identity.mjs";
 import {
   assertValidatedCandidateTag,
   compareReleaseVersions as compareVersions,
@@ -739,8 +739,8 @@ async function prepareRelease(operation, release) {
     const packageJson = JSON.parse(
       await readFile(join(verifiedSource, "package.json"), "utf8"),
     );
-    const stagedRendererFingerprint = await rendererRuntimeFingerprint(
-      join(verifiedSource, "renderer"),
+    const stagedRendererFingerprint = await validatedReleaseRendererFingerprint(
+      join(verifiedSource, "renderer"), manifest,
     );
     if (
       manifest?.version !== release.version ||

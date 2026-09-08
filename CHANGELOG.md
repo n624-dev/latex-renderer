@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 1.3.4-rc.5 - 2026-09-09
+
+- Fix RC.3 Update Manager compatibility: retain its frozen five-file release metadata fingerprint and add a versioned six-file Runtime identity. Both new updater verification paths check the extended identity; whole-archive checksum and provenance verification remain mandatory for old and new updaters.
+- Keep the language installation helper in Runtime identity, without modifying the installed updater or weakening validation. RC.4 failed before activation on the validation host; do not retry or replace its immutable assets.
+- Candidate only: retain RC.4 changes and require a successful real-host update before Stable promotion.
+
 ## 1.3.4-rc.4 - 2026-09-09
 
 - Candidate only: retain RC.3 fixes and validate an explicit update on the designated host before Stable promotion. This release does not deploy or reconfigure a host automatically.
