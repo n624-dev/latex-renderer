@@ -14,7 +14,7 @@ import {
 
 const roots: string[] = [];
 // Historical protocol boundary must not be rewritten during Stable promotion.
-const firstIdentityVersion = `${[1, 3, 4].join(".")}-rc.${5}`;
+const firstIdentityVersion = `${[1, 3, 4].join(".")}-rc.5`;
 it("pins the unmodified RC.3 verifier and wires both new updater paths", async () => {
   const old = await readFile("tests/fixtures/rc3-runtime-image-identity.mjs");
   expect(createHash("sha256").update(old).digest("hex")).toBe(
