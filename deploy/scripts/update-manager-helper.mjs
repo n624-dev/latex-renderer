@@ -35,7 +35,7 @@ import {
   assertSealedControlTree,
 } from "./release-assembly.mjs";
 import { validateReleaseArchive } from "./release-archive.mjs";
-import { rendererRuntimeFingerprint } from "./runtime-image-identity.mjs";
+import { validatedReleaseRendererFingerprint } from "./runtime-image-identity.mjs";
 import { acquireMutationLock } from "./mutation-lock.mjs";
 import {
   assertValidatedCandidateTag,
@@ -451,8 +451,8 @@ async function verifyExtractedRelease(release, source) {
   const packageJson = JSON.parse(
     await readFile(join(source, "package.json"), "utf8"),
   );
-  const fingerprint = await rendererRuntimeFingerprint(
-    join(source, "renderer"),
+  const fingerprint = await validatedReleaseRendererFingerprint(
+    join(source, "renderer"), manifest,
   );
   if (
     manifest?.version !== release.version ||
