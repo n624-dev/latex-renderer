@@ -61,6 +61,14 @@ includes that collection. Its `.ARCH` dependency is conditional, as in the
 standard installer: Windows-only binaries do not imply a Linux binary exists.
 The stricter failure policy above prevents this incomplete Base from recurring.
 
+The completed 16-object prefetch run `34239058615` took 13m21s for installation,
+10s for font cache, 16m47s for the Base build, 4m39s for validation, and 25m34s
+for the job. Main package-phase download wait was 156.034s, package wall time
+664.094s and CPU time 533.160s; peak reserved compressed buffer was 107663828
+bytes. All validation, security scan, SBOM and lease release passed. This is
+an observed comparison, not a controlled same-snapshot benchmark, and does not
+yet measure the subsequent 20-object automatic-refill change.
+
 ### Bounded archive prefetch
 
 `TeXLivePrefetch.pm` is mounted only during the Base install RUN. It wraps the
@@ -72,8 +80,12 @@ the current one. Workers verify the exact size and SHA-512 from the already
 verified TLPDB; standard `unpack` then checks them again before extraction.
 Database, installer, signatures, and unexpected URLs use the original path.
 
-The default compressed lookahead budget is 256MiB, with at most 16 objects
-ahead. Reservations count incomplete downloads at their full expected size.
+The default compressed lookahead budget is 256MiB, with at most 20 objects
+ahead and four concurrent transfers (not twenty simultaneous transfers).
+A separate coordinator refills idle workers as downloads finish, including
+while the installer is extracting. It pauses below twenty objects whenever the
+next archive would exceed the byte budget, and resumes after consumption.
+Reservations count incomplete downloads at their full expected size.
 Each response is capped while streaming, retries are limited to two, and each
 attempt has a 120s deadline. Unknown sizes, objects larger than the budget,
 non-HTTPS repositories, and profiles requesting sources/docs use the standard
@@ -82,7 +94,10 @@ snapshot origin; the standard path remains available for non-prefetched files.
 Workers prioritize the currently requested object before scheduling later
 ones. Workers and their private temporary directory are removed at the end of
 each install phase, including normal failures. Abrupt parent termination closes
-worker sockets; in-flight requests are bounded by the attempt deadlines.
+the coordinator control socket; it reaps workers on EOF. An active demanded
+download can delay EOF handling, bounded by the attempt deadlines. A hard kill
+can leave temporary files until the build's temporary filesystem is discarded;
+it does not create a persistent cache.
 
 This budget covers prefetched compressed archives, not the installed tree,
 the current archive handed to standard unpack, its expanded tar, or Docker
@@ -102,6 +117,9 @@ must use the same snapshot/profile and include complete hosted validation.
 Run `python3 -m unittest -v tests/texlive_prefetch_test.py` with Perl LWP HTTPS
 modules and OpenSSL installed. Tests use a small local HTTPS server with a
 temporary CA certificate; they do not download TeX Live or require root.
+They also simulate extraction pauses to check autonomous refill, the twenty
+object ceiling, byte-budget pauses below that ceiling and subsequent resumption,
+as well as worker/coordinator failures and skipped/backward package requests.
 
 ## Failed builds, retries and cache
 

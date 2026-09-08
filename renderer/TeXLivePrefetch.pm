@@ -3,6 +3,7 @@ use strict;
 use warnings;
 use Digest::SHA ();
 use File::Temp ();
+use File::Spec ();
 use IO::Handle ();
 use IO::Select ();
 use JSON::PP qw(encode_json decode_json);
@@ -29,7 +30,7 @@ sub new {
     my ($class, $plan) = @_;
     my $count = setting('TEXLIVE_PREFETCH_WORKERS', 4, 1, 8);
     my $budget = setting('TEXLIVE_PREFETCH_BYTES', 268435456, 1, 1073741824);
-    my $window = setting('TEXLIVE_PREFETCH_WINDOW', 16, 1, 64);
+    my $window = setting('TEXLIVE_PREFETCH_WINDOW', 20, 1, 64);
     my $dir = File::Temp->newdir('texlive-prefetch-XXXXXXXX', TMPDIR => 1);
     my $self = bless {plan => $plan, dir => $dir, budget => $budget,
         window => $window, reserved => 0, peak => 0, workers => [],
@@ -37,6 +38,36 @@ sub new {
     $self->{started} = time;
     $self->{cpu_start} = [times];
     for my $i (0 .. $#$plan) { $self->{index}{$plan->[$i]{url}} = $i; }
+    socketpair(my $parent, my $child, AF_UNIX, SOCK_STREAM, PF_UNSPEC)
+        or die "prefetch coordinator socketpair failed\n";
+    $parent->autoflush(1);
+    $child->autoflush(1);
+    STDOUT->flush;
+    STDERR->flush;
+    my $pid = fork();
+    die "prefetch coordinator fork failed\n" unless defined $pid;
+    if (!$pid) {
+        close $parent;
+        local $SIG{TERM} = local $SIG{INT} = sub { die "coordinator interrupted\n" };
+        local $SIG{PIPE} = 'IGNORE';
+        my $ok = eval {
+            $self->start_workers($count, $child);
+            $self->coordinate($child);
+            1;
+        };
+        $self->stop;
+        STDOUT->flush;
+        STDERR->flush;
+        POSIX::_exit($ok ? 0 : 1);
+    }
+    close $child;
+    $self->{coordinator} = $pid;
+    $self->{control} = $parent;
+    return $self;
+}
+
+sub start_workers {
+    my ($self, $count, $control) = @_;
     for (1 .. $count) {
         socketpair(my $parent, my $child, AF_UNIX, SOCK_STREAM, PF_UNSPEC)
             or die "prefetch socketpair failed\n";
@@ -46,6 +77,7 @@ sub new {
         die "prefetch fork failed\n" unless defined $pid;
         if (!$pid) {
             close $parent;
+            close $control; # Parent exit must be visible to the coordinator.
             close $_->{socket} for @{$self->{workers}};
             $SIG{TERM} = $SIG{INT} = $SIG{PIPE} = 'DEFAULT';
             eval { worker($child) };
@@ -54,7 +86,44 @@ sub new {
         close $child;
         push @{$self->{workers}}, {pid => $pid, socket => $parent};
     }
-    return $self;
+}
+
+# This process keeps refilling while the installer is extracting. Signals do
+# not execute scheduler logic. Only this process owns task/budget mutations.
+sub coordinate {
+    my ($self, $control) = @_;
+    my $cursor;
+    while (1) {
+        my @busy = grep { defined $_->{task} } @{$self->{workers}};
+        my @ready = IO::Select->new($control, map { $_->{socket} } @busy)->can_read(250);
+        die "prefetch worker deadline exceeded\n" if @busy && !@ready;
+        next unless @ready;
+        if (grep { fileno($_) == fileno($control) } @ready) {
+            my $line = <$control>;
+            last unless defined $line; # Installer exit, including abnormal exit.
+            my $request = decode_json($line);
+            last if $request->{op} eq 'stop';
+            my $result = $self->download($request->{url}, $request->{dest});
+            $cursor = $self->{index}{$request->{url}} + 1;
+            print {$control} encode_json({result => $result}) . "\n" or last;
+        } else {
+            $self->receive;
+        }
+        if (defined $cursor) {
+            $self->discard_before($cursor);
+            $self->fill($cursor);
+        }
+    }
+}
+
+sub discard_before {
+    my ($self, $index) = @_;
+    for my $i (keys %{$self->{tasks}}) {
+        next if $i >= $index || $self->{tasks}{$i}{status} eq 'running';
+        my $old = delete $self->{tasks}{$i};
+        unlink $old->{file};
+        $self->{reserved} -= $old->{size};
+    }
 }
 
 sub worker {
@@ -104,6 +173,8 @@ sub fill {
     $end = $#{$self->{plan}} if $end > $#{$self->{plan}};
     for my $i ($index .. $end) {
         last unless @idle;
+        # Skipped archives still running also count toward the object ceiling.
+        last if scalar(keys %{$self->{tasks}}) >= $self->{window};
         next if exists $self->{tasks}{$i};
         my $entry = $self->{plan}[$i];
         # Unknown and oversized objects use the standard downloader. Never
@@ -145,13 +216,20 @@ sub download {
     my $index = $self->{index}{$url};
     my $entry = $self->{plan}[$index];
     return undef if !$entry->{size} || $entry->{size} > $self->{budget};
-    # Discard completed earlier lookahead objects skipped by the installer.
-    for my $i (keys %{$self->{tasks}}) {
-        next if $i >= $index || $self->{tasks}{$i}{status} eq 'running';
-        my $old = delete $self->{tasks}{$i};
-        unlink $old->{file};
-        $self->{reserved} -= $old->{size};
+    if ($self->{coordinator}) {
+        local $SIG{PIPE} = 'IGNORE';
+        # The installer may chdir after the coordinator was forked.
+        $dest = File::Spec->rel2abs($dest);
+        print {$self->{control}} encode_json({op => 'download', url => $url, dest => $dest}) . "\n"
+            or die "prefetch coordinator unavailable\n";
+        die "prefetch coordinator deadline exceeded\n"
+            unless IO::Select->new($self->{control})->can_read(260);
+        my $line = readline($self->{control});
+        die "prefetch coordinator exited\n" unless defined $line;
+        return decode_json($line)->{result};
     }
+    # Discard completed earlier lookahead objects skipped by the installer.
+    $self->discard_before($index);
     my $start = time;
     $self->fill($index);
     # A retry may target an earlier object after lookahead filled the buffer.
@@ -173,6 +251,18 @@ sub download {
 sub stop {
     my ($self) = @_;
     return if $self->{stopped}++;
+    if ($self->{coordinator}) {
+        local $SIG{PIPE} = 'IGNORE';
+        print {$self->{control}} encode_json({op => 'stop'}) . "\n";
+        close $self->{control};
+        waitpid $self->{coordinator}, 0;
+        my @cpu = times;
+        my $cpu_seconds = 0;
+        $cpu_seconds += $cpu[$_] - $self->{cpu_start}[$_] for 0 .. 3;
+        printf "TEXLIVE_PREFETCH package_seconds=%.3f cpu_seconds=%.3f\n",
+            time - $self->{started}, $cpu_seconds;
+        return;
+    }
     for my $worker (@{$self->{workers}}) {
         kill 'TERM', $worker->{pid};
         close $worker->{socket};
@@ -181,11 +271,6 @@ sub stop {
     $self->{workers} = [];
     printf "TEXLIVE_PREFETCH wait_seconds=%.3f verified_bytes=%d peak_reserved_bytes=%d\n",
         $self->{wait}, $self->{transferred}, $self->{peak};
-    my @cpu = times;
-    my $cpu_seconds = 0;
-    $cpu_seconds += $cpu[$_] - $self->{cpu_start}[$_] for 0 .. 3;
-    printf "TEXLIVE_PREFETCH package_seconds=%.3f cpu_seconds=%.3f\n",
-        time - $self->{started}, $cpu_seconds;
 }
 
 sub DESTROY { $_[0]->stop unless $_[0]->{stopped}; }

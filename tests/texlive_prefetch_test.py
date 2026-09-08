@@ -93,15 +93,34 @@ use JSON::PP qw(decode_json);
 use Digest::SHA qw(sha512_hex);
 my $plan = decode_json(do { local $/; <STDIN> });
 my $pool = TeXLivePrefetch->new($plan);
+chdir $ENV{TMPDIR} or die if $ENV{PREFETCH_TEST_MODE} eq 'chdir';
 if ($ENV{PREFETCH_TEST_MODE} eq 'readonly') { chmod 0555, "$pool->{dir}" or die; }
 if ($ENV{PREFETCH_TEST_MODE} eq 'dead_worker') {
-    kill 'KILL', $pool->{workers}[0]{pid};
+    my $pid;
+    for (1 .. 100) {
+        open my $children, '<', "/proc/$pool->{coordinator}/task/$pool->{coordinator}/children" or die;
+        ($pid) = split /\s+/, (<$children> // '');
+        close $children;
+        last if $pid;
+        select undef, undef, undef, 0.01;
+    }
+    die 'worker not started' unless $pid;
+    kill 'KILL', $pid;
     # Avoid SIGPIPE racing with the death notification in this fault test.
     $SIG{PIPE} = 'IGNORE';
 }
+if ($ENV{PREFETCH_TEST_MODE} eq 'dead_coordinator') {
+    # TERM allows the coordinator to reap workers before reporting failure.
+    select undef, undef, undef, 0.1;
+    kill 'TERM', $pool->{coordinator};
+    select undef, undef, undef, 0.1;
+}
 my @result;
-for my $entry (@$plan) {
+my @order = @$plan;
+@order = ($plan->[0], $plan->[8], $plan->[0], @$plan) if $ENV{PREFETCH_TEST_MODE} eq 'retry';
+for my $entry (@order) {
     my $dest = "$ENV{TMPDIR}/current";
+    $dest = 'current' if $ENV{PREFETCH_TEST_MODE} eq 'chdir';
     my $ok = eval { $pool->download($entry->{url}, $dest) };
     if ($@) { print "worker error detected\n"; last; }
     push @result, defined($ok) ? $ok : 'fallback';
@@ -111,6 +130,14 @@ for my $entry (@$plan) {
         die "bad returned payload" unless sha512_hex(do { local $/; <$in> }) eq $entry->{sha};
         close $in;
         unlink $dest or die;
+    }
+    if ($ENV{PREFETCH_TEST_MODE} eq 'idle' && @result <= 2) {
+        # Simulate extraction: no downloader calls while workers finish and
+        # the coordinator refills. Count only fully verified ready files.
+        select undef, undef, undef, 2;
+        my @ready = glob "$pool->{dir}/*";
+        @ready = grep { /\/[0-9]+$/ } @ready;
+        print 'idle_ready=', scalar(@ready), "\n";
     }
 }
 print JSON::PP::encode_json(\@result), "\n";
@@ -122,7 +149,7 @@ undef $pool;
             env = dict(os.environ, TMPDIR=temporary,
                        TEXLIVE_PREFETCH_WORKERS=str(workers),
                        TEXLIVE_PREFETCH_BYTES=str(budget or 4 * len(PAYLOAD)),
-                       TEXLIVE_PREFETCH_WINDOW="8", PREFETCH_TEST_MODE=mode)
+                       TEXLIVE_PREFETCH_WINDOW="20", PREFETCH_TEST_MODE=mode)
             if trust:
                 env["PERL_LWP_SSL_CA_FILE"] = str(self.cert)
             else:
@@ -162,6 +189,18 @@ undef $pool;
         self.assertIn("[0]", output)
         self.assertIn("verified_bytes=0", output)
 
+    def test_refills_during_extraction_and_stops_at_twenty(self):
+        output, _ = self.run_pool(count=25, budget=30 * len(PAYLOAD), mode="idle")
+        self.assertEqual(output.count("idle_ready=20"), 2, output)
+        self.assertIn(f"peak_reserved_bytes={20 * len(PAYLOAD)}", output)
+        self.assertIn(json.dumps([1] * 25, separators=(",", ":")), output)
+
+    def test_byte_limit_pauses_below_twenty_and_resumes_after_consumption(self):
+        output, _ = self.run_pool(count=25, budget=6 * len(PAYLOAD) + 1, mode="idle")
+        self.assertEqual(output.count("idle_ready=6"), 2, output)
+        self.assertIn(f"peak_reserved_bytes={6 * len(PAYLOAD)}", output)
+        self.assertIn(json.dumps([1] * 25, separators=(",", ":")), output)
+
     def test_oversized_response_is_discarded(self):
         output, _ = self.run_pool(count=1, name="oversize")
         self.assertIn("[0]", output)
@@ -183,6 +222,20 @@ undef $pool;
     def test_worker_death_is_detected_and_cleaned_up(self):
         output, _ = self.run_pool(count=1, workers=1, mode="dead_worker")
         self.assertIn("worker error detected", output)
+
+    def test_coordinator_death_is_detected_and_cleaned_up(self):
+        output, _ = self.run_pool(count=1, mode="dead_coordinator")
+        self.assertIn("worker error detected", output)
+
+    def test_relative_destination_after_installer_changes_directory(self):
+        output, _ = self.run_pool(count=1, mode="chdir")
+        self.assertIn("[1]", output)
+
+    def test_skipped_packages_and_backward_retry_do_not_deadlock(self):
+        output, _ = self.run_pool(mode="retry")
+        self.assertNotIn("worker error detected", output)
+        self.assertNotIn("[0", output)
+        self.assertIn(f"peak_reserved_bytes={4 * len(PAYLOAD)}", output)
 
     @unittest.skipIf(os.geteuid() == 0, "root bypasses fixture directory permissions")
     def test_unwritable_buffer_fails_without_returning_a_file(self):
