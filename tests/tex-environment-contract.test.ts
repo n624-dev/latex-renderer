@@ -92,6 +92,9 @@ describe("managed TeX Live image pipeline", () => {
       "TEXLIVE_DOWNLOAD_REPOSITORY: ${{ steps.mirror.outputs.repository }}",
     );
     expect(workflow).toContain(
+      "TEXLIVE_CI_MIRROR_HOST: ${{ secrets.TEXLIVE_CI_MIRROR_HOST }}",
+    );
+    expect(workflow).toContain(
       "--secret id=texlive_download_repository,env=TEXLIVE_DOWNLOAD_REPOSITORY",
     );
     expect(baseDockerfile).toContain(

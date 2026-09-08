@@ -60,7 +60,8 @@ case "$operation" in
       const id=/^tl20\d{2}-[0-9a-f]{16}-[0-9a-f]{16}-[0-9a-f]{16}-v[1-9][0-9]*$/;
       if(!id.test(r.snapshotId)||!/^[0-9a-f]{64}$/.test(r.token)) throw new Error("invalid reservation response");
       const url=new URL(r.url);
-      if(url.protocol!=="https:"||url.username||url.password||url.search||url.hash||url.pathname!==`/snapshots/${r.snapshotId}/tlnet`||r.url!==url.origin+url.pathname) throw new Error("invalid reservation URL");
+      const expectedHost=process.env.TEXLIVE_CI_MIRROR_HOST;
+      if(!expectedHost||url.hostname!==expectedHost||url.port||url.protocol!=="https:"||url.username||url.password||url.search||url.hash||url.pathname!==`/snapshots/${r.snapshotId}/tlnet`||r.url!==url.origin+url.pathname) throw new Error("invalid reservation URL");
       fs.appendFileSync(process.env.GITHUB_OUTPUT,`repository=${r.url}\ntoken=${r.token}\nowner=${process.argv[4]}\nsnapshot_id=${r.snapshotId}\n`);
     ' "$response" "$date_value" "$upstream_installer" "$owner"
     ;;

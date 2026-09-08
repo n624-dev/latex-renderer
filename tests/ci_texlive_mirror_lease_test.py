@@ -58,6 +58,7 @@ printf '%s\n' '{"canonicalDate":"2026-09-08","installerSha512":"aaaaaaaaaaaaaaaa
                 "TEXLIVE_CI_KNOWN_HOSTS": "texlive-ci-lease.example.invalid ssh-ed25519 fake",
                 "TEXLIVE_CI_ACCESS_CLIENT_ID": access_id,
                 "TEXLIVE_CI_ACCESS_CLIENT_SECRET": access_secret,
+                "TEXLIVE_CI_MIRROR_HOST": "texlive-ci.example.invalid",
                 "SSH_CAPTURE": str(capture),
                 "SSH_ATTEMPTS": str(attempts),
             }
@@ -93,6 +94,27 @@ printf '%s\n' '{"canonicalDate":"2026-09-08","installerSha512":"aaaaaaaaaaaaaaaa
                 "snapshot_id=tl2026-aaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-cccccccccccccccc-v2",
                 github_output,
             )
+
+            mismatched_environment = {
+                **environment,
+                "GITHUB_OUTPUT": str(root / "mismatched-output"),
+                "TEXLIVE_CI_MIRROR_HOST": "other-mirror.example.invalid",
+            }
+            mismatch = subprocess.run(
+                [
+                    "sh",
+                    str(HELPER),
+                    "acquire",
+                    "2026-09-08",
+                    "a" * 128,
+                    "amd64",
+                ],
+                env=mismatched_environment,
+                text=True,
+                capture_output=True,
+            )
+            self.assertNotEqual(mismatch.returncode, 0)
+            self.assertIn("invalid reservation URL", mismatch.stderr)
 
     def test_missing_access_credentials_fail_before_ssh(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -63,6 +63,9 @@ jobs:
       REQUESTED_DATE: ${{ github.event.inputs.texlive_date || 'latest' }}
       PUBLISH_REQUESTED: ${{ github.event_name == 'schedule' || inputs.publish == true }}
       DOCKER_BUILD_RECORD_UPLOAD: "false"
+      # Register the private distribution hostname with the runner's log
+      # masker before any step can emit a snapshot URL.
+      TEXLIVE_CI_MIRROR_HOST: ${{ secrets.TEXLIVE_CI_MIRROR_HOST }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -105,13 +108,13 @@ jobs:
           TEXLIVE_CI_ACCESS_CLIENT_SECRET: ${{ secrets.TEXLIVE_CI_ACCESS_CLIENT_SECRET }}
         run: |
           configured=0
-          for value in "$TEXLIVE_CI_HOST" "$TEXLIVE_CI_SSH_KEY" "$TEXLIVE_CI_KNOWN_HOSTS" "$TEXLIVE_CI_ACCESS_CLIENT_ID" "$TEXLIVE_CI_ACCESS_CLIENT_SECRET"; do
+          for value in "$TEXLIVE_CI_HOST" "$TEXLIVE_CI_SSH_KEY" "$TEXLIVE_CI_KNOWN_HOSTS" "$TEXLIVE_CI_ACCESS_CLIENT_ID" "$TEXLIVE_CI_ACCESS_CLIENT_SECRET" "$TEXLIVE_CI_MIRROR_HOST"; do
             [ -n "$value" ] && configured=$((configured + 1))
           done
           if [ -z "$TEXLIVE_CI_SSH_KEY$TEXLIVE_CI_ACCESS_CLIENT_ID$TEXLIVE_CI_ACCESS_CLIENT_SECRET" ]; then
             exit 0
           fi
-          [ "$configured" -eq 5 ] || { echo 'Partial TeX Live CI mirror configuration' >&2; exit 64; }
+          [ "$configured" -eq 6 ] || { echo 'Partial TeX Live CI mirror configuration' >&2; exit 64; }
           sh deploy/scripts/install-cloudflared-client.sh
 
       - name: Reserve exact CI mirror snapshot when credentials are available
@@ -126,14 +129,14 @@ jobs:
         run: |
           echo 'repository=${{ steps.snapshot.outputs.repository }}' >> "$GITHUB_OUTPUT"
           configured=0
-          for value in "$TEXLIVE_CI_HOST" "$TEXLIVE_CI_SSH_KEY" "$TEXLIVE_CI_KNOWN_HOSTS" "$TEXLIVE_CI_ACCESS_CLIENT_ID" "$TEXLIVE_CI_ACCESS_CLIENT_SECRET"; do
+          for value in "$TEXLIVE_CI_HOST" "$TEXLIVE_CI_SSH_KEY" "$TEXLIVE_CI_KNOWN_HOSTS" "$TEXLIVE_CI_ACCESS_CLIENT_ID" "$TEXLIVE_CI_ACCESS_CLIENT_SECRET" "$TEXLIVE_CI_MIRROR_HOST"; do
             [ -n "$value" ] && configured=$((configured + 1))
           done
           if [ -z "$TEXLIVE_CI_SSH_KEY$TEXLIVE_CI_ACCESS_CLIENT_ID$TEXLIVE_CI_ACCESS_CLIENT_SECRET" ]; then
             exit 0
           fi
-          [ "$configured" -eq 5 ] || { echo 'Partial TeX Live CI mirror configuration' >&2; exit 64; }
-          if [ "$configured" -eq 5 ]; then
+          [ "$configured" -eq 6 ] || { echo 'Partial TeX Live CI mirror configuration' >&2; exit 64; }
+          if [ "$configured" -eq 6 ]; then
             sh deploy/scripts/ci-texlive-mirror-lease.sh acquire \
               '${{ steps.snapshot.outputs.date }}' '${{ steps.snapshot.outputs.installer_sha512 }}' amd64
           fi
