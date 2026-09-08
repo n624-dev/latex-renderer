@@ -87,13 +87,17 @@ class MirrorTest(unittest.TestCase):
             file.write_bytes(b"content")
         checksum = mirror.sha512_file(file)
         manifest = {
+            "selection": {
+                "architectures": list(self.config.architectures),
+                "format": 1,
+            },
             "files": [
                 {
                     "path": "archive/a.tar.xz",
                     "sha512": checksum,
                     "size": file.stat().st_size,
                 }
-            ]
+            ],
         }
         mirror.atomic_json(path / ".snapshot.json", manifest)
         state = mirror.load_state(self.config)
@@ -398,20 +402,73 @@ class MirrorTest(unittest.TestCase):
             (snapshot / "tlnet" / "tlpkg" / "texlive.tlpdb").read_text(),
         )
         manifest = json.loads((snapshot / ".snapshot.json").read_text())
-        self.assertEqual(manifest["selection"]["format"], 2)
+        self.assertEqual(manifest["selection"]["format"], 3)
         self.assertIn(
             "tlpkg/texlive.tlpdb", {item["path"] for item in manifest["files"]}
         )
+        self.assertEqual(
+            manifest["aliases"],
+            [
+                {
+                    "path": "archive/payload.tar.xz",
+                    "target": "archive/payload.r1.tar.xz",
+                }
+            ],
+        )
+        alias = snapshot / "tlnet/archive/payload.tar.xz"
+        target = snapshot / "tlnet/archive/payload.r1.tar.xz"
+        self.assertFalse(alias.is_symlink())
+        self.assertEqual(alias.stat().st_ino, target.stat().st_ino)
+        self.assertEqual(alias.read_bytes(), b"payload")
+
+    def test_snapshot_alias_must_be_an_internal_hardlink(self):
+        def download(_url, target, expected_size=None):
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(b"payload")
+
+        with (
+            mock.patch.object(
+                mirror, "verified_metadata", side_effect=self.fake_metadata
+            ),
+            mock.patch.object(mirror, "curl_download", side_effect=download),
+        ):
+            result = mirror.sync(
+                self.config,
+                "2026-09-07",
+                dt.datetime(2026, 9, 7, tzinfo=dt.timezone.utc),
+            )
+        snapshot = self.root / "snapshots" / result["snapshotId"]
+        manifest = json.loads((snapshot / ".snapshot.json").read_text())
+        alias = snapshot / "tlnet/archive/payload.tar.xz"
+        outside = Path(self.temp.name) / "outside-archive"
+        outside.write_bytes(b"payload")
+        alias.parent.chmod(0o755)
+        alias.unlink()
+        alias.symlink_to(outside)
+        with self.assertRaises(mirror.StateError):
+            mirror.validate_snapshot_payload(snapshot, manifest)
 
     def test_delete_crash_state_is_reconciled(self):
         old, _ = self.publish(1, hours_ago=100)
         self.publish(2)
+        old_path = self.root / "snapshots" / old
+        old_path.chmod(0o700)
         state = mirror.load_state(self.config)
         state["snapshots"][old]["status"] = "deleting"
         mirror.save_state(self.config, state)
+        mirror.reconcile_state(self.config, mirror.load_state(self.config))
+        self.assertEqual(old_path.stat().st_mode & 0o777, 0o555)
         result = mirror.gc(self.config, dt.datetime(2026, 9, 7, tzinfo=dt.timezone.utc))
         self.assertIn(old, result["deletedSnapshots"])
         self.assertNotIn(old, mirror.load_state(self.config)["snapshots"])
+
+    def test_gc_moves_a_readonly_snapshot_root_to_trash(self):
+        old, _ = self.publish(1, hours_ago=100)
+        self.publish(2)
+        (self.root / "snapshots" / old).chmod(0o555)
+        result = mirror.gc(self.config, dt.datetime(2026, 9, 7, tzinfo=dt.timezone.utc))
+        self.assertIn(old, result["deletedSnapshots"])
+        self.assertFalse((self.root / "snapshots" / old).exists())
 
     def test_enospc_never_publishes_incomplete_snapshot(self):
         latest, _ = self.publish(1)

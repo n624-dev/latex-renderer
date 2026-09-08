@@ -47,6 +47,12 @@ remain absent from Base and are used only by the temporary validation Runtime.
 containers remain omitted because the profile explicitly disables them. Package
 archives with no signed size or checksum abort the sync.
 
+TeX Live's signed database identifies revisioned package archives, while
+`install-tl` requests stable, unversioned archive names. Mirror format v3 records
+those aliases in the completion manifest and creates them as same-directory
+hardlinks to the verified revisioned files. This neither duplicates file data nor
+introduces symlinks that could escape the managed snapshot.
+
 The snapshot ID contains the TeX Live year and prefixes of the database,
 installer and selection hashes plus the mirror format version. Selection hashes
 cover architectures, profile hash and the complete package set. Re-running the
