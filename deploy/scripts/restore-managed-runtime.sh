@@ -72,7 +72,7 @@ if ! rootless_docker image inspect "$base_image" >/dev/null 2>&1; then
   exit 78
 fi
 
-runtime_files="texmf.cnf latexmkrc compile.sh svg-wrapper.tex export-svg.pl"
+runtime_files="texmf.cnf latexmkrc compile.sh svg-wrapper.tex export-svg.pl install-language-packages.sh"
 current_fingerprint=$(
   for file in $runtime_files; do
     [ -f "$repo_root/renderer/$file" ] || {
@@ -231,7 +231,9 @@ fi
 
 inventory_tmp=$(mktemp -d "$tmp_root/managed-environment.XXXXXX")
 trap 'rm -rf -- "$inventory_tmp"' EXIT HUP INT TERM
-rootless_docker run --rm --network none --read-only --entrypoint /bin/sh "$runtime_image" -c '
+rootless_docker run --rm --network none --read-only \
+  --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m \
+  --entrypoint /bin/sh "$runtime_image" -c '
   { tlmgr info --only-installed --data name 2>/dev/null | sed "s/^name: //" | sed "/^$/d";
     find /opt/texlive/2026/texmf-dist/tex -type f \
       \( -name "*.sty" -o -name "*.cls" -o -name "*.tex" -o -name "*.lua" -o -name "*.bst" \) \

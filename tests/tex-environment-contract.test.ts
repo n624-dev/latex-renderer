@@ -51,6 +51,13 @@ describe("managed TeX Live image pipeline", () => {
       "by-fingerprint/${TEXLIVE_SIGNING_FINGERPRINT}",
     );
     expect(baseDockerfile).toContain("gpgv --keyring /tmp/texlive.gpg");
+    expect(baseDockerfile).toContain("libwww-perl");
+    expect(baseDockerfile).toContain("liblwp-protocol-https-perl");
+    expect(baseDockerfile).toContain(
+      "perl -MLWP::UserAgent -MLWP::Protocol::https -e 1",
+    );
+    expect(baseDockerfile).toContain("--persistent-downloads");
+    expect(baseDockerfile).toContain("TEXLIVE_INSTALL_SECONDS=");
     expect(baseDockerfile).not.toContain("COPY texmf.cnf latexmkrc compile.sh");
     expect(baseSmoke).toContain("test ! -e /opt/renderer/compile.sh");
     expect(baseSmoke).toContain("kpsewhich pgfplots.sty");
@@ -92,6 +99,9 @@ describe("managed TeX Live image pipeline", () => {
       "TEXLIVE_DOWNLOAD_REPOSITORY: ${{ steps.mirror.outputs.repository }}",
     );
     expect(workflow).toContain(
+      "TEXLIVE_CI_MIRROR_HOST: ${{ secrets.TEXLIVE_CI_MIRROR_HOST }}",
+    );
+    expect(workflow).toContain(
       "--secret id=texlive_download_repository,env=TEXLIVE_DOWNLOAD_REPOSITORY",
     );
     expect(baseDockerfile).toContain(
@@ -104,6 +114,9 @@ describe("managed TeX Live image pipeline", () => {
     const validation = read("deploy/scripts/ci-validate-texlive-base.sh");
     expect(validation).toContain('docker history --no-trunc "$base"');
     expect(validation).toContain("CI mirror URL remains in image filesystem");
+    expect(validation).toContain(
+      "--tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m",
+    );
   });
 
   it("pins every derived runtime to a clean base and validates languages in that exact snapshot", () => {
@@ -177,6 +190,9 @@ describe("managed TeX Live image pipeline", () => {
     expect(manager).not.toContain("installed.length !== languages.length");
     expect(restore).toContain("effectiveLanguageCollections");
     expect(restore).toContain("effective_languages=$(rootless_docker run");
+    expect(restore).toContain(
+      "--tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m",
+    );
     expect(manager).toContain(
       "desired: {\n      ...previousState.desired,\n      selector,\n      languages,\n      autoUpdate,",
     );

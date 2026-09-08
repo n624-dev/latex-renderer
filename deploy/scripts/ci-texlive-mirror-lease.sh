@@ -20,12 +20,20 @@ run_lease_ssh() {
   known_hosts=$2
   shift
   shift
-  ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
-    -o ConnectTimeout=30 -o ConnectionAttempts=3 \
-    -o StrictHostKeyChecking=yes \
-    -o UserKnownHostsFile="$known_hosts" \
-    -o "ProxyCommand=cloudflared access ssh --hostname %h" \
-    "${TEXLIVE_CI_USER:-texlive-ci-lease}@$TEXLIVE_CI_HOST" "$@"
+  attempt=1
+  while :; do
+    if ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+      -o ConnectTimeout=30 -o ConnectionAttempts=1 \
+      -o StrictHostKeyChecking=yes \
+      -o UserKnownHostsFile="$known_hosts" \
+      -o "ProxyCommand=cloudflared access ssh --hostname %h" \
+      "${TEXLIVE_CI_USER:-texlive-ci-lease}@$TEXLIVE_CI_HOST" "$@"; then
+      return 0
+    fi
+    [ "$attempt" -lt 3 ] || return 255
+    attempt=$((attempt + 1))
+    sleep 5
+  done
 }
 
 case "$operation" in
@@ -52,7 +60,8 @@ case "$operation" in
       const id=/^tl20\d{2}-[0-9a-f]{16}-[0-9a-f]{16}-[0-9a-f]{16}-v[1-9][0-9]*$/;
       if(!id.test(r.snapshotId)||!/^[0-9a-f]{64}$/.test(r.token)) throw new Error("invalid reservation response");
       const url=new URL(r.url);
-      if(url.protocol!=="https:"||url.username||url.password||url.search||url.hash||url.pathname!==`/snapshots/${r.snapshotId}/tlnet`||r.url!==url.origin+url.pathname) throw new Error("invalid reservation URL");
+      const expectedHost=process.env.TEXLIVE_CI_MIRROR_HOST;
+      if(!expectedHost||url.hostname!==expectedHost||url.port||url.protocol!=="https:"||url.username||url.password||url.search||url.hash||url.pathname!==`/snapshots/${r.snapshotId}/tlnet`||r.url!==url.origin+url.pathname) throw new Error("invalid reservation URL");
       fs.appendFileSync(process.env.GITHUB_OUTPUT,`repository=${r.url}\ntoken=${r.token}\nowner=${process.argv[4]}\nsnapshot_id=${r.snapshotId}\n`);
     ' "$response" "$date_value" "$upstream_installer" "$owner"
     ;;

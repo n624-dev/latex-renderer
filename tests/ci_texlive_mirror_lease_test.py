@@ -17,18 +17,29 @@ class LeaseHelperTests(unittest.TestCase):
             bin_dir = root / "bin"
             bin_dir.mkdir()
             capture = root / "ssh.json"
+            attempts = root / "ssh-attempts"
             output = root / "github-output"
             (bin_dir / "cloudflared").write_text(
                 "#!/bin/sh\nexit 0\n", encoding="utf-8"
             )
+            (bin_dir / "sleep").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
             (bin_dir / "ssh").write_text(
                 """#!/bin/sh
+attempt=0
+[ ! -f "$SSH_ATTEMPTS" ] || attempt=$(cat "$SSH_ATTEMPTS")
+attempt=$((attempt + 1))
+printf '%s\n' "$attempt" > "$SSH_ATTEMPTS"
+[ "$attempt" -ge 3 ] || exit 255
 python3 -c 'import json,os,sys; json.dump({"argv":sys.argv[1:],"id":os.environ.get("TUNNEL_SERVICE_TOKEN_ID"),"secret":os.environ.get("TUNNEL_SERVICE_TOKEN_SECRET")},open(os.environ["SSH_CAPTURE"],"w"))' "$@"
 printf '%s\n' '{"canonicalDate":"2026-09-08","installerSha512":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","url":"https://texlive-ci.example.invalid/snapshots/tl2026-aaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-cccccccccccccccc-v2/tlnet","token":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","snapshotId":"tl2026-aaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-cccccccccccccccc-v2"}'
 """,
                 encoding="utf-8",
             )
-            for executable in (bin_dir / "cloudflared", bin_dir / "ssh"):
+            for executable in (
+                bin_dir / "cloudflared",
+                bin_dir / "sleep",
+                bin_dir / "ssh",
+            ):
                 executable.chmod(0o755)
 
             access_id = "id-for-test.access"
@@ -47,7 +58,9 @@ printf '%s\n' '{"canonicalDate":"2026-09-08","installerSha512":"aaaaaaaaaaaaaaaa
                 "TEXLIVE_CI_KNOWN_HOSTS": "texlive-ci-lease.example.invalid ssh-ed25519 fake",
                 "TEXLIVE_CI_ACCESS_CLIENT_ID": access_id,
                 "TEXLIVE_CI_ACCESS_CLIENT_SECRET": access_secret,
+                "TEXLIVE_CI_MIRROR_HOST": "texlive-ci.example.invalid",
                 "SSH_CAPTURE": str(capture),
+                "SSH_ATTEMPTS": str(attempts),
             }
             subprocess.run(
                 [
@@ -65,6 +78,7 @@ printf '%s\n' '{"canonicalDate":"2026-09-08","installerSha512":"aaaaaaaaaaaaaaaa
             )
 
             invocation = json.loads(capture.read_text(encoding="utf-8"))
+            self.assertEqual(attempts.read_text(encoding="utf-8").strip(), "3")
             self.assertEqual(invocation["id"], access_id)
             self.assertEqual(invocation["secret"], access_secret)
             arguments = invocation["argv"]
@@ -80,6 +94,27 @@ printf '%s\n' '{"canonicalDate":"2026-09-08","installerSha512":"aaaaaaaaaaaaaaaa
                 "snapshot_id=tl2026-aaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-cccccccccccccccc-v2",
                 github_output,
             )
+
+            mismatched_environment = {
+                **environment,
+                "GITHUB_OUTPUT": str(root / "mismatched-output"),
+                "TEXLIVE_CI_MIRROR_HOST": "other-mirror.example.invalid",
+            }
+            mismatch = subprocess.run(
+                [
+                    "sh",
+                    str(HELPER),
+                    "acquire",
+                    "2026-09-08",
+                    "a" * 128,
+                    "amd64",
+                ],
+                env=mismatched_environment,
+                text=True,
+                capture_output=True,
+            )
+            self.assertNotEqual(mismatch.returncode, 0)
+            self.assertIn("invalid reservation URL", mismatch.stderr)
 
     def test_missing_access_credentials_fail_before_ssh(self):
         with tempfile.TemporaryDirectory() as temporary:

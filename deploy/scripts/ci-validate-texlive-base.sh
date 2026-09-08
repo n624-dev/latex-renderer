@@ -31,6 +31,7 @@ if [ "$repository" != "$canonical_repository" ]; then
     '
 fi
 docker run --rm --network none --read-only \
+  --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m \
   --env "EXPECTED_TEXLIVE_REPOSITORY=$canonical_repository" \
   --entrypoint /bin/sh "$base" -c '
     grep -F "\"texliveRepository\":\"${EXPECTED_TEXLIVE_REPOSITORY}\"" /opt/renderer/build-provenance.json >/dev/null

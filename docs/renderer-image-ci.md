@@ -18,6 +18,109 @@ PR CI does not log in to GHCR or publish images. Daily publishes only Base after
 the entire sequence succeeds. No language Runtime is published. Installer
 signature/checksum verification in the Base Dockerfile remains mandatory.
 
+Base installation uses `--no-continue`: a failed package must fail the build,
+even if the upstream installer considers it inessential. Language installation
+also checks required collections and installed-package dependencies directly
+from TLPDB, plus `tlmgr check files`, before generating
+formats/caches. An incomplete installation is retried once with collection
+reinstallation, preserving checksum verification; a second failure stops the
+build. The language-install helper participates in Runtime identity and recovery.
+Standalone fonts in the language-neutral Base are allowed: unlike the broad
+`tlmgr check depends` audit, this does not require every package to belong to an
+installed collection. Missing required dependencies still fail the check.
+With docfiles disabled, an empty `texmf-dist/doc/man` directory keeps the shipped
+`bin/<arch>/man` symlink valid. No documentation payload is downloaded, and the
+normal missing-file check remains enabled.
+
+The cold Base build explicitly installs the Perl LWP HTTPS modules used by
+`install-tl` and enables its standard persistent downloader. This keeps the
+installer's normal, serial package installation order while reusing the HTTPS
+connection instead of starting a separate `curl` process for every archive.
+The Docker build log emits `TEXLIVE_INSTALL_SECONDS` (including the installer's
+format generation) and `TEXLIVE_FONT_CACHE_SECONDS` for the subsequent font cache
+step so hosted-run regressions can be compared without exposing the private
+download repository. Setting
+`TL_DOWNLOAD_PROGRAM` would bypass this LWP path and is intentionally avoided.
+
+Initial diagnostic evidence (2026-09-08): hosted run `34220055487` reached
+package 2574/4557 after 20m55s of installation before cancellation. A local
+LWP-enabled cold build reached package 3740/4555 after 9m41s before cancellation.
+These are incomplete runs on different machines and slightly different generated
+profiles, not a controlled speedup measurement or total build times. Compare
+completed hosted runs before attributing an improvement to LWP.
+
+The completed LWP-only hosted run `34222463572` took 29m06s for installation
+(packages finished at 26m41s), 11s for font cache, 32m48s for the Base build,
+4m55s for Base/runtime validation, and 41m25s for the entire job. This is the
+baseline for bounded prefetch. It passed the PDF/PNG/SVG tests, vulnerability
+scan, SBOM generation, and lease release. GHCR publication was not part of this
+PR job. CPU time and peak temporary disk were not sampled in that run.
+Subsequent log auditing found missing `collection-texworks`/`texworks` archives
+even in this nominally successful baseline. The checked-in mirror profile now
+includes that collection. Its `.ARCH` dependency is conditional, as in the
+standard installer: Windows-only binaries do not imply a Linux binary exists.
+The stricter failure policy above prevents this incomplete Base from recurring.
+
+The completed 16-object prefetch run `34239058615` took 13m21s for installation,
+10s for font cache, 16m47s for the Base build, 4m39s for validation, and 25m34s
+for the job. Main package-phase download wait was 156.034s, package wall time
+664.094s and CPU time 533.160s; peak reserved compressed buffer was 107663828
+bytes. All validation, security scan, SBOM and lease release passed. This is
+an observed comparison, not a controlled same-snapshot benchmark, and does not
+yet measure the subsequent 20-object automatic-refill change.
+
+### Bounded archive prefetch
+
+`TeXLivePrefetch.pm` is mounted only during the Base install RUN. It wraps the
+standard installer's resolved `install_packages` list and `download_file`
+entry point; it does not edit upstream Perl sources or metadata. The standard
+installer continues installing one package at a time. Four persistent LWP
+HTTPS workers fetch later archives while the installer verifies and extracts
+the current one. Workers verify the exact size and SHA-512 from the already
+verified TLPDB; standard `unpack` then checks them again before extraction.
+Database, installer, signatures, and unexpected URLs use the original path.
+
+The default compressed lookahead budget is 256MiB, with at most 20 objects
+ahead and four concurrent transfers (not twenty simultaneous transfers).
+A separate coordinator refills idle workers as downloads finish, including
+while the installer is extracting. It pauses below twenty objects whenever the
+next archive would exceed the byte budget, and resumes after consumption.
+Reservations count incomplete downloads at their full expected size.
+Each response is capped while streaming, retries are limited to two, and each
+attempt has a 120s deadline. Unknown sizes, objects larger than the budget,
+non-HTTPS repositories, and profiles requesting sources/docs use the standard
+downloader. Prefetch rejects redirects to keep each request at its fixed
+snapshot origin; the standard path remains available for non-prefetched files.
+Workers prioritize the currently requested object before scheduling later
+ones. Workers and their private temporary directory are removed at the end of
+each install phase, including normal failures. Abrupt parent termination closes
+the coordinator control socket; it reaps workers on EOF. An active demanded
+download can delay EOF handling, bounded by the attempt deadlines. A hard kill
+can leave temporary files until the build's temporary filesystem is discarded;
+it does not create a persistent cache.
+
+This budget covers prefetched compressed archives, not the installed tree,
+the current archive handed to standard unpack, its expanded tar, or Docker
+export state. Existing hosted-run disk guards remain required. Nothing is
+cached in Actions or permanently on the VPS. Base/runtime validation and
+publication policy are unchanged.
+
+Use `--build-arg TEXLIVE_PREFETCH_WORKERS=0` for the LWP-only baseline or a value
+from 1 to 8 for comparison. The module also validates `TEXLIVE_PREFETCH_BYTES`
+(1..1073741824) and `TEXLIVE_PREFETCH_WINDOW` (1..64) when run directly. The
+`TEXLIVE_PREFETCH` log lines report time blocked on prefetched downloads,
+verified bytes, peak reserved buffer bytes, package-phase wall time, and summed
+process/child CPU seconds. Download waits exclude original-downloader fallbacks;
+CPU seconds may exceed wall time because workers overlap. A speed comparison
+must use the same snapshot/profile and include complete hosted validation.
+
+Run `python3 -m unittest -v tests/texlive_prefetch_test.py` with Perl LWP HTTPS
+modules and OpenSSL installed. Tests use a small local HTTPS server with a
+temporary CA certificate; they do not download TeX Live or require root.
+They also simulate extraction pauses to check autonomous refill, the twenty
+object ceiling, byte-budget pauses below that ceiling and subsequent resumption,
+as well as worker/coordinator failures and skipped/backward package requests.
+
 ## Failed builds, retries and cache
 
 A cached layer or existing local tag is never evidence of passing validation.

@@ -28,6 +28,7 @@ collection-pictures 1
 collection-plaingeneric 1
 collection-pstricks 1
 collection-publishers 1
+collection-texworks 1
 collection-xetex 1
 instopt_adjustpath 0
 instopt_adjustrepo 1

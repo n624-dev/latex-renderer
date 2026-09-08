@@ -36,7 +36,7 @@ PACKAGE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9+_.-]*$")
 REVISION_RE = re.compile(r"^(?:0|[1-9][0-9]{0,15})$")
 ARCHES = {"amd64": "x86_64-linux", "arm64": "aarch64-linux"}
 STATE_SCHEMA = 1
-MIRROR_FORMAT = 2
+MIRROR_FORMAT = 3
 
 
 class MirrorError(RuntimeError):
@@ -328,6 +328,74 @@ def validate_manifest_item(item: Any) -> tuple[str, str, int]:
     if isinstance(size, bool) or not isinstance(size, int) or size < 0:
         raise StateError(f"snapshot manifest size is invalid: {relative}")
     return relative, checksum, size
+
+
+def validate_manifest_alias(item: Any, file_paths: set[str]) -> tuple[str, str]:
+    if not isinstance(item, dict):
+        raise StateError("snapshot manifest contains a non-object alias")
+    relative = safe_relative_path(item.get("path"))
+    target = safe_relative_path(item.get("target"))
+    if relative in file_paths or target not in file_paths:
+        raise StateError(f"snapshot manifest alias is invalid: {relative}")
+    if PurePosixPath(relative).parent != PurePosixPath(target).parent:
+        raise StateError(f"snapshot manifest alias crosses directories: {relative}")
+    return relative, target
+
+
+def validate_snapshot_aliases(
+    snapshot: Path, manifest: dict[str, Any], file_paths: set[str]
+) -> None:
+    selection = manifest.get("selection", {})
+    format_version = selection.get("format", 0) if isinstance(selection, dict) else 0
+    if isinstance(format_version, bool) or not isinstance(format_version, int):
+        raise StateError("snapshot manifest format is invalid")
+    if (
+        isinstance(selection, dict)
+        and format_version >= 3
+        and "aliases" not in manifest
+    ):
+        raise StateError("snapshot manifest aliases are missing")
+    aliases = manifest.get("aliases", [])
+    if not isinstance(aliases, list):
+        raise StateError("snapshot manifest aliases are invalid")
+    alias_paths: set[str] = set()
+    for item in aliases:
+        relative, target_relative = validate_manifest_alias(item, file_paths)
+        if relative in alias_paths:
+            raise StateError(f"duplicate snapshot manifest alias: {relative}")
+        alias_paths.add(relative)
+        alias = snapshot / "tlnet" / relative
+        target = snapshot / "tlnet" / target_relative
+        if (
+            not alias.is_file()
+            or alias.is_symlink()
+            or not target.is_file()
+            or target.is_symlink()
+            or alias.stat().st_dev != target.stat().st_dev
+            or alias.stat().st_ino != target.stat().st_ino
+        ):
+            raise StateError(f"snapshot alias verification failed: {relative}")
+
+
+def validate_snapshot_payload(snapshot: Path, manifest: dict[str, Any]) -> None:
+    items = manifest.get("files")
+    if not isinstance(items, list):
+        raise StateError("snapshot manifest files are invalid")
+    file_paths: set[str] = set()
+    for item in items:
+        relative, checksum, size = validate_manifest_item(item)
+        if relative in file_paths:
+            raise StateError(f"duplicate snapshot manifest file: {relative}")
+        file_paths.add(relative)
+        target = snapshot / "tlnet" / relative
+        if (
+            not target.is_file()
+            or target.is_symlink()
+            or target.stat().st_size != size
+            or sha512_file(target) != checksum
+        ):
+            raise StateError(f"snapshot file verification failed: {relative}")
+    validate_snapshot_aliases(snapshot, manifest, file_paths)
 
 
 def validate_snapshot_record(snapshot_id: str, record: Any) -> None:
@@ -687,6 +755,25 @@ def reserve(
         path = safe_child(config.root / "snapshots", snapshot_id)
         if not entry or entry.get("status") != "published" or not path.is_dir():
             raise MirrorError("requested snapshot is not reservable")
+        manifest = read_json(path / ".snapshot.json")
+        selection = manifest.get("selection")
+        architectures = (
+            selection.get("architectures") if isinstance(selection, dict) else None
+        )
+        if (
+            not isinstance(selection, dict)
+            or not isinstance(architectures, list)
+            or not all(isinstance(value, str) for value in architectures)
+            or architecture not in architectures
+        ):
+            raise MirrorError("requested snapshot does not contain the architecture")
+        items = manifest.get("files")
+        if not isinstance(items, list):
+            raise StateError("snapshot manifest files are invalid")
+        file_paths = {validate_manifest_item(item)[0] for item in items}
+        if len(file_paths) != len(items):
+            raise StateError("snapshot manifest contains duplicate files")
+        validate_snapshot_aliases(path, manifest, file_paths)
         reservations = active_reservations(config, now)
         token = reservation_token(owner, architecture, snapshot_id)
         target = config.root / "state" / "reservations" / f"{token}.json"
@@ -838,9 +925,15 @@ def dependency_closure(
     while queue:
         name, inherited_arch = queue.pop()
         if name.endswith(".ARCH"):
-            for arch in arch_names:
-                queue.append((name[:-5] + f".{arch}", arch))
+            # Match TLPDB::expand_dependencies: .ARCH is conditional. Some
+            # packages (e.g. texworks) only ship a Windows binary.
+            for arch in ([inherited_arch] if inherited_arch else arch_names):
+                candidate = name[:-5] + f".{arch}"
+                if candidate in packages:
+                    queue.append((candidate, arch))
             continue
+        if name.endswith(".windows"):
+            continue  # Neither supported mirror architecture is Windows.
         if name.startswith("setting_available_architectures:") or name.startswith(
             "setting_available_architectures/"
         ):
@@ -857,16 +950,7 @@ def dependency_closure(
             raise VerificationError(f"dependency is absent from signed tlpdb: {name}")
         result.add(name)
         for dependency in package.depends:
-            if dependency.endswith(".ARCH"):
-                if inherited_arch:
-                    queue.append(
-                        (dependency[:-5] + f".{inherited_arch}", inherited_arch)
-                    )
-                else:
-                    for arch in arch_names:
-                        queue.append((dependency[:-5] + f".{arch}", arch))
-            else:
-                queue.append((dependency, inherited_arch))
+            queue.append((dependency, inherited_arch))
     return result
 
 
@@ -894,6 +978,29 @@ def package_files(
             }
         )
     return result
+
+
+def package_aliases(
+    packages: dict[str, Package], selected: set[str], files: list[dict[str, Any]]
+) -> list[dict[str, str]]:
+    file_paths = {item["path"] for item in files}
+    aliases: list[dict[str, str]] = []
+    alias_paths: set[str] = set()
+    for name in sorted(selected):
+        package = packages[name]
+        if package.checksum is None and package.size is None:
+            continue
+        target = safe_relative_path(f"archive/{name}.r{package.revision}.tar.xz")
+        relative = safe_relative_path(f"archive/{name}.tar.xz")
+        if (
+            target not in file_paths
+            or relative in file_paths
+            or relative in alias_paths
+        ):
+            raise VerificationError(f"invalid package archive alias: {name}")
+        aliases.append({"path": relative, "target": target})
+        alias_paths.add(relative)
+    return aliases
 
 
 def curl_download(
@@ -1193,23 +1300,12 @@ def reconcile_state(config: Config, state: dict[str, Any]) -> None:
                 raise StateError(
                     f"orphan snapshot has no valid completion manifest: {snapshot_id}"
                 )
-            items = manifest.get("files")
-            if not isinstance(items, list):
+            try:
+                validate_snapshot_payload(path, manifest)
+            except StateError as error:
                 raise StateError(
-                    f"orphan snapshot manifest files are invalid: {snapshot_id}"
-                )
-            for item in items:
-                relative, checksum, size = validate_manifest_item(item)
-                target = path / "tlnet" / relative
-                if (
-                    not target.is_file()
-                    or target.is_symlink()
-                    or target.stat().st_size != size
-                    or sha512_file(target) != checksum
-                ):
-                    raise StateError(
-                        f"orphan snapshot verification failed: {snapshot_id}"
-                    )
+                    f"orphan snapshot verification failed: {snapshot_id}"
+                ) from error
             recovered_record = {
                 "year": manifest["year"],
                 "publishedAt": manifest["publishedAt"],
@@ -1228,6 +1324,7 @@ def reconcile_state(config: Config, state: dict[str, Any]) -> None:
         elif record.get("status") == "deleting" and snapshot_id in disk_ids:
             # Crash before the snapshots->trash rename: restore visibility and
             # let a fresh locked GC decision choose it again.
+            (snapshot_root / snapshot_id).chmod(0o555)
             record["status"] = "published"
         elif record.get("status") == "published" and snapshot_id not in disk_ids:
             raise StateError(f"published snapshot is missing: {snapshot_id}")
@@ -1389,6 +1486,11 @@ def gc(
             if deleting_latest:
                 state["latest"] = None
             save_state(config, state)
+            # Moving a directory between parents updates its '..' entry and
+            # therefore requires write permission on the directory itself.
+            # It is already non-reservable under the management lock; make only
+            # the snapshot root private/writable, never its immutable contents.
+            source.chmod(0o700)
             os.replace(source, destination)
             if deleting_latest:
                 (config.root / "latest.json").unlink(missing_ok=True)
@@ -1508,6 +1610,7 @@ def sync(
             )
             selected = dependency_closure(packages, roots, config.architectures)
             files = package_files(packages, selected)
+            aliases = package_aliases(packages, selected, files)
             # Metadata files are part of the manifest and are verified again below.
             for relative in [
                 "install-tl-unx.tar.gz",
@@ -1581,7 +1684,7 @@ def sync(
                 config.metadata_headroom,
                 config.temp_multiplier_milli,
             )
-            if not capacity_allows(config, metrics, peak, len(files)):
+            if not capacity_allows(config, metrics, peak, len(files) + len(aliases)):
                 gc(config, now, peak - metrics["managedBytes"])
                 metrics = filesystem_metrics(config.root)
                 with locked(config.root / "state" / "locks" / "management.lock"):
@@ -1594,7 +1697,9 @@ def sync(
                     config.metadata_headroom,
                     config.temp_multiplier_milli,
                 )
-                if not capacity_allows(config, metrics, peak, len(files)):
+                if not capacity_allows(
+                    config, metrics, peak, len(files) + len(aliases)
+                ):
                     raise CapacityBlocked(
                         f"estimated peak {peak} exceeds safe capacity"
                     )
@@ -1621,6 +1726,24 @@ def sync(
                     raise VerificationError(
                         f"final verification failed: {item['path']}"
                     )
+            # install-tl requests stable archive names while the signed tlpdb
+            # identifies revisioned objects. Hardlink aliases preserve both
+            # names without another copy and cannot escape the snapshot tree.
+            file_paths = {item["path"] for item in files}
+            for item in aliases:
+                relative, target_relative = validate_manifest_alias(item, file_paths)
+                target = staging / "tlnet" / target_relative
+                alias = staging / "tlnet" / relative
+                if target.stat().st_nlink == 1:
+                    target.chmod(0o444)
+                alias.parent.mkdir(parents=True, exist_ok=True)
+                os.link(target, alias)
+                if (
+                    alias.is_symlink()
+                    or alias.stat().st_dev != target.stat().st_dev
+                    or alias.stat().st_ino != target.stat().st_ino
+                ):
+                    raise VerificationError(f"alias verification failed: {relative}")
             # Re-read actual allocation and OS free space immediately before
             # publication; estimates are admission controls, not proof.
             storage_guard_ready(config)
@@ -1634,6 +1757,7 @@ def sync(
                 "installerSha512": installer_hash,
                 "selection": selection,
                 "files": sorted(files, key=lambda item: item["path"]),
+                "aliases": sorted(aliases, key=lambda item: item["path"]),
                 "publishedAt": iso(now),
             }
             atomic_json(staging / ".snapshot.json", manifest, 0o444)
