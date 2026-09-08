@@ -1,0 +1,20 @@
+#!/bin/sh
+set -eu
+set -f
+cli=/usr/local/libexec/texlive-mirror
+config=/etc/texlive-ci/config.json
+set -- ${SSH_ORIGINAL_COMMAND:-}
+operation=${1:-}
+case "$operation" in
+  reserve)
+    [ "$#" -eq 4 ] || exit 64
+    case "$2:$3:$4" in *[!0-9A-Za-z_.:@/-]*) exit 64;; esac
+    exec "$cli" --config "$config" reserve --canonical-date "$2" --owner "$3" --architecture "$4"
+    ;;
+  release)
+    [ "$#" -eq 3 ] || exit 64
+    case "$2:$3" in *[!0-9a-fA-Za-z_.:@/-]*) exit 64;; esac
+    exec "$cli" --config "$config" release --token "$2" --owner "$3"
+    ;;
+  *) exit 64 ;;
+esac

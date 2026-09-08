@@ -1,0 +1,22 @@
+[Unit]
+Description=Garbage collect the bounded TeX Live CI mirror
+RequiresMountsFor=/srv/texlive-ci
+
+[Service]
+Type=oneshot
+User=texlive-ci
+Group=texlive-ci
+ExecStart=/usr/local/libexec/texlive-mirror --config /etc/texlive-ci/config.json gc
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/texlive-ci
+Environment=TMPDIR=/srv/texlive-ci/staging
+InaccessiblePaths=/tmp /var/tmp
+TimeoutStartSec=10min
+StandardOutput=journal
+StandardError=journal
+LogNamespace=texlive-ci
+LogRateLimitIntervalSec=6h
+LogRateLimitBurst=200

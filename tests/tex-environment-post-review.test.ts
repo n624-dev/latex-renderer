@@ -131,6 +131,7 @@ describe("post-review TeX environment regressions", () => {
       expect(dockerfile).toContain(
         "sed -i 's|http://snapshot.debian.org/|https://snapshot.debian.org/|g'",
       );
+      expect(dockerfile).toContain("Acquire::Retries=5");
       expect(dockerfile).toContain("--connect-timeout 15");
       expect(dockerfile).toContain("--max-time 600");
     }

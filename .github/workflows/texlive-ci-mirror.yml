@@ -1,0 +1,63 @@
+name: texlive-ci-mirror
+
+on:
+  pull_request:
+    paths:
+      - "deploy/texlive-mirror/**"
+      - "deploy/scripts/ci-texlive-mirror-lease.sh"
+      - "deploy/scripts/install-cloudflared-client.sh"
+      - "deploy/scripts/cloudflared-update.sh"
+      - "deploy/apt/cloudflared.list"
+      - "deploy/systemd/texlive-ci-*"
+      - "deploy/systemd/cloudflared-update.*"
+      - "deploy/systemd/journald@texlive-ci.conf.d/**"
+      - "deploy/nginx/texlive-ci-mirror.conf"
+      - "deploy/logrotate/texlive-ci-mirror"
+      - "tests/texlive_mirror_test.py"
+      - "tests/ci_texlive_mirror_lease_test.py"
+      - "docs/texlive-ci-mirror.md"
+      - ".github/workflows/texlive-ci-mirror.yml"
+  push:
+    branches: [main]
+    paths:
+      - "deploy/texlive-mirror/**"
+      - "deploy/scripts/ci-texlive-mirror-lease.sh"
+      - "deploy/scripts/install-cloudflared-client.sh"
+      - "deploy/scripts/cloudflared-update.sh"
+      - "deploy/apt/cloudflared.list"
+      - "deploy/systemd/texlive-ci-*"
+      - "deploy/systemd/cloudflared-update.*"
+      - "deploy/systemd/journald@texlive-ci.conf.d/**"
+      - "deploy/nginx/texlive-ci-mirror.conf"
+      - "deploy/logrotate/texlive-ci-mirror"
+      - "tests/texlive_mirror_test.py"
+      - "tests/ci_texlive_mirror_lease_test.py"
+      - "docs/texlive-ci-mirror.md"
+      - ".github/workflows/texlive-ci-mirror.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fixture-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Compile and run bounded fixture tests
+        run: |
+          python3 -m py_compile deploy/texlive-mirror/texlive_mirror.py
+          python3 -m unittest -v \
+            tests/texlive_mirror_test.py \
+            tests/ci_texlive_mirror_lease_test.py
+      - name: Validate shell syntax
+        run: |
+          sh -n \
+            deploy/texlive-mirror/texlive-ci-storage-check \
+            deploy/texlive-mirror/texlive-ci-ssh \
+            deploy/scripts/ci-texlive-mirror-lease.sh \
+            deploy/scripts/install-cloudflared-client.sh \
+            deploy/scripts/cloudflared-update.sh

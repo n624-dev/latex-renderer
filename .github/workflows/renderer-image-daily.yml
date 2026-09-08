@@ -96,11 +96,54 @@ jobs:
         id: snapshot
         run: sh deploy/scripts/resolve-texlive-snapshot.sh "$REQUESTED_DATE"
 
+      - name: Install pinned cloudflared client when mirror credentials are available
+        env:
+          TEXLIVE_CI_HOST: ${{ secrets.TEXLIVE_CI_HOST }}
+          TEXLIVE_CI_SSH_KEY: ${{ secrets.TEXLIVE_CI_SSH_KEY }}
+          TEXLIVE_CI_KNOWN_HOSTS: ${{ secrets.TEXLIVE_CI_KNOWN_HOSTS }}
+          TEXLIVE_CI_ACCESS_CLIENT_ID: ${{ secrets.TEXLIVE_CI_ACCESS_CLIENT_ID }}
+          TEXLIVE_CI_ACCESS_CLIENT_SECRET: ${{ secrets.TEXLIVE_CI_ACCESS_CLIENT_SECRET }}
+        run: |
+          configured=0
+          for value in "$TEXLIVE_CI_HOST" "$TEXLIVE_CI_SSH_KEY" "$TEXLIVE_CI_KNOWN_HOSTS" "$TEXLIVE_CI_ACCESS_CLIENT_ID" "$TEXLIVE_CI_ACCESS_CLIENT_SECRET"; do
+            [ -n "$value" ] && configured=$((configured + 1))
+          done
+          if [ -z "$TEXLIVE_CI_SSH_KEY$TEXLIVE_CI_ACCESS_CLIENT_ID$TEXLIVE_CI_ACCESS_CLIENT_SECRET" ]; then
+            exit 0
+          fi
+          [ "$configured" -eq 5 ] || { echo 'Partial TeX Live CI mirror configuration' >&2; exit 64; }
+          sh deploy/scripts/install-cloudflared-client.sh
+
+      - name: Reserve exact CI mirror snapshot when credentials are available
+        id: mirror
+        env:
+          TEXLIVE_CI_HOST: ${{ secrets.TEXLIVE_CI_HOST }}
+          TEXLIVE_CI_USER: ${{ secrets.TEXLIVE_CI_USER }}
+          TEXLIVE_CI_SSH_KEY: ${{ secrets.TEXLIVE_CI_SSH_KEY }}
+          TEXLIVE_CI_KNOWN_HOSTS: ${{ secrets.TEXLIVE_CI_KNOWN_HOSTS }}
+          TEXLIVE_CI_ACCESS_CLIENT_ID: ${{ secrets.TEXLIVE_CI_ACCESS_CLIENT_ID }}
+          TEXLIVE_CI_ACCESS_CLIENT_SECRET: ${{ secrets.TEXLIVE_CI_ACCESS_CLIENT_SECRET }}
+        run: |
+          echo 'repository=${{ steps.snapshot.outputs.repository }}' >> "$GITHUB_OUTPUT"
+          configured=0
+          for value in "$TEXLIVE_CI_HOST" "$TEXLIVE_CI_SSH_KEY" "$TEXLIVE_CI_KNOWN_HOSTS" "$TEXLIVE_CI_ACCESS_CLIENT_ID" "$TEXLIVE_CI_ACCESS_CLIENT_SECRET"; do
+            [ -n "$value" ] && configured=$((configured + 1))
+          done
+          if [ -z "$TEXLIVE_CI_SSH_KEY$TEXLIVE_CI_ACCESS_CLIENT_ID$TEXLIVE_CI_ACCESS_CLIENT_SECRET" ]; then
+            exit 0
+          fi
+          [ "$configured" -eq 5 ] || { echo 'Partial TeX Live CI mirror configuration' >&2; exit 64; }
+          if [ "$configured" -eq 5 ]; then
+            sh deploy/scripts/ci-texlive-mirror-lease.sh acquire \
+              '${{ steps.snapshot.outputs.date }}' '${{ steps.snapshot.outputs.installer_sha512 }}' amd64
+          fi
+
       - name: Build and validate
         id: validate
         env:
           SNAPSHOT_DATE: ${{ steps.snapshot.outputs.date }}
           TEXLIVE_REPOSITORY: ${{ steps.snapshot.outputs.repository }}
+          TEXLIVE_DOWNLOAD_REPOSITORY: ${{ steps.mirror.outputs.repository }}
           TEXLIVE_INSTALLER_SHA512: ${{ steps.snapshot.outputs.installer_sha512 }}
           BUILDX_BUILDER: ${{ steps.buildx.outputs.name }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -122,7 +165,7 @@ jobs:
             base_source=reused-existing
           elif [[ "$tag_status" == absent ]]; then
             sh deploy/scripts/generate-texlive-profile.sh \
-              "$TEXLIVE_REPOSITORY" renderer/texlive.profile
+              "$TEXLIVE_DOWNLOAD_REPOSITORY" renderer/texlive.profile
             if grep -Eq '^collection-lang[^[:space:]]*[[:space:]]+1$' renderer/texlive.profile; then
               echo 'Generated base profile selects an optional language collection.' >&2
               exit 65
@@ -136,6 +179,7 @@ jobs:
               --build-arg "TEXLIVE_REPOSITORY=$TEXLIVE_REPOSITORY" \
               --build-arg "TEXLIVE_INSTALLER_SHA512=$TEXLIVE_INSTALLER_SHA512" \
               --build-arg "TEXLIVE_PROFILE_KIND=language-neutral-maximal" \
+              --secret id=texlive_download_repository,env=TEXLIVE_DOWNLOAD_REPOSITORY \
               --tag "$base" \
               renderer
             base_source=cold-built
@@ -149,7 +193,8 @@ jobs:
           [[ $(docker image inspect "$base" --format '{{index .Config.Labels "jp.n624.latex-renderer.base-kind"}}') == texlive-only-v1 ]]
           [[ $(docker image inspect "$base" --format '{{index .Config.Labels "jp.n624.latex-renderer.texlive.repository"}}') == "$TEXLIVE_REPOSITORY" ]]
           [[ $(docker image inspect "$base" --format '{{index .Config.Labels "jp.n624.latex-renderer.texlive.installer-sha512"}}') == "$TEXLIVE_INSTALLER_SHA512" ]]
-          sh deploy/scripts/ci-validate-texlive-base.sh "$base" "$TEXLIVE_REPOSITORY"
+          sh deploy/scripts/ci-validate-texlive-base.sh \
+            "$base" "$TEXLIVE_DOWNLOAD_REPOSITORY" "$TEXLIVE_REPOSITORY"
 
           docker tag "$base" "latex-renderer:validated-base-$SNAPSHOT_DATE"
 
@@ -254,3 +299,14 @@ jobs:
           docker buildx prune --builder "${BUILDX_BUILDER:-latex-renderer-ghcr}" --all --force >/dev/null 2>&1 || true
           docker buildx rm --force "${BUILDX_BUILDER:-latex-renderer-ghcr}" >/dev/null 2>&1 || true
           docker logout ghcr.io >/dev/null 2>&1 || true
+
+      - name: Release CI mirror reservation
+        if: always() && steps.mirror.outputs.token != ''
+        env:
+          TEXLIVE_CI_HOST: ${{ secrets.TEXLIVE_CI_HOST }}
+          TEXLIVE_CI_USER: ${{ secrets.TEXLIVE_CI_USER }}
+          TEXLIVE_CI_SSH_KEY: ${{ secrets.TEXLIVE_CI_SSH_KEY }}
+          TEXLIVE_CI_KNOWN_HOSTS: ${{ secrets.TEXLIVE_CI_KNOWN_HOSTS }}
+          TEXLIVE_CI_ACCESS_CLIENT_ID: ${{ secrets.TEXLIVE_CI_ACCESS_CLIENT_ID }}
+          TEXLIVE_CI_ACCESS_CLIENT_SECRET: ${{ secrets.TEXLIVE_CI_ACCESS_CLIENT_SECRET }}
+        run: sh deploy/scripts/ci-texlive-mirror-lease.sh release '${{ steps.mirror.outputs.token }}' '${{ steps.mirror.outputs.owner }}'

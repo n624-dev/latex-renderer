@@ -1,0 +1,9 @@
+/var/log/texlive-ci/*.log {
+    size 20M
+    rotate 8
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+}

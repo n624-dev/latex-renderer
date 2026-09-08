@@ -27,3 +27,4 @@ secrets/
 *.pem
 *.key
 *.credential
+__pycache__/

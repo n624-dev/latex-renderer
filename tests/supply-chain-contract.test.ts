@@ -27,6 +27,17 @@ describe("public supply-chain controls", () => {
     expect(read(".github/workflows/ci.yml")).toContain(
       "gitleaks/gitleaks-action@",
     );
+    const gitleaks = read(".gitleaks.toml");
+    expect(gitleaks).not.toContain("[allowlist]");
+    expect(gitleaks).not.toContain('regexTarget = "line"');
+    const ignoredFindings = read(".gitleaksignore").trim().split("\n").sort();
+    expect(ignoredFindings).toEqual(
+      [
+        "c97864181501dc212dcd68ecc60829332d4993ef:renderer/Dockerfile.base:generic-api-key:5",
+        "c97864181501dc212dcd68ecc60829332d4993ef:renderer/Dockerfile:generic-api-key:5",
+        "c97864181501dc212dcd68ecc60829332d4993ef:tests/tex-environment-contract.test.ts:generic-api-key:37",
+      ].sort(),
+    );
     const security = read(".github/workflows/security.yml");
     expect(security).toContain("github/codeql-action/init@");
     expect(security).toContain("languages: javascript-typescript");
