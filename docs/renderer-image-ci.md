@@ -18,6 +18,24 @@ PR CI does not log in to GHCR or publish images. Daily publishes only Base after
 the entire sequence succeeds. No language Runtime is published. Installer
 signature/checksum verification in the Base Dockerfile remains mandatory.
 
+The cold Base build explicitly installs the Perl LWP HTTPS modules used by
+`install-tl` and enables its standard persistent downloader. This keeps the
+installer's normal, serial package installation order while reusing the HTTPS
+connection instead of starting a separate `curl` process for every archive.
+The Docker build log emits `TEXLIVE_INSTALL_SECONDS` (including the installer's
+format generation) and `TEXLIVE_FONT_CACHE_SECONDS` for the subsequent font cache
+step so hosted-run regressions can be compared without exposing the private
+download repository. Setting
+`TL_DOWNLOAD_PROGRAM` would bypass this LWP path and is intentionally avoided.
+
+Initial diagnostic evidence (2026-09-08): hosted run `34220055487` reached
+package 2574/4557 after 20m55s of installation before cancellation. A local
+LWP-enabled cold build reached package 3740/4555 after 9m41s before cancellation.
+These are incomplete runs on different machines and slightly different generated
+profiles, not a controlled speedup measurement or total build times. Compare
+completed hosted runs before attributing an improvement to LWP. No parallel
+prefetch buffer or Actions/BuildKit cache is introduced by this optimization.
+
 ## Failed builds, retries and cache
 
 A cached layer or existing local tag is never evidence of passing validation.

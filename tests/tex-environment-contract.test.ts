@@ -51,6 +51,13 @@ describe("managed TeX Live image pipeline", () => {
       "by-fingerprint/${TEXLIVE_SIGNING_FINGERPRINT}",
     );
     expect(baseDockerfile).toContain("gpgv --keyring /tmp/texlive.gpg");
+    expect(baseDockerfile).toContain("libwww-perl");
+    expect(baseDockerfile).toContain("liblwp-protocol-https-perl");
+    expect(baseDockerfile).toContain(
+      "perl -MLWP::UserAgent -MLWP::Protocol::https -e 1",
+    );
+    expect(baseDockerfile).toContain("--persistent-downloads");
+    expect(baseDockerfile).toContain("TEXLIVE_INSTALL_SECONDS=");
     expect(baseDockerfile).not.toContain("COPY texmf.cnf latexmkrc compile.sh");
     expect(baseSmoke).toContain("test ! -e /opt/renderer/compile.sh");
     expect(baseSmoke).toContain("kpsewhich pgfplots.sty");
