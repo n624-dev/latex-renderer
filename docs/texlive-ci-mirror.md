@@ -137,8 +137,12 @@ and adds it to the job path without root access. Store the Access pair as
 SSH key as `TEXLIVE_CI_SSH_KEY`, and the pinned host key text as
 `TEXLIVE_CI_KNOWN_HOSTS`. Store `TEXLIVE_CI_HOST` and `TEXLIVE_CI_USER` as
 secrets too, so private connection metadata is not exposed as repository
-variables. Use `texlive-ci-lease.example.invalid` and `texlive-ci-lease` only
-as placeholder values in copied examples. The helper passes the Access pair through
+variables. Store the HTTPS distribution hostname (hostname only, without a
+scheme or path) as `TEXLIVE_CI_MIRROR_HOST`. The workflows register this value
+with GitHub's log masker before a snapshot URL can be emitted, and the lease
+helper rejects a returned URL whose hostname differs from it. Use
+`texlive-ci-lease.example.invalid` and `texlive-ci-lease` only as placeholder
+values in copied examples. The helper passes the Access pair through
 the native `TUNNEL_SERVICE_TOKEN_ID` and `TUNNEL_SERVICE_TOKEN_SECRET`
 environment variables, never as command-line arguments. It verifies that the reserved
 snapshot has the exact canonical date and installer hash already selected by
@@ -149,6 +153,13 @@ canonical archive. If only
 some credentials are present, trusted workflows fail closed as a partial
 configuration instead of bypassing Access. The mirror remains optional rather
 than a requirement for existing users.
+
+If the Cloudflare zone has a country or browser-oriented custom WAF challenge,
+add an exact-host `skip` condition for both dedicated CI hostnames before that
+challenge. Do not disable the rule for the rest of the zone. Non-browser
+`cloudflared access ssh` WebSocket upgrades and HTTPS package downloads cannot
+complete an interactive Managed Challenge. Verify the exception in Security
+Events and keep WebSockets enabled for the zone.
 
 The server's `cloudflared` package is maintained independently from the pinned
 CI client. Install Cloudflare's signed APT repository using its documented
