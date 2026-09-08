@@ -13,6 +13,8 @@ import {
 } from "../deploy/scripts/runtime-image-identity.mjs";
 
 const roots: string[] = [];
+// Historical protocol boundary must not be rewritten during Stable promotion.
+const firstIdentityVersion = `${[1, 3, 4].join(".")}-rc.${5}`;
 it("pins the unmodified RC.3 verifier and wires both new updater paths", async () => {
   const old = await readFile("tests/fixtures/rc3-runtime-image-identity.mjs");
   expect(createHash("sha256").update(old).digest("hex")).toBe(
@@ -51,7 +53,7 @@ function oldUpdaterHash(root: string) {
 }
 async function manifest(root: string) {
   return {
-    version: "1.3.4-rc.5",
+    version: firstIdentityVersion,
     rendererRuntimeFingerprint: await legacyReleaseRendererFingerprint(root),
     rendererRuntimeIdentity: {
       schemaVersion: 2,
@@ -104,7 +106,7 @@ it("rejects missing helpers and changed original Renderer files", async () => {
 it("requires the new identity from RC.5 onward and rejects unknown schemas", async () => {
   const root = await fixture(),
     m = await manifest(root);
-  for (const version of ["1.3.4-rc.5", "1.3.4", "2.0.0"]) {
+  for (const version of [firstIdentityVersion, "1.3.4", "2.0.0"]) {
     await expect(
       validatedReleaseRendererFingerprint(root, { version }),
     ).rejects.toThrow("required");

@@ -57,7 +57,10 @@ export async function validatedReleaseRendererFingerprint(rendererRoot, manifest
     }
     return legacy;
   }
-  if (compareReleaseVersions(manifest.version, "1.3.4-rc.5") >= 0) {
+  // Historical boundary, not the active application version. Keep it stable
+  // when release tooling replaces the candidate version during promotion.
+  const identityRequiredSince = `${[1, 3, 4].join(".")}-rc.${5}`;
+  if (compareReleaseVersions(manifest.version, identityRequiredSince) >= 0) {
     throw new Error("Release Runtime identity is required");
   }
   // Historical RC.4 emitted six files in the unversioned field. Older releases
