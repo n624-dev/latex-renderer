@@ -20,10 +20,14 @@ signature/checksum verification in the Base Dockerfile remains mandatory.
 
 Base installation uses `--no-continue`: a failed package must fail the build,
 even if the upstream installer considers it inessential. Language installation
-also checks `tlmgr check depends` and `tlmgr check files` before generating
+also checks required collections and installed-package dependencies directly
+from TLPDB, plus `tlmgr check files`, before generating
 formats/caches. An incomplete installation is retried once with collection
 reinstallation, preserving checksum verification; a second failure stops the
 build. The language-install helper participates in Runtime identity and recovery.
+Standalone fonts in the language-neutral Base are allowed: unlike the broad
+`tlmgr check depends` audit, this does not require every package to belong to an
+installed collection. Missing required dependencies still fail the check.
 
 The cold Base build explicitly installs the Perl LWP HTTPS modules used by
 `install-tl` and enables its standard persistent downloader. This keeps the
