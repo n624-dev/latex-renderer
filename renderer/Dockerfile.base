@@ -6,6 +6,7 @@ ARG TEXLIVE_INSTALLER_SHA512=f59a83d71f4d4cd6a1265fa7984fa20f5a9204382e1365b01f3
 ARG TEXLIVE_SIGNING_FINGERPRINT=C78B82D8C79512F79CC0D7C80D5E5D9106BAB6BC
 ARG TEXLIVE_PROFILE_KIND=language-neutral-maximal
 ARG DEBIAN_SNAPSHOT=20260812T235959Z
+ARG TEXLIVE_PREFETCH_WORKERS=4
 
 LABEL org.opencontainers.image.title="latex-renderer-texlive" \
       org.opencontainers.image.version="2026" \
@@ -38,6 +39,7 @@ RUN set -eu; \
 
 COPY texlive.profile /tmp/texlive.profile
 RUN --mount=type=secret,id=texlive_download_repository,required=false \
+    --mount=type=bind,source=TeXLivePrefetch.pm,target=/tmp/TeXLivePrefetch.pm \
     download_repository="$(cat /run/secrets/texlive_download_repository 2>/dev/null || printf '%s' "${TEXLIVE_REPOSITORY}")" \
  && test -n "${download_repository}" \
  && mkdir -p /tmp/install-tl \
@@ -53,7 +55,9 @@ RUN --mount=type=secret,id=texlive_download_repository,required=false \
  && tar -xzf /tmp/install-tl-unx.tar.gz --strip-components=1 -C /tmp/install-tl \
  && perl -MLWP::UserAgent -MLWP::Protocol::https -e 1 \
  && install_started=$(date +%s) \
- && perl /tmp/install-tl/install-tl --persistent-downloads --profile=/tmp/texlive.profile --repository="${download_repository}" \
+ && TEXLIVE_PREFETCH_WORKERS="${TEXLIVE_PREFETCH_WORKERS}" \
+      perl -I/tmp/install-tl/tlpkg -I/tmp -MTeXLivePrefetch \
+      /tmp/install-tl/install-tl --persistent-downloads --profile=/tmp/texlive.profile --repository="${download_repository}" \
  && install_finished=$(date +%s) \
  && printf 'TEXLIVE_INSTALL_SECONDS=%s\n' "$((install_finished - install_started))" \
  && /opt/texlive/2026/bin/x86_64-linux/tlmgr option repository "${TEXLIVE_REPOSITORY}" \

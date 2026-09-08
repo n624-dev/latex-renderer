@@ -33,8 +33,56 @@ package 2574/4557 after 20m55s of installation before cancellation. A local
 LWP-enabled cold build reached package 3740/4555 after 9m41s before cancellation.
 These are incomplete runs on different machines and slightly different generated
 profiles, not a controlled speedup measurement or total build times. Compare
-completed hosted runs before attributing an improvement to LWP. No parallel
-prefetch buffer or Actions/BuildKit cache is introduced by this optimization.
+completed hosted runs before attributing an improvement to LWP.
+
+The completed LWP-only hosted run `34222463572` took 29m06s for installation
+(packages finished at 26m41s), 11s for font cache, 32m48s for the Base build,
+4m55s for Base/runtime validation, and 41m25s for the entire job. This is the
+baseline for bounded prefetch. It passed the PDF/PNG/SVG tests, vulnerability
+scan, SBOM generation, and lease release. GHCR publication was not part of this
+PR job. CPU time and peak temporary disk were not sampled in that run.
+
+### Bounded archive prefetch
+
+`TeXLivePrefetch.pm` is mounted only during the Base install RUN. It wraps the
+standard installer's resolved `install_packages` list and `download_file`
+entry point; it does not edit upstream Perl sources or metadata. The standard
+installer continues installing one package at a time. Four persistent LWP
+HTTPS workers fetch later archives while the installer verifies and extracts
+the current one. Workers verify the exact size and SHA-512 from the already
+verified TLPDB; standard `unpack` then checks them again before extraction.
+Database, installer, signatures, and unexpected URLs use the original path.
+
+The default compressed lookahead budget is 256MiB, with at most 16 objects
+ahead. Reservations count incomplete downloads at their full expected size.
+Each response is capped while streaming, retries are limited to two, and each
+attempt has a 120s deadline. Unknown sizes, objects larger than the budget,
+non-HTTPS repositories, and profiles requesting sources/docs use the standard
+downloader. Prefetch rejects redirects to keep each request at its fixed
+snapshot origin; the standard path remains available for non-prefetched files.
+Workers prioritize the currently requested object before scheduling later
+ones. Workers and their private temporary directory are removed at the end of
+each install phase, including normal failures. Abrupt parent termination closes
+worker sockets; in-flight requests are bounded by the attempt deadlines.
+
+This budget covers prefetched compressed archives, not the installed tree,
+the current archive handed to standard unpack, its expanded tar, or Docker
+export state. Existing hosted-run disk guards remain required. Nothing is
+cached in Actions or permanently on the VPS. Base/runtime validation and
+publication policy are unchanged.
+
+Use `--build-arg TEXLIVE_PREFETCH_WORKERS=0` for the LWP-only baseline or a value
+from 1 to 8 for comparison. The module also validates `TEXLIVE_PREFETCH_BYTES`
+(1..1073741824) and `TEXLIVE_PREFETCH_WINDOW` (1..64) when run directly. The
+`TEXLIVE_PREFETCH` log lines report time blocked on prefetched downloads,
+verified bytes, peak reserved buffer bytes, package-phase wall time, and summed
+process/child CPU seconds. Download waits exclude original-downloader fallbacks;
+CPU seconds may exceed wall time because workers overlap. A speed comparison
+must use the same snapshot/profile and include complete hosted validation.
+
+Run `python3 -m unittest -v tests/texlive_prefetch_test.py` with Perl LWP HTTPS
+modules and OpenSSL installed. Tests use a small local HTTPS server with a
+temporary CA certificate; they do not download TeX Live or require root.
 
 ## Failed builds, retries and cache
 
