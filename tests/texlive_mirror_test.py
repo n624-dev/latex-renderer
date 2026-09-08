@@ -127,7 +127,9 @@ class MirrorTest(unittest.TestCase):
         self.assertIn("OnBootSec=1min", timer)
         self.assertIn("OnCalendar=*:0/15", timer)
         self.assertIn("Persistent=true", timer)
-        sync_service = (MODULE.parents[1] / "systemd/texlive-ci-sync.service").read_text()
+        sync_service = (
+            MODULE.parents[1] / "systemd/texlive-ci-sync.service"
+        ).read_text()
         self.assertIn("MemoryMax=768M", sync_service)
 
     def test_fourth_generation_deletes_oldest(self):
@@ -294,9 +296,7 @@ class MirrorTest(unittest.TestCase):
             with self.subTest(text=text):
                 with self.assertRaises(mirror.VerificationError):
                     mirror.parse_tlpdb(text)
-        package = mirror.Package(
-            "a", "../1", [], checksum, 1, None, None, None, None
-        )
+        package = mirror.Package("a", "../1", [], checksum, 1, None, None, None, None)
         with self.assertRaises(mirror.VerificationError):
             mirror.package_files({"a": package}, {"a"})
 
@@ -597,9 +597,7 @@ class MirrorTest(unittest.TestCase):
         del state["snapshots"][latest]["canonicalDates"]
         state_path.write_text(json.dumps(state))
         loaded = mirror.load_state(self.config)
-        self.assertEqual(
-            loaded["snapshots"][latest]["canonicalDates"], ["2026-09-01"]
-        )
+        self.assertEqual(loaded["snapshots"][latest]["canonicalDates"], ["2026-09-01"])
 
     def test_gc_reconciles_stale_latest_file_after_delete_crash(self):
         old, _ = self.publish(1, hours_ago=100, year=2025)
@@ -691,6 +689,32 @@ class MirrorTest(unittest.TestCase):
         selected = mirror.dependency_closure(packages, ["collection-basic"], ("amd64",))
         self.assertIn("engine.x86_64-linux", selected)
         self.assertNotIn("engine.aarch64-linux", selected)
+
+    def test_arch_dependency_is_conditional_but_plain_missing_dependency_is_not(self):
+        packages = {
+            "texworks": mirror.Package(
+                "texworks",
+                "1",
+                ["texworks.ARCH", "helper.windows"],
+                "a" * 128,
+                1,
+                None,
+                None,
+                None,
+                None,
+            ),
+            "texworks.windows": mirror.Package(
+                "texworks.windows", "1", [], "b" * 128, 1, None, None, None, None
+            ),
+        }
+        self.assertEqual(
+            mirror.dependency_closure(packages, ["texworks"], ("amd64",)), {"texworks"}
+        )
+        self.assertEqual(
+            mirror.dependency_closure(packages, ["texworks"], ("arm64",)), {"texworks"}
+        )
+        with self.assertRaises(mirror.VerificationError):
+            mirror.dependency_closure(packages, ["missing"], ("amd64",))
 
 
 if __name__ == "__main__":

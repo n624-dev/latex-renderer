@@ -13,6 +13,7 @@ export const RENDERER_RUNTIME_FILES = Object.freeze([
   "compile.sh",
   "svg-wrapper.tex",
   "export-svg.pl",
+  "install-language-packages.sh",
 ]);
 
 export function normalizeRuntimeLanguages(values) {

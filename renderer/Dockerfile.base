@@ -57,7 +57,7 @@ RUN --mount=type=secret,id=texlive_download_repository,required=false \
  && install_started=$(date +%s) \
  && TEXLIVE_PREFETCH_WORKERS="${TEXLIVE_PREFETCH_WORKERS}" \
       perl -I/tmp/install-tl/tlpkg -I/tmp -MTeXLivePrefetch \
-      /tmp/install-tl/install-tl --persistent-downloads --profile=/tmp/texlive.profile --repository="${download_repository}" \
+      /tmp/install-tl/install-tl --no-continue --persistent-downloads --profile=/tmp/texlive.profile --repository="${download_repository}" \
  && install_finished=$(date +%s) \
  && printf 'TEXLIVE_INSTALL_SECONDS=%s\n' "$((install_finished - install_started))" \
  && /opt/texlive/2026/bin/x86_64-linux/tlmgr option repository "${TEXLIVE_REPOSITORY}" \

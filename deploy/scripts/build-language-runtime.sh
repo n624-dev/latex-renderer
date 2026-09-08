@@ -13,7 +13,7 @@ esac
 
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
 renderer_source=${RENDERER_RUNTIME_SOURCE:-$repo_root/renderer}
-runtime_files="texmf.cnf latexmkrc compile.sh svg-wrapper.tex export-svg.pl"
+runtime_files="texmf.cnf latexmkrc compile.sh svg-wrapper.tex export-svg.pl install-language-packages.sh"
 for file in $runtime_files; do
   if [ ! -f "$renderer_source/$file" ]; then
     echo "Missing current renderer runtime file: $renderer_source/$file" >&2
@@ -103,6 +103,7 @@ USER root
 ARG TEXLIVE_REPOSITORY
 ARG TEXLIVE_LANGUAGES
 ARG RENDERER_RUNTIME_FINGERPRINT
+COPY runtime/ /opt/renderer/
 RUN if [ -n "${TEXLIVE_LANGUAGES}" ]; then \
       tlmgr option repository "${TEXLIVE_REPOSITORY}" \
       && for language in ${TEXLIVE_LANGUAGES}; do \
@@ -111,13 +112,12 @@ RUN if [ -n "${TEXLIVE_LANGUAGES}" ]; then \
              | grep -qx "$language" \
              || { echo "Selected TeX Live language collection is unavailable in this snapshot: $language" >&2; exit 65; }; \
          done \
-      && tlmgr install ${TEXLIVE_LANGUAGES} \
+      && sh /opt/renderer/install-language-packages.sh ${TEXLIVE_LANGUAGES} \
       && mktexlsr \
       && fmtutil-sys --all \
       && fc-cache -f \
       && TEXMFCACHE=/opt/texlive/2026/texmf-var luaotfload-tool --update --force --no-compress; \
     fi
-COPY runtime/ /opt/renderer/
 COPY languages.txt /opt/renderer/language-collections.txt
 RUN chmod 0555 /opt/renderer/compile.sh /opt/renderer/export-svg.pl \
  && chmod 0444 /opt/renderer/texmf.cnf /opt/renderer/latexmkrc /opt/renderer/svg-wrapper.tex /opt/renderer/language-collections.txt

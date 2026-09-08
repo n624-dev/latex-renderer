@@ -18,6 +18,13 @@ PR CI does not log in to GHCR or publish images. Daily publishes only Base after
 the entire sequence succeeds. No language Runtime is published. Installer
 signature/checksum verification in the Base Dockerfile remains mandatory.
 
+Base installation uses `--no-continue`: a failed package must fail the build,
+even if the upstream installer considers it inessential. Language installation
+also checks `tlmgr check depends` and `tlmgr check files` before generating
+formats/caches. An incomplete installation is retried once with collection
+reinstallation, preserving checksum verification; a second failure stops the
+build. The language-install helper participates in Runtime identity and recovery.
+
 The cold Base build explicitly installs the Perl LWP HTTPS modules used by
 `install-tl` and enables its standard persistent downloader. This keeps the
 installer's normal, serial package installation order while reusing the HTTPS
@@ -41,6 +48,11 @@ The completed LWP-only hosted run `34222463572` took 29m06s for installation
 baseline for bounded prefetch. It passed the PDF/PNG/SVG tests, vulnerability
 scan, SBOM generation, and lease release. GHCR publication was not part of this
 PR job. CPU time and peak temporary disk were not sampled in that run.
+Subsequent log auditing found missing `collection-texworks`/`texworks` archives
+even in this nominally successful baseline. The checked-in mirror profile now
+includes that collection. Its `.ARCH` dependency is conditional, as in the
+standard installer: Windows-only binaries do not imply a Linux binary exists.
+The stricter failure policy above prevents this incomplete Base from recurring.
 
 ### Bounded archive prefetch
 

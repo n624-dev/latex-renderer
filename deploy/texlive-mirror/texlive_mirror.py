@@ -925,9 +925,15 @@ def dependency_closure(
     while queue:
         name, inherited_arch = queue.pop()
         if name.endswith(".ARCH"):
-            for arch in arch_names:
-                queue.append((name[:-5] + f".{arch}", arch))
+            # Match TLPDB::expand_dependencies: .ARCH is conditional. Some
+            # packages (e.g. texworks) only ship a Windows binary.
+            for arch in ([inherited_arch] if inherited_arch else arch_names):
+                candidate = name[:-5] + f".{arch}"
+                if candidate in packages:
+                    queue.append((candidate, arch))
             continue
+        if name.endswith(".windows"):
+            continue  # Neither supported mirror architecture is Windows.
         if name.startswith("setting_available_architectures:") or name.startswith(
             "setting_available_architectures/"
         ):
@@ -944,16 +950,7 @@ def dependency_closure(
             raise VerificationError(f"dependency is absent from signed tlpdb: {name}")
         result.add(name)
         for dependency in package.depends:
-            if dependency.endswith(".ARCH"):
-                if inherited_arch:
-                    queue.append(
-                        (dependency[:-5] + f".{inherited_arch}", inherited_arch)
-                    )
-                else:
-                    for arch in arch_names:
-                        queue.append((dependency[:-5] + f".{arch}", arch))
-            else:
-                queue.append((dependency, inherited_arch))
+            queue.append((dependency, inherited_arch))
     return result
 
 

@@ -72,7 +72,7 @@ if ! rootless_docker image inspect "$base_image" >/dev/null 2>&1; then
   exit 78
 fi
 
-runtime_files="texmf.cnf latexmkrc compile.sh svg-wrapper.tex export-svg.pl"
+runtime_files="texmf.cnf latexmkrc compile.sh svg-wrapper.tex export-svg.pl install-language-packages.sh"
 current_fingerprint=$(
   for file in $runtime_files; do
     [ -f "$repo_root/renderer/$file" ] || {
