@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
@@ -10,6 +10,8 @@ it.each(["healthy", "missing-collection", "missing-dependency", "missing-file", 
     const root = mkdtempSync(join(tmpdir(), "language-install-"));
     try {
       mkdirSync(join(root, "tlpkg/TeXLive"), { recursive: true });
+      mkdirSync(join(root, "bin/x86_64-linux"), { recursive: true });
+      symlinkSync("../../texmf-dist/doc/man", join(root, "bin/x86_64-linux/man"));
       writeFileSync(join(root, "kpsewhich"), '#!/bin/sh\nprintf "%s\\n" "$TEST_ROOT"\n', { mode: 0o755 });
       writeFileSync(join(root, "tlpkg/TeXLive/TLPDB.pm"), `package TeXLive::TLPDB;
 sub new { bless {}, shift }
@@ -34,6 +36,7 @@ fi
 if [ ! -e "$TEST_ROOT/retried" ]; then
   if [ "$SCENARIO:$2" = missing-file:files ]; then exit 1; fi
 fi
+if [ "$2" = files ] && [ ! -r "$TEST_ROOT/bin/x86_64-linux/man" ]; then exit 1; fi
 exit 0
 `, { mode: 0o755 });
       const result = spawnSync("sh", ["renderer/install-language-packages.sh", "collection-langenglish", "collection-langjapanese"], {

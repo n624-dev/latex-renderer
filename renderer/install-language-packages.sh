@@ -9,6 +9,10 @@ done
 check_dependencies() {
   texlive_root=$(kpsewhich -var-value=SELFAUTOPARENT) || return 1
   [ -n "$texlive_root" ] && [ -d "$texlive_root/tlpkg" ] || return 1
+  # The shipped bin/<arch>/man symlink targets this directory even when
+  # docfiles are disabled. Keep the empty directory so check files can follow
+  # the genuine link; do not suppress missing-file diagnostics or add docs.
+  mkdir -p "$texlive_root/texmf-dist/doc/man" || return 1
   perl -I"$texlive_root/tlpkg" -MTeXLive::TLPDB - "$texlive_root" "$@" <<'PERL'
 use strict;
 use warnings;

@@ -28,6 +28,9 @@ build. The language-install helper participates in Runtime identity and recovery
 Standalone fonts in the language-neutral Base are allowed: unlike the broad
 `tlmgr check depends` audit, this does not require every package to belong to an
 installed collection. Missing required dependencies still fail the check.
+With docfiles disabled, an empty `texmf-dist/doc/man` directory keeps the shipped
+`bin/<arch>/man` symlink valid. No documentation payload is downloaded, and the
+normal missing-file check remains enabled.
 
 The cold Base build explicitly installs the Perl LWP HTTPS modules used by
 `install-tl` and enables its standard persistent downloader. This keeps the
