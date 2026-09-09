@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 1.3.4-rc.8 - 2026-09-09
+
+- Use a validated standalone CI hostname consistently across TLS, proxy headers and application origins without bypassing production profile validation.
+- Verify standalone client and MCPB downloads against client-dist metadata; generate static distribution assets as the build user for the frozen RC.5 baseline without modifying signed source or rebuilding signed clients.
+- Prevent delayed automatic Updater activation from racing release E2E fixtures. Require actual broken-controller startup evidence, the expected health failure and complete state recovery; lock contention cannot count as a successful recovery test.
+- Candidate only: RC.7 failed release E2E before publication. Preserve its tag and require release-only E2E plus separate post-publication validation on the designated host before stable promotion.
+
 ## 1.3.4-rc.7 - 2026-09-09
 
 - Fix release E2E provisioning by registering Docker's signed Ubuntu APT repository before installing rootless extras. Production APT configuration is unchanged.
