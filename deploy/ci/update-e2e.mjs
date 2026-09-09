@@ -14,6 +14,10 @@ import { pathToFileURL } from "node:url";
 import { verifyCiReleaseArtifact } from "../scripts/ci-release-artifact.mjs";
 import { downloadPublishedRelease } from "../scripts/published-release.mjs";
 import { acquireMutationLock } from "../scripts/mutation-lock.mjs";
+import {
+  brokenUpdaterSource,
+  assertStartupRecovery,
+} from "./updater-recovery-evidence.mjs";
 
 if (
   process.getuid() !== 0 ||
@@ -153,10 +157,22 @@ try {
   run("/bin/sh", [
     "/opt/latex-renderer/current/deploy/scripts/smoke-test-production.sh",
   ]);
+  // This disposable host drives activation synchronously. Prevent the signed
+  // driver's delayed systemd job from racing our positive/negative fixtures.
+  // The bootstrap itself remains unchanged and still takes the normal lock.
+  const activationDropIn =
+    "/run/systemd/system/latex-renderer-updater-activate.service.d";
+  await mkdir(activationDropIn, { recursive: true });
+  await writeFile(
+    join(activationDropIn, "90-ci-explicit-activation.conf"),
+    "[Unit]\nConditionPathExists=!/etc/latex-renderer-ci-host.json\n",
+    { mode: 0o644 },
+  );
+  run("/usr/bin/systemctl", ["daemon-reload"]);
   await deploy(candidate, { version: tag.slice(1), tag, commit }, false);
-  run("/usr/bin/systemctl", [
-    "start",
-    "latex-renderer-updater-activate.service",
+  run("/usr/local/bin/node", [
+    "/opt/latex-renderer/updater/bootstrap-v1/updater-bootstrap.mjs",
+    "activate",
   ]);
   const { UpdaterSlots, updaterEnvelope } = await import(
     pathToFileURL(join(candidate, "deploy/scripts/updater-slots.mjs"))
@@ -188,6 +204,8 @@ try {
   // candidate or a published artifact. The production bootstrap must restore
   // the prior controller when this intentionally broken entry cannot start.
   const broken = join(root, "broken-updater-fixture");
+  const startupNonce = randomBytes(24).toString("hex");
+  const startupMarker = `/var/lib/latex-renderer/update-manager/ci-startup-${startupNonce}.json`;
   run("/usr/bin/rsync", ["-a", `${installed.root}/`, `${broken}/`]);
   await writeFile(
     join(broken, "deploy/updater-files.json"),
@@ -195,18 +213,17 @@ try {
   );
   await writeFile(
     join(broken, "deploy/scripts/update-manager.mjs"),
-    "throw new Error('intentional E2E startup failure');\n",
+    brokenUpdaterSource(startupMarker, startupNonce),
   );
-  await slots.nominate(
-    await slots.stage(
-      broken,
-      await updaterEnvelope(broken, {
-        version: tag.slice(1),
-        commit,
-      }),
-    ),
+  const brokenId = await slots.stage(
+    broken,
+    await updaterEnvelope(broken, {
+      version: tag.slice(1),
+      commit,
+    }),
   );
-  let refused = false;
+  await slots.nominate(brokenId);
+  let failure = null;
   try {
     run(
       "/usr/local/bin/node",
@@ -217,13 +234,24 @@ try {
       { stdio: "pipe" },
     );
   } catch (error) {
-    if (error.status !== 1) throw error;
-    refused = true;
+    failure = error;
   }
-  if (!refused || (await slots.state()).current !== active.current)
-    throw new Error(
-      "Failed Updater did not fall back to the previous working controller",
-    );
+  let startupEvidence = null;
+  try {
+    startupEvidence = JSON.parse(await readFile(startupMarker, "utf8"));
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  } finally {
+    await rm(startupMarker, { force: true });
+  }
+  assertStartupRecovery({
+    failure,
+    marker: startupEvidence,
+    nonce: startupNonce,
+    brokenRoot: join(slots.root, "slots", brokenId),
+    state: await slots.state(),
+    before: active,
+  });
   run("/bin/sh", [
     "/opt/latex-renderer/current/deploy/scripts/wait-update-manager-socket.sh",
   ]);

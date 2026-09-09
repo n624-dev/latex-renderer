@@ -21,8 +21,18 @@ describe("MCPB deployment metadata", () => {
     expect(deploy).toContain(
       [
         '"$mcpb_verify_root/latex-renderer-local.mcpb" \\',
-        '  "$build_root/apps/public-web/dist/downloads/mcpb/mcpb.json"',
+        '  "$local_mcpb_manifest_path"',
       ].join("\n"),
+    );
+    expect(deploy).toContain('"$mcpb_base" "$local_mcpb_manifest_path"');
+    // Both modes must use the same selected metadata for the downloaded bytes
+    // and the unprivileged signature verifier; branch selection is exercised
+    // by bootstrap-distribution.test.ts.
+    expect(deploy).toContain(
+      'local_mcpb_manifest_path="$build_root/client-dist/mcpb.json"',
+    );
+    expect(deploy).toContain(
+      'local_mcpb_manifest_path="$build_root/apps/public-web/dist/downloads/mcpb/mcpb.json"',
     );
   });
 

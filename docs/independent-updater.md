@@ -120,6 +120,10 @@ server-release runs on explicit RC/stable release dispatch, not ordinary PRs:
    installing `docker-ce-rootless-extras`. Runner images need not retain that
    repository even when Docker is preinstalled. This setup is CI-only; the
    production installer and this VPS's APT configuration are not changed.
+   The fixture uses `latex-renderer-ci.test` consistently in `/etc/hosts`, TLS
+   certificate identity, proxy headers and application origins. It validates the
+   generated environment with the normal production-profile validator before
+   package installation; example placeholders are never exempted for CI.
 3. Install the frozen previous signed immutable RC, create an owner and persistent
    storage data, and render English/Japanese PDF/PNG. Apply the signed candidate
    through the same sealed-assembly deployment function used by production.
@@ -131,6 +135,18 @@ server-release runs on explicit RC/stable release dispatch, not ordinary PRs:
 
 The historical baseline is explicit in deploy/ci/update-e2e.mjs; review it when
 changing the migration floor and never rewrite it during RC-to-stable promotion.
+On the disposable CI host, a runtime-only systemd condition skips automatic
+activation while the CI host marker exists. E2E invokes the unchanged bootstrap
+synchronously, retaining its normal mutation lock, so delayed cutover jobs cannot
+race negative fixtures. Startup-failure recovery requires a per-attempt marker
+written by the broken controller in its actual slot, the expected health failure,
+and fully restored current/previous state with no candidate or pending journal.
+A lock conflict is not evidence of recovery. Production units are unchanged.
+The standalone driver verifies downloads against `client-dist`; it does not
+require a Workers build. Bootstrap also generates the static-site assets as the
+unprivileged build user for older signed drivers (including the frozen RC.5)
+which expect `apps/public-web/dist/downloads`. This copies already-built client
+bytes without re-signing them, deploying Workers, or modifying signed source.
 
 CI is not a production “allow Draft” switch. Old production Updaters still reject
 unpublished releases. Prepublication CI enters the shared post-verification
