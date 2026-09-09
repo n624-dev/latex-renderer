@@ -27,6 +27,7 @@ import {
 } from "./environment.mjs";
 import { assembleBuildArtifacts } from "./release-assembly.mjs";
 import { validateReleaseArchive } from "./release-archive.mjs";
+import { releaseAttestationArgs } from "./release-attestation.mjs";
 import { validatedReleaseRendererFingerprint } from "./runtime-image-identity.mjs";
 import {
   assertValidatedCandidateTag,
@@ -670,22 +671,12 @@ async function downloadBundle(operation, release, path) {
     await runLogged(
       operation,
       githubCli,
-      [
-        "attestation",
-        "verify",
-        path,
-        "--bundle",
-        attestationBundle,
-        "--repo",
-        repository,
-        "--signer-workflow",
-        `${repository}/.github/workflows/server-release.yml`,
-        "--source-ref",
-        `refs/tags/${release.tag}`,
-        "--predicate-type",
-        "https://slsa.dev/provenance/v1",
-        "--deny-self-hosted-runners",
-      ],
+      releaseAttestationArgs({
+        artifact: path,
+        bundle: attestationBundle,
+        tag: release.tag,
+        commit: release.commit,
+      }),
       {
         env: {
           PATH: "/usr/local/bin:/usr/bin:/bin",

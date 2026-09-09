@@ -80,8 +80,11 @@ describe("application updater privilege boundary", () => {
     expect(helper).toContain("(info.mode & 0o022) !== 0");
     expect(helper).toContain('compareVersions(version, "2.98.0") < 0');
     expect(helper).toContain('["attestation", "verify", "--help"]');
-    expect(helper).toContain('"--source-ref"');
-    expect(helper).toContain("`refs/tags/${release.tag}`");
+    expect(helper).toContain("releaseAttestationArgs({");
+    expect(helper).toContain("commit: release.commit");
+    const trust = read("deploy/scripts/release-attestation.mjs");
+    expect(trust).toContain('"--source-ref"');
+    expect(trust).toContain('"--source-digest"');
     expect(helper).not.toContain("request.command");
     expect(helper).not.toContain("request.path");
     expect(helper).not.toContain("request.url");

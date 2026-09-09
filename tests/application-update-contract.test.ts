@@ -354,7 +354,8 @@ describe("release-based application updates", () => {
         `/attestations/\${encodeURIComponent(release.digest)}`,
       );
       expect(source).toContain('"release-attestations.jsonl"');
-      expect(source).toContain('"--bundle"');
+      expect(source).toContain("bundle: attestationBundle");
+      expect(read("deploy/scripts/release-attestation.mjs")).toContain('"--bundle"');
       expect(source).toContain("attestationBundle");
       expect(source).toContain('GH_PROMPT_DISABLED: "1"');
       expect(source).not.toContain("GH_TOKEN");

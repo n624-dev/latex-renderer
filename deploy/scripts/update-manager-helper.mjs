@@ -35,6 +35,7 @@ import {
   assertSealedControlTree,
 } from "./release-assembly.mjs";
 import { validateReleaseArchive } from "./release-archive.mjs";
+import { releaseAttestationArgs } from "./release-attestation.mjs";
 import { validatedReleaseRendererFingerprint } from "./runtime-image-identity.mjs";
 import { acquireMutationLock } from "./mutation-lock.mjs";
 import {
@@ -93,6 +94,7 @@ const bootstrapControlFiles = [
   "deploy/scripts/update-manager-helper.mjs",
   "deploy/scripts/release-assembly.mjs",
   "deploy/scripts/release-archive.mjs",
+  "deploy/scripts/release-attestation.mjs",
   "deploy/scripts/runtime-image-identity.mjs",
   "deploy/scripts/mutation-lock.mjs",
   "deploy/scripts/release-version.mjs",
@@ -498,22 +500,12 @@ async function verifyAndExtractTrustedBundle(
     await mkdir(join(rootStage, directory), { mode: 0o700 });
   await runLogged(
     githubCli,
-    [
-      "attestation",
-      "verify",
-      trustedBundle,
-      "--bundle",
-      attestationBundle,
-      "--repo",
-      repository,
-      "--signer-workflow",
-      `${repository}/.github/workflows/server-release.yml`,
-      "--source-ref",
-      `refs/tags/${release.tag}`,
-      "--predicate-type",
-      "https://slsa.dev/provenance/v1",
-      "--deny-self-hosted-runners",
-    ],
+    releaseAttestationArgs({
+      artifact: trustedBundle,
+      bundle: attestationBundle,
+      tag: release.tag,
+      commit: release.commit,
+    }),
     {
       env: {
         PATH: "/usr/local/bin:/usr/bin:/bin",

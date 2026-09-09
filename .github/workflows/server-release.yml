@@ -135,6 +135,18 @@ jobs:
               --source-ref "refs/tags/$RELEASE_TAG" \
               --deny-self-hosted-runners
           done
+      - name: Verify pinned pre-publication server artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          artifact="$RUNNER_TEMP/release-assets/latex-renderer-server-${RELEASE_TAG#v}.tar.gz"
+          digest="sha256:$(sha256sum "$artifact" | cut -d' ' -f1)"
+          node deploy/scripts/ci-release-artifact.mjs \
+            "$artifact" "$RELEASE_TAG" "$(git rev-parse HEAD)" "$digest"
+          # This is a trust gate, not yet the disposable-host update E2E.
+          cp "$RUNNER_TEMP/release-assets/SHA256SUMS" "$RUNNER_TEMP/verified-release-SHA256SUMS"
       # GITHUB_TOKEN can manage draft release assets with contents:write, but
       # cannot read repository Administration settings. The maintainer verifies
       # immutable-release protection before dispatch and again before publish.
@@ -145,6 +157,9 @@ jobs:
         run: |
           set -euo pipefail
           version=${RELEASE_TAG#v}
+          # Upload precisely the verified bytes. Never rebuild after this gate.
+          (cd "$RUNNER_TEMP/release-assets" && sha256sum --strict --check "$RUNNER_TEMP/verified-release-SHA256SUMS")
+          cmp "$RUNNER_TEMP/verified-release-SHA256SUMS" "$RUNNER_TEMP/release-assets/SHA256SUMS"
           if ! gh api --paginate repos/n624-dev/latex-renderer/releases \
             --jq ".[] | select(.tag_name == \"$RELEASE_TAG\" and .draft == true) | .id" \
             | grep -q .; then

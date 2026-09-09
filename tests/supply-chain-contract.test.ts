@@ -83,8 +83,9 @@ describe("public supply-chain controls", () => {
     expect(release).toContain("--deny-self-hosted-runners");
     const updater = read("deploy/scripts/update-manager.mjs");
     expect(updater).toContain('const githubCli = "/usr/local/bin/gh"');
-    expect(updater).toContain('"attestation",');
-    expect(updater).toContain('"--predicate-type",');
+    expect(updater).toContain("releaseAttestationArgs({");
+    expect(updater).toContain("commit: release.commit");
+    expect(read("deploy/scripts/release-attestation.mjs")).toContain('"--predicate-type",');
     expect(release).toContain(
       '[[ "$GITHUB_REF" == "refs/tags/$RELEASE_TAG" ]]',
     );
