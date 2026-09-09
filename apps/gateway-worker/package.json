@@ -14,7 +14,7 @@
   "dependencies": {
     "@latex-renderer/contracts": "workspace:*",
     "@latex-renderer/gateway-core": "workspace:*",
-    "hono": "^4.9.2",
+    "hono": "^4.13.5",
     "zod": "^4.0.17"
   }
 }
