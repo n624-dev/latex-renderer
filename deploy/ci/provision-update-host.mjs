@@ -3,6 +3,10 @@ import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { configureDockerRepository } from "./docker-repository.mjs";
 import {
+  userEnvironmentKeys,
+  withoutUserEnvironmentDefaults,
+} from "./host-user-environment.mjs";
+import {
   ciHostname,
   ciCertificate,
   ciPrivateKey,
@@ -48,6 +52,15 @@ await writeFile(
   }),
   { mode: 0o600, flag: "wx" },
 );
+// Disposable-host only, after all guards: prevent PAM from assigning runner
+// directories to service accounts, including the unchanged historical RC.5.
+const machineEnvironmentPath = "/etc/environment";
+const machineEnvironment = await readFile(machineEnvironmentPath, "utf8");
+await writeFile(
+  machineEnvironmentPath,
+  withoutUserEnvironmentDefaults(machineEnvironment),
+);
+for (const key of userEnvironmentKeys) delete process.env[key];
 run("/bin/sh", [resolve(source, "deploy/scripts/install-host.sh")]);
 await configureDockerRepository(run);
 run("/usr/bin/apt-get", [
@@ -58,6 +71,11 @@ run("/usr/bin/apt-get", [
   "docker-ce-rootless-extras",
 ]);
 run("/bin/sh", ["-c", "command -v dockerd-rootless-setuptool.sh >/dev/null"]);
+// Prepare Docker using the current account-isolated setup. The immutable RC.5
+// baseline then reuses the existing service without executing its old installer.
+run("/bin/sh", [
+  resolve(source, "deploy/scripts/configure-rootless-docker.sh"),
+]);
 await mkdir("/etc/latex-renderer/ci", { mode: 0o700 });
 const cert = ciCertificate;
 run("/usr/bin/openssl", [

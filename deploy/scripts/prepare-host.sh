@@ -36,9 +36,7 @@ if [ -L /opt/latex-renderer/current ]; then
 fi
 worker_user=latex-render-worker
 worker_uid=$(id -u "$worker_user")
-worker_home=/var/lib/latex-render-worker
 runtime_dir="/run/user/$worker_uid"
-user_bus="unix:path=$runtime_dir/bus"
 rootless_socket="unix://$runtime_dir/docker.sock"
 
 id latex-renderer-update >/dev/null 2>&1 || useradd --system --gid latex-renderer \
@@ -193,31 +191,7 @@ visudo -cf /etc/sudoers.d/latex-renderer-update >/dev/null
 apparmor_parser -r /etc/apparmor.d/latex-renderer
 systemctl daemon-reload
 
-loginctl enable-linger "$worker_user"
-systemctl start "user@$worker_uid.service"
-
-if [ ! -f "$worker_home/.config/systemd/user/docker.service" ]; then
-  runuser -u "$worker_user" -- env \
-    HOME="$worker_home" \
-    XDG_RUNTIME_DIR="$runtime_dir" \
-    DBUS_SESSION_BUS_ADDRESS="$user_bus" \
-    dockerd-rootless-setuptool.sh install --force
-fi
-runuser -u "$worker_user" -- env \
-  HOME="$worker_home" \
-  XDG_RUNTIME_DIR="$runtime_dir" \
-  DBUS_SESSION_BUS_ADDRESS="$user_bus" \
-  systemctl --user enable --now docker
-
-attempt=0
-while [ ! -S "$runtime_dir/docker.sock" ]; do
-  attempt=$((attempt + 1))
-  if [ "$attempt" -ge 30 ]; then
-    echo "rootless Docker socket did not appear at $runtime_dir/docker.sock" >&2
-    exit 75
-  fi
-  sleep 1
-done
+sh "$source_root/deploy/scripts/configure-rootless-docker.sh"
 
 # Activate only after host preparation succeeds. Failure recovery must not
 # start new application code against old service definitions.

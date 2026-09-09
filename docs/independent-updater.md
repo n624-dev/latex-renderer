@@ -124,6 +124,18 @@ server-release runs on explicit RC/stable release dispatch, not ordinary PRs:
    certificate identity, proxy headers and application origins. It validates the
    generated environment with the normal production-profile validator before
    package installation; example placeholders are never exempted for CI.
+   Before service-account sessions start, the disposable host removes per-user
+   XDG/Docker assignments from `/etc/environment` and its provisioning process.
+   This is CI-only: [hosted image defaults](https://github.com/actions/runner-images/blob/main/images/ubuntu/scripts/build/configure-environment.sh)
+   can otherwise direct other users into runner directories through PAM.
+   Both new production deployments and CI use `configure-rootless-docker.sh`,
+   which sets the worker's XDG/Docker directories after `runuser`, clears caller
+   Docker endpoint/context overrides and checks the actual worker daemon reports
+   rootless mode. [Docker's installer](https://github.com/moby/moby/blob/master/contrib/dockerd-rootless-setuptool.sh)
+   uses `XDG_CONFIG_HOME` ahead of `HOME`; changing `HOME` alone is insufficient.
+   CI performs this setup before deploying the immutable RC.5 baseline, whose
+   original driver then reuses the prepared Docker service. The signed baseline
+   source and this VPS's environment/services are not modified.
 3. Install the frozen previous signed immutable RC, create an owner and persistent
    storage data, and render English/Japanese PDF/PNG. Apply the signed candidate
    through the same sealed-assembly deployment function used by production.
