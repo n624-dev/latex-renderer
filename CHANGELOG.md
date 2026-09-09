@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 1.3.4 - 2026-09-09
+
+- Promote the published immutable `v1.3.4-rc.10` candidate with no functional changes. RC10 passed signed-artifact upgrade/recovery E2E and the designated VPS update from RC5, including English/Japanese PDF/PNG rendering, public Worker boundary checks and independent Updater activation.
+- Add independently updatable, verified Updater slots with bounded retention and journaled activation/recovery. Preserve application data, immutable-release provenance, encrypted backup requirements and the existing authenticated update path.
+- Add tagless pre-release update validation and release-only signed-artifact E2E gates. Fix shared SQLite file permissions and isolate rootless Docker account configuration.
+- Include the opt-in CI TeX Live snapshot mirror, bounded verified download prefetch and canonical archive fallback; retain Base-only image publication and avoid Actions build caches.
+- Stable artifacts must name RC10 as the validated candidate and pass source-equivalence and final signed-artifact E2E checks before publication. This preparation does not deploy Stable to a host.
+
 ## 1.3.4-rc.10 - 2026-09-09
 
 - Prepare SQLite database and sidecar files with explicit shared-group write permissions before migration; preserve existing contents and refuse unsafe links or initial overwrite. Keep the unchanged signed RC.5 baseline compatible through exclusive database creation.
