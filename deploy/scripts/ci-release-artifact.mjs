@@ -27,19 +27,63 @@ async function digestOf(bundle) {
 // Read-only CI entry: it cannot install, invoke sudo, or grant the production
 // manager permission to accept a draft. The caller pins the checked-out tag,
 // commit and artifact digest; signatures are still mandatory before parsing.
-export async function verifyCiReleaseArtifact(
-  { artifact, tag, commit, digest, attestationBundle },
-  verifyAttestation = (args) =>
-    execFileSync("gh", args, {
-      stdio: ["ignore", "inherit", "inherit"],
-      timeout: 120_000,
-    }),
+const executeAttestation = (args) =>
+  execFileSync("gh", args, {
+    stdio: ["ignore", "inherit", "inherit"],
+    timeout: 120_000,
+  });
+
+export function validationAttestationArgs(pin) {
+  const sourceRef = pin.sourceRef;
+  if (
+    typeof sourceRef !== "string" ||
+    !/^refs\/heads\/[A-Za-z0-9_./-]+$/.test(sourceRef) ||
+    sourceRef.includes("..") ||
+    sourceRef.includes("//") ||
+    sourceRef
+      .split("/")
+      .some(
+        (part) =>
+          !part ||
+          part.startsWith(".") ||
+          part.endsWith(".") ||
+          part.endsWith(".lock"),
+      )
+  )
+    throw new Error("Validation must pin a valid branch ref");
+  const args = releaseAttestationArgs(pin);
+  args[args.indexOf("--signer-workflow") + 1] =
+    "n624-dev/latex-renderer/.github/workflows/server-update-validation.yml";
+  args[args.indexOf("--source-ref") + 1] = sourceRef;
+  return args;
+}
+
+export function verifyCiReleaseArtifact(
+  pin,
+  verifyAttestation = executeAttestation,
 ) {
-  const args = releaseAttestationArgs({
+  return verifyCiArtifact(pin, verifyAttestation, false);
+}
+export function verifyCiValidationArtifact(
+  pin,
+  verifyAttestation = executeAttestation,
+) {
+  return verifyCiArtifact(pin, verifyAttestation, true);
+}
+
+async function verifyCiArtifact(
+  { artifact, tag, commit, digest, attestationBundle, sourceRef },
+  verifyAttestation,
+  validationOnly,
+) {
+  const args = (
+    validationOnly ? validationAttestationArgs : releaseAttestationArgs
+  )({
     artifact,
     tag,
     commit,
     bundle: attestationBundle,
+    sourceRef,
   });
   if (!/^sha256:[a-f0-9]{64}$/.test(digest ?? ""))
     throw new Error("Expected artifact SHA-256 is required");
@@ -66,6 +110,9 @@ export async function verifyCiReleaseArtifact(
   const manifest = readJson(".latex-renderer-release.json");
   const pkg = readJson("package.json");
   if (
+    (validationOnly
+      ? manifest?.validationOnly !== true
+      : manifest?.validationOnly !== undefined) ||
     manifest?.schemaVersion !== 1 ||
     manifest?.version !== version ||
     manifest?.tag !== tag ||

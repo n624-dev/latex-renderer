@@ -62,6 +62,9 @@ await writeFile(
 );
 for (const key of userEnvironmentKeys) delete process.env[key];
 run("/bin/sh", [resolve(source, "deploy/scripts/install-host.sh")]);
+run("/usr/local/bin/node", [
+  resolve(source, "deploy/ci/check-database-access.mjs"),
+]);
 await configureDockerRepository(run);
 run("/usr/bin/apt-get", [
   "install",

@@ -12,7 +12,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { releaseAttestationArgs } from "../deploy/scripts/release-attestation.mjs";
-import { verifyCiReleaseArtifact } from "../deploy/scripts/ci-release-artifact.mjs";
+import {
+  verifyCiReleaseArtifact,
+  verifyCiValidationArtifact,
+  validationAttestationArgs,
+} from "../deploy/scripts/ci-release-artifact.mjs";
 
 const roots: string[] = [];
 const tag = "v9.2.0-rc.1",
@@ -182,4 +186,90 @@ it("keeps the CI entry read-only and outside the production helper dispatch", as
   ).toBeLessThan(workflow.indexOf("gh release upload"));
   expect(workflow).toContain("sha256sum --strict --check");
   expect(workflow).not.toContain("pull_request:");
+});
+
+it("pins branch validation to its separate workflow and source commit", async () => {
+  const pin = {
+    ...(await fixture({ validationOnly: true })),
+    sourceRef: "refs/heads/fix/example",
+  };
+  const verify = vi.fn();
+  await verifyCiValidationArtifact(pin, verify);
+  const args = verify.mock.calls[0]?.[0] as string[];
+  expect(args).toContain(
+    "n624-dev/latex-renderer/.github/workflows/server-update-validation.yml",
+  );
+  expect(args).toContain(pin.sourceRef);
+  expect(args).toContain(commit);
+  expect(args).toContain("--deny-self-hosted-runners");
+  expect(args).not.toContain(`refs/tags/${tag}`);
+});
+it.each([
+  "refs/tags/v9.2.0-rc.1",
+  "refs/pull/1/merge",
+  "refs/heads/../main",
+  "refs/heads/main.lock",
+  "refs/heads/a//b",
+  "main",
+  "",
+])("rejects invalid validation source refs: %s", (sourceRef) => {
+  expect(() =>
+    validationAttestationArgs({ artifact: "/a", tag, commit, sourceRef }),
+  ).toThrow();
+});
+it("rejects cross-mode artifacts even when the attestation verifier is mocked successful", async () => {
+  await expect(
+    verifyCiReleaseArtifact(await fixture({ validationOnly: true }), vi.fn()),
+  ).rejects.toThrow("metadata");
+  await expect(
+    verifyCiValidationArtifact(
+      { ...(await fixture()), sourceRef: "refs/heads/main" },
+      vi.fn(),
+    ),
+  ).rejects.toThrow("metadata");
+});
+it("rejects validation tampering and signature failures before accepting branch metadata", async () => {
+  const pin = {
+    ...(await fixture({ validationOnly: true })),
+    sourceRef: "refs/heads/main",
+  };
+  await expect(
+    verifyCiValidationArtifact(pin, () => {
+      throw new Error("bad signature");
+    }),
+  ).rejects.toThrow("bad signature");
+  await writeFile(pin.artifact, "tampered");
+  const verify = vi.fn();
+  await expect(verifyCiValidationArtifact(pin, verify)).rejects.toThrow(
+    "digest",
+  );
+  expect(verify).not.toHaveBeenCalled();
+});
+
+it("keeps validation manual, source-pinned, short-lived and unable to publish", async () => {
+  const workflow = await readFile(
+    ".github/workflows/server-update-validation.yml",
+    "utf8",
+  );
+  expect(workflow).toContain("workflow_dispatch:");
+  for (const forbidden of [
+    "pull_request:",
+    "push:",
+    "schedule:",
+    "contents: write",
+    "gh release",
+    "git push",
+    "actions/cache",
+    "secrets.",
+  ])
+    expect(workflow).not.toContain(forbidden);
+  expect(workflow).toContain("retention-days: 1");
+  expect(workflow).toContain(
+    "artifact-ids: ${{ needs.build.outputs.artifact-id }}",
+  );
+  expect(workflow).toContain("ref: ${{ github.sha }}");
+  expect(workflow).toContain("ref: ${{ needs.build.outputs.commit }}");
+  expect(workflow).toContain("deploy/ci/update-e2e.mjs");
+  expect(workflow).toContain("deploy/ci/provision-update-host.mjs");
+  expect(workflow).toContain("--validation-only");
 });

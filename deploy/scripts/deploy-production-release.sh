@@ -228,6 +228,7 @@ fi
 chown root:root /etc/latex-renderer/secrets/update-manager-token
 chmod 0400 /etc/latex-renderer/secrets/update-manager-token
 
+/usr/local/bin/node "$source_root/deploy/scripts/application-database-file.mjs"
 admin_local_root=$(mktemp -d /tmp/latex-renderer-admin-local.XXXXXX)
 chown latex-renderer:latex-renderer "$admin_local_root"
 chmod 0700 "$admin_local_root"

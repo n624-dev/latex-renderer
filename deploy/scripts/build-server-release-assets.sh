@@ -1,14 +1,23 @@
 #!/bin/sh
 set -eu
 
-if [ "$#" -lt 2 ] || [ "$#" -gt 3 ]; then
-  echo "usage: build-server-release-assets.sh RELEASE_TAG OUTPUT_DIRECTORY [VALIDATED_CANDIDATE_TAG]" >&2
+if [ "$#" -lt 2 ] || [ "$#" -gt 4 ]; then
+  echo "usage: build-server-release-assets.sh RELEASE_TAG OUTPUT_DIRECTORY [VALIDATED_CANDIDATE_TAG] [--validation-only]" >&2
   exit 64
 fi
 
 release_tag=$1
 output_directory=$2
 validated_candidate_tag=${3:-}
+validation_only=false
+case "${4:-}" in
+  '') ;;
+  --validation-only) validation_only=true ;;
+  *) echo "Unknown artifact build mode" >&2; exit 64 ;;
+esac
+if [ "$validation_only" = true ]; then
+  case "$release_tag" in *-rc.*) ;; *) echo "Branch validation requires an RC package version" >&2; exit 64 ;; esac
+fi
 if ! printf '%s\n' "$release_tag" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.[1-9][0-9]*)?$'; then
   echo "release tag must use vX.Y.Z or vX.Y.Z-rc.N" >&2
   exit 64
@@ -41,7 +50,9 @@ esac
 
 repository_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
 version=${release_tag#v}
-commit=$(git -C "$repository_root" rev-list -n 1 "$release_tag")
+source_ref=$release_tag
+if [ "$validation_only" = true ]; then source_ref=HEAD; fi
+commit=$(git -C "$repository_root" rev-list -n 1 "$source_ref")
 if [ -z "$commit" ] || [ "$(git -C "$repository_root" rev-parse HEAD)" != "$commit" ]; then
   echo "$release_tag must point at the checked-out commit" >&2
   exit 65
@@ -62,7 +73,7 @@ if [ -n "$(find "$output_directory" -mindepth 1 -maxdepth 1 -print -quit)" ]; th
   echo "output directory must be empty" >&2
   exit 73
 fi
-git -C "$repository_root" archive "$release_tag" | tar -x -C "$stage"
+git -C "$repository_root" archive "$commit" | tar -x -C "$stage"
 
 # The repository uses one systemd alias symlink. Release bundles reject
 # symlinks, so materialize that known alias as a regular file before applying
@@ -82,7 +93,7 @@ fi
 
 renderer_fingerprint=$(node "$repository_root/deploy/scripts/runtime-image-identity.mjs" --renderer-fingerprint)
 legacy_fingerprint=$(node "$repository_root/deploy/scripts/runtime-image-identity.mjs" --release-legacy-fingerprint)
-node - "$stage/.latex-renderer-release.json" "$stage/deploy/release-policy.json" "$stage/package.json" "$version" "$release_tag" "$commit" "$legacy_fingerprint" "$validated_candidate_tag" "$renderer_fingerprint" <<'NODE'
+node - "$stage/.latex-renderer-release.json" "$stage/deploy/release-policy.json" "$stage/package.json" "$version" "$release_tag" "$commit" "$legacy_fingerprint" "$validated_candidate_tag" "$renderer_fingerprint" "$validation_only" <<'NODE'
 const fs = require("node:fs");
 const policy = JSON.parse(fs.readFileSync(process.argv[3], "utf8"));
 const packageJson = JSON.parse(fs.readFileSync(process.argv[4], "utf8"));
@@ -100,6 +111,7 @@ fs.writeFileSync(process.argv[2], `${JSON.stringify({
   rendererRuntimeIdentity: { schemaVersion: 2, fingerprint: process.argv[10] },
   validatedCandidateTag: process.argv[9] || null,
   provenance: "github-artifact-attestation",
+  ...(process.argv[11] === "true" ? { validationOnly: true } : {}),
 }, null, 2)}\n`, { mode: 0o644 });
 NODE
 
