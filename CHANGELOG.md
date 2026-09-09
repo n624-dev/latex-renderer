@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 1.3.4-rc.7 - 2026-09-09
+
+- Fix release E2E provisioning by registering Docker's signed Ubuntu APT repository before installing rootless extras. Production APT configuration is unchanged.
+- Preserve the invoking non-root deployment user on first installation instead of assuming an ubuntu account.
+- Avoid reacquiring the application deployment lock for clean Updater recovery; interrupted activation still requires exclusive recovery and verified state.
+- Release the shared mutation lock when its owner terminates, including SIGKILL, by tying the lock helper to an owner-held pipe.
+- Candidate only: RC.6 stopped during CI host provisioning and was not published. Keep its tag unchanged; require the release-only upgrade E2E and separate post-publication host validation before stable promotion.
+
 ## 1.3.4-rc.6 - 2026-09-09
 
 - Update gray-matter's js-yaml dependency to 3.15.2 to enforce the empty-merge CPU budget (GHSA-2883-xcg3-v3hh), without weakening dependency audits.
