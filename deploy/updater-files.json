@@ -4,6 +4,7 @@
   "deploy/scripts/update-manager-helper.mjs",
   "deploy/scripts/application-database-file.mjs",
   "deploy/scripts/environment.mjs",
+  "deploy/scripts/update-log-retention.mjs",
   "deploy/scripts/release-assembly.mjs",
   "deploy/scripts/release-archive.mjs",
   "deploy/scripts/release-attestation.mjs",

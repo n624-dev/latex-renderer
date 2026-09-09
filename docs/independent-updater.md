@@ -75,6 +75,33 @@ rollback mechanism.
 
 ## Recovery
 
+### Bounded diagnostic retention
+
+Update Manager diagnostic `.log` files expire seven days after their last write.
+The controller collects at startup, before/after operations and every 15 minutes
+while running, even when there are no new updates. A stopped host collects on
+the next controller startup. The active operation is protected until final log
+writes and restart scheduling finish. Completed/orphan logs are removed oldest
+first to enforce a default 40 MiB budget. One 4 MiB operation-log allowance is
+reserved, so idle retained logs may be reduced to 36 MiB before the next update.
+If old protected data alone exceeds the budget, it is not forcibly removed.
+
+Configure `UPDATE_LOG_RETENTION_DAYS` and `UPDATE_LOG_TOTAL_MAX_BYTES` in the
+root-owned Update Manager environment file; the total must accommodate
+`UPDATE_MAX_OPERATION_LOG_BYTES` (default 4 MiB). New updates do not start if
+their preflight log collection fails. Periodic errors are reported on state
+changes rather than every tick. Links/special files and cross-device entries are
+rejected; this collector never recursively deletes directories.
+
+Only diagnostic logs expire. Small operation result JSON (including failed
+status) and controller state remain for recovery and the management API; an old
+operation can return an empty log after collection. No additional permanent
+diagnostic archive is created, and no response body or credentials are added to
+these diagnostics. This policy does not manage journald, application backups,
+TeX snapshots or GHCR.
+
+### Failed deployment checks
+
 Application deployment logs identify validation checkpoints with
 `Deployment check: NAME`. A failing command records
 `Deployment failed: step=NAME exit=CODE` before temporary-file cleanup and local

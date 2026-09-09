@@ -1,5 +1,5 @@
 import { execFile, spawnSync } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { copyFile, mkdtemp, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -43,22 +43,16 @@ it.each([
       response.end(body);
     });
     try {
+      // Quotes, spaces and shell metacharacters must remain literal path data.
+      const copiedHelper = join(root, "helper ' ; $() ` literal.sh");
+      await copyFile(helper, copiedHelper);
       await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
       const address = server.address();
       if (!address || typeof address === "string")
         throw new Error("no fixture address");
       const result = await exec("/bin/sh", [
-        "-c",
-        `
-      set -eu
-      . "$1"
-      temporary_root=$2
-      deployment_checkpoint fixture-http
-      trap 'status=$?; if [ "$status" -ne 0 ]; then deployment_report_failure "$status"; fi' EXIT
-      deployment_expect_body "$3" 'literal.[marker]'
-    `,
-        "fixture",
-        helper,
+        "tests/fixtures/deployment-http-check.sh",
+        copiedHelper,
         root,
         `http://127.0.0.1:${address.port}/?secret=private-query-value`,
       ]).then(
