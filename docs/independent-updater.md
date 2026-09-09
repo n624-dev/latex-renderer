@@ -100,6 +100,11 @@ server-release runs on explicit RC/stable release dispatch, not ordinary PRs:
    Cloudflare credentials or mirror leases are provided. Provisioning refuses
    an existing installation and records a sealed run/boot marker; the CI
    deployment entry also checks this marker.
+   The Ubuntu 24.04 amd64 CI host registers the [official Docker APT repository](https://docs.docker.com/engine/install/ubuntu/)
+   with a dedicated `Signed-By` keyring and refreshes package indexes before
+   installing `docker-ce-rootless-extras`. Runner images need not retain that
+   repository even when Docker is preinstalled. This setup is CI-only; the
+   production installer and this VPS's APT configuration are not changed.
 3. Install the frozen previous signed immutable RC, create an owner and persistent
    storage data, and render English/Japanese PDF/PNG. Apply the signed candidate
    through the same sealed-assembly deployment function used by production.
