@@ -56,7 +56,7 @@ does not deploy/migrate the application. It verifies the immutable server
 artifact, then uses only .latex-renderer-updater.json and declared Updater files;
 application manifest/DB format is not the bootstrap contract. There is no URL
 override, Draft flag or verification-disable option. Downloads are temporary;
-interrupted bootstrap downloads are collected under the shared lock at boot or
+interrupted bootstrap downloads are collected under the shared lock on activation or
 the next bootstrap mutation. Upgrade requires 4 GiB free for its bounded peak.
 
 The schema-1 envelope pins version, commit, Node major and each file's size/hash.
@@ -89,6 +89,21 @@ not merely an old code symlink.
 
 ## Release-only CI
 
+On a fresh sudo installation, the helper uses the invoking non-root account
+until `prepare-host.sh` persists `UPDATE_DEPLOY_USER`. An explicit or persisted
+account still takes precedence. CI therefore builds and deploys as `runner`,
+without assuming that an `ubuntu` account or its pnpm installation exists.
+
+The recovery dependency verifies a clean committed Updater slot read-only.
+It does not reacquire the application deployment lock unless an interrupted
+activation journal exists. Pending recovery still acquires the shared lock,
+rechecks state, restores controller data, and collects unused slots before
+the service starts. A corrupt state or committed slot remains a hard failure.
+
+The shared lock helper waits on a pipe owned by its caller, not an independent
+infinite sleep. If a manual bootstrap is terminated (including SIGKILL), EOF
+releases its kernel lock without relying on JavaScript cleanup or a VPS reboot.
+
 server-release runs on explicit RC/stable release dispatch, not ordinary PRs:
 
 1. Build/attest once and transfer by an immutable Actions artifact ID retained
@@ -100,6 +115,11 @@ server-release runs on explicit RC/stable release dispatch, not ordinary PRs:
    Cloudflare credentials or mirror leases are provided. Provisioning refuses
    an existing installation and records a sealed run/boot marker; the CI
    deployment entry also checks this marker.
+   The Ubuntu 24.04 amd64 CI host registers the [official Docker APT repository](https://docs.docker.com/engine/install/ubuntu/)
+   with a dedicated `Signed-By` keyring and refreshes package indexes before
+   installing `docker-ce-rootless-extras`. Runner images need not retain that
+   repository even when Docker is preinstalled. This setup is CI-only; the
+   production installer and this VPS's APT configuration are not changed.
 3. Install the frozen previous signed immutable RC, create an owner and persistent
    storage data, and render English/Japanese PDF/PNG. Apply the signed candidate
    through the same sealed-assembly deployment function used by production.

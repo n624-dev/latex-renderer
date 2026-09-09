@@ -12,11 +12,13 @@ import {
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import { acquireMutationLockForPath } from "../deploy/scripts/mutation-lock.mjs";
 import {
   UpdaterSlots,
   updaterEnvelope,
   UPDATER_FILES,
+  recoverPendingUpdater,
 } from "../deploy/scripts/updater-slots.mjs";
 
 const roots: string[] = [];
@@ -46,6 +48,92 @@ async function fixture() {
   await slots.nominate(first);
   return { root, source, slots, stage, first };
 }
+it("starts clean migration recovery while the deployment holds the real lock", async () => {
+  const f = await fixture();
+  const path = join(f.root, "mutation.lock");
+  const lock = await acquireMutationLockForPath(path);
+  const acquire = vi.fn(() => acquireMutationLockForPath(path));
+  const restore = vi.fn();
+  const before = await readFile(join(f.slots.root, "state.json"));
+  try {
+    expect(await recoverPendingUpdater(f.slots, acquire, restore)).toBe(false);
+    expect(acquire).not.toHaveBeenCalled();
+    expect(restore).not.toHaveBeenCalled();
+    expect(await readFile(join(f.slots.root, "state.json"))).toEqual(before);
+  } finally {
+    await lock.release();
+  }
+});
+it("requires the real lock for a pending journal, then restores it after release", async () => {
+  const f = await fixture();
+  await f.slots.nominate(await f.stage("9.1.0"));
+  await f.slots.begin();
+  const path = join(f.root, "mutation.lock");
+  const lock = await acquireMutationLockForPath(path);
+  const acquire = () => acquireMutationLockForPath(path);
+  const restore = vi.fn(() => f.slots.recover());
+  try {
+    await expect(
+      recoverPendingUpdater(f.slots, acquire, restore),
+    ).rejects.toMatchObject({ code: "MUTATION_LOCK_BUSY" });
+    expect(restore).not.toHaveBeenCalled();
+    expect((await f.slots.state()).pending).not.toBeNull();
+  } finally {
+    await lock.release();
+  }
+  expect(await recoverPendingUpdater(f.slots, acquire, restore)).toBe(true);
+  expect((await f.slots.state()).current).toBe(f.first);
+  expect((await f.slots.state()).pending).toBeNull();
+});
+it("never treats corrupt clean state as a reason to skip recovery validation", async () => {
+  const f = await fixture();
+  await writeFile(join(f.slots.root, "state.json"), "broken");
+  await expect(
+    recoverPendingUpdater(f.slots, vi.fn(), vi.fn()),
+  ).rejects.toThrow();
+});
+it("rechecks a journal after acquiring the recovery lock", async () => {
+  const f = await fixture();
+  await f.slots.nominate(await f.stage("9.1.0"));
+  await f.slots.begin();
+  const release = vi.fn(async () => {});
+  const restore = vi.fn();
+  const acquire = async () => {
+    await f.slots.recover();
+    return { release };
+  };
+  expect(await recoverPendingUpdater(f.slots, acquire, restore)).toBe(false);
+  expect(restore).not.toHaveBeenCalled();
+  expect(release).toHaveBeenCalledOnce();
+});
+it("releases the recovery lock when controller-state restoration fails", async () => {
+  const f = await fixture();
+  await f.slots.nominate(await f.stage("9.1.0"));
+  await f.slots.begin();
+  const path = join(f.root, "mutation.lock");
+  await expect(
+    recoverPendingUpdater(
+      f.slots,
+      () => acquireMutationLockForPath(path),
+      () => Promise.reject(new Error("invalid backup")),
+    ),
+  ).rejects.toThrow("invalid backup");
+  const lock = await acquireMutationLockForPath(path);
+  await lock.release();
+  expect((await f.slots.state()).pending).not.toBeNull();
+});
+it("refuses a damaged committed slot even without a pending journal", async () => {
+  const f = await fixture();
+  await writeFile(
+    join(f.slots.root, "slots", f.first, "package.json"),
+    "tampered",
+  );
+  const acquire = vi.fn();
+  await expect(
+    recoverPendingUpdater(f.slots, acquire, vi.fn()),
+  ).rejects.toThrow();
+  expect(acquire).not.toHaveBeenCalled();
+});
 it("keeps the controller runnable after the application source is removed", async () => {
   const f = await fixture();
   await rm(f.source, { recursive: true });

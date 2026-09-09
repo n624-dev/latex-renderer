@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { configureDockerRepository } from "./docker-repository.mjs";
 
 if (
   process.getuid() !== 0 ||
@@ -37,6 +38,7 @@ await writeFile(
   { mode: 0o600, flag: "wx" },
 );
 run("/bin/sh", [resolve(source, "deploy/scripts/install-host.sh")]);
+await configureDockerRepository(run);
 run("/usr/bin/apt-get", [
   "install",
   "--no-install-recommends",
