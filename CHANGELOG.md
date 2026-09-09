@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 1.3.5-rc.1 - 2026-09-09
+
+- Update Hono from locked version 4.13.0 to 4.13.5 across all seven consuming applications, including its Node server peer resolutions. No other dependency version or application behavior is intentionally changed.
+- Include upstream fixes for fragment-aware query parsing, static site generation path containment and bounded dot-notation body parsing. Keep existing authentication, routing and request validation enabled.
+- Candidate only: require signed-artifact update/recovery E2E and separate designated-host validation before Stable promotion. Stable 1.3.4 and its published assets remain unchanged.
+
 ## 1.3.4 - 2026-09-09
 
 - Promote the published immutable `v1.3.4-rc.10` candidate with no functional changes. RC10 passed signed-artifact upgrade/recovery E2E and the designated VPS update from RC5, including English/Japanese PDF/PNG rendering, public Worker boundary checks and independent Updater activation.
