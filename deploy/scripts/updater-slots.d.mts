@@ -13,6 +13,11 @@ export interface UpdaterState {
   pending: { from: string; previous: string | null } | null;
 }
 export const UPDATER_FILES: readonly string[];
+export function recoverPendingUpdater(
+  slots: UpdaterSlots,
+  acquireLock: () => Promise<{ release(): Promise<void> }>,
+  restore: () => Promise<unknown>,
+): Promise<boolean>;
 export function updaterEnvelope(
   source: string,
   identity: { version: string; commit: string },

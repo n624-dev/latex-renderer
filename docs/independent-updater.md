@@ -56,7 +56,7 @@ does not deploy/migrate the application. It verifies the immutable server
 artifact, then uses only .latex-renderer-updater.json and declared Updater files;
 application manifest/DB format is not the bootstrap contract. There is no URL
 override, Draft flag or verification-disable option. Downloads are temporary;
-interrupted bootstrap downloads are collected under the shared lock at boot or
+interrupted bootstrap downloads are collected under the shared lock on activation or
 the next bootstrap mutation. Upgrade requires 4 GiB free for its bounded peak.
 
 The schema-1 envelope pins version, commit, Node major and each file's size/hash.
@@ -88,6 +88,17 @@ database migration needs that release's recovery procedure and encrypted backup,
 not merely an old code symlink.
 
 ## Release-only CI
+
+On a fresh sudo installation, the helper uses the invoking non-root account
+until `prepare-host.sh` persists `UPDATE_DEPLOY_USER`. An explicit or persisted
+account still takes precedence. CI therefore builds and deploys as `runner`,
+without assuming that an `ubuntu` account or its pnpm installation exists.
+
+The recovery dependency verifies a clean committed Updater slot read-only.
+It does not reacquire the application deployment lock unless an interrupted
+activation journal exists. Pending recovery still acquires the shared lock,
+rechecks state, restores controller data, and collects unused slots before
+the service starts. A corrupt state or committed slot remains a hard failure.
 
 server-release runs on explicit RC/stable release dispatch, not ordinary PRs:
 

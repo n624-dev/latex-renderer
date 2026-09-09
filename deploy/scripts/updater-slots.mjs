@@ -12,6 +12,27 @@ import {
 } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 
+// A clean first migration may already hold the application mutation lock while
+// systemd starts the new recovery dependency. Nothing needs restoring then:
+// verify the committed slot read-only, without reacquiring the parent's lock.
+// A pending journal still requires exclusive recovery and a fresh state check.
+export async function recoverPendingUpdater(slots, acquireLock, restore) {
+  const state = await slots.state();
+  await slots.verify(state.pending?.from ?? state.current);
+  if (!state.pending) return false;
+  const lock = await acquireLock();
+  try {
+    const current = await slots.state();
+    await slots.verify(current.pending?.from ?? current.current);
+    if (!current.pending) return false;
+    await restore();
+    await slots.collect();
+    return true;
+  } finally {
+    await lock.release();
+  }
+}
+
 // Bootstrap protocol 1 is independent of application release/database schemas.
 export const UPDATER_FILES = Object.freeze([
   "package.json",

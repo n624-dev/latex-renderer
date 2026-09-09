@@ -11,7 +11,7 @@ import {
   statfs,
 } from "node:fs/promises";
 import { join } from "node:path";
-import { UpdaterSlots } from "./updater-slots.mjs";
+import { UpdaterSlots, recoverPendingUpdater } from "./updater-slots.mjs";
 import { downloadPublishedRelease } from "./published-release.mjs";
 import { acquireMutationLock } from "./mutation-lock.mjs";
 
@@ -200,49 +200,46 @@ if (verb === "status") {
       updaterCommit: envelope.commit,
     }),
   );
+} else if (verb === "recover") {
+  await recoverPendingUpdater(slots, acquireMutationLock, restore);
 } else {
   const lock = await acquireMutationLock();
   try {
     const protectedState = await slots.state();
     await slots.verify(protectedState.pending?.from ?? protectedState.current);
     await cleanupDownloads();
-    if (verb === "recover") {
-      await restore();
-      await slots.collect();
-    } else {
-      if (verb === "upgrade") {
-        const disk = await statfs("/opt/latex-renderer/update-staging");
-        if (disk.bavail * disk.bsize < 4 * 1024 ** 3)
-          throw new Error(
-            "Insufficient space for bounded bootstrap download/extraction peak",
-          );
-        await mkdir("/opt/latex-renderer/update-staging", {
-          recursive: true,
-          mode: 0o711,
-        });
-        const stage = await mkdtemp(
-          "/opt/latex-renderer/update-staging/updater-",
+    if (verb === "upgrade") {
+      const disk = await statfs("/opt/latex-renderer/update-staging");
+      if (disk.bavail * disk.bsize < 4 * 1024 ** 3)
+        throw new Error(
+          "Insufficient space for bounded bootstrap download/extraction peak",
         );
-        try {
-          const release = await downloadPublishedRelease(version, stage);
-          const envelope = JSON.parse(
-            await readFile(
-              join(release.source, ".latex-renderer-updater.json"),
-              "utf8",
-            ),
-          );
-          if (
-            envelope.version !== release.version ||
-            envelope.commit !== release.commit
-          )
-            throw new Error("Updater envelope differs from signed release");
-          await slots.nominate(await slots.stage(release.source, envelope));
-        } finally {
-          await rm(stage, { recursive: true, force: true });
-        }
+      await mkdir("/opt/latex-renderer/update-staging", {
+        recursive: true,
+        mode: 0o711,
+      });
+      const stage = await mkdtemp(
+        "/opt/latex-renderer/update-staging/updater-",
+      );
+      try {
+        const release = await downloadPublishedRelease(version, stage);
+        const envelope = JSON.parse(
+          await readFile(
+            join(release.source, ".latex-renderer-updater.json"),
+            "utf8",
+          ),
+        );
+        if (
+          envelope.version !== release.version ||
+          envelope.commit !== release.commit
+        )
+          throw new Error("Updater envelope differs from signed release");
+        await slots.nominate(await slots.stage(release.source, envelope));
+      } finally {
+        await rm(stage, { recursive: true, force: true });
       }
-      await activate();
     }
+    await activate();
   } finally {
     await lock.release();
   }

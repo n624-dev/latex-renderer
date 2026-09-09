@@ -587,7 +587,9 @@ async function deploymentIdentity() {
       if (error?.code !== "ENOENT") throw error;
     }
   }
-  deployUser ??= "ubuntu";
+  // On a fresh host prepare-host has not written update-manager.env yet.
+  // Match its sudo caller fallback instead of silently changing runner -> ubuntu.
+  deployUser ??= process.env.SUDO_USER ?? "ubuntu";
   if (deployUser === "root" || !/^[a-z_][a-z0-9_-]{0,31}$/.test(deployUser))
     throw new Error("UPDATE_DEPLOY_USER must be a valid non-root account");
   const uid = (await runCapture("id", ["-u", deployUser])).trim();
