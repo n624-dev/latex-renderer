@@ -232,3 +232,13 @@ recovery, retention, state corruption, unsafe paths and protocol rejection.
 Mocks do not establish actual Sigstore/systemd/Docker success. The real release
 E2E runs only upon RC/stable dispatch; it and the production migration must not
 be reported successful until results exist.
+
+On 2026-09-09, [branch validation run 34329605991](https://github.com/n624-dev/latex-renderer/actions/runs/34329605991)
+passed for commit `de5494988ae8dd3c7a162844309a43321e700279`. It verified
+GitHub-issued branch provenance, distinct service-UID database writes, the
+unchanged RC.5 baseline upgrade, owner/storage preservation, English/Japanese
+PDF/PNG rendering, failed Updater startup recovery and interrupted activation
+recovery. Build took about 2 minutes 9 seconds and the disposable-host E2E job
+about 10 minutes 19 seconds. This is validation-only evidence, not a published
+RC.9 artifact or a successful update of the production VPS. The final RC.10
+tagged artifacts and designated-host update still require their own results.

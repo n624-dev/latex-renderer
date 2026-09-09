@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 1.3.4-rc.10 - 2026-09-09
+
+- Prepare SQLite database and sidecar files with explicit shared-group write permissions before migration; preserve existing contents and refuse unsafe links or initial overwrite. Keep the unchanged signed RC.5 baseline compatible through exclusive database creation.
+- Add a manual tagless update-validation workflow with separately pinned branch provenance, one-day artifacts and no build cache or production credentials. Run the same update/recovery E2E without creating a Release or consuming an RC tag.
+- Disposable-host validation passed for commit `de5494988ae8dd3c7a162844309a43321e700279`: distinct service-user database access, RC.5 upgrade, owner/storage preservation, English/Japanese PDF/PNG rendering, failed Updater startup and interrupted activation recovery.
+- Candidate only: RC.9 failed baseline database migration before publication. Preserve its tag. Branch validation does not replace the final tagged release E2E or separate post-publication validation on the designated host.
+
 ## 1.3.4-rc.9 - 2026-09-09
 
 - Isolate rootless Docker setup from caller and PAM-injected XDG/Docker settings. Set worker-owned configuration paths after the user transition and verify the responding daemon is rootless before continuing.
