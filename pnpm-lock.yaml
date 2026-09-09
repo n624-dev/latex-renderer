@@ -81,7 +81,7 @@ importers:
     dependencies:
       '@hono/node-server':
         specifier: ^2.0.12
-        version: 2.1.0(hono@4.13.0)
+        version: 2.1.0(hono@4.13.5)
       '@latex-renderer/auth':
         specifier: workspace:*
         version: link:../../packages/auth
@@ -104,8 +104,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/zip-validation
       hono:
-        specifier: ^4.9.2
-        version: 4.13.0
+        specifier: ^4.13.5
+        version: 4.13.5
       yazl:
         specifier: ^3.3.1
         version: 3.3.1
@@ -145,7 +145,7 @@ importers:
     dependencies:
       '@hono/node-server':
         specifier: ^2.0.12
-        version: 2.1.0(hono@4.13.0)
+        version: 2.1.0(hono@4.13.5)
       '@latex-renderer/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -153,8 +153,8 @@ importers:
         specifier: 4.0.3
         version: 4.0.3
       hono:
-        specifier: ^4.9.2
-        version: 4.13.0
+        specifier: ^4.13.5
+        version: 4.13.5
       marked:
         specifier: 18.0.9
         version: 18.0.9
@@ -189,8 +189,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/gateway-core
       hono:
-        specifier: ^4.9.2
-        version: 4.13.0
+        specifier: ^4.13.5
+        version: 4.13.5
       zod:
         specifier: ^4.0.17
         version: 4.4.3
@@ -199,7 +199,7 @@ importers:
     dependencies:
       '@hono/node-server':
         specifier: ^2.0.12
-        version: 2.1.0(hono@4.13.0)
+        version: 2.1.0(hono@4.13.5)
       '@latex-renderer/auth':
         specifier: workspace:*
         version: link:../../packages/auth
@@ -219,8 +219,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/zip-validation
       hono:
-        specifier: ^4.9.2
-        version: 4.13.0
+        specifier: ^4.13.5
+        version: 4.13.5
 
   apps/mcp-server:
     dependencies:
@@ -247,7 +247,7 @@ importers:
     dependencies:
       '@hono/node-server':
         specifier: ^1.19.9
-        version: 1.19.17(hono@4.13.0)
+        version: 1.19.17(hono@4.13.5)
       '@latex-renderer/auth':
         specifier: workspace:*
         version: link:../../packages/auth
@@ -264,8 +264,8 @@ importers:
         specifier: ^2.0.0
         version: 2.0.0
       hono:
-        specifier: ^4.9.0
-        version: 4.13.0
+        specifier: ^4.13.5
+        version: 4.13.5
       zod:
         specifier: ^4.2.0
         version: 4.4.3
@@ -274,7 +274,7 @@ importers:
     dependencies:
       '@hono/node-server':
         specifier: ^2.0.12
-        version: 2.1.0(hono@4.13.0)
+        version: 2.1.0(hono@4.13.5)
       '@latex-renderer/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
@@ -291,8 +291,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/zip-validation
       hono:
-        specifier: ^4.9.2
-        version: 4.13.0
+        specifier: ^4.13.5
+        version: 4.13.5
 
   apps/renderer-worker:
     dependencies:
@@ -316,7 +316,7 @@ importers:
     dependencies:
       '@hono/node-server':
         specifier: ^2.0.12
-        version: 2.1.0(hono@4.13.0)
+        version: 2.1.0(hono@4.13.5)
       '@latex-renderer/gateway-core':
         specifier: workspace:*
         version: link:../../packages/gateway-core
@@ -324,8 +324,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/shared
       hono:
-        specifier: ^4.9.2
-        version: 4.13.0
+        specifier: ^4.13.5
+        version: 4.13.5
 
   packages/api-client:
     dependencies:
@@ -1693,8 +1693,8 @@ packages:
     resolution: {integrity: sha512-5v6yZd4JK3eMI3FqqCouswVqwugaA9r4dNZB1wwcmrD02QkV5H0y7XBQW8QwQqEaZY1pM9aqORSORhJRdNK44Q==}
     engines: {node: '>=6.0'}
 
-  hono@4.13.0:
-    resolution: {integrity: sha512-jhunvfHWxd7J5EFfSgH4xsYJzSe/lfqbUCxiyyeaQasUsXeEHXtzVid+7EOGByc5JnFa23SSFL3Y2RV/z1T+eQ==}
+  hono@4.13.5:
+    resolution: {integrity: sha512-O6+/eCYRkzzzy0rPWwKLiGBR1nFuUPZynnwjxN1MBA62NNqbT0wQEzQyK2gSO5yDIDB336sXQleAhOHrzlYyKw==}
     engines: {node: '>=16.9.0'}
 
   iconv-lite@0.4.24:
@@ -2410,13 +2410,13 @@ snapshots:
       '@eslint/core': 1.2.1
       levn: 0.4.1
 
-  '@hono/node-server@1.19.17(hono@4.13.0)':
+  '@hono/node-server@1.19.17(hono@4.13.5)':
     dependencies:
-      hono: 4.13.0
+      hono: 4.13.5
 
-  '@hono/node-server@2.1.0(hono@4.13.0)':
+  '@hono/node-server@2.1.0(hono@4.13.5)':
     dependencies:
-      hono: 4.13.0
+      hono: 4.13.5
 
   '@humanfs/core@0.19.2':
     dependencies:
@@ -3205,7 +3205,7 @@ snapshots:
       section-matter: 1.0.0
       strip-bom-string: 1.0.0
 
-  hono@4.13.0: {}
+  hono@4.13.5: {}
 
   iconv-lite@0.4.24:
     dependencies:
