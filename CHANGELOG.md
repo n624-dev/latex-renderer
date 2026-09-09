@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 1.3.4-rc.9 - 2026-09-09
+
+- Isolate rootless Docker setup from caller and PAM-injected XDG/Docker settings. Set worker-owned configuration paths after the user transition and verify the responding daemon is rootless before continuing.
+- Prepare the disposable CI host's per-user environment and Docker service before deploying the unchanged signed RC.5 baseline. Production does not rewrite machine-wide environment defaults.
+- Candidate only: RC.8 passed build and attestation but failed during baseline rootless Docker setup, before candidate deployment. Preserve its tag; require release-only update/recovery E2E and separate post-publication host validation before stable promotion.
+
 ## 1.3.4-rc.8 - 2026-09-09
 
 - Use a validated standalone CI hostname consistently across TLS, proxy headers and application origins without bypassing production profile validation.
