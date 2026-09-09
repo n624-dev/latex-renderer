@@ -291,13 +291,19 @@ fi
 
 client_base="$public_origin/downloads/client"
 mcpb_base="$public_origin/downloads/mcpb"
-local_manifest_path="$build_root/apps/public-web/dist/downloads/client/manifest.json"
+if [ "$deployment_mode" = standalone ]; then
+  local_manifest_path="$build_root/client-dist/manifest.json"
+  local_mcpb_manifest_path="$build_root/client-dist/mcpb.json"
+else
+  local_manifest_path="$build_root/apps/public-web/dist/downloads/client/manifest.json"
+  local_mcpb_manifest_path="$build_root/apps/public-web/dist/downloads/mcpb/mcpb.json"
+fi
 archive_path="$temporary_root/client-archive.zip"
 actual_hash=$(/usr/local/bin/node "$source_root/deploy/scripts/verify-public-client-assets.mjs" \
   "$client_base" "$local_manifest_path" "$archive_path" "$release_id")
 unzip -t "$archive_path" >/dev/null
 mcpb_hash=$(/usr/local/bin/node "$source_root/deploy/scripts/verify-public-mcpb-assets.mjs" \
-  "$mcpb_base" "$build_root/apps/public-web/dist/downloads/mcpb/mcpb.json" \
+  "$mcpb_base" "$local_mcpb_manifest_path" \
   "$temporary_root/latex-renderer-local.mcpb" "$release_id")
 mcpb_verify_root=$(mktemp -d /tmp/latex-renderer-mcpb-verify.XXXXXX)
 chown "$sync_user:$sync_group" "$mcpb_verify_root"
@@ -308,7 +314,7 @@ install -o "$sync_user" -g "$sync_group" -m 0600 \
 runuser -u "$sync_user" -- /usr/local/bin/node \
   "$source_root/client/verify-mcpb.mjs" \
   "$mcpb_verify_root/latex-renderer-local.mcpb" \
-  "$build_root/apps/public-web/dist/downloads/mcpb/mcpb.json"
+  "$local_mcpb_manifest_path"
 cache_buster="release=$release_id&fresh=$(date +%s)"
 curl --fail --silent --show-error "$client_base/install.mjs?$cache_buster" | grep -q 'installDistribution'
 curl --fail --silent --show-error "$public_origin/downloads/?$cache_buster" | grep -q '最新版ZIP'

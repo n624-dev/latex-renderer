@@ -135,6 +135,11 @@ server-release runs on explicit RC/stable release dispatch, not ordinary PRs:
 
 The historical baseline is explicit in deploy/ci/update-e2e.mjs; review it when
 changing the migration floor and never rewrite it during RC-to-stable promotion.
+The standalone driver verifies downloads against `client-dist`; it does not
+require a Workers build. Bootstrap also generates the static-site assets as the
+unprivileged build user for older signed drivers (including the frozen RC.5)
+which expect `apps/public-web/dist/downloads`. This copies already-built client
+bytes without re-signing them, deploying Workers, or modifying signed source.
 
 CI is not a production “allow Draft” switch. Old production Updaters still reject
 unpublished releases. Prepublication CI enters the shared post-verification

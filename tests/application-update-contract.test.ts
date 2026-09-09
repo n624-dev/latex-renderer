@@ -377,6 +377,12 @@ describe("release-based application updates", () => {
       if (!firstOutput) throw new Error("production output allowlist is empty");
       for (const output of requiredProductionBuildOutputs)
         writeFixture(buildSource, output, `built:${output}\n`);
+      const legacyManifests = [
+        "apps/public-web/dist/downloads/client/manifest.json",
+        "apps/public-web/dist/downloads/mcpb/mcpb.json",
+      ];
+      for (const path of legacyManifests)
+        writeFixture(buildSource, path, `derived:${path}\n`);
 
       await assembleBuildArtifacts({
         verifiedSource,
@@ -391,6 +397,8 @@ describe("release-based application updates", () => {
 
       expect(read(join(assembly, controlPath))).toBe("trusted-control\n");
       expect(read(join(assembly, firstOutput))).toBe(`built:${firstOutput}\n`);
+      for (const path of legacyManifests)
+        expect(read(join(assembly, path))).toBe(`derived:${path}\n`);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

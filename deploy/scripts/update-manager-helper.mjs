@@ -680,6 +680,14 @@ export async function buildBootstrapRelease(
       userOptions,
     );
 
+  // Older signed deployment drivers expect the static-site distribution paths.
+  // Generate derived assets without rebuilding/re-signing clients or deploying Workers.
+  await runLogged(
+    "/usr/local/bin/node",
+    [join(buildSource, "apps/public-web/build.mjs")],
+    userOptions,
+  );
+
   const assembly = join(rootStage, "assembly");
   await mkdir(assembly, { mode: 0o700 });
   await assembleBuildArtifacts({
