@@ -1,0 +1,16 @@
+[Unit]
+Description=Activate and health-check the independent Updater
+After=latex-renderer-updater-recovery.service
+Requires=latex-renderer-updater-recovery.service
+StartLimitIntervalSec=5min
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+User=root
+Group=latex-renderer
+UMask=0007
+ExecStart=/usr/local/bin/node /opt/latex-renderer/updater/bootstrap-v1/updater-bootstrap.mjs activate
+TimeoutStartSec=5min
+Restart=on-failure
+RestartSec=30s

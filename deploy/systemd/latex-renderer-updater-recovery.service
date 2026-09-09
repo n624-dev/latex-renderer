@@ -1,0 +1,16 @@
+[Unit]
+Description=Recover interrupted independent Updater activation
+After=local-fs.target
+Before=latex-renderer-update-manager.service latex-renderer-image-manager.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=root
+Group=latex-renderer
+UMask=0007
+RuntimeDirectory=latex-renderer
+RuntimeDirectoryMode=0770
+RuntimeDirectoryPreserve=yes
+ExecStart=/usr/local/bin/node /opt/latex-renderer/updater/bootstrap-v1/updater-bootstrap.mjs recover
+TimeoutStartSec=2min

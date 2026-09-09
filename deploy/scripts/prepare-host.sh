@@ -22,6 +22,8 @@ if ! command -v setfacl >/dev/null 2>&1; then
   exit 69
 fi
 sh "$source_root/deploy/scripts/install-github-cli.sh"
+# Stage the independent controller before copying files or moving current.
+/usr/local/bin/node "$source_root/deploy/scripts/install-updater.mjs"
 release_root="/opt/latex-renderer/releases/$release_id"
 release_marker="$release_root/.host-prepare-source-complete"
 previous_release=

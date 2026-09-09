@@ -560,8 +560,15 @@ logged in with Wrangler and have the required Worker, Route, and Tunnel access:
 # Keep Account, Tunnel, and Zone identifiers in /etc/latex-renderer/deployment.env
 # (root:root, mode 0600). Edit both host-local files with deployment values.
 pnpm exec wrangler login
-sudo sh deploy/scripts/deploy-production-release.sh <release-id>
+# First installation only, from the verified published release bundle:
+sudo /usr/local/bin/node deploy/scripts/bootstrap-published-host.mjs <published-version>
 ```
+
+Existing hosts use the authenticated Update Manager rather than rerunning the
+first-install bootstrap. The internal deployment driver requires a sealed
+root-owned control tree and a separate non-root build tree. The independent
+Updater layout, activation journal and release-only CI are documented in
+[independent-updater.md](docs/independent-updater.md).
 
 After all production smoke tests pass, the command retains the three newest
 immutable host releases (and always preserves the active release). For legacy

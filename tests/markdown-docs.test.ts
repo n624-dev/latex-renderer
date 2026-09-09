@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { docsPage as selectedDocsPage } from "../apps/admin-web/src/docs-pages.js";
 import {
@@ -14,6 +15,22 @@ import {
 
 describe("Markdown public documentation", () => {
   afterEach(() => vi.unstubAllEnvs());
+  it("bounds empty YAML merge sources in the actual frontmatter dependency", () => {
+    const require = createRequire(
+      new URL("../apps/admin-web/package.json", import.meta.url),
+    );
+    const matter = require("gray-matter") as (source: string) => {
+      data: Record<string, unknown>;
+    };
+    expect(matter("---\ntitle: Example\n---\nBody").data.title).toBe("Example");
+    // Small fixture exceeding the default 10,000-source budget, not a CPU benchmark.
+    const sources = Array.from({ length: 100 }, () => "{}").join(",");
+    const targets = "  - <<: *arr\n".repeat(101);
+    expect(() =>
+      matter(`---\narr: &arr [${sources}]\ntargets:\n${targets}---\nBody`),
+    ).toThrow(/maxTotalMergeKeys/);
+  });
+
   it("loads ordered, complete frontmatter from repository Markdown files", () => {
     expect(publicDocs.map(({ slug }) => slug)).toEqual([
       "index",
@@ -53,10 +70,11 @@ describe("Markdown public documentation", () => {
     const selfHosting = publicDocs.find(({ slug }) => slug === "self-hosting");
     expect(selfHosting).toBeDefined();
     expect(selfHosting?.html).toContain(
-      "latex-renderer-server-1.3.4-rc.5.tar.gz",
+      "latex-renderer-server-1.3.4-rc.6.tar.gz",
     );
     expect(selfHosting?.html).toContain("/opt/latex-renderer/update-staging");
-    expect(selfHosting?.html).toContain("deploy-production-release.sh");
+    expect(selfHosting?.html).toContain("bootstrap-published-host.mjs");
+    expect(selfHosting?.html).toContain("/opt/latex-renderer/updater");
     expect(selfHosting?.html).toContain(
       "bootstrap-update-manager-transition.sh",
     );

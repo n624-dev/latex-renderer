@@ -10,4 +10,4 @@ fi
 # this short-lived root process with no caller-selected executable or args.
 exec /usr/bin/systemd-run --pipe --wait --collect --quiet --service-type=exec \
   /usr/bin/flock --nonblock --exclusive /opt/latex-renderer/update-staging/update-helper.lock \
-  /usr/local/bin/node /opt/latex-renderer/current/deploy/scripts/update-manager-helper.mjs
+  /usr/local/bin/node /opt/latex-renderer/updater/bootstrap-v1/updater-entry.mjs helper

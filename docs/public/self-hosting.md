@@ -10,9 +10,9 @@ since: "v1.2.0"
 
 ## 現在の提供状況
 
-このページは[`v1.3.4-rc.5`](https://github.com/n624-dev/latex-renderer/releases/tag/v1.3.4-rc.5)のサーバーbundleを対象にします。バージョンが`-rc.N`のReleaseは指定された検証hostだけへ明示適用し、一般利用者はStableを使用してください。Cloudflare構成に加えて、通常のTLSリバースプロキシとOIDC／ローカルパスワード認証を選択できます。このReleaseは公開後にタグや配布ファイルを差し替えできない設定で固定され、次を含みます。
+このページは[`v1.3.4-rc.6`](https://github.com/n624-dev/latex-renderer/releases/tag/v1.3.4-rc.6)のサーバーbundleを対象にします。バージョンが`-rc.N`のReleaseは指定された検証hostだけへ明示適用し、一般利用者はStableを使用してください。Cloudflare構成に加えて、通常のTLSリバースプロキシとOIDC／ローカルパスワード認証を選択できます。このReleaseは公開後にタグや配布ファイルを差し替えできない設定で固定され、次を含みます。
 
-- `latex-renderer-server-1.3.4-rc.5.tar.gz`
+- `latex-renderer-server-1.3.4-rc.6.tar.gz`
 - クライアントZIPとClaude Desktop用MCPB
 - 3つの配布ファイルを検証する`SHA256SUMS`
 - commit、バージョン、Renderer fingerprint、Node.js／pnpm要件を記録したbundle内metadata
@@ -89,7 +89,7 @@ since: "v1.2.0"
 
 公開リポジトリの`*.example`ファイルは項目確認のための雛形です。設定済みファイルを雛形へ上書きしてcommitする運用はしません。
 
-## v1.3.4-rc.5をダウンロードして検証
+## v1.3.4-rc.6をダウンロードして検証
 
 RC.3からRC.4への更新は、旧Updaterが5ファイル、新しい配布metadataが6ファイルでRenderer識別hashを計算する互換性問題により、サービス切替前に失敗します。RC.4を再適用したり、検証を無効化したりせず、修正版RC.5を明示してください。
 
@@ -98,7 +98,7 @@ RC.5は旧Updater用の5ファイルのmetadata項目を固定し、6ファイ�
 次のコマンドは、固定されたReleaseであることをGitHub APIで確認し、APIが返すdigestとダウンロードしたbundleを照合します。通常の非rootユーザーで実行します。
 
 ```bash
-version=1.3.4-rc.5
+version=1.3.4-rc.6
 repository=n624-dev/latex-renderer
 asset="latex-renderer-server-$version.tar.gz"
 work_dir=$(mktemp -d)
@@ -221,10 +221,12 @@ sudoedit /etc/latex-renderer/secrets/oidc-client-secret
 
 ```bash
 release_id=$(jq -r '"v\(.version)-\(.commit[0:12])"' "$bundle_root/.latex-renderer-release.json")
-sudo sh "$bundle_root/deploy/scripts/deploy-production-release.sh" "$release_id"
+sudo /usr/local/bin/node "$bundle_root/deploy/scripts/bootstrap-published-host.mjs" "$version"
 ```
 
 このコマンドはproduction serviceとWebが必要とする`client-dist`を先にbuildし、`/opt/latex-renderer/releases/$release_id`へ一緒に固定配置して、Update Managerのsocket、health check、公開境界のsmoke testを確認します。初回配置でOwnerがまだ存在しない場合だけ、認証済みレンダリングsmoke testはOwner登録後まで延期されます。既存環境の更新では配置処理内で自動実行されます。途中で失敗した場合は、エラーを修正せずに同じ処理を繰り返さず、最初に表示された失敗箇所とredacted logを確認します。
+
+初回専用bootstrapは公開済みimmutable artifactを再取得・署名検証し、root所有の制御ツリーと非rootのbuildツリーを分離します。既存のDBまたは`current`がある場合は拒否します。導入後は既存の認証付き更新操作を使用してください。Updater自体はアプリとは別の`/opt/latex-renderer/updater`に保持し、切替失敗時には前のUpdaterへ復旧します。DBの巻き戻しとは別です。運用・復旧と公開時E2Eの詳細はリポジトリの`docs/independent-updater.md`を参照してください。
 
 buildやservice停止の前に、`renderer.env`がroot所有・`0640`・重複keyなしであること、公開originの完全一致、認証mode固有値、OIDC client secretまたはpassword pepperの所有者・group・mode・長さを検査します。検査でcredentialの内容を表示することはありません。失敗した場合は表示された設定項目だけをGit管理外のhost fileで修正し、秘密値をIssueやログへ貼らないでください。
 
@@ -422,7 +424,7 @@ v1.2.xまでのUpdate Managerはroot daemonです。v1.3.0以降は、長寿命c
 この移行だけは、先にこのページの「ダウンロードして検証」を通常ユーザーで実行し、展開した対象Releaseから次の専用コマンドを一度実行します。`VERSION`は`bundle_root`のReleaseと完全一致させます。通常のデプロイスクリプトをuser所有build treeからsudo実行する旧手順は使用しません。
 
 ```bash
-VERSION=1.3.4-rc.5
+VERSION=1.3.4-rc.6
 cd "$bundle_root"
 sudo sh deploy/scripts/bootstrap-update-manager-transition.sh "$VERSION"
 ```

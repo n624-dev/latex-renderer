@@ -381,6 +381,11 @@ fi
 /opt/latex-renderer/current/deploy/scripts/prune-production-artifacts.sh "$release_id"
 
 deployment_finished=true
+# The old controller must finish persisting its operation before it is stopped.
+# This separate service retries a busy shared mutation lock at most three times.
+systemd-run --quiet --collect --on-active=10s \
+  --unit="latex-renderer-updater-cutover-$(date +%s)" \
+  /usr/bin/systemctl start latex-renderer-updater-activate.service
 echo "Production release deployed and verified: $release_id"
 echo "Cross-platform installer: $client_base/install.mjs"
 echo "Windows PowerShell installer: $public_origin/downloads/windows/install.ps1"
