@@ -75,6 +75,29 @@ rollback mechanism.
 
 ## Recovery
 
+Application deployment logs identify validation checkpoints with
+`Deployment check: NAME`. A failing command records
+`Deployment failed: step=NAME exit=CODE` before temporary-file cleanup and local
+service recovery. INT/TERM/HUP are failures (130/143/129), not successful exits.
+The post-MCPB installer, downloads, client install/doctor/uninstall, local pages,
+health and rendering checks have separate names. Do not enable shell tracing or
+dump temporary client JSON to diagnose a failure: it may contain credentials.
+
+Small HTTP checks and installer-script downloads require a complete HTTP 200
+response, with 10-second connection / 30-second total timeouts and a 4 MiB body
+limit per request. Redirects and partial transfers are rejected even if their
+body contains the expected text. Diagnostic output includes only the static
+check name, curl exit code, HTTP status or a missing-content reason, not the URL
+or body. The existing public-status check still retries at most ten times with
+two-second intervals; client installation and other mutations are not retried.
+Archive signature/checksum checks and real rendering validation are unchanged.
+
+These diagnostics do not retroactively identify failures from older releases.
+If an application operation failed after cutover, separately inspect the active
+application, services and Updater status; a working application does not turn
+the recorded failed operation into a successful one. Do not edit operation
+history, automatically activate a candidate, or bypass validation to clear it.
+
 Inspect latex-renderer-updater-activate.service and its journal before retrying.
 The status command shows current/previous/candidate IDs and any pending switch.
 Do not edit the journal, delete protected slots, or remove a busy lock file.

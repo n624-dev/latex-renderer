@@ -10,5 +10,6 @@
   "deploy/scripts/release-version.mjs",
   "deploy/scripts/runtime-image-identity.mjs",
   "deploy/scripts/mutation-lock.mjs",
-  "deploy/scripts/deploy-production-release.sh"
+  "deploy/scripts/deploy-production-release.sh",
+  "deploy/scripts/deployment-checks.sh"
 ]
