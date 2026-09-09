@@ -135,6 +135,13 @@ server-release runs on explicit RC/stable release dispatch, not ordinary PRs:
 
 The historical baseline is explicit in deploy/ci/update-e2e.mjs; review it when
 changing the migration floor and never rewrite it during RC-to-stable promotion.
+On the disposable CI host, a runtime-only systemd condition skips automatic
+activation while the CI host marker exists. E2E invokes the unchanged bootstrap
+synchronously, retaining its normal mutation lock, so delayed cutover jobs cannot
+race negative fixtures. Startup-failure recovery requires a per-attempt marker
+written by the broken controller in its actual slot, the expected health failure,
+and fully restored current/previous state with no candidate or pending journal.
+A lock conflict is not evidence of recovery. Production units are unchanged.
 The standalone driver verifies downloads against `client-dist`; it does not
 require a Workers build. Bootstrap also generates the static-site assets as the
 unprivileged build user for older signed drivers (including the frozen RC.5)
