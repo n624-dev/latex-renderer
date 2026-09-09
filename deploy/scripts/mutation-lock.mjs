@@ -17,9 +17,11 @@ export function acquireMutationLockForPath(lockPath) {
         lockPath,
         "/bin/sh",
         "-c",
-        `printf '${READY}'; exec /usr/bin/sleep infinity`,
+        // The pipe is owned by this Node process. EOF releases the lock even
+        // after SIGKILL, where JavaScript finally/signal handlers cannot run.
+        `printf '${READY}'; exec /usr/bin/cat >/dev/null`,
       ],
-      { stdio: ["ignore", "pipe", "pipe"] },
+      { stdio: ["pipe", "pipe", "pipe"] },
     );
     let ready = false;
     let settled = false;

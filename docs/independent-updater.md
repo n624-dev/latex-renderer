@@ -100,6 +100,10 @@ activation journal exists. Pending recovery still acquires the shared lock,
 rechecks state, restores controller data, and collects unused slots before
 the service starts. A corrupt state or committed slot remains a hard failure.
 
+The shared lock helper waits on a pipe owned by its caller, not an independent
+infinite sleep. If a manual bootstrap is terminated (including SIGKILL), EOF
+releases its kernel lock without relying on JavaScript cleanup or a VPS reboot.
+
 server-release runs on explicit RC/stable release dispatch, not ordinary PRs:
 
 1. Build/attest once and transfer by an immutable Actions artifact ID retained
