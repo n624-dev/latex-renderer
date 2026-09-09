@@ -2,6 +2,13 @@ import { execFileSync } from "node:child_process";
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { configureDockerRepository } from "./docker-repository.mjs";
+import {
+  ciHostname,
+  ciCertificate,
+  ciPrivateKey,
+  standaloneEnvironment,
+  standaloneProxy,
+} from "./standalone-fixture.mjs";
 
 if (
   process.getuid() !== 0 ||
@@ -27,6 +34,10 @@ for (const path of [
   }
 }
 const source = resolve(process.argv[1], "../../..");
+// Validate the generated fixture before installing packages or building releases.
+const environment = standaloneEnvironment(
+  await readFile(resolve(source, ".env.example"), "utf8"),
+);
 const run = (program, args) =>
   execFileSync(program, args, { stdio: "inherit", timeout: 600_000 });
 await writeFile(
@@ -48,7 +59,7 @@ run("/usr/bin/apt-get", [
 ]);
 run("/bin/sh", ["-c", "command -v dockerd-rootless-setuptool.sh >/dev/null"]);
 await mkdir("/etc/latex-renderer/ci", { mode: 0o700 });
-const cert = "/usr/local/share/ca-certificates/latex-renderer-ci.crt";
+const cert = ciCertificate;
 run("/usr/bin/openssl", [
   "req",
   "-x509",
@@ -58,39 +69,31 @@ run("/usr/bin/openssl", [
   "-days",
   "2",
   "-subj",
-  "/CN=latex.example.com",
+  `/CN=${ciHostname}`,
   "-addext",
-  "subjectAltName=DNS:latex.example.com",
+  `subjectAltName=DNS:${ciHostname}`,
   "-keyout",
-  "/etc/latex-renderer/ci/tls.key",
+  ciPrivateKey,
   "-out",
   cert,
 ]);
 run("/usr/sbin/update-ca-certificates", []);
 await writeFile(
   "/etc/hosts",
-  (await readFile("/etc/hosts", "utf8")) + "\n127.0.0.1 latex.example.com\n",
+  (await readFile("/etc/hosts", "utf8")) + `\n127.0.0.1 ${ciHostname}\n`,
 );
-const proxy = (
+const proxy = standaloneProxy(
   await readFile(
     resolve(source, "deploy/reverse-proxy/nginx.conf.example"),
     "utf8",
-  )
-)
-  .replace("/etc/letsencrypt/live/latex.example.com/fullchain.pem", cert)
-  .replace(
-    "/etc/letsencrypt/live/latex.example.com/privkey.pem",
-    "/etc/latex-renderer/ci/tls.key",
-  );
+  ),
+);
 await writeFile("/etc/nginx/conf.d/latex-renderer-ci.conf", proxy);
 run("/usr/sbin/nginx", ["-t"]);
 run("/usr/bin/systemctl", ["restart", "nginx"]);
-await writeFile(
-  "/etc/latex-renderer/renderer.env",
-  (await readFile(resolve(source, ".env.example"), "utf8")) +
-    `\nNODE_EXTRA_CA_CERTS=${cert}\n`,
-  { mode: 0o640 },
-);
+await writeFile("/etc/latex-renderer/renderer.env", environment, {
+  mode: 0o640,
+});
 run("/usr/bin/chown", [
   "root:latex-renderer",
   "/etc/latex-renderer/renderer.env",

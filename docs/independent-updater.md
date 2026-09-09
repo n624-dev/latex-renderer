@@ -120,6 +120,10 @@ server-release runs on explicit RC/stable release dispatch, not ordinary PRs:
    installing `docker-ce-rootless-extras`. Runner images need not retain that
    repository even when Docker is preinstalled. This setup is CI-only; the
    production installer and this VPS's APT configuration are not changed.
+   The fixture uses `latex-renderer-ci.test` consistently in `/etc/hosts`, TLS
+   certificate identity, proxy headers and application origins. It validates the
+   generated environment with the normal production-profile validator before
+   package installation; example placeholders are never exempted for CI.
 3. Install the frozen previous signed immutable RC, create an owner and persistent
    storage data, and render English/Japanese PDF/PNG. Apply the signed candidate
    through the same sealed-assembly deployment function used by production.
