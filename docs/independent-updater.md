@@ -168,6 +168,65 @@ cover the transition with these separate pieces of evidence.
 
 ## Verification status
 
+### Branch-only update validation (no Release or Git tag)
+
+Before dispatch, run the same portable checks locally with Node.js 24 and the
+repository's pinned pnpm (the test prerequisites include `age` and `acl`):
+
+```sh
+pnpm check
+pnpm build:client
+```
+
+These run type checks, workspace builds, documentation checks, fixture tests,
+lint, and the real client build. The package fixture also exercises both release
+and tagless validation packaging and removes its temporary directory afterward.
+They do not prove multi-UID permissions, systemd/PAM/rootless Docker integration,
+or GitHub-issued provenance. Do not bypass the disposable-host guards to run
+provisioning or the full update E2E on an existing production VPS.
+
+After `server-update-validation.yml` is merged into the default branch, run it
+manually from Actions or with:
+
+```sh
+gh workflow run server-update-validation.yml --ref YOUR_BRANCH
+```
+
+Use a branch in this repository with an RC package version. Keep that version
+unchanged while fixing validation failures; no RC tag or Draft is created. This
+workflow does not run on pull-request events and receives no production or
+Cloudflare secrets. A branch commit is pinned at dispatch, fully checked and
+packaged by the shared builder with `--validation-only`. Its manifest is marked
+`validationOnly: true`. Sigstore verification pins the dedicated validation
+workflow, branch ref and exact commit before the shared E2E imports any artifact
+code. Production/release verification still requires the release workflow and
+tag; branch-validation proofs are not a release publication authority.
+
+The artifact is transferred by immutable Actions artifact ID, not build cache,
+and retained for one day. Both runners are disposable; E2E staging and temporary
+DB probes are removed in `finally` blocks. Interrupted runner execution is
+reclaimed with the runner. There is no release-upload job or contents-write
+permission. Passing this workflow does not replace the release-only E2E: the
+final tagged, signed bytes still pass that gate before Draft creation, followed
+by separate designated-host validation after publication.
+
+### Initial database permissions
+
+SQLite's default creation mode does not grant shared-group write even with
+umask 0007. Deployment explicitly prepares the database as
+`latex-renderer:latex-renderer`, mode 0660, before the first CLI migration, and
+repairs existing WAL/SHM/journal modes without truncating data. It rejects
+symlinks, multiply linked files and non-regular entries. Initial CI deployment
+uses exclusive creation before invoking the frozen historical driver and still
+refuses an existing database. No live database has been repaired by these code
+changes alone.
+
+Disposable-host provisioning also checks two distinct real service UIDs against
+a temporary SQLite database, reproducing readonly failure at 0640 and verifying
+successful writes with live WAL/SHM after preparation. This runs before the slow
+TeX build; its success is separate from local fixture/mode tests and must not be
+claimed until that CI step actually passes.
+
 Fixture tests cover independent file lifetime, identity reuse, activation,
 recovery, retention, state corruption, unsafe paths and protocol rejection.
 Mocks do not establish actual Sigstore/systemd/Docker success. The real release

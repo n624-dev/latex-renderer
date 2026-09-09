@@ -1,0 +1,135 @@
+name: server-update-validation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: server-update-validation-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.repository == 'n624-dev/latex-renderer' && github.ref_type == 'branch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    outputs:
+      artifact-id: ${{ steps.assets.outputs.artifact-id }}
+      commit: ${{ steps.source.outputs.commit }}
+      version-tag: ${{ steps.source.outputs.version-tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "24"
+      - name: Install build and test prerequisites
+        run: |
+          corepack enable
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes age acl
+      - name: Check pinned branch source and build
+        id: source
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" == refs/heads/* ]]
+          [[ $(git rev-parse HEAD) == "$GITHUB_SHA" ]]
+          version=$(node -p 'require("./package.json").version')
+          [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-rc\.[1-9][0-9]*$ ]]
+          echo "commit=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          echo "version-tag=v$version" >> "$GITHUB_OUTPUT"
+          pnpm install --frozen-lockfile
+          pnpm check
+          pnpm build:client
+          # Version label only: no local or remote Git tag is created.
+          sh deploy/scripts/build-server-release-assets.sh \
+            "v$version" "$RUNNER_TEMP/validation-assets" "" --validation-only
+      - name: Attest validation-only artifacts
+        id: attest
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-checksums: ${{ runner.temp }}/validation-assets/SHA256SUMS
+      - name: Verify branch workflow and exact source digest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION_TAG: ${{ steps.source.outputs.version-tag }}
+          ATTESTATION_BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          artifact="$RUNNER_TEMP/validation-assets/latex-renderer-server-${VERSION_TAG#v}.tar.gz"
+          digest="sha256:$(sha256sum "$artifact" | cut -d' ' -f1)"
+          node deploy/ci/verify-validation-artifact.mjs \
+            "$artifact" "$VERSION_TAG" "$GITHUB_SHA" "$digest" "$ATTESTATION_BUNDLE" "$GITHUB_REF"
+          node -e 'const fs=require("node:fs");fs.writeFileSync(process.argv[2],JSON.stringify(JSON.parse(fs.readFileSync(process.argv[1],"utf8")))+"\n")' \
+            "$ATTESTATION_BUNDLE" "$RUNNER_TEMP/validation-assets/PROVENANCE.jsonl"
+      - name: Transfer bounded validation artifacts (not a build cache)
+        id: assets
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: update-validation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/validation-assets/
+          retention-days: 1
+          compression-level: 0
+          if-no-files-found: error
+
+  update-e2e:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      attestations: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.build.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "24"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact-id }}
+          path: ${{ runner.temp }}/validation-assets
+          merge-multiple: true
+          digest-mismatch: error
+      - name: Provision disposable standalone validation host
+        run: |
+          set -euo pipefail
+          sh deploy/scripts/ci-renderer-disk.sh before-update-e2e 12
+          sudo install -m 0755 "$(command -v node)" /usr/local/bin/node
+          sudo npm install --global --prefix /usr/local corepack@0.34.6
+          mkdir -p "$HOME/.local/share/pnpm/bin"
+          /usr/local/bin/corepack enable --install-directory "$HOME/.local/share/pnpm/bin" pnpm
+          sudo env RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" GITHUB_ACTIONS="$GITHUB_ACTIONS" \
+            GITHUB_RUN_ID="$GITHUB_RUN_ID" \
+            /usr/local/bin/node deploy/ci/provision-update-host.mjs
+      - name: Run the shared real update and recovery E2E
+        env:
+          VERSION_TAG: ${{ needs.build.outputs.version-tag }}
+          SOURCE_COMMIT: ${{ needs.build.outputs.commit }}
+        run: |
+          set -euo pipefail
+          artifact="$RUNNER_TEMP/validation-assets/latex-renderer-server-${VERSION_TAG#v}.tar.gz"
+          (cd "$RUNNER_TEMP/validation-assets" && sha256sum --strict --check SHA256SUMS)
+          digest="sha256:$(sha256sum "$artifact" | cut -d' ' -f1)"
+          sudo env RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" GITHUB_ACTIONS="$GITHUB_ACTIONS" \
+            GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_WORKFLOW_REF="$GITHUB_WORKFLOW_REF" \
+            NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/latex-renderer-ci.crt \
+            /usr/local/bin/node deploy/ci/update-e2e.mjs \
+            "$artifact" "$VERSION_TAG" "$SOURCE_COMMIT" "$digest" \
+            "$RUNNER_TEMP/validation-assets/PROVENANCE.jsonl" "$GITHUB_REF"
+      - name: Bounded, redacted disposable-host diagnostics
+        if: failure()
+        run: |
+          sudo env RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" GITHUB_RUN_ID="$GITHUB_RUN_ID" \
+            /usr/local/bin/node deploy/ci/update-diagnostics.mjs

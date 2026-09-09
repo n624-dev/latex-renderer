@@ -12,10 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
-import {
-  UPDATER_FILES,
-  type UpdaterEnvelope,
-} from "../deploy/scripts/updater-slots.mjs";
+import { type UpdaterEnvelope } from "../deploy/scripts/updater-slots.mjs";
 import { RENDERER_RUNTIME_FILES } from "../deploy/scripts/runtime-image-identity.mjs";
 
 it("builds a deterministic fixture release containing a complete hashed Updater envelope (not a signed release)", async () => {
@@ -31,8 +28,11 @@ it("builds a deterministic fixture release containing a complete hashed Updater 
       "client-dist",
     ])
       await mkdir(join(source, dir), { recursive: true });
+    const currentFiles = JSON.parse(
+      await readFile("deploy/updater-files.json", "utf8"),
+    ) as string[];
     const files = new Set([
-      ...UPDATER_FILES,
+      ...currentFiles,
       "deploy/scripts/updater-slots.mjs",
       "deploy/scripts/build-server-release-assets.sh",
       "deploy/updater-files.json",
@@ -109,7 +109,7 @@ it("builds a deterministic fixture release containing a complete hashed Updater 
       version,
       commit: git("rev-parse", "HEAD").toString().trim(),
     });
-    expect(Object.keys(envelope.files)).toEqual(UPDATER_FILES);
+    expect(Object.keys(envelope.files)).toEqual(currentFiles);
     for (const [path, file] of Object.entries(envelope.files)) {
       const bytes = content(path);
       expect(bytes.length).toBe(file.bytes);
@@ -117,6 +117,59 @@ it("builds a deterministic fixture release containing a complete hashed Updater 
         file.sha256,
       );
     }
+    // A new branch commit is testable without moving/creating any release tag.
+    await writeFile(join(source, "branch-only.txt"), "new branch content");
+    git("add", "branch-only.txt");
+    git(
+      "-c",
+      "user.name=Fixture",
+      "-c",
+      "user.email=fixture@example.com",
+      "commit",
+      "--quiet",
+      "-m",
+      "branch change",
+    );
+    expect(() =>
+      execFileSync(
+        "sh",
+        [
+          join(source, "deploy/scripts/build-server-release-assets.sh"),
+          tag,
+          join(root, "must-refuse"),
+        ],
+        { stdio: "pipe" },
+      ),
+    ).toThrow();
+    execFileSync(
+      "sh",
+      [
+        join(source, "deploy/scripts/build-server-release-assets.sh"),
+        tag,
+        join(root, "validation"),
+        "",
+        "--validation-only",
+      ],
+      { stdio: "pipe" },
+    );
+    const validationManifest: unknown = JSON.parse(
+      execFileSync(
+        "tar",
+        [
+          "-xOzf",
+          join(root, "validation", name),
+          `latex-renderer-server-${version}/.latex-renderer-release.json`,
+        ],
+        { encoding: "utf8" },
+      ),
+    );
+    expect(
+      (validationManifest as { validationOnly: boolean }).validationOnly,
+    ).toBe(true);
+    expect((validationManifest as { commit: string }).commit).toBe(
+      git("rev-parse", "HEAD").toString().trim(),
+    );
+    expect(git("tag", "--points-at", "HEAD").toString().trim()).toBe("");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

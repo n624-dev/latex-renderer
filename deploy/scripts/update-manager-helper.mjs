@@ -38,6 +38,7 @@ import { validateReleaseArchive } from "./release-archive.mjs";
 import { releaseAttestationArgs } from "./release-attestation.mjs";
 import { validatedReleaseRendererFingerprint } from "./runtime-image-identity.mjs";
 import { acquireMutationLock } from "./mutation-lock.mjs";
+import { prepareApplicationDatabase, applicationDatabaseIdentity } from "./application-database-file.mjs";
 import {
   assertValidatedCandidateTag,
   compareReleaseVersions as compareVersions,
@@ -794,6 +795,11 @@ export async function deploySealedAssembly(assembly, rootStage, release, manifes
   if (initialInstall) {
     try { await lstat("/var/lib/latex-renderer/renderer.sqlite3"); throw new Error("Initial install cannot overwrite an existing database"); }
     catch (error) { if (error.code !== "ENOENT") throw error; }
+    // Exclusive creation preserves the initial-install refusal and supplies
+    // correct shared permissions even to an unchanged older signed driver.
+    await prepareApplicationDatabase("/var/lib/latex-renderer/renderer.sqlite3", {
+      ...applicationDatabaseIdentity(), createOnly: true,
+    });
   } else await runLogged("systemctl", ["restart", "latex-renderer-backup.service"]);
   await deployFromAssembly(assembly, deployment, releaseId, { ownsParentMutationLock: !initialInstall });
   return releaseId;

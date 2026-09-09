@@ -11,7 +11,10 @@ import {
 } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { verifyCiReleaseArtifact } from "../scripts/ci-release-artifact.mjs";
+import {
+  verifyCiReleaseArtifact,
+  verifyCiValidationArtifact,
+} from "../scripts/ci-release-artifact.mjs";
 import { downloadPublishedRelease } from "../scripts/published-release.mjs";
 import { acquireMutationLock } from "../scripts/mutation-lock.mjs";
 import {
@@ -37,11 +40,18 @@ if (
     (await readFile("/proc/sys/kernel/random/boot_id", "utf8")).trim()
 )
   throw new Error("CI host marker does not match this run/boot");
-if (process.argv.length !== 7)
+if (process.argv.length !== 7 && process.argv.length !== 8)
   throw new Error(
-    "usage: update-e2e.mjs ARTIFACT TAG COMMIT sha256:DIGEST ATTESTATION",
+    "usage: update-e2e.mjs ARTIFACT TAG COMMIT sha256:DIGEST ATTESTATION [VALIDATION_SOURCE_REF]",
   );
-const [input, tag, commit, digest, proofInput] = process.argv.slice(2);
+const [input, tag, commit, digest, proofInput, validationSourceRef] =
+  process.argv.slice(2);
+if (
+  validationSourceRef &&
+  process.env.GITHUB_WORKFLOW_REF !==
+    `n624-dev/latex-renderer/.github/workflows/server-update-validation.yml@${validationSourceRef}`
+)
+  throw new Error("Branch validation requires its dedicated workflow identity");
 const root = await mkdtemp("/opt/latex-renderer/update-staging/ci-");
 const run = (cmd, args, options = {}) =>
   execFileSync(cmd, args, { stdio: "inherit", timeout: 5_400_000, ...options });
@@ -59,12 +69,15 @@ try {
   // CI inputs become private root-owned bytes before any verification or use.
   await copyFile(input, artifact);
   await copyFile(proofInput, attestationBundle);
-  await verifyCiReleaseArtifact({
+  await (
+    validationSourceRef ? verifyCiValidationArtifact : verifyCiReleaseArtifact
+  )({
     artifact,
     tag,
     commit,
     digest,
     attestationBundle,
+    sourceRef: validationSourceRef,
   });
   run("/usr/bin/tar", [
     "-xzf",
@@ -274,6 +287,8 @@ try {
   console.log(
     JSON.stringify({
       event: "release.update_e2e.passed",
+      validationOnly: Boolean(validationSourceRef),
+      sourceRef: validationSourceRef ?? `refs/tags/${tag}`,
       baselineTag,
       tag,
       commit,
