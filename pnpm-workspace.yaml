@@ -7,5 +7,7 @@ allowBuilds:
   workerd: true
 
 overrides:
+  # GHSA-2883-xcg3-v3hh: retain gray-matter's v3 API with the merge-budget fix.
+  "gray-matter>js-yaml": 3.15.2
   nanoid: 3.3.18
   tmp: 0.2.7

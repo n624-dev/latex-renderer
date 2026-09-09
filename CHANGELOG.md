@@ -4,6 +4,7 @@
 
 ## 1.3.4-rc.6 - 2026-09-09
 
+- Update gray-matter's js-yaml dependency to 3.15.2 to enforce the empty-merge CPU budget (GHSA-2883-xcg3-v3hh), without weakening dependency audits.
 - Decouple the Updater from the application release directory using checksum-addressed, root-owned slots. Retain the previous controller, journal activation, restore controller state after failed startup, and recover interrupted cutovers at boot without rolling back application databases.
 - Add an independent published-release bootstrap for future Updater changes. Keep the bootstrap protocol separate from application/database schemas, preserve mandatory immutable-release and Sigstore checks, and pin attestations to both tag and source commit.
 - Gate RC and stable Draft uploads on a disposable standalone/password/TLS host upgrade E2E, using the same verified deployment pipeline and exact signed artifacts. Exercise English/Japanese PDF/PNG rendering, persistent owner/storage data, failed Updater startup and interrupted activation recovery. No production credentials or Actions build cache are used.
