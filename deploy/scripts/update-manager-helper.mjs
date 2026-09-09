@@ -445,7 +445,7 @@ async function assertNoSymlinks(root) {
     );
 }
 
-async function verifyExtractedRelease(release, source) {
+export async function verifyExtractedRelease(release, source) {
   await assertNoSymlinks(source);
   const manifest = JSON.parse(
     await readFile(join(source, ".latex-renderer-release.json"), "utf8"),
@@ -597,7 +597,7 @@ async function deploymentIdentity() {
   return { deployUser, uid, gid };
 }
 
-async function buildBootstrapRelease(
+export async function buildBootstrapRelease(
   rootStage,
   source,
   packageManager,
@@ -750,6 +750,8 @@ async function deployFromAssembly(
 }
 
 async function apply(request) {
+  if (compareVersions(request.version, (await installedRelease()).version) < 0)
+    throw new Error("Application downgrade requires the explicit compatible rollback path");
   const rootStage = await mkdtemp(join(privilegedStagingRoot, "privileged-"));
   try {
     const prepared = await prepareTrustedSource(request, rootStage);
@@ -766,14 +768,25 @@ async function apply(request) {
       runCommand: (command, args) => runLogged(command, args),
     });
     await sealControlTree(assembly, 0);
-    const deployment = await prepareDeploymentTrees(rootStage, assembly);
-    const releaseId = `v${prepared.release.version}-${prepared.manifest.commit.slice(0, 12)}`;
-    await runLogged("systemctl", ["restart", "latex-renderer-backup.service"]);
-    await deployFromAssembly(assembly, deployment, releaseId);
+    const releaseId = await deploySealedAssembly(assembly, rootStage, prepared.release, prepared.manifest);
     await writeOutput(`${JSON.stringify({ ok: true, releaseId })}\n`);
   } finally {
     await rm(rootStage, { recursive: true, force: true });
   }
+}
+
+// Shared after verification only. CI imports this from the signed candidate;
+// stdin dispatch below has no candidate/path/skip-verification verb.
+export async function deploySealedAssembly(assembly, rootStage, release, manifest, initialInstall = false) {
+  await assertSealedControlTree(assembly);
+  const deployment = await prepareDeploymentTrees(rootStage, assembly);
+  const releaseId = `v${release.version}-${manifest.commit.slice(0, 12)}`;
+  if (initialInstall) {
+    try { await lstat("/var/lib/latex-renderer/renderer.sqlite3"); throw new Error("Initial install cannot overwrite an existing database"); }
+    catch (error) { if (error.code !== "ENOENT") throw error; }
+  } else await runLogged("systemctl", ["restart", "latex-renderer-backup.service"]);
+  await deployFromAssembly(assembly, deployment, releaseId, { ownsParentMutationLock: !initialInstall });
+  return releaseId;
 }
 
 async function installedRelease() {
@@ -913,13 +926,19 @@ async function bootstrapPrivilegeSeparatedUpdater(request) {
 }
 
 async function rollback(request) {
+  const current = await installedRelease();
+  const activeManifest = JSON.parse(await readFile(join(current.path, ".latex-renderer-release.json"), "utf8"));
+  if (activeManifest.rollbackCompatible !== true)
+    throw new Error("Application schema does not permit automatic rollback");
   const releaseId = validReleaseId(request.releaseId);
   const target = directChild(releaseRoot, releaseId);
   const targetInfo = await lstat(target);
   if (!targetInfo.isDirectory())
     throw new Error("Rollback release is not a directory");
   await assertSealedControlTree(target);
-  const current = await installedRelease();
+  const targetUpdater = JSON.parse(await readFile(join(target, ".latex-renderer-updater.json"), "utf8"));
+  if (targetUpdater.schemaVersion !== 1)
+    throw new Error("Legacy Updater rollback requires explicit host recovery");
   const rootStage = await mkdtemp(
     join(privilegedStagingRoot, "privileged-rollback-"),
   );
@@ -976,6 +995,7 @@ async function scheduleManagerRestart() {
   await writeOutput('{"ok":true}\n');
 }
 
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
 const request = await readRequest();
 switch (request.verb) {
   case "bootstrap":
@@ -1001,4 +1021,5 @@ switch (request.verb) {
     break;
   default:
     throw new Error("Update helper verb is not allowed");
+}
 }

@@ -90,7 +90,7 @@ describe("application updater privilege boundary", () => {
     expect(helper).not.toContain("request.url");
     expect(launcher).toContain("does not accept command-line arguments");
     expect(launcher).toContain(
-      "/opt/latex-renderer/current/deploy/scripts/update-manager-helper.mjs",
+      "/opt/latex-renderer/updater/bootstrap-v1/updater-entry.mjs helper",
     );
     expect(launcher).toContain("/usr/bin/systemd-run --pipe --wait --collect");
     expect(launcher).toContain(

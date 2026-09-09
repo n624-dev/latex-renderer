@@ -1,13 +1,14 @@
 [Unit]
 Description=LaTeX Renderer Application Update Manager
-After=network-online.target
+After=network-online.target latex-renderer-updater-recovery.service
+Requires=latex-renderer-updater-recovery.service
 Wants=network-online.target
 
 [Service]
 Type=simple
 User=latex-renderer-update
 Group=latex-renderer
-WorkingDirectory=/opt/latex-renderer/current
+WorkingDirectory=/opt/latex-renderer/updater
 Environment=UPDATE_MANAGER_SOCKET=/run/latex-renderer/update-manager.sock
 Environment=UPDATE_MANAGER_TOKEN_FILE=%d/update-manager-token
 Environment=UPDATE_MANAGER_STATE_ROOT=/var/lib/latex-renderer/update-manager
@@ -23,7 +24,7 @@ RuntimeDirectoryMode=0770
 # lock. Keep the directory while either unit restarts so one manager cannot
 # unlink the other manager's live Unix socket.
 RuntimeDirectoryPreserve=yes
-ExecStart=/usr/local/bin/node deploy/scripts/update-manager.mjs
+ExecStart=/usr/local/bin/node /opt/latex-renderer/updater/bootstrap-v1/updater-entry.mjs controller
 Restart=on-failure
 RestartSec=5
 TimeoutStartSec=2min

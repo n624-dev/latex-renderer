@@ -103,6 +103,14 @@ fs.writeFileSync(process.argv[2], `${JSON.stringify({
 }, null, 2)}\n`, { mode: 0o644 });
 NODE
 
+node --input-type=module - "$repository_root" "$stage" "$version" "$commit" <<'NODE'
+import { writeFile } from "node:fs/promises";
+import { pathToFileURL } from "node:url";
+const [root, stage, version, commit] = process.argv.slice(2);
+const { updaterEnvelope } = await import(pathToFileURL(`${root}/deploy/scripts/updater-slots.mjs`));
+await writeFile(`${stage}/.latex-renderer-updater.json`, JSON.stringify(await updaterEnvelope(stage, { version, commit })) + "\n");
+NODE
+
 tar \
   --sort=name \
   --mtime='UTC 1970-01-01' \

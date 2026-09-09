@@ -173,6 +173,7 @@ async function cleanupStagingRoot() {
 async function loadState() {
   try {
     const parsed = JSON.parse(await readFile(statePath, "utf8"));
+    if (parsed?.version !== 1) throw new Error("Unsupported Update Manager state schema");
     return {
       ...emptyState(),
       ...parsed,

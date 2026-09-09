@@ -119,6 +119,18 @@ it("never parses or accepts an artifact after signature verification fails", asy
   ).rejects.toThrow("untrusted signature");
 });
 
+it("passes a portable proof to the same source-pinned verifier (mock signature)", async () => {
+  const pin = await fixture();
+  const verify = vi.fn();
+  await verifyCiReleaseArtifact(
+    { ...pin, attestationBundle: "/proof.jsonl" },
+    verify,
+  );
+  expect(verify).toHaveBeenCalledExactlyOnceWith(
+    releaseAttestationArgs({ ...pin, bundle: "/proof.jsonl" }),
+  );
+});
+
 it("rejects a changed artifact before invoking the verifier", async () => {
   const pin = await fixture();
   await writeFile(pin.artifact, "changed");

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 1.3.4-rc.6 - 2026-09-09
+
+- Decouple the Updater from the application release directory using checksum-addressed, root-owned slots. Retain the previous controller, journal activation, restore controller state after failed startup, and recover interrupted cutovers at boot without rolling back application databases.
+- Add an independent published-release bootstrap for future Updater changes. Keep the bootstrap protocol separate from application/database schemas, preserve mandatory immutable-release and Sigstore checks, and pin attestations to both tag and source commit.
+- Gate RC and stable Draft uploads on a disposable standalone/password/TLS host upgrade E2E, using the same verified deployment pipeline and exact signed artifacts. Exercise English/Japanese PDF/PNG rendering, persistent owner/storage data, failed Updater startup and interrupted activation recovery. No production credentials or Actions build cache are used.
+- Candidate only: release E2E and the post-publication production update remain distinct validation requirements. Do not promote before both have succeeded.
+
 ## 1.3.4-rc.5 - 2026-09-09
 
 - Fix RC.3 Update Manager compatibility: retain its frozen five-file release metadata fingerprint and add a versioned six-file Runtime identity. Both new updater verification paths check the extended identity; whole-archive checksum and provenance verification remain mandatory for old and new updaters.

@@ -28,14 +28,19 @@ async function digestOf(bundle) {
 // manager permission to accept a draft. The caller pins the checked-out tag,
 // commit and artifact digest; signatures are still mandatory before parsing.
 export async function verifyCiReleaseArtifact(
-  { artifact, tag, commit, digest },
+  { artifact, tag, commit, digest, attestationBundle },
   verifyAttestation = (args) =>
     execFileSync("gh", args, {
       stdio: ["ignore", "inherit", "inherit"],
       timeout: 120_000,
     }),
 ) {
-  const args = releaseAttestationArgs({ artifact, tag, commit });
+  const args = releaseAttestationArgs({
+    artifact,
+    tag,
+    commit,
+    bundle: attestationBundle,
+  });
   if (!/^sha256:[a-f0-9]{64}$/.test(digest ?? ""))
     throw new Error("Expected artifact SHA-256 is required");
   if ((await digestOf(artifact)) !== digest)
@@ -83,16 +88,18 @@ if (
   process.argv[1] &&
   resolve(process.argv[1]) === fileURLToPath(import.meta.url)
 ) {
-  if (process.argv.length !== 6)
+  if (process.argv.length !== 6 && process.argv.length !== 7)
     throw new Error(
-      "usage: ci-release-artifact.mjs ABSOLUTE_ARTIFACT TAG COMMIT sha256:DIGEST",
+      "usage: ci-release-artifact.mjs ABSOLUTE_ARTIFACT TAG COMMIT sha256:DIGEST [ABSOLUTE_ATTESTATION]",
     );
-  const [artifact, tag, commit, digest] = process.argv.slice(2);
+  const [artifact, tag, commit, digest, attestationBundle] =
+    process.argv.slice(2);
   const receipt = await verifyCiReleaseArtifact({
     artifact,
     tag,
     commit,
     digest,
+    attestationBundle,
   });
   console.log(JSON.stringify(receipt));
 }

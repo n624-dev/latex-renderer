@@ -3,8 +3,9 @@ export interface CiReleasePin {
   tag: string;
   commit: string;
   digest: string;
+  attestationBundle?: string;
 }
 export function verifyCiReleaseArtifact(
   pin: CiReleasePin,
   verifyAttestation?: (args: string[]) => unknown,
-): Promise<Omit<CiReleasePin, "artifact">>;
+): Promise<Omit<CiReleasePin, "artifact" | "attestationBundle">>;
