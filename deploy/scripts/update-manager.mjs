@@ -20,7 +20,9 @@ import {
 import { dirname, join, resolve } from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { setInterval } from "node:timers";
 import { acquireMutationLock } from "./mutation-lock.mjs";
+import { collectUpdateLogs, updateLogPolicy } from "./update-log-retention.mjs";
 import {
   boundedIntegerEnvironment,
   positiveBytesEnvironment,
@@ -95,6 +97,7 @@ const maxOperationLogBytes = boundedIntegerEnvironment(
   64 * 1024,
   64 * 1024 * 1024,
 );
+const logPolicy = updateLogPolicy(process.env, maxOperationLogBytes);
 // Release SHA-256 values protect the transport, while the keyless Sigstore
 // attestation binds the artifact to this repository's protected workflow.
 const githubCli = "/usr/local/bin/gh";
@@ -149,8 +152,26 @@ const emptyState = () => ({
 });
 let state = await loadState();
 let activeOperation = null;
+let logCollection = Promise.resolve();
+let logCollectionFailed = false;
 await recoverInterruptedOperation();
 await cleanupStagingRoot();
+await cleanupOperationLogs();
+
+function cleanupOperationLogs() {
+  const collection = logCollection.then(() => collectUpdateLogs({
+    root: operationsRoot, policy: logPolicy,
+    activeId: () => activeOperation?.id ?? null,
+  }));
+  logCollection = collection.then(() => {
+    if (logCollectionFailed) console.log("Update log collection recovered");
+    logCollectionFailed = false;
+  }, () => {
+    if (!logCollectionFailed) console.error("Update log collection failed; inspect private controller state");
+    logCollectionFailed = true;
+  });
+  return collection;
+}
 
 async function cleanupStagingRoot() {
   const cutoff = Date.now() - 24 * 60 * 60 * 1000;
@@ -1081,6 +1102,9 @@ async function startOperation(type, requestedVersion, task) {
   try {
     await saveOperation(operation);
     await persistState();
+    // Do not begin downloading/building if bounded diagnostic storage cannot
+    // be established. The new operation is already protected from collection.
+    await cleanupOperationLogs();
   } catch (error) {
     activeOperation = null;
     state.lastOperationId = previousLastOperationId;
@@ -1116,7 +1140,6 @@ async function startOperation(type, requestedVersion, task) {
       const restartForNewCode =
         operation.status === "succeeded" &&
         ["apply", "automatic-apply", "rollback"].includes(operation.type);
-      activeOperation = null;
       if (restartForNewCode) {
         try {
           await runPrivileged(operation, {
@@ -1129,7 +1152,10 @@ async function startOperation(type, requestedVersion, task) {
           ).catch(() => {});
         }
       }
+      await operation.logWrite?.catch(() => {});
       await mutationLock.release().catch(() => {});
+      activeOperation = null;
+      await cleanupOperationLogs().catch(() => {});
     });
   return operationView(operation);
 }
@@ -1262,6 +1288,11 @@ await new Promise((resolvePromise, reject) => {
   server.listen(socketPath, resolvePromise);
 });
 await chmod(socketPath, 0o660);
+// A long-lived idle controller still expires diagnostics; no Actions callback
+// or subsequent update is required. Startup also collects after interruption.
+setInterval(() => {
+  void cleanupOperationLogs().catch(() => {});
+}, logPolicy.intervalMs).unref();
 console.log(
   JSON.stringify({
     event: "update_manager.started",

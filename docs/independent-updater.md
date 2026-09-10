@@ -75,6 +75,56 @@ rollback mechanism.
 
 ## Recovery
 
+### Bounded diagnostic retention
+
+Update Manager diagnostic `.log` files expire seven days after their last write.
+The controller collects at startup, before/after operations and every 15 minutes
+while running, even when there are no new updates. A stopped host collects on
+the next controller startup. The active operation is protected until final log
+writes and restart scheduling finish. Completed/orphan logs are removed oldest
+first to enforce a default 40 MiB budget. One 4 MiB operation-log allowance is
+reserved, so idle retained logs may be reduced to 36 MiB before the next update.
+If old protected data alone exceeds the budget, it is not forcibly removed.
+
+Configure `UPDATE_LOG_RETENTION_DAYS` and `UPDATE_LOG_TOTAL_MAX_BYTES` in the
+root-owned Update Manager environment file; the total must accommodate
+`UPDATE_MAX_OPERATION_LOG_BYTES` (default 4 MiB). New updates do not start if
+their preflight log collection fails. Periodic errors are reported on state
+changes rather than every tick. Links/special files and cross-device entries are
+rejected; this collector never recursively deletes directories.
+
+Only diagnostic logs expire. Small operation result JSON (including failed
+status) and controller state remain for recovery and the management API; an old
+operation can return an empty log after collection. No additional permanent
+diagnostic archive is created, and no response body or credentials are added to
+these diagnostics. This policy does not manage journald, application backups,
+TeX snapshots or GHCR.
+
+### Failed deployment checks
+
+Application deployment logs identify validation checkpoints with
+`Deployment check: NAME`. A failing command records
+`Deployment failed: step=NAME exit=CODE` before temporary-file cleanup and local
+service recovery. INT/TERM/HUP are failures (130/143/129), not successful exits.
+The post-MCPB installer, downloads, client install/doctor/uninstall, local pages,
+health and rendering checks have separate names. Do not enable shell tracing or
+dump temporary client JSON to diagnose a failure: it may contain credentials.
+
+Small HTTP checks and installer-script downloads require a complete HTTP 200
+response, with 10-second connection / 30-second total timeouts and a 4 MiB body
+limit per request. Redirects and partial transfers are rejected even if their
+body contains the expected text. Diagnostic output includes only the static
+check name, curl exit code, HTTP status or a missing-content reason, not the URL
+or body. The existing public-status check still retries at most ten times with
+two-second intervals; client installation and other mutations are not retried.
+Archive signature/checksum checks and real rendering validation are unchanged.
+
+These diagnostics do not retroactively identify failures from older releases.
+If an application operation failed after cutover, separately inspect the active
+application, services and Updater status; a working application does not turn
+the recorded failed operation into a successful one. Do not edit operation
+history, automatically activate a candidate, or bypass validation to clear it.
+
 Inspect latex-renderer-updater-activate.service and its journal before retrying.
 The status command shows current/previous/candidate IDs and any pending switch.
 Do not edit the journal, delete protected slots, or remove a busy lock file.

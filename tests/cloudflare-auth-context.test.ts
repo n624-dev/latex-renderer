@@ -31,16 +31,19 @@ describe("Cloudflare OAuth deployment build context", () => {
         [
           "-c",
           `set -eu
+      . "$1"
       deployment_mode=cloudflare
       source_root=/sealed-control
       run_deployment_pnpm() { return ${status}; }
       ${block}
       echo PREFLIGHT_PASS
     `,
+          "preflight-fixture",
+          resolve("deploy/scripts/deployment-checks.sh"),
         ],
         { encoding: "utf8" },
       );
-      expect(result.status === 0).toBe(status === 0 || status === 2);
+      expect(result.status === 0, result.stderr).toBe(status === 0 || status === 2);
       expect(result.stdout.includes("PREFLIGHT_PASS")).toBe(
         status === 0 || status === 2,
       );

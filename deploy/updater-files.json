@@ -4,11 +4,13 @@
   "deploy/scripts/update-manager-helper.mjs",
   "deploy/scripts/application-database-file.mjs",
   "deploy/scripts/environment.mjs",
+  "deploy/scripts/update-log-retention.mjs",
   "deploy/scripts/release-assembly.mjs",
   "deploy/scripts/release-archive.mjs",
   "deploy/scripts/release-attestation.mjs",
   "deploy/scripts/release-version.mjs",
   "deploy/scripts/runtime-image-identity.mjs",
   "deploy/scripts/mutation-lock.mjs",
-  "deploy/scripts/deploy-production-release.sh"
+  "deploy/scripts/deploy-production-release.sh",
+  "deploy/scripts/deployment-checks.sh"
 ]

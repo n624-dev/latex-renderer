@@ -56,6 +56,8 @@ mcpb_verify_root=
 gateway_runtime_config=
 deployment_quiesced=false
 deployment_finished=false
+. "$source_root/deploy/scripts/deployment-checks.sh"
+deployment_checkpoint preflight
 
 restore_services_after_failure() {
   recovery_failed=false
@@ -84,17 +86,28 @@ restore_services_after_failure() {
 cleanup() {
   status=$?
   trap - EXIT INT TERM HUP
-  [ -z "$gateway_runtime_config" ] || rm -f -- "$gateway_runtime_config"
-  [ -z "$admin_local_root" ] || rm -rf -- "$admin_local_root"
-  [ -z "$client_smoke_root" ] || rm -rf -- "$client_smoke_root"
-  [ -z "$mcpb_verify_root" ] || rm -rf -- "$mcpb_verify_root"
-  rm -rf -- "$temporary_root"
+  if [ "$status" -ne 0 ]; then
+    deployment_report_failure "$status"
+  fi
+  cleanup_failed=false
+  [ -z "$gateway_runtime_config" ] || rm -f -- "$gateway_runtime_config" || cleanup_failed=true
+  [ -z "$admin_local_root" ] || rm -rf -- "$admin_local_root" || cleanup_failed=true
+  [ -z "$client_smoke_root" ] || rm -rf -- "$client_smoke_root" || cleanup_failed=true
+  [ -z "$mcpb_verify_root" ] || rm -rf -- "$mcpb_verify_root" || cleanup_failed=true
+  rm -rf -- "$temporary_root" || cleanup_failed=true
+  if [ "$cleanup_failed" = true ]; then
+    echo "Deployment temporary-file cleanup failed; inspect private host state." >&2
+    [ "$status" -ne 0 ] || status=1
+  fi
   if [ "$deployment_quiesced" = true ] && [ "$deployment_finished" != true ]; then
     restore_services_after_failure
   fi
   exit "$status"
 }
-trap cleanup EXIT INT TERM HUP
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 environment_file=/etc/latex-renderer/renderer.env
 if [ ! -f "$environment_file" ]; then
@@ -184,11 +197,13 @@ run_deployment_pnpm() {
     sh "$source_root/deploy/scripts/deployment-pnpm.sh" "$build_root" "$sync_pnpm_bin/pnpm" "$@"
 }
 # Reconcile relocated dependencies before any service stop or activation.
+deployment_checkpoint dependency-install
 run_deployment_pnpm install --frozen-lockfile
 # Probe the same OAuth fallback and API read permissions used after cutover.
 # Without --apply these commands only inspect and plan route synchronization.
 # Exit 2 means a valid plan has changes; authentication/API errors still abort.
 if [ "$deployment_mode" = cloudflare ]; then
+  deployment_checkpoint cloudflare-preflight
   run_deployment_pnpm exec node "$source_root/deploy/scripts/sync-public-worker-routes.mjs" || [ "$?" -eq 2 ]
   run_deployment_pnpm exec node "$source_root/deploy/scripts/sync-cloudflare-tunnel-config.mjs" || [ "$?" -eq 2 ]
 fi
@@ -198,6 +213,7 @@ if [ "$deployment_mode" = cloudflare ]; then
 fi
 
 if [ "$build_root" = "$source_root" ]; then
+  deployment_checkpoint production-build
   run_deployment_pnpm build:production-services
   run_deployment_pnpm build:client
 fi
@@ -210,6 +226,7 @@ fi
 # release symlink, renderer.env, inventory, or persisted Image Manager state.
 # The quiesce helper is backward-compatible with the release immediately before
 # /v1/quiesce by stopping normal mutation callers before checking active state.
+deployment_checkpoint quiesce-and-prepare-host
 sh "$source_root/deploy/scripts/quiesce-image-manager.sh"
 deployment_quiesced=true
 "$source_root/deploy/scripts/prepare-host.sh" "$release_id"
@@ -272,6 +289,7 @@ systemctl enable --now \
   latex-renderer-image-operation-watchdog.timer \
   latex-renderer-image-log-cleanup.timer
 
+deployment_checkpoint local-service-readiness
 for unit in latex-renderer-update-manager latex-renderer-image-manager latex-renderer-api latex-renderer-internal-api latex-renderer-admin-api latex-renderer-admin-web latex-renderer-remote-mcp latex-renderer-worker; do
   systemctl is-active --quiet "$unit"
 done
@@ -284,6 +302,7 @@ done
 /opt/latex-renderer/current/deploy/scripts/wait-update-manager-socket.sh
 
 if [ "$deployment_mode" = cloudflare ]; then
+  deployment_checkpoint public-worker-deployment
   systemctl is-active --quiet cloudflared
   run_deployment_pnpm --filter @latex-renderer/gateway-worker exec wrangler deploy --config "$gateway_runtime_config"
   run_deployment_pnpm --filter @latex-renderer/public-web run deploy
@@ -300,9 +319,11 @@ else
   local_mcpb_manifest_path="$build_root/apps/public-web/dist/downloads/mcpb/mcpb.json"
 fi
 archive_path="$temporary_root/client-archive.zip"
+deployment_checkpoint client-archive-verification
 actual_hash=$(/usr/local/bin/node "$source_root/deploy/scripts/verify-public-client-assets.mjs" \
   "$client_base" "$local_manifest_path" "$archive_path" "$release_id")
 unzip -t "$archive_path" >/dev/null
+deployment_checkpoint mcpb-archive-verification
 mcpb_hash=$(/usr/local/bin/node "$source_root/deploy/scripts/verify-public-mcpb-assets.mjs" \
   "$mcpb_base" "$local_mcpb_manifest_path" \
   "$temporary_root/latex-renderer-local.mcpb" "$release_id")
@@ -317,21 +338,27 @@ runuser -u "$sync_user" -- /usr/local/bin/node \
   "$mcpb_verify_root/latex-renderer-local.mcpb" \
   "$local_mcpb_manifest_path"
 cache_buster="release=$release_id&fresh=$(date +%s)"
-curl --fail --silent --show-error "$client_base/install.mjs?$cache_buster" | grep -q 'installDistribution'
-curl --fail --silent --show-error "$public_origin/downloads/?$cache_buster" | grep -q '最新版ZIP'
+deployment_checkpoint public-installer-content
+deployment_expect_body "$client_base/install.mjs?$cache_buster" 'installDistribution'
+deployment_checkpoint public-downloads-content
+deployment_expect_body "$public_origin/downloads/?$cache_buster" '最新版ZIP'
 
+deployment_checkpoint client-smoke-directory
 client_smoke_root=$(mktemp -d /tmp/latex-renderer-client-smoke.XXXXXX)
 chown "$sync_user:$sync_group" "$client_smoke_root"
 chmod 0700 "$client_smoke_root"
-curl --fail --silent --show-error \
+deployment_checkpoint client-installer-download
+deployment_fetch \
   "$client_base/install.mjs?$cache_buster" \
-  --output "$client_smoke_root/client-install.mjs"
-curl --fail --silent --show-error \
+  "$client_smoke_root/client-install.mjs"
+deployment_checkpoint client-uninstaller-download
+deployment_fetch \
   "$client_base/uninstall.mjs?$cache_buster" \
-  --output "$client_smoke_root/client-uninstall.mjs"
+  "$client_smoke_root/client-uninstall.mjs"
 chown "$sync_user:$sync_group" \
   "$client_smoke_root/client-install.mjs" \
   "$client_smoke_root/client-uninstall.mjs"
+deployment_checkpoint client-install
 runuser -u "$sync_user" -- /usr/local/bin/node "$client_smoke_root/client-install.mjs" \
   --base-uri "$client_base/" \
   --install-directory "$client_smoke_root/client" \
@@ -339,8 +366,10 @@ runuser -u "$sync_user" -- /usr/local/bin/node "$client_smoke_root/client-instal
   --skill-target none \
   --mcp-target none \
   --json > "$client_smoke_root/setup.json"
+deployment_checkpoint client-doctor
 runuser -u "$sync_user" -- env PATH="$client_smoke_root/bin:$PATH" \
   "$client_smoke_root/bin/latex-render" doctor --json > "$client_smoke_root/doctor.json"
+deployment_checkpoint client-install-doctor-json
 /usr/local/bin/node -e '
   const fs=require("node:fs");
   for(const file of process.argv.slice(1)){
@@ -349,47 +378,61 @@ runuser -u "$sync_user" -- env PATH="$client_smoke_root/bin:$PATH" \
     if(value.success!==true||/apiKey|uploadTicket|jobTicket|lrk_/i.test(serialized))process.exit(1);
   }
 ' "$client_smoke_root/setup.json" "$client_smoke_root/doctor.json"
+deployment_checkpoint client-uninstall
 runuser -u "$sync_user" -- /usr/local/bin/node "$client_smoke_root/client-uninstall.mjs" \
   --install-directory "$client_smoke_root/client" \
   --bin-directory "$client_smoke_root/bin" \
   --keep-credential \
   --keep-skills \
   --json > "$client_smoke_root/remove.json"
+deployment_checkpoint client-uninstall-json
 /usr/local/bin/node -e '
   const value=require(process.argv[1]);
   if(value.success!==true||value.command!=="setup.remove"||value.result?.removed!==true)process.exit(1);
 ' "$client_smoke_root/remove.json"
+deployment_checkpoint client-uninstall-directory
 test ! -e "$client_smoke_root/client"
-curl --fail --silent --show-error http://127.0.0.1:3101/ | grep -q 'LaTeXをPDFに変換'
-curl --fail --silent --show-error http://127.0.0.1:3101/admin/ | grep -q 'data-page="dashboard"'
-curl --fail --silent --show-error http://127.0.0.1:3101/admin/tex-environment/ | grep -q 'data-page="tex"'
-curl --fail --silent --show-error http://127.0.0.1:3104/health | grep -q '"status":"ok"'
+deployment_checkpoint local-home
+deployment_expect_body http://127.0.0.1:3101/ 'LaTeXをPDFに変換'
+deployment_checkpoint local-admin
+deployment_expect_body http://127.0.0.1:3101/admin/ 'data-page="dashboard"'
+deployment_checkpoint local-tex
+deployment_expect_body http://127.0.0.1:3101/admin/tex-environment/ 'data-page="tex"'
+deployment_checkpoint local-health
+deployment_expect_body http://127.0.0.1:3104/health '"status":"ok"'
+deployment_checkpoint public-rendering-status
 attempt=0
-until curl --fail --silent --show-error "$public_origin/status/?$cache_buster&attempt=$attempt" | grep -q 'レンダリング処理：応答中'; do
+until deployment_expect_body "$public_origin/status/?$cache_buster&attempt=$attempt" 'レンダリング処理：応答中'; do
   attempt=$((attempt + 1))
   [ "$attempt" -lt 10 ] || { echo "Public rendering status did not become healthy" >&2; exit 1; }
   sleep 2
 done
 
+deployment_checkpoint owner-query
 active_owner_count=$(sqlite3 /var/lib/latex-renderer/renderer.sqlite3 \
   "SELECT COUNT(*) FROM users WHERE role='owner' AND status='active';")
 if [ "$active_owner_count" -gt 0 ]; then
+  deployment_checkpoint production-render-smoke
   LATEX_RENDER_BASE_URL="$public_origin" \
     /opt/latex-renderer/current/deploy/scripts/smoke-test-production.sh
 else
   echo "No active owner exists yet; authenticated render smoke is deferred until owner bootstrap."
 fi
 if [ "$deployment_mode" = cloudflare ]; then
+  deployment_checkpoint tunnel-reconciliation
   run_deployment_pnpm exec node "$source_root/deploy/scripts/sync-cloudflare-tunnel-config.mjs" --apply
+  deployment_checkpoint public-worker-boundary
   LATEX_RENDER_BASE_URL="$public_origin" \
     "$source_root/deploy/scripts/smoke-test-public-worker-boundary.sh"
 fi
 
+deployment_checkpoint artifact-pruning
 /opt/latex-renderer/current/deploy/scripts/prune-production-artifacts.sh "$release_id"
 
 deployment_finished=true
 # The old controller must finish persisting its operation before it is stopped.
 # This separate service retries a busy shared mutation lock at most three times.
+deployment_checkpoint updater-cutover-scheduling
 systemd-run --quiet --collect --on-active=10s \
   --unit="latex-renderer-updater-cutover-$(date +%s)" \
   /usr/bin/systemctl start latex-renderer-updater-activate.service
