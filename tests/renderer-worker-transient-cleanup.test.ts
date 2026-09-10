@@ -259,7 +259,9 @@ describe("renderer transient workspace cleanup", () => {
           { ...config, workerId: "worker_new" },
           { ...workerJob(jobId), lease_generation: 2 },
         );
-        const row = database.artifacts.getDownloadable(jobId, "compile.log")!;
+        const row = database.artifacts.getDownloadable(jobId, "compile.log");
+        if (row === undefined)
+          throw new Error("New generation artifact is missing");
         expect(row.storage_generation).toBe(2);
         expect(await fs.readFile(artifactStoragePath(root, row), "utf8")).toBe(
           "generation 2\n",

@@ -181,7 +181,8 @@ describe("generation-selected artifact delivery", () => {
           ),
         );
       f.database.migrate();
-      const row = f.database.artifacts.getDownloadable(jobId, "compile.log")!;
+      const row = f.database.artifacts.getDownloadable(jobId, "compile.log");
+      if (row === undefined) throw new Error("Migrated artifact is missing");
       expect(row.storage_generation).toBeNull();
       expect(await readFile(artifactStoragePath(f.root, row), "utf8")).toBe(
         "selected",
