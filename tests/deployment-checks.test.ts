@@ -131,13 +131,11 @@ it.each([
       script.indexOf("cleanup() {"),
       script.indexOf("\nenvironment_file="),
     );
-    const result = spawnSync(
-      "/bin/sh",
-      [
-        "-c",
-        `
+    const result = spawnSync("/bin/sh", ["-s"], {
+      env: { ...process.env, DEPLOYMENT_TEST_HELPER: helper },
+      input: `
     set -eu
-    . "$1"
+    . "$DEPLOYMENT_TEST_HELPER"
     temporary_root=fixture
     gateway_runtime_config=
     admin_local_root=
@@ -152,11 +150,8 @@ it.each([
     ${command}
     echo should-not-run
   `,
-        "fixture",
-        helper,
-      ],
-      { encoding: "utf8" },
-    );
+      encoding: "utf8",
+    });
     expect(result.status).toBe(expected);
     expect(result.stderr).toContain(
       `Deployment failed: step=client-doctor exit=${expected}`,
