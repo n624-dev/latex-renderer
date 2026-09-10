@@ -29,7 +29,14 @@ attempt=0
 [ ! -f "$SSH_ATTEMPTS" ] || attempt=$(cat "$SSH_ATTEMPTS")
 attempt=$((attempt + 1))
 printf '%s\n' "$attempt" > "$SSH_ATTEMPTS"
-[ "$attempt" -ge 3 ] || exit 255
+if [ "$attempt" -le "${SSH_FAILURES:-2}" ]; then
+  printf '%s' "${SSH_FAILED_OUTPUT:-partial-json}"
+  exit 255
+fi
+if [ -n "${SSH_RESPONSE_OVERRIDE:-}" ]; then
+  printf '%s' "$SSH_RESPONSE_OVERRIDE"
+  exit 0
+fi
 python3 -c 'import json,os,sys; json.dump({"argv":sys.argv[1:],"id":os.environ.get("TUNNEL_SERVICE_TOKEN_ID"),"secret":os.environ.get("TUNNEL_SERVICE_TOKEN_SECRET")},open(os.environ["SSH_CAPTURE"],"w"))' "$@"
 printf '%s\n' '{"canonicalDate":"2026-09-08","installerSha512":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","url":"https://texlive-ci.example.invalid/snapshots/tl2026-aaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-cccccccccccccccc-v2/tlnet","token":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","snapshotId":"tl2026-aaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-cccccccccccccccc-v2"}'
 """,
@@ -87,7 +94,9 @@ printf '%s\n' '{"canonicalDate":"2026-09-08","installerSha512":"aaaaaaaaaaaaaaaa
             )
             self.assertNotIn(access_id, arguments)
             self.assertNotIn(access_secret, arguments)
-            self.assertIn("texlive-ci-lease@texlive-ci-lease.example.invalid", arguments)
+            self.assertIn(
+                "texlive-ci-lease@texlive-ci-lease.example.invalid", arguments
+            )
             github_output = output.read_text(encoding="utf-8")
             self.assertIn("owner=123:2:build:amd64", github_output)
             self.assertIn(
@@ -115,6 +124,59 @@ printf '%s\n' '{"canonicalDate":"2026-09-08","installerSha512":"aaaaaaaaaaaaaaaa
             )
             self.assertNotEqual(mismatch.returncode, 0)
             self.assertIn("invalid reservation URL", mismatch.stderr)
+
+            cases = [
+                ("acquire", 0, "", None, True),
+                ("acquire", 1, '{"partial":', None, True),
+                ("acquire", 2, '{"completeButFailed":true}\n', None, True),
+                ("acquire", 3, '{"partial":', None, False),
+                ("acquire", 0, "", "not-json", False),
+                ("acquire", 0, "", '{"canonicalDate":"wrong"}', False),
+                ("release", 2, '{"partial":', '{"released":true}', True),
+                ("release", 3, '{"partial":', None, False),
+            ]
+            for index, (
+                operation,
+                failures,
+                failed_output,
+                response,
+                success,
+            ) in enumerate(cases):
+                with self.subTest(
+                    operation=operation, failures=failures, response=response
+                ):
+                    attempts.unlink(missing_ok=True)
+                    case_output = root / f"case-output-{index}"
+                    case_env = {
+                        **environment,
+                        "GITHUB_OUTPUT": str(case_output),
+                        "SSH_FAILURES": str(failures),
+                        "SSH_FAILED_OUTPUT": failed_output,
+                        "SSH_RESPONSE_OVERRIDE": response or "",
+                    }
+                    args = (
+                        ["acquire", "2026-09-08", "a" * 128, "amd64"]
+                        if operation == "acquire"
+                        else ["release", "b" * 64, "123:2:build:amd64"]
+                    )
+                    result = subprocess.run(
+                        ["sh", str(HELPER), *args],
+                        env=case_env,
+                        text=True,
+                        capture_output=True,
+                        timeout=10,
+                    )
+                    self.assertEqual(result.returncode == 0, success, result.stderr)
+                    self.assertEqual(int(attempts.read_text()), min(failures + 1, 3))
+                    if success and operation == "acquire":
+                        self.assertEqual(
+                            case_output.read_text().count("snapshot_id="), 1
+                        )
+                        self.assertEqual(result.stdout, "")
+                    else:
+                        self.assertFalse(case_output.exists())
+                        self.assertEqual(result.stdout, response if success else "")
+                    self.assertEqual(list(root.glob("texlive-ci-*")), [])
 
     def test_missing_access_credentials_fail_before_ssh(self):
         with tempfile.TemporaryDirectory() as temporary:

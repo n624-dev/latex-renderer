@@ -201,7 +201,11 @@ values in copied examples. The helper passes the Access pair through
 the native `TUNNEL_SERVICE_TOKEN_ID` and `TUNNEL_SERVICE_TOKEN_SECRET`
 environment variables, never as command-line arguments. It verifies that the reserved
 snapshot has the exact canonical date and installer hash already selected by
-CI. A reservation failure never switches to another snapshot. Workflows must
+CI. SSH retries overwrite a private temporary response file on each attempt;
+failed attempts cannot contaminate the successful reservation JSON or release
+output. Only a successful, identity-validated reservation writes job outputs.
+The temporary response is removed on exit, including exhausted retries.
+A reservation failure never switches to another snapshot. Workflows must
 release in an `always()` step and retain a job timeout below eight hours.
 Fork/untrusted PRs receive none of the connection secrets and continue to use the
 canonical archive. If only
