@@ -88,6 +88,23 @@ Migration 016 adds the validated `api_keys.kind` invariant. Existing `lra_` keys
 
 Migrations 008 through 016 are additive but change the ownership, cleanup, admission, OAuth, upload, pagination, Project output, and credential invariants used by v1.2. Apply them only through the application migrator after the normal maintenance/drain/backup sequence. Treat the combined upgrade as forward-only: an older release does not enforce these invariants and must not be started on schema 16. Rollback requires stopping admission and every database writer, then restoring the WAL-consistent encrypted pre-migration backup.
 
+## Migration 017: Generation-selected artifact storage
+
+Migration 017 adds nullable `artifacts.storage_generation`. Existing rows remain
+NULL and keep the legacy `jobs/<id>/output/` location. New normal and failure
+outputs use `jobs/<id>/outputs/<lease-generation>/`; their generation is selected
+in the same fenced database transaction as Job finalization. A stale worker
+cannot replace the files selected by a newer worker. Public artifact paths and
+URLs do not change. Admin, Renderer API and Remote MCP resolve the selected
+generation, and normal Job cleanup removes both output layouts.
+
+Upgrade all readers and workers together after maintenance/drain and backup.
+Do not mix old readers with new generation-aware writers. Keep release
+`rollbackCompatible: false`: dropping the column or switching only application
+code back would make newer artifacts unreadable. See
+[migration 017 recovery](deploy/migrations/017_artifact_generation.rollback.md)
+for legacy compatibility, crash cleanup and restoration requirements.
+
 ## Administrative API migration for 0.3
 
 This release changes administrative HTTP routes but does not require an additional database migration beyond the schema migrations documented above.

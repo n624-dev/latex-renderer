@@ -1,5 +1,6 @@
 import { createReadStream } from "node:fs";
-import { basename, normalize, join, sep } from "node:path";
+import { basename, normalize, sep } from "node:path";
+import { artifactStoragePath } from "@latex-renderer/database";
 import { Readable } from "node:stream";
 import { AppError, newId, nowIso } from "@latex-renderer/shared";
 import yazl from "yazl";
@@ -35,7 +36,10 @@ export function adminArtifactsArchiveResponse(
         "No downloadable artifacts exist",
         404,
       );
-    for (const row of rows) assertStoredArtifactPath(row.relative_path);
+    for (const row of rows) {
+      assertStoredArtifactPath(row.relative_path);
+      artifactStoragePath(deps.storageRoot, row);
+    }
     const leases = rows.map((row) => {
       const leaseId = newId("download");
       deps.database.artifacts.createLease({
@@ -63,14 +67,7 @@ export function adminArtifactsArchiveResponse(
   });
 
   const archive = new yazl.ZipFile();
-  for (const row of leased.rows) {
-    archive.addFile(
-      join(deps.storageRoot, "jobs", jobId, "output", row.relative_path),
-      row.relative_path,
-      { compress: false },
-    );
-  }
-  archive.end();
+  const output = archive.outputStream as unknown as Readable;
   let cleaned = false;
   const cleanup = () => {
     if (cleaned) return;
@@ -81,6 +78,26 @@ export function adminArtifactsArchiveResponse(
   archive.outputStream.once("close", cleanup);
   archive.outputStream.once("error", cleanup);
   archive.outputStream.once("end", cleanup);
+  // yazl emits file stat/read failures on ZipFile, not just outputStream.
+  // Install handlers before addFile/end and propagate failure to the response.
+  archive.on("error", (error: Error) => {
+    output.destroy(error);
+    cleanup();
+  });
+  try {
+    for (const row of leased.rows) {
+      archive.addFile(
+        artifactStoragePath(deps.storageRoot, row),
+        row.relative_path,
+        { compress: false },
+      );
+    }
+    archive.end();
+  } catch (error) {
+    output.destroy();
+    cleanup();
+    throw error;
+  }
   return new Response(
     Readable.toWeb(
       archive.outputStream as unknown as Readable,
@@ -89,7 +106,8 @@ export function adminArtifactsArchiveResponse(
       headers: {
         "Content-Type": "application/zip",
         "Content-Disposition": `attachment; filename="${jobId}-artifacts.zip"`,
-        "Cache-Control": "private, no-store, no-cache, max-age=0, must-revalidate",
+        "Cache-Control":
+          "private, no-store, no-cache, max-age=0, must-revalidate",
         "Cloudflare-CDN-Cache-Control": "no-store",
         "CDN-Cache-Control": "no-store",
         Pragma: "no-cache",
@@ -128,6 +146,7 @@ export function adminArtifactResponse(
     const row = deps.database.artifacts.getDownloadable(jobId, relativePath);
     if (row === undefined)
       throw new AppError("ARTIFACT_NOT_FOUND", "Artifact does not exist", 404);
+    artifactStoragePath(deps.storageRoot, row);
     const leaseId = newId("download");
     deps.database.artifacts.createLease({
       id: leaseId,
@@ -154,7 +173,7 @@ export function adminArtifactResponse(
     throw error;
   }
   const input = createReadStream(
-    join(deps.storageRoot, "jobs", jobId, "output", leased.row.relative_path),
+    artifactStoragePath(deps.storageRoot, leased.row),
   );
   let cleaned = false;
   const cleanup = () => {

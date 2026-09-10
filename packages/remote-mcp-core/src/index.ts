@@ -15,6 +15,7 @@ import { createReadStream, createWriteStream } from "node:fs";
 import { dirname, join } from "node:path";
 import { PassThrough, Readable, Transform } from "node:stream";
 import type {
+  ArtifactRow,
   JobRow,
   RemoteMcpAuthorizationCodeRow,
   RemoteMcpPrincipalRow,
@@ -22,6 +23,7 @@ import type {
   RendererDatabase,
   SourceRow,
 } from "@latex-renderer/database";
+import { artifactStoragePath } from "@latex-renderer/database";
 import {
   AppError,
   DEFAULT_RESOURCE_LIMITS,
@@ -1119,10 +1121,7 @@ export class RemoteRenderService {
         errorsArtifact === undefined
           ? { errors: [], warnings: [] }
           : parseDiagnosticsJson(
-              await readFile(
-                this.artifactPath(jobId, errorsArtifact.relative_path),
-                "utf8",
-              ),
+              await readFile(this.artifactPath(errorsArtifact), "utf8"),
             ),
       diagnostics: RemoteRenderDiagnostic[] = [
         ...parsed.errors.map((item) => ({
@@ -1145,10 +1144,7 @@ export class RemoteRenderService {
       log =
         logArtifact === undefined
           ? ""
-          : await readFile(
-              this.artifactPath(jobId, logArtifact.relative_path),
-              "utf8",
-            ),
+          : await readFile(this.artifactPath(logArtifact), "utf8"),
       rawLogResourceUri =
         logArtifact === undefined
           ? null
@@ -1207,7 +1203,7 @@ export class RemoteRenderService {
         size: artifact.size,
         sha256: artifact.sha256,
         bytes: await readBoundedArtifact(
-          this.artifactPath(jobId, artifact.relative_path),
+          this.artifactPath(artifact),
           artifact.size,
           this.maxInlineArtifactBytes,
         ),
@@ -2168,8 +2164,8 @@ export class RemoteRenderService {
     };
   }
 
-  private artifactPath(jobId: string, relativePath: string): string {
-    return join(this.storageRoot, "jobs", jobId, "output", relativePath);
+  private artifactPath(artifact: ArtifactRow): string {
+    return artifactStoragePath(this.storageRoot, artifact);
   }
 
   private acquireInlineArtifactBytes(bytes: number): Promise<() => void> {

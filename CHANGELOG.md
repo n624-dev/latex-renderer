@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Prevent stale workers from replacing newer artifacts by publishing normal and failure output into generation-specific directories and selecting them in the fenced final database transaction (migration 017). Preserve legacy artifact reads, public URLs and cleanup of both storage layouts.
+- Handle ZIP source-file and construction errors without an unhandled ZipFile error; terminate the response and release download leases exactly once.
+
 ## 1.3.5-rc.1 - 2026-09-09
 
 - Update Hono from locked version 4.13.0 to 4.13.5 across all seven consuming applications, including its Node server peer resolutions. No other dependency version or application behavior is intentionally changed.

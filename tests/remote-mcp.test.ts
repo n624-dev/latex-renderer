@@ -4,6 +4,7 @@ import {
   mkdtemp,
   readFile,
   readdir,
+  rename,
   rm,
   truncate,
   writeFile,
@@ -1373,6 +1374,32 @@ describe("Remote MCP HTTP server", () => {
       blob: TEST_PDF.toString("base64"),
     });
   });
+
+  it.each(["failed", "succeeded"] as const)(
+    "reads %s artifacts from the DB-selected generation",
+    async (status) => {
+      const fixture = await createFixture();
+      const job = await seedCompletedRemoteJob(fixture, status);
+      const root = join(fixture.storage, "jobs", job);
+      await mkdir(join(root, "outputs"));
+      await rename(join(root, "output"), join(root, "outputs", "3"));
+      fixture.database.raw
+        .prepare("UPDATE artifacts SET storage_generation=3 WHERE job_id=?")
+        .run(job);
+      const identity = { userId: "user_test", scopes: ["mcp:read"] as const };
+      if (status === "failed") {
+        const diagnostics = await fixture.renders.diagnostics(identity, job);
+        expect(JSON.stringify(diagnostics)).toContain("Paragraph ended");
+      } else {
+        const artifact = await fixture.renders.artifact(
+          identity,
+          job,
+          "result.pdf",
+        );
+        expect(artifact.bytes).toEqual(TEST_PDF);
+      }
+    },
+  );
 
   it("rejects artifacts larger than the MCP inline resource cap", async () => {
     const fixture = await createFixture(),

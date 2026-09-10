@@ -8,7 +8,10 @@ import { createWriteStream, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { RendererDatabase } from "@latex-renderer/database";
+import {
+  RendererDatabase,
+  artifactStoragePath,
+} from "@latex-renderer/database";
 import { recordFailure } from "../apps/renderer-worker/src/failure.js";
 import { processJob } from "../apps/renderer-worker/src/job-processor.js";
 import type { WorkerConfig } from "../apps/renderer-worker/src/config.js";
@@ -61,13 +64,15 @@ describe("renderer transient workspace cleanup", () => {
       );
     vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
       await rename(from, to);
-      if (to === join(root, "jobs", jobId, "output"))
+      if (to === join(root, "jobs", jobId, "outputs", "1"))
         database.raw
           .prepare("UPDATE jobs SET cancel_requested_at=? WHERE id=?")
           .run(new Date().toISOString(), jobId);
     });
     await processJob(database, config, workerJob(jobId));
-    const bytes = await directorySize(join(root, "jobs", jobId, "output"));
+    const bytes = await directorySize(
+      join(root, "jobs", jobId, "outputs", "1"),
+    );
     expect(bytes).toBeGreaterThan(0);
     expect(database.jobs.get(jobId)).toMatchObject({
       status: "canceled",
@@ -141,12 +146,141 @@ describe("renderer transient workspace cleanup", () => {
       "ZIP_INVALID",
       "rejected",
     );
-    const output = join(root, "jobs", jobId, "output"),
+    const output = join(root, "jobs", jobId, "outputs", "1"),
       artifacts = database.artifacts.listDownloadable(jobId),
       total = artifacts.reduce((sum, artifact) => sum + artifact.size, 0);
     expect(database.jobs.get(jobId)?.output_size).toBe(total);
     await expect(directorySize(output)).resolves.toBe(total);
   });
+
+  it("removes its uncommitted output if the final DB transaction rolls back", async () => {
+    const { database, config, root, jobId } = await fixture("validating");
+    const legacy = join(root, "jobs", jobId, "output");
+    await mkdir(legacy, { recursive: true });
+    await writeFile(join(legacy, "compile.log"), "legacy stays intact");
+    vi.spyOn(database, "audit").mockImplementation(() => {
+      throw new Error("fixture DB rollback");
+    });
+    await expect(
+      recordFailure(
+        database,
+        config,
+        workerJob(jobId),
+        "failure",
+        "FAILED",
+        "failed",
+      ),
+    ).rejects.toThrow("fixture DB rollback");
+    expect(database.artifacts.listDownloadable(jobId)).toEqual([]);
+    expect(database.jobs.get(jobId)?.status).toBe("validating");
+    expect(await pathExists(join(root, "jobs", jobId, "outputs", "1"))).toBe(
+      false,
+    );
+    expect(await fs.readFile(join(legacy, "compile.log"), "utf8")).toBe(
+      "legacy stays intact",
+    );
+  });
+
+  it.each([false, true])(
+    "a stale writer cannot replace a newer published generation (failure=%s)",
+    async (failure) => {
+      const { database, config, root, jobId } = await fixture("validating");
+      const input = join(root, "jobs", jobId, "input");
+      await mkdir(input, { recursive: true });
+      const zip = new yazl.ZipFile();
+      const writing = pipeline(
+        zip.outputStream,
+        createWriteStream(join(input, "source.zip")),
+      );
+      zip.addBuffer(Buffer.from("test"), "main.tex");
+      zip.end();
+      await writing;
+      vi.spyOn(docker, "spawnRenderer").mockImplementation(
+        (_config, _id, generation, _extracted, staging) => {
+          writeFileSync(
+            join(staging, "compile.log"),
+            `generation ${generation}\n`,
+          );
+          return {
+            containerName: "fixture",
+            process: spawn(process.execPath, ["-e", "process.exit(1)"], {
+              stdio: ["ignore", "pipe", "pipe"],
+            }),
+          };
+        },
+      );
+      const { rename } =
+        await vi.importActual<typeof import("node:fs/promises")>(
+          "node:fs/promises",
+        );
+      let resume!: () => void, paused!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        resume = resolve;
+      });
+      const reached = new Promise<void>((resolve) => {
+        paused = resolve;
+      });
+      vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+        if (
+          from ===
+          join(
+            root,
+            "jobs",
+            jobId,
+            "attempts",
+            failure ? "1-failure" : "1",
+            "output",
+          )
+        ) {
+          paused();
+          await gate;
+        }
+        await rename(from, to);
+      });
+      const old = failure
+        ? recordFailure(
+            database,
+            config,
+            workerJob(jobId),
+            "old failure",
+            "FAILED",
+            "failed",
+          )
+        : processJob(database, config, workerJob(jobId));
+      try {
+        await reached;
+        database.raw
+          .prepare(
+            "UPDATE jobs SET lease_generation=2,lease_owner='worker_new',status='validating' WHERE id=?",
+          )
+          .run(jobId);
+        await processJob(
+          database,
+          { ...config, workerId: "worker_new" },
+          { ...workerJob(jobId), lease_generation: 2 },
+        );
+        const row = database.artifacts.getDownloadable(jobId, "compile.log")!;
+        expect(row.storage_generation).toBe(2);
+        expect(await fs.readFile(artifactStoragePath(root, row), "utf8")).toBe(
+          "generation 2\n",
+        );
+        resume();
+        await old;
+        expect(
+          database.artifacts.getDownloadable(jobId, "compile.log"),
+        ).toEqual(row);
+        expect(await fs.readFile(artifactStoragePath(root, row), "utf8")).toBe(
+          "generation 2\n",
+        );
+        expect(
+          await pathExists(join(root, "jobs", jobId, "outputs", "1")),
+        ).toBe(false);
+      } finally {
+        resume();
+        await old;
+      }
+    },
+  );
 });
 
 async function fixture(status: "validating" | "canceled"): Promise<{

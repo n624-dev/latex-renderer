@@ -92,6 +92,14 @@ describe("scheduled cleanup", () => {
       );
       await mkdir(join(sourcePath, ".."), { recursive: true });
       await writeFile(sourcePath, "x");
+      const generations = join(storageRoot, "jobs", jobId, "outputs");
+      for (const generation of ["1", "2"]) {
+        await mkdir(join(generations, generation), { recursive: true });
+        await writeFile(
+          join(generations, generation, "compile.log"),
+          "orphan or selected",
+        );
+      }
       const cleanup = () =>
         execFileAsync(
           process.execPath,
@@ -106,6 +114,7 @@ describe("scheduled cleanup", () => {
         );
       await cleanup();
       expect(db.jobs.get(jobId)?.status).toBe("deleted");
+      await expect(stat(generations)).rejects.toMatchObject({ code: "ENOENT" });
       expect(db.sources.get(sourceId)).toMatchObject({
         status: "ready",
         expires_at: old,

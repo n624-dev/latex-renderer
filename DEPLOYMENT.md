@@ -1,5 +1,11 @@
 # Deployment
 
+Migration 017 introduces generation-selected artifact storage. Upgrade all
+application readers and workers together using the maintenance/drain/backup
+procedure; do not use an application-only rollback after new artifacts exist.
+Existing artifacts keep their old locations and public URLs. See
+[migration 017 recovery](deploy/migrations/017_artifact_generation.rollback.md).
+
 ## Build and validation
 
 ```bash
