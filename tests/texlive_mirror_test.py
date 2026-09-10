@@ -1,4 +1,5 @@
 import datetime as dt
+import contextlib
 import errno
 import hashlib
 import importlib.util
@@ -6,6 +7,9 @@ import io
 import json
 import os
 import sys
+import signal
+import subprocess
+import time
 import tempfile
 import threading
 import unittest
@@ -21,6 +25,280 @@ SPEC.loader.exec_module(mirror)
 
 
 class MirrorTest(unittest.TestCase):
+    def probe_result(self, code=0, status=200):
+        return subprocess.CompletedProcess(
+            [],
+            code,
+            json.dumps(
+                {
+                    "http_code": status,
+                    "remote_ip": "192.0.2.1",
+                    "time_namelookup": 0.01,
+                    "time_connect": 0.1,
+                    "time_appconnect": 0.3,
+                    "time_total": 0.4,
+                    "url_effective": "https://private.invalid/?token=do-not-log",
+                }
+            ),
+            "private stderr do-not-log",
+        )
+
+    def test_probe_retries_same_date_and_logs_only_whitelisted_metrics(self):
+        with (
+            mock.patch.object(
+                mirror.subprocess,
+                "run",
+                side_effect=[
+                    self.probe_result(28, 0),
+                    self.probe_result(22, 503),
+                    self.probe_result(),
+                ],
+            ) as run,
+            mock.patch.object(mirror.time, "sleep") as sleep,
+            contextlib.redirect_stdout(io.StringIO()) as output,
+        ):
+            self.assertTrue(mirror.probe_archive(self.config, dt.date(2026, 9, 9)))
+        self.assertEqual(run.call_count, 3)
+        self.assertEqual(len({call.args[0][-1] for call in run.call_args_list}), 1)
+        self.assertEqual(sleep.call_count, 2)
+        self.assertNotIn("do-not-log", output.getvalue())
+        self.assertNotIn("https://", output.getvalue())
+        self.assertEqual(
+            json.loads(output.getvalue().splitlines()[0])["remoteIp"], "192.0.2.1"
+        )
+
+    def test_probe_transport_failure_does_not_search_older_dates(self):
+        with (
+            mock.patch.object(
+                mirror.subprocess, "run", return_value=self.probe_result(28, 0)
+            ) as run,
+            mock.patch.object(mirror.time, "sleep"),
+        ):
+            with self.assertRaises(mirror.TransportError):
+                mirror.resolve_latest_date(
+                    self.config, dt.datetime(2026, 9, 9, tzinfo=dt.timezone.utc)
+                )
+        self.assertEqual(run.call_count, 3)
+        self.assertEqual(len({call.args[0][-1] for call in run.call_args_list}), 1)
+
+    def test_probe_missing_date_can_search_previous_date(self):
+        with mock.patch.object(
+            mirror.subprocess,
+            "run",
+            side_effect=[self.probe_result(22, 404), self.probe_result()],
+        ) as run:
+            self.assertEqual(
+                mirror.resolve_latest_date(
+                    self.config, dt.datetime(2026, 9, 9, tzinfo=dt.timezone.utc)
+                ),
+                "2026-09-08",
+            )
+        self.assertIn("2026/09/09", run.call_args_list[0].args[0][-1])
+        self.assertIn("2026/09/08", run.call_args_list[1].args[0][-1])
+
+    def test_probe_auth_certificate_and_malformed_metrics_fail_closed(self):
+        for result in [
+            self.probe_result(22, 403),
+            self.probe_result(60, 0),
+            subprocess.CompletedProcess([], 0, "not json"),
+        ]:
+            with (
+                self.subTest(result=result),
+                mock.patch.object(mirror.subprocess, "run", return_value=result) as run,
+            ):
+                with self.assertRaises(mirror.VerificationError):
+                    mirror.probe_archive(self.config, dt.date(2026, 9, 9))
+                self.assertEqual(run.call_count, 1)
+
+    def test_probe_process_timeout_is_bounded_and_classified(self):
+        with (
+            mock.patch.object(
+                mirror.subprocess,
+                "run",
+                side_effect=subprocess.TimeoutExpired("curl", 65),
+            ) as run,
+            mock.patch.object(mirror.time, "sleep"),
+        ):
+            with self.assertRaises(mirror.TransportError):
+                mirror.probe_archive(self.config, dt.date(2026, 9, 9))
+        self.assertEqual(run.call_count, 3)
+
+    def test_retry_cycle_keeps_resolved_date_and_retries_at_offsets(self):
+        clock = [0.0]
+        sleeps = []
+
+        def wait(seconds):
+            # A waiting retry cycle must not retain the lock GC needs to
+            # reclaim abandoned staging. Both locks are actual flock locks.
+            with mirror.locked(self.root / "state/locks/sync.lock", nonblocking=True):
+                pass
+            sleeps.append(seconds)
+            clock[0] += seconds
+
+        with (
+            mock.patch.object(mirror, "storage_guard_ready"),
+            mock.patch.object(mirror, "gc"),
+            mock.patch.object(
+                mirror, "resolve_latest_date", return_value="2026-09-09"
+            ) as resolve,
+            mock.patch.object(
+                mirror,
+                "_sync_attempt",
+                side_effect=[
+                    mirror.TransportError("temporary"),
+                    mirror.TransportError("temporary"),
+                    {"status": "published"},
+                ],
+            ) as attempt,
+            mock.patch.object(mirror.time, "monotonic", side_effect=lambda: clock[0]),
+            mock.patch.object(mirror.time, "sleep", side_effect=wait),
+        ):
+            result = mirror.sync(self.config, "latest")
+        self.assertEqual(result["status"], "published")
+        self.assertEqual(sleeps, [900, 900])
+        self.assertEqual(resolve.call_count, 1)
+        self.assertEqual(
+            [call.args[1] for call in attempt.call_args_list], ["2026-09-09"] * 3
+        )
+
+    def test_resolver_failure_records_event_and_keeps_original_date_anchor(self):
+        anchor = dt.datetime(2026, 9, 9, 23, 59, tzinfo=dt.timezone.utc)
+        with (
+            mock.patch.object(mirror, "storage_guard_ready"),
+            mock.patch.object(mirror, "gc"),
+            mock.patch.object(
+                mirror,
+                "resolve_latest_date",
+                side_effect=mirror.TransportError("temporary"),
+            ) as resolve,
+            mock.patch.object(mirror.time, "sleep"),
+            mock.patch.object(mirror, "_sync_attempt") as attempt,
+        ):
+            with self.assertRaises(mirror.TransportError):
+                mirror.sync(self.config, "latest", anchor)
+        self.assertEqual(resolve.call_count, 3)
+        self.assertTrue(all(call.args[1] == anchor for call in resolve.call_args_list))
+        attempt.assert_not_called()
+        self.assertEqual(
+            mirror.load_state(self.config)["lastEvent"]["kind"], "upstream_unavailable"
+        )
+
+    def test_validation_and_capacity_errors_are_not_retried(self):
+        for error in [
+            mirror.VerificationError("bad signature"),
+            mirror.CapacityBlocked("full"),
+        ]:
+            with (
+                self.subTest(error=error),
+                mock.patch.object(mirror, "storage_guard_ready"),
+                mock.patch.object(mirror, "gc"),
+                mock.patch.object(
+                    mirror, "_sync_attempt", side_effect=error
+                ) as attempt,
+                mock.patch.object(mirror.time, "sleep") as sleep,
+            ):
+                with self.assertRaises(type(error)):
+                    mirror.sync(self.config, "2026-09-09")
+                self.assertEqual(attempt.call_count, 1)
+                sleep.assert_not_called()
+
+    def test_cycle_lock_prevents_overlapping_retry_jobs(self):
+        with (
+            mirror.locked(self.root / "state/locks/cycle.lock"),
+            mock.patch.object(mirror, "storage_guard_ready"),
+            mock.patch.object(mirror, "_sync_attempt") as attempt,
+        ):
+            with self.assertRaisesRegex(mirror.MirrorError, "lock is busy"):
+                mirror.sync(self.config, "2026-09-09")
+            attempt.assert_not_called()
+
+    def test_retry_cannot_wait_beyond_total_deadline(self):
+        with (
+            mock.patch.object(mirror, "storage_guard_ready"),
+            mock.patch.object(mirror, "gc"),
+            mock.patch.object(
+                mirror, "_sync_attempt", side_effect=mirror.TransportError("temporary")
+            ),
+            mock.patch.object(
+                mirror.time,
+                "monotonic",
+                side_effect=[0, 0, self.config.sync_timeout - 1],
+            ),
+            mock.patch.object(mirror.time, "sleep") as sleep,
+        ):
+            with self.assertRaises(mirror.SyncDeadline):
+                mirror.sync(self.config, "2026-09-09")
+            sleep.assert_not_called()
+
+    def test_wall_clock_deadline_interrupts_wait_and_restores_handler(self):
+        previous = signal.getsignal(signal.SIGALRM)
+        with self.assertRaises(mirror.SyncDeadline):
+            with mirror.sync_deadline(0.02):
+                time.sleep(0.2)
+        self.assertEqual(signal.getsignal(signal.SIGALRM), previous)
+
+    def test_retry_configuration_bounds(self):
+        for changes in [
+            {"sync_retry_offsets_seconds": [900, 900]},
+            {"sync_retry_offsets_seconds": [True]},
+            {"sync_retry_offsets_seconds": [900, 1800, 2700]},
+            {"sync_retry_offsets_seconds": [999999]},
+            {"upstream_probe_attempts": 6},
+            {"upstream_connect_timeout_seconds": 61},
+        ]:
+            with self.subTest(changes=changes):
+                self.write_config(**changes)
+                with self.assertRaises(mirror.ConfigError):
+                    mirror.Config.load(self.config_path)
+
+    def test_delayed_retries_can_be_disabled(self):
+        self.write_config(sync_retry_offsets_seconds=[])
+        config = mirror.Config.load(self.config_path)
+        with (
+            mock.patch.object(mirror, "storage_guard_ready"),
+            mock.patch.object(mirror, "gc"),
+            mock.patch.object(
+                mirror, "_sync_attempt", side_effect=mirror.TransportError("temporary")
+            ) as attempt,
+            mock.patch.object(mirror.time, "sleep") as sleep,
+        ):
+            with self.assertRaises(mirror.TransportError):
+                mirror.sync(config, "2026-09-09")
+            self.assertEqual(attempt.call_count, 1)
+            sleep.assert_not_called()
+
+    def test_upstream_notifications_are_bounded_across_retries(self):
+        self.write_config(notify_command=["fixture-notifier"])
+        config = mirror.Config.load(self.config_path)
+        state = mirror.load_state(config)
+        now = dt.datetime(2026, 9, 9, tzinfo=dt.timezone.utc)
+        with mock.patch.object(mirror.subprocess, "run") as notify:
+            for seconds in [0, 900, 1800, 21599]:
+                mirror.emit_event(
+                    config,
+                    state,
+                    "upstream_unavailable",
+                    {},
+                    now + dt.timedelta(seconds=seconds),
+                )
+            self.assertEqual(notify.call_count, 1)
+            mirror.emit_event(
+                config,
+                state,
+                "upstream_unavailable",
+                {},
+                now + dt.timedelta(hours=6),
+            )
+            self.assertEqual(notify.call_count, 2)
+            mirror.emit_event(
+                config,
+                state,
+                "verification_failed",
+                {},
+                now + dt.timedelta(hours=6, seconds=1),
+            )
+            self.assertEqual(notify.call_count, 3)
+
     def setUp(self):
         test_parent = os.environ.get("TEXLIVE_MIRROR_TEST_TMPDIR")
         self.temp = tempfile.TemporaryDirectory(dir=test_parent)

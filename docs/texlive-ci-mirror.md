@@ -93,12 +93,61 @@ sudo -u texlive-ci /usr/local/libexec/texlive-mirror --config /etc/texlive-ci/co
 Install the supplied systemd units after review. GC runs at boot and every 15
 minutes; sync runs daily, calls GC before and after, has one process lock and a
 three-hour service timeout. `Persistent=true` handles downtime. Configure this
-service's supplied `texlive-ci` journald namespace caps its own journal at 200
-MiB without changing the host-wide journal policy. If file logging is added,
+service's supplied `texlive-ci` journald namespace has a 40 MiB journal budget,
+seven-day retention and daily / 4 MiB rotation without changing the host-wide
+journal policy. Journald applies retention to archived files at rotation; these
+are rotation-based bounds, not a byte-exact filesystem quota. No separate
+connection diagnostic archive is created. If file logging is added,
 the supplied logrotate example caps eight 20 MiB generations. Nginx exposes only
 `/snapshots/<id>/tlnet` and the small root-level `latest.json`; `staging`,
 `trash`, and `state` are denied. Supply certificates through the host's existing
 ACME policy.
+
+### Upstream failures and bounded retry
+
+Actions still downloads exclusively from the leased VPS snapshot when the CI
+mirror is configured. This change adds no direct canonical fallback to Actions,
+does not bypass a failed lease, and never relabels another date's content.
+The VPS continues to populate its mirror from its existing canonical upstream.
+
+The VPS probes each candidate date at most three times with the existing
+ten-second connection budget and two-second gaps. Only HTTP 404/410 means a
+candidate date is absent. DNS/connect/timeouts, selected transient transfer
+errors and HTTP 408/429/500/502/503/504 trigger bounded retries of the **same**
+candidate. Certificate failures, authorization failures, unexpected responses
+and invalid diagnostics stop immediately. Metadata/package signature and hash
+verification remain mandatory; probe success alone is not verification.
+
+If transport failures remain, the sync command retries at offsets 15 and 30
+minutes from the first failed cycle (not an endless timer). The latest-date
+search uses the original invocation's date, even across midnight. Once a date
+is resolved, later attempts use that exact date. Capacity/state/verification
+failures are not delayed retries. A process-held cycle lock excludes overlapping
+jobs; the normal sync lock and staging protections apply during each attempt.
+GC can run during backoff. The CLI alarm and systemd three-hour timeout bound
+the **whole** command, including connection attempts, backoff, build-up of the
+snapshot and cleanup. Reboot/termination releases locks; retries are not a
+persisted queue that could rehydrate old dates after a reboot.
+
+`upstream_probe_attempts` (1–5), `upstream_probe_retry_delay_seconds` (1–60),
+`upstream_connect_timeout_seconds` (1–60), and `sync_retry_offsets_seconds`
+(at most two strictly increasing positive offsets within `sync_timeout_minutes`)
+are configurable. An empty offset list disables delayed retries. Existing
+package-transfer curl retries remain separate from the date-probe attempts.
+
+Each probe logs only date, attempt, curl exit, HTTP status, remote IP and
+DNS/TCP/TLS/total cumulative timings. Missing measurements stay null, not zero.
+No URL, response body, headers, curl stderr or credentials are included in probe
+diagnostics. Resolver failures now reach the existing persistent event and
+state-change / six-hour notification mechanism as `upstream_unavailable`.
+Inspect the dedicated namespace with `journalctl --namespace=texlive-ci`.
+
+For deployment, review/install the updated mirror executable, namespace journal
+drop-in and sync service together, reload systemd and apply the namespace's
+settings in a maintenance window. Do not restart an in-progress sync. No unit
+changes to the host-wide journal, disk layout, firewall, or Actions credentials
+are needed. Test namespace retention/rotation on a disposable systemd host;
+ordinary fixture tests do not claim to verify actual journald vacuum behavior.
 
 ## Reservations and GitHub Actions
 

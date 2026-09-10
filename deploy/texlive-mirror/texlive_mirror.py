@@ -15,13 +15,17 @@ import datetime as dt
 import fcntl
 import hashlib
 import json
+import ipaddress
+import math
 import os
 import re
 import shutil
+import signal
 import stat
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.parse
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterator
@@ -56,6 +60,14 @@ class StateError(MirrorError):
 
 
 class CapacityBlocked(MirrorError):
+    exit_code = 75
+
+
+class TransportError(MirrorError):
+    exit_code = 69
+
+
+class SyncDeadline(MirrorError):
     exit_code = 75
 
 
@@ -152,6 +164,10 @@ class Config:
     validation_collections: tuple[str, ...]
     ci_job_timeout: int
     sync_enabled: bool
+    probe_attempts: int
+    probe_retry_delay: int
+    probe_connect_timeout: int
+    sync_retry_offsets: tuple[int, ...]
 
     @classmethod
     def load(cls, path: Path) -> "Config":
@@ -254,6 +270,21 @@ class Config:
         latest_lookback_days = integer("latest_lookback_days", 14, 1)
         if latest_lookback_days > 90:
             raise ConfigError("latest_lookback_days must not exceed 90")
+        probe_attempts = integer("upstream_probe_attempts", 3, 1)
+        probe_retry_delay = integer("upstream_probe_retry_delay_seconds", 2, 1)
+        probe_connect_timeout = integer("upstream_connect_timeout_seconds", 10, 1)
+        offsets = raw.get("sync_retry_offsets_seconds", [900, 1800])
+        if probe_attempts > 5 or probe_retry_delay > 60 or probe_connect_timeout > 60:
+            raise ConfigError("upstream probe retry/timeout bounds exceeded")
+        if (
+            not isinstance(offsets, list)
+            or len(offsets) > 2
+            or any(type(x) is not int or x <= 0 or x >= sync_timeout for x in offsets)
+            or offsets != sorted(set(offsets))
+        ):
+            raise ConfigError(
+                "sync retry offsets must be increasing and within sync timeout"
+            )
         return cls(
             root=root,
             public_base_url=public_url.rstrip("/"),
@@ -281,6 +312,10 @@ class Config:
             validation_collections=validation_collections,
             ci_job_timeout=ci_job_timeout,
             sync_enabled=sync_enabled,
+            probe_attempts=probe_attempts,
+            probe_retry_delay=probe_retry_delay,
+            probe_connect_timeout=probe_connect_timeout,
+            sync_retry_offsets=tuple(offsets),
         )
 
 
@@ -310,8 +345,10 @@ def safe_relative_path(value: Any) -> str:
     if not isinstance(value, str) or not value or "\\" in value:
         raise StateError(f"unsafe relative path: {value!r}")
     path = PurePosixPath(value)
-    if path.is_absolute() or str(path) != value or any(
-        part in {"", ".", ".."} for part in path.parts
+    if (
+        path.is_absolute()
+        or str(path) != value
+        or any(part in {"", ".", ".."} for part in path.parts)
     ):
         raise StateError(f"unsafe relative path: {value!r}")
     return value
@@ -413,7 +450,11 @@ def validate_snapshot_record(snapshot_id: str, record: Any) -> None:
     if not required.issubset(record):
         raise StateError(f"snapshot record is incomplete: {snapshot_id}")
     year = record["year"]
-    if isinstance(year, bool) or not isinstance(year, int) or year != int(match["year"]):
+    if (
+        isinstance(year, bool)
+        or not isinstance(year, int)
+        or year != int(match["year"])
+    ):
         raise StateError(f"snapshot year is inconsistent: {snapshot_id}")
     if not isinstance(record["status"], str) or record["status"] not in {
         "published",
@@ -624,6 +665,8 @@ def emit_event(
         "verification_failed",
         "gc_failed",
         "stale",
+        "upstream_unavailable",
+        "sync_failed",
     }:
         notification_file = config.root / "state" / "notification.json"
         previous = None
@@ -695,7 +738,11 @@ def active_reservations(
             raise StateError(f"reservation state is unsafe: {path}")
         created = parse_time(value["createdAt"])
         expires = parse_time(value["expiresAt"])
-        if created > now or expires <= created or expires > created + dt.timedelta(hours=8):
+        if (
+            created > now
+            or expires <= created
+            or expires > created + dt.timedelta(hours=8)
+        ):
             raise StateError(f"reservation timestamps are unsafe: {path}")
         if expires <= now:
             if purge:
@@ -867,7 +914,9 @@ def parse_tlpdb(text: str) -> dict[str, Package]:
         if name in packages:
             raise VerificationError(f"duplicate package in tlpdb: {name}")
         revision = one("revision")
-        has_archive = one("containerchecksum") is not None or one("containersize") is not None
+        has_archive = (
+            one("containerchecksum") is not None or one("containersize") is not None
+        )
         if has_archive and revision is None:
             raise VerificationError(f"archive package has no revision: {name}")
         revision = revision or "0"
@@ -927,7 +976,7 @@ def dependency_closure(
         if name.endswith(".ARCH"):
             # Match TLPDB::expand_dependencies: .ARCH is conditional. Some
             # packages (e.g. texworks) only ship a Windows binary.
-            for arch in ([inherited_arch] if inherited_arch else arch_names):
+            for arch in [inherited_arch] if inherited_arch else arch_names:
                 candidate = name[:-5] + f".{arch}"
                 if candidate in packages:
                     queue.append((candidate, arch))
@@ -1049,7 +1098,10 @@ def curl_download(
                     raise VerificationError(f"download exceeds size budget for {url}")
                 output.write(block)
                 actual_size += len(block)
-        if process.wait() != 0:
+        code = process.wait()
+        if code in {6, 7, 28, 52, 55, 56}:
+            raise TransportError("upstream file transfer failed temporarily")
+        if code != 0:
             raise VerificationError(f"download failed for {url}")
         if expected_size is not None and actual_size != expected_size:
             raise VerificationError(f"download size mismatch for {url}")
@@ -1114,9 +1166,7 @@ def verified_metadata(
     metadata_bytes = 0
     for name in names:
         remaining = config.metadata_headroom - metadata_bytes
-        curl_download(
-            f"{upstream}/{name}", staging_tlnet / name, max_size=remaining
-        )
+        curl_download(f"{upstream}/{name}", staging_tlnet / name, max_size=remaining)
         metadata_bytes += (staging_tlnet / name).stat().st_size
     subprocess.run(
         [
@@ -1206,9 +1256,7 @@ def existing_checksum_index(
         for item in items:
             relative, checksum, size = validate_manifest_item(item)
             candidate = (
-                safe_child(config.root / "snapshots", snapshot_id)
-                / "tlnet"
-                / relative
+                safe_child(config.root / "snapshots", snapshot_id) / "tlnet" / relative
             )
             if candidate.is_file() and not candidate.is_symlink():
                 index[(checksum, size)] = candidate
@@ -1526,32 +1574,111 @@ def make_snapshot_id(
     return f"tl{year}-{db_hash[:16]}-{installer_hash[:16]}-{selection_hash[:16]}-v{MIRROR_FORMAT}"
 
 
+def probe_archive(config: Config, candidate: dt.date) -> bool:
+    url = f"{config.upstream_base_url}/{candidate.year:04d}/{candidate.month:02d}/{candidate.day:02d}/tlnet/install-tl-unx.tar.gz.sha512"
+    for attempt in range(1, config.probe_attempts + 1):
+        try:
+            result = subprocess.run(
+                [
+                    "curl",
+                    "--disable",
+                    "--fail",
+                    "--location",
+                    "--silent",
+                    "--connect-timeout",
+                    str(config.probe_connect_timeout),
+                    "--max-time",
+                    "60",
+                    "--max-filesize",
+                    "4096",
+                    "--proto",
+                    "=https",
+                    "--proto-redir",
+                    "=https",
+                    "--output",
+                    os.devnull,
+                    "--write-out",
+                    "%{json}",
+                    url,
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=65,
+            )
+        except subprocess.TimeoutExpired:
+            result = subprocess.CompletedProcess([], 28, '{"http_code":0}')
+        try:
+            data = json.loads(result.stdout)
+            if not isinstance(data, dict):
+                raise ValueError("invalid metrics")
+            status = data.get("http_code", 0)
+            if type(status) is not int or not 0 <= status <= 599:
+                raise ValueError("invalid HTTP status")
+            remote = data.get("remote_ip", "")
+            if not isinstance(remote, str):
+                raise ValueError("invalid remote address")
+            if remote:
+                remote = str(ipaddress.ip_address(remote))
+            timings = {}
+            for key in (
+                "time_namelookup",
+                "time_connect",
+                "time_appconnect",
+                "time_total",
+            ):
+                value = data.get(key)
+                if value is not None and (
+                    type(value) not in (int, float)
+                    or not math.isfinite(value)
+                    or value < 0
+                ):
+                    raise ValueError("invalid timing")
+                timings[key] = value
+        except (ValueError, TypeError) as error:
+            raise VerificationError(
+                "invalid upstream connection diagnostics"
+            ) from error
+        # Never log the URL, response body, curl stderr or the full JSON object.
+        print(
+            canonical_json(
+                {
+                    "kind": "upstream_probe",
+                    "at": iso(utcnow()),
+                    "canonicalDate": candidate.isoformat(),
+                    "attempt": attempt,
+                    "curlExit": result.returncode,
+                    "httpStatus": status,
+                    "remoteIp": remote,
+                    **timings,
+                }
+            )
+            .decode()
+            .rstrip(),
+            flush=True,
+        )
+        if result.returncode == 0 and status == 200:
+            return True
+        if result.returncode == 22 and status in {404, 410}:
+            return False
+        transient = result.returncode in {6, 7, 28, 52, 55, 56} or (
+            result.returncode == 22 and status in {408, 429, 500, 502, 503, 504}
+        )
+        if not transient:
+            raise VerificationError(
+                f"upstream probe rejected (curl={result.returncode}, HTTP={status})"
+            )
+        if attempt < config.probe_attempts:
+            time.sleep(config.probe_retry_delay)
+    raise TransportError("upstream archive probe exhausted bounded retries")
+
+
 def resolve_latest_date(config: Config, now: dt.datetime) -> str:
     if now.year != config.active_year:
         raise ConfigError("latest resolution is disabled outside active_year")
     for offset in range(config.latest_lookback_days):
         candidate = now.date() - dt.timedelta(days=offset)
-        url = f"{config.upstream_base_url}/{candidate.year:04d}/{candidate.month:02d}/{candidate.day:02d}/tlnet/install-tl-unx.tar.gz.sha512"
-        result = subprocess.run(
-            [
-                "curl",
-                "--fail",
-                "--location",
-                "--silent",
-                "--show-error",
-                "--connect-timeout",
-                "10",
-                "--max-time",
-                "60",
-                "--proto",
-                "=https",
-                "--output",
-                os.devnull,
-                url,
-            ],
-            check=False,
-        )
-        if result.returncode == 0:
+        if probe_archive(config, candidate):
             return candidate.isoformat()
     raise VerificationError(
         "no canonical archive is available within the configured lookback"
@@ -1563,9 +1690,89 @@ def sync(
 ) -> dict[str, Any]:
     if not config.sync_enabled:
         raise ConfigError("sync is disabled in configuration")
+    ensure_layout(config)
+    storage_guard_ready(config)
+    anchor = now or utcnow()
+    selected = None if canonical_date == "latest" else canonical_date
+    deadline = time.monotonic() + config.sync_timeout
+    first_failure = None
+    # Keep one retry cycle per host, but release the inner sync lock during
+    # backoff so periodic GC can reclaim interrupted staging safely.
+    with locked(config.root / "state" / "locks" / "cycle.lock", nonblocking=True):
+        for cycle in range(len(config.sync_retry_offsets) + 1):
+            if time.monotonic() >= deadline:
+                raise SyncDeadline("sync retry cycle deadline reached")
+            try:
+                gc(config, now, config.metadata_headroom)
+                if selected is None:
+                    selected = resolve_latest_date(config, anchor)
+                return _sync_attempt(config, selected, now)
+            except (TransportError, VerificationError, SyncDeadline) as error:
+                with locked(config.root / "state" / "locks" / "management.lock"):
+                    state = load_state(config)
+                    emit_event(
+                        config,
+                        state,
+                        "upstream_unavailable"
+                        if isinstance(error, TransportError)
+                        else "sync_failed"
+                        if isinstance(error, SyncDeadline)
+                        else "verification_failed",
+                        {"error": str(error), "cycle": cycle + 1},
+                        utcnow(),
+                    )
+                    save_state(config, state)
+                if not isinstance(error, TransportError) or cycle == len(
+                    config.sync_retry_offsets
+                ):
+                    raise
+                if first_failure is None:
+                    first_failure = time.monotonic()
+                target = first_failure + config.sync_retry_offsets[cycle]
+                if target >= deadline:
+                    raise SyncDeadline(
+                        "no time remains for delayed sync retry"
+                    ) from error
+                delay = max(0, target - time.monotonic())
+                print(
+                    canonical_json(
+                        {
+                            "kind": "sync_retry_scheduled",
+                            "at": iso(utcnow()),
+                            "nextCycle": cycle + 2,
+                            "delaySeconds": delay,
+                            "canonicalDate": selected,
+                            "anchorDate": anchor.date().isoformat(),
+                        }
+                    )
+                    .decode()
+                    .rstrip(),
+                    flush=True,
+                )
+                time.sleep(delay)
+    raise AssertionError("unreachable retry cycle")
+
+
+@contextlib.contextmanager
+def sync_deadline(seconds: int) -> Iterator[None]:
+    def expired(signum: int, frame: Any) -> None:
+        raise SyncDeadline("overall sync execution deadline reached")
+
+    previous = signal.signal(signal.SIGALRM, expired)
+    signal.setitimer(signal.ITIMER_REAL, seconds)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
+
+
+def _sync_attempt(
+    config: Config, canonical_date: str, now: dt.datetime | None = None
+) -> dict[str, Any]:
+    if not config.sync_enabled:
+        raise ConfigError("sync is disabled in configuration")
     now = now or utcnow()
-    if canonical_date == "latest":
-        canonical_date = resolve_latest_date(config, now)
     ensure_layout(config)
     storage_guard_ready(config)
     sync_lock = config.root / "state" / "locks" / "sync.lock"
@@ -1828,6 +2035,8 @@ def sync(
                     kind = (
                         "capacity_blocked"
                         if isinstance(error, CapacityBlocked)
+                        else "upstream_unavailable"
+                        if isinstance(error, TransportError)
                         else "verification_failed"
                         if isinstance(error, VerificationError)
                         else "sync_failed"
@@ -1881,7 +2090,8 @@ def main(argv: list[str] | None = None) -> int:
             storage_guard_ready(config)
             result: Any = {"valid": True}
         elif args.command == "sync":
-            result = sync(config, args.date)
+            with sync_deadline(config.sync_timeout):
+                result = sync(config, args.date)
         elif args.command == "gc":
             result = gc(config)
         elif args.command == "reserve":

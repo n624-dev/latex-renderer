@@ -24,4 +24,4 @@ StandardOutput=journal
 StandardError=journal
 LogNamespace=texlive-ci
 LogRateLimitIntervalSec=6h
-LogRateLimitBurst=200
+LogRateLimitBurst=1000
