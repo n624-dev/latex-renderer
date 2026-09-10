@@ -2,8 +2,13 @@
 
 ## Unreleased
 
+## 1.3.5-rc.2 - 2026-09-11
+
 - Prevent stale workers from replacing newer artifacts by publishing normal and failure output into generation-specific directories and selecting them in the fenced final database transaction (migration 017). Preserve legacy artifact reads, public URLs and cleanup of both storage layouts.
 - Handle ZIP source-file and construction errors without an unhandled ZipFile error; terminate the response and release download leases exactly once.
+- Improve deployment failure checkpoints and bound Updater operation logs by age and total size, with periodic cleanup.
+- Add bounded upstream retries and connection diagnostics to the VPS TeX Live mirror, and isolate CI lease responses across SSH retries. Preserve snapshot identity, VPS-only configured CI downloads and existing signature/checksum verification.
+- Forward-only candidate: upgrade readers and workers together after maintenance/drain and backup. Keep application-only rollback disabled. Signed-artifact upgrade/recovery E2E and separate designated-host validation are required before Stable promotion; this preparation does not deploy the candidate.
 
 ## 1.3.5-rc.1 - 2026-09-09
 
