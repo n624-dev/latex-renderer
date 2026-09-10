@@ -18,8 +18,8 @@ prepare_access() {
 run_lease_ssh() {
   key=$1
   known_hosts=$2
-  shift
-  shift
+  response=$3
+  shift 3
   attempt=1
   while :; do
     if ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
@@ -27,7 +27,9 @@ run_lease_ssh() {
       -o StrictHostKeyChecking=yes \
       -o UserKnownHostsFile="$known_hosts" \
       -o "ProxyCommand=cloudflared access ssh --hostname %h" \
-      "${TEXLIVE_CI_USER:-texlive-ci-lease}@$TEXLIVE_CI_HOST" "$@"; then
+      "${TEXLIVE_CI_USER:-texlive-ci-lease}@$TEXLIVE_CI_HOST" "$@" > "$response"; then
+      # Each attempt truncates the private response file. Failed stdout must
+      # never be concatenated with the next attempt's reservation JSON.
       return 0
     fi
     [ "$attempt" -lt 3 ] || return 255
@@ -52,8 +54,8 @@ case "$operation" in
     printf '%s\n' "$TEXLIVE_CI_SSH_KEY" > "$key"
     printf '%s\n' "${TEXLIVE_CI_KNOWN_HOSTS:?}" > "$known_hosts"
     chmod 600 "$key" "$known_hosts"
-    run_lease_ssh "$key" "$known_hosts" \
-      reserve "$date_value" "$owner" "$architecture" > "$response"
+    run_lease_ssh "$key" "$known_hosts" "$response" \
+      reserve "$date_value" "$owner" "$architecture"
     node -e '
       const fs=require("fs"); const r=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));
       if(r.canonicalDate!==process.argv[2] || r.installerSha512!==process.argv[3]) throw new Error("mirror identity differs from canonical archive");
@@ -73,11 +75,13 @@ case "$operation" in
     prepare_access
     key=$(mktemp "${RUNNER_TEMP:?}/texlive-ci-key.XXXXXX")
     known_hosts=$(mktemp "${RUNNER_TEMP:?}/texlive-ci-known-hosts.XXXXXX")
-    trap 'rm -f "$key" "$known_hosts"' EXIT HUP INT TERM
+    response=$(mktemp "${RUNNER_TEMP:?}/texlive-ci-reservation.XXXXXX")
+    trap 'rm -f "$key" "$known_hosts" "$response"' EXIT HUP INT TERM
     printf '%s\n' "$TEXLIVE_CI_SSH_KEY" > "$key"
     printf '%s\n' "${TEXLIVE_CI_KNOWN_HOSTS:?}" > "$known_hosts"
     chmod 600 "$key" "$known_hosts"
-    run_lease_ssh "$key" "$known_hosts" release "$token" "$owner"
+    run_lease_ssh "$key" "$known_hosts" "$response" release "$token" "$owner"
+    cat "$response"
     ;;
   *) echo "unknown operation" >&2; exit 64 ;;
 esac
