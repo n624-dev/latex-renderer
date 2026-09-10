@@ -152,7 +152,7 @@ for (const record of jobs) {
       )
       .get(id)?.storage_key;
     if (sourceStorage === `jobs/${id}/input/source.zip`) {
-      for (const child of ["output", "work", "staging", "attempts"])
+      for (const child of ["output", "outputs", "work", "staging", "attempts"])
         await rm(join(storageRoot, "jobs", id, child), {
           recursive: true,
           force: true,

@@ -15,7 +15,7 @@ Before migrations on production:
    node deploy/scripts/preflight-users-migration.mjs /var/lib/latex-renderer/renderer.sqlite3
    ```
 
-4. Confirm the preflight reports target version 6. Deploy the application; the
+4. Confirm the preflight reports target version 17. Deploy the application; the
    first process holding `BEGIN IMMEDIATE` performs the migration and later
    processes observe it as already applied.
 5. Verify `PRAGMA integrity_check`, `PRAGMA foreign_key_check`, migration version,

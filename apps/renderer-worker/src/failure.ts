@@ -18,7 +18,9 @@ export async function recordFailure(
     failureRoot = join(root, "attempts", `${job.lease_generation}-failure`),
     staging = join(failureRoot, "staging"),
     candidateOutput = join(failureRoot, "output"),
-    output = join(root, "output");
+    output = join(root, "outputs", String(job.lease_generation));
+  let published = false,
+    committed = false;
   const renewLease = (): boolean =>
     database.worker.heartbeat(
       job.id,
@@ -55,9 +57,10 @@ export async function recordFailure(
     const artifacts = await validateArtifacts(config, staging, false);
     await publishArtifacts(staging, candidateOutput, artifacts);
     if (!renewLease()) return;
-    await rm(output, { recursive: true, force: true });
+    await mkdir(join(root, "outputs"), { recursive: true, mode: 0o770 });
     await rename(candidateOutput, output);
-    database.transaction(() => {
+    published = true;
+    committed = database.transaction(() => {
       const timestamp = nowIso();
       const total = artifacts.reduce((sum, artifact) => sum + artifact.size, 0);
       if (
@@ -79,6 +82,7 @@ export async function recordFailure(
           job_id: jobId,
           type: artifact.type,
           relative_path: artifact.path,
+          storage_generation: job.lease_generation,
           size: artifact.size,
           sha256: artifact.sha256,
           created_at: timestamp,
@@ -92,8 +96,11 @@ export async function recordFailure(
         result: status,
         metadata: { message: safeMessage },
       });
+      return true;
     });
   } finally {
+    if (published && !committed)
+      await rm(output, { recursive: true, force: true });
     await rm(failureRoot, { recursive: true, force: true });
   }
 }

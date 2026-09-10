@@ -84,7 +84,9 @@ export async function processJob(
     extracted = join(work, "input"),
     staging = join(attempt, "staging"),
     candidateOutput = join(attempt, "output"),
-    output = join(root, "output");
+    output = join(root, "outputs", String(job.lease_generation));
+  let published = false,
+    committed = false;
   try {
     const outputs = renderOutputs(job.outputs_json);
     await rm(attempt, { recursive: true, force: true });
@@ -216,9 +218,10 @@ export async function processJob(
     await publishArtifacts(staging, candidateOutput, artifacts);
     renewLease();
     if (leaseIsLost()) return;
-    await rm(output, { recursive: true, force: true });
+    await mkdir(join(root, "outputs"), { recursive: true, mode: 0o770 });
     await rename(candidateOutput, output);
-    database.transaction(() => {
+    published = true;
+    committed = database.transaction(() => {
       const finalRuntime = database.worker.runtimeState(job.id);
       if (finalRuntime === undefined)
         throw new Error("Renderer job disappeared during finalization");
@@ -232,14 +235,15 @@ export async function processJob(
         finalRuntime.cancel_requested_at !== null ||
         finalRuntime.status === "canceled"
       ) {
-        database.worker.markCanceled(
-          job.id,
-          config.workerId,
-          job.lease_generation,
-          nowIso(),
-          artifacts.reduce((sum, item) => sum + item.size, 0),
+        return (
+          database.worker.markCanceled(
+            job.id,
+            config.workerId,
+            job.lease_generation,
+            nowIso(),
+            artifacts.reduce((sum, item) => sum + item.size, 0),
+          ) === 1
         );
-        return false;
       }
       const timestamp = nowIso();
       for (const artifact of artifacts)
@@ -248,6 +252,7 @@ export async function processJob(
           job_id: job.id,
           type: artifact.type,
           relative_path: artifact.path,
+          storage_generation: job.lease_generation,
           size: artifact.size,
           sha256: artifact.sha256,
           created_at: timestamp,
@@ -309,6 +314,8 @@ export async function processJob(
     });
   } finally {
     clearInterval(leaseHeartbeat);
+    if (published && !committed)
+      await rm(output, { recursive: true, force: true });
     await rm(attempt, { recursive: true, force: true });
   }
 }

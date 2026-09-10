@@ -33,7 +33,7 @@ try {
   assertNullAndUniqueBehavior(migrated.raw);
   migrated.close();
   process.stdout.write(
-    `${JSON.stringify({ event: "migration.preflight_completed", users: beforeUsers.length, tables: beforeCounts.size, targetVersion: 6 })}\n`,
+    `${JSON.stringify({ event: "migration.preflight_completed", users: beforeUsers.length, tables: beforeCounts.size, targetVersion: 17 })}\n`,
   );
 } finally {
   await rm(work, { recursive: true, force: true });
@@ -85,10 +85,11 @@ function assertSchema(db) {
     undefined
   )
     throw new Error("Migration version 4 is absent");
-  for (const version of [5, 6]) {
+  for (const version of [5, 6, 17]) {
     if (
-      db.prepare("SELECT 1 FROM schema_migrations WHERE version=?").get(version) ===
-      undefined
+      db
+        .prepare("SELECT 1 FROM schema_migrations WHERE version=?")
+        .get(version) === undefined
     )
       throw new Error(`Migration version ${version} is absent`);
   }
@@ -98,6 +99,13 @@ function assertSchema(db) {
     .find(({ name }) => name === "outputs_json");
   if (outputs?.notnull !== 1)
     throw new Error("jobs.outputs_json is absent or nullable");
+  if (
+    !db
+      .prepare("PRAGMA table_info(artifacts)")
+      .all()
+      .some(({ name }) => name === "storage_generation")
+  )
+    throw new Error("artifacts.storage_generation is absent");
   for (const table of [
     "remote_mcp_clients",
     "remote_mcp_authorization_codes",

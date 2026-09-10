@@ -53,6 +53,25 @@ export function applyDatabaseMigrations(db: DatabaseSync): void {
   applyProjectRevisionOutputsV14(db);
   applySourceUploadConcurrencyV15(db);
   applyApiKeyKindV16(db);
+  applyArtifactGenerationV17(db);
+}
+
+function applyArtifactGenerationV17(db: DatabaseSync): void {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    if (!db.prepare("SELECT 1 FROM schema_migrations WHERE version=17").get()) {
+      db.exec(
+        "ALTER TABLE artifacts ADD COLUMN storage_generation INTEGER CHECK(storage_generation IS NULL OR storage_generation > 0)",
+      );
+      db.exec(
+        "INSERT INTO schema_migrations(version,applied_at) VALUES (17,strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
+      );
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
 }
 
 const sourcesV3Sql = `
