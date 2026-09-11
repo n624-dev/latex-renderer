@@ -53,7 +53,11 @@ export async function downloadPublishedRelease(
 ) {
   if (
     apiToken !== undefined &&
-    (typeof apiToken !== "string" || !/^[A-Za-z0-9_]+$/.test(apiToken))
+    // RFC 6750 section 2.1: opaque b64token, not a GitHub prefix/format.
+    // Explicit whitespace rejection also excludes a final newline before `$`.
+    (typeof apiToken !== "string" ||
+      /\s/.test(apiToken) ||
+      !/^[-A-Za-z0-9._~+/]+=*$/.test(apiToken))
   )
     throw new Error("Invalid release API credential");
   // Explicit opt-in for CI only. Never read ambient host credentials.

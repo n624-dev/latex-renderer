@@ -258,7 +258,11 @@ attestation using their short-lived, read-only Actions token. Only the named
 entry point removes it from the environment before spawning children. It is
 passed explicitly to GitHub API requests, never to release asset downloads or
 the isolated provenance verifier. API redirects fail closed. Production
-bootstrap does not consume ambient GitHub credentials. API failures report
+bootstrap does not consume ambient GitHub credentials.
+Credentials are opaque Bearer tokens using the
+[RFC 6750 section 2.1 syntax](https://www.rfc-editor.org/rfc/rfc6750.html#section-2.1),
+not a fixed GitHub prefix or an alphanumeric-only format; whitespace and control
+characters are rejected. API failures report
 only HTTP status and bounded numeric rate-limit headers, not response bodies
 or credentials; a 403 alone does not prove rate limiting. Check these headers
 and job permissions before retrying, without bypassing integrity verification.

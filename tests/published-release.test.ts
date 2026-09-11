@@ -14,7 +14,12 @@ afterEach(async () => {
   );
 });
 
-it.each([undefined, "github_ci_test_token"])(
+it.each([
+  undefined,
+  "github_ci_test_token",
+  "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJmaXh0dXJlIn0.fixture-signature_123",
+  "fixture-._~+/0123456789==",
+])(
   "scopes explicit API authentication (%s) to metadata, never asset downloads",
   async (apiToken) => {
     const stage = await mkdtemp(join(tmpdir(), "published-release-test-"));
@@ -112,7 +117,20 @@ it("rejects API redirects without requesting the external destination", async ()
   expect(fetch).toHaveBeenCalledTimes(1);
 });
 
-it.each(["bad\r\nheader", "", "bad token"])(
+it.each([
+  "bad\r\nheader",
+  "",
+  "bad token",
+  "bad\n",
+  "bad\r",
+  "bad\t",
+  "bad\0token",
+  "bad\u007ftoken",
+  "非ASCII",
+  "=",
+  "bad=middle",
+  "bad:token",
+])(
   "rejects malformed explicit credentials before network access",
   async (apiToken) => {
     const fetch = vi.fn();
