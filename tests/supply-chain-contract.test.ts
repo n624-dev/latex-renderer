@@ -30,9 +30,16 @@ describe("public supply-chain controls", () => {
     const gitleaks = read(".gitleaks.toml");
     expect(gitleaks).not.toContain("[allowlist]");
     expect(gitleaks).not.toContain('regexTarget = "line"');
-    const ignoredFindings = read(".gitleaksignore").trim().split("\n").sort();
+    const ignoredFindings = read(".gitleaksignore")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0 && !line.startsWith("#"))
+      .sort();
     expect(ignoredFindings).toEqual(
       [
+        // Only the two reviewed historical synthetic JWT fixture findings.
+        "882635718292436f705303edc817a510ee0ee2ba:tests/published-release.test.ts:generic-api-key:19",
+        "882635718292436f705303edc817a510ee0ee2ba:tests/published-release.test.ts:jwt:20",
         "c97864181501dc212dcd68ecc60829332d4993ef:renderer/Dockerfile.base:generic-api-key:5",
         "c97864181501dc212dcd68ecc60829332d4993ef:renderer/Dockerfile:generic-api-key:5",
         "c97864181501dc212dcd68ecc60829332d4993ef:tests/tex-environment-contract.test.ts:generic-api-key:37",
