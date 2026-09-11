@@ -22,6 +22,9 @@ import {
   assertStartupRecovery,
 } from "./updater-recovery-evidence.mjs";
 
+const apiToken = process.env.CI_RELEASE_GITHUB_TOKEN;
+delete process.env.CI_RELEASE_GITHUB_TOKEN;
+
 if (
   process.getuid() !== 0 ||
   process.env.RUNNER_ENVIRONMENT !== "github-hosted" ||
@@ -133,7 +136,11 @@ try {
   const baselineTag = `v${[1, 3, 4].join(".")}-rc.5`;
   const oldStage = join(root, "baseline");
   await mkdir(oldStage);
-  const baseline = await downloadPublishedRelease(baselineTag, oldStage);
+  if (!apiToken)
+    throw new Error("CI baseline download requires its read-only API token");
+  const baseline = await downloadPublishedRelease(baselineTag, oldStage, {
+    apiToken,
+  });
   await deploy(baseline.source, { ...baseline, tag: baselineTag }, true);
   // Persist a real owner, DB record and storage data before candidate update.
   const password = "/etc/latex-renderer/ci/password";
