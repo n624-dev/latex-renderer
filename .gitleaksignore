@@ -1,3 +1,7 @@
 c97864181501dc212dcd68ecc60829332d4993ef:renderer/Dockerfile:generic-api-key:5
 c97864181501dc212dcd68ecc60829332d4993ef:renderer/Dockerfile.base:generic-api-key:5
 c97864181501dc212dcd68ecc60829332d4993ef:tests/tex-environment-contract.test.ts:generic-api-key:37
+# Synthetic unsigned JWT fixture in historical commit; no real credential.
+# Exact finding fingerprints only: do not exclude this file or JWT rules.
+882635718292436f705303edc817a510ee0ee2ba:tests/published-release.test.ts:generic-api-key:19
+882635718292436f705303edc817a510ee0ee2ba:tests/published-release.test.ts:jwt:20

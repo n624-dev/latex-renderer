@@ -14,10 +14,18 @@ afterEach(async () => {
   );
 });
 
+// Synthetic, unsigned JWT-shaped input: never a real credential. Generate its
+// encoded segments from readable fixture data instead of storing a token literal.
+const fixtureJwt = [
+  Buffer.from(JSON.stringify({ alg: "HS256" })).toString("base64url"),
+  Buffer.from(JSON.stringify({ sub: "fixture" })).toString("base64url"),
+  "fixture-signature_123",
+].join(".");
+
 it.each([
   undefined,
   "github_ci_test_token",
-  "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJmaXh0dXJlIn0.fixture-signature_123",
+  fixtureJwt,
   "fixture-._~+/0123456789==",
 ])(
   "scopes explicit API authentication (%s) to metadata, never asset downloads",
