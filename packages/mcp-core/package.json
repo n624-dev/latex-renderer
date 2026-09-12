@@ -1,6 +1,6 @@
 {
   "name": "@latex-renderer/mcp-core",
-  "version": "1.3.5-rc.3",
+  "version": "1.3.5-rc.4",
   "private": true,
   "license": "Apache-2.0",
   "type": "module",
@@ -22,6 +22,6 @@
     "@latex-renderer/contracts": "workspace:*",
     "@latex-renderer/setup-core": "workspace:*",
     "@latex-renderer/shared": "workspace:*",
-    "zod": "^4.0.17"
+    "zod": "^4.6.2"
   }
 }

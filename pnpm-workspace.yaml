@@ -7,6 +7,8 @@ allowBuilds:
   workerd: true
 
 overrides:
+  # GHSA-rgj7-g3m4-5g8c: use patched libheif through Miniflare's image decoder.
+  "miniflare>sharp": 0.35.4
   # GHSA-2883-xcg3-v3hh: retain gray-matter's v3 API with the merge-budget fix.
   "gray-matter>js-yaml": 3.15.2
   nanoid: 3.3.18

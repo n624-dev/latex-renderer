@@ -1,6 +1,6 @@
 {
   "name": "@latex-renderer/standalone-gateway",
-  "version": "1.3.5-rc.3",
+  "version": "1.3.5-rc.4",
   "private": true,
   "license": "Apache-2.0",
   "type": "module",
@@ -11,9 +11,9 @@
     "start": "node dist/server.js"
   },
   "dependencies": {
-    "@hono/node-server": "^2.0.12",
+    "@hono/node-server": "^2.1.1",
     "@latex-renderer/gateway-core": "workspace:*",
     "@latex-renderer/shared": "workspace:*",
-    "hono": "^4.13.5"
+    "hono": "^4.13.7"
   }
 }

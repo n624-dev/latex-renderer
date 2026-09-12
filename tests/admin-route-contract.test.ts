@@ -160,12 +160,10 @@ describe("admin route contract", () => {
 
   it("enforces dedicated mutation scopes, owner role, reason, and manager payloads at runtime", async () => {
     const audits: Array<Record<string, unknown>> = [];
-    const updateApply = vi.fn((version?: string) => {
-      void version;
+    const updateApply = vi.fn(() => {
       return Promise.resolve({ id: "updop_test" });
     });
-    const imageApply = vi.fn((input: unknown) => {
-      void input;
+    const imageApply = vi.fn(() => {
       return Promise.resolve({ id: "imgop_test" });
     });
     let role: "owner" | "admin" = "admin";

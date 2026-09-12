@@ -167,8 +167,9 @@ export class ApiKeysRepository {
       .get(id, now) as unknown as
       (RenderIdentityRow & { scopes_json: string }) | undefined;
     if (row === undefined) return undefined;
+    const { scopes_json, ...identity } = row;
     try {
-      const scopes = JSON.parse(row.scopes_json) as unknown;
+      const scopes = JSON.parse(scopes_json) as unknown;
       if (
         !Array.isArray(scopes) ||
         !scopes.every((scope) => typeof scope === "string") ||
@@ -178,8 +179,6 @@ export class ApiKeysRepository {
     } catch {
       return undefined;
     }
-    const { scopes_json: _scopes, ...identity } = row;
-    void _scopes;
     return identity;
   }
 

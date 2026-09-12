@@ -104,8 +104,7 @@ describe("gateway boundary", () => {
   it("proxies a bodyless job-ticket renewal without Content-Length", async () => {
     let capturedInit: RequestInit | undefined;
     const internalFetch = vi.fn(
-      (input: string | URL | Request, init?: RequestInit) => {
-        void input;
+      (_input: string | URL | Request, init?: RequestInit) => {
         capturedInit = init;
         return Promise.resolve(
           Response.json({
