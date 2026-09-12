@@ -82,6 +82,10 @@ jobs:
 
   update-e2e:
     needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        baseline: [legacy, installed]
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     permissions:
@@ -115,6 +119,7 @@ jobs:
             /usr/local/bin/node deploy/ci/provision-update-host.mjs
       - name: Run the shared real update and recovery E2E
         env:
+          CI_UPDATE_BASELINE: ${{ matrix.baseline }}
           CI_RELEASE_GITHUB_TOKEN: ${{ github.token }}
           VERSION_TAG: ${{ needs.build.outputs.version-tag }}
           SOURCE_COMMIT: ${{ needs.build.outputs.commit }}
@@ -124,6 +129,7 @@ jobs:
           (cd "$RUNNER_TEMP/validation-assets" && sha256sum --strict --check SHA256SUMS)
           digest="sha256:$(sha256sum "$artifact" | cut -d' ' -f1)"
           sudo --preserve-env=CI_RELEASE_GITHUB_TOKEN env RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" GITHUB_ACTIONS="$GITHUB_ACTIONS" \
+            CI_UPDATE_BASELINE="$CI_UPDATE_BASELINE" \
             GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_WORKFLOW_REF="$GITHUB_WORKFLOW_REF" \
             NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/latex-renderer-ci.crt \
             /usr/local/bin/node deploy/ci/update-e2e.mjs \

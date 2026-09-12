@@ -15,7 +15,7 @@ import {
   verifyCiReleaseArtifact,
   verifyCiValidationArtifact,
 } from "../scripts/ci-release-artifact.mjs";
-import { downloadPublishedRelease } from "../scripts/published-release.mjs";
+import { downloadPublishedRelease } from "./published-release.mjs";
 import { acquireMutationLock } from "../scripts/mutation-lock.mjs";
 import {
   brokenUpdaterSource,
@@ -132,8 +132,14 @@ try {
       await rm(stage, { recursive: true, force: true });
     }
   };
-  // Frozen historical baseline, not changed by the RC -> stable text promotion.
-  const baselineTag = `v${[1, 3, 4].join(".")}-rc.5`;
+  // Test both the legacy transition and a host with bootstrap-v1 already frozen.
+  // Numeric pieces avoid RC -> stable text promotion changing baseline identity.
+  const baselines = {
+    legacy: `v${[1, 3, 4].join(".")}-rc.5`,
+    installed: `v${[1, 3, 5].join(".")}-rc.1`,
+  };
+  const baselineTag = baselines[process.env.CI_UPDATE_BASELINE];
+  if (!baselineTag) throw new Error("Unknown CI update baseline");
   const oldStage = join(root, "baseline");
   await mkdir(oldStage);
   if (!apiToken)
@@ -142,6 +148,32 @@ try {
     apiToken,
   });
   await deploy(baseline.source, { ...baseline, tag: baselineTag }, true);
+  if (process.env.CI_UPDATE_BASELINE === "installed") {
+    const { UpdaterSlots } = await import(
+      pathToFileURL(join(candidate, "deploy/scripts/updater-slots.mjs"))
+    );
+    const baselineSlots = new UpdaterSlots("/opt/latex-renderer/updater", 0);
+    const baselineState = await baselineSlots.state();
+    const baselineUpdater = await baselineSlots.verify(baselineState.current);
+    if (
+      baselineUpdater.envelope.version !== baseline.version ||
+      baselineState.pending
+    )
+      throw new Error("Installed baseline Updater was not established");
+    const installedBootstrap = await readFile(
+      "/opt/latex-renderer/updater/bootstrap-v1/published-release.mjs",
+    );
+    if (
+      !installedBootstrap.equals(
+        await readFile(
+          join(baseline.source, "deploy/scripts/published-release.mjs"),
+        ),
+      )
+    )
+      throw new Error(
+        "Baseline bootstrap was replaced before candidate update",
+      );
+  }
   // Persist a real owner, DB record and storage data before candidate update.
   const password = "/etc/latex-renderer/ci/password";
   await writeFile(password, randomBytes(32).toString("base64url"), {

@@ -252,13 +252,27 @@ workflow, branch ref and exact commit before the shared E2E imports any artifact
 code. Production/release verification still requires the release workflow and
 tag; branch-validation proofs are not a release publication authority.
 
-Both E2E workflows fetch the historical baseline's release metadata, tag and
+Both E2E workflows require separate disposable runners for the legacy
+`v1.3.4-rc.5` transition and the already-installed bootstrap in `v1.3.5-rc.1`.
+The latter verifies the baseline slot and frozen bootstrap before applying the
+candidate; the release upload waits for both cases. A new baseline is an explicit
+test-policy change, not a moving latest release.
+
+Both E2E workflows fetch each baseline's release metadata, tag and
 attestation using their short-lived, read-only Actions token. Only the named
 `CI_RELEASE_GITHUB_TOKEN` environment variable is preserved across sudo; the
 entry point removes it from the environment before spawning children. It is
 passed explicitly to GitHub API requests, never to release asset downloads or
 the isolated provenance verifier. API redirects fail closed. Production
 bootstrap does not consume ambient GitHub credentials.
+The authenticated downloader lives only in `deploy/ci/published-release.mjs`.
+Its verification tail is checked against the frozen production implementation.
+All eight bootstrap-v1 files must remain byte-identical to published RC1; tests
+pin their hashes and exercise the real installer guard. Do not change these
+hashes or overwrite a host bootstrap to make an ordinary application update pass.
+RC2 inadvertently changed a frozen dependency and is rejected on such hosts;
+use the corrected RC3 instead. No bootstrap migration or verification bypass is
+needed for RC1 to RC3.
 Credentials are opaque Bearer tokens using the
 [RFC 6750 section 2.1 syntax](https://www.rfc-editor.org/rfc/rfc6750.html#section-2.1),
 not a fixed GitHub prefix or an alphanumeric-only format; whitespace and control
