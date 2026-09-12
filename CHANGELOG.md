@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 1.3.5 - 2026-09-12
+
+- Promote the published immutable `v1.3.5-rc.3` candidate with no functional changes. RC3 passed both legacy and installed-RC1 signed-artifact update/recovery E2E, followed by the designated VPS update, English/Japanese PDF/PNG rendering, public Worker boundary checks and independent Updater activation.
+- Include the Hono update, generation-fenced artifact publication, ZIP error handling, bounded Updater logs and VPS mirror retry diagnostics from the candidates below. Preserve the installed bootstrap-v1 byte-for-byte.
+- Migration 017 remains forward-only: retain a full database/storage backup and upgrade readers and workers together; application-only rollback remains disabled.
+- Stable artifacts must name RC3 as the validated candidate and pass source-equivalence and final signed-artifact E2E checks before publication. This preparation does not deploy Stable to a host.
+
 ## 1.3.5-rc.3 - 2026-09-12
 
 - Restore byte-for-byte compatibility with the installed bootstrap-v1 from RC1. Move CI-only authenticated release fetching outside the frozen bootstrap; keep immutable release, checksum and provenance verification unchanged.
