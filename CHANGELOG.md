@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 1.3.5-rc.4 - 2026-09-12
+
+- Refresh pnpm dependencies across all workspaces within their declared version ranges, including Hono, its Node server adapter, Zod, jose and development tooling. Preserve exact toolchain pins and existing security overrides.
+- Override Miniflare's transitive sharp dependency to 0.35.4 for GHSA-rgj7-g3m4-5g8c. Add lockfile and actual native-library regression checks, PNG/AVIF round trips and malformed-image rejection; keep application rendering and frozen bootstrap-v1 unchanged.
+- Adapt unused test arguments and render-identity scope destructuring to the updated lint rules without disabling checks or changing authorization behavior.
+- Supersede the RC3-only Stable promotion preparation: this changed dependency set requires fresh signed-artifact update/recovery E2E and designated-host validation before Stable. Retain migration 017 backup and forward-only update requirements.
+
 ## 1.3.5-rc.3 - 2026-09-12
 
 - Restore byte-for-byte compatibility with the installed bootstrap-v1 from RC1. Move CI-only authenticated release fetching outside the frozen bootstrap; keep immutable release, checksum and provenance verification unchanged.

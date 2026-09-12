@@ -280,14 +280,7 @@ class FakeClient implements ClientTransport {
     this.#jobs = [...jobs];
   }
 
-  createSource(
-    _size: number,
-    _sha256: string,
-    _idempotencyKey: string,
-  ): Promise<SourceTicketResponse> {
-    void _size;
-    void _sha256;
-    void _idempotencyKey;
+  createSource(): Promise<SourceTicketResponse> {
     this.createdTickets += 1;
     return Promise.resolve({
       sourceId: "source_0123456789abcdef0123456789abcdef",
@@ -315,10 +308,7 @@ class FakeClient implements ClientTransport {
   createSourceJob(
     _sourceId: string,
     entrypoint: string | undefined,
-    _idempotencyKey: string,
   ): Promise<SourceRenderResponse> {
-    void _sourceId;
-    void _idempotencyKey;
     this.entrypoints.push(entrypoint ?? "main.tex");
     return Promise.resolve({
       jobId: "job_test",
@@ -327,18 +317,13 @@ class FakeClient implements ClientTransport {
     });
   }
 
-  job(_jobId: string, _jobTicket: string): Promise<JobResponse> {
-    void _jobId;
-    void _jobTicket;
+  job(): Promise<JobResponse> {
     const value = this.#jobs.shift();
     if (value === undefined) throw new Error("Fake job sequence exhausted");
     return Promise.resolve(value);
   }
 
-  renewJobTicket(
-    _jobId: string,
-  ): Promise<{ jobTicket: string; expiresAt: string }> {
-    void _jobId;
+  renewJobTicket(): Promise<{ jobTicket: string; expiresAt: string }> {
     this.renewed += 1;
     return Promise.resolve({
       jobTicket: "renewed-job-ticket",
@@ -351,19 +336,15 @@ class FakeClient implements ClientTransport {
     _jobTicket: string,
     action: "cancel" | "delete",
   ): Promise<void> {
-    void _jobId;
-    void _jobTicket;
     this.actions.push(action);
     return Promise.resolve();
   }
 
   artifactUrl(_jobId: string, name: string): string {
-    void _jobId;
     return `artifact:${name}`;
   }
 
   previewUrl(_jobId: string, page: string): string {
-    void _jobId;
     return `preview:${page}`;
   }
 
@@ -372,7 +353,6 @@ class FakeClient implements ClientTransport {
     _ticket: string,
     destination: string,
   ): Promise<void> {
-    void _ticket;
     await mkdir(dirname(destination), { recursive: true });
     await writeFile(destination, url.replace(/^(?:artifact|preview):/, ""));
   }
