@@ -1,19 +1,35 @@
+// CI-only authenticated transport. Keep verification tail identical to frozen bootstrap.
 import { createHash } from "node:crypto";
 import { open, writeFile, lstat } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
-import { validReleaseVersion, isReleaseCandidate } from "./release-version.mjs";
-import { releaseAttestationArgs } from "./release-attestation.mjs";
-import { validateReleaseArchive } from "./release-archive.mjs";
+import {
+  validReleaseVersion,
+  isReleaseCandidate,
+} from "../scripts/release-version.mjs";
+import { releaseAttestationArgs } from "../scripts/release-attestation.mjs";
+import { validateReleaseArchive } from "../scripts/release-archive.mjs";
 
 const repo = "n624-dev/latex-renderer";
-async function responseBytes(url, maximum) {
+async function responseBytes(url, maximum, apiToken) {
   const response = await globalThis.fetch(url, {
     signal: globalThis.AbortSignal.timeout(120_000),
-    headers: { "User-Agent": "latex-renderer-bootstrap" },
+    redirect: "error",
+    headers: {
+      "User-Agent": "latex-renderer-bootstrap",
+      ...(apiToken ? { Authorization: `Bearer ${apiToken}` } : {}),
+    },
   });
-  if (!response.ok || !response.body)
-    throw new Error(`Release request failed: HTTP ${response.status}`);
+  if (!response.ok || !response.body) {
+    // Only bounded numeric diagnostics, never response bodies or credentials.
+    const limits = ["x-ratelimit-remaining", "x-ratelimit-reset", "retry-after"]
+      .map((name) => [name, response.headers.get(name)])
+      .filter(([, value]) => /^\d{1,16}$/.test(value ?? ""))
+      .map(([name, value]) => `${name}=${value}`);
+    throw new Error(
+      `Release request failed: HTTP ${response.status}${limits.length ? ` (${limits.join(", ")})` : ""}`,
+    );
+  }
   const chunks = [];
   let size = 0;
   for await (const chunk of response.body) {
@@ -23,17 +39,33 @@ async function responseBytes(url, maximum) {
   }
   return Buffer.concat(chunks);
 }
-const github = async (path) =>
+const githubRequest = async (path, apiToken) =>
   JSON.parse(
     (
       await responseBytes(
         `https://api.github.com/repos/${repo}/${path}`,
         8 * 1024 ** 2,
+        apiToken,
       )
     ).toString(),
   );
 
-export async function downloadPublishedRelease(requested, stage) {
+export async function downloadPublishedRelease(
+  requested,
+  stage,
+  { apiToken } = {},
+) {
+  if (
+    apiToken !== undefined &&
+    // RFC 6750 section 2.1: opaque b64token, not a GitHub prefix/format.
+    // Explicit whitespace rejection also excludes a final newline before `$`.
+    (typeof apiToken !== "string" ||
+      /\s/.test(apiToken) ||
+      !/^[-A-Za-z0-9._~+/]+=*$/.test(apiToken))
+  )
+    throw new Error("Invalid release API credential");
+  // Explicit opt-in for CI only. Never read ambient host credentials.
+  const github = (path) => githubRequest(path, apiToken);
   const version = validReleaseVersion(requested.replace(/^v/, "")),
     tag = `v${version}`;
   const release = await github(`releases/tags/${tag}`);

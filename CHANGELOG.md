@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 1.3.5-rc.3 - 2026-09-12
+
+- Restore byte-for-byte compatibility with the installed bootstrap-v1 from RC1. Move CI-only authenticated release fetching outside the frozen bootstrap; keep immutable release, checksum and provenance verification unchanged.
+- Require both legacy and installed-RC1 update/recovery E2E jobs before release upload. Pin all eight frozen bootstrap files in local regression tests and retain the installer's refusal to overwrite changed bootstrap files.
+- Supersede RC2 for hosts with an installed bootstrap. Preserve migration 017 and its full database/storage backup requirement; application-only rollback remains disabled.
+
 ## 1.3.5-rc.2 - 2026-09-11
 
 - Prevent stale workers from replacing newer artifacts by publishing normal and failure output into generation-specific directories and selecting them in the fenced final database transaction (migration 017). Preserve legacy artifact reads, public URLs and cleanup of both storage layouts.

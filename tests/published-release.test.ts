@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { downloadPublishedRelease } from "../deploy/scripts/published-release.mjs";
+import { downloadPublishedRelease } from "../deploy/ci/published-release.mjs";
 
 const stages: string[] = [];
 afterEach(async () => {

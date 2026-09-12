@@ -168,6 +168,10 @@ jobs:
 
   update-e2e:
     needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        baseline: [legacy, installed]
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     permissions:
@@ -201,6 +205,7 @@ jobs:
             /usr/local/bin/node deploy/ci/provision-update-host.mjs
       - name: Upgrade previous RC, validate data/rendering, exercise Updater recovery
         env:
+          CI_UPDATE_BASELINE: ${{ matrix.baseline }}
           CI_RELEASE_GITHUB_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.version }}
           RELEASE_COMMIT: ${{ needs.build.outputs.commit }}
@@ -210,6 +215,7 @@ jobs:
           (cd "$RUNNER_TEMP/release-assets" && sha256sum --strict --check VERIFIED-SHA256SUMS)
           digest="sha256:$(sha256sum "$artifact" | cut -d' ' -f1)"
           sudo --preserve-env=CI_RELEASE_GITHUB_TOKEN env RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" GITHUB_ACTIONS="$GITHUB_ACTIONS" \
+            CI_UPDATE_BASELINE="$CI_UPDATE_BASELINE" \
             GITHUB_RUN_ID="$GITHUB_RUN_ID" \
             NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/latex-renderer-ci.crt \
             /usr/local/bin/node deploy/ci/update-e2e.mjs \
