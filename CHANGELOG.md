@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 1.3.5 - 2026-09-13
+
+- Promote the published immutable `v1.3.5-rc.4` candidate with no functional changes. RC4 passed legacy and installed-RC1 signed-artifact update/recovery E2E and the designated VPS update, including English/Japanese PDF/PNG rendering, public Worker boundary checks and independent Updater activation.
+- Include the dependency refresh and patched sharp/libheif, generation-fenced artifact publication, ZIP error handling, bounded Updater logs and VPS mirror retry diagnostics from the candidates below. Preserve installed bootstrap-v1 byte-for-byte.
+- Migration 017 remains forward-only: retain a full database/storage backup and upgrade readers and workers together; application-only rollback remains disabled.
+- Stable artifacts must name RC4 as the validated candidate and pass source-equivalence and final signed-artifact E2E checks before publication. This preparation does not deploy Stable to a host.
+
 ## 1.3.5-rc.4 - 2026-09-12
 
 - Refresh pnpm dependencies across all workspaces within their declared version ranges, including Hono, its Node server adapter, Zod, jose and development tooling. Preserve exact toolchain pins and existing security overrides.
