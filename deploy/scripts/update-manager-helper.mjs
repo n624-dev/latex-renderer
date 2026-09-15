@@ -14,6 +14,7 @@
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { withHostRecovery } from "./update-recovery-host.mjs";
+import { githubJson as readGitHubJson } from "./github-json.mjs";
 import {
   chmod,
   copyFile,
@@ -97,6 +98,7 @@ const helperSource = fileURLToPath(import.meta.url);
 const helperRoot = resolve(dirname(helperSource), "../..");
 const bootstrapControlFiles = [
   "deploy/scripts/update-manager-helper.mjs",
+  "deploy/scripts/github-json.mjs",
   "deploy/scripts/application-database-file.mjs",
   "deploy/scripts/update-recovery.mjs",
   "deploy/scripts/update-recovery-host.mjs",
@@ -283,17 +285,7 @@ async function readRequest() {
 }
 
 async function githubJson(url) {
-  const response = await globalThis.fetch(url, {
-    headers: {
-      Accept: "application/vnd.github+json",
-      "X-GitHub-Api-Version": "2022-11-28",
-      "User-Agent": "latex-renderer-update-helper",
-    },
-    signal: globalThis.AbortSignal.timeout(30_000),
-  });
-  if (!response.ok)
-    throw new Error(`GitHub request failed: HTTP ${response.status}`);
-  return response.json();
+  return readGitHubJson(url, "latex-renderer-update-helper");
 }
 
 async function resolveTagCommit(tag) {

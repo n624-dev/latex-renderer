@@ -2,6 +2,7 @@
   "package.json",
   "deploy/scripts/update-manager.mjs",
   "deploy/scripts/update-manager-helper.mjs",
+  "deploy/scripts/github-json.mjs",
   "deploy/scripts/updater-status.mjs",
   "deploy/scripts/updater-slots.mjs",
   "deploy/scripts/update-recovery.mjs",

@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
 import {
   copyFile,
   lstat,
@@ -233,6 +234,24 @@ try {
     tmpfilesPath,
     `${legacyTmpfiles}\nd /var/lib/latex-renderer/update-manager 0750 root latex-renderer -\nd /var/lib/latex-renderer/update-manager/staging 0750 root latex-renderer -\nd /var/lib/latex-renderer/update-manager/operations 0750 root latex-renderer -\ne /var/lib/latex-renderer/update-manager/staging - - - 1d\ne /var/lib/latex-renderer/update-manager/operations - - - 30d\n`,
   );
+  const baselineDatabase = new DatabaseSync(
+    "/var/lib/latex-renderer/renderer.sqlite3",
+    { readOnly: true },
+  );
+  let baselineDatabaseVersion;
+  try {
+    baselineDatabaseVersion = {
+      sqliteUserVersion: baselineDatabase.prepare("PRAGMA user_version").get()
+        .user_version,
+      applicationSchemaVersion: baselineDatabase
+        .prepare(
+          "SELECT COALESCE(MAX(version),0) AS version FROM schema_migrations",
+        )
+        .get().version,
+    };
+  } finally {
+    baselineDatabase.close();
+  }
   await deploy(candidate, { version: tag.slice(1), tag, commit }, false);
   if (
     !(await readFile(tmpfilesPath)).equals(
@@ -296,6 +315,15 @@ try {
     throw new Error(
       "Candidate update did not preserve a complete baseline recovery point",
     );
+  if (
+    point.sqliteUserVersion !== baselineDatabaseVersion.sqliteUserVersion ||
+    point.applicationSchemaVersion !==
+      baselineDatabaseVersion.applicationSchemaVersion ||
+    point.schema !== point.sqliteUserVersion
+  )
+    throw new Error(
+      "Recovery summary does not identify the baseline application database version",
+    );
   const recoveredTar = execFileSync(
     "age",
     [
@@ -311,6 +339,21 @@ try {
     ["-xOf", "-", "./storage/update-e2e-sentinel"],
     { input: recoveredTar, encoding: "utf8" },
   );
+  const recoveredManifest = JSON.parse(
+    execFileSync("tar", ["-xOf", "-", "./manifest.json"], {
+      input: recoveredTar,
+      encoding: "utf8",
+    }),
+  );
+  if (
+    recoveredManifest.sqliteUserVersion !== point.sqliteUserVersion ||
+    recoveredManifest.applicationSchemaVersion !==
+      point.applicationSchemaVersion ||
+    recoveredManifest.schema !== point.schema
+  )
+    throw new Error(
+      "Encrypted recovery manifest and summary database versions differ",
+    );
   if (recoveredSentinel !== data)
     throw new Error(
       "Decrypted recovery point did not preserve baseline storage",

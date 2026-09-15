@@ -32,7 +32,14 @@ export function recoveryPolicy(value = {}) {
     retainHours: 168,
     maxEntries: 100_000,
   };
-  if (Object.keys(value).some((key) => !(key in defaults)))
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    ![Object.prototype, null].includes(Object.getPrototypeOf(value))
+  )
+    throw new Error("Recovery policy must be a plain object");
+  if (Reflect.ownKeys(value).some((key) => !Object.hasOwn(defaults, key)))
     throw new Error("Unknown recovery policy setting");
   const result = { ...defaults, ...value };
   for (const [key, number] of Object.entries(result))
@@ -185,14 +192,40 @@ async function tree(root, maximum, sealed = false) {
 }
 
 function checkDatabase(path) {
-  const db = new DatabaseSync(path, { readOnly: true });
+  // Only private snapshot/decrypted copies reach this function. Node24.15 /
+  // SQLite3.51.3 can omit CHECK violations from a read-only integrity_check;
+  // never open the live source read-write to work around that behavior.
+  const db = new DatabaseSync(path);
   try {
     if (
       db.prepare("PRAGMA integrity_check").get()?.integrity_check !== "ok" ||
       db.prepare("PRAGMA foreign_key_check").all().length
     )
       throw new Error("Recovery database verification failed");
-    return db.prepare("PRAGMA user_version").get()?.user_version;
+    const sqliteUserVersion = db
+      .prepare("PRAGMA user_version")
+      .get()?.user_version;
+    const migrations = db
+      .prepare("SELECT type FROM sqlite_schema WHERE name='schema_migrations'")
+      .get();
+    let applicationSchemaVersion = null;
+    if (migrations !== undefined) {
+      if (
+        migrations.type !== "table" ||
+        db
+          .prepare(
+            "SELECT 1 FROM schema_migrations WHERE typeof(version)!='integer' OR version<1 OR version>9007199254740991 LIMIT 1",
+          )
+          .get()
+      )
+        throw new Error("Invalid recovery application migration history");
+      applicationSchemaVersion = db
+        .prepare(
+          "SELECT COALESCE(MAX(version),0) AS version FROM schema_migrations",
+        )
+        .get().version;
+    }
+    return { sqliteUserVersion, applicationSchemaVersion };
   } finally {
     db.close();
   }
@@ -326,6 +359,25 @@ export class RecoveryStore {
         !/^[a-f0-9]{64}$/.test(value.archive.sha256 ?? "")
       )
         throw new Error("Corrupt recovery point metadata");
+      // Additive format-1 metadata: old points keep their legacy schema field
+      // and remain readable without rewriting either summary or archive.
+      if (
+        Object.hasOwn(value, "sqliteUserVersion") ||
+        Object.hasOwn(value, "applicationSchemaVersion")
+      ) {
+        if (
+          !Number.isInteger(value.sqliteUserVersion) ||
+          value.sqliteUserVersion < -2147483648 ||
+          value.sqliteUserVersion > 2147483647 ||
+          value.schema !== value.sqliteUserVersion ||
+          !(
+            value.applicationSchemaVersion === null ||
+            (Number.isSafeInteger(value.applicationSchemaVersion) &&
+              value.applicationSchemaVersion >= 0)
+          )
+        )
+          throw new Error("Corrupt recovery database version metadata");
+      }
       const archive = await lstat(join(path, "recovery.tar.age"));
       if (!archive.isFile() || archive.size !== value.archive.bytes)
         throw new Error("Incomplete recovery point");
@@ -480,7 +532,7 @@ export class RecoveryStore {
         sourceDb.close();
       }
       await chmod(join(data, "renderer.sqlite3"), 0o600);
-      const schema = checkDatabase(join(data, "renderer.sqlite3"));
+      const databaseVersion = checkDatabase(join(data, "renderer.sqlite3"));
       await mkdir(join(data, "storage"), { mode: 0o700 });
       for (const relative of inventory.directories)
         await mkdir(join(data, "storage", relative), {
@@ -515,7 +567,8 @@ export class RecoveryStore {
         id,
         createdAt: now,
         release,
-        schema,
+        schema: databaseVersion.sqliteUserVersion, // legacy format-1 alias
+        ...databaseVersion,
         storageIncluded: true,
         directories: inventory.directories,
         files: records,
@@ -559,13 +612,18 @@ export class RecoveryStore {
         if (actual.sha256 !== record.sha256 || actual.bytes !== record.bytes)
           throw new Error("Decrypted recovery verification failed");
       }
-      checkDatabase(join(verified, "renderer.sqlite3"));
+      if (
+        JSON.stringify(checkDatabase(join(verified, "renderer.sqlite3"))) !==
+        JSON.stringify(databaseVersion)
+      )
+        throw new Error("Decrypted recovery database version mismatch");
       const summary = {
         format: 1,
         id,
         createdAt: now,
         release,
-        schema,
+        schema: databaseVersion.sqliteUserVersion, // legacy format-1 alias
+        ...databaseVersion,
         storageIncluded: true,
         files: records.length,
         archive: await digest(archive),
