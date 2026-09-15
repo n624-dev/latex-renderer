@@ -1,5 +1,15 @@
 # Deployment
 
+Migration 018 introduces durable audit export sequences and format-3 checkpoints.
+Upgrade application, exporter and cleanup together after maintenance, verified
+backup and the private-copy migration preflight. Stop audit export and cleanup
+timers/services across migration; the new Updater's full-recovery wrapper handles
+this for its normal deployment path. Valid legacy checkpoints replay all retained
+audit rows once, possibly duplicating previous exports. Keep application-only
+rollback disabled and reconcile external checkpoint state explicitly after DB
+restoration. See [migration 018 recovery](deploy/migrations/018_audit_export_sequence.rollback.md)
+and [audit operations](OPERATIONS.md#audit-export-sequence-and-recovery).
+
 Migration 017 introduces generation-selected artifact storage. Upgrade all
 application readers and workers together using the maintenance/drain/backup
 procedure; do not use an application-only rollback after new artifacts exist.

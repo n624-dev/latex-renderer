@@ -105,6 +105,30 @@ code back would make newer artifacts unreadable. See
 [migration 017 recovery](deploy/migrations/017_artifact_generation.rollback.md)
 for legacy compatibility, crash cleanup and restoration requirements.
 
+## Migration 018: Durable audit export sequence
+
+Migration 018 assigns each audit INSERT a persistent AUTOINCREMENT sequence and
+random token, with a separate singleton database identity. Existing rows are
+backfilled once, without deleting or changing their audit fields. New inserts
+are ordered by sequence regardless of timestamp or ID; audit UPDATE is rejected.
+Format-3 export checkpoints bind that sequence to the database and row token.
+
+On migration from a valid legacy checkpoint, re-export all audit rows still in
+the DB once: duplicates with older encrypted exports are possible, but the old
+timestamp position cannot safely distinguish omissions. Cleanup only prunes
+expired, acknowledged rows and reclaims obsolete ledger entries in bounded
+batches while retaining the checkpoint anchor. Corrupt or restored/forked
+checkpoint state stops audit export and pruning instead of skipping data.
+
+Stop export/cleanup timers and application writers during migration; deploy the
+application, exporter and cleanup together after the verified backup/preflight.
+Keep `rollbackCompatible: false`. Do not drop the ledger or use an old exporter
+with the new checkpoint. Restore the pre-upgrade DB/storage and corresponding
+application when rollback is required, preserving newer encrypted exports.
+See [migration 018 recovery](deploy/migrations/018_audit_export_sequence.rollback.md)
+and [audit operations](OPERATIONS.md#audit-export-sequence-and-recovery) for the
+explicit retained-row replay procedure after DB restoration.
+
 ## Administrative API migration for 0.3
 
 This release changes administrative HTTP routes but does not require an additional database migration beyond the schema migrations documented above.

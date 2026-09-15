@@ -5,7 +5,10 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { RendererDatabase } from "@latex-renderer/database";
-import { writeAuditCheckpoint } from "../deploy/scripts/audit-checkpoint.mjs";
+import {
+  readAuditDatabaseState,
+  writeAuditCheckpoint,
+} from "../deploy/scripts/audit-checkpoint.mjs";
 
 const execFileAsync = promisify(execFile),
   roots: string[] = [];
@@ -162,11 +165,19 @@ describe("scheduled cleanup", () => {
     );
     insert.run("audit_old", old);
     insert.run("audit_recent", recent);
-    database.close();
+    const state = readAuditDatabaseState(database.raw);
+    const anchor = database.raw
+      .prepare(
+        "SELECT token FROM audit_export_sequence WHERE audit_id='audit_old'",
+      )
+      .get();
     await writeAuditCheckpoint(checkpointPath, {
-      createdAt: old,
-      id: "audit_old",
+      format: 3,
+      databaseId: state.databaseId,
+      sequence: "1",
+      token: String(anchor?.token),
     });
+    database.close();
 
     const { stdout } = await execFileAsync(
       process.execPath,

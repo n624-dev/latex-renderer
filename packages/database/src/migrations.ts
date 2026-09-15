@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { auditExportSequenceSql } from "./schema.js";
 
 const usersAccessSubjectV2Sql = `
 DROP INDEX IF EXISTS idx_users_access_subject_unique;
@@ -54,6 +55,19 @@ export function applyDatabaseMigrations(db: DatabaseSync): void {
   applySourceUploadConcurrencyV15(db);
   applyApiKeyKindV16(db);
   applyArtifactGenerationV17(db);
+  applyAuditExportSequenceV18(db);
+}
+
+function applyAuditExportSequenceV18(db: DatabaseSync): void {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    if (!db.prepare("SELECT 1 FROM schema_migrations WHERE version=18").get())
+      db.exec(auditExportSequenceSql);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
 }
 
 function applyArtifactGenerationV17(db: DatabaseSync): void {

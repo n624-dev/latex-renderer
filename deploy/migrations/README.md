@@ -15,7 +15,7 @@ Before migrations on production:
    node deploy/scripts/preflight-users-migration.mjs /var/lib/latex-renderer/renderer.sqlite3
    ```
 
-4. Confirm the preflight reports target version 17. Deploy the application; the
+4. Confirm the preflight reports target version 18. Deploy the application; the
    first process holding `BEGIN IMMEDIATE` performs the migration and later
    processes observe it as already applied.
 5. Verify `PRAGMA integrity_check`, `PRAGMA foreign_key_check`, migration version,
@@ -34,3 +34,12 @@ rollback. Raise `minimumSourceVersion` when the release cannot be safely applied
 from every older supported installation. These values are copied into the
 signed release manifest during the server release workflow, so changing them
 after publication is intentionally impossible.
+
+Migration 18 replaces timestamp-based audit export positions with durable
+sequences. Upgrade export and cleanup scripts together with application code;
+do not run older timestamp-based cleanup against the migrated database. Valid
+legacy checkpoints replay retained audit rows once, with possible duplicates.
+The external checkpoint must be reconciled separately after DB restoration.
+Keep `rollbackCompatible: false`; see
+[migration 18 recovery](018_audit_export_sequence.rollback.md) and
+[audit operations](../../OPERATIONS.md#audit-export-sequence-and-recovery).
