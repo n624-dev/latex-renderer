@@ -151,6 +151,39 @@ it("does not publish a point with the wrong decryption key and cleans plaintext 
   expect(await f.store.points()).toEqual([]);
   expect(await readdir(join(f.store.root, "staging"))).toEqual([]);
 });
+it("drains the authenticated producer through EOF even with delayed tar zero padding", async () => {
+  const f = await fixture(),
+    commands = join(f.root, "commands");
+  await mkdir(commands, { mode: 0o700 });
+  // Make the reader/producer race deterministic: real age verifies the archive,
+  // then its fixture wrapper delays the last zero-padding record and pipe EOF.
+  await writeFile(
+    join(commands, "age"),
+    `#!/usr/bin/env node
+const {spawn} = require('node:child_process');
+const child = spawn('/usr/bin/age', process.argv.slice(2), {stdio:['inherit','pipe','inherit']});
+child.stdout.pipe(process.stdout, {end:false});
+child.on('error', () => process.exit(1));
+child.on('close', code => {
+  if (code !== 0) process.exit(code ?? 1);
+  if (process.argv[2] === '-d') setTimeout(() => process.stdout.write(Buffer.alloc(10240), () => process.exit(0)), 100);
+  else process.exit(0);
+});
+`,
+    { mode: 0o700 },
+  );
+  const priorPath = process.env.PATH;
+  process.env.PATH = `${commands}:${priorPath ?? ""}`;
+  try {
+    await expect(f.store.create(f)).resolves.toMatchObject({
+      storageIncluded: true,
+    });
+    expect(await readdir(join(f.store.root, "staging"))).toEqual([]);
+  } finally {
+    if (priorPath === undefined) delete process.env.PATH;
+    else process.env.PATH = priorPath;
+  }
+});
 it("cleans a private incomplete SQLite destination after ENOSPC", async () => {
   const f = await fixture();
   // Keep the dynamic database receiver while intercepting only VACUUM below.

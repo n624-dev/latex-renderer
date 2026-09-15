@@ -134,6 +134,11 @@ the managed root, normally removed immediately, and covered by admission.
 Local tests use tiny SQLite/storage fixtures and ephemeral age keys, exercise
 real encryption/decryption, retention, capacity refusal, corruption, unsafe paths,
 service quiescence/restoration, interrupted owners and activation read races.
+A delayed-zero-padding fixture reproduces early tar reader exit deterministically.
+Extraction drains producer EOF (`--ignore-zeros`, with end-block warnings enabled)
+and still requires both process exit codes, age authentication and every file/DB
+check to pass. Pipe failures identify the failing command pair, not only a generic
+stream error. See [GNU tar's EOF behavior](https://www.gnu.org/software/tar/manual/html_node/Ignore-Zeros.html).
 The two disposable-host E2E baselines additionally check that the new helper's
 baseline recovery point decrypts to the preserved storage sentinel. Neither
 successful local tests nor branch artifacts authorize production rollout.

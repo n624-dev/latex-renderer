@@ -241,6 +241,11 @@ async function commandPipe(first, second, maximum) {
       },
     });
     await Promise.all([...done, pipeline(source.stdout, limit, target.stdin)]);
+  } catch (error) {
+    throw new Error(
+      `Recovery pipe ${first[0]} -> ${second[0]} failed: ${error.message}`,
+      { cause: error },
+    );
   } finally {
     clearTimeout(timer);
     for (const child of children)
@@ -529,6 +534,11 @@ export class RecoveryStore {
         ["age", "-d", "-i", identity, archive],
         [
           "tar",
+          // Consume authenticated producer EOF, not just tar's first zero
+          // record. Early tar exit otherwise races Node's pipe completion.
+          "--ignore-zeros",
+          "--warning=alone-zero-block",
+          "--warning=missing-zero-blocks",
           "--no-same-owner",
           "--no-same-permissions",
           "-C",
