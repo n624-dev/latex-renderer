@@ -75,6 +75,10 @@ chown -R latex-renderer-update:latex-renderer /var/lib/latex-renderer/update-man
 chmod 0750 /var/lib/latex-renderer/update-manager
 chmod 0750 /var/lib/latex-renderer/update-manager/operations
 chmod 0700 /var/lib/latex-renderer/update-manager/staging
+# Migrate the persistent OS policy too, or a later tmpfiles pass can undo the
+# controller ownership above and make the next controller restart fail.
+/usr/local/bin/node "$source_root/deploy/scripts/install-manager-tmpfiles.mjs"
+install -o root -g root -m 0644 "$source_root/deploy/scripts/update-recovery-entry.mjs" /usr/local/libexec/latex-renderer-update-recovery.mjs
 install -d -o root -g root -m 0711 /opt/latex-renderer/update-staging
 if [ ! -f /etc/latex-renderer/update-manager.env ]; then
   update_deploy_user=${UPDATE_DEPLOY_USER:-${SUDO_USER:-$(stat -c '%U' "$source_root")}}

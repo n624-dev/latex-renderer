@@ -190,9 +190,7 @@ describe("managed TeX Live image pipeline", () => {
     expect(manager).not.toContain("installed.length !== languages.length");
     expect(restore).toContain("effectiveLanguageCollections");
     expect(restore).toContain("effective_languages=$(rootless_docker run");
-    expect(restore).toContain(
-      "--tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m",
-    );
+    expect(restore).toContain("--tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m");
     expect(manager).toContain(
       "desired: {\n      ...previousState.desired,\n      selector,\n      languages,\n      autoUpdate,",
     );
@@ -317,8 +315,10 @@ describe("managed TeX Live image pipeline", () => {
     );
     expect(prune).toContain("previousManaged?.runtimeImageId");
     expect(prune).toContain("previousManaged?.baseImageId");
-    expect(installHost).toContain("latex-renderer-image-manager.conf");
-    expect(installHost).toContain("operations - - - 30d");
+    expect(installHost).toContain("install-manager-tmpfiles.mjs");
+    expect(
+      read("deploy/tmpfiles.d/latex-renderer-image-manager.conf"),
+    ).toContain("e /var/lib/latex-renderer/image-manager/operations - - - 30d");
   });
 
   it("uses a localhost-only privileged helper and refuses registry-failure cold rebuilds", () => {

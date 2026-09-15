@@ -24,6 +24,11 @@ import { setInterval } from "node:timers";
 import { acquireMutationLock } from "./mutation-lock.mjs";
 import { collectUpdateLogs, updateLogPolicy } from "./update-log-retention.mjs";
 import {
+  updaterStatus,
+  updateOutcome,
+  readExpectedUpdater,
+} from "./updater-status.mjs";
+import {
   boundedIntegerEnvironment,
   positiveBytesEnvironment,
 } from "./environment.mjs";
@@ -159,17 +164,26 @@ await cleanupStagingRoot();
 await cleanupOperationLogs();
 
 function cleanupOperationLogs() {
-  const collection = logCollection.then(() => collectUpdateLogs({
-    root: operationsRoot, policy: logPolicy,
-    activeId: () => activeOperation?.id ?? null,
-  }));
-  logCollection = collection.then(() => {
-    if (logCollectionFailed) console.log("Update log collection recovered");
-    logCollectionFailed = false;
-  }, () => {
-    if (!logCollectionFailed) console.error("Update log collection failed; inspect private controller state");
-    logCollectionFailed = true;
-  });
+  const collection = logCollection.then(() =>
+    collectUpdateLogs({
+      root: operationsRoot,
+      policy: logPolicy,
+      activeId: () => activeOperation?.id ?? null,
+    }),
+  );
+  logCollection = collection.then(
+    () => {
+      if (logCollectionFailed) console.log("Update log collection recovered");
+      logCollectionFailed = false;
+    },
+    () => {
+      if (!logCollectionFailed)
+        console.error(
+          "Update log collection failed; inspect private controller state",
+        );
+      logCollectionFailed = true;
+    },
+  );
   return collection;
 }
 
@@ -194,7 +208,8 @@ async function cleanupStagingRoot() {
 async function loadState() {
   try {
     const parsed = JSON.parse(await readFile(statePath, "utf8"));
-    if (parsed?.version !== 1) throw new Error("Unsupported Update Manager state schema");
+    if (parsed?.version !== 1)
+      throw new Error("Unsupported Update Manager state schema");
     return {
       ...emptyState(),
       ...parsed,
@@ -379,6 +394,7 @@ function operationView(operation) {
     startedAt: operation.startedAt,
     finishedAt: operation.finishedAt ?? null,
     error: operation.error ?? null,
+    expectedUpdater: operation.expectedUpdater ?? null,
   };
 }
 
@@ -440,7 +456,18 @@ async function operationWithLog(id) {
   } catch (error) {
     if (error?.code !== "ENOENT") throw error;
   }
-  return { ...operationView(operation), log };
+  return {
+    ...operationView(operation),
+    log,
+    outcome:
+      id === state.lastOperationId
+        ? updateOutcome(operation, await updaterStatus())
+        : {
+            application: operation.status,
+            updater: "historical",
+            complete: false,
+          },
+  };
 }
 
 async function installedRelease() {
@@ -753,7 +780,8 @@ async function prepareRelease(operation, release) {
       await readFile(join(verifiedSource, "package.json"), "utf8"),
     );
     const stagedRendererFingerprint = await validatedReleaseRendererFingerprint(
-      join(verifiedSource, "renderer"), manifest,
+      join(verifiedSource, "renderer"),
+      manifest,
     );
     if (
       manifest?.version !== release.version ||
@@ -910,6 +938,8 @@ async function deployPrepared(operation, release, prepared) {
   const before = await installedRelease();
   const releaseId = `v${release.version}-${prepared.manifest.commit.slice(0, 12)}`;
   const stage = prepared.stage.slice(stagingRoot.length + 1);
+  operation.expectedUpdater = await readExpectedUpdater(prepared.source);
+  await saveOperation(operation);
   try {
     await runPrivileged(operation, {
       verb: "apply",
@@ -917,6 +947,11 @@ async function deployPrepared(operation, release, prepared) {
       stage,
     });
   } catch (deploymentError) {
+    if (String(deploymentError).includes("RECOVERY_REVIEW_REQUIRED"))
+      throw new Error(
+        `Deployment recovery requires operator review; no automatic code rollback was attempted: ${deploymentError.message}`,
+        { cause: deploymentError },
+      );
     if (prepared.manifest.rollbackCompatible !== true) {
       throw new Error(
         `Deployment failed and this release declares its migration non-rollback-compatible; automatic code rollback was not attempted: ${deploymentError instanceof Error ? deploymentError.message : String(deploymentError)}`,
@@ -1010,6 +1045,8 @@ async function rollbackRelease(operation) {
   if (resolve(target) !== `${releaseRoot}/${releaseId}`)
     throw new Error("Rollback release path is invalid");
   const current = await installedRelease();
+  operation.expectedUpdater = await readExpectedUpdater(target);
+  await saveOperation(operation);
   await runPrivileged(operation, { verb: "rollback", releaseId });
   const after = await installedRelease();
   if (after?.releaseId !== releaseId)
@@ -1209,6 +1246,7 @@ const server = createServer(async (request, response) => {
       return send(response, 200, {
         ...state,
         installed: await installedRelease(),
+        updater: await updaterStatus(),
         activeOperationId: activeOperation?.id ?? null,
       });
     }

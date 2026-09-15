@@ -1,0 +1,7 @@
+{
+  "maxBytes": 4294967296,
+  "minFreeBytes": 3221225472,
+  "retainCount": 2,
+  "retainHours": 168,
+  "maxEntries": 100000
+}

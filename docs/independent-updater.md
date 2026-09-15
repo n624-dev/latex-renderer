@@ -33,6 +33,11 @@ the original operation releases the mutation lock. Busy/failed activation is
 retried at most three times, 30 seconds apart. Application operation success and
 Updater activation success are distinct: inspect both results.
 
+New controllers expose both outcomes in the management API/UI. New helpers also
+acquire bounded, decrypt-verified full-data recovery points before deployment.
+See [update recovery points](update-recovery.md) for limits, migration and failure
+handling; an old controller's completed operation remains explicitly unconfirmed.
+
 Activation stops the old controller, backs up its bounded state JSON as its
 non-root owner, journals the switch, starts the candidate, and checks its process
 directory plus authenticated socket. Only successful health checks commit it.
@@ -99,6 +104,33 @@ operation can return an empty log after collection. No additional permanent
 diagnostic archive is created, and no response body or credentials are added to
 these diagnostics. This policy does not manage journald, application backups,
 TeX snapshots or GHCR.
+
+### Persistent host policy during upgrades
+
+First install and every application upgrade install the same
+`deploy/tmpfiles.d/latex-renderer-image-manager.conf` through
+`install-manager-tmpfiles.mjs`. The historical filename is deliberately reused:
+adding a second configuration would leave conflicting old ownership rules in
+place. Replacement is atomic and durable before `systemd-tmpfiles --create`;
+an apply failure stops preparation before changing the application pointer.
+Retrying reinstalls the same policy. No age-based cleanup runs during deployment.
+
+Repairing directory ownership alone is insufficient. An older root-owned staging
+rule can undo that repair on a subsequent OS tmpfiles pass, making the non-root
+controller fail to start. Update Manager staging and operation logs are collected
+by the controller, not tmpfiles; operation JSON and recovery state are not deleted
+by OS age rules. Image Manager's existing retention rules are unchanged.
+
+The isolated local test applies the real policy twice with `systemd-tmpfiles
+--root` (Linux/systemd required), without touching host accounts or services.
+Both legacy and installed-bootstrap release E2E scenarios deliberately restore
+the obsolete policy before the candidate update, then apply tmpfiles again and
+check real service-account ownership and controller activation. A newly
+provisioned CI host alone cannot cover this persistent-host migration failure.
+
+This is an application host-preparation migration, not a bootstrap-v1 change or
+an Updater-only slot activation side effect. Existing frozen bootstrap hashes,
+release verification, and rollback boundaries remain unchanged.
 
 ### Failed deployment checks
 

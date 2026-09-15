@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 1.3.6-rc.1 - 2026-09-15
+
+- Reconcile persistent manager tmpfiles policy on every application upgrade, preventing old OS ownership rules from breaking the non-root Updater after deployment. Leave active staging and operation records to the controller's bounded cleanup.
+- Expose verified running Updater identity and separate application/Updater operation outcomes. Do not report pending, failed, corrupt, mismatched or legacy-unconfirmed activation as combined update success.
+- Add independently managed full DB/storage recovery points to new Updater helpers: quiesce writers through deployment, encrypt and decrypt-verify, retain at most two normal generations for seven days, enforce a 4 GiB working budget and 3 GiB filesystem reserve, and preserve failed-deployment points until explicit review. Existing backups and live data are not restored or deleted automatically.
+- Extend local fixtures and both disposable-host update E2E baselines for persistent-host migrations and full recovery contents. Preserve all eight frozen bootstrap files and release checksum/provenance/renderer validation gates. First transition from an old helper still requires the documented manual full backup or upgrading the independent Updater first.
+
 ## 1.3.5 - 2026-09-13
 
 - Promote the published immutable `v1.3.5-rc.4` candidate with no functional changes. RC4 passed legacy and installed-RC1 signed-artifact update/recovery E2E and the designated VPS update, including English/Japanese PDF/PNG rendering, public Worker boundary checks and independent Updater activation.

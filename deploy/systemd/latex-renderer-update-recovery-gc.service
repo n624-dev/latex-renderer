@@ -1,0 +1,11 @@
+[Unit]
+Description=Collect bounded application update recovery points
+After=latex-renderer-update-manager.service
+
+[Service]
+Type=oneshot
+User=root
+UMask=0077
+ExecStart=/usr/local/bin/node /usr/local/libexec/latex-renderer-update-recovery.mjs gc
+TimeoutStartSec=5min
+Nice=10
