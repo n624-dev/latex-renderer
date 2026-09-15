@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 1.3.6 - 2026-09-15
+
+- Promote the published immutable `v1.3.6-rc.1` candidate with no functional changes. RC1 passed both signed-artifact update/recovery E2E baselines and designated VPS validation: independent Updater upgrade followed by application deployment, English/Japanese PDF/PNG rendering, public Worker boundary checks and combined application/Updater completion.
+- Include persistent manager tmpfiles migration, verified Updater activation status, and bounded, encrypted, decrypt-verified full database/storage recovery points from RC1. Preserve existing backups, frozen bootstrap-v1, mandatory provenance checks and Base-only image publication.
+- For the first transition from an older helper, upgrade the independent Updater first or retain the documented manual full backup. Application-only rollback remains disabled; failed-deployment recovery requires explicit operator review.
+- Stable artifacts must name RC1 as the validated candidate and pass source-equivalence and final signed-artifact E2E checks before publication. This preparation does not deploy Stable to a host.
+
 ## 1.3.6-rc.1 - 2026-09-15
 
 - Reconcile persistent manager tmpfiles policy on every application upgrade, preventing old OS ownership rules from breaking the non-root Updater after deployment. Leave active staging and operation records to the controller's bounded cleanup.
