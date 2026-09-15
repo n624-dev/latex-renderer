@@ -1,11 +1,17 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { constants, createReadStream } from "node:fs";
+import { createReadStream } from "node:fs";
 import { mkdir, mkdtemp, open, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
+import {
+  assertBackupDatabase,
+  openBackupFile,
+  projectSourceStorageKey,
+  validateBackupArchive,
+} from "./backup-boundary.mjs";
 
 const databasePath = absolutePath(required("DATABASE_PATH"), "DATABASE_PATH");
 const storageRoot = absolutePath(required("STORAGE_ROOT"), "STORAGE_ROOT");
@@ -32,9 +38,13 @@ try {
     sourceDatabase.close();
   }
 
-  const snapshotDatabase = new DatabaseSync(snapshot, { readOnly: true });
+  // Node 24.15.0 / SQLite 3.51.3 returned "ok" for a CHECK violation when
+  // opened read-only in our regression fixture. Inspect only this private
+  // copy read-write to avoid that observed runtime difference, never the live DB.
+  const snapshotDatabase = new DatabaseSync(snapshot);
   let projectBoundary;
   try {
+    assertBackupDatabase(snapshotDatabase);
     projectBoundary = await copyProjectSources(snapshotDatabase);
   } finally {
     snapshotDatabase.close();
@@ -68,6 +78,8 @@ try {
   const entries = ["renderer.sqlite3", "manifest.json"];
   if (projectBoundary.sources.length > 0) entries.push("project-sources");
   await run("tar", ["-C", work, "-cf", tarPath, ...entries]);
+  // Do not publish a backup that the shared restore boundary cannot inspect.
+  await validateBackupArchive(tarPath);
   const output = join(destination, `${basename(tarPath)}.age`);
   await run("age", ["-R", recipientFile, "-o", output, tarPath]);
   if ((await stat(output)).size === 0)
@@ -107,14 +119,13 @@ async function copyProjectSources(database) {
     .all();
   const copied = [];
   for (const source of sources) {
-    assertProjectSource(source);
+    const storageKey = projectSourceStorageKey(source);
     const relativePath = `project-sources/${source.id}/source.zip`;
     const directory = join(work, "project-sources", source.id);
     await mkdir(directory, { recursive: true, mode: 0o700 });
-    const sourcePath = join(storageRoot, "sources", source.id, "source.zip");
     const destinationPath = join(work, relativePath);
     await copyVerifiedRegularFile(
-      sourcePath,
+      storageKey,
       destinationPath,
       source.size,
       source.sha256,
@@ -136,19 +147,8 @@ async function copyProjectSources(database) {
   };
 }
 
-function assertProjectSource(source) {
-  if (
-    !/^source_[a-f0-9]{32}$/.test(source.id) ||
-    source.storage_key !== `sources/${source.id}/source.zip` ||
-    !Number.isSafeInteger(source.size) ||
-    source.size < 0 ||
-    !/^[a-f0-9]{64}$/.test(source.sha256)
-  )
-    throw new Error(`Project Source metadata is invalid: ${source.id}`);
-}
-
 async function copyVerifiedRegularFile(
-  sourcePath,
+  storageKey,
   destinationPath,
   expectedSize,
   expectedSha256,
@@ -156,7 +156,7 @@ async function copyVerifiedRegularFile(
   let source;
   let destinationHandle;
   try {
-    source = await open(sourcePath, constants.O_RDONLY | constants.O_NOFOLLOW);
+    source = await openBackupFile(storageRoot, storageKey);
     const sourceStat = await source.stat();
     if (!sourceStat.isFile() || sourceStat.nlink !== 1)
       throw new Error("Project Source must be a single-link regular file");
@@ -168,14 +168,15 @@ async function copyVerifiedRegularFile(
     const hash = createHash("sha256");
     const buffer = Buffer.allocUnsafe(1024 * 1024);
     let readPosition = 0;
-    for (;;) {
+    while (readPosition < expectedSize) {
       const { bytesRead } = await source.read(
         buffer,
         0,
-        buffer.length,
+        Math.min(buffer.length, expectedSize - readPosition),
         readPosition,
       );
-      if (bytesRead === 0) break;
+      if (bytesRead === 0)
+        throw new Error("Project Source was truncated during backup");
       hash.update(buffer.subarray(0, bytesRead));
       let written = 0;
       while (written < bytesRead) {
@@ -185,18 +186,28 @@ async function copyVerifiedRegularFile(
           bytesRead - written,
           readPosition + written,
         );
+        if (result.bytesWritten === 0)
+          throw new Error("Project Source backup write made no progress");
         written += result.bytesWritten;
       }
       readPosition += bytesRead;
     }
     await destinationHandle.sync();
-    if (readPosition !== expectedSize || hash.digest("hex") !== expectedSha256)
+    const after = await source.stat();
+    if (
+      readPosition !== expectedSize ||
+      hash.digest("hex") !== expectedSha256 ||
+      after.size !== sourceStat.size ||
+      after.mtimeMs !== sourceStat.mtimeMs ||
+      after.ctimeMs !== sourceStat.ctimeMs ||
+      after.nlink !== 1
+    )
       throw new Error(
         "Project Source content does not match the database snapshot",
       );
   } catch (error) {
     throw new Error(
-      `Could not back up Project Source ${sourcePath}: ${error}`,
+      `Could not back up Project Source ${storageKey}: ${error}`,
       {
         cause: error,
       },
@@ -208,7 +219,7 @@ async function copyVerifiedRegularFile(
   const copiedStat = await stat(destinationPath);
   if (copiedStat.size !== expectedSize)
     throw new Error(
-      `Project Source changed while the backup was being created: ${sourcePath}`,
+      `Project Source changed while the backup was being created: ${storageKey}`,
     );
 }
 

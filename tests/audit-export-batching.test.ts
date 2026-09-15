@@ -75,11 +75,12 @@ copyFileSync(args.at(-1), args[args.indexOf("-o") + 1]);
       },
     );
     expect(JSON.parse(stdout)).toMatchObject({ count: 5, batches: 3 });
-    expect((await readdir(destination)).filter((name) => name.endsWith(".age")))
-      .toHaveLength(3);
-    await expect(readAuditCheckpoint(checkpointPath)).resolves.toEqual({
-      createdAt: "2026-08-30T00:00:05.000Z",
-      id: "audit_005",
+    expect(
+      (await readdir(destination)).filter((name) => name.endsWith(".age")),
+    ).toHaveLength(3);
+    await expect(readAuditCheckpoint(checkpointPath)).resolves.toMatchObject({
+      format: 3,
+      sequence: "5",
     });
   });
 });

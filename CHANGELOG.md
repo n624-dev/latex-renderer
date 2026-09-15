@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 1.3.7-rc.1 - 2026-09-15
+
+- Include migration-3 legacy Project Source inputs in scheduled encrypted backups; verify foreign keys as well as SQLite integrity on backup and format-1/2 restore copies. Share strict, bounded archive validation and descriptor-pinned Source reads without changing the live DB or the separate Updater full-recovery boundary.
+- Prevent equal-time or backdated audit INSERTs from being omitted by export and then pruned. Migration 018 introduces durable sequences, database/row identities, serialized exports and format-3 checkpoints; replay retained legacy audit rows once, allowing duplicates to prevent omissions. Preserve unexported rows and bound obsolete ledger cleanup.
+- Fail closed on corrupt or restored/forked checkpoint state; document explicit recovery, Linux prerequisites and existing-backup transition limitations. Keep application-only rollback disabled and frozen Updater bootstrap files unchanged.
+- Candidate preparation only: require signed-artifact update/recovery E2E and separate designated-host validation before Stable. Existing Stable artifacts, production data, Base-only publication and CI cache policy remain unchanged.
+
 ## 1.3.6 - 2026-09-15
 
 - Promote the published immutable `v1.3.6-rc.1` candidate with no functional changes. RC1 passed both signed-artifact update/recovery E2E baselines and designated VPS validation: independent Updater upgrade followed by application deployment, English/Japanese PDF/PNG rendering, public Worker boundary checks and combined application/Updater completion.

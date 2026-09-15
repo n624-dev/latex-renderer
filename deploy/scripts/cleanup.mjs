@@ -2,7 +2,10 @@
 import { rm } from "node:fs/promises";
 import { dirname, isAbsolute, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { readAuditCheckpoint } from "./audit-checkpoint.mjs";
+import {
+  readAuditCheckpoint,
+  validateAuditCheckpoint,
+} from "./audit-checkpoint.mjs";
 import {
   boundedIntegerEnvironment,
   positiveIntegerEnvironment,
@@ -319,9 +322,12 @@ for (const id of old) {
   }
 }
 let auditLogsDeleted = 0;
+let auditSequenceEntriesDeleted = 0;
 try {
+  db.exec("BEGIN IMMEDIATE");
   const checkpoint = await readAuditCheckpoint(auditCheckpointPath);
-  if (checkpoint.createdAt !== "") {
+  if (checkpoint.format === 3) {
+    validateAuditCheckpoint(db, checkpoint);
     const auditCutoff = new Date(
       Date.now() - auditRetentionDays * 86_400_000,
     ).toISOString();
@@ -329,22 +335,31 @@ try {
       db
         .prepare(
           `DELETE FROM audit_logs WHERE id IN (
-             SELECT id FROM audit_logs
-             WHERE created_at<?
-               AND (created_at<? OR (created_at=? AND id<=?))
-             ORDER BY created_at,id LIMIT ?
+             SELECT a.id FROM audit_logs a JOIN audit_export_sequence e ON e.audit_id=a.id
+             WHERE a.created_at<? AND e.sequence<=?
+             ORDER BY e.sequence LIMIT ?
            )`,
         )
-        .run(
-          auditCutoff,
-          checkpoint.createdAt,
-          checkpoint.createdAt,
-          checkpoint.id,
-          auditPruneBatchSize,
-        ).changes,
+        .run(auditCutoff, BigInt(checkpoint.sequence), auditPruneBatchSize)
+        .changes,
+    );
+    // Retain the one checkpoint anchor even after deleting its audit row. Its
+    // random token detects a restored/forked DB that reused the same sequence.
+    auditSequenceEntriesDeleted = Number(
+      db
+        .prepare(
+          `DELETE FROM audit_export_sequence
+      WHERE sequence IN (SELECT sequence FROM audit_export_sequence
+        WHERE audit_id IS NULL AND sequence<? ORDER BY sequence LIMIT ?)`,
+        )
+        .run(BigInt(checkpoint.sequence), auditPruneBatchSize).changes,
     );
   }
+  db.exec("COMMIT");
 } catch (error) {
+  if (db.isTransaction) db.exec("ROLLBACK");
+  auditLogsDeleted = 0;
+  auditSequenceEntriesDeleted = 0;
   recordFailure("audit-prune", "audit_logs", error);
 }
 console.log(
@@ -355,6 +370,7 @@ console.log(
     sourcesDeleted,
     historyDeleted,
     auditLogsDeleted,
+    auditSequenceEntriesDeleted,
     staleJobUploadsRecovered,
     staleSourceUploadsRecovered,
     itemFailureCount,

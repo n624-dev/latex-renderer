@@ -4,14 +4,18 @@ import {
   readFile,
   rm,
   stat,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   readAuditCheckpoint,
   writeAuditCheckpoint,
+  type AuditCheckpoint,
 } from "../deploy/scripts/audit-checkpoint.mjs";
 
 const roots: string[] = [];
@@ -26,8 +30,7 @@ describe("audit export checkpoint", () => {
     const root = await temporaryRoot(),
       path = join(root, "checkpoint");
     await expect(readAuditCheckpoint(path)).resolves.toEqual({
-      createdAt: "",
-      id: "",
+      format: 0,
     });
     await writeFile(path, "not-json", { mode: 0o600 });
     await expect(readAuditCheckpoint(path)).rejects.toThrow("checkpoint JSON");
@@ -41,9 +44,11 @@ describe("audit export checkpoint", () => {
   it("atomically writes and verifies a checksummed checkpoint", async () => {
     const root = await temporaryRoot(),
       path = join(root, "checkpoint");
-    const value = {
-      createdAt: "2026-08-31T00:00:00.000Z",
-      id: "audit_test",
+    const value: AuditCheckpoint = {
+      format: 3,
+      databaseId: "a".repeat(64),
+      sequence: "42",
+      token: "b".repeat(64),
     };
     await writeAuditCheckpoint(path, value);
     await expect(readAuditCheckpoint(path)).resolves.toEqual(value);
@@ -52,11 +57,66 @@ describe("audit export checkpoint", () => {
       string,
       unknown
     >;
-    parsed.id = "audit_tampered";
+    parsed.sequence = "41";
     await writeFile(path, `${JSON.stringify(parsed)}\n`, { mode: 0o600 });
     await expect(readAuditCheckpoint(path)).rejects.toThrow(
       "checkpoint checksum",
     );
+  });
+
+  it.each(["-1", "01", "1.5", "9223372036854775808"])(
+    "rejects invalid sequence %s before writing",
+    async (sequence) => {
+      const path = join(await temporaryRoot(), "checkpoint");
+      await expect(
+        writeAuditCheckpoint(path, {
+          format: 3,
+          databaseId: "a".repeat(64),
+          sequence,
+          token: "b".repeat(64),
+        }),
+      ).rejects.toThrow("checkpoint schema");
+      await expect(readAuditCheckpoint(path)).resolves.toEqual({ format: 0 });
+    },
+  );
+
+  it("round-trips the full SQLite integer range without number truncation", async () => {
+    const path = join(await temporaryRoot(), "checkpoint");
+    const value: AuditCheckpoint = {
+      format: 3,
+      databaseId: "a".repeat(64),
+      sequence: "9223372036854775807",
+      token: "b".repeat(64),
+    };
+    await writeAuditCheckpoint(path, value);
+    await expect(readAuditCheckpoint(path)).resolves.toEqual(value);
+  });
+
+  it("rejects unknown/downgraded checkpoint fields", async () => {
+    const path = join(await temporaryRoot(), "checkpoint");
+    await writeFile(
+      path,
+      JSON.stringify({ createdAt: "", id: "", sequence: "4" }),
+    );
+    await expect(readAuditCheckpoint(path)).rejects.toThrow(
+      "checkpoint schema",
+    );
+    await writeFile(path, JSON.stringify({ format: 4, createdAt: "", id: "" }));
+    await expect(readAuditCheckpoint(path)).rejects.toThrow(
+      "checkpoint checksum",
+    );
+  });
+
+  it("rejects FIFO and direct symlink checkpoints without waiting for a writer", async () => {
+    const root = await temporaryRoot(),
+      fifo = join(root, "fifo"),
+      link = join(root, "link");
+    await promisify(execFile)("mkfifo", [fifo]);
+    await expect(readAuditCheckpoint(fifo)).rejects.toThrow("checkpoint file");
+    await symlink(join(root, "absent-target"), link);
+    await expect(readAuditCheckpoint(link)).rejects.toMatchObject({
+      code: "ELOOP",
+    });
   });
 });
 

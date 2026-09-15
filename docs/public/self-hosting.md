@@ -484,7 +484,13 @@ sudo systemctl start latex-renderer-image-manager.service \
 - Cloudflare profileの場合だけ`/etc/cloudflared`とTunnel、Access、Worker構成を復元できる記録
 - standalone profileの場合はTLS reverse proxyと証明書更新設定を復元できる記録
 
-既定のbackupはageで暗号化します。`deploy/scripts/restore-test.mjs`はSQLite整合性だけでなく、Project revision→Source対応、Sourceの通常ファイル性、サイズ、SHA-256も検査します。復元テストを行っていないbackupを、復旧可能なbackupとして扱わないでください。秘密鍵と暗号化backupは同じ障害で失われない場所へ保管します。実際の復旧時はサービスを停止し、archive内の`renderer.sqlite3`と`project-sources/<source_id>/source.zip`をmanifestどおり同じ復旧点として戻します。
+既定のbackupはageで暗号化します。`deploy/scripts/restore-test.mjs`はSQLiteの整合性と外部キー、Project revision→Source対応、Sourceの通常ファイル性、サイズ、SHA-256も検査します。復元テストを行っていないbackupを、復旧可能なbackupとして扱わないでください。秘密鍵と暗号化backupは同じ障害で失われない場所へ保管します。
+
+`1.3.7-rc.1`以降のbackup／復旧検証は、現行Sourceとmigration 3由来の旧Job入力保存先の両方に対応します。Linuxの`/proc/self/fd`、GNU tar、ageが必要です。tar一覧は作成・検証の両方で各16MiBまでに制限し、不正な名前・リンク・重複entryを展開前に拒否します。実際の復旧時はサービスを停止し、archive内の`renderer.sqlite3`とSourceを同じ復旧点として戻します。`project-sources/<source_id>/source.zip`の配置先は、復旧DBの検証済み`storage_key`です。旧形式では対応する`jobs/job_<suffix>/input/source.zip`へ戻し、勝手に現行保存先へ変更しません。
+
+旧backupが既に旧Sourceを拒否しているhostでは、Updaterが切替前backupで止まる可能性があります。backup検証を省略したりsealed Releaseを書き換えたりせず、完全な復旧点と適用手順を個別に確認してください。定期backupは、独立Updaterの全DB／storage復旧ポイントとは別の機能です。
+
+同RCのmigration 18では、監査ログを時刻ではなく永続sequenceで出力管理します。移行時はDB内に残るログを一度再出力するため、過去のexportと重複する場合があります。未出力ログは古い時刻でも削除しません。checkpoint破損や復旧DBとの不一致は監査export／監査pruneを安全側に停止します。復旧時はcheckpointを適当に編集せず、[監査ログの復旧手順](https://github.com/n624-dev/latex-renderer/blob/main/OPERATIONS.md#audit-export-sequence-and-recovery)に従って保全・再出力を判断してください。
 
 ## 問題が起きた場合
 

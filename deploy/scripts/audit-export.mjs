@@ -1,11 +1,24 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, rename, rm, stat, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { randomUUID } from "node:crypto";
+import {
+  mkdir,
+  mkdtemp,
+  open,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
   readAuditCheckpoint,
+  readAuditDatabaseState,
+  syncAuditDirectory,
+  validateAuditCheckpoint,
   writeAuditCheckpoint,
 } from "./audit-checkpoint.mjs";
 import { boundedIntegerEnvironment } from "./environment.mjs";
@@ -32,55 +45,89 @@ const maxBatches = boundedIntegerEnvironment(
 );
 
 await mkdir(destination, { recursive: true, mode: 0o700 });
-let checkpoint = await initialCheckpoint();
-const database = new DatabaseSync(databasePath, { readOnly: true });
-const selectBatch = database.prepare(
-  `SELECT id,actor_type,actor_id,action,target_type,target_id,result,
-          ip_address,user_agent,metadata_json,created_at
-   FROM audit_logs
-   WHERE created_at>? OR (created_at=? AND id>?)
-   ORDER BY created_at,id LIMIT ?`,
+const lockDirectory = join(dirname(databasePath), "audit");
+await mkdir(lockDirectory, { recursive: true, mode: 0o700 });
+// The kernel lock survives the short flock child through its shared open file
+// description and is released even on SIGKILL. Never unlink this lock file.
+const lock = await open(
+  join(lockDirectory, "export.lock"),
+  constants.O_RDWR | constants.O_CREAT | constants.O_NOFOLLOW,
+  0o600,
 );
-const work = await mkdtemp(join(tmpdir(), "latex-audit-"));
+let database, work;
 let exported = 0;
 let batches = 0;
+let legacyReplay;
 try {
+  if (!(await lock.stat()).isFile())
+    throw new Error("Invalid audit export lock file");
+  await run("flock", ["--exclusive", "--nonblock", "3"], lock.fd);
+  database = new DatabaseSync(databasePath, { readOnly: true });
+  database.exec("PRAGMA busy_timeout=5000; BEGIN");
+  const state = readAuditDatabaseState(database);
+  const initial = await initialCheckpoint();
+  legacyReplay = initial.format === 1 || initial.format === 2;
+  let checkpoint =
+    initial.format === 3
+      ? validateAuditCheckpoint(database, initial, state)
+      : { format: 3, databaseId: state.databaseId, sequence: "0", token: "" };
+  database.exec("COMMIT");
+  const selectBatch = database.prepare(
+    `SELECT a.id,a.actor_type,a.actor_id,a.action,a.target_type,a.target_id,a.result,
+            a.ip_address,a.user_agent,a.metadata_json,a.created_at,
+            CAST(e.sequence AS TEXT) AS export_sequence,e.token AS export_token
+     FROM audit_export_sequence e JOIN audit_logs a ON a.id=e.audit_id
+     WHERE e.sequence>? ORDER BY e.sequence LIMIT ?`,
+  );
+  work = await mkdtemp(join(tmpdir(), "latex-audit-"));
   for (; batches < maxBatches; batches += 1) {
-    const rows = selectBatch.all(
-      checkpoint.createdAt,
-      checkpoint.createdAt,
-      checkpoint.id,
-      batchSize,
-    );
-    if (rows.length === 0) break;
+    database.exec("BEGIN");
+    validateAuditCheckpoint(database, checkpoint);
+    const rows = selectBatch.all(BigInt(checkpoint.sequence), batchSize);
+    database.exec("COMMIT");
+    if (rows.length === 0) {
+      // Empty legacy databases also transition once; sequence zero acknowledges
+      // no rows and therefore cannot allow unexported rows to be pruned.
+      if (checkpoint.sequence === "0" && initial.format !== 3)
+        await writeAuditCheckpoint(checkpointPath, checkpoint);
+      break;
+    }
     const stamp = new Date().toISOString().replaceAll(":", "-");
     const suffix = String(batches + 1).padStart(3, "0");
     const jsonl = join(work, `audit-${stamp}-${suffix}.jsonl`);
     await writeFile(
       jsonl,
-      `${rows.map((row) => JSON.stringify(row)).join("\n")}\n`,
+      `${rows.map((row) => JSON.stringify({ ...row, export_database_id: state.databaseId })).join("\n")}\n`,
       { mode: 0o600 },
     );
     const last = rows.at(-1);
-    const lastId = String(last.id).replaceAll(/[^A-Za-z0-9_-]/g, "_");
     const output = join(
       destination,
-      `${basename(jsonl)}-${lastId}.age`,
+      `${basename(jsonl)}-${last.export_sequence}-${randomUUID()}.age`,
     );
     const partial = `${output}.part-${process.pid}`;
     try {
       await run("age", ["-R", recipient, "-o", partial, jsonl]);
       if ((await stat(partial)).size === 0)
         throw new Error("Encrypted audit export is empty");
+      const encrypted = await open(partial, "r");
+      try {
+        await encrypted.sync();
+      } finally {
+        await encrypted.close();
+      }
       await rename(partial, output);
+      await syncAuditDirectory(destination);
     } catch (error) {
       await rm(partial, { force: true }).catch(() => undefined);
       throw error;
     }
     await uploadIfConfigured(output);
     checkpoint = {
-      createdAt: String(last.created_at),
-      id: String(last.id),
+      format: 3,
+      databaseId: state.databaseId,
+      sequence: String(last.export_sequence),
+      token: String(last.export_token),
     };
     await writeAuditCheckpoint(checkpointPath, checkpoint);
     exported += rows.length;
@@ -91,31 +138,29 @@ try {
     }
   }
 } finally {
-  database.close();
-  await rm(work, { recursive: true, force: true });
+  database?.close();
+  if (work) await rm(work, { recursive: true, force: true });
+  await lock.close();
 }
 
 console.log(
   JSON.stringify({
-    event: exported === 0 ? "audit_export.no_changes" : "audit_export.completed",
+    event:
+      exported === 0 ? "audit_export.no_changes" : "audit_export.completed",
     count: exported,
     batches,
     backlogMayRemain: batches >= maxBatches,
+    legacyReplay,
   }),
 );
 
 async function initialCheckpoint() {
   const current = await readAuditCheckpoint(checkpointPath);
-  if (
-    current.createdAt !== "" ||
-    process.env.AUDIT_EXPORT_CHECKPOINT !== undefined
-  )
+  if (current.format !== 0 || process.env.AUDIT_EXPORT_CHECKPOINT !== undefined)
     return current;
   const legacy = await readAuditCheckpoint(
     join(destination, "audit-export.checkpoint"),
   );
-  if (legacy.createdAt !== "")
-    await writeAuditCheckpoint(checkpointPath, legacy);
   return legacy;
 }
 
@@ -132,10 +177,13 @@ async function uploadIfConfigured(path) {
   await run(executable, [...args, path]);
 }
 
-function run(command, args) {
+function run(command, args, lockFd) {
   return new Promise((resolvePromise, reject) => {
     const child = spawn(command, args, {
-      stdio: ["ignore", "ignore", "pipe"],
+      stdio:
+        lockFd === undefined
+          ? ["ignore", "ignore", "pipe"]
+          : ["ignore", "ignore", "pipe", lockFd],
       shell: false,
     });
     let error = "";

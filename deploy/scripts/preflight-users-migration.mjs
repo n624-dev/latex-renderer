@@ -31,9 +31,14 @@ try {
   }
   assertSchema(migrated.raw);
   assertNullAndUniqueBehavior(migrated.raw);
+  const targetVersion = Number(
+    migrated.raw
+      .prepare("SELECT MAX(version) AS version FROM schema_migrations")
+      .get().version,
+  );
   migrated.close();
   process.stdout.write(
-    `${JSON.stringify({ event: "migration.preflight_completed", users: beforeUsers.length, tables: beforeCounts.size, targetVersion: 17 })}\n`,
+    `${JSON.stringify({ event: "migration.preflight_completed", users: beforeUsers.length, tables: beforeCounts.size, targetVersion })}\n`,
   );
 } finally {
   await rm(work, { recursive: true, force: true });
@@ -85,7 +90,7 @@ function assertSchema(db) {
     undefined
   )
     throw new Error("Migration version 4 is absent");
-  for (const version of [5, 6, 17]) {
+  for (const version of [5, 6, 17, 18]) {
     if (
       db
         .prepare("SELECT 1 FROM schema_migrations WHERE version=?")
@@ -106,6 +111,20 @@ function assertSchema(db) {
       .some(({ name }) => name === "storage_generation")
   )
     throw new Error("artifacts.storage_generation is absent");
+  for (const [type, name] of [
+    ["table", "audit_export_state"],
+    ["table", "audit_export_sequence"],
+    ["trigger", "audit_export_insert"],
+    ["trigger", "audit_export_delete"],
+    ["trigger", "audit_export_immutable"],
+  ]) {
+    if (
+      !db
+        .prepare("SELECT 1 FROM sqlite_schema WHERE type=? AND name=?")
+        .get(type, name)
+    )
+      throw new Error(`Audit export ${type} ${name} is absent`);
+  }
   for (const table of [
     "remote_mcp_clients",
     "remote_mcp_authorization_codes",

@@ -2,10 +2,16 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { lstat, mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import {
+  assertBackupDatabase,
+  openBackupFile,
+  projectSourceStorageKey,
+  validateBackupArchive,
+} from "./backup-boundary.mjs";
 
 const archive = process.argv[2];
 if (!archive) throw new Error("usage: restore-test.mjs BACKUP.tar.age");
@@ -15,6 +21,7 @@ const work = await mkdtemp(join(tmpdir(), "latex-restore-test-"));
 try {
   const tarPath = join(work, "backup.tar");
   await run("age", ["-d", "-i", identity, "-o", tarPath, archive]);
+  await validateBackupArchive(tarPath);
   await run("tar", [
     "-C",
     work,
@@ -36,17 +43,18 @@ try {
   )
     throw new Error("Backup database manifest mismatch");
 
-  const database = new DatabaseSync(databasePath, { readOnly: true });
+  // Node 24.15.0 / SQLite 3.51.3 returned "ok" for a CHECK violation when
+  // opened read-only in our regression fixture. Avoid that observed runtime
+  // difference by opening only this private decrypted copy read-write.
+  const database = new DatabaseSync(databasePath);
   let migrations;
   try {
-    const integrity = database.prepare("PRAGMA integrity_check").all();
+    assertBackupDatabase(database);
     migrations = database
       .prepare(
         "SELECT version,applied_at FROM schema_migrations ORDER BY version",
       )
       .all();
-    if (integrity.length !== 1 || integrity[0].integrity_check !== "ok")
-      throw new Error("SQLite integrity_check failed");
     if (manifest.format === 2)
       await verifyProjectSources(database, manifest.projectSources);
   } finally {
@@ -56,8 +64,10 @@ try {
     JSON.stringify({
       event: "restore_test.completed",
       migrations,
-      projectSourceCount: manifest.projectSources?.sources?.length ?? 0,
-      projectRevisionCount: manifest.projectSources?.revisions?.length ?? 0,
+      projectSourceCount:
+        manifest.format === 2 ? manifest.projectSources.sources.length : 0,
+      projectRevisionCount:
+        manifest.format === 2 ? manifest.projectSources.revisions.length : 0,
     }),
   );
 } finally {
@@ -74,7 +84,7 @@ async function verifyProjectSources(database, boundary) {
     throw new Error("Project Source backup manifest is invalid");
   const expectedSources = database
     .prepare(
-      `SELECT DISTINCT s.id,s.size,s.sha256
+      `SELECT DISTINCT s.id,s.storage_key,s.size,s.sha256
        FROM sources s
        JOIN project_revisions r ON r.source_id=s.id
        JOIN projects p ON p.id=r.project_id
@@ -86,6 +96,7 @@ async function verifyProjectSources(database, boundary) {
     throw new Error("Project Source backup set is incomplete");
   for (let index = 0; index < expectedSources.length; index += 1) {
     const expected = expectedSources[index];
+    projectSourceStorageKey(expected);
     const actual = boundary.sources[index];
     const relativePath = `project-sources/${expected.id}/source.zip`;
     if (
@@ -95,16 +106,29 @@ async function verifyProjectSources(database, boundary) {
       actual?.sha256 !== expected.sha256
     )
       throw new Error("Project Source manifest does not match the database");
-    const path = join(work, relativePath);
-    const file = await lstat(path);
-    if (
-      !file.isFile() ||
-      file.isSymbolicLink() ||
-      file.nlink !== 1 ||
-      file.size !== expected.size ||
-      (await sha256(path)) !== expected.sha256
-    )
-      throw new Error(`Project Source backup file is invalid: ${expected.id}`);
+    const handle = await openBackupFile(work, relativePath);
+    try {
+      const before = await handle.stat();
+      if (before.size !== expected.size)
+        throw new Error("Project Source backup file size is invalid");
+      const hash = createHash("sha256");
+      // Read from the already checked descriptor, not from the path again.
+      for await (const chunk of handle.createReadStream({ autoClose: false }))
+        hash.update(chunk);
+      const after = await handle.stat();
+      if (
+        hash.digest("hex") !== expected.sha256 ||
+        after.size !== before.size ||
+        after.mtimeMs !== before.mtimeMs ||
+        after.ctimeMs !== before.ctimeMs ||
+        after.nlink !== 1
+      )
+        throw new Error(
+          `Project Source backup file is invalid: ${expected.id}`,
+        );
+    } finally {
+      await handle.close();
+    }
   }
   const expectedRevisions = database
     .prepare(
@@ -130,6 +154,7 @@ function run(command, args) {
     const child = spawn(command, args, {
       stdio: ["ignore", "ignore", "pipe"],
       shell: false,
+      env: { ...process.env, LC_ALL: "C" },
     });
     let error = "";
     child.stderr.setEncoding("utf8");
