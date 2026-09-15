@@ -13,6 +13,7 @@
 
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
+import { withHostRecovery } from "./update-recovery-host.mjs";
 import {
   chmod,
   copyFile,
@@ -38,7 +39,10 @@ import { validateReleaseArchive } from "./release-archive.mjs";
 import { releaseAttestationArgs } from "./release-attestation.mjs";
 import { validatedReleaseRendererFingerprint } from "./runtime-image-identity.mjs";
 import { acquireMutationLock } from "./mutation-lock.mjs";
-import { prepareApplicationDatabase, applicationDatabaseIdentity } from "./application-database-file.mjs";
+import {
+  prepareApplicationDatabase,
+  applicationDatabaseIdentity,
+} from "./application-database-file.mjs";
 import {
   assertValidatedCandidateTag,
   compareReleaseVersions as compareVersions,
@@ -93,6 +97,9 @@ const helperSource = fileURLToPath(import.meta.url);
 const helperRoot = resolve(dirname(helperSource), "../..");
 const bootstrapControlFiles = [
   "deploy/scripts/update-manager-helper.mjs",
+  "deploy/scripts/application-database-file.mjs",
+  "deploy/scripts/update-recovery.mjs",
+  "deploy/scripts/update-recovery-host.mjs",
   "deploy/scripts/release-assembly.mjs",
   "deploy/scripts/release-archive.mjs",
   "deploy/scripts/release-attestation.mjs",
@@ -455,7 +462,8 @@ export async function verifyExtractedRelease(release, source) {
     await readFile(join(source, "package.json"), "utf8"),
   );
   const fingerprint = await validatedReleaseRendererFingerprint(
-    join(source, "renderer"), manifest,
+    join(source, "renderer"),
+    manifest,
   );
   if (
     manifest?.version !== release.version ||
@@ -753,16 +761,23 @@ async function deployFromAssembly(
     delete environment.UPDATE_MANAGER_STATE_ROOT;
     delete environment.UPDATE_MANAGER_SOCKET;
   }
-  await runLogged(
-    "sh",
-    [join(assembly, "deploy/scripts/deploy-production-release.sh"), releaseId],
-    { env: environment },
+  await withHostRecovery(() =>
+    runLogged(
+      "sh",
+      [
+        join(assembly, "deploy/scripts/deploy-production-release.sh"),
+        releaseId,
+      ],
+      { env: environment },
+    ),
   );
 }
 
 async function apply(request) {
   if (compareVersions(request.version, (await installedRelease()).version) < 0)
-    throw new Error("Application downgrade requires the explicit compatible rollback path");
+    throw new Error(
+      "Application downgrade requires the explicit compatible rollback path",
+    );
   const rootStage = await mkdtemp(join(privilegedStagingRoot, "privileged-"));
   try {
     const prepared = await prepareTrustedSource(request, rootStage);
@@ -779,7 +794,12 @@ async function apply(request) {
       runCommand: (command, args) => runLogged(command, args),
     });
     await sealControlTree(assembly, 0);
-    const releaseId = await deploySealedAssembly(assembly, rootStage, prepared.release, prepared.manifest);
+    const releaseId = await deploySealedAssembly(
+      assembly,
+      rootStage,
+      prepared.release,
+      prepared.manifest,
+    );
     await writeOutput(`${JSON.stringify({ ok: true, releaseId })}\n`);
   } finally {
     await rm(rootStage, { recursive: true, force: true });
@@ -788,20 +808,37 @@ async function apply(request) {
 
 // Shared after verification only. CI imports this from the signed candidate;
 // stdin dispatch below has no candidate/path/skip-verification verb.
-export async function deploySealedAssembly(assembly, rootStage, release, manifest, initialInstall = false) {
+export async function deploySealedAssembly(
+  assembly,
+  rootStage,
+  release,
+  manifest,
+  initialInstall = false,
+) {
   await assertSealedControlTree(assembly);
   const deployment = await prepareDeploymentTrees(rootStage, assembly);
   const releaseId = `v${release.version}-${manifest.commit.slice(0, 12)}`;
   if (initialInstall) {
-    try { await lstat("/var/lib/latex-renderer/renderer.sqlite3"); throw new Error("Initial install cannot overwrite an existing database"); }
-    catch (error) { if (error.code !== "ENOENT") throw error; }
+    try {
+      await lstat("/var/lib/latex-renderer/renderer.sqlite3");
+      throw new Error("Initial install cannot overwrite an existing database");
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
     // Exclusive creation preserves the initial-install refusal and supplies
     // correct shared permissions even to an unchanged older signed driver.
-    await prepareApplicationDatabase("/var/lib/latex-renderer/renderer.sqlite3", {
-      ...applicationDatabaseIdentity(), createOnly: true,
-    });
-  } else await runLogged("systemctl", ["restart", "latex-renderer-backup.service"]);
-  await deployFromAssembly(assembly, deployment, releaseId, { ownsParentMutationLock: !initialInstall });
+    await prepareApplicationDatabase(
+      "/var/lib/latex-renderer/renderer.sqlite3",
+      {
+        ...applicationDatabaseIdentity(),
+        createOnly: true,
+      },
+    );
+  } else
+    await runLogged("systemctl", ["restart", "latex-renderer-backup.service"]);
+  await deployFromAssembly(assembly, deployment, releaseId, {
+    ownsParentMutationLock: !initialInstall,
+  });
   return releaseId;
 }
 
@@ -943,7 +980,9 @@ async function bootstrapPrivilegeSeparatedUpdater(request) {
 
 async function rollback(request) {
   const current = await installedRelease();
-  const activeManifest = JSON.parse(await readFile(join(current.path, ".latex-renderer-release.json"), "utf8"));
+  const activeManifest = JSON.parse(
+    await readFile(join(current.path, ".latex-renderer-release.json"), "utf8"),
+  );
   if (activeManifest.rollbackCompatible !== true)
     throw new Error("Application schema does not permit automatic rollback");
   const releaseId = validReleaseId(request.releaseId);
@@ -952,7 +991,9 @@ async function rollback(request) {
   if (!targetInfo.isDirectory())
     throw new Error("Rollback release is not a directory");
   await assertSealedControlTree(target);
-  const targetUpdater = JSON.parse(await readFile(join(target, ".latex-renderer-updater.json"), "utf8"));
+  const targetUpdater = JSON.parse(
+    await readFile(join(target, ".latex-renderer-updater.json"), "utf8"),
+  );
   if (targetUpdater.schemaVersion !== 1)
     throw new Error("Legacy Updater rollback requires explicit host recovery");
   const rootStage = await mkdtemp(
@@ -1011,31 +1052,34 @@ async function scheduleManagerRestart() {
   await writeOutput('{"ok":true}\n');
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-const request = await readRequest();
-switch (request.verb) {
-  case "bootstrap":
-    if (typeof request.version !== "string")
-      throw new Error("Bootstrap version is required");
-    await bootstrapPrivilegeSeparatedUpdater({
-      version: validReleaseVersion(request.version.replace(/^v/, "")),
-    });
-    break;
-  case "apply":
-    if (typeof request.version !== "string")
-      throw new Error("Apply version is required");
-    await apply({
-      version: validReleaseVersion(request.version.replace(/^v/, "")),
-      stage: request.stage,
-    });
-    break;
-  case "rollback":
-    await rollback(request);
-    break;
-  case "schedule-manager-restart":
-    await scheduleManagerRestart();
-    break;
-  default:
-    throw new Error("Update helper verb is not allowed");
-}
+if (
+  process.argv[1] &&
+  resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+) {
+  const request = await readRequest();
+  switch (request.verb) {
+    case "bootstrap":
+      if (typeof request.version !== "string")
+        throw new Error("Bootstrap version is required");
+      await bootstrapPrivilegeSeparatedUpdater({
+        version: validReleaseVersion(request.version.replace(/^v/, "")),
+      });
+      break;
+    case "apply":
+      if (typeof request.version !== "string")
+        throw new Error("Apply version is required");
+      await apply({
+        version: validReleaseVersion(request.version.replace(/^v/, "")),
+        stage: request.stage,
+      });
+      break;
+    case "rollback":
+      await rollback(request);
+      break;
+    case "schedule-manager-restart":
+      await scheduleManagerRestart();
+      break;
+    default:
+      throw new Error("Update helper verb is not allowed");
+  }
 }

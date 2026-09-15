@@ -55,10 +55,8 @@ describe("production hardening", () => {
         "-o latex-renderer -g latex-renderer -m 2770 /var/lib/latex-renderer /var/lib/latex-renderer/storage",
       );
     }
-    const tmpfiles = install.slice(
-        install.indexOf(
-          "cat > /etc/tmpfiles.d/latex-renderer-image-manager.conf",
-        ),
+    const tmpfiles = read(
+        "deploy/tmpfiles.d/latex-renderer-image-manager.conf",
       ),
       parent = "d /var/lib/latex-renderer 2770 root latex-renderer -",
       imageManager =

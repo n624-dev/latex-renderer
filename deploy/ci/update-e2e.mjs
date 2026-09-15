@@ -221,7 +221,53 @@ try {
     { mode: 0o644 },
   );
   run("/usr/bin/systemctl", ["daemon-reload"]);
+  // Model a genuinely upgraded host, not just a fresh host provisioned using
+  // candidate install-host.sh. Old OS policy can survive multiple releases and
+  // undo the controller ownership when tmpfiles runs again after deployment.
+  const tmpfilesPath = "/etc/tmpfiles.d/latex-renderer-image-manager.conf";
+  const legacyTmpfiles = (await readFile(tmpfilesPath, "utf8"))
+    .split("\n")
+    .filter((line) => !line.includes("/update-manager"))
+    .join("\n");
+  await writeFile(
+    tmpfilesPath,
+    `${legacyTmpfiles}\nd /var/lib/latex-renderer/update-manager 0750 root latex-renderer -\nd /var/lib/latex-renderer/update-manager/staging 0750 root latex-renderer -\nd /var/lib/latex-renderer/update-manager/operations 0750 root latex-renderer -\ne /var/lib/latex-renderer/update-manager/staging - - - 1d\ne /var/lib/latex-renderer/update-manager/operations - - - 30d\n`,
+  );
   await deploy(candidate, { version: tag.slice(1), tag, commit }, false);
+  if (
+    !(await readFile(tmpfilesPath)).equals(
+      await readFile(
+        join(candidate, "deploy/tmpfiles.d/latex-renderer-image-manager.conf"),
+      ),
+    )
+  )
+    throw new Error(
+      "Application upgrade did not migrate legacy tmpfiles policy",
+    );
+  run("/usr/bin/systemd-tmpfiles", ["--create", tmpfilesPath]);
+  const controllerIdentity = ["-u", "-g"].map((option) =>
+    Number(
+      execFileSync("id", [option, "latex-renderer-update"], {
+        encoding: "utf8",
+      }).trim(),
+    ),
+  );
+  for (const [suffix, mode] of [
+    ["", 0o750],
+    ["/operations", 0o750],
+    ["/staging", 0o700],
+  ]) {
+    const info = await lstat(`/var/lib/latex-renderer/update-manager${suffix}`);
+    if (
+      !info.isDirectory() ||
+      info.uid !== controllerIdentity[0] ||
+      info.gid !== controllerIdentity[1] ||
+      (info.mode & 0o777) !== mode
+    )
+      throw new Error(
+        "OS tmpfiles pass reverted controller directory ownership/mode",
+      );
+  }
   run("/usr/local/bin/node", [
     "/opt/latex-renderer/updater/bootstrap-v1/updater-bootstrap.mjs",
     "activate",
@@ -240,6 +286,43 @@ try {
     throw new Error("Independent Updater cutover did not finish");
   if ((await readFile(sentinel, "utf8")) !== data)
     throw new Error("Storage was not preserved");
+  const { RecoveryStore } = await import(
+    pathToFileURL(join(candidate, "deploy/scripts/update-recovery.mjs"))
+  );
+  const recovery = new RecoveryStore("/var/lib/latex-renderer-update-recovery");
+  const points = await recovery.points();
+  const point = points[0];
+  if (!point?.storageIncluded || point.release.version !== baseline.version)
+    throw new Error(
+      "Candidate update did not preserve a complete baseline recovery point",
+    );
+  const recoveredTar = execFileSync(
+    "age",
+    [
+      "-d",
+      "-i",
+      "/etc/latex-renderer/secrets/backup-age-identity",
+      join(recovery.root, "points", point.id, "recovery.tar.age"),
+    ],
+    { maxBuffer: 16 * 1024 * 1024 },
+  );
+  const recoveredSentinel = execFileSync(
+    "tar",
+    ["-xOf", "-", "./storage/update-e2e-sentinel"],
+    { input: recoveredTar, encoding: "utf8" },
+  );
+  if (recoveredSentinel !== data)
+    throw new Error(
+      "Decrypted recovery point did not preserve baseline storage",
+    );
+  const { updaterStatus } = await import(
+    pathToFileURL(join(installed.root, "deploy/scripts/updater-status.mjs"))
+  );
+  if (
+    (await updaterStatus({ slots, runningRoot: installed.root })).status !==
+    "ready"
+  )
+    throw new Error("Committed controller is not reported ready");
   const owners = execFileSync(
     "/usr/bin/sqlite3",
     [
@@ -338,6 +421,8 @@ try {
       pdfPng: true,
       updaterRecovery: true,
       updaterStartupFailureRecovery: true,
+      tmpfilesMigration: true,
+      fullRecoveryPoint: true,
     }),
   );
 } finally {

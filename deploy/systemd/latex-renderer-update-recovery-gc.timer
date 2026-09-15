@@ -1,0 +1,11 @@
+[Unit]
+Description=Collect update recovery points every 15 minutes
+
+[Timer]
+OnBootSec=5min
+OnCalendar=*:0/15
+Persistent=true
+Unit=latex-renderer-update-recovery-gc.service
+
+[Install]
+WantedBy=timers.target

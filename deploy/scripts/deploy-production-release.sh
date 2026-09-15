@@ -284,6 +284,7 @@ else
 fi
 systemctl enable --now \
   latex-renderer-remote-mcp.service \
+  latex-renderer-update-recovery-gc.timer \
   latex-renderer-update-refresh.timer \
   latex-renderer-image-refresh.timer \
   latex-renderer-image-operation-watchdog.timer \

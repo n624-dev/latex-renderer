@@ -553,7 +553,11 @@ paths:
   /updates/state:
     get:
       summary: Read installed, available, previous, and active application update state
-      description: Requires admin:update:read (or emergency compatibility scope admin:*).
+      description: >-
+        Requires admin:update:read (or emergency compatibility scope admin:*).
+        The additive updater field reports status (ready, activating, unavailable),
+        verified running identity (version, commit, slotId), selectedSlotId,
+        candidateSlotId and pending. Application and Updater versions are independent.
       responses:
         "200": { description: Application update state }
         "503": { description: Update Manager is not configured or unavailable }
@@ -626,7 +630,13 @@ paths:
   /updates/operations/{id}:
     get:
       summary: Read application update progress and retained redacted log output
-      description: Requires admin:update:read (or emergency compatibility scope admin:*).
+      description: >-
+        Requires admin:update:read (or emergency compatibility scope admin:*).
+        status remains the application result. expectedUpdater identifies the
+        requested controller slot when recorded by a new controller. outcome
+        contains application, updater and complete; only complete=true confirms
+        both parts of a new update. Legacy and historical records are explicitly
+        unconfirmed. Activation waits at most ten minutes before needs-attention.
       parameters: [{ $ref: "#/components/parameters/Id" }]
       responses:
         "200": { description: Application update operation and log }

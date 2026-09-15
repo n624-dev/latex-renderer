@@ -70,19 +70,5 @@ if [ ! -f /etc/latex-renderer/update-manager.env ]; then
 fi
 chown root:root /etc/latex-renderer/update-manager.env
 chmod 0600 /etc/latex-renderer/update-manager.env
-# Keep operation diagnostics for 30 days without allowing unbounded growth.
-cat > /etc/tmpfiles.d/latex-renderer-image-manager.conf <<'EOF'
-d /var/lib/latex-renderer 2770 root latex-renderer -
-d /var/lib/latex-renderer/image-manager 0750 root latex-renderer -
-d /var/lib/latex-renderer/image-manager/tmp 0750 root latex-renderer -
-d /var/lib/latex-renderer/image-manager/operations 0750 root latex-renderer -
-e /var/lib/latex-renderer/image-manager/tmp - - - 1d
-e /var/lib/latex-renderer/image-manager/operations - - - 30d
-d /var/lib/latex-renderer/update-manager 0750 latex-renderer-update latex-renderer -
-d /var/lib/latex-renderer/update-manager/operations 0750 latex-renderer-update latex-renderer -
-d /var/lib/latex-renderer/update-manager/staging 0700 latex-renderer-update latex-renderer -
-e /var/lib/latex-renderer/update-manager/operations - - - 30d
-EOF
-systemd-tmpfiles --create /etc/tmpfiles.d/latex-renderer-image-manager.conf
-systemd-tmpfiles --clean /etc/tmpfiles.d/latex-renderer-image-manager.conf || true
+/usr/local/bin/node "$source_root/deploy/scripts/install-manager-tmpfiles.mjs"
 echo "Host users and directories created. Install Node.js 24 and rootless Docker for latex-render-worker before enabling services; cloudflared is required only for the cloudflare profile."
