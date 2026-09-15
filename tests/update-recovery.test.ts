@@ -247,6 +247,157 @@ it("validates capacity and retention settings", () => {
   expect(recoveryPolicy().maxBytes).toBe(4 * 1024 ** 3);
 });
 
+it("rejects inherited-name keys and non-object configuration without changing valid defaults", () => {
+  for (const config of [
+    null,
+    [],
+    "",
+    3,
+    true,
+    JSON.parse('{"constructor":1}') as unknown,
+    JSON.parse('{"__proto__":1}') as unknown,
+    { toString: 1 },
+    { hasOwnProperty: 1 },
+    { unexpected: 1 },
+    { [Symbol("maxBytes")]: 1 },
+    Object.create({ maxBytes: 10 }) as unknown,
+  ])
+    expect(() => recoveryPolicy(config)).toThrow();
+  expect(recoveryPolicy({ minFreeBytes: 0, retainCount: 3 })).toMatchObject({
+    minFreeBytes: 0,
+    retainCount: 3,
+    maxBytes: 4 * 1024 ** 3,
+  });
+  expect(recoveryPolicy(Object.create(null) as unknown)).toEqual(
+    recoveryPolicy(),
+  );
+});
+
+it("records application migration18 separately from SQLite user_version0 in summary and encrypted manifest", async () => {
+  const f = await fixture();
+  const db = new DatabaseSync(f.database);
+  db.exec(
+    "PRAGMA user_version=0; CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY,applied_at TEXT NOT NULL); INSERT INTO schema_migrations VALUES(1,'fixture'),(17,'fixture'),(18,'fixture');",
+  );
+  db.close();
+  const original = await readFile(f.database);
+  const point = await f.store.create(f);
+  expect(point).toMatchObject({
+    format: 1,
+    schema: 0,
+    sqliteUserVersion: 0,
+    applicationSchemaVersion: 18,
+  });
+  const tar = execFileSync("age", [
+    "-d",
+    "-i",
+    f.identity,
+    join(f.store.root, "points", point.id, "recovery.tar.age"),
+  ]);
+  const manifest: unknown = JSON.parse(
+    execFileSync("tar", ["-xOf", "-", "./manifest.json"], {
+      input: tar,
+      encoding: "utf8",
+    }),
+  );
+  expect(manifest).toMatchObject({
+    schema: 0,
+    sqliteUserVersion: 0,
+    applicationSchemaVersion: 18,
+  });
+  expect(await readFile(f.database)).toEqual(original);
+  expect((await f.store.points())[0]).toEqual(point);
+});
+
+it("does not mistake an absent migration history for SQLite's user_version", async () => {
+  const f = await fixture();
+  expect(await f.store.create(f)).toMatchObject({
+    schema: 17,
+    sqliteUserVersion: 17,
+    applicationSchemaVersion: null,
+  });
+});
+
+it("reads historical format1 metadata without rewriting its summary or encrypted archive", async () => {
+  const f = await fixture();
+  const point = await f.store.create(f);
+  const summaryPath = join(f.store.root, "points", point.id, "summary.json");
+  const archivePath = join(
+    f.store.root,
+    "points",
+    point.id,
+    "recovery.tar.age",
+  );
+  delete point.sqliteUserVersion;
+  delete point.applicationSchemaVersion;
+  await writeFile(summaryPath, JSON.stringify(point), { mode: 0o600 });
+  const before = await Promise.all([
+    readFile(summaryPath),
+    readFile(archivePath),
+  ]);
+  expect(await f.store.points()).toEqual([point]);
+  expect(
+    await Promise.all([readFile(summaryPath), readFile(archivePath)]),
+  ).toEqual(before);
+});
+
+it.each([
+  "CREATE TABLE schema_migrations(version); INSERT INTO schema_migrations VALUES('invalid');",
+  "CREATE TABLE schema_migrations(version); INSERT INTO schema_migrations VALUES(-1);",
+  "CREATE TABLE schema_migrations(version); INSERT INTO schema_migrations VALUES(NULL);",
+  "CREATE TABLE schema_migrations(version); INSERT INTO schema_migrations VALUES(9007199254740992);",
+  "CREATE VIEW schema_migrations AS SELECT 18 AS version;",
+])(
+  "fails closed on malformed application migration history: %s",
+  async (sql) => {
+    const f = await fixture();
+    const db = new DatabaseSync(f.database);
+    db.exec(sql);
+    db.close();
+    await expect(f.store.create(f)).rejects.toThrow(
+      "Invalid recovery application migration history",
+    );
+    expect(await f.store.points()).toEqual([]);
+    expect(await readdir(join(f.store.root, "staging"))).toEqual([]);
+  },
+);
+
+it("rejects a CHECK-corrupt private recovery copy without altering the source", async () => {
+  const f = await fixture();
+  const db = new DatabaseSync(f.database);
+  db.exec(
+    "CREATE TABLE checked(value INTEGER CHECK(value>0)); PRAGMA ignore_check_constraints=ON; INSERT INTO checked VALUES(-1);",
+  );
+  db.close();
+  const before = await readFile(f.database);
+  await expect(f.store.create(f)).rejects.toThrow(
+    "Recovery database verification failed",
+  );
+  expect(await f.store.points()).toEqual([]);
+  expect(await readdir(join(f.store.root, "staging"))).toEqual([]);
+  expect(await readFile(f.database)).toEqual(before);
+});
+
+it("does not collect old points when explicit version metadata is corrupt", async () => {
+  const f = await fixture();
+  const point = await f.store.create(f);
+  const path = join(f.store.root, "points", point.id, "summary.json");
+  for (const fields of [
+    { sqliteUserVersion: 1 },
+    { applicationSchemaVersion: -1 },
+    { applicationSchemaVersion: "18" },
+    { applicationSchemaVersion: 1.5 },
+  ]) {
+    await writeFile(path, JSON.stringify({ ...point, ...fields }), {
+      mode: 0o600,
+    });
+    await expect(
+      f.store.collect({ now: now + 8 * 24 * 3600_000 }),
+    ).rejects.toThrow("Corrupt recovery database version metadata");
+    expect(await readdir(join(f.store.root, "points"))).toEqual([point.id]);
+  }
+});
+
 async function quiescedFixture() {
   const f = await fixture();
   const enabled = new Set([

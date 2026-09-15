@@ -25,6 +25,49 @@ Health endpoints are loopback `/health`; Renderer API also has `/ready`, which c
 
 Use `journalctl -u UNIT --since ... -o cat` and filter structured event names. Emergency containment is described in [INCIDENT_RESPONSE.md](INCIDENT_RESPONSE.md).
 
+## Updater metadata retries and recovery versions
+
+The application Update Manager and its independent privileged
+helper retry **public GitHub JSON GETs only** (release, tag and attestation
+metadata). Each request allows at most three attempts, 30 seconds per attempt
+including the response body, a 95-second total time budget, and 8 MiB of response
+data per attempt. Transient HTTP 408/500/502/503/504 and selected temporary
+network/time-out failures use 1- then 2-second backoff. No persistent cache is
+created. Failed attempt bodies are discarded, not combined.
+
+Rate-limit responses honor `Retry-After` and `x-ratelimit-reset`; a requested wait
+longer than five seconds, an unusable rate-limit hint, or an exhausted total
+budget ends this operation for later retry rather than contacting GitHub early.
+Authentication/permission/not-found errors, invalid JSON, oversized responses,
+TLS certificate failures and checksum/provenance/identity failures are not
+retried. `update.github_retry` events contain bounded attempt/reason/delay data,
+not response bodies, credentials or URLs. See
+[GitHub's rate-limit guidance](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api#handle-rate-limit-errors-appropriately).
+
+This does **not** retry deployments, mutations, asset transfers, `gh` verification,
+or the frozen bootstrap-v1 downloader. The already installed old Updater handles
+the first transition; its behavior is not retroactively changed. If that update
+fails, inspect the real operation and recovery state before explicitly retrying.
+Do not edit sealed slots or bypass backup/signature checks to obtain the fix.
+
+New full-recovery format-1 summaries and encrypted manifests record
+`applicationSchemaVersion` from the copied DB's `schema_migrations` and
+`sqliteUserVersion` from `PRAGMA user_version` separately. The old `schema` field
+remains a legacy alias of `sqliteUserVersion`, **not** the application's migration
+number. Missing migration tables produce `applicationSchemaVersion: null`
+(unknown); an existing empty history produces zero. Invalid histories fail
+closed. Private snapshot/decrypted copies undergo SQLite integrity and FK checks;
+the live source retains read-only access. These metadata fields do not prove
+code-only rollback compatibility.
+
+Historical format-1 points lacking the new fields remain readable without
+rewriting any summary or encrypted archive. Do not infer their application
+version from `schema`; inspect a private decrypted DB copy if needed. Recovery
+configuration must be a plain object containing only the documented own keys;
+arrays and inherited-name keys such as `constructor` are rejected. Capacity and
+retention defaults are unchanged, and recovery storage remains separate from the
+TeX Live CI mirror's 15 GiB budget.
+
 ## Backup and restore boundaries
 
 The scheduled format-2 backup includes a WAL-consistent database and every Source

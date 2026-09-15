@@ -22,6 +22,7 @@ import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { setInterval } from "node:timers";
 import { acquireMutationLock } from "./mutation-lock.mjs";
+import { githubJson as readGitHubJson } from "./github-json.mjs";
 import { collectUpdateLogs, updateLogPolicy } from "./update-log-retention.mjs";
 import {
   updaterStatus,
@@ -507,17 +508,7 @@ async function fetchRelease(
   const endpoint = version
     ? `https://api.github.com/repos/${repository}/releases/tags/v${version}`
     : `https://api.github.com/repos/${repository}/releases/latest`;
-  const response = await globalThis.fetch(endpoint, {
-    headers: {
-      Accept: "application/vnd.github+json",
-      "X-GitHub-Api-Version": "2022-11-28",
-      "User-Agent": "latex-renderer-update-manager",
-    },
-    signal: globalThis.AbortSignal.timeout(30_000),
-  });
-  if (!response.ok)
-    throw new Error(`GitHub release lookup failed: HTTP ${response.status}`);
-  const release = await response.json();
+  const release = await githubJson(endpoint);
   if (release?.draft !== false)
     throw new Error("Draft releases cannot be installed");
   const tag = typeof release?.tag_name === "string" ? release.tag_name : "";
@@ -579,39 +570,22 @@ async function fetchRelease(
   };
 }
 
+async function githubJson(url) {
+  return readGitHubJson(url, "latex-renderer-update-manager");
+}
+
 async function resolveTagCommit(tag) {
-  const headers = {
-    Accept: "application/vnd.github+json",
-    "X-GitHub-Api-Version": "2022-11-28",
-    "User-Agent": "latex-renderer-update-manager",
-  };
-  let response = await globalThis.fetch(
+  let response = await githubJson(
     `https://api.github.com/repos/${repository}/git/ref/tags/${encodeURIComponent(tag)}`,
-    {
-      headers,
-      signal: globalThis.AbortSignal.timeout(30_000),
-    },
   );
-  if (!response.ok)
-    throw new Error(
-      `GitHub release tag lookup failed: HTTP ${response.status}`,
-    );
-  let object = (await response.json())?.object;
+  let object = response?.object;
   for (let depth = 0; object?.type === "tag" && depth < 4; depth += 1) {
     if (!/^[a-f0-9]{40}$/.test(object.sha ?? ""))
       throw new Error("GitHub annotated tag object is invalid");
-    response = await globalThis.fetch(
+    response = await githubJson(
       `https://api.github.com/repos/${repository}/git/tags/${object.sha}`,
-      {
-        headers,
-        signal: globalThis.AbortSignal.timeout(30_000),
-      },
     );
-    if (!response.ok)
-      throw new Error(
-        `GitHub annotated tag lookup failed: HTTP ${response.status}`,
-      );
-    object = (await response.json())?.object;
+    object = response?.object;
   }
   if (object?.type !== "commit" || !/^[a-f0-9]{40}$/.test(object.sha ?? "")) {
     throw new Error("Immutable release tag does not resolve to a commit");
@@ -631,22 +605,9 @@ async function checkRelease(
 }
 
 async function publicAttestationBundle(release, stage) {
-  const response = await globalThis.fetch(
+  const value = await githubJson(
     `https://api.github.com/repos/${repository}/attestations/${encodeURIComponent(release.digest)}`,
-    {
-      headers: {
-        Accept: "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-        "User-Agent": "latex-renderer-update-manager",
-      },
-      signal: globalThis.AbortSignal.timeout(30_000),
-    },
   );
-  if (!response.ok)
-    throw new Error(
-      `GitHub attestation lookup failed: HTTP ${response.status}`,
-    );
-  const value = await response.json();
   const bundles = Array.isArray(value?.attestations)
     ? value.attestations.map((entry) => entry?.bundle).filter(Boolean)
     : [];

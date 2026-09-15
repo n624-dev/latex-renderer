@@ -11,11 +11,14 @@ export interface RecoveryPoint {
   createdAt: number;
   release: { version: string; commit: string };
   schema: number;
+  /** Explicit fields are absent in historical format-1 recovery points. */
+  sqliteUserVersion?: number;
+  applicationSchemaVersion?: number | null;
   storageIncluded: boolean;
   files: number;
   archive: { bytes: number; sha256: string };
 }
-export function recoveryPolicy(value?: Partial<RecoveryPolicy>): RecoveryPolicy;
+export function recoveryPolicy(value?: unknown): RecoveryPolicy;
 export class RecoveryStore {
   root: string;
   policy: RecoveryPolicy;

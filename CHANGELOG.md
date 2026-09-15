@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 1.3.7-rc.2 - 2026-09-15
+
+- Retry transient public GitHub release/tag/attestation JSON failures in the independent Updater and application controller, with three attempts, per-attempt/total time bounds, isolated bounded responses and server-respecting backoff. Do not retry deployments, artifact downloads, TLS certificate failures or provenance/identity/checksum failures; preserve frozen bootstrap-v1.
+- Record the application migration number separately from SQLite user_version in new encrypted full-recovery manifests and summaries. Preserve the historical schema alias and old recovery archives without rewriting them; validate private snapshot/decrypted DB copies read-write to detect CHECK violations while retaining read-only access to the live source.
+- Reject non-object recovery settings and unknown own keys, including inherited-name keys, without changing capacity or retention defaults. Extend deterministic HTTP/SQLite/age fixtures and signed-artifact E2E database-version checks.
+- Candidate preparation only: require fresh signed-artifact update/recovery E2E and designated-host validation before Stable. RC1 production, existing release assets, Base-only publication and Actions cache policy remain unchanged.
+
 ## 1.3.7-rc.1 - 2026-09-15
 
 - Include migration-3 legacy Project Source inputs in scheduled encrypted backups; verify foreign keys as well as SQLite integrity on backup and format-1/2 restore copies. Share strict, bounded archive validation and descriptor-pinned Source reads without changing the live DB or the separate Updater full-recovery boundary.
