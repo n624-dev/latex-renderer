@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 1.3.7 - 2026-09-16
+
+- Promote the published immutable `v1.3.7-rc.2` candidate with no functional changes. RC2 passed both signed-artifact update/recovery E2E baselines and designated VPS validation: independent Updater upgrade followed by application deployment, Japanese/English PDF/PNG rendering, public boundary checks, user preservation and combined application/Updater completion.
+- Include RC1's legacy Project Source backup support, integrity/foreign-key restore verification and durable audit export sequences with the approved one-time legacy replay. Include RC2's bounded GitHub metadata retries, explicit application/SQLite recovery versions and strict recovery configuration validation.
+- Independently decrypt-verified the RC2 host's full recovery point, all five file hashes and application schema 18 / SQLite user_version 0; the scheduled backup restored four Sources and four Project revisions. Preserve existing recovery points, frozen bootstrap-v1, mandatory provenance checks and Base-only image publication.
+- Stable artifacts must identify RC2 as the validated candidate and pass source-equivalence and final signed-artifact E2E checks before publication. Application-only rollback remains disabled; no new schema migration, toolchain or retention change is introduced by this promotion. This preparation does not deploy Stable to a host.
+
 ## 1.3.7-rc.2 - 2026-09-15
 
 - Retry transient public GitHub release/tag/attestation JSON failures in the independent Updater and application controller, with three attempts, per-attempt/total time bounds, isolated bounded responses and server-respecting backoff. Do not retry deployments, artifact downloads, TLS certificate failures or provenance/identity/checksum failures; preserve frozen bootstrap-v1.
