@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
+import { writeFileSync, statSync } from "node:fs";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   RecoveryStore,
@@ -149,6 +150,33 @@ it("does not publish a point with the wrong decryption key and cleans plaintext 
   await expect(f.store.create({ ...f, identity: other })).rejects.toThrow();
   expect(await f.store.points()).toEqual([]);
   expect(await readdir(join(f.store.root, "staging"))).toEqual([]);
+});
+it("cleans a private incomplete SQLite destination after ENOSPC", async () => {
+  const f = await fixture();
+  // Keep the dynamic database receiver while intercepting only VACUUM below.
+  // eslint-disable-next-line @typescript-eslint/unbound-method
+  const prepare = DatabaseSync.prototype.prepare;
+  const spy = vi
+    .spyOn(DatabaseSync.prototype, "prepare")
+    .mockImplementation(function (this: DatabaseSync, sql: string) {
+      const statement = prepare.call(this, sql);
+      if (sql === "VACUUM INTO ?")
+        vi.spyOn(statement, "run").mockImplementation((path) => {
+          if (typeof path !== "string")
+            throw new Error("Invalid SQLite destination");
+          expect(statSync(path).mode & 0o777).toBe(0o600);
+          writeFileSync(path, "incomplete SQLite snapshot");
+          throw new Error("ENOSPC");
+        });
+      return statement;
+    });
+  try {
+    await expect(f.store.create(f)).rejects.toThrow("ENOSPC");
+    expect(await f.store.points()).toEqual([]);
+    expect(await readdir(join(f.store.root, "staging"))).toEqual([]);
+  } finally {
+    spy.mockRestore();
+  }
 });
 it("does not collect good backups when another archive is corrupt", async () => {
   const f = await fixture(),

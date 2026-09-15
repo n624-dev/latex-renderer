@@ -458,6 +458,15 @@ export class RecoveryStore {
         verified = join(work, "verified");
       await mkdir(data, { mode: 0o700 });
       await mkdir(verified, { mode: 0o700 });
+      // VACUUM may leave an incomplete destination on ENOSPC. Make it private
+      // from creation, not only by chmod after success, so safe GC can recover it.
+      // VACUUM INTO explicitly supports an existing empty destination file.
+      const destination = await open(
+        join(data, "renderer.sqlite3"),
+        "wx",
+        0o600,
+      );
+      await destination.close();
       const sourceDb = new DatabaseSync(database, { readOnly: true });
       try {
         sourceDb.exec("PRAGMA busy_timeout=30000");
