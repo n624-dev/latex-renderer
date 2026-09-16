@@ -8,7 +8,111 @@ afterEach(() => {
 });
 
 describe("Render Source and Project atomicity", () => {
-  it("expires orphan Sources but retains ready Sources until the last owned Project is deleted", () => {
+  it("uses an exclusive orphan deadline consistently across lookup and queue insertion", () => {
+    const fixture = setup(),
+      { database, sourceId, userId, now } = fixture;
+    database.raw
+      .prepare("UPDATE sources SET expires_at=? WHERE id=?")
+      .run(now, sourceId);
+    const before = new Date(Date.parse(now) - 1).toISOString();
+    expect(database.sources.getReady(sourceId, before)?.id).toBe(sourceId);
+    expect(database.sources.getReady(sourceId, now)).toBeUndefined();
+    expect(
+      database.sources.getOwnedReady(sourceId, userId, now),
+    ).toBeUndefined();
+    expect(
+      database.sources.findReady(userId, "a".repeat(64), 10, now),
+    ).toBeUndefined();
+    expect(insertQueued(fixture)).toBe(0);
+  });
+
+  it.each(["deleted", "expired"])(
+    "does not retain input for a %s Job",
+    (status) => {
+      const fixture = setup(),
+        { database, sourceId, now } = fixture;
+      expect(insertQueued(fixture)).toBe(1);
+      database.raw
+        .prepare("UPDATE jobs SET status=? WHERE id=?")
+        .run(status, fixture.jobId);
+      database.raw
+        .prepare("UPDATE sources SET expires_at=? WHERE id=?")
+        .run(now, sourceId);
+      expect(database.sources.isRetained(sourceId)).toBe(false);
+      expect(database.sources.blockingReferenceCount(sourceId)).toBe(0);
+      expect(database.sources.getReady(sourceId, now)).toBeUndefined();
+      expect(database.sources.markDeleting(sourceId, now)).toBe(1);
+    },
+  );
+
+  it.each(["reserved", "uploading", "deleting", "deleted", "expired"])(
+    "does not revive a %s Source through a retaining Job",
+    (status) => {
+      const fixture = setup(),
+        { database, sourceId, userId, now } = fixture;
+      expect(insertQueued(fixture)).toBe(1);
+      database.raw
+        .prepare("UPDATE sources SET status=? WHERE id=?")
+        .run(status, sourceId);
+      expect(database.sources.getReady(sourceId, now)).toBeUndefined();
+      expect(
+        database.sources.getOwnedReady(sourceId, userId, now),
+      ).toBeUndefined();
+      expect(
+        database.sources.findReady(userId, "a".repeat(64), 10, now),
+      ).toBeUndefined();
+      expect(insertQueued({ ...fixture, jobId: "job_another" })).toBe(0);
+    },
+  );
+
+  it.each(["job", "project"])(
+    "protects a malformed cross-owner %s reference from GC without extending reuse",
+    (kind) => {
+      const fixture = setup(),
+        { database, sourceId, now } = fixture;
+      database.users.insertInvitation({
+        id: "other_user",
+        displayName: "Other",
+        role: "user",
+        createdBy: "test",
+        timestamp: now,
+      });
+      if (kind === "job") {
+        expect(insertQueued(fixture)).toBe(1);
+        database.raw
+          .prepare("UPDATE jobs SET user_id='other_user' WHERE id=?")
+          .run(fixture.jobId);
+      } else {
+        database.projects.insert({
+          id: "other_project",
+          ownerUserId: "other_user",
+          displayName: "Other",
+          timestamp: now,
+        });
+        database.projects.insertRevision({
+          id: "other_revision",
+          projectId: "other_project",
+          sourceId,
+          displayName: "Other",
+          originalFilename: "main.tex",
+          entrypoint: "main.tex",
+          timestamp: now,
+        });
+      }
+      database.raw
+        .prepare("UPDATE sources SET expires_at=? WHERE id=?")
+        .run(now, sourceId);
+      expect(database.sources.blockingReferenceCount(sourceId)).toBe(1);
+      expect(database.sources.isRetained(sourceId)).toBe(false);
+      expect(database.sources.getReady(sourceId, now)).toBeUndefined();
+      expect(
+        database.sources.getOwnedReady(sourceId, "other_user", now),
+      ).toBeUndefined();
+      expect(database.sources.markDeleting(sourceId, now)).toBe(0);
+    },
+  );
+
+  it("expires orphan Sources but retains ready Sources until the last owned reference is removed", () => {
     const fixture = setup(),
       { database, sourceId, userId, now } = fixture;
     database.raw
@@ -56,6 +160,10 @@ describe("Render Source and Project atomicity", () => {
       .prepare("UPDATE sources SET status='ready' WHERE id=?")
       .run(sourceId);
     database.projects.softDelete("project_second", userId, now);
+    expect(database.sources.getReady(sourceId, now)?.id).toBe(sourceId);
+    database.raw
+      .prepare("UPDATE jobs SET status='deleted' WHERE id=?")
+      .run(fixture.jobId);
     expect(database.sources.getReady(sourceId, now)).toBeUndefined();
   });
 

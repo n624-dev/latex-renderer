@@ -2,6 +2,7 @@
 import { rm } from "node:fs/promises";
 import { dirname, isAbsolute, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { sourceReferenceCountSql } from "../../packages/database/dist/source-lifecycle.js";
 import {
   readAuditCheckpoint,
   validateAuditCheckpoint,
@@ -177,10 +178,8 @@ for (const record of jobs) {
     if (source?.source_id)
       db.prepare(
         `UPDATE sources SET expires_at=?,updated_at=? WHERE id=? AND status='ready'
-      AND NOT EXISTS (SELECT 1 FROM jobs WHERE source_id=? AND status NOT IN ('deleted','expired'))
-      AND NOT EXISTS (SELECT 1 FROM project_revisions r JOIN projects p ON p.id=r.project_id
-                      WHERE r.source_id=sources.id AND p.deleted_at IS NULL)`,
-      ).run(now, now, String(source.source_id), String(source.source_id));
+      AND ${sourceReferenceCountSql("sources")}=0`,
+      ).run(now, now, String(source.source_id));
     db.exec("COMMIT");
     artifactsDeleted += 1;
   } catch (error) {
@@ -213,10 +212,7 @@ const sources = db
       OR (status='deleting' AND deletion_status IN ('retained','pending','deleting'))
       OR (deletion_status IN ('pending','deleting','retry')
           AND (deletion_next_attempt_at IS NULL OR deletion_next_attempt_at<=?))
-    ) AND NOT EXISTS
-      (SELECT 1 FROM jobs j WHERE j.source_id=s.id AND j.status NOT IN ('deleted','expired'))
-    AND NOT EXISTS (SELECT 1 FROM project_revisions r JOIN projects p ON p.id=r.project_id
-                    WHERE r.source_id=s.id AND p.deleted_at IS NULL)
+    ) AND ${sourceReferenceCountSql("s")}=0
     ORDER BY COALESCE(deletion_next_attempt_at,expires_at,updated_at),id LIMIT 100`,
   )
   .all(now, now);
@@ -236,11 +232,9 @@ for (const record of sources) {
           OR (deletion_status IN ('pending','deleting','retry')
               AND (deletion_next_attempt_at IS NULL OR deletion_next_attempt_at<=?))
         )
-    AND NOT EXISTS (SELECT 1 FROM jobs WHERE source_id=? AND status NOT IN ('deleted','expired'))
-    AND NOT EXISTS (SELECT 1 FROM project_revisions r JOIN projects p ON p.id=r.project_id
-                    WHERE r.source_id=? AND p.deleted_at IS NULL)`,
+    AND ${sourceReferenceCountSql("sources")}=0`,
       )
-      .run(now, id, now, now, id, id);
+      .run(now, id, now, now);
     db.exec("COMMIT");
     if (changed.changes !== 1) continue;
   } catch (error) {
@@ -262,11 +256,9 @@ for (const record of sources) {
         `UPDATE sources SET status='deleted',deletion_status='deleted',deletion_error=NULL,
        deletion_next_attempt_at=NULL,deleted_at=?,updated_at=?
        WHERE id=? AND status='deleting' AND deletion_status='deleting'
-       AND NOT EXISTS (SELECT 1 FROM jobs WHERE source_id=? AND status NOT IN ('deleted','expired'))
-       AND NOT EXISTS (SELECT 1 FROM project_revisions r JOIN projects p ON p.id=r.project_id
-                       WHERE r.source_id=? AND p.deleted_at IS NULL)`,
+       AND ${sourceReferenceCountSql("sources")}=0`,
       )
-      .run(now, now, id, id, id);
+      .run(now, now, id);
     if (deleted.changes !== 1)
       throw new Error("Source deletion ownership changed concurrently");
     sourcesDeleted += 1;

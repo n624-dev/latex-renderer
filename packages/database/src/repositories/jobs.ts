@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { readySourceSql } from "../source-lifecycle.js";
 import type { JobStatus, RenderOutput } from "@latex-renderer/contracts";
 import {
   decodePageCursor,
@@ -416,10 +417,7 @@ export class JobsRepository {
           `INSERT INTO jobs(id,user_id,service_account_id,api_key_id,status,renderer_version,source_size,source_sha256,
       created_at,updated_at,queued_at,retry_of_job_id,source_id,entrypoint,project_revision_id,outputs_json,reserved_output_bytes)
       SELECT ?,?,?,?,'queued',?,s.size,s.sha256,?,?,?,?,s.id,?,?,?,?
-      FROM sources s WHERE s.id=? AND s.owner_user_id=? AND s.status='ready'
-      AND (s.expires_at>? OR EXISTS (
-        SELECT 1 FROM project_revisions r JOIN projects p ON p.id=r.project_id
-        WHERE r.source_id=s.id AND p.deleted_at IS NULL AND p.owner_user_id=s.owner_user_id))`,
+      FROM sources s WHERE s.id=? AND s.owner_user_id=? AND ${readySourceSql("s")}`,
         )
         .run(
           input.id,

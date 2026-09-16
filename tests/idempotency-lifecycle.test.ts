@@ -4,6 +4,85 @@ import { RendererDatabase } from "@latex-renderer/database";
 import { AdminJobsService } from "../apps/admin-api/src/services/jobs.js";
 
 describe("idempotency resource lifecycle", () => {
+  it("atomically replaces only expired keys, without renewing active requests or crossing actor boundaries", () => {
+    const database = new RendererDatabase(":memory:");
+    database.migrate();
+    try {
+      const start = "2026-09-16T00:00:00.000Z",
+        deadline = "2026-09-17T00:00:00.000Z";
+      const record = {
+        actorType: "user",
+        actorId: "first",
+        operation: "source.create",
+        keyHash: "key",
+        requestHash: "request",
+        resourceId: "source_first",
+        responseCode: 200,
+        createdAt: start,
+        expiresAt: deadline,
+      };
+      database.security.insertIdempotency(record);
+      expect(() =>
+        database.security.insertIdempotency({
+          ...record,
+          resourceId: "source_second",
+          createdAt: "2026-09-16T23:59:59.999Z",
+          expiresAt: "2026-09-18T00:00:00.000Z",
+        }),
+      ).toThrow(/already active/);
+      expect(
+        database.raw
+          .prepare(
+            "SELECT created_at,expires_at,resource_id FROM idempotency_records",
+          )
+          .get(),
+      ).toMatchObject({
+        created_at: start,
+        expires_at: deadline,
+        resource_id: "source_first",
+      });
+      database.security.insertIdempotency({ ...record, actorId: "second" });
+      database.security.insertIdempotency({
+        ...record,
+        operation: "another.operation",
+      });
+      expect(
+        database.security.idempotency(
+          "user",
+          "first",
+          "source.create",
+          "key",
+          deadline,
+        ),
+      ).toBeUndefined();
+      database.security.insertIdempotency({
+        ...record,
+        resourceId: "source_second",
+        createdAt: deadline,
+        expiresAt: "2026-09-18T00:00:00.000Z",
+      });
+      expect(
+        database.security.idempotency(
+          "user",
+          "first",
+          "source.create",
+          "key",
+          deadline,
+        )?.resource_id,
+      ).toBe("source_second");
+      expect(
+        database.raw
+          .prepare("SELECT COUNT(*) AS n FROM idempotency_records")
+          .get()?.n,
+      ).toBe(3);
+      expect(() =>
+        database.security.insertIdempotency({ ...record, createdAt: deadline }),
+      ).toThrow(/lifetime/);
+    } finally {
+      database.close();
+    }
+  });
+
   it("does not replay a deleted Admin Retry Job as a success", async () => {
     const database = new RendererDatabase(":memory:");
     database.migrate();

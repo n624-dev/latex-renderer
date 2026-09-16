@@ -3,6 +3,7 @@ import type { JobStatus } from "@latex-renderer/contracts";
 import { AppError, newId, nowIso } from "@latex-renderer/shared";
 import { schemaSql } from "./schema.js";
 import { applyDatabaseMigrations } from "./migrations.js";
+export { sourceRequestExpiresAt } from "./source-lifecycle.js";
 import {
   ApiKeysRepository,
   ArtifactsRepository,

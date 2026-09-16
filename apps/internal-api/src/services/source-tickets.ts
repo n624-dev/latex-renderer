@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { AuthenticatedServiceAccount } from "@latex-renderer/auth";
+import { sourceRequestExpiresAt } from "@latex-renderer/database";
 import { AppError, nowIso } from "@latex-renderer/shared";
 import type { InternalApiDependencies } from "../types.js";
 
@@ -49,7 +50,20 @@ export class SourceTicketsService {
     );
     if (ready !== undefined) {
       try {
-        this.deps.database.transaction(() =>
+        this.deps.database.transaction(() => {
+          const timestamp = nowIso();
+          if (
+            this.deps.database.sources.getOwnedReady(
+              ready.id,
+              actor.userId,
+              timestamp,
+            ) === undefined
+          )
+            throw new AppError(
+              "SOURCE_NOT_READY",
+              "Source is no longer available",
+              409,
+            );
           this.deps.database.security.insertIdempotency({
             actorType: "service_account",
             actorId: actor.serviceAccountId,
@@ -58,12 +72,10 @@ export class SourceTicketsService {
             requestHash,
             resourceId: ready.id,
             responseCode: 200,
-            expiresAt: new Date(
-              Math.min(Date.now() + 86_400_000, Date.parse(ready.expires_at)),
-            ).toISOString(),
-            createdAt: now,
-          }),
-        );
+            expiresAt: sourceRequestExpiresAt(timestamp),
+            createdAt: timestamp,
+          });
+        });
       } catch (caught) {
         const raced = this.deps.database.security.idempotency(
           "service_account",
@@ -183,7 +195,14 @@ export class SourceTicketsService {
     const source = this.deps.database.sources.getOwned(sourceId, actor.userId);
     if (source === undefined)
       throw new AppError("SOURCE_NOT_FOUND", "Source does not exist", 404);
-    if (source.expires_at <= nowIso())
+    if (
+      source.expires_at <= nowIso() &&
+      this.deps.database.sources.getOwnedReady(
+        sourceId,
+        actor.userId,
+        nowIso(),
+      ) === undefined
+    )
       throw new AppError(
         "IDEMPOTENT_RESOURCE_GONE",
         "Idempotent Source reservation has expired",

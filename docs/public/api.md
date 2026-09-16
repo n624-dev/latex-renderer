@@ -4,7 +4,7 @@ category: API
 title: 公開API
 description: Source共有、ジョブ作成、ZIPアップロード、状態確認、成果物取得をHTTPから行います。
 navOrder: 70
-updated: "2026-08-18"
+updated: "2026-09-16"
 since: "v1.0.0"
 ---
 
@@ -69,7 +69,12 @@ Content-Length: <ZIPサイズ>
 ```
 
 Sourceがreadyになったら、ZIP内に存在する相対 `.tex` パスを指定します。省略時は `main.tex` です。
-Jobから参照されないready Sourceは初期値1時間でcleanupされ、管理画面の `source_orphan_retention_minutes`（5分〜24時間）で保持時間を変更できます。
+Jobにも有効なProject改訂にも参照されないready Sourceは初期値1時間でcleanupされ、管理画面の `source_orphan_retention_minutes`（5分〜24時間）で保持時間を変更できます。
+同じ所有者のJob（`deleted`・`expired`以外）または削除されていないProject改訂が保持するready Sourceは、この孤立時の期限を過ぎても再利用・再描画できます。終了済みJobも保持に含まれます。最後の参照がなくなると、期限を過ぎたSourceは利用できず、cleanup対象になります。参照によってアップロード途中・削除中のSourceがreadyへ戻ることはありません。
+
+Source応答の `expiresAt` は、アップロード前なら予約の期限、readyなら参照がない場合の期限です。ready Sourceの保持期限を一律に表す値ではありません。同じZIPの再利用に対する `Idempotency-Key` は受付から24時間記録され、再送で延長されません。未完了アップロードの予約は従来どおり10分です。同じ有効キーを別の内容へ使うと409、元のSourceの期限切れは410、削除済みは404になります。アップロード等が進行中なら409で再開を拒否します。期限切れのキーは定期cleanupを待たず再利用できますが、元のSourceを復活させるものではありません。
+
+この保持判定はWeb・HTTP API・MCPで共通です。MCPの重複アップロード開始・完了も保持済みready Sourceを使い、ZIPを書き換えません。MCPのSource参照は最大15分で、参照自体はSourceの保持を延長しません。未完了アップロードの期限・検証・同時書込み制御は引き続き適用されます。
 
 ```http
 POST /api/v1/render-tickets
