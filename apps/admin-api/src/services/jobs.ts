@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { statfs } from "node:fs/promises";
 import { AppError, newId, nowIso } from "@latex-renderer/shared";
-import type { JobRow } from "@latex-renderer/database";
+import { sourceRequestExpiresAt, type JobRow } from "@latex-renderer/database";
 import type { RenderOutput } from "@latex-renderer/contracts";
 import { RemoteRenderService } from "@latex-renderer/remote-mcp-core";
 import { validateEntrypointPath } from "@latex-renderer/zip-validation";
@@ -406,7 +406,20 @@ export class AdminJobsService {
     );
     if (ready !== undefined) {
       try {
-        this.deps.database.transaction(() =>
+        this.deps.database.transaction(() => {
+          const timestamp = nowIso();
+          if (
+            this.deps.database.sources.getOwnedReady(
+              ready.id,
+              identity.user_id,
+              timestamp,
+            ) === undefined
+          )
+            throw new AppError(
+              "SOURCE_NOT_READY",
+              "Source is no longer available",
+              409,
+            );
           this.deps.database.security.insertIdempotency({
             actorType: actor.type,
             actorId: actor.id,
@@ -415,17 +428,10 @@ export class AdminJobsService {
             requestHash,
             resourceId: ready.id,
             responseCode: 200,
-            expiresAt: new Date(
-              this.deps.database.sources.isProjectRetained(ready.id)
-                ? Date.now() + 86_400_000
-                : Math.min(
-                    Date.now() + 86_400_000,
-                    Date.parse(ready.expires_at),
-                  ),
-            ).toISOString(),
-            createdAt: nowIso(),
-          }),
-        );
+            expiresAt: sourceRequestExpiresAt(timestamp),
+            createdAt: timestamp,
+          });
+        });
       } catch (caught) {
         const raced = this.deps.database.security.idempotency(
           actor.type,

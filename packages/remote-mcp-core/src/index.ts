@@ -681,7 +681,7 @@ export class RemoteRenderService {
       throw new AppError("SOURCE_NOT_READY", "Source is not ready", 409);
     const sourceRef = newId("source_ref"),
       expiresAt = new Date(
-        this.database.sources.isProjectRetained(source.id)
+        this.database.sources.isRetained(source.id)
           ? Date.now() + SOURCE_REF_MS
           : Math.min(Date.now() + SOURCE_REF_MS, Date.parse(source.expires_at)),
       ).toISOString();
@@ -1339,7 +1339,8 @@ export class RemoteRenderService {
     base64: string,
   ): Promise<RemoteSourceUpload> {
     const source = this.assertOwnedSource(userId, uploadId);
-    if (source.expires_at <= nowIso())
+    if (source.status === "ready") this.resolveOwnedSource(userId, uploadId);
+    if (source.status !== "ready" && source.expires_at <= nowIso())
       throw new AppError(
         "SOURCE_UPLOAD_EXPIRED",
         "Source upload has expired",
@@ -1465,13 +1466,17 @@ export class RemoteRenderService {
     uploadId: string,
   ): Promise<RemoteSourceSummary> {
     const source = this.assertOwnedSource(userId, uploadId);
+    if (source.status === "ready")
+      return this.summarizeSource(
+        this.resolveOwnedSource(userId, uploadId),
+        null,
+      );
     if (source.expires_at <= nowIso())
       throw new AppError(
         "SOURCE_UPLOAD_EXPIRED",
         "Source upload has expired",
         410,
       );
-    if (source.status === "ready") return this.summarizeSource(source, null);
     if (source.status !== "uploading")
       throw new AppError(
         "SOURCE_UPLOAD_STATE",

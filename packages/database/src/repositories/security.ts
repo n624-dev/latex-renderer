@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { AppError } from "@latex-renderer/shared";
 
 export class SecurityRepository {
   constructor(private readonly db: DatabaseSync) {}
@@ -38,9 +39,16 @@ export class SecurityRepository {
     expiresAt: string;
     createdAt: string;
   }): void {
-    this.db
+    if (!(input.expiresAt > input.createdAt))
+      throw new Error("Idempotency lifetime must be positive");
+    const result = this.db
       .prepare(
-        `INSERT INTO idempotency_records(actor_type,actor_id,operation,key_hash,request_hash,resource_id,response_code,expires_at,created_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+        `INSERT INTO idempotency_records(actor_type,actor_id,operation,key_hash,request_hash,resource_id,response_code,expires_at,created_at) VALUES (?,?,?,?,?,?,?,?,?)
+         ON CONFLICT(actor_type,actor_id,operation,key_hash) DO UPDATE SET
+           request_hash=excluded.request_hash,resource_id=excluded.resource_id,
+           response_code=excluded.response_code,expires_at=excluded.expires_at,
+           created_at=excluded.created_at
+         WHERE idempotency_records.expires_at<=excluded.created_at`,
       )
       .run(
         input.actorType,
@@ -52,6 +60,12 @@ export class SecurityRepository {
         input.responseCode,
         input.expiresAt,
         input.createdAt,
+      );
+    if (result.changes !== 1)
+      throw new AppError(
+        "IDEMPOTENCY_CONFLICT",
+        "Idempotency-Key is already active",
+        409,
       );
   }
   insertNonce(nonce: string, jobId: string, expiresAt: string): void {

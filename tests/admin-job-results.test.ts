@@ -18,6 +18,53 @@ afterEach(async () => {
 });
 
 describe("administrator Job results and Sources", () => {
+  it("retries a failed Job using retained input after its orphan deadline", async () => {
+    const fixture = await setup(),
+      sourceId = `source_${"f".repeat(32)}`,
+      jobId = `job_${"f".repeat(32)}`,
+      timestamp = new Date().toISOString();
+    seedSource(fixture.database, sourceId, timestamp, ["main.tex"]);
+    expect(
+      fixture.database.jobs.insertQueued({
+        id: jobId,
+        userId: "user_owner",
+        serviceAccountId: "sa_web",
+        apiKeyId: "key_web",
+        rendererVersion: "test",
+        sourceId,
+        entrypoint: "main.tex",
+        timestamp,
+        reservedOutputBytes: 1,
+      }),
+    ).toBe(1);
+    fixture.database.raw
+      .prepare("UPDATE jobs SET status='failed' WHERE id=?")
+      .run(jobId);
+    fixture.database.raw
+      .prepare(
+        "UPDATE sources SET expires_at='2000-01-01T00:00:00.000Z' WHERE id=?",
+      )
+      .run(sourceId);
+    const response = await fixture.app.request(
+      `/admin/api/v1/jobs/${jobId}/retry`,
+      {
+        method: "POST",
+        headers: {
+          ...fixture.headers,
+          "X-CSRF-Token": "1",
+          "Idempotency-Key": "retained-source-admin-retry-123456",
+        },
+      },
+    );
+    expect(response.status).toBe(202);
+    const body = (await response.json()) as { id: string };
+    expect(fixture.database.jobs.get(body.id)).toMatchObject({
+      status: "queued",
+      source_id: sourceId,
+      retry_of_job_id: jobId,
+    });
+  });
+
   it("shows retained metadata and streams authenticated, integrity-labelled artifacts", async () => {
     const fixture = await setup(),
       jobId = `job_${"a".repeat(32)}`,

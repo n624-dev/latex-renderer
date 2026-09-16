@@ -155,9 +155,54 @@ describe("user Web application API", () => {
         source.sourceId,
         "user_one",
         new Date().toISOString(),
+      )?.id,
+    ).toBe(source.sourceId);
+    // Finished Jobs still retain the Source, but do not consume queue slots.
+    database.raw
+      .prepare("UPDATE jobs SET status='succeeded' WHERE source_id=?")
+      .run(source.sourceId);
+    const deletedProject = await render("outputs-deleted-123456", ["pdf"]);
+    expect(deletedProject.status).toBe(404);
+    expect(await deletedProject.json()).toMatchObject({
+      error: { code: "PROJECT_NOT_FOUND" },
+    });
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const reused = await app.request("/app/api/v1/source-tickets", {
+        method: "POST",
+        headers: {
+          ...headers,
+          "Idempotency-Key": "job-only-retained-reuse-123456",
+        },
+        body: JSON.stringify({ size: 123, sha256: "b".repeat(64) }),
+      });
+      expect(reused.status).toBe(200);
+      expect(await reused.json()).toMatchObject({
+        sourceId: source.sourceId,
+        uploadRequired: false,
+      });
+    }
+    database.raw
+      .prepare("UPDATE jobs SET status='deleted' WHERE source_id=?")
+      .run(source.sourceId);
+    expect(
+      database.sources.getOwnedReady(
+        source.sourceId,
+        "user_one",
+        new Date().toISOString(),
       ),
     ).toBeUndefined();
-    expect((await render("outputs-deleted-123456", ["pdf"])).status).toBe(409);
+    expect(
+      (
+        await app.request("/app/api/v1/source-tickets", {
+          method: "POST",
+          headers: {
+            ...headers,
+            "Idempotency-Key": "job-only-retained-reuse-123456",
+          },
+          body: JSON.stringify({ size: 123, sha256: "b".repeat(64) }),
+        })
+      ).status,
+    ).toBe(410);
   });
 
   it("uses a fixed secretless principal and owns Projects, revisions, Jobs, and renewed tickets", async () => {

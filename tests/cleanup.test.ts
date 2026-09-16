@@ -309,7 +309,7 @@ describe("scheduled cleanup", () => {
       sha256: "0".repeat(64),
       storageKey: `sources/${sourceId}/source.zip`,
       timestamp,
-      expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+      expiresAt: "2000-01-01T00:00:00.000Z",
     });
     db.raw
       .prepare(
@@ -352,6 +352,11 @@ describe("scheduled cleanup", () => {
     await run();
     const retained = new RendererDatabase(databasePath);
     expect(retained.sources.get(sourceId)?.status).toBe("ready");
+    expect(
+      retained.sources.getOwnedReady(sourceId, "user", new Date().toISOString())
+        ?.id,
+    ).toBe(sourceId);
+    expect((await stat(path)).size).toBe(1);
     retained.raw
       .prepare("UPDATE jobs SET status='deleting' WHERE id=?")
       .run(second);

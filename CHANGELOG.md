@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 1.3.8-rc.1 - 2026-09-16
+
+- Unify Source reuse and retention across lookup, deduplication, queued Jobs, Web/Internal API, MCP and cleanup. Ready inputs retained by the same owner's Jobs or undeleted Projects remain reusable after their orphan deadline; deleting or expired inputs cannot be revived. Preserve conservative deletion protection and immutable ZIP contents.
+- Give completed-Source request replay a fixed 24-hour lifetime independent of the orphan deadline. Atomically replace expired request keys without waiting for cleanup, refuse active-key overwrites and recheck deduplicated inputs within the write transaction. Preserve ten-minute upload reservations, owner boundaries and existing quotas.
+- Complete MCP deduplicated uploads against retained ready Sources and issue usable bounded Source references without extending Source lifetime. Keep incomplete-upload expiry, checksum/ZIP validation and upload leases unchanged; add boundary, lifecycle, replay, cleanup and race regressions.
+- Candidate preparation only: require signed-artifact update/recovery E2E and designated-host validation before Stable. No schema migration, Updater/bootstrap changes, new cache or production deployment is included.
+
 ## 1.3.7 - 2026-09-16
 
 - Promote the published immutable `v1.3.7-rc.2` candidate with no functional changes. RC2 passed both signed-artifact update/recovery E2E baselines and designated VPS validation: independent Updater upgrade followed by application deployment, Japanese/English PDF/PNG rendering, public boundary checks, user preservation and combined application/Updater completion.

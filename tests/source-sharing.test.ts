@@ -23,6 +23,234 @@ afterEach(async () => {
 });
 
 describe("immutable shared Sources", () => {
+  it.each([
+    "reserved",
+    "uploading",
+    "queued",
+    "running",
+    "succeeded",
+    "failed",
+    "timeout",
+    "canceled",
+    "rejected",
+    "deleting",
+  ])(
+    "keeps an orphan-expired Source reusable while a %s Job retains it",
+    async (status) => {
+      const { database, actor, sourceService, renderService } = await fixture();
+      const input = { size: 1, sha256: "a".repeat(64) };
+      const reserved = await sourceService.create(
+        actor,
+        input,
+        "retained-job-source-123456",
+      );
+      const sourceId = reserved.value.sourceId;
+      database.raw
+        .prepare(
+          "UPDATE sources SET status='ready',paths_json='[\"main.tex\"]' WHERE id=?",
+        )
+        .run(sourceId);
+      const first = await renderService.create(
+        actor,
+        { sourceId, entrypoint: "main.tex" },
+        "retained-first-job-123456",
+      );
+      database.raw
+        .prepare("UPDATE jobs SET status=? WHERE id=?")
+        .run(status, first.value.jobId);
+      database.raw
+        .prepare(
+          "UPDATE sources SET expires_at='2000-01-01T00:00:00.000Z' WHERE id=?",
+        )
+        .run(sourceId);
+      const now = new Date().toISOString();
+      expect(database.sources.blockingReferenceCount(sourceId)).toBe(1);
+      expect(
+        database.sources.getOwnedReady(sourceId, actor.userId, now)?.id,
+      ).toBe(sourceId);
+      expect(database.sources.getReady(sourceId, now)?.id).toBe(sourceId);
+      expect(
+        database.sources.findReady(actor.userId, input.sha256, input.size, now)
+          ?.id,
+      ).toBe(sourceId);
+      expect(
+        database.sources.getOwnedReady(sourceId, "other-user", now),
+      ).toBeUndefined();
+      const second = await renderService.create(
+        actor,
+        { sourceId, entrypoint: "main.tex" },
+        "retained-second-job-123456",
+      );
+      expect(database.jobs.get(second.value.jobId)?.source_id).toBe(sourceId);
+      expect(database.sources.markDeleting(sourceId, now)).toBe(0);
+    },
+  );
+
+  it.each(["project", "job"])(
+    "replays %s-retained Source tickets without an expired idempotency row",
+    async (kind) => {
+      const { database, actor, sourceService, renderService } = await fixture();
+      const input = { size: 1, sha256: "a".repeat(64) },
+        now = new Date().toISOString();
+      const {
+        value: { sourceId },
+      } = await sourceService.create(
+        actor,
+        input,
+        "reuse-original-source-123456",
+      );
+      database.raw
+        .prepare(
+          "UPDATE sources SET status='ready',paths_json='[\"main.tex\"]' WHERE id=?",
+        )
+        .run(sourceId);
+      if (kind === "project") {
+        database.projects.insert({
+          id: "project_retained",
+          ownerUserId: actor.userId,
+          displayName: "Retained",
+          timestamp: now,
+        });
+        database.projects.insertRevision({
+          id: "revision_retained",
+          projectId: "project_retained",
+          sourceId,
+          displayName: "Retained",
+          originalFilename: "main.tex",
+          entrypoint: "main.tex",
+          timestamp: now,
+        });
+      } else
+        await renderService.create(
+          actor,
+          { sourceId, entrypoint: "main.tex" },
+          "reuse-retaining-job-123456",
+        );
+      database.raw
+        .prepare(
+          "UPDATE sources SET expires_at='2000-01-01T00:00:00.000Z' WHERE id=?",
+        )
+        .run(sourceId);
+      const key = "reuse-retained-idempotency-123456";
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const response = await sourceService.create(actor, input, key);
+        expect(response.value).toMatchObject({
+          sourceId,
+          uploadRequired: false,
+        });
+      }
+      const row = database.raw
+        .prepare(
+          "SELECT created_at,expires_at FROM idempotency_records WHERE key_hash=?",
+        )
+        .get(createHash("sha256").update(key).digest("hex"));
+      expect(Date.parse(String(row?.expires_at))).toBeGreaterThan(
+        Date.parse(now),
+      );
+      expect(
+        Date.parse(String(row?.expires_at)) -
+          Date.parse(String(row?.created_at)),
+      ).toBe(86_400_000);
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(Date.now() + 60_000);
+      expect(
+        (await sourceService.create(actor, input, key)).value.sourceId,
+      ).toBe(sourceId);
+      expect(
+        database.raw
+          .prepare(
+            "SELECT created_at,expires_at FROM idempotency_records WHERE key_hash=?",
+          )
+          .get(createHash("sha256").update(key).digest("hex")),
+      ).toEqual(row);
+      // Replaying the original reservation after upload follows the same rule.
+      expect(
+        (
+          await sourceService.create(
+            actor,
+            input,
+            "reuse-original-source-123456",
+          )
+        ).value,
+      ).toMatchObject({ sourceId, uploadRequired: false });
+      await expect(
+        sourceService.create(actor, { ...input, size: 2 }, key),
+      ).rejects.toMatchObject({ code: "IDEMPOTENCY_CONFLICT", status: 409 });
+      expect(
+        database.raw.prepare("SELECT COUNT(*) AS n FROM sources").get()?.n,
+      ).toBe(1);
+      if (kind === "project")
+        database.projects.softDelete(
+          "project_retained",
+          actor.userId,
+          new Date().toISOString(),
+        );
+      else
+        database.raw
+          .prepare("UPDATE jobs SET status='deleted' WHERE source_id=?")
+          .run(sourceId);
+      await expect(
+        sourceService.create(actor, input, key),
+      ).rejects.toMatchObject({
+        code: "IDEMPOTENT_RESOURCE_GONE",
+        status: 410,
+      });
+      expect(
+        database.raw.prepare("SELECT COUNT(*) AS n FROM sources").get()?.n,
+      ).toBe(1);
+    },
+  );
+
+  it("rechecks a deduplicated Source inside the idempotency write transaction", async () => {
+    const { database, actor, sourceService } = await fixture();
+    const input = { size: 1, sha256: "a".repeat(64) };
+    const {
+      value: { sourceId },
+    } = await sourceService.create(actor, input, "race-source-original-123456");
+    database.raw
+      .prepare("UPDATE sources SET status='ready' WHERE id=?")
+      .run(sourceId);
+    const findReady = database.sources.findReady.bind(database.sources);
+    const spy = vi
+      .spyOn(database.sources, "findReady")
+      .mockImplementationOnce((...args) => {
+        const stale = findReady(...args);
+        database.sources.markDeleting(sourceId, new Date().toISOString());
+        return stale;
+      });
+    try {
+      await expect(
+        sourceService.create(actor, input, "race-source-reuse-123456"),
+      ).rejects.toMatchObject({ code: "SOURCE_NOT_READY", status: 409 });
+      expect(
+        database.raw
+          .prepare("SELECT COUNT(*) AS n FROM idempotency_records")
+          .get()?.n,
+      ).toBe(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("reuses an expired request key without depending on scheduled cleanup", async () => {
+    const { database, actor, sourceService } = await fixture();
+    const key = "expired-source-request-123456",
+      input = { size: 1, sha256: "a".repeat(64) };
+    await sourceService.create(actor, input, key);
+    database.raw
+      .prepare(
+        "UPDATE idempotency_records SET expires_at='2000-01-01T00:00:00.000Z'",
+      )
+      .run();
+    const response = await sourceService.create(actor, input, key);
+    expect(response.status).toBe(201);
+    expect(
+      database.raw
+        .prepare("SELECT COUNT(*) AS n FROM idempotency_records")
+        .get()?.n,
+    ).toBe(1);
+  });
+
   it.each(["source", "legacy"] as const)(
     "releases claims and stops heartbeats after mkdir fails (%s)",
     async (kind) => {

@@ -1,5 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
 import {
+  readySourceSql,
+  sourceReferenceCountSql,
+} from "../source-lifecycle.js";
+import {
   AppError,
   decodePageCursor,
   encodePageCursor,
@@ -63,15 +67,10 @@ export class SourcesRepository {
     ownerUserId: string,
     timestamp: string,
   ): SourceRow | undefined {
-    // expires_at is the orphan deadline. An active owned Project pins ready
-    // input, but never revives uploading, deleting, deleted or expired rows.
+    // expires_at is only the orphan deadline, not the lifetime of retained input.
     return this.db
       .prepare(
-        `SELECT * FROM sources WHERE id=? AND owner_user_id=? AND status='ready'
-         AND (expires_at>? OR EXISTS (
-           SELECT 1 FROM project_revisions r JOIN projects p ON p.id=r.project_id
-           WHERE r.source_id=sources.id AND p.deleted_at IS NULL
-             AND p.owner_user_id=sources.owner_user_id))`,
+        `SELECT * FROM sources WHERE id=? AND owner_user_id=? AND ${readySourceSql("sources")}`,
       )
       .get(id, ownerUserId, timestamp) as unknown as SourceRow | undefined;
   }
@@ -79,11 +78,7 @@ export class SourcesRepository {
   getReady(id: string, timestamp: string): SourceRow | undefined {
     return this.db
       .prepare(
-        `SELECT * FROM sources WHERE id=? AND status='ready'
-         AND (expires_at>? OR EXISTS (
-           SELECT 1 FROM project_revisions r JOIN projects p ON p.id=r.project_id
-           WHERE r.source_id=sources.id AND p.deleted_at IS NULL
-             AND p.owner_user_id=sources.owner_user_id))`,
+        `SELECT * FROM sources WHERE id=? AND ${readySourceSql("sources")}`,
       )
       .get(id, timestamp) as unknown as SourceRow | undefined;
   }
@@ -95,6 +90,16 @@ export class SourcesRepository {
           `SELECT 1 FROM sources s JOIN project_revisions r ON r.source_id=s.id
        JOIN projects p ON p.id=r.project_id
        WHERE s.id=? AND p.deleted_at IS NULL AND p.owner_user_id=s.owner_user_id LIMIT 1`,
+        )
+        .get(id) !== undefined
+    );
+  }
+
+  isRetained(id: string): boolean {
+    return (
+      this.db
+        .prepare(
+          `SELECT 1 FROM sources s WHERE s.id=? AND ${sourceReferenceCountSql("s", true)}>0`,
         )
         .get(id) !== undefined
     );
@@ -145,9 +150,7 @@ export class SourcesRepository {
            s.expires_at,s.uploaded_at,s.paths_json,s.dedupe_eligible,s.deleted_at,
            s.upload_received_bytes,s.upload_lease_owner,s.upload_lease_expires_at,
            COUNT(j.id) AS job_count,
-           COUNT(CASE WHEN j.status NOT IN ('deleted','expired') THEN j.id END)
-             + (SELECT COUNT(*) FROM project_revisions r3 JOIN projects p3 ON p3.id=r3.project_id
-                WHERE r3.source_id=s.id AND p3.deleted_at IS NULL) AS blocking_reference_count,
+           ${sourceReferenceCountSql("s")} AS blocking_reference_count,
            (SELECT j2.id FROM jobs j2 WHERE j2.source_id=s.id AND j2.deleted_at IS NULL
              ORDER BY j2.created_at DESC,j2.id DESC LIMIT 1) AS latest_job_id,
            (SELECT j2.status FROM jobs j2 WHERE j2.source_id=s.id AND j2.deleted_at IS NULL
@@ -196,13 +199,9 @@ export class SourcesRepository {
           `UPDATE sources SET status='deleting',deletion_status='pending',deletion_attempts=0,
            deletion_error=NULL,deletion_next_attempt_at=NULL,updated_at=?
            WHERE id=? AND status IN ('ready','expired')
-        AND NOT EXISTS (SELECT 1 FROM jobs WHERE source_id=? AND status NOT IN ('deleted','expired'))
-        AND NOT EXISTS (
-          SELECT 1 FROM project_revisions r JOIN projects p ON p.id=r.project_id
-          WHERE r.source_id=? AND p.deleted_at IS NULL
-        )`,
+        AND ${sourceReferenceCountSql("sources")}=0`,
         )
-        .run(timestamp, id, id, id).changes,
+        .run(timestamp, id).changes,
     );
   }
 
@@ -215,10 +214,7 @@ export class SourcesRepository {
     return this.db
       .prepare(
         `SELECT * FROM sources WHERE owner_user_id=? AND sha256=? AND size=?
-      AND status='ready' AND (expires_at>? OR EXISTS (
-        SELECT 1 FROM project_revisions r JOIN projects p ON p.id=r.project_id
-        WHERE r.source_id=sources.id AND p.deleted_at IS NULL
-          AND p.owner_user_id=sources.owner_user_id)) ORDER BY created_at DESC LIMIT 1`,
+      AND ${readySourceSql("sources")} ORDER BY created_at DESC LIMIT 1`,
       )
       .get(ownerUserId, sha256, size, now) as unknown as SourceRow | undefined;
   }
@@ -465,15 +461,14 @@ export class SourcesRepository {
   /** References that prevent a ready/expired Source from being deleted. */
   blockingReferenceCount(id: string): number {
     return (
-      this.db
-        .prepare(
-          `SELECT
-              (SELECT COUNT(*) FROM jobs WHERE source_id=? AND status NOT IN ('deleted','expired')) +
-              (SELECT COUNT(*) FROM project_revisions r JOIN projects p ON p.id=r.project_id
-               WHERE r.source_id=? AND p.deleted_at IS NULL) AS count`,
-        )
-        .get(id, id) as { count: number }
-    ).count;
+      (
+        this.db
+          .prepare(
+            `SELECT ${sourceReferenceCountSql("s")} AS count FROM sources s WHERE s.id=?`,
+          )
+          .get(id) as { count: number } | undefined
+      )?.count ?? 0
+    );
   }
 
   storageUsageForUser(ownerUserId: string): number {

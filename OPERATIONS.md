@@ -68,6 +68,37 @@ arrays and inherited-name keys such as `constructor` are rejected. Capacity and
 retention defaults are unchanged, and recovery storage remains separate from the
 TeX Live CI mirror's 15 GiB budget.
 
+## Source retention and request replay
+
+Ready Sources remain reusable while the same owner's Jobs (all states except
+`deleted` and `expired`) or undeleted Project revisions reference them. The
+stored `expires_at` is the orphan deadline, not a hard lifetime for retained
+input. Removing the last reference does not grant a new retention window;
+expired input is no longer reusable and the next cleanup may remove it. Failed
+or completed Jobs still retain input until their normal deletion. Uploading,
+deleting, deleted and expired Sources never become ready through a reference.
+
+Lookup, deduplication, queued-Job admission and cleanup share the database
+package's Source reference predicate. Cleanup conservatively protects even a
+malformed cross-owner reference, but that reference does not extend reuse.
+Do not repair such inconsistencies by deleting storage manually. Build the
+database package before directly running `deploy/scripts/cleanup.mjs` from a
+source checkout (`pnpm --filter @latex-renderer/database build`); normal CI and
+production deployment already build it before starting cleanup services.
+
+Completed-Source request deduplication is remembered for a fixed 24 hours in
+Web/Internal API; an unfinished upload reservation still lasts ten minutes.
+Replay does not renew either deadline or pin Source bytes. Expired request keys
+can be atomically replaced without waiting for scheduled metadata cleanup;
+unexpired keys remain actor/operation-scoped and cannot be overwritten. Source
+availability is rechecked inside the request-record write transaction. No DB
+migration, physical ZIP rewrite, quota change or retention extension is needed.
+
+MCP deduplicated begin/finalize returns the retained ready Source without
+rewriting it. Unfinished upload expiry, integrity validation and writer leases
+remain mandatory. A Source reference lasts at most 15 minutes and is not itself
+a retaining reference; resolving it rechecks the Source's availability.
+
 ## Backup and restore boundaries
 
 The scheduled format-2 backup includes a WAL-consistent database and every Source

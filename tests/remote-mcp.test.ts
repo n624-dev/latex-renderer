@@ -914,6 +914,11 @@ describe("Remote MCP HTTP server", () => {
         "UPDATE jobs SET status='failed',completed_at=?,updated_at=?,exit_code=1 WHERE id=?",
       )
       .run("2026-08-12T00:02:00.000Z", "2026-08-12T00:02:00.000Z", jobIdValue);
+    fixture.database.raw
+      .prepare(
+        "UPDATE sources SET expires_at='2000-01-01T00:00:00.000Z' WHERE id=?",
+      )
+      .run(sourceIdValue);
     const retried = await mcpRequest(fixture.app, token, {
       jsonrpc: "2.0",
       id: 35,
@@ -1166,6 +1171,93 @@ describe("Remote MCP HTTP server", () => {
     ).resolves.toMatchObject({ id: upload.sourceId, status: "ready" });
   });
 
+  it.each(["project", "job"])(
+    "finishes deduplicated %s-retained Sources after the orphan deadline",
+    async (kind) => {
+      const fixture = await createFixture();
+      const identity = { userId: "user_test", scopes: ["mcp:render"] as const };
+      const source = await fixture.renders.createSource(identity, [
+        { path: "main.tex", text: "retained" },
+      ]);
+      const timestamp = new Date().toISOString();
+      if (kind === "project") {
+        fixture.database.projects.insert({
+          id: "project_retained",
+          ownerUserId: identity.userId,
+          displayName: "Retained",
+          timestamp,
+        });
+        fixture.database.projects.insertRevision({
+          id: "revision_retained",
+          projectId: "project_retained",
+          sourceId: source.id,
+          displayName: "Retained",
+          originalFilename: "main.tex",
+          entrypoint: "main.tex",
+          timestamp,
+        });
+      } else
+        await fixture.renders.createRender(identity, { sourceId: source.id });
+      fixture.database.raw
+        .prepare(
+          "UPDATE sources SET expires_at='2000-01-01T00:00:00.000Z' WHERE id=?",
+        )
+        .run(source.id);
+      const before = fixture.database.sources.get(source.id);
+      const upload = await fixture.renders.beginSourceUpload(
+        identity,
+        source.size,
+        source.sha256,
+      );
+      expect(upload).toMatchObject({
+        sourceId: source.id,
+        receivedBytes: source.size,
+      });
+      await expect(
+        fixture.renders.finalizeSourceUpload(identity, upload.uploadId),
+      ).resolves.toMatchObject({ id: source.id, status: "ready" });
+      await expect(
+        fixture.renders.uploadSourceChunk(
+          identity,
+          upload.uploadId,
+          0,
+          "ignored",
+        ),
+      ).resolves.toMatchObject({
+        sourceId: source.id,
+        receivedBytes: source.size,
+      });
+      expect(fixture.database.sources.get(source.id)).toEqual(before);
+      expect(
+        Date.parse(
+          fixture.renders.createSourceReference(identity, source.id).expiresAt,
+        ),
+      ).toBeGreaterThan(Date.now());
+      if (kind === "project")
+        fixture.database.projects.softDelete(
+          "project_retained",
+          identity.userId,
+          timestamp,
+        );
+      else
+        fixture.database.raw
+          .prepare("UPDATE jobs SET status='deleted' WHERE source_id=?")
+          .run(source.id);
+      await expect(
+        fixture.renders.finalizeSourceUpload(identity, upload.uploadId),
+      ).rejects.toMatchObject({ code: "SOURCE_NOT_READY", status: 409 });
+      await expect(
+        fixture.renders.uploadSourceChunk(
+          identity,
+          upload.uploadId,
+          0,
+          "ignored",
+        ),
+      ).rejects.toMatchObject({ code: "SOURCE_NOT_READY", status: 409 });
+      expect(fixture.database.sources.get(source.id)).toEqual(before);
+    },
+  );
+
   it("issues usable references for Project-retained Sources without reviving deleted Projects", async () => {
     const fixture = await createFixture(),
       identity = { userId: "user_test", scopes: ["mcp:render"] as const },
@@ -1198,16 +1290,21 @@ describe("Remote MCP HTTP server", () => {
       source.id,
     );
     expect(Date.parse(reference.expiresAt)).toBeGreaterThan(Date.now());
-    await expect(
-      fixture.renders.createRender(identity, {
-        sourceRef: reference.sourceRef,
-      }),
-    ).resolves.toMatchObject({ sourceId: source.id });
+    const render = await fixture.renders.createRender(identity, {
+      sourceRef: reference.sourceRef,
+    });
+    expect(render).toMatchObject({ sourceId: source.id });
     fixture.database.projects.softDelete(
       "project_retained",
       identity.userId,
       timestamp,
     );
+    expect(
+      fixture.renders.createSourceReference(identity, source.id).sourceRef,
+    ).toMatch(/^source_ref_/);
+    fixture.database.raw
+      .prepare("UPDATE jobs SET status='deleted' WHERE source_id=?")
+      .run(source.id);
     expect(() =>
       fixture.renders.createSourceReference(identity, source.id),
     ).toThrow();
