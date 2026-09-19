@@ -1,7 +1,7 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
 import { lstat, rename, rm } from "node:fs/promises";
-import { Readable } from "node:stream";
+import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import {
   jobResponseSchema,
@@ -246,8 +246,12 @@ export class RendererClient {
     url: string,
     ticket: string,
     destination: string,
+    expected: { size: number; sha256: string },
   ): Promise<void> {
-    const response = await fetch(freshUrl(this.credentialTarget(url)), {
+    const target = this.credentialTarget(url);
+    if (!Number.isSafeInteger(expected.size) || expected.size < 0 || !/^[a-f0-9]{64}$/.test(expected.sha256))
+      throw new AppError("INVALID_ARTIFACT_METADATA", "Artifact size and SHA-256 are required", 502);
+    const response = await fetch(freshUrl(target), {
       headers: noStoreRequestHeaders({ Authorization: `Bearer ${ticket}` }),
       cache: "no-store",
       redirect: "error",
@@ -262,19 +266,40 @@ export class RendererClient {
           return undefined;
         throw error;
       });
-      if (existing?.isSymbolicLink())
+      if (existing !== undefined && (existing.isSymbolicLink() || !existing.isFile() || existing.nlink !== 1))
         throw new AppError(
           "UNSAFE_OUTPUT_PATH",
           "Artifact destination must not be a symbolic link",
           400,
         );
+      const hash = createHash("sha256");
+      let size = 0;
+      const verifier = new Transform({
+        transform(chunk: Buffer, _encoding, callback) {
+          size += chunk.length;
+          if (size > expected.size)
+            return callback(new AppError("ARTIFACT_INTEGRITY_MISMATCH", "Artifact exceeds its advertised size", 502));
+          hash.update(chunk);
+          callback(null, chunk);
+        },
+      });
       await pipeline(
-        Readable.from(readWebBody(response.body)),
+        Readable.fromWeb(response.body as import("node:stream/web").ReadableStream<Uint8Array>),
+        verifier,
         createWriteStream(temporary, { flags: "wx", mode: 0o600 }),
       );
+      if (size !== expected.size || hash.digest("hex") !== expected.sha256)
+        throw new AppError("ARTIFACT_INTEGRITY_MISMATCH", "Artifact size or SHA-256 does not match Job metadata", 502);
+      const current = await lstat(destination).catch((error: unknown) => {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+        throw error;
+      });
+      if (current !== undefined && (current.isSymbolicLink() || !current.isFile() || current.nlink !== 1))
+        throw new AppError("UNSAFE_OUTPUT_PATH", "Artifact destination changed while downloading", 400);
       await rename(temporary, destination);
     } catch (error) {
       await rm(temporary, { force: true }).catch(() => undefined);
+      await response.body.cancel().catch(() => undefined);
       throw error;
     }
   }
@@ -336,18 +361,4 @@ function throwFromValue(status: number, value: unknown): never {
     `HTTP request failed with status ${status}`,
     status,
   );
-}
-async function* readWebBody(
-  body: ReadableStream<Uint8Array>,
-): AsyncGenerator<Uint8Array> {
-  const reader = body.getReader();
-  try {
-    for (;;) {
-      const part = await reader.read();
-      if (part.done) return;
-      yield part.value;
-    }
-  } finally {
-    reader.releaseLock();
-  }
 }

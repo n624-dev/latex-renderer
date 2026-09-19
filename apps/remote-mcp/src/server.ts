@@ -37,6 +37,7 @@ const oauth = new RemoteOAuthService(
     "/var/lib/latex-renderer/environment",
     loadResourceLimits(process.env),
     positiveBytesEnvironment(process.env, "MAX_OUTPUT_BYTES", 200 * 1024 * 1024),
+    positiveIntegerEnvironment(process.env, "ARTIFACT_RETENTION_HOURS", 24),
   ),
   app = createRemoteMcpApp({
     database,

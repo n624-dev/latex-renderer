@@ -21,6 +21,7 @@ import process from "node:process";
 import { pathToFileURL, URL } from "node:url";
 import { crc32, inflateRawSync } from "node:zlib";
 import { AppError } from "@latex-renderer/shared";
+import { hasExternalWindowsBin, manageWindowsLaunchers, windowsLauncherContents } from "./windows-launchers.js";
 
 export const DEFAULT_DISTRIBUTION_URI =
   "https://latex-render.n624.jp/downloads/client/";
@@ -68,6 +69,7 @@ export interface ManagedSetupState {
   readonly mcpTarget: McpTarget;
   readonly managedMcpClients: readonly ("codex" | "claude")[];
   readonly windowsUserPathAdded: boolean;
+  readonly windowsLauncherLayout?: 1;
   readonly installedAt: string;
   readonly updatedAt: string;
 }
@@ -236,8 +238,10 @@ export function resolveSetupPaths(options: CoreOptions = {}): SetupPaths {
   const binDirectory =
     options.binDirectory ??
     env.LATEX_RENDER_BIN_DIRECTORY ??
-    defaultBinDirectory({ platform, home, env });
+    (platform === "win32" ? win32.join(installDirectory, "bin") : defaultBinDirectory({ platform, home, env }));
   const pathApi = platform === "win32" ? win32 : posix;
+  if (platform === "win32" && [installDirectory, binDirectory].some(path => !win32.isAbsolute(path) || /[\r\n\0";]/.test(path)))
+    throw new AppError("INVALID_SETUP_PATH", "Windows installation and bin directories must be absolute paths without quotes, semicolons or control characters", 400);
   return {
     platform,
     home,
@@ -247,12 +251,10 @@ export function resolveSetupPaths(options: CoreOptions = {}): SetupPaths {
     credentialPath: credentialPath({ platform, home, env }),
     cliLauncher:
       platform === "win32"
-        ? pathApi.join(installDirectory, "bin", "latex-render.cmd")
+        ? pathApi.join(binDirectory, "latex-render.cmd")
         : pathApi.join(binDirectory, "latex-render"),
     mcpLauncher: pathApi.join(
-      platform === "win32"
-        ? pathApi.join(installDirectory, "bin")
-        : binDirectory,
+      binDirectory,
       platform === "win32" ? "latex-renderer-mcp.cmd" : "latex-renderer-mcp",
     ),
     skillRoot: pathApi.join(installDirectory, "skill"),
@@ -441,7 +443,7 @@ export async function installDistribution({
       skillTarget,
       mcpTarget,
       managedMcpClients: previous?.managedMcpClients ?? [],
-      windowsUserPathAdded: previous?.windowsUserPathAdded ?? false,
+      windowsUserPathAdded: previous !== undefined && normalizePath(previous.binDirectory, paths.platform) === normalizePath(paths.binDirectory, paths.platform) ? previous.windowsUserPathAdded : false,
       installedAt: previous?.installedAt ?? now,
       updatedAt: now,
     };
@@ -649,6 +651,9 @@ export async function repairSetup({
   const preserved: string[] = [];
 
   if (paths.platform === "win32") {
+    const launchers = await manageWindowsLaunchers(paths.installDirectory, paths.binDirectory);
+    repaired.push(...launchers.repaired);
+    preserved.push(...launchers.preserved);
     const pathResult = ensureWindowsUserPath(
       paths.binDirectory,
       options.runner ?? defaultCommandRunner,
@@ -687,10 +692,12 @@ export async function repairSetup({
   repaired.push(...mcp.repaired);
   preserved.push(...mcp.preserved);
   const windowsPathAdded =
-    stateResult.state.windowsUserPathAdded ||
+    (normalizePath(stateResult.state.binDirectory, paths.platform) === normalizePath(paths.binDirectory, paths.platform) && stateResult.state.windowsUserPathAdded) ||
     repaired.includes("path.windows_user");
   const nextState: ManagedSetupState = {
     ...stateResult.state,
+    binDirectory: paths.binDirectory,
+    ...(paths.platform === "win32" ? { windowsLauncherLayout: 1 as const } : {}),
     skillTarget: selectedSkill,
     mcpTarget: selectedMcp,
     managedMcpClients: mcp.managed,
@@ -746,11 +753,11 @@ export async function removeSetup({
   );
   if (paths.platform !== "win32")
     preserved.push(...(await removeUnixLaunchers(paths, output, warning)));
-  else if (state.windowsUserPathAdded)
-    removeWindowsUserPath(
-      paths.binDirectory,
-      options.runner ?? defaultCommandRunner,
-    );
+  else {
+    preserved.push(...(await manageWindowsLaunchers(paths.installDirectory, paths.binDirectory, true)).preserved);
+    if (state.windowsUserPathAdded)
+      removeWindowsUserPath(state.binDirectory, options.runner ?? defaultCommandRunner);
+  }
 
   await rm(paths.installDirectory, { recursive: true, force: true });
   if (!keepCredential) {
@@ -1024,8 +1031,13 @@ function normalizeState(
     normalizePath(value.installDirectory, paths.platform) ===
       normalizePath(paths.installDirectory, paths.platform) &&
     typeof value.binDirectory === "string" &&
-    normalizePath(value.binDirectory, paths.platform) ===
-      normalizePath(paths.binDirectory, paths.platform) &&
+    (normalizePath(value.binDirectory, paths.platform) === normalizePath(paths.binDirectory, paths.platform) ||
+      // Pre-fix clients recorded a default PATH directory even when the actual
+      // Windows payload was installed elsewhere. Repair adopts the corrected
+      // directory; the old PATH entry is preserved, not guessed/deleted.
+      (paths.platform === "win32" && value.windowsLauncherLayout === undefined &&
+        win32.isAbsolute(value.binDirectory) && !/[\r\n\0";]/.test(value.binDirectory))) &&
+    (value.windowsLauncherLayout === undefined || value.windowsLauncherLayout === 1) &&
     isTarget(value.skillTarget) &&
     isTarget(value.mcpTarget) &&
     Array.isArray(value.managedMcpClients) &&
@@ -1152,10 +1164,7 @@ async function inspectLauncher(
   type: "cli" | "mcp",
 ): Promise<DiagnosticCheck> {
   const name = type === "cli" ? "latex-render" : "latex-renderer-mcp";
-  const destination =
-    paths.platform === "win32"
-      ? join(paths.installDirectory, "bin", `${name}.cmd`)
-      : join(paths.binDirectory, name);
+  const destination = type === "cli" ? paths.cliLauncher : paths.mcpLauncher;
   const info = await lstat(destination).catch(() => undefined);
   if (!info)
     return {
@@ -1164,7 +1173,9 @@ async function inspectLauncher(
       message: "Command launcher is missing",
       path: destination,
     };
-  if (paths.platform === "win32" && info.isFile())
+  if (paths.platform === "win32" && info.isFile() && info.nlink === 1 &&
+      (!hasExternalWindowsBin(paths.installDirectory, paths.binDirectory) ||
+        (info.size < 16_384 && await readFile(destination, "utf8") === windowsLauncherContents(paths.installDirectory, paths.binDirectory, name))))
     return {
       id: `launcher.${type}`,
       status: "pass",
@@ -1431,7 +1442,7 @@ function inspectMcpTarget(
 function mcpCommand(paths: SetupPaths): { command: string; args: string[] } {
   const launcher =
     paths.platform === "win32"
-      ? join(paths.installDirectory, "bin", "latex-renderer-mcp.cmd")
+      ? paths.mcpLauncher
       : join(paths.installDirectory, "bin", "latex-renderer-mcp");
   return paths.platform === "win32"
     ? { command: "cmd", args: ["/c", launcher] }

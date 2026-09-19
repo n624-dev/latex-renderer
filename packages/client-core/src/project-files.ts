@@ -1,3 +1,5 @@
+import { isArtifactTransactionPath } from "./artifact-transaction.js";
+
 const generatedLatexSuffixes = [
   ".aux",
   ".bbl",
@@ -24,6 +26,7 @@ export function shouldExcludeProjectPath(name: string): boolean {
   const normalized = name.replaceAll("\\", "/");
   const lower = normalized.toLowerCase();
   return (
+    isArtifactTransactionPath(normalized) ||
     normalized === ".render" ||
     normalized.startsWith(".render/") ||
     normalized === ".git" ||

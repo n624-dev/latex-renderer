@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import {
@@ -11,7 +10,7 @@ import { join } from "node:path";
 import process from "node:process";
 import { Writable } from "node:stream";
 import { RendererClient } from "@latex-renderer/api-client";
-import { renderProject } from "@latex-renderer/client-core";
+import { openLocalTarget, renderProject } from "@latex-renderer/client-core";
 import {
   DEFAULT_DISTRIBUTION_URI,
   deleteCredential,
@@ -639,33 +638,4 @@ function redactMessage(message: string): string {
   return message.replace(/lrk_[a-f0-9]{32}_[A-Za-z0-9_-]{43}/g, "[redacted]");
 }
 
-function openBrowser(url: string): Promise<boolean> {
-  const child =
-    process.platform === "win32"
-      ? spawn(
-          "powershell.exe",
-          [
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            "Start-Process -LiteralPath $env:LATEX_RENDER_SETUP_URL",
-          ],
-          {
-            detached: true,
-            stdio: "ignore",
-            windowsHide: true,
-            env: { ...process.env, LATEX_RENDER_SETUP_URL: url },
-          },
-        )
-      : spawn(process.platform === "darwin" ? "open" : "xdg-open", [url], {
-          detached: true,
-          stdio: "ignore",
-        });
-  return new Promise((resolve) => {
-    child.once("spawn", () => {
-      child.unref();
-      resolve(true);
-    });
-    child.once("error", () => resolve(false));
-  });
-}
+function openBrowser(url: string): Promise<boolean> { return openLocalTarget(url); }

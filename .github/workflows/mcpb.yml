@@ -6,6 +6,13 @@ on:
       - "apps/mcp-server/**"
       - "packages/mcp-core/**"
       - "packages/client-core/**"
+      - "packages/api-client/**"
+      - "packages/setup-core/**"
+      - "packages/setup-web/**"
+      - "tests/artifact-transaction*"
+      - "tests/fixtures/artifact-transaction-child.mjs"
+      - "tests/client-audit-integration.test.ts"
+      - "tests/windows-setup-layout.test.ts"
       - "client/mcpb/**"
       - "client/*mcpb*.mjs"
       - "package.json"
@@ -17,6 +24,13 @@ on:
       - "apps/mcp-server/**"
       - "packages/mcp-core/**"
       - "packages/client-core/**"
+      - "packages/api-client/**"
+      - "packages/setup-core/**"
+      - "packages/setup-web/**"
+      - "tests/artifact-transaction*"
+      - "tests/fixtures/artifact-transaction-child.mjs"
+      - "tests/client-audit-integration.test.ts"
+      - "tests/windows-setup-layout.test.ts"
       - "client/mcpb/**"
       - "client/*mcpb*.mjs"
       - "package.json"
@@ -47,6 +61,10 @@ jobs:
         run: corepack enable
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+      - name: Build shared client libraries
+        run: pnpm --filter @latex-renderer/setup-core... --filter @latex-renderer/client-core... --filter @latex-renderer/api-client... build
+      - name: Exercise client integrity, recovery, and native launchers
+        run: pnpm exec vitest run packages/setup-core/src/windows-launchers.test.ts packages/client-core/src/open-local-target.test.ts tests/artifact-transaction.test.ts tests/artifact-transaction-faults.test.ts tests/client-audit-integration.test.ts packages/api-client/src/index.test.ts tests/windows-setup-layout.test.ts
       - name: Select OpenSSL on macOS
         if: runner.os == 'macOS'
         run: echo "$(brew --prefix openssl@3)/bin" >> "$GITHUB_PATH"

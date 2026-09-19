@@ -102,4 +102,19 @@ describe("MCP core", () => {
       ),
     ).rejects.toMatchObject({ code: "OUTSIDE_ALLOWED_ROOT" });
   });
+
+  it("accepts dot-heavy path components but rejects real parent traversal", async () => {
+    const base = await mkdtemp(join(tmpdir(), "mcp-dot-path-"));
+    temporaryRoots.push(base);
+    const allowed = join(base, "allowed"), root = join(allowed, "..draft");
+    await mkdir(root, { recursive: true });
+    const input = join(root, "chapter..v2.tex");
+    await writeFile(input, "test");
+    const roots = [await realpath(allowed)];
+    await expect(resolveAllowedMcpPath(input, roots, true)).resolves.toBe(input);
+    const output = join(allowed, "..output", "result.pdf");
+    await expect(resolveAllowedMcpPath(output, roots, false)).resolves.toBe(output);
+    await expect(resolveAllowedMcpPath(join(allowed, "..", "escape.tex"), roots, false))
+      .rejects.toMatchObject({ code: "OUTSIDE_ALLOWED_ROOT" });
+  });
 });

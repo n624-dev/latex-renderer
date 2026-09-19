@@ -23,7 +23,7 @@ import type {
   RendererDatabase,
   SourceRow,
 } from "@latex-renderer/database";
-import { artifactStoragePath } from "@latex-renderer/database";
+import { artifactStoragePath, protectArtifactDownloadLeases, ARTIFACT_DOWNLOAD_LEASE_MS } from "@latex-renderer/database";
 import {
   AppError,
   DEFAULT_RESOURCE_LIMITS,
@@ -647,6 +647,7 @@ export class RemoteRenderService {
     private readonly environmentRoot = "/var/lib/latex-renderer/environment",
     private readonly resourceLimits: Readonly<ResourceLimits> = DEFAULT_RESOURCE_LIMITS,
     private readonly maxOutputBytes = 200 * 1024 * 1024,
+    private readonly artifactRetentionHours = 24,
   ) {
     this.maxInlineArtifactBytes = Math.min(
       REMOTE_MCP_MAX_INLINE_ARTIFACT_BYTES,
@@ -1110,7 +1111,7 @@ export class RemoteRenderService {
   ): Promise<RemoteRenderDiagnostics> {
     requireScope(identity.scopes, "mcp:read");
     const row = this.assertOwned(identity.userId, jobId),
-      available = this.database.artifacts.listDownloadable(jobId),
+      available = this.database.artifacts.listDownloadable(jobId, { retentionHours: this.artifactRetentionHours }),
       errorsArtifact = available.find(
         (artifact) => artifact.relative_path === "errors.json",
       ),
@@ -1121,7 +1122,7 @@ export class RemoteRenderService {
         errorsArtifact === undefined
           ? { errors: [], warnings: [] }
           : parseDiagnosticsJson(
-              await readFile(this.artifactPath(errorsArtifact), "utf8"),
+              (await this.artifact(identity, jobId, errorsArtifact.relative_path)).bytes.toString("utf8"),
             ),
       diagnostics: RemoteRenderDiagnostic[] = [
         ...parsed.errors.map((item) => ({
@@ -1144,7 +1145,7 @@ export class RemoteRenderService {
       log =
         logArtifact === undefined
           ? ""
-          : await readFile(this.artifactPath(logArtifact), "utf8"),
+          : (await this.artifact(identity, jobId, logArtifact.relative_path)).bytes.toString("utf8"),
       rawLogResourceUri =
         logArtifact === undefined
           ? null
@@ -1167,13 +1168,13 @@ export class RemoteRenderService {
   ): Promise<RemoteArtifactContent> {
     requireScope(identity.scopes, "mcp:read");
     this.assertOwned(identity.userId, jobId);
-    let artifact = this.database.artifacts.getDownloadable(jobId, relativePath);
+    let artifact = this.database.artifacts.getDownloadable(jobId, relativePath, { retentionHours: this.artifactRetentionHours });
     const page = /^previews\/page-[1-9][0-9]*\.png$/.test(relativePath)
       ? previewPage(relativePath)
       : null;
     if (page !== null) {
       const candidates = this.database.artifacts
-        .listDownloadable(jobId)
+        .listDownloadable(jobId, { retentionHours: this.artifactRetentionHours })
         .filter(
           (item) =>
             item.type === "preview" && previewPage(item.relative_path) === page,
@@ -1195,7 +1196,21 @@ export class RemoteRenderService {
         413,
       );
     const release = await this.acquireInlineArtifactBytes(artifact.size);
+    let releaseLease: (() => void) | undefined;
     try {
+      // Admission may wait behind other reads. Recheck retention and register
+      // protection together only after the memory budget is actually acquired.
+      const leaseId = this.database.transaction(() => {
+        const current = this.database.artifacts.getDownloadable(jobId, artifact.relative_path, { retentionHours: this.artifactRetentionHours });
+        if (current === undefined || current.id !== artifact.id)
+          throw new AppError("ARTIFACT_NOT_FOUND", "Artifact is no longer available", 404);
+        const id = newId("download");
+        this.database.artifacts.createLease({ id, jobId, artifactId: current.id,
+          createdAt: nowIso(), expiresAt: new Date(Date.now() + ARTIFACT_DOWNLOAD_LEASE_MS).toISOString() });
+        return id;
+      });
+      const controller = new AbortController();
+      releaseLease = protectArtifactDownloadLeases(this.database.artifacts, [leaseId], () => controller.abort(new AppError("ARTIFACT_UNAVAILABLE", "Artifact download protection was lost", 503)));
       return {
         jobId,
         relativePath: artifact.relative_path,
@@ -1206,9 +1221,11 @@ export class RemoteRenderService {
           this.artifactPath(artifact),
           artifact.size,
           this.maxInlineArtifactBytes,
+          controller.signal,
         ),
       };
     } finally {
+      releaseLease?.();
       release();
     }
   }
@@ -2127,7 +2144,7 @@ export class RemoteRenderService {
   }
 
   private summarize(row: JobRow): RemoteJobSummary {
-    const artifacts = this.database.artifacts.listDownloadable(row.id),
+    const artifacts = this.database.artifacts.listDownloadable(row.id, { retentionHours: this.artifactRetentionHours }),
       previewPages = artifacts
         .filter((artifact) => artifact.type === "preview")
         .map((artifact) => previewPage(artifact.relative_path))
@@ -2234,6 +2251,7 @@ async function readBoundedArtifact(
   path: string,
   expectedSize: number,
   maximumBytes: number,
+  signal: AbortSignal,
 ): Promise<Buffer> {
   let handle;
   try {
@@ -2244,6 +2262,7 @@ async function readBoundedArtifact(
     throw error;
   }
   try {
+    signal.throwIfAborted();
     const initial = await handle.stat();
     if (
       !initial.isFile() ||
@@ -2265,6 +2284,7 @@ async function readBoundedArtifact(
     const bytes = Buffer.allocUnsafe(initial.size);
     let offset = 0;
     while (offset < initial.size) {
+      signal.throwIfAborted();
       const length = Math.min(ARTIFACT_READ_CHUNK_BYTES, initial.size - offset);
       const result = await handle.read(bytes, offset, length, offset);
       if (result.bytesRead <= 0)
@@ -2282,6 +2302,7 @@ async function readBoundedArtifact(
         );
     }
     const final = await handle.stat();
+    signal.throwIfAborted();
     if (final.size !== expectedSize)
       throw new AppError(
         "ARTIFACT_UNAVAILABLE",

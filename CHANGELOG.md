@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 1.3.8-rc.2 - 2026-09-19
+
+- Stage and verify complete CLI/Local MCP artifact sets against advertised sizes and SHA-256 before switching existing output paths. Preserve user files and the previous set on failure, reject concurrent writers, and recover interrupted publication on the next download. Exclude bounded transaction data from source archives.
+- Renew active artifact download protection for direct, ZIP and Remote MCP reads; stop transfers when protection is lost. Share terminal-state and retention-deadline policy across metadata, downloads and cleanup, including non-default retention periods.
+- Fix Windows output permission checks, observe PDF/browser launcher exit results, align custom install/bin/PATH launchers, and accept dot-heavy filenames without permitting parent traversal. Add process-crash, integrity, lifetime and cross-platform regressions. No schema, Updater/bootstrap or image-publication policy change.
+
 ## 1.3.8-rc.1 - 2026-09-16
 
 - Unify Source reuse and retention across lookup, deduplication, queued Jobs, Web/Internal API, MCP and cleanup. Ready inputs retained by the same owner's Jobs or undeleted Projects remain reusable after their orphan deadline; deleting or expired inputs cannot be revived. Preserve conservative deletion protection and immutable ZIP contents.

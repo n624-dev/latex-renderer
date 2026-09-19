@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
+import { ARTIFACT_AVAILABLE_SQL, artifactAvailabilityCutoff, type ArtifactAvailability } from "../artifact-availability.js";
 
 export interface ArtifactRow {
   id: string;
@@ -45,25 +46,26 @@ export function artifactStoragePath(
 export class ArtifactsRepository {
   constructor(private readonly db: DatabaseSync) {}
 
-  listDownloadable(jobId: string): ArtifactRow[] {
+  listDownloadable(jobId: string, policy: ArtifactAvailability = {}): ArtifactRow[] {
     return this.db
       .prepare(
         `SELECT a.id,a.job_id,a.type,a.relative_path,a.size,a.sha256,a.created_at,a.storage_generation FROM artifacts a
-      JOIN jobs j ON j.id=a.job_id WHERE a.job_id=? AND j.status NOT IN ('deleting','deleted') ORDER BY a.relative_path`,
+      JOIN jobs j ON j.id=a.job_id WHERE a.job_id=? AND ${ARTIFACT_AVAILABLE_SQL} ORDER BY a.relative_path`,
       )
-      .all(jobId) as unknown as ArtifactRow[];
+      .all(jobId, artifactAvailabilityCutoff(policy)) as unknown as ArtifactRow[];
   }
 
   getDownloadable(
     jobId: string,
     relativePath: string,
+    policy: ArtifactAvailability = {},
   ): ArtifactRow | undefined {
     return this.db
       .prepare(
         `SELECT a.id,a.job_id,a.type,a.relative_path,a.size,a.sha256,a.created_at,a.storage_generation FROM artifacts a
-      JOIN jobs j ON j.id=a.job_id WHERE a.job_id=? AND a.relative_path=? AND j.status NOT IN ('deleting','deleted')`,
+      JOIN jobs j ON j.id=a.job_id WHERE a.job_id=? AND a.relative_path=? AND ${ARTIFACT_AVAILABLE_SQL}`,
       )
-      .get(jobId, relativePath) as unknown as ArtifactRow | undefined;
+      .get(jobId, relativePath, artifactAvailabilityCutoff(policy)) as unknown as ArtifactRow | undefined;
   }
 
   createLease(input: {
@@ -88,6 +90,11 @@ export class ArtifactsRepository {
 
   deleteLease(id: string): void {
     this.db.prepare("DELETE FROM artifact_download_leases WHERE id=?").run(id);
+  }
+
+  renewLease(id: string, timestamp: string, expiresAt: string): boolean {
+    return this.db.prepare("UPDATE artifact_download_leases SET expires_at=? WHERE id=? AND expires_at>?")
+      .run(expiresAt, id, timestamp).changes === 1;
   }
 
   insert(input: ArtifactRow): void {

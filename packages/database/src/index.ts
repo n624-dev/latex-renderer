@@ -4,6 +4,8 @@ import { AppError, newId, nowIso } from "@latex-renderer/shared";
 import { schemaSql } from "./schema.js";
 import { applyDatabaseMigrations } from "./migrations.js";
 export { sourceRequestExpiresAt } from "./source-lifecycle.js";
+export { artifactRetentionExpiresAt } from "./artifact-availability.js";
+export { bindArtifactDownloadLeases, protectArtifactDownloadLeases, ARTIFACT_DOWNLOAD_LEASE_MS } from "./artifact-download-lease.js";
 import {
   ApiKeysRepository,
   ArtifactsRepository,

@@ -1,4 +1,5 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -7,6 +8,21 @@ import { RendererClient } from "./index.js";
 afterEach(() => vi.unstubAllGlobals());
 
 describe("RendererClient cache safety", () => {
+  it.each(["same-size", "short", "long"])("rejects %s artifact corruption without replacing the destination", async (kind) => {
+    const expected = Buffer.from("correct"),
+      actual = Buffer.from(kind === "same-size" ? "CORRUPT" : kind === "short" ? "short" : "much too long");
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(new Response(actual))));
+    const root = await mkdtemp(join(tmpdir(), "artifact-integrity-")), destination = join(root, "result.pdf");
+    try {
+      await writeFile(destination, "previous");
+      const client = new RendererClient("https://gateway.example", "lrk_test");
+      await expect(client.download(client.artifactUrl("job_test", "result.pdf"), "ticket", destination,
+        { size: expected.length, sha256: createHash("sha256").update(expected).digest("hex") }))
+        .rejects.toMatchObject({ code: "ARTIFACT_INTEGRITY_MISMATCH" });
+      expect(await readFile(destination, "utf8")).toBe("previous");
+      expect(await readdir(root)).toEqual(["result.pdf"]);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
   it("cache-busts job status requests and asks every cache layer not to store them", async () => {
     const fetchMock = vi.fn(() =>
       Promise.resolve(
@@ -64,6 +80,7 @@ describe("RendererClient cache safety", () => {
         "https://renderer.example/v1/jobs/job_test/artifacts/result.pdf",
         "ticket",
         destination,
+        { size: 3, sha256: createHash("sha256").update(Buffer.from([1, 2, 3])).digest("hex") },
       );
       const [input, init] = fetchMock.mock.calls[0] as unknown as [
         URL,
@@ -158,6 +175,7 @@ describe("RendererClient cache safety", () => {
           "https://untrusted.example/result.pdf",
           "job-ticket",
           join(root, "result.pdf"),
+          { size: 1, sha256: "a".repeat(64) },
         ),
       ).rejects.toMatchObject({ code: "UNTRUSTED_CREDENTIAL_ORIGIN" });
       expect(fetchMock).not.toHaveBeenCalled();

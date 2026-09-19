@@ -1,7 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { parseCompileLog } from "./index.js";
+import { parseCompileLog, parseRecorder } from "./index.js";
 
 describe("compile log parser", () => {
+  it("preserves dot-heavy recorder names without permitting parent components", () => {
+    expect(parseRecorder([
+      "INPUT /work/input/..draft/main.tex",
+      "INPUT /work/input/chapter..v2.tex",
+      "INPUT ../outside.tex",
+      "INPUT chapters/../../outside.tex",
+      "INPUT /etc/passwd",
+      "OUTPUT /work/output/..draft/main.aux",
+    ].join("\n"))).toEqual({
+      inputs: ["..draft/main.tex", "chapter..v2.tex"],
+      outputs: ["..draft/main.aux"],
+    });
+  });
   it("extracts file, line, and message without a backtracking expression", () => {
     expect(
       parseCompileLog(

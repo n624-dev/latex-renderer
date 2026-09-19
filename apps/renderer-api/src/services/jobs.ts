@@ -1,5 +1,5 @@
 import { AppError, nowIso } from "@latex-renderer/shared";
-import type { ArtifactRow } from "@latex-renderer/database";
+import { artifactRetentionExpiresAt, type ArtifactRow } from "@latex-renderer/database";
 import type {
   JobArtifact,
   JobResponse,
@@ -14,7 +14,7 @@ export class RendererJobsService {
     const row = this.deps.database.jobs.get(id);
     if (row === undefined || row.status === "deleted")
       throw new AppError("JOB_NOT_FOUND", "Job does not exist", 404);
-    const listed = this.deps.database.artifacts.listDownloadable(id),
+    const listed = this.deps.database.artifacts.listDownloadable(id, { retentionHours: this.deps.artifactRetentionHours }),
       artifacts: JobArtifact[] = [],
       previews: JobArtifact[] = [];
     for (const artifact of listed) {
@@ -95,7 +95,7 @@ function retentionExpiresAt(
   hours: number,
 ): string | null {
   return RETAINED_STATUSES.has(status)
-    ? new Date(new Date(terminalAt).getTime() + hours * 3_600_000).toISOString()
+    ? artifactRetentionExpiresAt(terminalAt, hours)
     : null;
 }
 function artifactItem(jobId: string, row: ArtifactRow): JobArtifact {

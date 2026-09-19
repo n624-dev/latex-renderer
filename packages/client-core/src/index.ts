@@ -2,7 +2,6 @@ import { createHash, randomUUID } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
 import {
   lstat,
-  mkdir,
   mkdtemp,
   open,
   readFile,
@@ -28,8 +27,11 @@ import yazl from "yazl";
 import { shouldExcludeProjectPath } from "./project-files.js";
 import { pollUntilTerminal } from "./polling.js";
 import { pruneGeneratedArtifacts } from "./artifact-cleanup.js";
+import { publishArtifactSet } from "./artifact-transaction.js";
+import { ensureSecureDirectory, assertSafeOutputFile } from "./output-safety.js";
 
 export { shouldExcludeProjectPath } from "./project-files.js";
+export { openLocalTarget } from "./open-local-target.js";
 
 export interface ClientTransport {
   createSource(
@@ -60,7 +62,7 @@ export interface ClientTransport {
   ): Promise<void>;
   artifactUrl(jobId: string, name: string): string;
   previewUrl(jobId: string, page: string): string;
-  download(url: string, ticket: string, destination: string): Promise<void>;
+  download(url: string, ticket: string, destination: string, expected: { size: number; sha256: string }): Promise<void>;
 }
 
 export type ClientCoreEvent =
@@ -423,6 +425,37 @@ async function downloadArtifacts(
   outputDirectory: string,
   options: ClientCoreOptions,
 ): Promise<ArtifactPaths> {
+  const advertised = [...job.artifacts, ...job.previews];
+  if (advertised.length > 10_000 || advertised.some(item => !Number.isSafeInteger(item.size) || item.size < 0 || !/^[a-f0-9]{64}$/.test(item.sha256)) ||
+      advertised.reduce((total, item) => total + item.size, 0) > 1024 ** 3)
+    throw new AppError("INVALID_ARTIFACT_METADATA", "Artifact metadata is invalid or exceeds the 1 GiB/10000 entry transaction limit", 502);
+  const events: ClientCoreEvent[] = [];
+  const result = await publishArtifactSet(outputDirectory, async (stage) => {
+    const paths = await stageArtifacts(client, job, jobTicket, stage, {
+      ...options,
+      onEvent: event => events.push(event.type === "artifact.downloaded"
+        ? { ...event, path: join(outputDirectory, relative(stage, event.path)) } : event),
+    });
+    const finalPath = (path: string) => join(outputDirectory, relative(stage, path));
+    return {
+      ...(paths.pdf === undefined ? {} : { pdf: finalPath(paths.pdf) }),
+      ...(paths.errors === undefined ? {} : { errors: finalPath(paths.errors) }),
+      ...(paths.log === undefined ? {} : { log: finalPath(paths.log) }),
+      job: finalPath(paths.job), previews: paths.previews.map(finalPath), svg: paths.svg.map(finalPath),
+    };
+  });
+  // No observer sees a successfully downloaded file before the whole set commits.
+  for (const event of events) options.onEvent?.(event);
+  return result;
+}
+
+async function stageArtifacts(
+  client: ClientTransport,
+  job: JobResponse,
+  jobTicket: string,
+  outputDirectory: string,
+  options: ClientCoreOptions,
+): Promise<ArtifactPaths> {
   await ensureSecureDirectory(outputDirectory);
   const paths = new Map(
     job.artifacts.map((artifact) => [artifact.relativePath, artifact]),
@@ -438,7 +471,7 @@ async function downloadArtifacts(
     job.id,
     jobTicket,
     outputDirectory,
-    paths.has("result.pdf") ? "result.pdf" : undefined,
+    paths.get("result.pdf"),
     options,
   );
   const errors = await downloadNamedArtifact(
@@ -446,7 +479,7 @@ async function downloadArtifacts(
     job.id,
     jobTicket,
     outputDirectory,
-    paths.has("errors.json") ? "errors.json" : undefined,
+    paths.get("errors.json"),
     options,
   );
   const log = await downloadNamedArtifact(
@@ -454,7 +487,7 @@ async function downloadArtifacts(
     job.id,
     jobTicket,
     outputDirectory,
-    paths.has("compile.log") ? "compile.log" : undefined,
+    paths.get("compile.log"),
     options,
   );
   const previews = await downloadPreviews(
@@ -484,10 +517,11 @@ async function downloadArtifacts(
     const destination = join(outputDirectory, artifact.relativePath);
     await ensureSecureDirectory(dirname(destination));
     await assertSafeOutputFile(destination);
-    await client.download(
+    await downloadVerified(client,
       client.artifactUrl(job.id, artifact.relativePath),
       jobTicket,
       destination,
+      artifact,
     );
     svg.push(destination);
     options.onEvent?.({
@@ -555,7 +589,7 @@ async function downloadPreviews(
     names.add(canonicalName);
     const destination = join(directory, canonicalName);
     await assertSafeOutputFile(destination);
-    await client.download(client.previewUrl(job.id, name), ticket, destination);
+    await downloadVerified(client, client.previewUrl(job.id, name), ticket, destination, artifact);
     previews.push(destination);
     options.onEvent?.({
       type: "artifact.downloaded",
@@ -571,15 +605,27 @@ async function downloadNamedArtifact(
   jobId: string,
   ticket: string,
   output: string,
-  name: string | undefined,
+  artifact: JobResponse["artifacts"][number] | undefined,
   options: ClientCoreOptions,
 ): Promise<string | undefined> {
-  if (name === undefined) return undefined;
+  if (artifact === undefined) return undefined;
+  const name = artifact.relativePath;
   const destination = join(output, name);
   await assertSafeOutputFile(destination);
-  await client.download(client.artifactUrl(jobId, name), ticket, destination);
+  await downloadVerified(client, client.artifactUrl(jobId, name), ticket, destination, artifact);
   options.onEvent?.({ type: "artifact.downloaded", name, path: destination });
   return destination;
+}
+
+async function downloadVerified(client: ClientTransport, url: string, ticket: string, destination: string, expected: { size: number; sha256: string }): Promise<void> {
+  if (!Number.isSafeInteger(expected.size) || expected.size < 0 || !/^[a-f0-9]{64}$/.test(expected.sha256))
+    throw new AppError("INVALID_ARTIFACT_METADATA", "Artifact size or SHA256 is invalid", 502);
+  await client.download(url, ticket, destination, expected);
+  // Also verify custom transports: the core's publication invariant does not
+  // depend on a particular HTTP adapter behaving correctly.
+  await assertSafeOutputFile(destination);
+  if ((await lstat(destination)).size !== expected.size || await hashFile(destination) !== expected.sha256)
+    throw new AppError("ARTIFACT_INTEGRITY_ERROR", "Downloaded artifact does not match its advertised size and SHA256", 502);
 }
 
 async function projectIgnore(root: string): Promise<Ignore> {
@@ -659,39 +705,6 @@ async function* walkProject(
       );
     yield { path, name, size: info.size };
   }
-}
-
-async function ensureSecureDirectory(directory: string): Promise<void> {
-  await mkdir(directory, { recursive: true, mode: 0o700 });
-  const info = await lstat(directory);
-  const currentUser = process.getuid?.();
-  if (
-    info.isSymbolicLink() ||
-    !info.isDirectory() ||
-    (currentUser !== undefined && info.uid !== currentUser) ||
-    (process.platform !== "win32" && (info.mode & 0o022) !== 0)
-  )
-    throw new AppError(
-      "UNSAFE_OUTPUT_DIRECTORY",
-      "Artifact output directory must be owned by the current user and not group/world writable",
-      400,
-    );
-}
-
-async function assertSafeOutputFile(path: string): Promise<void> {
-  const info = await lstat(path).catch((error: unknown) => {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    throw error;
-  });
-  if (
-    info !== undefined &&
-    (info.isSymbolicLink() || !info.isFile() || info.nlink !== 1)
-  )
-    throw new AppError(
-      "UNSAFE_OUTPUT_PATH",
-      "Artifact output path must be a regular, single-link file",
-      400,
-    );
 }
 
 async function atomicWriteFile(path: string, contents: string): Promise<void> {

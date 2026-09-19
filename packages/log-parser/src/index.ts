@@ -73,7 +73,7 @@ export function parseRecorder(recorder: string): {
     const match = /^(INPUT|OUTPUT) (.+)$/.exec(sanitize(raw));
     if (match === null) continue;
     const path = projectPath(String(match[2]));
-    if (path.startsWith("/") || path.includes("..")) continue;
+    if (path.startsWith("/") || /^[A-Za-z]:/.test(path) || path.split("/").includes("..")) continue;
     (match[1] === "INPUT" ? inputs : outputs).add(path);
   }
   return {

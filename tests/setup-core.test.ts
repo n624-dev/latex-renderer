@@ -36,6 +36,21 @@ afterEach(async () => {
 });
 
 describe("setup-core", () => {
+  it.each([
+    { install: undefined, bin: undefined, expectedInstall: "C:\\Users\\tester\\AppData\\Local\\LaTeXRenderer", expectedBin: "C:\\Users\\tester\\AppData\\Local\\LaTeXRenderer\\bin" },
+    { install: "D:\\Tools\\Renderer", bin: undefined, expectedInstall: "D:\\Tools\\Renderer", expectedBin: "D:\\Tools\\Renderer\\bin" },
+    { install: undefined, bin: "D:\\Commands", expectedInstall: "C:\\Users\\tester\\AppData\\Local\\LaTeXRenderer", expectedBin: "D:\\Commands" },
+    { install: "D:\\Tools\\Renderer", bin: "D:\\Commands", expectedInstall: "D:\\Tools\\Renderer", expectedBin: "D:\\Commands" },
+  ])("keeps Windows launchers and PATH together: $expectedBin", ({ install, bin, expectedInstall, expectedBin }) => {
+    const paths = resolveSetupPaths({ platform: "win32", home: "C:\\Users\\tester", env: {},
+      ...(install === undefined ? {} : { installDirectory: install }),
+      ...(bin === undefined ? {} : { binDirectory: bin }),
+    });
+    expect(paths.installDirectory).toBe(expectedInstall);
+    expect(paths.binDirectory).toBe(expectedBin);
+    expect(paths.cliLauncher).toBe(`${expectedBin}\\latex-render.cmd`);
+    expect(paths.mcpLauncher).toBe(`${expectedBin}\\latex-renderer-mcp.cmd`);
+  });
   it("rejects oversized manifest and archive responses before buffering them", async () => {
     const distribution = await clientDistribution();
     let archiveRequested = false;

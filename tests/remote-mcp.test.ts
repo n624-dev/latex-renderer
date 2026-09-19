@@ -42,6 +42,34 @@ afterEach(async () => {
 });
 
 describe("Remote MCP HTTP server", () => {
+  it("applies the same retention deadline to summary, diagnostics and inline resources", async () => {
+    const f = await createFixture(), jobId = await seedCompletedRemoteJob(f, "failed"),
+      identity = { userId: "user_test", scopes: ["mcp:read"] as const };
+    const completed = f.database.jobs.get(jobId)?.completed_at;
+    const deadline = Date.parse(completed ?? "") + 24 * 3_600_000;
+    const clock = vi.spyOn(Date, "now").mockReturnValue(deadline - 1);
+    expect((await f.renders.diagnostics(identity, jobId)).diagnostics.length).toBeGreaterThan(0);
+    clock.mockReturnValue(deadline);
+    expect(f.renders.job(identity, jobId).artifacts).toEqual([]);
+    expect((await f.renders.diagnostics(identity, jobId)).diagnostics).toEqual([]);
+    await expect(f.renders.artifact(identity, jobId, "compile.log")).rejects.toMatchObject({ code: "ARTIFACT_NOT_FOUND" });
+    const longer = new RemoteRenderService(f.database, f.storage, "test", ORIGIN, undefined, undefined, undefined, undefined, undefined, 48);
+    expect((await longer.artifact(identity, jobId, "compile.log")).bytes.length).toBeGreaterThan(0);
+    f.database.raw.prepare("UPDATE jobs SET status='expired' WHERE id=?").run(jobId);
+    await expect(longer.artifact(identity, jobId, "compile.log")).rejects.toMatchObject({ code: "ARTIFACT_NOT_FOUND" });
+  });
+  it("registers and releases protection for buffered resources and diagnostic files", async () => {
+    const f = await createFixture(), jobId = await seedCompletedRemoteJob(f, "failed"), identity = { userId: "user_test", scopes: ["mcp:read"] as const };
+    const registered = vi.spyOn(f.database.artifacts, "createLease"), released = vi.spyOn(f.database.artifacts, "deleteLease");
+    await f.renders.diagnostics(identity, jobId);
+    expect(registered).toHaveBeenCalledTimes(2);
+    expect(released).toHaveBeenCalledTimes(2);
+    await rm(join(f.storage, "jobs", jobId, "output/compile.log"));
+    await expect(f.renders.artifact(identity, jobId, "compile.log")).rejects.toMatchObject({ code: "ARTIFACT_NOT_FOUND" });
+    expect(registered).toHaveBeenCalledTimes(3);
+    expect(released).toHaveBeenCalledTimes(3);
+    expect(f.database.raw.prepare("SELECT COUNT(*) AS n FROM artifact_download_leases").get()).toMatchObject({ n: 0 });
+  });
   it.each(["hash", "missing-chunk", "existing-archive"] as const)(
     "cleans up failed finalization without losing another writer's data: %s",
     async (failure) => {
@@ -1766,7 +1794,7 @@ async function seedCompletedRemoteJob(
         "\\documentclass{article}\\begin{document}remote\\end{document}",
       entrypoint: "main.tex",
     }),
-    completedAt = "2026-08-12T00:01:00.000Z";
+    completedAt = new Date().toISOString();
   fixture.database.raw
     .prepare(
       `UPDATE jobs SET status=?,started_at=?,completed_at=?,updated_at=?,exit_code=?,error_code=?,error_message=? WHERE id=?`,
