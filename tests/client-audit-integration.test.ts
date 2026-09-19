@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,7 +9,7 @@ import { createProjectArchive, downloadJobArtifacts, renderSource, type ClientTr
 
 const timestamp = "2026-01-01T00:00:00.000Z";
 function artifact(relativePath: string, type: string): JobArtifact {
-  return { relativePath, type, size: 1, sha256: "0".repeat(64), createdAt: timestamp, downloadUrl: `/api/v1/jobs/job_test/artifacts/${relativePath}` };
+  return { relativePath, type, size: Buffer.byteLength(relativePath), sha256: createHash("sha256").update(relativePath).digest("hex"), createdAt: timestamp, downloadUrl: `/api/v1/jobs/job_test/artifacts/${relativePath}` };
 }
 function job(status: JobResponse["status"] = "succeeded"): JobResponse {
   return { id: "job_test", status, sourceSize: 1, sourceSha256: "0".repeat(64), createdAt: timestamp, updatedAt: timestamp, errorCode: null, errorMessage: null, retentionExpiresAt: null, artifacts: [], previews: [] };
@@ -32,7 +33,10 @@ function client(current: () => JobResponse, downloadedTickets: string[] = []): C
 async function fixture(run: (root: string) => Promise<void>) {
   const root = await mkdtemp(join(tmpdir(), "client-audit-integration-"));
   try { await run(root); }
-  finally { await rm(root, { recursive: true, force: true }); }
+  finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(`${root}.latex-renderer-state`, { recursive: true, force: true });
+  }
 }
 
 describe("client audit integration", () => {

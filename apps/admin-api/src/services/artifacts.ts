@@ -1,6 +1,6 @@
 import { createReadStream } from "node:fs";
 import { basename, normalize, sep } from "node:path";
-import { artifactStoragePath } from "@latex-renderer/database";
+import { artifactStoragePath, artifactRetentionExpiresAt, bindArtifactDownloadLeases, ARTIFACT_DOWNLOAD_LEASE_MS } from "@latex-renderer/database";
 import { Readable } from "node:stream";
 import { AppError, newId, nowIso } from "@latex-renderer/shared";
 import yazl from "yazl";
@@ -29,7 +29,7 @@ export function adminArtifactsArchiveResponse(
         "Artifacts are no longer available",
         410,
       );
-    const rows = deps.database.artifacts.listDownloadable(jobId);
+    const rows = deps.database.artifacts.listDownloadable(jobId, { retentionHours: deps.artifactRetentionHours ?? 24 });
     if (rows.length === 0)
       throw new AppError(
         "ARTIFACT_NOT_FOUND",
@@ -46,7 +46,7 @@ export function adminArtifactsArchiveResponse(
         id: leaseId,
         jobId,
         artifactId: row.id,
-        expiresAt: new Date(Date.now() + 300_000).toISOString(),
+        expiresAt: new Date(Date.now() + ARTIFACT_DOWNLOAD_LEASE_MS).toISOString(),
         createdAt: nowIso(),
       });
       return leaseId;
@@ -68,16 +68,7 @@ export function adminArtifactsArchiveResponse(
 
   const archive = new yazl.ZipFile();
   const output = archive.outputStream as unknown as Readable;
-  let cleaned = false;
-  const cleanup = () => {
-    if (cleaned) return;
-    cleaned = true;
-    for (const leaseId of leased.leases)
-      deps.database.artifacts.deleteLease(leaseId);
-  };
-  archive.outputStream.once("close", cleanup);
-  archive.outputStream.once("error", cleanup);
-  archive.outputStream.once("end", cleanup);
+  const cleanup = bindArtifactDownloadLeases(deps.database.artifacts, leased.leases, output);
   // yazl emits file stat/read failures on ZipFile, not just outputStream.
   // Install handlers before addFile/end and propagate failure to the response.
   archive.on("error", (error: Error) => {
@@ -143,7 +134,7 @@ export function adminArtifactResponse(
         "Artifact is no longer available",
         410,
       );
-    const row = deps.database.artifacts.getDownloadable(jobId, relativePath);
+    const row = deps.database.artifacts.getDownloadable(jobId, relativePath, { retentionHours: deps.artifactRetentionHours ?? 24 });
     if (row === undefined)
       throw new AppError("ARTIFACT_NOT_FOUND", "Artifact does not exist", 404);
     artifactStoragePath(deps.storageRoot, row);
@@ -152,7 +143,7 @@ export function adminArtifactResponse(
       id: leaseId,
       jobId,
       artifactId: row.id,
-      expiresAt: new Date(Date.now() + 300_000).toISOString(),
+      expiresAt: new Date(Date.now() + ARTIFACT_DOWNLOAD_LEASE_MS).toISOString(),
       createdAt: nowIso(),
     });
     deps.database.audit({
@@ -175,15 +166,7 @@ export function adminArtifactResponse(
   const input = createReadStream(
     artifactStoragePath(deps.storageRoot, leased.row),
   );
-  let cleaned = false;
-  const cleanup = () => {
-    if (cleaned) return;
-    cleaned = true;
-    deps.database.artifacts.deleteLease(leased.leaseId);
-  };
-  input.once("close", cleanup);
-  input.once("error", cleanup);
-  input.once("end", cleanup);
+  bindArtifactDownloadLeases(deps.database.artifacts, [leased.leaseId], input);
   const digest = Buffer.from(leased.row.sha256, "hex").toString("base64"),
     disposition =
       inline && ["pdf", "preview"].includes(leased.row.type)
@@ -235,10 +218,7 @@ export function retentionExpiresAt(
   deps: AdminDependencies,
   terminalAt: string,
 ): string {
-  return new Date(
-    new Date(terminalAt).getTime() +
-      (deps.artifactRetentionHours ?? 24) * 3_600_000,
-  ).toISOString();
+  return artifactRetentionExpiresAt(terminalAt, deps.artifactRetentionHours ?? 24);
 }
 
 function isPastRetention(deps: AdminDependencies, terminalAt: string): boolean {

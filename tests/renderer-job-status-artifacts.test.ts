@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RendererDatabase } from "@latex-renderer/database";
 import { RendererJobsService } from "../apps/renderer-api/src/services/jobs.js";
 import {
@@ -7,8 +7,10 @@ import {
 } from "../packages/contracts/src/index.js";
 
 const databases: RendererDatabase[] = [];
+beforeEach(() => vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-08-10T06:00:00.000Z")));
 
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const database of databases.splice(0)) database.close();
 });
 

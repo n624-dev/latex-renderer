@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   readFile,
   rm,
@@ -37,6 +38,23 @@ afterEach(async () => {
 });
 
 describe("client core", () => {
+  it("does not publish a mixed set or successful events when a later artifact is corrupt", async () => {
+    const root = await temporaryRoot(), output = join(root, ".render"), value = job("succeeded");
+    const transport = new FakeClient([value, value]);
+    await downloadJobArtifacts(transport, value.id, output);
+    const before = await readFile(join(output, "job.json"), "utf8");
+    value.updatedAt = "2026-09-19T00:00:00.000Z";
+    const normalDownload = transport.download.bind(transport);
+    transport.download = async (url, ticket, destination) => {
+      if (url === "artifact:errors.json") await writeFile(destination, "broken.json");
+      else await normalDownload(url, ticket, destination);
+    };
+    const events: ClientCoreEvent[] = [];
+    await expect(downloadJobArtifacts(transport, value.id, output, { onEvent: event => events.push(event) })).rejects.toMatchObject({ code: "ARTIFACT_INTEGRITY_ERROR" });
+    expect(await readFile(join(output, "job.json"), "utf8")).toBe(before);
+    expect(await readFile(join(output, "errors.json"), "utf8")).toBe("errors.json");
+    expect(events.filter(event => event.type === "artifact.downloaded")).toEqual([]);
+  });
   it.each([
     "main.log",
     "main.aux",
@@ -44,6 +62,8 @@ describe("client core", () => {
     "main.fdb_latexmk",
     "main.synctex.gz",
     ".render/result.pdf",
+    ".render.latex-renderer-state/transaction/stage/result.pdf",
+    "custom.latex-renderer-state/transaction/backup/result.pdf",
     ".git/config",
     ".env",
     ".env.local",
@@ -389,8 +409,8 @@ function artifact(
   return {
     type,
     relativePath,
-    size: 1,
-    sha256: "b".repeat(64),
+    size: Buffer.byteLength(relativePath.replace(/^previews\//, "")),
+    sha256: createHash("sha256").update(relativePath.replace(/^previews\//, "")).digest("hex"),
     createdAt: "2026-08-11T00:00:00.000Z",
     downloadUrl: `/api/v1/jobs/job_test/artifacts/${relativePath}`,
   };

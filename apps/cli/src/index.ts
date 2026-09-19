@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-import { spawn } from "node:child_process";
 import { Writable } from "node:stream";
 import { RendererClient } from "@latex-renderer/api-client";
 import {
   downloadJobArtifacts,
+  openLocalTarget,
   getJob,
   renderProject,
   renderSource,
@@ -254,7 +254,8 @@ program
           ? await renderProject(client, path ?? ".", renderOptions)
           : await renderSource(client, options.source, renderOptions);
     const pdf = result.artifacts.pdf;
-    if (options.open === true && pdf !== undefined) openFile(pdf);
+    if (options.open === true && pdf !== undefined && !(await openLocalTarget(pdf)))
+      process.stderr.write("PDF was saved, but opening it failed. Open the saved PDF manually.\n");
     if (result.job.status === "succeeded") {
       emitSuccess("render", result, () => undefined);
       return;
@@ -509,25 +510,4 @@ async function readStdin(): Promise<string> {
   process.stdin.setEncoding("utf8");
   for await (const chunk of process.stdin) value += String(chunk);
   return value;
-}
-
-function openFile(path: string): void {
-  if (process.platform === "win32")
-    spawn(
-      "powershell.exe",
-      [
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        "Start-Process -LiteralPath $env:LATEX_RENDER_PDF",
-      ],
-      {
-        detached: true,
-        stdio: "ignore",
-        env: { ...process.env, LATEX_RENDER_PDF: path },
-      },
-    ).unref();
-  else if (process.platform === "darwin")
-    spawn("open", [path], { detached: true, stdio: "ignore" }).unref();
-  else spawn("xdg-open", [path], { detached: true, stdio: "ignore" }).unref();
 }

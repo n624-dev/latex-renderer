@@ -1,6 +1,8 @@
-import { lstat, readFile, unlink } from "node:fs/promises";
+import type { Stats } from "node:fs";
+import { readFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { AppError } from "@latex-renderer/shared";
+import { assertOutputDirectory, assertOutputFile, optionalOutputStat } from "./output-safety.js";
 
 /** Delete only generated paths recorded by the previous job, not user files. */
 export async function pruneGeneratedArtifacts(root: string, keep: ReadonlySet<string>): Promise<void> {
@@ -36,10 +38,7 @@ export async function pruneGeneratedArtifacts(root: string, keep: ReadonlySet<st
       current = join(current, component);
       const info = await optionalStat(current);
       if (info === undefined) { exists = false; break; }
-      if (!info.isDirectory() || info.isSymbolicLink() ||
-          (process.getuid !== undefined && info.uid !== process.getuid()) ||
-          (info.mode & 0o022) !== 0)
-        throw new AppError("UNSAFE_OUTPUT_DIRECTORY", "Generated artifact directory is unsafe", 400);
+      assertOutputDirectory(info);
     }
     if (!exists) continue;
     const path = join(root, name), info = await optionalStat(path);
@@ -55,14 +54,10 @@ function generatedPath(path: string): boolean {
     /^svg\/objects\/(?:math|tikz)-[0-9]{6}\.svg$/.test(path);
 }
 
-function assertRegularFile(info: Awaited<ReturnType<typeof lstat>>): void {
-  if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1)
-    throw new AppError("UNSAFE_OUTPUT_PATH", "Generated artifact must be a regular, single-link file", 400);
+function assertRegularFile(info: Stats): void {
+  assertOutputFile(info);
 }
 
 async function optionalStat(path: string) {
-  return lstat(path).catch((error: unknown) => {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    throw error;
-  });
+  return optionalOutputStat(path);
 }

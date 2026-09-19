@@ -61,7 +61,7 @@ db.prepare(
   `UPDATE source_upload_nonces SET state='expired',claim_owner=NULL,claimed_at=NULL,claim_expires_at=NULL
    WHERE expires_at<? AND state IN ('unused','released')`,
 ).run(now);
-db.prepare("DELETE FROM artifact_download_leases WHERE expires_at<?").run(now);
+db.prepare("DELETE FROM artifact_download_leases WHERE expires_at<=?").run(now);
 db.prepare(
   "DELETE FROM used_nonces WHERE expires_at<? AND state!='claimed'",
 ).run(now);
@@ -112,7 +112,7 @@ const jobs = db
   .prepare(
     `SELECT j.id FROM jobs j WHERE (
       (j.deletion_status='retained' AND j.status IN (${terminalStatuses})
-       AND COALESCE(j.completed_at,j.updated_at)<?)
+       AND COALESCE(j.completed_at,j.updated_at)<=?)
       OR (j.status='deleting' AND j.deletion_status IN ('retained','pending','deleting'))
       OR (j.deletion_status IN ('pending','deleting','retry')
           AND (j.deletion_next_attempt_at IS NULL OR j.deletion_next_attempt_at<=?))
@@ -134,7 +134,7 @@ for (const record of jobs) {
           deletion_error=NULL,deletion_next_attempt_at=NULL,updated_at=?
         WHERE id=? AND (
           (deletion_status='retained' AND status IN (${terminalStatuses})
-           AND COALESCE(completed_at,updated_at)<?)
+           AND COALESCE(completed_at,updated_at)<=?)
           OR (status='deleting' AND deletion_status IN ('retained','pending','deleting'))
           OR (deletion_status IN ('pending','deleting','retry')
               AND (deletion_next_attempt_at IS NULL OR deletion_next_attempt_at<=?))

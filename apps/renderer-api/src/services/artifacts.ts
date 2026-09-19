@@ -1,6 +1,6 @@
 import { createReadStream } from "node:fs";
 import { normalize, sep } from "node:path";
-import { artifactStoragePath } from "@latex-renderer/database";
+import { artifactStoragePath, bindArtifactDownloadLeases, ARTIFACT_DOWNLOAD_LEASE_MS } from "@latex-renderer/database";
 import { Readable } from "node:stream";
 import { AppError, newId, nowIso } from "@latex-renderer/shared";
 import type { RendererApiDependencies } from "../types.js";
@@ -11,7 +11,7 @@ export function artifactResponse(
   name: string,
 ): Response {
   const leased = deps.database.transaction(() => {
-    const row = deps.database.artifacts.getDownloadable(jobId, name);
+    const row = deps.database.artifacts.getDownloadable(jobId, name, { retentionHours: deps.artifactRetentionHours });
     if (row === undefined)
       throw new AppError("ARTIFACT_NOT_FOUND", "Artifact does not exist", 404);
     const leaseId = newId("download");
@@ -19,7 +19,7 @@ export function artifactResponse(
       id: leaseId,
       jobId,
       artifactId: row.id,
-      expiresAt: new Date(Date.now() + 300_000).toISOString(),
+      expiresAt: new Date(Date.now() + ARTIFACT_DOWNLOAD_LEASE_MS).toISOString(),
       createdAt: nowIso(),
     });
     return { row, leaseId };
@@ -45,15 +45,7 @@ export function artifactResponse(
     throw error;
   }
   const input = createReadStream(storagePath);
-  let cleaned = false;
-  const cleanup = () => {
-    if (cleaned) return;
-    cleaned = true;
-    deps.database.artifacts.deleteLease(leaseId);
-  };
-  input.once("close", cleanup);
-  input.once("error", cleanup);
-  input.once("end", cleanup);
+  bindArtifactDownloadLeases(deps.database.artifacts, [leaseId], input);
   const digestBase64 = Buffer.from(row.sha256, "hex").toString("base64");
   return new Response(Readable.toWeb(input) as ReadableStream, {
     headers: {

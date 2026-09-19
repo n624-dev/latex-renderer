@@ -47,7 +47,7 @@ export class AdminJobsService {
         Date.parse(retention) > Date.now() &&
         !["expired", "deleting", "deleted"].includes(row.status),
       artifacts = available
-        ? this.deps.database.artifacts.listDownloadable(id)
+        ? this.deps.database.artifacts.listDownloadable(id, { retentionHours: this.deps.artifactRetentionHours ?? 24 })
         : [];
     const item = (artifact: (typeof artifacts)[number]) => {
       const leaf =

@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { describe, it } from "vitest";
+import { describe, it, vi } from "vitest";
 import { pruneGeneratedArtifacts } from "../packages/client-core/src/artifact-cleanup.js";
 
 async function fixture(run: (root: string) => Promise<void>) {
@@ -15,6 +15,17 @@ async function manifest(root: string, names: string[]) {
 }
 
 describe("previous generated artifact cleanup", () => {
+  it("does not treat Windows mode bits as POSIX directory ACLs", async () => fixture(async root => {
+    await mkdir(join(root, "previews"));
+    await chmod(join(root, "previews"), 0o777);
+    await writeFile(join(root, "previews/page-2.png"), "old");
+    await manifest(root, ["previews/page-2.png"]);
+    vi.stubGlobal("process", { ...process, platform: "win32", getuid: undefined });
+    try {
+      await pruneGeneratedArtifacts(root, new Set());
+      await assert.rejects(readFile(join(root, "previews/page-2.png")), { code: "ENOENT" });
+    } finally { vi.unstubAllGlobals(); }
+  }));
   it("removes only previously recorded generated paths, preserving current and user files", async () => fixture(async root => {
     const names = ["result.pdf", "compile.log", "previews/page-01.png", "previews/page-2.png", "svg/manifest.json", "svg/objects/math-000001.svg", "notes.txt", "../outside.txt"];
     for (const name of names.filter(name => !name.startsWith(".."))) {

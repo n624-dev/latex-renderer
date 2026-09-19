@@ -456,7 +456,7 @@ async function nearestExistingAncestor(value: string): Promise<string> {
 
 function containsPath(root: string, target: string): boolean {
   const suffix = relative(root, target);
-  return suffix === "" || (!suffix.startsWith("..") && !isAbsolute(suffix));
+  return suffix === "" || (!suffix.split(/[\\/]/).includes("..") && !isAbsolute(suffix));
 }
 
 function notFoundOnly(error: unknown): undefined {
