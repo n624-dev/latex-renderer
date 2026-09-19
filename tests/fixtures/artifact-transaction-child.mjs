@@ -12,6 +12,10 @@ const canonicalOutput = join(
 const originalRename = filesystem.rename;
 const stop = async (phase) => {
   if (phase !== pauseAt) return;
+  // An unresolved Promise does not keep Node alive, and a fork's IPC channel
+  // starts unreferenced. Keep it referenced before reporting readiness; exit if
+  // the parent disappears so a paused crash fixture cannot become an orphan.
+  process.once("disconnect", () => process.exit(0));
   process.send({ phase });
   await new Promise(() => {});
 };

@@ -13,6 +13,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import { publishArtifactSet } from "../packages/client-core/src/artifact-transaction.js";
 
@@ -72,9 +73,21 @@ async function paused(output: string, phase: string) {
   return child;
 }
 async function kill(child: ChildProcess) {
+  assertAlive(child);
   const exited = once(child, "exit");
   child.kill("SIGKILL");
   await exited;
+}
+function assertAlive(child: ChildProcess) {
+  expect(
+    child.exitCode,
+    "paused writer exited before parent stopped it",
+  ).toBeNull();
+  expect(child.signalCode).toBeNull();
+  const pid = child.pid;
+  if (pid === undefined) throw new Error("Paused writer has no PID");
+  // Check the OS too: delivery of the parent's exit event can lag behind exit.
+  expect(() => process.kill(pid, 0)).not.toThrow();
 }
 
 describe("whole artifact set publication", () => {
@@ -124,6 +137,9 @@ describe("whole artifact set publication", () => {
   it("does not evict a live independent writer", async () => {
     const { output } = await fixture(),
       child = await paused(output, "staging");
+    // Let IPC writes drain. An unresolved Promise alone cannot keep Node alive.
+    await delay(100);
+    assertAlive(child);
     await expect(
       publishArtifactSet(output, () =>
         Promise.reject(new Error("must not start")),
@@ -136,6 +152,19 @@ describe("whole artifact set publication", () => {
     ]);
     await kill(child);
   });
+  it.each(["staging", "backup", "published", "committed", "cleanup"])(
+    "keeps the fixture paused at %s until its parent disconnects",
+    async (phase) => {
+      const { output } = await fixture(),
+        child = await paused(output, phase);
+      await delay(100);
+      assertAlive(child);
+      const exited = once(child, "exit");
+      child.disconnect();
+      // Losing the parent must not leave a paused orphan behind.
+      expect(await exited).toEqual([0, null]);
+    },
+  );
   it.each(["staging", "backup", "published", "committed", "cleanup"])(
     "recovers after real process termination at %s",
     async (phase) => {

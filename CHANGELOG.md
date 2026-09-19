@@ -2,12 +2,18 @@
 
 ## Unreleased
 
+## 1.3.8-rc.3 - 2026-09-19
+
 - Fence App file inspections by selection generation, clear stale tasks immediately,
   and snapshot Project/output choices before asynchronous submission.
 - Queue Web batches with at most three tracked Jobs, bounded retries only for explicit
   capacity rejections, and one shared Source upload per ZIP. Stop unstarted work if
   Job tracking is lost. Add real Chromium regressions, including mobile widths,
   without an Actions cache or changes to Source/auth/Project policy.
+- Package the merged Web fixes as a new candidate. Preserve existing published
+  artifacts, frozen Updater bootstrap, schema and Base-only image publication.
+  Require signed-artifact update/recovery E2E before release and designated-host
+  validation before Stable; candidate preparation does not update production.
 
 ## 1.3.8-rc.2 - 2026-09-19
 
