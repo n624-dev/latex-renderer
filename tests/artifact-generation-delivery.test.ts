@@ -2,6 +2,8 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { PassThrough } from "node:stream";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   RendererDatabase,
@@ -34,9 +36,10 @@ const actor: AppActor = {
   role: "owner",
 };
 
-async function fixture(generation: number | null = 2) {
+async function fixture(generation: number | null = 2, persistent = false) {
   const root = await mkdtemp(join(tmpdir(), "artifact-generation-"));
-  const database = new RendererDatabase(":memory:");
+  const databasePath = join(root, "fixture.sqlite3");
+  const database = new RendererDatabase(persistent ? databasePath : ":memory:");
   cleanups.push(async () => {
     database.close();
     await rm(root, { recursive: true, force: true });
@@ -80,6 +83,7 @@ async function fixture(generation: number | null = 2) {
   const deps = { database, storageRoot: root, artifactRetentionHours: 24 };
   return {
     root,
+    databasePath,
     database,
     path,
     row,
@@ -115,7 +119,7 @@ describe("generation-selected artifact delivery", () => {
     await vi.waitFor(() => expect(f.database.raw.prepare("SELECT COUNT(*) AS n FROM artifact_download_leases").get()).toMatchObject({ n: 0 }));
   });
   it("keeps every ZIP lease alive beyond five minutes until a later file is read", async () => {
-    const f = await fixture(), slow = new PassThrough();
+    const f = await fixture(2, true), slow = new PassThrough();
     f.database.artifacts.insert({ ...f.row, id: "later", type: "errors", relative_path: "errors.json", size: 2 });
     await writeFile(join(dirname(f.path), "errors.json"), "{}");
     // eslint-disable-next-line @typescript-eslint/unbound-method -- the original is called with the intercepted ZipFile as this below
@@ -131,12 +135,25 @@ describe("generation-selected artifact delivery", () => {
     expect(f.database.raw.prepare("SELECT COUNT(*) AS n FROM artifact_download_leases WHERE expires_at>?").get(now)).toMatchObject({ n: 2 });
     // The same protection predicate used by GC still excludes this Job.
     expect(f.database.raw.prepare("SELECT id FROM jobs WHERE id=? AND NOT EXISTS (SELECT 1 FROM artifact_download_leases WHERE job_id=jobs.id AND expires_at>?)").all(jobId, now)).toEqual([]);
+    // Execute the real cleanup program against only this disposable database
+    // and storage. Make the Job eligible while the admitted transfer is active.
+    f.database.raw.prepare("UPDATE jobs SET completed_at=? WHERE id=?").run(new Date(Date.now() - 48 * 3_600_000).toISOString(), jobId);
+    const gc = () => promisify(execFile)(process.execPath, [join(process.cwd(), "deploy/scripts/cleanup.mjs")], {
+      timeout: 10_000,
+      env: { DATABASE_PATH: f.databasePath, STORAGE_ROOT: f.root, ARTIFACT_RETENTION_HOURS: "24", AUDIT_EXPORT_CHECKPOINT: join(f.root, "audit.checkpoint") },
+    });
+    await gc();
+    expect(f.database.jobs.get(jobId)?.status).toBe("succeeded");
+    expect(await readFile(f.path, "utf8")).toBe("selected");
     slow.end("selected");
     const zip = Buffer.from(await bytes);
     expect(zip.includes(Buffer.from("selected"))).toBe(true);
     expect(zip.includes(Buffer.from("{}"))).toBe(true);
     expect(f.database.raw.prepare("SELECT COUNT(*) AS n FROM artifact_download_leases").get()).toMatchObject({ n: 0 });
     expect(vi.getTimerCount()).toBe(0);
+    await gc();
+    expect(f.database.jobs.get(jobId)?.status).toBe("deleted");
+    await expect(readFile(f.path)).rejects.toMatchObject({ code: "ENOENT" });
   });
   it("applies the retention boundary to repository, Renderer and Admin delivery", async () => {
     const f = await fixture(), deadline = Date.parse(f.row.created_at) + 24 * 3_600_000;
