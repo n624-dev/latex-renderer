@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Fence App file inspections by selection generation, clear stale tasks immediately,
+  and snapshot Project/output choices before asynchronous submission.
+- Queue Web batches with at most three tracked Jobs, bounded retries only for explicit
+  capacity rejections, and one shared Source upload per ZIP. Stop unstarted work if
+  Job tracking is lost. Add real Chromium regressions, including mobile widths,
+  without an Actions cache or changes to Source/auth/Project policy.
+
 ## 1.3.8-rc.2 - 2026-09-19
 
 - Stage and verify complete CLI/Local MCP artifact sets against advertised sizes and SHA-256 before switching existing output paths. Preserve user files and the previous set on failure, reject concurrent writers, and recover interrupted publication on the next download. Exclude bounded transaction data from source archives.
