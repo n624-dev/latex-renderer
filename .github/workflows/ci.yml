@@ -39,6 +39,10 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Typecheck, test, and lint
         run: pnpm check
+      - name: Install Chromium for Web regression tests
+        run: pnpm exec playwright install --with-deps --only-shell chromium
+      - name: Verify Web selection and bounded batch behavior in Chromium
+        run: pnpm test:browser
       - name: Build workspaces and Windows distribution
         run: pnpm build
       - name: Verify signed MCPB distribution

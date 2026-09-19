@@ -6,6 +6,7 @@ import {
   parseJobStatus,
   parseSourceTicket,
   responseError,
+  runBoundedBatch,
   sha256Hex,
   uploadSourceZip,
   zipSingleTex,
@@ -200,6 +201,32 @@ function parseRender(value: unknown) {
     jobTicket: row.jobTicket,
     expiresAt: row.expiresAt,
   };
+}
+
+// Only explicit, pre-admission capacity rejections are safe to retry. Keep
+// the caller's request body and idempotency key unchanged across attempts.
+export async function retryRenderCapacity<T>(
+  operation: () => Promise<T>,
+  onWait: () => void,
+  wait: (milliseconds: number) => Promise<void> = (milliseconds) =>
+    new Promise((resolve) => setTimeout(resolve, milliseconds)),
+): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await operation();
+    } catch (error) {
+      const value = error as { code?: string; status?: number } | null;
+      const capacity =
+        (value?.code === "QUEUE_FULL" && value.status === 503) ||
+        (["ACCOUNT_QUEUE_LIMIT", "USER_QUEUE_LIMIT"].includes(
+          value?.code ?? "",
+        ) &&
+          value?.status === 429);
+      if (!capacity || attempt >= 5) throw error;
+      onWait();
+      await wait(Math.min(8_000, 1_000 * 2 ** attempt));
+    }
+  }
 }
 
 async function issueAccess(
@@ -433,7 +460,7 @@ async function followJob(
           "expired",
         ].includes(last.status)
       )
-        return;
+        return true;
       await new Promise((resolve) => setTimeout(resolve, 1500));
     } catch (error) {
       failures += 1;
@@ -451,7 +478,7 @@ async function followJob(
           "変換処理への接続が切れました。処理は継続しているため、再接続しています…";
       if (failures >= 8) {
         showError(error);
-        return;
+        return false;
       }
       await new Promise((resolve) =>
         setTimeout(resolve, Math.min(10_000, 500 * 2 ** failures)),
@@ -536,12 +563,22 @@ function installRender(fetcher: Fetcher) {
     bytes: Uint8Array;
     selected: boolean;
   };
-  let tasks: Task[] = [];
+  let tasks: Task[] = [],
+    generation = 0,
+    busy = false;
+  const updateStart = () => {
+    start.disabled = busy || !tasks.some((task) => task.selected);
+  };
   const inspect = async () => {
+    const current = ++generation;
+    tasks = [];
+    choices.replaceChildren();
+    choices.hidden = true;
+    updateStart();
     try {
       const files = [...(input.files ?? [])];
       if (files.length === 0) return;
-      tasks = [];
+      let inspectedTasks: Task[];
       if (files.length === 1 && files[0]?.name.toLowerCase().endsWith(".zip")) {
         const file = files[0],
           bytes = new Uint8Array(await file.arrayBuffer());
@@ -551,7 +588,7 @@ function installRender(fetcher: Fetcher) {
           entrypoints = inspected.hasMainTex
             ? ["main.tex"]
             : inspected.texFiles;
-        tasks = entrypoints.map((entrypoint) => ({
+        inspectedTasks = entrypoints.map((entrypoint) => ({
           label: entrypoint,
           original: file.name,
           entrypoint,
@@ -561,7 +598,7 @@ function installRender(fetcher: Fetcher) {
       } else {
         if (files.some((file) => !file.name.toLowerCase().endsWith(".tex")))
           throw new Error("複数選択ではTeXファイルだけを選択してください。");
-        tasks = await Promise.all(
+        inspectedTasks = await Promise.all(
           files.map(async (file) => ({
             label: file.name,
             original: file.name,
@@ -571,6 +608,8 @@ function installRender(fetcher: Fetcher) {
           })),
         );
       }
+      if (current !== generation) return;
+      tasks = inspectedTasks;
       projectName.value ||= (files[0]?.name ?? "文書").replace(
         /\.(?:zip|tex)$/i,
         "",
@@ -589,14 +628,15 @@ function installRender(fetcher: Fetcher) {
           checkbox.checked = task.selected;
           checkbox.onchange = () => {
             task.selected = checkbox.checked;
-            start.disabled = !tasks.some((item) => item.selected);
+            updateStart();
           };
           label.append(checkbox, document.createTextNode(` ${task.label}`));
           choices.append(label);
         });
       } else choices.hidden = true;
-      start.disabled = !tasks.some((task) => task.selected);
+      updateStart();
     } catch (error) {
+      if (current !== generation) return;
       tasks = [];
       start.disabled = true;
       showError(error);
@@ -642,63 +682,104 @@ function installRender(fetcher: Fetcher) {
   }
   form.onsubmit = (event) => {
     event.preventDefault();
-    const selected = tasks.filter((task) => task.selected);
+    if (busy) return;
+    const selected = tasks
+      .filter((task) => task.selected)
+      .map((task) => ({ ...task }));
     if (selected.length === 0) return;
-    start.disabled = true;
+    const projectId = projectSelect.value,
+      name = projectName.value.trim(),
+      outputs = svgOutput.checked ? ["pdf", "svg"] : ["pdf"];
+    busy = true;
+    updateStart();
     results.hidden = false;
     items.replaceChildren();
-    void Promise.all(
-      selected.map(async (task) => {
-        const container = document.createElement("div");
-        container.className = "render-result-card";
-        container.textContent = `${task.label} を準備しています…`;
-        items.append(container);
-        try {
-          const source = await createSource(
-              fetcher,
-              task.bytes,
-              `app-source-${crypto.randomUUID()}`,
-            ),
-            project = projectSelect.value
-              ? { id: projectSelect.value }
-              : ((await json(fetcher, "/app/api/v1/projects", {
-                  method: "POST",
-                  body: JSON.stringify({
-                    displayName:
-                      selected.length === 1
-                        ? projectName.value.trim() || task.label
-                        : `${projectName.value.trim() || "文書"} - ${task.label}`,
-                  }),
-                })) as { id: string }),
-            ticket = parseRender(
-              await json(fetcher, "/app/api/v1/render-tickets", {
-                method: "POST",
-                headers: {
-                  "Idempotency-Key": `app-job-${crypto.randomUUID()}`,
-                },
-                body: JSON.stringify({
-                  sourceId: source,
-                  entrypoint: task.entrypoint,
-                  projectId: project.id,
-                  displayName: task.label,
-                  originalFilename: task.original,
-                  outputs: svgOutput.checked ? ["pdf", "svg"] : ["pdf"],
-                }),
-              }),
-            );
-          history.replaceState(null, "", `/app/jobs/${ticket.jobId}/`);
-          await followJob(fetcher, ticket.jobId, container, task.label, ticket);
-        } catch (error) {
-          container.textContent = `${task.label}: 変換を開始できませんでした。`;
-          showError(error);
-        }
-      }),
-    ).finally(() => {
-      start.disabled = false;
-      void loadJobs(fetcher, recent, 5);
+    const cards = selected.map((task) => {
+      const container = document.createElement("div");
+      container.className = "render-result-card";
+      container.textContent = `${task.label}: 開始待ち…`;
+      items.append(container);
+      return { task, container };
     });
+    // Every entrypoint from a ZIP retains the same immutable byte array.
+    // Share even a rejected promise, so a failed upload cannot cause a storm.
+    const sources = new Map<Uint8Array, Promise<string>>();
+    let trackingLost = false;
+    void runBoundedBatch(cards, 3, async ({ task, container }) => {
+      if (trackingLost) {
+        container.textContent = `${task.label}: 状態確認が途切れたため開始していません。履歴を確認してください。`;
+        return;
+      }
+      container.textContent = `${task.label} を準備しています…`;
+      try {
+        let sourcePromise = sources.get(task.bytes);
+        if (!sourcePromise) {
+          sourcePromise = createSource(
+            fetcher,
+            task.bytes,
+            `app-source-${crypto.randomUUID()}`,
+          );
+          sources.set(task.bytes, sourcePromise);
+        }
+        const source = await sourcePromise,
+          project = projectId
+            ? { id: projectId }
+            : ((await json(fetcher, "/app/api/v1/projects", {
+                method: "POST",
+                body: JSON.stringify({
+                  displayName:
+                    selected.length === 1
+                      ? name || task.label
+                      : `${name || "文書"} - ${task.label}`,
+                }),
+              })) as { id: string });
+        const request = {
+          method: "POST",
+          headers: {
+            "Idempotency-Key": `app-job-${crypto.randomUUID()}`,
+          },
+          body: JSON.stringify({
+            sourceId: source,
+            entrypoint: task.entrypoint,
+            projectId: project.id,
+            displayName: task.label,
+            originalFilename: task.original,
+            outputs,
+          }),
+        };
+        const ticket = parseRender(
+          await retryRenderCapacity(
+            () => json(fetcher, "/app/api/v1/render-tickets", request),
+            () => {
+              container.textContent = `${task.label}: 混雑のため再試行を待っています…`;
+            },
+          ),
+        );
+        history.replaceState(null, "", `/app/jobs/${ticket.jobId}/`);
+        if (
+          !(await followJob(
+            fetcher,
+            ticket.jobId,
+            container,
+            task.label,
+            ticket,
+          ))
+        ) {
+          trackingLost = true;
+        }
+      } catch (error) {
+        container.textContent = `${task.label}: 変換を開始できませんでした。`;
+        showError(error);
+      }
+    })
+      .catch(showError)
+      .finally(() => {
+        busy = false;
+        updateStart();
+        void loadJobs(fetcher, recent, 5).catch(showError);
+      });
   };
-  void loadJobs(fetcher, recent, 5);
+  void loadJobs(fetcher, recent, 5).catch(showError);
 }
 
 function installJob(fetcher: Fetcher) {
@@ -1004,6 +1085,8 @@ export const appScript = `
   const establishSession = ${establishSession.toString()};
   const createSource = ${createSource.toString()};
   const parseRender = ${parseRender.toString()};
+  const retryRenderCapacity = ${retryRenderCapacity.toString()};
+  const runBoundedBatch = ${runBoundedBatch.toString()};
   const issueAccess = ${issueAccess.toString()};
   const rendererJob = ${rendererJob.toString()};
   const jobTracker = ${jobTracker.toString()};
