@@ -152,7 +152,9 @@ async function sync(path: string, directory = true): Promise<void> {
   // Windows does not support opening directories for fsync. Process-crash
   // recovery is supported there; a hardware/power-loss atomicity guarantee is not.
   if (directory && process.platform === "win32") return;
-  const handle = await open(path, "r");
+  // Windows FlushFileBuffers requires a writable handle. Only staged regular
+  // files use r+ (no creation/truncation); POSIX directory handles remain read-only.
+  const handle = await open(path, process.platform === "win32" ? "r+" : "r");
   try {
     await handle.sync();
   } finally {
