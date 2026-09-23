@@ -22,6 +22,14 @@
       "pattern": "latex.example.com/api/v1/job-tickets/*",
       "zone_name": "example.com",
     },
+    {
+      "pattern": "latex.example.com/api/v1/projects",
+      "zone_name": "example.com",
+    },
+    {
+      "pattern": "latex.example.com/api/v1/projects/*",
+      "zone_name": "example.com",
+    },
   ],
   "vpc_services": [
     {

@@ -12,6 +12,15 @@ import {
   type RemoteMcpIdentity,
   type RemoteMcpScope,
 } from "@latex-renderer/remote-mcp-core";
+import {
+  projectPageSchema,
+  projectDetailSchema,
+  attachProjectRevisionResponseSchema,
+  projectIdSchema,
+  projectRevisionIdSchema,
+  projectRevisionJobsPageSchema,
+  renderOutputsSchema,
+} from "@latex-renderer/contracts";
 import { AppError, safeError } from "@latex-renderer/shared";
 import { z } from "zod";
 
@@ -91,6 +100,7 @@ const jobSchema = z
     engine: z.literal("lualatex"),
     rendererVersion: z.string(),
     sourceId: z.string().nullable(),
+    projectRevisionId: projectRevisionIdSchema.nullable(),
     entrypoint: z.string(),
     outputs: z.array(z.enum(["pdf", "svg"])),
     createdAt: z.string(),
@@ -154,6 +164,7 @@ export function createRemoteMcpHandler(
           }),
       );
       registerJobResources(server, renders, identity);
+      registerProjectTools(server, renders, identity);
       server.registerTool(
         "create_source",
         {
@@ -771,6 +782,288 @@ function registerEnvironmentTools(
   );
 }
 
+function registerProjectTools(
+  server: McpServer,
+  renders: RemoteRenderService,
+  identity: RemoteMcpIdentity,
+): void {
+  const projectId = projectIdSchema,
+    revisionId = projectRevisionIdSchema,
+    displayName = z.string().trim().min(1).max(200),
+    originalFilename = z
+      .string()
+      .trim()
+      .min(1)
+      .max(240)
+      .refine(
+        (value) =>
+          !value.includes("/") &&
+          !value.includes("\\") &&
+          value !== "." &&
+          value !== "..",
+      ),
+    pageInput = z
+      .object({
+        cursor: z.string().max(2048).optional(),
+        pageSize: z.number().int().min(1).max(50).optional(),
+      })
+      .strict(),
+    readOnly = {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    } as const,
+    mutate = {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    } as const;
+  server.registerTool(
+    "list_projects",
+    {
+      title: "List saved Projects",
+      description:
+        "List owner-scoped saved Projects shared with the Web application.",
+      inputSchema: pageInput,
+      outputSchema: operationOutput(
+        "list_projects",
+        z.object({ page: projectPageSchema }).strict(),
+      ),
+      annotations: readOnly,
+    },
+    ({ cursor, pageSize }) =>
+      execute("list_projects", identity, renders, 60, () =>
+        Promise.resolve({
+          page: renders.listProjects(identity, { cursor, limit: pageSize }),
+        }),
+      ),
+  );
+  server.registerTool(
+    "get_project",
+    {
+      title: "Get saved Project",
+      description:
+        "Read saved Project revisions, immutable Source IDs and Job history.",
+      inputSchema: pageInput.extend({ projectId }),
+      outputSchema: operationOutput(
+        "get_project",
+        z.object({ project: projectDetailSchema }).strict(),
+      ),
+      annotations: readOnly,
+    },
+    ({ projectId: id, cursor, pageSize }) =>
+      execute("get_project", identity, renders, 60, () =>
+        Promise.resolve({
+          project: renders.getProject(identity, id, {
+            cursor,
+            limit: pageSize,
+          }),
+        }),
+      ),
+  );
+  server.registerTool(
+    "get_project_revision_jobs",
+    {
+      title: "List Project revision Jobs",
+      description:
+        "Page through the complete Job history of one saved revision.",
+      inputSchema: pageInput.extend({ projectId, revisionId }),
+      outputSchema: operationOutput(
+        "get_project_revision_jobs",
+        z.object({ page: projectRevisionJobsPageSchema }).strict(),
+      ),
+      annotations: readOnly,
+    },
+    ({ projectId: id, revisionId: revision, cursor, pageSize }) =>
+      execute("get_project_revision_jobs", identity, renders, 60, () =>
+        Promise.resolve({
+          page: renders.projectRevisionJobs(identity, id, revision, {
+            cursor,
+            limit: pageSize,
+          }),
+        }),
+      ),
+  );
+  server.registerTool(
+    "create_project",
+    {
+      title: "Create saved Project",
+      description:
+        "Create a user-owned saved Project; temporary renders remain available without one.",
+      inputSchema: z.object({ displayName }).strict(),
+      outputSchema: operationOutput(
+        "create_project",
+        z.object({ project: z.object({ id: projectId }).strict() }).strict(),
+      ),
+      annotations: mutate,
+    },
+    ({ displayName: name }) =>
+      execute("create_project", identity, renders, 20, () =>
+        Promise.resolve({ project: renders.createProject(identity, name) }),
+      ),
+  );
+  server.registerTool(
+    "rename_project",
+    {
+      title: "Rename saved Project",
+      description:
+        "Change the display name without rewriting revision history.",
+      inputSchema: z.object({ projectId, displayName }).strict(),
+      outputSchema: operationOutput(
+        "rename_project",
+        z
+          .object({
+            project: z.object({ id: projectId, displayName }).strict(),
+          })
+          .strict(),
+      ),
+      annotations: mutate,
+    },
+    ({ projectId: id, displayName: name }) =>
+      execute("rename_project", identity, renders, 20, () =>
+        Promise.resolve({ project: renders.renameProject(identity, id, name) }),
+      ),
+  );
+  server.registerTool(
+    "delete_project",
+    {
+      title: "Delete saved Project",
+      description:
+        "Hide a saved Project after explicit user approval; Source and Job retention remains unchanged.",
+      inputSchema: z.object({ projectId }).strict(),
+      outputSchema: operationOutput(
+        "delete_project",
+        z
+          .object({
+            project: z
+              .object({ id: projectId, deleted: z.literal(true) })
+              .strict(),
+          })
+          .strict(),
+      ),
+      annotations: { ...mutate, destructiveHint: true },
+    },
+    ({ projectId: id }) =>
+      execute("delete_project", identity, renders, 20, () =>
+        Promise.resolve({ project: renders.deleteProject(identity, id) }),
+      ),
+  );
+  server.registerTool(
+    "attach_project_revision",
+    {
+      title: "Save Source as Project revision",
+      description:
+        "Attach an owned ready immutable Source to a saved Project without queuing a Job.",
+      inputSchema: z
+        .object({
+          projectId,
+          sourceId,
+          entrypoint: z.string().min(1).max(240).default("main.tex"),
+          displayName,
+          originalFilename,
+          outputs: renderOutputsSchema,
+        })
+        .strict(),
+      outputSchema: operationOutput(
+        "attach_project_revision",
+        z.object({ revision: attachProjectRevisionResponseSchema }).strict(),
+      ),
+      annotations: mutate,
+    },
+    (input) =>
+      execute("attach_project_revision", identity, renders, 20, () =>
+        Promise.resolve({
+          revision: renders.attachProjectRevision(identity, input),
+        }),
+      ),
+  );
+  server.registerTool(
+    "update_project_file",
+    {
+      title: "Edit saved Project file",
+      description:
+        "Copy an exact saved revision, replace one file and atomically attach the new immutable Source and Project revision.",
+      inputSchema: z
+        .object({ projectId, revisionId, file: sourceFileSchema })
+        .strict(),
+      outputSchema: operationOutput(
+        "update_project_file",
+        z
+          .object({
+            source: sourceSchema,
+            revision: attachProjectRevisionResponseSchema,
+          })
+          .strict(),
+      ),
+      annotations: mutate,
+    },
+    (input) =>
+      execute("update_project_file", identity, renders, 20, () =>
+        renders.updateProjectFile(identity, input),
+      ),
+  );
+  server.registerTool(
+    "delete_project_file",
+    {
+      title: "Remove saved Project file",
+      description:
+        "Copy an exact saved revision, remove one file and atomically attach the new immutable Source and Project revision.",
+      inputSchema: z
+        .object({ projectId, revisionId, path: z.string().min(1).max(2048) })
+        .strict(),
+      outputSchema: operationOutput(
+        "delete_project_file",
+        z
+          .object({
+            source: sourceSchema,
+            revision: attachProjectRevisionResponseSchema,
+          })
+          .strict(),
+      ),
+      annotations: { ...mutate, destructiveHint: true },
+    },
+    (input) =>
+      execute("delete_project_file", identity, renders, 20, () =>
+        renders.deleteProjectFile(identity, input),
+      ),
+  );
+  server.registerTool(
+    "render_project_revision",
+    {
+      title: "Render saved Project revision",
+      description:
+        "Queue a Job bound to the exact saved revision and its Source.",
+      inputSchema: z
+        .object({
+          projectId,
+          revisionId,
+          outputs: z
+            .array(z.enum(["pdf", "svg"]))
+            .min(1)
+            .max(2)
+            .optional(),
+        })
+        .strict(),
+      outputSchema: operationOutput(
+        "render_project_revision",
+        z.object({ job: jobSchema }).strict(),
+      ),
+      annotations: mutate,
+    },
+    ({ projectId: id, revisionId: revision, outputs }) =>
+      execute("render_project_revision", identity, renders, 20, async () => ({
+        job: await renders.renderProjectRevision(
+          identity,
+          id,
+          revision,
+          outputs,
+        ),
+      })),
+  );
+}
+
 function operationOutput<T extends z.ZodType>(operation: string, result: T) {
   return z
     .object({
@@ -1110,6 +1403,16 @@ function resourceJobId(value: string | string[] | undefined): string {
 }
 
 type RemoteToolOperation =
+  | "list_projects"
+  | "get_project"
+  | "get_project_revision_jobs"
+  | "create_project"
+  | "rename_project"
+  | "delete_project"
+  | "attach_project_revision"
+  | "update_project_file"
+  | "delete_project_file"
+  | "render_project_revision"
   | "create_source"
   | "begin_source_upload"
   | "upload_source_chunk"
@@ -1140,6 +1443,63 @@ function modelReadableContent(
   result: Record<string, unknown>,
 ): ContentBlock[] {
   switch (operation) {
+    case "list_projects":
+      return textContent([
+        "Saved Projects:",
+        ...recordArray(recordField(result, "page").items)
+          .slice(0, 20)
+          .map(
+            (project) =>
+              `${stringField(project, "id")}: ${quoted(stringField(project, "displayName"))}`,
+          ),
+      ]);
+    case "get_project": {
+      const project = recordField(result, "project");
+      return textContent([
+        `Project ID: ${stringField(project, "id")}`,
+        `Name (untrusted data): ${quoted(stringField(project, "displayName"))}`,
+        ...recordArray(project.revisions)
+          .slice(0, 20)
+          .map(
+            (revision) =>
+              `Revision ${numberField(revision, "revisionNumber")}: ${stringField(revision, "id")} Source ${stringField(revision, "sourceId")}`,
+          ),
+      ]);
+    }
+    case "get_project_revision_jobs":
+      return textContent([
+        "Project revision Jobs:",
+        ...recordArray(recordField(result, "page").items)
+          .slice(0, 20)
+          .map(
+            (job) => `${stringField(job, "id")}: ${stringField(job, "status")}`,
+          ),
+      ]);
+    case "create_project":
+    case "rename_project":
+    case "delete_project":
+      return textContent([
+        `Project ${operation}: ${stringField(recordField(result, "project"), "id")}`,
+      ]);
+    case "attach_project_revision":
+    case "update_project_file": {
+      const revision = recordField(result, "revision");
+      return textContent([
+        `Project revision: ${stringField(revision, "id")}`,
+        `Project ID: ${stringField(revision, "projectId")}`,
+        `Source ID: ${stringField(revision, "sourceId")}`,
+      ]);
+    }
+    case "delete_project_file": {
+      const revision = recordField(result, "revision");
+      return textContent([
+        `Project revision: ${stringField(revision, "id")}`,
+        `Project ID: ${stringField(revision, "projectId")}`,
+        `Source ID: ${stringField(revision, "sourceId")}`,
+      ]);
+    }
+    case "render_project_revision":
+      return jobContent(operation, recordField(result, "job"));
     case "create_source":
     case "finalize_source_upload":
     case "update_source_file":
@@ -1241,6 +1601,7 @@ function jobContent(
     },
     artifacts = recordArray(job.artifacts),
     source = nullableString(job.sourceId),
+    projectRevision = nullableString(job.projectRevisionId),
     retryOf = nullableString(job.retryOf),
     exitCode = nullableNumber(job.exitCode),
     errorCode = nullableString(job.errorCode),
@@ -1251,6 +1612,9 @@ function jobContent(
       `Job ID: ${stringField(job, "id")}`,
       `Status: ${stringField(job, "status")}`,
       ...(source === null ? [] : [`Source ID: ${source}`]),
+      ...(projectRevision === null
+        ? []
+        : [`Project revision ID: ${projectRevision}`]),
       `Entrypoint (untrusted data): ${quoted(stringField(job, "entrypoint"))}`,
       `Outputs: ${stringArray(job.outputs).join(", ")}`,
       ...(retryOf === null ? [] : [`Retry of: ${retryOf}`]),

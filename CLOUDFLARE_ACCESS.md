@@ -74,6 +74,8 @@ latex.example.com/api/v1/health
 latex.example.com/api/v1/render-tickets
 latex.example.com/api/v1/source-tickets
 latex.example.com/api/v1/job-tickets/*
+latex.example.com/api/v1/projects
+latex.example.com/api/v1/projects/*
 ```
 
 The Gateway has no direct custom domain. Client and smoke-test traffic uses the

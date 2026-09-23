@@ -15,6 +15,7 @@ export class RenderTicketsService {
           sourceId: string;
           entrypoint?: string | undefined;
           outputs?: RenderOutput[];
+          project?: { projectId: string; revisionId: string };
         },
     idempotencyKey: string,
   ) {
@@ -155,14 +156,20 @@ export class RenderTicketsService {
       sourceId: string;
       entrypoint?: string | undefined;
       outputs?: RenderOutput[];
+      project?: { projectId: string; revisionId: string };
     },
     idempotencyKey: string,
   ) {
     const entrypoint = validateEntrypointPath(input.entrypoint ?? "main.tex"),
       outputs: RenderOutput[] = input.outputs ?? ["pdf"],
       normalized = outputs.includes("svg")
-        ? { sourceId: input.sourceId, entrypoint, outputs }
-        : { sourceId: input.sourceId, entrypoint };
+        ? {
+            sourceId: input.sourceId,
+            entrypoint,
+            outputs,
+            project: input.project,
+          }
+        : { sourceId: input.sourceId, entrypoint, project: input.project };
     const requestHash = createHash("sha256")
         .update(JSON.stringify(normalized))
         .digest("hex"),
@@ -234,6 +241,28 @@ export class RenderTicketsService {
             "Source does not contain the requested entrypoint",
             422,
           );
+        const revision =
+          input.project === undefined
+            ? undefined
+            : this.deps.database.projects.revisionOwned(
+                input.project.revisionId,
+                actor.userId,
+              );
+        if (
+          input.project !== undefined &&
+          (this.deps.database.projects.getOwned(
+            input.project.projectId,
+            actor.userId,
+          ) === undefined ||
+            revision?.project_id !== input.project.projectId ||
+            revision.source_id !== currentSource.id ||
+            revision.entrypoint !== entrypoint)
+        )
+          throw new AppError(
+            "PROJECT_REVISION_NOT_FOUND",
+            "Project revision does not exist",
+            404,
+          );
         if (
           this.deps.database.jobs.insertQueued({
             id: jobId,
@@ -244,6 +273,9 @@ export class RenderTicketsService {
             sourceId: currentSource.id,
             entrypoint,
             outputs,
+            ...(revision === undefined
+              ? {}
+              : { projectRevisionId: revision.id }),
             timestamp,
             reservedOutputBytes: this.deps.maxOutputBytes,
           }) !== 1
@@ -271,7 +303,14 @@ export class RenderTicketsService {
           targetType: "job",
           targetId: jobId,
           result: "success",
-          metadata: { sourceId: currentSource.id, entrypoint, outputs },
+          metadata: {
+            sourceId: currentSource.id,
+            entrypoint,
+            outputs,
+            ...(revision === undefined
+              ? {}
+              : { projectRevisionId: revision.id }),
+          },
         });
       });
     } catch (caught) {

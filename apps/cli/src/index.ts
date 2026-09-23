@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import { Writable } from "node:stream";
+import { basename, resolve } from "node:path";
+import { randomUUID } from "node:crypto";
 import { RendererClient } from "@latex-renderer/api-client";
 import {
   downloadJobArtifacts,
@@ -233,36 +235,56 @@ program
   .option("--output <directory>", "output directory")
   .option("--svg", "also export each outermost math and TikZ object as SVG")
   .option("--open", "open the PDF after success")
-  .action(async (path: string | undefined, options: { open?: boolean; svg?: boolean; source?: string; entrypoint: string; output?: string }) => {
-    if (options.source !== undefined && path !== undefined)
-      throw new AppError(
-        "CLI_USAGE_ERROR",
-        "Specify either a project path or --source, not both",
-        400,
-      );
-    const client = await configuredClient(),
-      renderOptions = {
-        entrypoint: options.entrypoint,
-        outputs: options.svg === true ? (["pdf", "svg"] as const) : (["pdf"] as const),
-        ...(options.output === undefined
-          ? {}
-          : { outputDirectory: options.output }),
-        ...(isJsonMode() ? {} : { onEvent: humanRenderEvent }),
+  .action(
+    async (
+      path: string | undefined,
+      options: {
+        open?: boolean;
+        svg?: boolean;
+        source?: string;
+        entrypoint: string;
+        output?: string;
       },
-      result =
-        options.source === undefined
-          ? await renderProject(client, path ?? ".", renderOptions)
-          : await renderSource(client, options.source, renderOptions);
-    const pdf = result.artifacts.pdf;
-    if (options.open === true && pdf !== undefined && !(await openLocalTarget(pdf)))
-      process.stderr.write("PDF was saved, but opening it failed. Open the saved PDF manually.\n");
-    if (result.job.status === "succeeded") {
-      emitSuccess("render", result, () => undefined);
-      return;
-    }
-    emitRenderFailure(result);
-    process.exitCode = 2;
-  });
+    ) => {
+      if (options.source !== undefined && path !== undefined)
+        throw new AppError(
+          "CLI_USAGE_ERROR",
+          "Specify either a project path or --source, not both",
+          400,
+        );
+      const client = await configuredClient(),
+        renderOptions = {
+          entrypoint: options.entrypoint,
+          outputs:
+            options.svg === true
+              ? (["pdf", "svg"] as const)
+              : (["pdf"] as const),
+          ...(options.output === undefined
+            ? {}
+            : { outputDirectory: options.output }),
+          ...(isJsonMode() ? {} : { onEvent: humanRenderEvent }),
+        },
+        result =
+          options.source === undefined
+            ? await renderProject(client, path ?? ".", renderOptions)
+            : await renderSource(client, options.source, renderOptions);
+      const pdf = result.artifacts.pdf;
+      if (
+        options.open === true &&
+        pdf !== undefined &&
+        !(await openLocalTarget(pdf))
+      )
+        process.stderr.write(
+          "PDF was saved, but opening it failed. Open the saved PDF manually.\n",
+        );
+      if (result.job.status === "succeeded") {
+        emitSuccess("render", result, () => undefined);
+        return;
+      }
+      emitRenderFailure(result);
+      process.exitCode = 2;
+    },
+  );
 
 const sources = program.command("source");
 sources
@@ -280,6 +302,134 @@ sources
       );
     });
   });
+
+const projects = program
+  .command("projects")
+  .description("manage saved Projects shared with Web and MCP");
+projects
+  .command("list")
+  .option("--cursor <cursor>")
+  .action(async (options: { cursor?: string }) => {
+    const result = await (await configuredClient()).listProjects(options);
+    emitSuccess("projects.list", result, () =>
+      process.stdout.write(`${JSON.stringify(result, null, 2)}\n`),
+    );
+  });
+projects
+  .command("get")
+  .argument("<id>")
+  .option("--cursor <cursor>")
+  .action(async (id: string, options: { cursor?: string }) => {
+    const result = await (await configuredClient()).getProject(id, options);
+    emitSuccess("projects.get", result, () =>
+      process.stdout.write(`${JSON.stringify(result, null, 2)}\n`),
+    );
+  });
+projects
+  .command("jobs")
+  .argument("<project-id>")
+  .argument("<revision-id>")
+  .option("--cursor <cursor>")
+  .action(
+    async (
+      projectId: string,
+      revisionId: string,
+      options: { cursor?: string },
+    ) => {
+      const result = await (
+        await configuredClient()
+      ).listProjectRevisionJobs(projectId, revisionId, options);
+      emitSuccess("projects.jobs", result, () =>
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`),
+      );
+    },
+  );
+projects
+  .command("create")
+  .argument("<name>")
+  .action(async (name: string) => {
+    const result = await (await configuredClient()).createProject(name);
+    emitSuccess("projects.create", result, () =>
+      process.stdout.write(`${result.id}\n`),
+    );
+  });
+projects
+  .command("rename")
+  .argument("<id>")
+  .argument("<name>")
+  .action(async (id: string, name: string) => {
+    const result = await (await configuredClient()).renameProject(id, name);
+    emitSuccess("projects.rename", result, () =>
+      process.stdout.write(`${result.id}: ${result.displayName}\n`),
+    );
+  });
+projects
+  .command("delete")
+  .argument("<id>")
+  .requiredOption("--yes")
+  .action(async (id: string) => {
+    await (await configuredClient()).deleteProject(id);
+    emitSuccess("projects.delete", { id, deleted: true }, () =>
+      process.stdout.write(`${id} deleted.\n`),
+    );
+  });
+projects
+  .command("save")
+  .description("upload a local Source and attach an immutable Project revision")
+  .argument("<project-id>")
+  .argument("<path>")
+  .option("--entrypoint <path>", "TeX entrypoint", "main.tex")
+  .option("--name <name>", "revision display name")
+  .option("--svg", "use PDF and SVG as initial output defaults")
+  .action(
+    async (
+      projectId: string,
+      path: string,
+      options: { entrypoint: string; name?: string; svg?: boolean },
+    ) => {
+      const client = await configuredClient(),
+        source = await uploadProjectSource(client, path),
+        filename = basename(resolve(path));
+      const revision = await client.attachProjectRevision({
+        projectId,
+        sourceId: source.sourceId,
+        entrypoint: options.entrypoint,
+        displayName: options.name ?? filename,
+        originalFilename: filename,
+        outputs: options.svg ? ["pdf", "svg"] : ["pdf"],
+      });
+      emitSuccess("projects.save", { source, revision }, () =>
+        process.stdout.write(`${revision.id} (${source.sourceId})\n`),
+      );
+    },
+  );
+projects
+  .command("render")
+  .description("queue a Job for an exact saved revision")
+  .argument("<project-id>")
+  .argument("<revision-id>")
+  .option("--svg", "use PDF and SVG instead of the revision defaults")
+  .action(
+    async (
+      projectId: string,
+      revisionId: string,
+      options: { svg?: boolean },
+    ) => {
+      const result = await (
+        await configuredClient()
+      ).renderProjectRevision(
+        projectId,
+        revisionId,
+        randomUUID(),
+        options.svg ? ["pdf", "svg"] : undefined,
+      );
+      emitSuccess(
+        "projects.render",
+        { projectId, revisionId, jobId: result.jobId },
+        () => process.stdout.write(`${result.jobId}\n`),
+      );
+    },
+  );
 
 const jobs = program.command("jobs");
 jobs

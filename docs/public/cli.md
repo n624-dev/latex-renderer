@@ -4,7 +4,7 @@ category: CLI
 title: CLI
 description: 実装済みのコマンドと保存される成果物を説明します。
 navOrder: 30
-updated: "2026-08-18"
+updated: "2026-09-23"
 since: "v1.0.0"
 ---
 
@@ -66,6 +66,21 @@ latex-render render --source source_... --entrypoint reports/b.tex --output .ren
 ```
 
 Source作成結果が `uploadRequired: false` の場合、同じowner・同じSHA-256のZIPは再送信されません。Source IDは後続Jobで使えますが、別ownerからは利用できません。
+
+## 保存Projectと改訂
+
+```text
+latex-render projects list
+latex-render projects create <name>
+latex-render projects save <projectId> ./project --entrypoint main.tex --name <revision-name>
+latex-render projects get <projectId>
+latex-render projects jobs <projectId> <revisionId>
+latex-render projects render <projectId> <revisionId>
+latex-render projects rename <projectId> <name>
+latex-render projects delete <projectId> --yes
+```
+
+`save` はローカルのディレクトリまたはZIPをSourceとして準備し、指定Projectへ不変の改訂を保存します。`--svg` は改訂の初回出力設定をPDF＋SVGにします。`render` は保存済みの指定改訂を使ってJobを作成し、`--svg` を付けた場合だけ出力設定を上書きします。`list`／`get`／`jobs` は `--cursor` で続きのページを取得できます。Projectは同じユーザーのWeb・API・MCP・別のAPIキーと共有されます。一時的な `render` や `source upload` は保存Projectを必須にしません。削除はProject記録の非表示であり、既存Jobを直ちに削除しません。
 
 ## ジョブ操作
 

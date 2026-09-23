@@ -3,9 +3,14 @@ import type { JobStatus } from "@latex-renderer/contracts";
 import { AppError, newId, nowIso } from "@latex-renderer/shared";
 import { schemaSql } from "./schema.js";
 import { applyDatabaseMigrations } from "./migrations.js";
+export { ProjectOperations, type ProjectActor } from "./project-operations.js";
 export { sourceRequestExpiresAt } from "./source-lifecycle.js";
 export { artifactRetentionExpiresAt } from "./artifact-availability.js";
-export { bindArtifactDownloadLeases, protectArtifactDownloadLeases, ARTIFACT_DOWNLOAD_LEASE_MS } from "./artifact-download-lease.js";
+export {
+  bindArtifactDownloadLeases,
+  protectArtifactDownloadLeases,
+  ARTIFACT_DOWNLOAD_LEASE_MS,
+} from "./artifact-download-lease.js";
 import {
   ApiKeysRepository,
   ArtifactsRepository,
@@ -175,11 +180,11 @@ export class RendererDatabase {
   ): void {
     const timestamp = nowIso(),
       result = this.raw
-      .prepare(
-        `UPDATE used_nonces SET state='claimed',claim_owner=?,claimed_at=?,claim_expires_at=?
+        .prepare(
+          `UPDATE used_nonces SET state='claimed',claim_owner=?,claimed_at=?,claim_expires_at=?
     WHERE nonce=? AND job_id=? AND state IN ('unused','released') AND expires_at>?`,
-      )
-      .run(owner, timestamp, claimUntil, nonce, jobId, timestamp);
+        )
+        .run(owner, timestamp, claimUntil, nonce, jobId, timestamp);
     if (result.changes !== 1)
       throw new AppError(
         "UPLOAD_TICKET_REPLAYED",
@@ -205,10 +210,10 @@ export class RendererDatabase {
   consumeNonce(nonce: string, owner: string): void {
     const timestamp = nowIso(),
       result = this.raw
-      .prepare(
-        "UPDATE used_nonces SET state='consumed',used_at=?,claim_expires_at=NULL WHERE nonce=? AND state='claimed' AND claim_owner=? AND claim_expires_at>?",
-      )
-      .run(timestamp, nonce, owner, timestamp);
+        .prepare(
+          "UPDATE used_nonces SET state='consumed',used_at=?,claim_expires_at=NULL WHERE nonce=? AND state='claimed' AND claim_owner=? AND claim_expires_at>?",
+        )
+        .run(timestamp, nonce, owner, timestamp);
     if (result.changes !== 1)
       throw new AppError("NONCE_STATE_CONFLICT", "Upload claim was lost", 409);
   }
@@ -229,11 +234,11 @@ export class RendererDatabase {
   ): void {
     const timestamp = nowIso(),
       result = this.raw
-      .prepare(
-        `UPDATE source_upload_nonces SET state='claimed',claim_owner=?,claimed_at=?,claim_expires_at=?
+        .prepare(
+          `UPDATE source_upload_nonces SET state='claimed',claim_owner=?,claimed_at=?,claim_expires_at=?
          WHERE nonce=? AND source_id=? AND state IN ('unused','released') AND expires_at>?`,
-      )
-      .run(owner, timestamp, claimUntil, nonce, sourceId, timestamp);
+        )
+        .run(owner, timestamp, claimUntil, nonce, sourceId, timestamp);
     if (result.changes !== 1)
       throw new AppError(
         "UPLOAD_TICKET_REPLAYED",
@@ -259,10 +264,10 @@ export class RendererDatabase {
   consumeSourceNonce(nonce: string, owner: string): void {
     const timestamp = nowIso(),
       result = this.raw
-      .prepare(
-        "UPDATE source_upload_nonces SET state='consumed',used_at=?,claim_expires_at=NULL WHERE nonce=? AND state='claimed' AND claim_owner=? AND claim_expires_at>?",
-      )
-      .run(timestamp, nonce, owner, timestamp);
+        .prepare(
+          "UPDATE source_upload_nonces SET state='consumed',used_at=?,claim_expires_at=NULL WHERE nonce=? AND state='claimed' AND claim_owner=? AND claim_expires_at>?",
+        )
+        .run(timestamp, nonce, owner, timestamp);
     if (result.changes !== 1)
       throw new AppError("NONCE_STATE_CONFLICT", "Upload claim was lost", 409);
   }

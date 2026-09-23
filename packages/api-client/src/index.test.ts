@@ -8,21 +8,145 @@ import { RendererClient } from "./index.js";
 afterEach(() => vi.unstubAllGlobals());
 
 describe("RendererClient cache safety", () => {
-  it.each(["same-size", "short", "long"])("rejects %s artifact corruption without replacing the destination", async (kind) => {
-    const expected = Buffer.from("correct"),
-      actual = Buffer.from(kind === "same-size" ? "CORRUPT" : kind === "short" ? "short" : "much too long");
-    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(new Response(actual))));
-    const root = await mkdtemp(join(tmpdir(), "artifact-integrity-")), destination = join(root, "result.pdf");
-    try {
-      await writeFile(destination, "previous");
-      const client = new RendererClient("https://gateway.example", "lrk_test");
-      await expect(client.download(client.artifactUrl("job_test", "result.pdf"), "ticket", destination,
-        { size: expected.length, sha256: createHash("sha256").update(expected).digest("hex") }))
-        .rejects.toMatchObject({ code: "ARTIFACT_INTEGRITY_MISMATCH" });
-      expect(await readFile(destination, "utf8")).toBe("previous");
-      expect(await readdir(root)).toEqual(["result.pdf"]);
-    } finally { await rm(root, { recursive: true, force: true }); }
+  it("uses owner-scoped saved Project endpoints without changing temporary render requests", async () => {
+    const projectId = `project_${"a".repeat(32)}`,
+      revisionId = `revision_${"b".repeat(32)}`,
+      sourceId = `source_${"c".repeat(32)}`,
+      calls: Array<{ path: string; method: string; body: unknown }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: URL, init?: RequestInit) => {
+        calls.push({
+          path: input.pathname + input.search,
+          method: init?.method ?? "GET",
+          body:
+            typeof init?.body === "string"
+              ? (JSON.parse(init.body) as unknown)
+              : null,
+        });
+        const headers = new Headers(init?.headers);
+        expect(headers.get("Authorization")).toBe("Bearer lrk_test");
+        if (input.pathname.endsWith("/render"))
+          return Promise.resolve(
+            Response.json({
+              projectId,
+              revisionId,
+              jobId: `job_${"d".repeat(32)}`,
+              jobTicket: "short-lived-job-ticket",
+              expiresAt: "2026-08-12T00:00:00.000Z",
+            }),
+          );
+        if (input.pathname.endsWith("/revisions"))
+          return Promise.resolve(
+            Response.json({
+              id: revisionId,
+              projectId,
+              sourceId,
+              revisionNumber: 1,
+              entrypoint: "main.tex",
+              outputs: ["pdf"],
+            }),
+          );
+        if (input.pathname.endsWith("/jobs"))
+          return Promise.resolve(
+            Response.json({ items: [], hasMore: false, nextCursor: null }),
+          );
+        if (input.pathname.endsWith(`/${projectId}`))
+          return Promise.resolve(
+            Response.json({
+              id: projectId,
+              displayName: "Draft",
+              createdAt: "2026-08-11T00:00:00.000Z",
+              updatedAt: "2026-08-11T00:00:00.000Z",
+              revisionCount: 0,
+              latestRevision: null,
+              revisions: [],
+              revisionsHasMore: false,
+              revisionsNextCursor: null,
+            }),
+          );
+        return Promise.resolve(
+          Response.json({ items: [], hasMore: false, nextCursor: null }),
+        );
+      }),
+    );
+    const client = new RendererClient("https://gateway.example", "lrk_test");
+    expect((await client.listProjects({ pageSize: 10 })).items).toEqual([]);
+    expect((await client.getProject(projectId)).id).toBe(projectId);
+    expect(
+      (await client.listProjectRevisionJobs(projectId, revisionId)).items,
+    ).toEqual([]);
+    expect(
+      (
+        await client.attachProjectRevision({
+          projectId,
+          sourceId,
+          entrypoint: "main.tex",
+          displayName: "First",
+          originalFilename: "main.tex",
+        })
+      ).id,
+    ).toBe(revisionId);
+    expect(
+      (
+        await client.renderProjectRevision(
+          projectId,
+          revisionId,
+          "project-render-123456789",
+        )
+      ).revisionId,
+    ).toBe(revisionId);
+    expect(calls.map((call) => call.path)).toEqual([
+      "/api/v1/projects?pageSize=10",
+      `/api/v1/projects/${projectId}`,
+      `/api/v1/projects/${projectId}/revisions/${revisionId}/jobs`,
+      `/api/v1/projects/${projectId}/revisions`,
+      `/api/v1/projects/${projectId}/revisions/${revisionId}/render`,
+    ]);
+    expect(calls[3]?.body).toMatchObject({ sourceId, outputs: ["pdf"] });
+    expect(calls[4]?.body).toEqual({});
   });
+  it.each(["same-size", "short", "long"])(
+    "rejects %s artifact corruption without replacing the destination",
+    async (kind) => {
+      const expected = Buffer.from("correct"),
+        actual = Buffer.from(
+          kind === "same-size"
+            ? "CORRUPT"
+            : kind === "short"
+              ? "short"
+              : "much too long",
+        );
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(() => Promise.resolve(new Response(actual))),
+      );
+      const root = await mkdtemp(join(tmpdir(), "artifact-integrity-")),
+        destination = join(root, "result.pdf");
+      try {
+        await writeFile(destination, "previous");
+        const client = new RendererClient(
+          "https://gateway.example",
+          "lrk_test",
+        );
+        await expect(
+          client.download(
+            client.artifactUrl("job_test", "result.pdf"),
+            "ticket",
+            destination,
+            {
+              size: expected.length,
+              sha256: createHash("sha256").update(expected).digest("hex"),
+            },
+          ),
+        ).rejects.toMatchObject({ code: "ARTIFACT_INTEGRITY_MISMATCH" });
+        expect(await readFile(destination, "utf8")).toBe("previous");
+        expect(await readdir(root)).toEqual(["result.pdf"]);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
   it("cache-busts job status requests and asks every cache layer not to store them", async () => {
     const fetchMock = vi.fn(() =>
       Promise.resolve(
@@ -80,7 +204,12 @@ describe("RendererClient cache safety", () => {
         "https://renderer.example/v1/jobs/job_test/artifacts/result.pdf",
         "ticket",
         destination,
-        { size: 3, sha256: createHash("sha256").update(Buffer.from([1, 2, 3])).digest("hex") },
+        {
+          size: 3,
+          sha256: createHash("sha256")
+            .update(Buffer.from([1, 2, 3]))
+            .digest("hex"),
+        },
       );
       const [input, init] = fetchMock.mock.calls[0] as unknown as [
         URL,

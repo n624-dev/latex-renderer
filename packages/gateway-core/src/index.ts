@@ -1,5 +1,6 @@
 const MAX_JSON_BYTES = 1024;
-const MAX_RESPONSE_BYTES = 64 * 1024;
+const MAX_PROJECT_JSON_BYTES = 4096;
+const MAX_RESPONSE_BYTES = 1024 * 1024;
 const API_KEY = /^Bearer lrk_[a-f0-9]{32}_[A-Za-z0-9_-]{43}$/;
 const IDEMPOTENCY_KEY = /^[A-Za-z0-9][A-Za-z0-9._:-]{15,199}$/;
 
@@ -21,6 +22,9 @@ export async function proxyGatewayJson(input: {
   bodyRequired?: boolean | undefined;
 }): Promise<Response> {
   const bodyRequired = input.bodyRequired !== false;
+  const maxJsonBytes = input.upstreamPath.startsWith("/internal/v1/projects")
+    ? MAX_PROJECT_JSON_BYTES
+    : MAX_JSON_BYTES;
   const authorization = input.request.headers.get("Authorization");
   if (authorization === null || !API_KEY.test(authorization))
     return errorResponse("UNAUTHORIZED", "Bearer API key is required", 401);
@@ -43,7 +47,7 @@ export async function proxyGatewayJson(input: {
         413,
       );
     length = Number(lengthText);
-    if (!Number.isSafeInteger(length) || length > MAX_JSON_BYTES)
+    if (!Number.isSafeInteger(length) || length > maxJsonBytes)
       return errorResponse(
         "REQUEST_TOO_LARGE",
         "JSON request is too large",
@@ -72,7 +76,7 @@ export async function proxyGatewayJson(input: {
 
   let body: Uint8Array<ArrayBuffer>;
   try {
-    body = await readLimited(input.request.body, MAX_JSON_BYTES);
+    body = await readLimited(input.request.body, maxJsonBytes);
   } catch {
     return errorResponse("REQUEST_TOO_LARGE", "JSON request is too large", 413);
   }
@@ -111,16 +115,23 @@ export async function proxyGatewayJson(input: {
   });
   if (bodyRequired) headers.set("Content-Type", "application/json");
   if (idempotencyKey !== null) headers.set("Idempotency-Key", idempotencyKey);
-  const response = await input.fetchUpstream(
-    new URL(input.upstreamPath, "http://internal-api.local"),
-    {
-      method: input.request.method,
-      headers,
-      ...(body.byteLength === 0 ? {} : { body }),
-      redirect: "manual",
-      signal: AbortSignal.timeout(10_000),
-    },
-  );
+  const upstreamUrl = new URL(input.upstreamPath, "http://internal-api.local");
+  if (
+    input.request.method === "GET" &&
+    upstreamUrl.pathname.startsWith("/internal/v1/projects")
+  ) {
+    const search = new URL(input.request.url).search;
+    if (search.length > 2048)
+      return errorResponse("INVALID_QUERY", "Project query is too long", 400);
+    upstreamUrl.search = search;
+  }
+  const response = await input.fetchUpstream(upstreamUrl, {
+    method: input.request.method,
+    headers,
+    ...(body.byteLength === 0 ? {} : { body }),
+    redirect: "manual",
+    signal: AbortSignal.timeout(10_000),
+  });
   if (response.status >= 300 && response.status < 400)
     return errorResponse(
       "UPSTREAM_REDIRECT_REJECTED",
@@ -181,6 +192,33 @@ export function gatewayRoute(
       upstreamPath: "/internal/v1/source-tickets",
       idempotencyRequired: true,
       bodyRequired: true,
+    };
+  }
+  const projectPath =
+    /^\/api\/v1\/projects(?:\/(project_[a-f0-9]{32})(?:\/revisions(?:\/(revision_[a-f0-9]{32})(?:\/(jobs|render))?)?)?)?$/.exec(
+      pathname,
+    );
+  if (projectPath !== null) {
+    const project = projectPath[1],
+      revision = projectPath[2],
+      suffix = projectPath[3];
+    const allowed =
+      project === undefined
+        ? ["GET", "POST"]
+        : revision === undefined
+          ? pathname.endsWith("/revisions")
+            ? ["POST"]
+            : ["GET", "PATCH", "DELETE"]
+          : suffix === "jobs"
+            ? ["GET"]
+            : suffix === "render"
+              ? ["POST"]
+              : [];
+    if (!allowed.includes(method)) return "method-not-allowed";
+    return {
+      upstreamPath: pathname.replace(/^\/api\/v1/, "/internal/v1"),
+      idempotencyRequired: suffix === "render",
+      bodyRequired: method === "POST" || method === "PATCH",
     };
   }
   const match =

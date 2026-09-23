@@ -168,4 +168,78 @@ describe("gateway boundary", () => {
       gatewayRoute("/api/v1/job-tickets/job_" + "a".repeat(32), "POST"),
     ).toMatchObject({ bodyRequired: false, idempotencyRequired: false });
   });
+  it("forwards a bounded Project cursor only through the private binding", async () => {
+    const projectId = `project_${"a".repeat(32)}`;
+    let upstream = "";
+    const response = await gatewayApp.request(
+      `/api/v1/projects/${projectId}?pageSize=5&cursor=abc`,
+      {
+        headers: {
+          Authorization:
+            "Bearer lrk_11111111111111111111111111111111_1111111111111111111111111111111111111111111",
+        },
+      },
+      {
+        INTERNAL_API: {
+          fetch: (input) => {
+            upstream =
+              input instanceof URL
+                ? input.href
+                : input instanceof Request
+                  ? input.url
+                  : input;
+            return Promise.resolve(
+              Response.json({ items: [], hasMore: false, nextCursor: null }),
+            );
+          },
+        },
+      },
+    );
+    expect(response.status).toBe(200);
+    expect(upstream).toBe(
+      `http://internal-api.local/internal/v1/projects/${projectId}?pageSize=5&cursor=abc`,
+    );
+    expect(upstream).not.toContain("lrk_");
+  });
+  it("accepts valid multibyte Project metadata while bounding the JSON body", async () => {
+    const projectId = `project_${"a".repeat(32)}`;
+    const sourceId = `source_${"b".repeat(32)}`;
+    const originalFilename = `${"あ".repeat(190)}.tex`;
+    const displayName = "あ".repeat(200);
+    const body = JSON.stringify({
+      sourceId,
+      entrypoint: "main.tex",
+      displayName,
+      originalFilename,
+      outputs: ["pdf"],
+    });
+    const internalFetch = vi.fn(() =>
+      Promise.resolve(Response.json({ id: "revision_test" })),
+    );
+    const request = (payload: string) =>
+      gatewayApp.request(
+        `/api/v1/projects/${projectId}/revisions`,
+        {
+          method: "POST",
+          headers: {
+            Authorization:
+              "Bearer lrk_11111111111111111111111111111111_1111111111111111111111111111111111111111111",
+            "Content-Type": "application/json",
+            "Content-Length": String(
+              new TextEncoder().encode(payload).byteLength,
+            ),
+          },
+          body: payload,
+        },
+        { INTERNAL_API: { fetch: internalFetch } },
+      );
+    expect(new TextEncoder().encode(body).byteLength).toBeGreaterThan(1024);
+    expect((await request(body)).status).toBe(200);
+    expect(internalFetch).toHaveBeenCalledOnce();
+    expect(
+      (await request(JSON.stringify({ displayName: "あ".repeat(2000) })))
+        .status,
+    ).toBe(413);
+    expect(internalFetch).toHaveBeenCalledOnce();
+  });
 });

@@ -1,11 +1,154 @@
 openapi: 3.1.0
 info:
   title: LaTeX Renderer Job Creation API
-  version: 0.3.0
-  description: Create render jobs and renew job-operation tickets.
+  version: 0.4.0
+  description: Create temporary render jobs, manage saved Projects and renew job-operation tickets.
 servers:
   - url: /
 paths:
+  /api/v1/projects:
+    get:
+      summary: List saved Projects owned by the API key's user
+      security: [{ renderApiKey: [] }]
+      parameters:
+        - { in: query, name: cursor, schema: { type: string } }
+        - {
+            in: query,
+            name: pageSize,
+            schema: { type: integer, minimum: 1, maximum: 100 },
+          }
+      responses:
+        "200":
+          {
+            description: Paginated Project summaries; nextCursor is null at the end,
+          }
+    post:
+      summary: Create a saved Project
+      security: [{ renderApiKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [displayName]
+              properties:
+                displayName: { type: string, minLength: 1, maxLength: 200 }
+      responses:
+        "201": { description: Project ID created }
+  /api/v1/projects/{projectId}:
+    parameters:
+      - { $ref: "#/components/parameters/ProjectId" }
+    get:
+      summary: Read a saved Project's revisions and bounded Job history
+      security: [{ renderApiKey: [] }]
+      parameters:
+        - { in: query, name: cursor, schema: { type: string } }
+        - {
+            in: query,
+            name: pageSize,
+            schema: { type: integer, minimum: 1, maximum: 100 },
+          }
+      responses:
+        "200":
+          {
+            description: Project detail with immutable revision,
+            Source and Job IDs,
+          }
+        "404": { $ref: "#/components/responses/Error" }
+    patch:
+      summary: Rename a saved Project without rewriting revisions
+      security: [{ renderApiKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [displayName]
+              properties:
+                displayName: { type: string, minLength: 1, maxLength: 200 }
+      responses:
+        "200": { description: Updated Project ID and display name }
+        "404": { $ref: "#/components/responses/Error" }
+    delete:
+      summary: Hide a saved Project; Source and Job retention remains independent
+      security: [{ renderApiKey: [] }]
+      responses:
+        "200": { description: Project ID and deleted flag }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/projects/{projectId}/revisions:
+    parameters:
+      - { $ref: "#/components/parameters/ProjectId" }
+    post:
+      summary: Attach an owned ready Source as an immutable Project revision
+      description: Same Project, Source and entrypoint reuse the existing revision. This does not queue a Job.
+      security: [{ renderApiKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AttachRevisionRequest" }
+      responses:
+        "201":
+          {
+            description: Revision ID,
+            number,
+            Source ID,
+            entrypoint and default outputs,
+          }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/projects/{projectId}/revisions/{revisionId}/jobs:
+    parameters:
+      - { $ref: "#/components/parameters/ProjectId" }
+      - { $ref: "#/components/parameters/RevisionId" }
+    get:
+      summary: Page through Jobs associated with one Project revision
+      security: [{ renderApiKey: [] }]
+      parameters:
+        - { in: query, name: cursor, schema: { type: string } }
+        - {
+            in: query,
+            name: pageSize,
+            schema: { type: integer, minimum: 1, maximum: 100 },
+          }
+      responses:
+        "200": { description: Paginated Job summaries }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/projects/{projectId}/revisions/{revisionId}/render:
+    parameters:
+      - { $ref: "#/components/parameters/ProjectId" }
+      - { $ref: "#/components/parameters/RevisionId" }
+    post:
+      summary: Queue a Job bound to this exact Project revision
+      security: [{ renderApiKey: [] }]
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema: { type: string, minLength: 16, maxLength: 200 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                outputs: { $ref: "#/components/schemas/RenderOutputs" }
+      responses:
+        "200": { description: Idempotently reused Job and renewed ticket }
+        "201":
+          {
+            description: New Job ID and short-lived ticket,
+            Project and revision IDs,
+          }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /api/v1/source-tickets:
     post:
       summary: Reserve or deduplicate an immutable Source
@@ -99,7 +242,28 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
 components:
+  parameters:
+    ProjectId:
+      in: path
+      name: projectId
+      required: true
+      schema: { type: string, pattern: "^project_[a-f0-9]{32}$" }
+    RevisionId:
+      in: path
+      name: revisionId
+      required: true
+      schema: { type: string, pattern: "^revision_[a-f0-9]{32}$" }
   schemas:
+    AttachRevisionRequest:
+      type: object
+      additionalProperties: false
+      required: [sourceId, entrypoint, displayName, originalFilename]
+      properties:
+        sourceId: { type: string, pattern: "^source_[a-f0-9]{32}$" }
+        entrypoint: { type: string, minLength: 1, maxLength: 240 }
+        displayName: { type: string, minLength: 1, maxLength: 200 }
+        originalFilename: { type: string, minLength: 1, maxLength: 240 }
+        outputs: { $ref: "#/components/schemas/RenderOutputs" }
     RenderTicketRequest:
       oneOf:
         - { $ref: "#/components/schemas/SourceTicketRequest" }

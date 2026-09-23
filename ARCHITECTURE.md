@@ -21,6 +21,8 @@ latex.example.com
     ├── render-tickets        Gateway Worker
     ├── source-tickets        Gateway Worker
     ├── job-tickets/*         Gateway Worker
+    ├── projects              Gateway Worker
+    ├── projects/*            Gateway Worker
     ├── sources/*             Renderer API
     └── jobs/*                Renderer API
 ```
@@ -35,6 +37,7 @@ Remote MCP binds to loopback port 3104 behind the selected trusted frontend. Its
 2. The selected gateway validates the narrow ticket request with `packages/gateway-core`. Gateway Worker uses its `INTERNAL_API` Workers VPC Service binding; standalone Hono uses loopback. Neither profile exposes an Internal API hostname or uses a browser credential on this hop.
 3. Internal API authenticates the long-lived render key, applies quotas and idempotency, and returns only the short-lived ticket needed for the selected Source or Job flow.
 4. For the reusable Source flow, the client uploads the ZIP directly to Renderer API with the Source upload ticket, then creates one or more Jobs from `sourceId + entrypoint` through Gateway Worker. For the compatibility flow, it uploads directly to the reserved Job with the Job-scoped upload ticket.
+   Saved documents can instead attach that ready Source to a user-owned immutable Project revision, then queue Jobs against the exact revision. Web, API-key clients and MCP share the same user-owned Project history; temporary Source-only Jobs remain available.
 5. Renderer API verifies ticket scope, owner, ID, size, SHA-256, and nonce as applicable. Large ZIP/PDF/PNG/log traffic never traverses Gateway Worker.
 6. Renderer Worker claims queued Jobs and runs a rootless container with no network, a read-only root filesystem, non-root UID/GID, dropped capabilities, seccomp, PID/CPU/memory limits, and bounded tmpfs. Docker rootless mode does not support AppArmor, so production does not claim that control; the checked-in profile is limited to explicitly approved rootful development tests.
 7. Renderer API serves validated artifacts with download leases and integrity headers.

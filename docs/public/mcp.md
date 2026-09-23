@@ -4,7 +4,7 @@ category: AI・MCP
 title: Remote MCP・Local MCP
 description: OAuthで接続するRemote MCPと、ローカルファイルを扱うLocal MCPの使い分けです。
 navOrder: 45
-updated: "2026-09-07"
+updated: "2026-09-23"
 since: "v1.0.0"
 ---
 
@@ -31,16 +31,19 @@ Team・EnterpriseではOwnerがOrganization settingsのConnectorsからCustom We
 
 Remote MCPは次のツールを提供します。
 
-| 分類        | ツール                                                                                                                                                   |
-| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Source      | `create_source`、`update_source_file`、`delete_source_file`、`begin_source_upload`、`upload_source_chunk`、`finalize_source_upload`、`create_source_ref` |
-| Render      | `create_render`、`retry_render`、`get_render_status`、`cancel_render`、`delete_render`                                                                   |
-| Inspection  | `get_render_diagnostics`、`get_render_preview`、`get_render_artifacts`                                                                                   |
-| Environment | `get_renderer_capabilities`、`check_packages`、`search_packages`、`check_fonts`、`search_fonts`                                                          |
+| 分類        | ツール                                                                                                                                                                                                                |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Source      | `create_source`、`update_source_file`、`delete_source_file`、`begin_source_upload`、`upload_source_chunk`、`finalize_source_upload`、`create_source_ref`                                                              |
+| 保存Project | `list_projects`、`get_project`、`get_project_revision_jobs`、`create_project`、`rename_project`、`delete_project`、`attach_project_revision`、`update_project_file`、`delete_project_file`、`render_project_revision` |
+| Render      | `create_render`、`retry_render`、`get_render_status`、`cancel_render`、`delete_render`                                                                                                                                |
+| Inspection  | `get_render_diagnostics`、`get_render_preview`、`get_render_artifacts`                                                                                                                                                |
+| Environment | `get_renderer_capabilities`、`check_packages`、`search_packages`、`check_fonts`、`search_fonts`                                                                                                                       |
 
 小さな複数ファイルSourceはtextまたはbase64を含む `create_source` で作成します。直接作成は合計4 MiB、1ファイル1 MiB、100ファイルまでです。大きなZIPは `begin_source_upload` で予約し、最大512 KiBのbase64 chunkをoffset順に送って `finalize_source_upload` します。ZIPは20 MiB、展開後100 MiB、500ファイル、1ファイル20 MiBまでで、未完了uploadは10分で期限切れになります。
 
 `update_source_file` と `delete_source_file` は元Sourceを書き換えず、新しい不変Source revisionを返します。Remote MCPで作ったSourceは `sourceId` のままrenderできます。`sourceRef` は別経路への15分間のowner-scoped handoffが必要な場合だけ `create_source_ref` で作成します。
+
+継続して扱う文書は `create_project` で保存先を作り、`attach_project_revision` でready Sourceを固定の改訂として保存します。保存済み改訂からのファイル編集は `update_project_file`／`delete_project_file` を使います。元の改訂を変更せず、新しいSourceと改訂を一緒に登録します。`render_project_revision` は指定した改訂をレンダリングし、結果Jobを同じ履歴へ結び付けます。Web・CLI・公開APIと同じユーザー所有のProjectを共有します。Projectに保存しない従来の一時的なSource・Jobも使えます。削除操作は利用者の明示的な依頼を確認してから実行してください。
 
 Remote MCPの結果は3層で返します。標準 `content` には、AIが判断や次のtool呼び出しに必要なSource ID、Job ID、status、offset、cursor、availability、bounded diagnosticsを必ず含めます。`structuredContent` は同じvalidated resultの完全な機械処理表現として維持します。PDF、完全なcompile log、raw JSON等の大容量データは、同じOAuth利用者だけが読める `latex-renderer://jobs/...` Resourceとして返します。
 
@@ -76,17 +79,22 @@ claude mcp add --scope user latex-renderer -- latex-renderer-mcp
 
 ## Local MCPのツール
 
-| ツール                      | 操作                                                                  |
-| --------------------------- | --------------------------------------------------------------------- |
-| `upload_source`             | ディレクトリまたはZIPを1つのSourceとして準備                          |
-| `create_render_job`         | `sourceId + entrypoint` から1つのJobを作成。`outputs` でSVGも選択可能 |
-| `render_project`            | Source準備から成果物取得までを一括実行。`outputs` でSVGも選択可能     |
-| `get_render_status`         | ジョブ状態を確認                                                      |
-| `download_render_artifacts` | PDF、SVG、ログ、構造化エラーを取得                                    |
-| `cancel_render`             | 実行中ジョブを中止                                                    |
-| `delete_render`             | 終了済みジョブを削除                                                  |
+| ツール                                                        | 操作                                                                  |
+| ------------------------------------------------------------- | --------------------------------------------------------------------- |
+| `upload_source`                                               | ディレクトリまたはZIPを1つのSourceとして準備                          |
+| `create_render_job`                                           | `sourceId + entrypoint` から1つのJobを作成。`outputs` でSVGも選択可能 |
+| `render_project`                                              | Source準備から成果物取得までを一括実行。`outputs` でSVGも選択可能     |
+| `list_projects` / `get_project` / `get_project_revision_jobs` | 保存Project・改訂・Job履歴を閲覧                                      |
+| `create_project` / `rename_project` / `delete_project`        | 保存Projectを管理                                                     |
+| `attach_project_revision` / `render_project_revision`         | アップロード済みSourceを保存し、固定改訂からJobを作成                 |
+| `get_render_status`                                           | ジョブ状態を確認                                                      |
+| `download_render_artifacts`                                   | PDF、SVG、ログ、構造化エラーを取得                                    |
+| `cancel_render`                                               | 実行中ジョブを中止                                                    |
+| `delete_render`                                               | 終了済みジョブを削除                                                  |
 
 単一文書は `render_project` を使えます。`entrypoint` を省略すると `main.tex`、`outputs` を省略すると `["pdf"]` です。SVGが必要な場合は `["pdf","svg"]` を指定します。利用者が複数のentrypointを指定した場合は、`upload_source` を1回呼び、返された同じ `sourceId` で `create_render_job` を文書ごとに呼びます。利用者が対象を指定していない場合、すべての `.tex` を独立文書と推測して実行しません。
+
+保存する場合は `upload_source` の後に `attach_project_revision` を呼びます。ローカルMCPの改訂保存はアップロード済みSourceを参照します。保存Projectを使わない `render_project` も引き続き利用できます。
 
 各ツールはobject-rootの `outputSchema` を公開し、機械処理用の `structuredContent` と、旧クライアント向けの短いTextContentを返します。状態、Source ID、ジョブID、成果物パス、構造化エラーは `structuredContent` を参照してください。
 

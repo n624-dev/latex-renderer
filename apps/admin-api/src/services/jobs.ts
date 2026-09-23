@@ -1,7 +1,11 @@
 import { createHash, randomBytes } from "node:crypto";
 import { statfs } from "node:fs/promises";
 import { AppError, newId, nowIso } from "@latex-renderer/shared";
-import { sourceRequestExpiresAt, type JobRow } from "@latex-renderer/database";
+import {
+  ProjectOperations,
+  sourceRequestExpiresAt,
+  type JobRow,
+} from "@latex-renderer/database";
 import type { RenderOutput } from "@latex-renderer/contracts";
 import { RemoteRenderService } from "@latex-renderer/remote-mcp-core";
 import { validateEntrypointPath } from "@latex-renderer/zip-validation";
@@ -47,7 +51,9 @@ export class AdminJobsService {
         Date.parse(retention) > Date.now() &&
         !["expired", "deleting", "deleted"].includes(row.status),
       artifacts = available
-        ? this.deps.database.artifacts.listDownloadable(id, { retentionHours: this.deps.artifactRetentionHours ?? 24 })
+        ? this.deps.database.artifacts.listDownloadable(id, {
+            retentionHours: this.deps.artifactRetentionHours ?? 24,
+          })
         : [];
     const item = (artifact: (typeof artifacts)[number]) => {
       const leaf =
@@ -806,33 +812,16 @@ export class AdminJobsService {
         id: revision.id,
       };
     }
-    let revision = this.deps.database.projects.revisionForSource(
-      owned.id,
+    const revision = new ProjectOperations(
+      this.deps.database,
+    ).attachRevisionInTransaction(actor, {
+      projectId: owned.id,
       sourceId,
       entrypoint,
-    );
-    if (revision === undefined) {
-      revision = this.deps.database.projects.insertRevision({
-        id: newId("revision"),
-        projectId: owned.id,
-        sourceId,
-        displayName: project.displayName,
-        originalFilename: project.originalFilename,
-        entrypoint,
-        outputs: project.outputs,
-        timestamp: nowIso(),
-      });
-      this.deps.database.audit({
-        actorType: actor.type,
-        actorId: actor.id,
-        action: "project.revision_created",
-        targetType: "project_revision",
-        targetId: revision.id,
-        result: "success",
-        metadata: { projectId: owned.id, sourceId },
-      });
-    }
-    this.deps.database.projects.touch(owned.id, nowIso());
+      displayName: project.displayName,
+      originalFilename: project.originalFilename,
+      outputs: project.outputs,
+    });
     return {
       id: revision.id,
     };
