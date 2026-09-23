@@ -5,6 +5,8 @@
 | `POST /api/v1/render-tickets` | long-lived `lrk_` render key |
 | `POST /api/v1/source-tickets` | long-lived `lrk_` render key |
 | `POST /api/v1/job-tickets/:jobId` | long-lived `lrk_` render key |
+| `GET /api/v1/projects*` | `lrk_` render key with `render:read:own`; same user across keys |
+| Project create/rename/delete, revision attach and render under `/api/v1/projects*` | `lrk_` render key with `render:create` |
 | `PUT /api/v1/sources/:sourceId/content` | short-lived Source upload ticket |
 | `PUT /api/v1/jobs/:jobId/source` (legacy one-Job upload flow) | short-lived Job upload ticket |
 | status/download/cancel/delete for `/api/v1/jobs/:jobId/*` | short-lived job ticket |

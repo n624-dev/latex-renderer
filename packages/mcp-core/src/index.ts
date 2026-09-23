@@ -1,5 +1,6 @@
 import { lstat, realpath } from "node:fs/promises";
 import { delimiter, dirname, isAbsolute, relative, resolve } from "node:path";
+import { randomUUID } from "node:crypto";
 import { RendererClient } from "@latex-renderer/api-client";
 import {
   createSourceRenderJob,
@@ -9,10 +10,16 @@ import {
   requestJobAction,
   uploadProjectSource,
   type ArtifactPaths,
-  type ClientTransport,
 } from "@latex-renderer/client-core";
 import {
   jobStatuses,
+  projectPageSchema,
+  projectDetailSchema,
+  projectRevisionJobsPageSchema,
+  projectIdSchema,
+  projectRevisionIdSchema,
+  attachProjectRevisionResponseSchema,
+  renderOutputsSchema,
   type JobArtifact,
   type JobResponse,
 } from "@latex-renderer/contracts";
@@ -28,6 +35,14 @@ export const MCP_TOOL_NAMES = [
   "download_render_artifacts",
   "cancel_render",
   "delete_render",
+  "list_projects",
+  "get_project",
+  "get_project_revision_jobs",
+  "create_project",
+  "rename_project",
+  "delete_project",
+  "attach_project_revision",
+  "render_project_revision",
 ] as const;
 export type McpToolName = (typeof MCP_TOOL_NAMES)[number];
 
@@ -54,7 +69,25 @@ export const downloadArtifactsInputSchema = z
     outputDirectory: z.string().min(1).default(".render"),
   })
   .strict();
-
+export const projectIdInputSchema = z
+  .object({ projectId: projectIdSchema })
+  .strict();
+export const projectPageInputSchema = z
+  .object({
+    cursor: z.string().max(1024).optional(),
+    pageSize: z.number().int().min(1).max(50).optional(),
+  })
+  .strict();
+export const attachProjectRevisionInputSchema = z
+  .object({
+    projectId: projectIdSchema,
+    sourceId: z.string().regex(/^source_[a-f0-9]{32}$/),
+    entrypoint: z.string().min(1).max(240).default("main.tex"),
+    displayName: z.string().trim().min(1).max(200),
+    originalFilename: z.string().trim().min(1).max(240),
+    outputs: renderOutputsSchema,
+  })
+  .strict();
 const errorSchema = z
   .object({
     code: z.string(),
@@ -106,6 +139,69 @@ const sourceSchema = z
     files: z.number().int().nonnegative(),
   })
   .strict();
+function projectOutput<Name extends string, Result extends z.ZodType>(
+  operation: Name,
+  result: Result,
+) {
+  return z
+    .object({
+      success: z.boolean(),
+      operation: z.literal(operation),
+      result: result.optional(),
+      error: errorSchema.optional(),
+    })
+    .strict();
+}
+export const listProjectsOutputSchema = projectOutput(
+  "list_projects",
+  z.object({ page: projectPageSchema }).strict(),
+);
+export const getProjectOutputSchema = projectOutput(
+  "get_project",
+  z.object({ project: projectDetailSchema }).strict(),
+);
+export const getProjectRevisionJobsOutputSchema = projectOutput(
+  "get_project_revision_jobs",
+  z.object({ page: projectRevisionJobsPageSchema }).strict(),
+);
+export const createProjectOutputSchema = projectOutput(
+  "create_project",
+  z.object({ project: z.object({ id: projectIdSchema }).strict() }).strict(),
+);
+export const renameProjectOutputSchema = projectOutput(
+  "rename_project",
+  z
+    .object({
+      project: z
+        .object({ id: projectIdSchema, displayName: z.string() })
+        .strict(),
+    })
+    .strict(),
+);
+export const deleteProjectOutputSchema = projectOutput(
+  "delete_project",
+  z
+    .object({
+      project: z
+        .object({ id: projectIdSchema, deleted: z.literal(true) })
+        .strict(),
+    })
+    .strict(),
+);
+export const attachProjectRevisionOutputSchema = projectOutput(
+  "attach_project_revision",
+  z.object({ revision: attachProjectRevisionResponseSchema }).strict(),
+);
+export const renderProjectRevisionOutputSchema = projectOutput(
+  "render_project_revision",
+  z
+    .object({
+      projectId: projectIdSchema,
+      revisionId: projectRevisionIdSchema,
+      job: jobSchema,
+    })
+    .strict(),
+);
 
 export const uploadSourceOutputSchema = z
   .object({
@@ -196,6 +292,20 @@ export type DownloadArtifactsOutput = z.infer<
 >;
 export type CancelRenderOutput = z.infer<typeof cancelRenderOutputSchema>;
 export type DeleteRenderOutput = z.infer<typeof deleteRenderOutputSchema>;
+export type ListProjectsOutput = z.infer<typeof listProjectsOutputSchema>;
+export type GetProjectOutput = z.infer<typeof getProjectOutputSchema>;
+export type GetProjectRevisionJobsOutput = z.infer<
+  typeof getProjectRevisionJobsOutputSchema
+>;
+export type CreateProjectOutput = z.infer<typeof createProjectOutputSchema>;
+export type RenameProjectOutput = z.infer<typeof renameProjectOutputSchema>;
+export type DeleteProjectOutput = z.infer<typeof deleteProjectOutputSchema>;
+export type AttachProjectRevisionOutput = z.infer<
+  typeof attachProjectRevisionOutputSchema
+>;
+export type RenderProjectRevisionOutput = z.infer<
+  typeof renderProjectRevisionOutputSchema
+>;
 export type McpToolOutput =
   | UploadSourceOutput
   | CreateRenderJobOutput
@@ -203,7 +313,15 @@ export type McpToolOutput =
   | GetRenderStatusOutput
   | DownloadArtifactsOutput
   | CancelRenderOutput
-  | DeleteRenderOutput;
+  | DeleteRenderOutput
+  | ListProjectsOutput
+  | GetProjectOutput
+  | GetProjectRevisionJobsOutput
+  | CreateProjectOutput
+  | RenameProjectOutput
+  | DeleteProjectOutput
+  | AttachProjectRevisionOutput
+  | RenderProjectRevisionOutput;
 
 export interface McpOperations {
   uploadSource(path: string): Promise<UploadSourceOutput>;
@@ -222,13 +340,39 @@ export interface McpOperations {
   ): Promise<DownloadArtifactsOutput>;
   cancelRender(jobId: string): Promise<CancelRenderOutput>;
   deleteRender(jobId: string): Promise<DeleteRenderOutput>;
+  listProjects(options: {
+    cursor?: string | undefined;
+    pageSize?: number | undefined;
+  }): Promise<ListProjectsOutput>;
+  getProject(
+    projectId: string,
+    options: { cursor?: string | undefined; pageSize?: number | undefined },
+  ): Promise<GetProjectOutput>;
+  getProjectRevisionJobs(
+    projectId: string,
+    revisionId: string,
+    options: { cursor?: string | undefined; pageSize?: number | undefined },
+  ): Promise<GetProjectRevisionJobsOutput>;
+  createProject(displayName: string): Promise<CreateProjectOutput>;
+  renameProject(
+    projectId: string,
+    displayName: string,
+  ): Promise<RenameProjectOutput>;
+  deleteProject(projectId: string): Promise<DeleteProjectOutput>;
+  attachProjectRevision(
+    input: z.infer<typeof attachProjectRevisionInputSchema>,
+  ): Promise<AttachProjectRevisionOutput>;
+  renderProjectRevision(
+    projectId: string,
+    revisionId: string,
+  ): Promise<RenderProjectRevisionOutput>;
 }
 
 export interface McpOperationsOptions {
   readonly baseUrl?: string;
   readonly renderTimeoutMs?: number;
   readonly allowedRoots?: readonly string[];
-  readonly clientFactory?: () => Promise<ClientTransport>;
+  readonly clientFactory?: () => Promise<RendererClient>;
 }
 
 export function createMcpOperations(
@@ -329,6 +473,68 @@ export function createMcpOperations(
       operation: "delete_render",
       result: await requestJobAction(await client(), jobId, "delete"),
     }),
+    listProjects: async (query) => ({
+      success: true,
+      operation: "list_projects",
+      result: { page: await (await client()).listProjects(query) },
+    }),
+    getProject: async (projectId, query) => ({
+      success: true,
+      operation: "get_project",
+      result: { project: await (await client()).getProject(projectId, query) },
+    }),
+    getProjectRevisionJobs: async (projectId, revisionId, query) => ({
+      success: true,
+      operation: "get_project_revision_jobs",
+      result: {
+        page: await (
+          await client()
+        ).listProjectRevisionJobs(projectId, revisionId, query),
+      },
+    }),
+    createProject: async (displayName) => ({
+      success: true,
+      operation: "create_project",
+      result: { project: await (await client()).createProject(displayName) },
+    }),
+    renameProject: async (projectId, displayName) => ({
+      success: true,
+      operation: "rename_project",
+      result: {
+        project: await (await client()).renameProject(projectId, displayName),
+      },
+    }),
+    deleteProject: async (projectId) => {
+      await (await client()).deleteProject(projectId);
+      return {
+        success: true,
+        operation: "delete_project",
+        result: { project: { id: projectId, deleted: true } },
+      };
+    },
+    attachProjectRevision: async (input) => ({
+      success: true,
+      operation: "attach_project_revision",
+      result: { revision: await (await client()).attachProjectRevision(input) },
+    }),
+    renderProjectRevision: async (projectId, revisionId) => {
+      const api = await client(),
+        ticket = await api.renderProjectRevision(
+          projectId,
+          revisionId,
+          randomUUID(),
+        ),
+        job = await api.job(ticket.jobId, ticket.jobTicket);
+      return {
+        success: true,
+        operation: "render_project_revision",
+        result: {
+          projectId,
+          revisionId,
+          job: summarizeJob(job),
+        },
+      };
+    },
   };
 }
 
@@ -456,7 +662,10 @@ async function nearestExistingAncestor(value: string): Promise<string> {
 
 function containsPath(root: string, target: string): boolean {
   const suffix = relative(root, target);
-  return suffix === "" || (!suffix.split(/[\\/]/).includes("..") && !isAbsolute(suffix));
+  return (
+    suffix === "" ||
+    (!suffix.split(/[\\/]/).includes("..") && !isAbsolute(suffix))
+  );
 }
 
 function notFoundOnly(error: unknown): undefined {
@@ -482,6 +691,14 @@ export function assertValidMcpOutput(output: McpToolOutput): McpToolOutput {
     download_render_artifacts: downloadArtifactsOutputSchema,
     cancel_render: cancelRenderOutputSchema,
     delete_render: deleteRenderOutputSchema,
+    list_projects: listProjectsOutputSchema,
+    get_project: getProjectOutputSchema,
+    get_project_revision_jobs: getProjectRevisionJobsOutputSchema,
+    create_project: createProjectOutputSchema,
+    rename_project: renameProjectOutputSchema,
+    delete_project: deleteProjectOutputSchema,
+    attach_project_revision: attachProjectRevisionOutputSchema,
+    render_project_revision: renderProjectRevisionOutputSchema,
   }[output.operation];
   return schema.parse(output);
 }

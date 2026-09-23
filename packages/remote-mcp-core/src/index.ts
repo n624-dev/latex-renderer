@@ -23,7 +23,12 @@ import type {
   RendererDatabase,
   SourceRow,
 } from "@latex-renderer/database";
-import { artifactStoragePath, protectArtifactDownloadLeases, ARTIFACT_DOWNLOAD_LEASE_MS } from "@latex-renderer/database";
+import {
+  ProjectOperations,
+  artifactStoragePath,
+  protectArtifactDownloadLeases,
+  ARTIFACT_DOWNLOAD_LEASE_MS,
+} from "@latex-renderer/database";
 import {
   AppError,
   DEFAULT_RESOURCE_LIMITS,
@@ -516,6 +521,7 @@ export interface RemoteJobSummary {
   engine: "lualatex";
   rendererVersion: string;
   sourceId: string | null;
+  projectRevisionId: string | null;
   entrypoint: string;
   outputs: Array<"pdf" | "svg">;
   createdAt: string;
@@ -935,6 +941,247 @@ export class RemoteRenderService {
     });
   }
 
+  private projectActor(identity: RemoteMcpIdentity) {
+    return { userId: identity.userId, type: "oauth", id: identity.userId };
+  }
+
+  listProjects(
+    identity: RemoteMcpIdentity,
+    options: { cursor?: string | undefined; limit?: number | undefined } = {},
+  ) {
+    requireScope(identity.scopes, "mcp:read");
+    return new ProjectOperations(this.database).list(
+      this.projectActor(identity),
+      options,
+    );
+  }
+
+  getProject(
+    identity: RemoteMcpIdentity,
+    projectId: string,
+    options: { cursor?: string | undefined; limit?: number | undefined } = {},
+  ) {
+    requireScope(identity.scopes, "mcp:read");
+    return new ProjectOperations(this.database).get(
+      this.projectActor(identity),
+      projectId,
+      options,
+    );
+  }
+
+  projectRevisionJobs(
+    identity: RemoteMcpIdentity,
+    projectId: string,
+    revisionId: string,
+    options: { cursor?: string | undefined; limit?: number | undefined } = {},
+  ) {
+    requireScope(identity.scopes, "mcp:read");
+    return new ProjectOperations(this.database).jobs(
+      this.projectActor(identity),
+      projectId,
+      revisionId,
+      options,
+    );
+  }
+
+  createProject(identity: RemoteMcpIdentity, displayName: string) {
+    requireScope(identity.scopes, "mcp:render");
+    return new ProjectOperations(this.database).create(
+      this.projectActor(identity),
+      displayName,
+    );
+  }
+
+  renameProject(
+    identity: RemoteMcpIdentity,
+    projectId: string,
+    displayName: string,
+  ) {
+    requireScope(identity.scopes, "mcp:render");
+    new ProjectOperations(this.database).rename(
+      this.projectActor(identity),
+      projectId,
+      displayName,
+    );
+    return { id: projectId, displayName };
+  }
+
+  deleteProject(identity: RemoteMcpIdentity, projectId: string) {
+    requireScope(identity.scopes, "mcp:delete");
+    new ProjectOperations(this.database).delete(
+      this.projectActor(identity),
+      projectId,
+    );
+    return { id: projectId, deleted: true as const };
+  }
+
+  attachProjectRevision(
+    identity: RemoteMcpIdentity,
+    input: {
+      projectId: string;
+      sourceId: string;
+      entrypoint: string;
+      displayName: string;
+      originalFilename: string;
+      outputs: Array<"pdf" | "svg">;
+    },
+  ) {
+    requireScope(identity.scopes, "mcp:render");
+    const revision = new ProjectOperations(this.database).attachRevision(
+      this.projectActor(identity),
+      { ...input, entrypoint: validateEntrypointPath(input.entrypoint) },
+    );
+    return {
+      id: revision.id,
+      projectId: input.projectId,
+      sourceId: revision.source_id,
+      revisionNumber: revision.revision_number,
+      entrypoint: revision.entrypoint,
+      outputs: this.database.projects.renderOutputs(revision),
+    };
+  }
+
+  async updateProjectFile(
+    identity: RemoteMcpIdentity,
+    input: {
+      projectId: string;
+      revisionId: string;
+      file: RemoteSourceFileInput;
+    },
+  ) {
+    requireScope(identity.scopes, "mcp:render");
+    const path = validateSourceFilePath(input.file.path);
+    if ((input.file.text === undefined) === (input.file.base64 === undefined))
+      throw new AppError(
+        "SOURCE_FILE_CONTENT",
+        "Source file must contain exactly one of text or base64",
+        400,
+      );
+    const bytes =
+      input.file.text === undefined
+        ? decodeBase64(input.file.base64 as string)
+        : Buffer.from(input.file.text, "utf8");
+    if (
+      bytes.byteLength >
+      Math.min(20 * 1024 * 1024, this.resourceLimits.maxUploadBytes)
+    )
+      throw new AppError(
+        "SOURCE_FILE_SIZE",
+        "Source file exceeds the configured revision file limit",
+        400,
+      );
+    return this.reviseProjectFile(
+      identity,
+      input.projectId,
+      input.revisionId,
+      async (root) => {
+        const target = join(root, ...path.split("/"));
+        await mkdir(dirname(target), { recursive: true, mode: 0o770 });
+        await writeFile(target, bytes, { mode: 0o660 });
+      },
+    );
+  }
+
+  async deleteProjectFile(
+    identity: RemoteMcpIdentity,
+    input: {
+      projectId: string;
+      revisionId: string;
+      path: string;
+    },
+  ) {
+    requireScope(identity.scopes, "mcp:render");
+    const path = validateSourceFilePath(input.path);
+    return this.reviseProjectFile(
+      identity,
+      input.projectId,
+      input.revisionId,
+      async (root) => {
+        const target = join(root, ...path.split("/"));
+        const current = await stat(target).catch(() => undefined);
+        if (current === undefined || !current.isFile())
+          throw new AppError(
+            "SOURCE_FILE_NOT_FOUND",
+            "Source file does not exist",
+            404,
+          );
+        await rm(target);
+      },
+    );
+  }
+
+  private async reviseProjectFile(
+    identity: RemoteMcpIdentity,
+    projectId: string,
+    revisionId: string,
+    mutation: (root: string) => Promise<void>,
+  ) {
+    const projects = new ProjectOperations(this.database),
+      selected = projects.revision(
+        this.projectActor(identity),
+        projectId,
+        revisionId,
+      );
+    let projectRevision:
+      ReturnType<ProjectOperations["attachRevisionInTransaction"]> | undefined;
+    const source = await this.reviseSource(
+      identity.userId,
+      selected.revision.source_id,
+      mutation,
+      (sourceId) => {
+        projectRevision = projects.attachRevisionInTransaction(
+          this.projectActor(identity),
+          {
+            projectId,
+            sourceId,
+            entrypoint: selected.revision.entrypoint,
+            displayName: selected.revision.display_name,
+            originalFilename: selected.revision.original_filename,
+            outputs: this.database.projects.renderOutputs(selected.revision),
+          },
+        );
+      },
+    );
+    if (projectRevision === undefined)
+      throw new AppError(
+        "PROJECT_REVISION_MISSING",
+        "Project revision was not attached",
+        500,
+      );
+    return {
+      source,
+      revision: {
+        id: projectRevision.id,
+        projectId,
+        sourceId: projectRevision.source_id,
+        revisionNumber: projectRevision.revision_number,
+        entrypoint: projectRevision.entrypoint,
+        outputs: this.database.projects.renderOutputs(projectRevision),
+      },
+    };
+  }
+
+  async renderProjectRevision(
+    identity: RemoteMcpIdentity,
+    projectId: string,
+    revisionId: string,
+    outputs?: Array<"pdf" | "svg">,
+  ) {
+    requireScope(identity.scopes, "mcp:render");
+    const projects = new ProjectOperations(this.database),
+      selected = projects.revision(
+        this.projectActor(identity),
+        projectId,
+        revisionId,
+      );
+    return this.createRender(identity, {
+      sourceId: selected.revision.source_id,
+      entrypoint: selected.revision.entrypoint,
+      outputs: outputs ?? projects.renderOutputs(selected.revision),
+      project: { projectId, revisionId },
+    });
+  }
+
   async createRender(
     identity: RemoteMcpIdentity,
     input:
@@ -952,6 +1199,7 @@ export class RemoteRenderService {
           sourceId: string;
           entrypoint?: string | undefined;
           outputs?: Array<"pdf" | "svg">;
+          project?: { projectId: string; revisionId: string };
         },
   ): Promise<RemoteJobSummary> {
     requireScope(identity.scopes, "mcp:render");
@@ -996,6 +1244,27 @@ export class RemoteRenderService {
           "Source does not contain the requested entrypoint",
           422,
         );
+      const project = "project" in input ? input.project : undefined;
+      const revision =
+        project !== undefined
+          ? this.database.projects.revisionOwned(
+              project.revisionId,
+              identity.userId,
+            )
+          : undefined;
+      if (
+        project !== undefined &&
+        (this.database.projects.getOwned(project.projectId, identity.userId) ===
+          undefined ||
+          revision?.project_id !== project.projectId ||
+          revision.source_id !== currentSource.id ||
+          revision.entrypoint !== entrypoint)
+      )
+        throw new AppError(
+          "PROJECT_REVISION_NOT_FOUND",
+          "Project revision does not exist",
+          404,
+        );
       if (
         this.database.jobs.insertQueued({
           id: jobId,
@@ -1006,6 +1275,7 @@ export class RemoteRenderService {
           sourceId: currentSource.id,
           entrypoint,
           outputs,
+          ...(revision === undefined ? {} : { projectRevisionId: revision.id }),
           timestamp,
           reservedOutputBytes: this.maxOutputBytes,
         }) !== 1
@@ -1111,7 +1381,9 @@ export class RemoteRenderService {
   ): Promise<RemoteRenderDiagnostics> {
     requireScope(identity.scopes, "mcp:read");
     const row = this.assertOwned(identity.userId, jobId),
-      available = this.database.artifacts.listDownloadable(jobId, { retentionHours: this.artifactRetentionHours }),
+      available = this.database.artifacts.listDownloadable(jobId, {
+        retentionHours: this.artifactRetentionHours,
+      }),
       errorsArtifact = available.find(
         (artifact) => artifact.relative_path === "errors.json",
       ),
@@ -1122,7 +1394,13 @@ export class RemoteRenderService {
         errorsArtifact === undefined
           ? { errors: [], warnings: [] }
           : parseDiagnosticsJson(
-              (await this.artifact(identity, jobId, errorsArtifact.relative_path)).bytes.toString("utf8"),
+              (
+                await this.artifact(
+                  identity,
+                  jobId,
+                  errorsArtifact.relative_path,
+                )
+              ).bytes.toString("utf8"),
             ),
       diagnostics: RemoteRenderDiagnostic[] = [
         ...parsed.errors.map((item) => ({
@@ -1145,7 +1423,9 @@ export class RemoteRenderService {
       log =
         logArtifact === undefined
           ? ""
-          : (await this.artifact(identity, jobId, logArtifact.relative_path)).bytes.toString("utf8"),
+          : (
+              await this.artifact(identity, jobId, logArtifact.relative_path)
+            ).bytes.toString("utf8"),
       rawLogResourceUri =
         logArtifact === undefined
           ? null
@@ -1168,13 +1448,19 @@ export class RemoteRenderService {
   ): Promise<RemoteArtifactContent> {
     requireScope(identity.scopes, "mcp:read");
     this.assertOwned(identity.userId, jobId);
-    let artifact = this.database.artifacts.getDownloadable(jobId, relativePath, { retentionHours: this.artifactRetentionHours });
+    let artifact = this.database.artifacts.getDownloadable(
+      jobId,
+      relativePath,
+      { retentionHours: this.artifactRetentionHours },
+    );
     const page = /^previews\/page-[1-9][0-9]*\.png$/.test(relativePath)
       ? previewPage(relativePath)
       : null;
     if (page !== null) {
       const candidates = this.database.artifacts
-        .listDownloadable(jobId, { retentionHours: this.artifactRetentionHours })
+        .listDownloadable(jobId, {
+          retentionHours: this.artifactRetentionHours,
+        })
         .filter(
           (item) =>
             item.type === "preview" && previewPage(item.relative_path) === page,
@@ -1201,16 +1487,42 @@ export class RemoteRenderService {
       // Admission may wait behind other reads. Recheck retention and register
       // protection together only after the memory budget is actually acquired.
       const leaseId = this.database.transaction(() => {
-        const current = this.database.artifacts.getDownloadable(jobId, artifact.relative_path, { retentionHours: this.artifactRetentionHours });
+        const current = this.database.artifacts.getDownloadable(
+          jobId,
+          artifact.relative_path,
+          { retentionHours: this.artifactRetentionHours },
+        );
         if (current === undefined || current.id !== artifact.id)
-          throw new AppError("ARTIFACT_NOT_FOUND", "Artifact is no longer available", 404);
+          throw new AppError(
+            "ARTIFACT_NOT_FOUND",
+            "Artifact is no longer available",
+            404,
+          );
         const id = newId("download");
-        this.database.artifacts.createLease({ id, jobId, artifactId: current.id,
-          createdAt: nowIso(), expiresAt: new Date(Date.now() + ARTIFACT_DOWNLOAD_LEASE_MS).toISOString() });
+        this.database.artifacts.createLease({
+          id,
+          jobId,
+          artifactId: current.id,
+          createdAt: nowIso(),
+          expiresAt: new Date(
+            Date.now() + ARTIFACT_DOWNLOAD_LEASE_MS,
+          ).toISOString(),
+        });
         return id;
       });
       const controller = new AbortController();
-      releaseLease = protectArtifactDownloadLeases(this.database.artifacts, [leaseId], () => controller.abort(new AppError("ARTIFACT_UNAVAILABLE", "Artifact download protection was lost", 503)));
+      releaseLease = protectArtifactDownloadLeases(
+        this.database.artifacts,
+        [leaseId],
+        () =>
+          controller.abort(
+            new AppError(
+              "ARTIFACT_UNAVAILABLE",
+              "Artifact download protection was lost",
+              503,
+            ),
+          ),
+      );
       return {
         jobId,
         relativePath: artifact.relative_path,
@@ -1709,6 +2021,7 @@ export class RemoteRenderService {
     userId: string,
     archive: string,
     paths: readonly string[],
+    onReady?: (sourceId: string) => void,
   ): Promise<SourceRow> {
     const metadata = await stat(archive);
     if (
@@ -1736,7 +2049,11 @@ export class RemoteRenderService {
       metadata.size,
       nowIso(),
     );
-    if (existing !== undefined) return existing;
+    if (existing !== undefined) {
+      if (onReady !== undefined)
+        this.database.transaction(() => onReady(existing.id));
+      return existing;
+    }
     const sourceId = newId("source"),
       storageKey = `sources/${sourceId}/source.zip`,
       path = join(this.storageRoot, storageKey),
@@ -1771,6 +2088,7 @@ export class RemoteRenderService {
             paths_json: JSON.stringify(paths),
           },
         );
+        onReady?.(sourceId);
       });
     } catch (error) {
       await rm(dirname(path), { recursive: true, force: true });
@@ -1789,6 +2107,7 @@ export class RemoteRenderService {
     userId: string,
     sourceId: string,
     mutation: (root: string) => Promise<void>,
+    onReady?: (sourceId: string) => void,
   ): Promise<RemoteSourceSummary> {
     const source = this.resolveOwnedSource(userId, sourceId),
       root = await mkdtemp(
@@ -1825,6 +2144,7 @@ export class RemoteRenderService {
           userId,
           archive,
           paths,
+          onReady,
         );
         return this.summarizeSource(revision, source.id);
       } finally {
@@ -2144,7 +2464,9 @@ export class RemoteRenderService {
   }
 
   private summarize(row: JobRow): RemoteJobSummary {
-    const artifacts = this.database.artifacts.listDownloadable(row.id, { retentionHours: this.artifactRetentionHours }),
+    const artifacts = this.database.artifacts.listDownloadable(row.id, {
+        retentionHours: this.artifactRetentionHours,
+      }),
       previewPages = artifacts
         .filter((artifact) => artifact.type === "preview")
         .map((artifact) => previewPage(artifact.relative_path))
@@ -2156,6 +2478,7 @@ export class RemoteRenderService {
       engine: "lualatex",
       rendererVersion: row.renderer_version,
       sourceId: row.source_id,
+      projectRevisionId: row.project_revision_id,
       entrypoint: row.entrypoint,
       outputs: this.database.jobs.outputs(row),
       createdAt: row.created_at,

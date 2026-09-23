@@ -1,4 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/server";
+import { z } from "zod";
 import {
   assertValidMcpOutput,
   cancelRenderOutputSchema,
@@ -14,6 +15,17 @@ import {
   renderProjectOutputSchema,
   uploadSourceInputSchema,
   uploadSourceOutputSchema,
+  projectIdInputSchema,
+  projectPageInputSchema,
+  attachProjectRevisionInputSchema,
+  listProjectsOutputSchema,
+  getProjectOutputSchema,
+  getProjectRevisionJobsOutputSchema,
+  createProjectOutputSchema,
+  renameProjectOutputSchema,
+  deleteProjectOutputSchema,
+  attachProjectRevisionOutputSchema,
+  renderProjectRevisionOutputSchema,
   type McpOperations,
   type McpToolName,
   type McpToolOutput,
@@ -168,7 +180,140 @@ export function createLatexRendererMcpServer(
     async ({ jobId }) =>
       runTool("delete_render", () => operations.deleteRender(jobId)),
   );
+  registerProjectTools(server, operations);
   return server;
+}
+
+function registerProjectTools(
+  server: McpServer,
+  operations: McpOperations,
+): void {
+  const readOnly = {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    } as const,
+    mutate = {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    } as const,
+    name = z.string().trim().min(1).max(200),
+    revisionId = z.string().regex(/^revision_[a-f0-9]{32}$/);
+  server.registerTool(
+    "list_projects",
+    {
+      title: "List saved Projects",
+      description: "List owner-scoped saved Projects shared with Web.",
+      inputSchema: projectPageInputSchema,
+      outputSchema: listProjectsOutputSchema,
+      annotations: readOnly,
+    },
+    (options) =>
+      runTool("list_projects", () => operations.listProjects(options)),
+  );
+  server.registerTool(
+    "get_project",
+    {
+      title: "Get saved Project",
+      description: "Read immutable revisions, Source IDs and Job history.",
+      inputSchema: projectPageInputSchema.extend({
+        projectId: projectIdInputSchema.shape.projectId,
+      }),
+      outputSchema: getProjectOutputSchema,
+      annotations: readOnly,
+    },
+    ({ projectId, cursor, pageSize }) =>
+      runTool("get_project", () =>
+        operations.getProject(projectId, { cursor, pageSize }),
+      ),
+  );
+  server.registerTool(
+    "get_project_revision_jobs",
+    {
+      title: "List Project revision Jobs",
+      description: "Page through Job history for one saved revision.",
+      inputSchema: projectPageInputSchema.extend({
+        projectId: projectIdInputSchema.shape.projectId,
+        revisionId,
+      }),
+      outputSchema: getProjectRevisionJobsOutputSchema,
+      annotations: readOnly,
+    },
+    ({ projectId, revisionId: id, cursor, pageSize }) =>
+      runTool("get_project_revision_jobs", () =>
+        operations.getProjectRevisionJobs(projectId, id, { cursor, pageSize }),
+      ),
+  );
+  server.registerTool(
+    "create_project",
+    {
+      title: "Create saved Project",
+      description: "Create a Project; temporary renders remain independent.",
+      inputSchema: z.object({ displayName: name }).strict(),
+      outputSchema: createProjectOutputSchema,
+      annotations: mutate,
+    },
+    ({ displayName }) =>
+      runTool("create_project", () => operations.createProject(displayName)),
+  );
+  server.registerTool(
+    "rename_project",
+    {
+      title: "Rename saved Project",
+      description: "Change only the Project display name.",
+      inputSchema: projectIdInputSchema.extend({ displayName: name }),
+      outputSchema: renameProjectOutputSchema,
+      annotations: mutate,
+    },
+    ({ projectId, displayName }) =>
+      runTool("rename_project", () =>
+        operations.renameProject(projectId, displayName),
+      ),
+  );
+  server.registerTool(
+    "delete_project",
+    {
+      title: "Delete saved Project",
+      description: "Hide a saved Project only after explicit user approval.",
+      inputSchema: projectIdInputSchema,
+      outputSchema: deleteProjectOutputSchema,
+      annotations: { ...mutate, destructiveHint: true },
+    },
+    ({ projectId }) =>
+      runTool("delete_project", () => operations.deleteProject(projectId)),
+  );
+  server.registerTool(
+    "attach_project_revision",
+    {
+      title: "Save Project revision",
+      description:
+        "Attach an already uploaded immutable Source to a saved Project.",
+      inputSchema: attachProjectRevisionInputSchema,
+      outputSchema: attachProjectRevisionOutputSchema,
+      annotations: mutate,
+    },
+    (input) =>
+      runTool("attach_project_revision", () =>
+        operations.attachProjectRevision(input),
+      ),
+  );
+  server.registerTool(
+    "render_project_revision",
+    {
+      title: "Render Project revision",
+      description: "Queue a Job for an exact saved revision and Source.",
+      inputSchema: projectIdInputSchema.extend({ revisionId }),
+      outputSchema: renderProjectRevisionOutputSchema,
+      annotations: mutate,
+    },
+    ({ projectId, revisionId: id }) =>
+      runTool("render_project_revision", () =>
+        operations.renderProjectRevision(projectId, id),
+      ),
+  );
 }
 
 async function runTool(
@@ -192,6 +337,20 @@ function shortSummary(output: McpToolOutput): string {
   if (!output.success)
     return `${output.operation} failed (${output.error?.code ?? "UNKNOWN"}).`;
   switch (output.operation) {
+    case "list_projects":
+      return `Found ${output.result?.page.items.length ?? 0} Project(s).`;
+    case "get_project":
+      return `Project ${output.result?.project.id ?? "found"}.`;
+    case "get_project_revision_jobs":
+      return `Found ${output.result?.page.items.length ?? 0} Job(s).`;
+    case "create_project":
+    case "rename_project":
+    case "delete_project":
+      return `Project ${output.result?.project.id ?? "updated"}.`;
+    case "attach_project_revision":
+      return `Project revision ${output.result?.revision.id ?? "saved"}.`;
+    case "render_project_revision":
+      return `Render ${output.result?.job.id ?? "queued"} for revision ${output.result?.revisionId ?? "selected"}.`;
     case "upload_source":
       return `Source ${output.result?.source.sourceId ?? "prepared"}.`;
     case "create_render_job":

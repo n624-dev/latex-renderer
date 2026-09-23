@@ -97,6 +97,89 @@ export const sourceRenderResponseSchema = z.object({
 });
 export type SourceRenderResponse = z.infer<typeof sourceRenderResponseSchema>;
 
+export const projectIdSchema = z.string().regex(/^project_[a-f0-9]{32}$/);
+export const projectRevisionIdSchema = z
+  .string()
+  .regex(/^revision_[a-f0-9]{32}$/);
+export const projectJobSummarySchema = z
+  .object({
+    id: z.string().regex(/^job_[a-f0-9]{32}$/),
+    status: JobStatusSchema,
+    createdAt: z.string(),
+    updatedAt: z.string(),
+    retryOfJobId: z.string().nullable(),
+    errorCode: z.string().nullable(),
+    outputs: z.array(renderOutputSchema),
+  })
+  .loose();
+export const projectRevisionJobsPageSchema = z.object({
+  items: z.array(projectJobSummarySchema),
+  hasMore: z.boolean(),
+  nextCursor: z.string().nullable(),
+});
+export const projectRevisionSummarySchema = z
+  .object({
+    id: projectRevisionIdSchema,
+    revisionNumber: z.number().int().positive(),
+    sourceId: z.string().regex(/^source_[a-f0-9]{32}$/),
+    displayName: z.string(),
+    originalFilename: z.string(),
+    entrypoint: z.string(),
+    outputs: z.array(renderOutputSchema),
+    createdAt: z.string(),
+    jobs: z.array(projectJobSummarySchema),
+    jobCount: z.number().int().nonnegative(),
+    jobsHasMore: z.boolean(),
+    jobsNextCursor: z.string().nullable(),
+  })
+  .loose();
+export const projectSummarySchema = z
+  .object({
+    id: projectIdSchema,
+    displayName: z.string(),
+    createdAt: z.string(),
+    updatedAt: z.string(),
+    revisionCount: z.number().int().nonnegative(),
+    latestRevision: z
+      .object({
+        id: projectRevisionIdSchema,
+        revisionNumber: z.number().int().positive(),
+        entrypoint: z.string(),
+        displayName: z.string(),
+        originalFilename: z.string(),
+        createdAt: z.string(),
+      })
+      .loose()
+      .nullable(),
+  })
+  .loose();
+export const projectPageSchema = z.object({
+  items: z.array(projectSummarySchema),
+  hasMore: z.boolean(),
+  nextCursor: z.string().nullable(),
+});
+export const projectDetailSchema = projectSummarySchema
+  .extend({
+    revisions: z.array(projectRevisionSummarySchema),
+    revisionsHasMore: z.boolean(),
+    revisionsNextCursor: z.string().nullable(),
+    latestRevision: projectRevisionSummarySchema.nullable(),
+  })
+  .loose();
+export const attachProjectRevisionResponseSchema = z.object({
+  id: projectRevisionIdSchema,
+  projectId: projectIdSchema,
+  sourceId: z.string().regex(/^source_[a-f0-9]{32}$/),
+  revisionNumber: z.number().int().positive(),
+  entrypoint: z.string(),
+  outputs: z.array(renderOutputSchema),
+});
+export type ProjectPage = z.infer<typeof projectPageSchema>;
+export type ProjectDetail = z.infer<typeof projectDetailSchema>;
+export type AttachProjectRevisionResponse = z.infer<
+  typeof attachProjectRevisionResponseSchema
+>;
+
 export const jobArtifactSchema = z.object({
   type: z.string().min(1),
   relativePath: z.string().min(1),
@@ -150,9 +233,7 @@ export const createUserSchema = z
       z
         .object({
           type: z.literal("password"),
-          loginName: z
-            .string()
-            .regex(/^[a-z0-9][a-z0-9._-]{2,63}$/),
+          loginName: z.string().regex(/^[a-z0-9][a-z0-9._-]{2,63}$/),
           password: z.string().min(12).max(1024),
         })
         .strict(),
@@ -203,7 +284,8 @@ export const adminApiScopeLabels: Readonly<
   "admin:update:read": "Read application update state",
   "admin:update:write": "Request application update operations (owner only)",
   "admin:tex-environment:read": "Read TeX environment state",
-  "admin:tex-environment:write": "Request TeX environment operations (owner only for runtime mutations)",
+  "admin:tex-environment:write":
+    "Request TeX environment operations (owner only for runtime mutations)",
   "admin:audit:read": "Read audit logs",
   "admin:*": "All administration operations (owner-only key issuance)",
 };

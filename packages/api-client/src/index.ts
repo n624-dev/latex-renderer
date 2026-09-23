@@ -5,10 +5,18 @@ import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import {
   jobResponseSchema,
+  projectPageSchema,
+  projectDetailSchema,
+  projectRevisionJobsPageSchema,
+  projectIdSchema,
+  attachProjectRevisionResponseSchema,
   sourceRenderResponseSchema,
   sourceTicketResponseSchema,
   ticketResponseSchema,
   type JobResponse,
+  type ProjectPage,
+  type ProjectDetail,
+  type AttachProjectRevisionResponse,
   type RenderOutput,
   type SourceRenderResponse,
   type SourceTicketResponse,
@@ -142,10 +150,188 @@ export class RendererClient {
     );
     return sourceRenderResponseSchema.parse(await responseJson(response));
   }
+  async listProjects(
+    options: {
+      cursor?: string | undefined;
+      pageSize?: number | undefined;
+    } = {},
+  ): Promise<ProjectPage> {
+    const url = new URL(`${PUBLIC_API_PREFIX}/projects`, this.#baseUrl);
+    if (options.cursor !== undefined)
+      url.searchParams.set("cursor", options.cursor);
+    if (options.pageSize !== undefined)
+      url.searchParams.set("pageSize", String(options.pageSize));
+    const response = await fetch(url, {
+      headers: noStoreRequestHeaders(this.headers()),
+      cache: "no-store",
+      redirect: "error",
+    });
+    return projectPageSchema.parse(await responseJson(response));
+  }
+  async getProject(
+    id: string,
+    options: {
+      cursor?: string | undefined;
+      pageSize?: number | undefined;
+    } = {},
+  ): Promise<ProjectDetail> {
+    const url = new URL(
+      `${PUBLIC_API_PREFIX}/projects/${encodeURIComponent(id)}`,
+      this.#baseUrl,
+    );
+    if (options.cursor !== undefined)
+      url.searchParams.set("cursor", options.cursor);
+    if (options.pageSize !== undefined)
+      url.searchParams.set("pageSize", String(options.pageSize));
+    const response = await fetch(url, {
+      headers: noStoreRequestHeaders(this.headers()),
+      cache: "no-store",
+      redirect: "error",
+    });
+    return projectDetailSchema.parse(await responseJson(response));
+  }
+  async listProjectRevisionJobs(
+    projectId: string,
+    revisionId: string,
+    options: {
+      cursor?: string | undefined;
+      pageSize?: number | undefined;
+    } = {},
+  ) {
+    const url = new URL(
+      `${PUBLIC_API_PREFIX}/projects/${encodeURIComponent(projectId)}/revisions/${encodeURIComponent(revisionId)}/jobs`,
+      this.#baseUrl,
+    );
+    if (options.cursor !== undefined)
+      url.searchParams.set("cursor", options.cursor);
+    if (options.pageSize !== undefined)
+      url.searchParams.set("pageSize", String(options.pageSize));
+    const response = await fetch(url, {
+      headers: noStoreRequestHeaders(this.headers()),
+      cache: "no-store",
+      redirect: "error",
+    });
+    return projectRevisionJobsPageSchema.parse(await responseJson(response));
+  }
+  async createProject(displayName: string): Promise<{ id: string }> {
+    const response = await fetch(
+      new URL(`${PUBLIC_API_PREFIX}/projects`, this.#baseUrl),
+      {
+        method: "POST",
+        headers: this.headers({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ displayName }),
+        redirect: "error",
+      },
+    );
+    return z
+      .object({ id: projectIdSchema })
+      .parse(await responseJson(response));
+  }
+  async renameProject(
+    id: string,
+    displayName: string,
+  ): Promise<{ id: string; displayName: string }> {
+    const response = await fetch(
+      new URL(
+        `${PUBLIC_API_PREFIX}/projects/${encodeURIComponent(id)}`,
+        this.#baseUrl,
+      ),
+      {
+        method: "PATCH",
+        headers: this.headers({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ displayName }),
+        redirect: "error",
+      },
+    );
+    return z
+      .object({ id: projectIdSchema, displayName: z.string() })
+      .parse(await responseJson(response));
+  }
+  async deleteProject(id: string): Promise<void> {
+    const response = await fetch(
+      new URL(
+        `${PUBLIC_API_PREFIX}/projects/${encodeURIComponent(id)}`,
+        this.#baseUrl,
+      ),
+      {
+        method: "DELETE",
+        headers: this.headers(),
+        redirect: "error",
+      },
+    );
+    await responseJson(response);
+  }
+  async attachProjectRevision(input: {
+    projectId: string;
+    sourceId: string;
+    entrypoint: string;
+    displayName: string;
+    originalFilename: string;
+    outputs?: readonly RenderOutput[];
+  }): Promise<AttachProjectRevisionResponse> {
+    const response = await fetch(
+      new URL(
+        `${PUBLIC_API_PREFIX}/projects/${encodeURIComponent(input.projectId)}/revisions`,
+        this.#baseUrl,
+      ),
+      {
+        method: "POST",
+        headers: this.headers({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          sourceId: input.sourceId,
+          entrypoint: input.entrypoint,
+          displayName: input.displayName,
+          originalFilename: input.originalFilename,
+          outputs: input.outputs ?? ["pdf"],
+        }),
+        redirect: "error",
+      },
+    );
+    return attachProjectRevisionResponseSchema.parse(
+      await responseJson(response),
+    );
+  }
+  async renderProjectRevision(
+    projectId: string,
+    revisionId: string,
+    idempotencyKey: string,
+    outputs?: readonly RenderOutput[],
+  ) {
+    const response = await fetch(
+      new URL(
+        `${PUBLIC_API_PREFIX}/projects/${encodeURIComponent(projectId)}/revisions/${encodeURIComponent(revisionId)}/render`,
+        this.#baseUrl,
+      ),
+      {
+        method: "POST",
+        headers: this.headers({
+          "Content-Type": "application/json",
+          "Idempotency-Key": idempotencyKey,
+        }),
+        body: JSON.stringify(outputs === undefined ? {} : { outputs }),
+        redirect: "error",
+      },
+    );
+    return sourceRenderResponseSchema
+      .extend({
+        projectId: projectIdSchema,
+        revisionId: z.string().regex(/^revision_[a-f0-9]{32}$/),
+      })
+      .parse(await responseJson(response));
+  }
   async job(
     ...args:
-      | [jobId: string, jobTicket: string, options?: RendererRequestOptions | undefined]
-      | [rendererUrl: string, jobId: string, jobTicket: string, options?: RendererRequestOptions | undefined]
+      | [
+          jobId: string,
+          jobTicket: string,
+          options?: RendererRequestOptions | undefined,
+        ]
+      | [
+          rendererUrl: string,
+          jobId: string,
+          jobTicket: string,
+          options?: RendererRequestOptions | undefined,
+        ]
   ): Promise<JobResponse> {
     let base: string, jobId: string, ticket: string, path: string;
     let options: RendererRequestOptions | undefined;
@@ -249,8 +435,16 @@ export class RendererClient {
     expected: { size: number; sha256: string },
   ): Promise<void> {
     const target = this.credentialTarget(url);
-    if (!Number.isSafeInteger(expected.size) || expected.size < 0 || !/^[a-f0-9]{64}$/.test(expected.sha256))
-      throw new AppError("INVALID_ARTIFACT_METADATA", "Artifact size and SHA-256 are required", 502);
+    if (
+      !Number.isSafeInteger(expected.size) ||
+      expected.size < 0 ||
+      !/^[a-f0-9]{64}$/.test(expected.sha256)
+    )
+      throw new AppError(
+        "INVALID_ARTIFACT_METADATA",
+        "Artifact size and SHA-256 are required",
+        502,
+      );
     const response = await fetch(freshUrl(target), {
       headers: noStoreRequestHeaders({ Authorization: `Bearer ${ticket}` }),
       cache: "no-store",
@@ -266,7 +460,12 @@ export class RendererClient {
           return undefined;
         throw error;
       });
-      if (existing !== undefined && (existing.isSymbolicLink() || !existing.isFile() || existing.nlink !== 1))
+      if (
+        existing !== undefined &&
+        (existing.isSymbolicLink() ||
+          !existing.isFile() ||
+          existing.nlink !== 1)
+      )
         throw new AppError(
           "UNSAFE_OUTPUT_PATH",
           "Artifact destination must not be a symbolic link",
@@ -278,24 +477,44 @@ export class RendererClient {
         transform(chunk: Buffer, _encoding, callback) {
           size += chunk.length;
           if (size > expected.size)
-            return callback(new AppError("ARTIFACT_INTEGRITY_MISMATCH", "Artifact exceeds its advertised size", 502));
+            return callback(
+              new AppError(
+                "ARTIFACT_INTEGRITY_MISMATCH",
+                "Artifact exceeds its advertised size",
+                502,
+              ),
+            );
           hash.update(chunk);
           callback(null, chunk);
         },
       });
       await pipeline(
-        Readable.fromWeb(response.body as import("node:stream/web").ReadableStream<Uint8Array>),
+        Readable.fromWeb(
+          response.body as import("node:stream/web").ReadableStream<Uint8Array>,
+        ),
         verifier,
         createWriteStream(temporary, { flags: "wx", mode: 0o600 }),
       );
       if (size !== expected.size || hash.digest("hex") !== expected.sha256)
-        throw new AppError("ARTIFACT_INTEGRITY_MISMATCH", "Artifact size or SHA-256 does not match Job metadata", 502);
+        throw new AppError(
+          "ARTIFACT_INTEGRITY_MISMATCH",
+          "Artifact size or SHA-256 does not match Job metadata",
+          502,
+        );
       const current = await lstat(destination).catch((error: unknown) => {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+        if ((error as NodeJS.ErrnoException).code === "ENOENT")
+          return undefined;
         throw error;
       });
-      if (current !== undefined && (current.isSymbolicLink() || !current.isFile() || current.nlink !== 1))
-        throw new AppError("UNSAFE_OUTPUT_PATH", "Artifact destination changed while downloading", 400);
+      if (
+        current !== undefined &&
+        (current.isSymbolicLink() || !current.isFile() || current.nlink !== 1)
+      )
+        throw new AppError(
+          "UNSAFE_OUTPUT_PATH",
+          "Artifact destination changed while downloading",
+          400,
+        );
       await rename(temporary, destination);
     } catch (error) {
       await rm(temporary, { force: true }).catch(() => undefined);

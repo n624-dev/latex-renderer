@@ -2,9 +2,9 @@
 slug: api
 category: API
 title: 公開API
-description: Source共有、ジョブ作成、ZIPアップロード、状態確認、成果物取得をHTTPから行います。
+description: Source・保存Project共有、ジョブ作成、状態確認、成果物取得をHTTPから行います。
 navOrder: 70
-updated: "2026-09-16"
+updated: "2026-09-23"
 since: "v1.0.0"
 ---
 
@@ -19,32 +19,44 @@ since: "v1.0.0"
 
 ## 認証とスコープ
 
-ジョブ作成と操作用トークン更新はAPIキー、アップロードとジョブ操作は応答で返された短時間トークンをBearer認証で送ります。
+ジョブ作成、保存Project操作、操作用トークン更新はAPIキー、アップロードとジョブ操作は応答で返された短時間トークンをBearer認証で送ります。同じユーザーが所有する別のAPIキー／Service Accountは同じ保存Projectを扱えます。他のユーザーには公開されません。
 
 ```http
 Authorization: Bearer <TOKEN>
 ```
 
-- `render:create`：ジョブ作成
-- `render:read:own`：自分のジョブ用短時間トークンの更新
+- `render:create`：ジョブ作成、Project作成・改名・削除・改訂保存
+- `render:read:own`：自分のジョブ用短時間トークンの更新、Projectと履歴の閲覧
 
 > [!WARNING]
 > APIキー、uploadTicket、jobTicketをログ、URL、ソースZIPへ含めないでください。
 
 ## APIエンドポイント
 
-| メソッド | パス                                    | 用途                                                                 |
-| -------- | --------------------------------------- | -------------------------------------------------------------------- |
-| POST     | `/api/v1/render-tickets`                | 既存SourceからJobを作成、または従来フローのJobとuploadTicket等を作成 |
-| POST     | `/api/v1/source-tickets`                | Sourceを予約または同一ユーザー内で再利用                             |
-| PUT      | `/api/v1/sources/{sourceId}/content`    | Source ZIPを検証してアップロード                                     |
-| POST     | `/api/v1/job-tickets/{jobId}`           | 所有ジョブの操作用トークンを更新                                     |
-| PUT      | `/api/v1/jobs/{jobId}/source`           | ZIPを直接Renderer APIへアップロード                                  |
-| GET      | `/api/v1/jobs/{jobId}`                  | 状態とエラーを取得                                                   |
-| POST     | `/api/v1/jobs/{jobId}/cancel`           | 待機中または処理中のジョブを中止                                     |
-| GET      | `/api/v1/jobs/{jobId}/artifacts/{path}` | PDF、ログ、構造化エラー、SVGを取得                                   |
-| GET      | `/api/v1/jobs/{jobId}/previews/{page}`  | `page-N.png` のページプレビューを取得                                |
-| DELETE   | `/api/v1/jobs/{jobId}`                  | 終了済みジョブを削除対象へ移行                                       |
+| メソッド | パス                                                         | 用途                                                                 |
+| -------- | ------------------------------------------------------------ | -------------------------------------------------------------------- |
+| POST     | `/api/v1/render-tickets`                                     | 既存SourceからJobを作成、または従来フローのJobとuploadTicket等を作成 |
+| POST     | `/api/v1/source-tickets`                                     | Sourceを予約または同一ユーザー内で再利用                             |
+| GET      | `/api/v1/projects`                                           | 保存Projectの一覧                                                    |
+| POST     | `/api/v1/projects`                                           | 保存Projectの作成                                                    |
+| GET      | `/api/v1/projects/{projectId}`                               | Projectの詳細・改訂履歴                                              |
+| PATCH    | `/api/v1/projects/{projectId}`                               | Projectの改名                                                        |
+| DELETE   | `/api/v1/projects/{projectId}`                               | Projectの削除                                                        |
+| POST     | `/api/v1/projects/{projectId}/revisions`                     | ready Sourceを不変の改訂として保存                                   |
+| GET      | `/api/v1/projects/{projectId}/revisions/{revisionId}/jobs`   | 改訂のJob履歴を取得                                                  |
+| POST     | `/api/v1/projects/{projectId}/revisions/{revisionId}/render` | 指定した改訂を再レンダリング                                         |
+| PUT      | `/api/v1/sources/{sourceId}/content`                         | Source ZIPを検証してアップロード                                     |
+| POST     | `/api/v1/job-tickets/{jobId}`                                | 所有ジョブの操作用トークンを更新                                     |
+| PUT      | `/api/v1/jobs/{jobId}/source`                                | ZIPを直接Renderer APIへアップロード                                  |
+| GET      | `/api/v1/jobs/{jobId}`                                       | 状態とエラーを取得                                                   |
+| POST     | `/api/v1/jobs/{jobId}/cancel`                                | 待機中または処理中のジョブを中止                                     |
+| GET      | `/api/v1/jobs/{jobId}/artifacts/{path}`                      | PDF、ログ、構造化エラー、SVGを取得                                   |
+| GET      | `/api/v1/jobs/{jobId}/previews/{page}`                       | `page-N.png` のページプレビューを取得                                |
+| DELETE   | `/api/v1/jobs/{jobId}`                                       | 終了済みジョブを削除対象へ移行                                       |
+
+Projectの一覧・詳細・Job履歴は `cursor` と `pageSize` でページングできます。改訂保存は `sourceId`、Source内の相対 `.tex` パスである `entrypoint`、`displayName`、`originalFilename`、`outputs` を送ります。同じProject・Source・entrypointなら改訂を再利用します。改訂のレンダリングは `Idempotency-Key`（16〜200文字）が必須で、本文の `outputs` を省略するとその改訂の初回設定を使います。返された固定の `projectId`／`revisionId` で履歴を参照してください。従来の一時的なSource→Jobフローも引き続き利用できます。
+
+保守モードが `reject-new-jobs` の間はProjectの閲覧・改名・削除・改訂保存は可能ですが、新しいJobは作成できません。`read-only` と `lockdown` ではProjectの変更も拒否されます。Project削除は記録の非表示であり、SourceやJobの即時完全削除ではありません。
 
 ## ジョブ作成
 

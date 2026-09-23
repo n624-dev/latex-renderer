@@ -11,6 +11,7 @@
   "dependencies": {
     "@hono/node-server": "^1.19.17",
     "@latex-renderer/auth": "workspace:*",
+    "@latex-renderer/contracts": "workspace:*",
     "@latex-renderer/database": "workspace:*",
     "@latex-renderer/remote-mcp-core": "workspace:*",
     "@latex-renderer/shared": "workspace:*",

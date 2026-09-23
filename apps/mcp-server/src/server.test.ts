@@ -10,6 +10,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createLatexRendererMcpServer } from "./server.js";
 
 const jobId = `job_${"a".repeat(32)}`;
+const projectId = `project_${"c".repeat(32)}`;
+const revisionId = `revision_${"d".repeat(32)}`;
+const sourceId = `source_${"f".repeat(32)}`;
 const secret = `lrk_${"b".repeat(32)}_${"C".repeat(43)}`;
 const job = {
   id: jobId,
@@ -93,6 +96,75 @@ const operations: McpOperations = {
       operation: "delete_render",
       result: { jobId, action: "delete", requested: true },
     }),
+  listProjects: () =>
+    Promise.resolve({
+      success: true,
+      operation: "list_projects",
+      result: { page: { items: [], hasMore: false, nextCursor: null } },
+    }),
+  getProject: () =>
+    Promise.resolve({
+      success: true,
+      operation: "get_project",
+      result: {
+        project: {
+          id: projectId,
+          displayName: "Draft",
+          createdAt: "2026-08-11T00:00:00.000Z",
+          updatedAt: "2026-08-11T00:00:00.000Z",
+          revisionCount: 0,
+          latestRevision: null,
+          revisions: [],
+          revisionsHasMore: false,
+          revisionsNextCursor: null,
+        },
+      },
+    }),
+  getProjectRevisionJobs: () =>
+    Promise.resolve({
+      success: true,
+      operation: "get_project_revision_jobs",
+      result: { page: { items: [], hasMore: false, nextCursor: null } },
+    }),
+  createProject: () =>
+    Promise.resolve({
+      success: true,
+      operation: "create_project",
+      result: { project: { id: projectId } },
+    }),
+  renameProject: () =>
+    Promise.resolve({
+      success: true,
+      operation: "rename_project",
+      result: { project: { id: projectId, displayName: "Renamed" } },
+    }),
+  deleteProject: () =>
+    Promise.resolve({
+      success: true,
+      operation: "delete_project",
+      result: { project: { id: projectId, deleted: true } },
+    }),
+  attachProjectRevision: () =>
+    Promise.resolve({
+      success: true,
+      operation: "attach_project_revision",
+      result: {
+        revision: {
+          id: revisionId,
+          projectId,
+          sourceId,
+          revisionNumber: 1,
+          entrypoint: "main.tex",
+          outputs: ["pdf"],
+        },
+      },
+    }),
+  renderProjectRevision: () =>
+    Promise.resolve({
+      success: true,
+      operation: "render_project_revision",
+      result: { projectId, revisionId, job },
+    }),
 };
 
 const connections: McpConnection[] = [];
@@ -123,6 +195,20 @@ describe("local MCP v2", () => {
       download_render_artifacts: { jobId, outputDirectory: "/tmp/output" },
       cancel_render: { jobId },
       delete_render: { jobId },
+      list_projects: {},
+      get_project: { projectId },
+      get_project_revision_jobs: { projectId, revisionId },
+      create_project: { displayName: "Draft" },
+      rename_project: { projectId, displayName: "Renamed" },
+      delete_project: { projectId },
+      attach_project_revision: {
+        projectId,
+        sourceId,
+        entrypoint: "main.tex",
+        displayName: "Draft",
+        originalFilename: "main.tex",
+      },
+      render_project_revision: { projectId, revisionId },
     };
     for (const name of MCP_TOOL_NAMES) {
       const result = asRecord(

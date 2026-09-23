@@ -43,32 +43,65 @@ afterEach(async () => {
 
 describe("Remote MCP HTTP server", () => {
   it("applies the same retention deadline to summary, diagnostics and inline resources", async () => {
-    const f = await createFixture(), jobId = await seedCompletedRemoteJob(f, "failed"),
+    const f = await createFixture(),
+      jobId = await seedCompletedRemoteJob(f, "failed"),
       identity = { userId: "user_test", scopes: ["mcp:read"] as const };
     const completed = f.database.jobs.get(jobId)?.completed_at;
     const deadline = Date.parse(completed ?? "") + 24 * 3_600_000;
     const clock = vi.spyOn(Date, "now").mockReturnValue(deadline - 1);
-    expect((await f.renders.diagnostics(identity, jobId)).diagnostics.length).toBeGreaterThan(0);
+    expect(
+      (await f.renders.diagnostics(identity, jobId)).diagnostics.length,
+    ).toBeGreaterThan(0);
     clock.mockReturnValue(deadline);
     expect(f.renders.job(identity, jobId).artifacts).toEqual([]);
-    expect((await f.renders.diagnostics(identity, jobId)).diagnostics).toEqual([]);
-    await expect(f.renders.artifact(identity, jobId, "compile.log")).rejects.toMatchObject({ code: "ARTIFACT_NOT_FOUND" });
-    const longer = new RemoteRenderService(f.database, f.storage, "test", ORIGIN, undefined, undefined, undefined, undefined, undefined, 48);
-    expect((await longer.artifact(identity, jobId, "compile.log")).bytes.length).toBeGreaterThan(0);
-    f.database.raw.prepare("UPDATE jobs SET status='expired' WHERE id=?").run(jobId);
-    await expect(longer.artifact(identity, jobId, "compile.log")).rejects.toMatchObject({ code: "ARTIFACT_NOT_FOUND" });
+    expect((await f.renders.diagnostics(identity, jobId)).diagnostics).toEqual(
+      [],
+    );
+    await expect(
+      f.renders.artifact(identity, jobId, "compile.log"),
+    ).rejects.toMatchObject({ code: "ARTIFACT_NOT_FOUND" });
+    const longer = new RemoteRenderService(
+      f.database,
+      f.storage,
+      "test",
+      ORIGIN,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      48,
+    );
+    expect(
+      (await longer.artifact(identity, jobId, "compile.log")).bytes.length,
+    ).toBeGreaterThan(0);
+    f.database.raw
+      .prepare("UPDATE jobs SET status='expired' WHERE id=?")
+      .run(jobId);
+    await expect(
+      longer.artifact(identity, jobId, "compile.log"),
+    ).rejects.toMatchObject({ code: "ARTIFACT_NOT_FOUND" });
   });
   it("registers and releases protection for buffered resources and diagnostic files", async () => {
-    const f = await createFixture(), jobId = await seedCompletedRemoteJob(f, "failed"), identity = { userId: "user_test", scopes: ["mcp:read"] as const };
-    const registered = vi.spyOn(f.database.artifacts, "createLease"), released = vi.spyOn(f.database.artifacts, "deleteLease");
+    const f = await createFixture(),
+      jobId = await seedCompletedRemoteJob(f, "failed"),
+      identity = { userId: "user_test", scopes: ["mcp:read"] as const };
+    const registered = vi.spyOn(f.database.artifacts, "createLease"),
+      released = vi.spyOn(f.database.artifacts, "deleteLease");
     await f.renders.diagnostics(identity, jobId);
     expect(registered).toHaveBeenCalledTimes(2);
     expect(released).toHaveBeenCalledTimes(2);
     await rm(join(f.storage, "jobs", jobId, "output/compile.log"));
-    await expect(f.renders.artifact(identity, jobId, "compile.log")).rejects.toMatchObject({ code: "ARTIFACT_NOT_FOUND" });
+    await expect(
+      f.renders.artifact(identity, jobId, "compile.log"),
+    ).rejects.toMatchObject({ code: "ARTIFACT_NOT_FOUND" });
     expect(registered).toHaveBeenCalledTimes(3);
     expect(released).toHaveBeenCalledTimes(3);
-    expect(f.database.raw.prepare("SELECT COUNT(*) AS n FROM artifact_download_leases").get()).toMatchObject({ n: 0 });
+    expect(
+      f.database.raw
+        .prepare("SELECT COUNT(*) AS n FROM artifact_download_leases")
+        .get(),
+    ).toMatchObject({ n: 0 });
   });
   it.each(["hash", "missing-chunk", "existing-archive"] as const)(
     "cleans up failed finalization without losing another writer's data: %s",
@@ -517,6 +550,16 @@ describe("Remote MCP HTTP server", () => {
         params: {},
       });
       expect(listed.result.tools?.map((tool) => tool.name)).toEqual([
+        "list_projects",
+        "get_project",
+        "get_project_revision_jobs",
+        "create_project",
+        "rename_project",
+        "delete_project",
+        "attach_project_revision",
+        "update_project_file",
+        "delete_project_file",
+        "render_project_revision",
         "create_source",
         "begin_source_upload",
         "upload_source_chunk",
@@ -1601,6 +1644,115 @@ describe("Remote MCP HTTP server", () => {
       ),
     ).rejects.toMatchObject({ code: "MAINTENANCE", status: 503 });
     expect(fixture.database.sources.list()).toHaveLength(before);
+  });
+
+  it("edits a saved Project into a new immutable Source and visible revision", async () => {
+    const fixture = await createFixture(),
+      identity = {
+        userId: "user_test",
+        scopes: ["mcp", "mcp:render", "mcp:read"] as const,
+      },
+      original = await fixture.renders.createSource(identity, [
+        {
+          path: "main.tex",
+          text: "\\documentclass{article}\\begin{document}first\\end{document}",
+        },
+        { path: "notes.tex", text: "unused" },
+      ]),
+      project = fixture.renders.createProject(identity, "Draft"),
+      first = fixture.renders.attachProjectRevision(identity, {
+        projectId: project.id,
+        sourceId: original.id,
+        entrypoint: "main.tex",
+        displayName: "First",
+        originalFilename: "main.tex",
+        outputs: ["pdf"],
+      }),
+      edited = await fixture.renders.updateProjectFile(identity, {
+        projectId: project.id,
+        revisionId: first.id,
+        file: {
+          path: "main.tex",
+          text: "\\documentclass{article}\\begin{document}second\\end{document}",
+        },
+      });
+    expect(edited.source.id).not.toBe(original.id);
+    expect(edited.source.revisionOf).toBe(original.id);
+    expect(edited.revision.revisionNumber).toBe(2);
+    expect(fixture.database.projects.revisionCount(project.id)).toBe(2);
+    const job = await fixture.renders.renderProjectRevision(
+      identity,
+      project.id,
+      edited.revision.id,
+    );
+    expect(job).toMatchObject({
+      sourceId: edited.source.id,
+      projectRevisionId: edited.revision.id,
+    });
+    expect(fixture.renders.getProject(identity, project.id)).toMatchObject({
+      revisions: [
+        {
+          id: edited.revision.id,
+          sourceId: edited.source.id,
+          jobs: [{ id: job.id }],
+        },
+        { id: first.id, sourceId: original.id },
+      ],
+    });
+    const removed = await fixture.renders.deleteProjectFile(identity, {
+      projectId: project.id,
+      revisionId: edited.revision.id,
+      path: "notes.tex",
+    });
+    expect(removed.revision.revisionNumber).toBe(3);
+    expect(removed.source.paths).toEqual(["main.tex"]);
+    const temporaryJob = await fixture.renders.createRender(identity, {
+      sourceId: original.id,
+    });
+    expect(temporaryJob.projectRevisionId).toBeNull();
+  });
+
+  it("rolls back a Project file edit if revision attachment fails", async () => {
+    const fixture = await createFixture(),
+      identity = { userId: "user_test", scopes: ["mcp:render"] as const },
+      source = await fixture.renders.createSource(identity, [
+        {
+          path: "main.tex",
+          text: "\\documentclass{article}\\begin{document}first\\end{document}",
+        },
+      ]),
+      project = fixture.renders.createProject(identity, "Draft"),
+      first = fixture.renders.attachProjectRevision(identity, {
+        projectId: project.id,
+        sourceId: source.id,
+        entrypoint: "main.tex",
+        displayName: "First",
+        originalFilename: "main.tex",
+        outputs: ["pdf"],
+      }),
+      sourceCount = fixture.database.sources.list().length;
+    vi.spyOn(fixture.database.projects, "insertRevision").mockImplementation(
+      () => {
+        throw new Error("injected revision failure");
+      },
+    );
+    await expect(
+      fixture.renders.updateProjectFile(identity, {
+        projectId: project.id,
+        revisionId: first.id,
+        file: {
+          path: "main.tex",
+          text: "\\documentclass{article}\\begin{document}changed\\end{document}",
+        },
+      }),
+    ).rejects.toThrow("injected revision failure");
+    expect(fixture.database.projects.revisionCount(project.id)).toBe(1);
+    expect(fixture.database.sources.list()).toHaveLength(sourceCount);
+    expect(
+      (await readdir(join(fixture.storage, "sources"))).filter(
+        (name) => name !== source.id,
+      ),
+    ).toEqual([]);
   });
 
   it("uses live database queue settings and reserves maximum output bytes", async () => {

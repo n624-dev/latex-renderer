@@ -52,6 +52,14 @@ describe("MCP core", () => {
       "download_render_artifacts",
       "cancel_render",
       "delete_render",
+      "list_projects",
+      "get_project",
+      "get_project_revision_jobs",
+      "create_project",
+      "rename_project",
+      "delete_project",
+      "attach_project_revision",
+      "render_project_revision",
     ]);
   });
 

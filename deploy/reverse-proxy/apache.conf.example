@@ -25,6 +25,7 @@
 
   ProxyPassMatch "^(/api/v1/(health|render-tickets|source-tickets))$" "http://127.0.0.1:3105$1" nocanon
   ProxyPass /api/v1/job-tickets/ http://127.0.0.1:3105/api/v1/job-tickets/ nocanon
+  ProxyPass /api/v1/projects http://127.0.0.1:3105/api/v1/projects nocanon
   ProxyPass /.well-known/oauth-authorization-server http://127.0.0.1:3104/.well-known/oauth-authorization-server nocanon
   ProxyPass /.well-known/oauth-protected-resource http://127.0.0.1:3104/.well-known/oauth-protected-resource nocanon
   ProxyPass /oauth/ http://127.0.0.1:3104/oauth/ nocanon
