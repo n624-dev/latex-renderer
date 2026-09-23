@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 1.3.8-rc.4 - 2026-09-23
+
+- Share owner-scoped saved Projects and immutable revisions across Web, public API,
+  CLI, Local MCP and Remote MCP. Bind Project render Jobs to the selected revision
+  and support atomic Remote MCP file edits; keep temporary Source-only rendering.
+- Add public Gateway routes, OpenAPI/client documentation and cross-client
+  regressions. Preserve existing authorization boundaries, the Base-only image
+  policy, frozen Updater bootstrap and published artifacts.
+- Candidate preparation only: require signed-artifact update/recovery E2E and
+  designated-host validation before Stable. This version bump does not update
+  production.
+
 ## 1.3.8-rc.3 - 2026-09-19
 
 - Fence App file inspections by selection generation, clear stale tasks immediately,
