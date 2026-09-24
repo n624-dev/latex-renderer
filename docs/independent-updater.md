@@ -150,6 +150,13 @@ check name, curl exit code, HTTP status or a missing-content reason, not the URL
 or body. The existing public-status check still retries at most ten times with
 two-second intervals; client installation and other mutations are not retried.
 Archive signature/checksum checks and real rendering validation are unchanged.
+The production render smoke submits a real job, so application deployment
+requires maintenance mode `normal`. Do not enable `read-only` or `lockdown`
+before an application update; a non-normal mode is rejected before the release
+switch, then checked again immediately before host preparation. If maintenance
+is enabled after that check, the smoke may still fail after cutover and require
+the documented recovery-point review. An Updater-only slot activation does not
+submit a render job.
 
 These diagnostics do not retroactively identify failures from older releases.
 If an application operation failed after cutover, separately inspect the active

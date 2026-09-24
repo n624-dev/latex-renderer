@@ -107,4 +107,65 @@ describe("deployment prerequisite failure boundary", () => {
     );
     expect(prepare.match(/ln -sfn/g)).toHaveLength(1);
   });
+
+  it.skipIf(process.platform === "win32")(
+    "rejects maintenance before release mutation so the render smoke can run",
+    () => {
+      const root = mkdtempSync(join(tmpdir(), "renderer-maintenance-"));
+      try {
+        const source = readFileSync(
+          "deploy/scripts/deploy-production-release.sh",
+          "utf8",
+        );
+        const start = source.indexOf(
+          "require_normal_maintenance_for_smoke() {",
+        );
+        const end = source.indexOf("\n}\n", start) + 2;
+        expect(start).toBeGreaterThan(0);
+        expect(end).toBeGreaterThan(start);
+        expect(
+          source.indexOf("require_normal_maintenance_for_smoke\n"),
+        ).toBeLessThan(
+          source.indexOf("deployment_checkpoint dependency-install"),
+        );
+        expect(
+          source.indexOf("require_normal_maintenance_for_smoke\n", end),
+        ).toBeLessThan(
+          source.indexOf('"$source_root/deploy/scripts/prepare-host.sh"'),
+        );
+
+        const database = join(root, "renderer.sqlite3");
+        const sqlite3 = join(root, "sqlite3");
+        writeFileSync(database, "fixture");
+        writeFileSync(sqlite3, '#!/bin/sh\nprintf "%s\\n" "$MOCK_MODE"\n', {
+          mode: 0o700,
+        });
+        const functionBody = source
+          .slice(start, end)
+          .replace("/var/lib/latex-renderer/renderer.sqlite3", database);
+        const run = (mode: string) =>
+          spawnSync(
+            "/bin/sh",
+            ["-c", `${functionBody}\nrequire_normal_maintenance_for_smoke`],
+            {
+              encoding: "utf8",
+              env: {
+                ...process.env,
+                PATH: `${root}:${process.env.PATH}`,
+                MOCK_MODE: mode,
+              },
+            },
+          );
+        expect(run('"normal"').status).toBe(0);
+        const readOnly = run('"read-only"');
+        expect(readOnly.status).toBe(78);
+        expect(readOnly.stderr).toContain("requires normal maintenance mode");
+        expect(run("").status).toBe(78);
+        rmSync(database);
+        expect(run("").status).toBe(0); // No DB on a first install.
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
 });

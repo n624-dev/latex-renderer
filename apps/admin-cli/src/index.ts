@@ -21,6 +21,19 @@ import {
 } from "@latex-renderer/shared";
 import { adminApiBaseUrl } from "./base-url.js";
 
+const credentialPath =
+  process.platform === "win32"
+    ? join(
+        process.env.APPDATA ?? homedir(),
+        "latex-renderer",
+        "admin-credential.bin",
+      )
+    : join(
+        process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"),
+        "latex-renderer",
+        "admin-credential",
+      );
+
 const program = new Command()
   .name("latex-render-admin")
   .version(CLIENT_VERSION);
@@ -147,7 +160,12 @@ maintenance
   .requiredOption("--reason <reason>")
   .requiredOption("--yes")
   .action(async (o: { mode: string; reason: string }) =>
-    print(await request("POST", "/system/maintenance/enable", o)),
+    print(
+      await request("POST", "/system/maintenance/enable", {
+        mode: o.mode,
+        reason: o.reason,
+      }),
+    ),
   );
 maintenance
   .command("disable")
@@ -560,19 +578,6 @@ function asRecord(value: unknown): Record<string, unknown> {
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
-
-const credentialPath =
-  process.platform === "win32"
-    ? join(
-        process.env.APPDATA ?? homedir(),
-        "latex-renderer",
-        "admin-credential.bin",
-      )
-    : join(
-        process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"),
-        "latex-renderer",
-        "admin-credential",
-      );
 
 async function saveKey(key: string): Promise<void> {
   await mkdir(dirname(credentialPath), { recursive: true, mode: 0o700 });
