@@ -355,7 +355,9 @@ describe("release-based application updates", () => {
       );
       expect(source).toContain('"release-attestations.jsonl"');
       expect(source).toContain("bundle: attestationBundle");
-      expect(read("deploy/scripts/release-attestation.mjs")).toContain('"--bundle"');
+      expect(read("deploy/scripts/release-attestation.mjs")).toContain(
+        '"--bundle"',
+      );
       expect(source).toContain("attestationBundle");
       expect(source).toContain('GH_PROMPT_DISABLED: "1"');
       expect(source).not.toContain("GH_TOKEN");
@@ -523,9 +525,15 @@ describe("release-based application updates", () => {
 
   it("serializes application and TeX mutations with one non-blocking OS lock", () => {
     const lock = read("deploy/scripts/mutation-lock.mjs");
+    const recoveryGc = read(
+      "deploy/systemd/latex-renderer-update-recovery-gc.service",
+    );
     expect(lock).toContain("/run/latex-renderer/mutation.lock");
     expect(lock).toContain('"--nonblock"');
     expect(lock).toContain('"--no-fork"');
+    expect(recoveryGc).toContain("User=root");
+    expect(recoveryGc).toContain("Group=latex-renderer");
+    expect(recoveryGc).toContain("UMask=0007");
     expect(read("deploy/scripts/update-manager.mjs")).toContain(
       "await acquireMutationLock()",
     );

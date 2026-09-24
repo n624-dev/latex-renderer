@@ -160,7 +160,12 @@ maintenance
   .requiredOption("--reason <reason>")
   .requiredOption("--yes")
   .action(async (o: { mode: string; reason: string }) =>
-    print(await request("POST", "/system/maintenance/enable", o)),
+    print(
+      await request("POST", "/system/maintenance/enable", {
+        mode: o.mode,
+        reason: o.reason,
+      }),
+    ),
   );
 maintenance
   .command("disable")

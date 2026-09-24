@@ -59,6 +59,23 @@ deployment_finished=false
 . "$source_root/deploy/scripts/deployment-checks.sh"
 deployment_checkpoint preflight
 
+# The final production smoke submits a real render job. Reject maintenance
+# before changing the active release, and recheck after the build in case an
+# operator enabled it while deployment dependencies were being prepared.
+require_normal_maintenance_for_smoke() {
+  database=/var/lib/latex-renderer/renderer.sqlite3
+  [ -f "$database" ] || return 0 # First install has no application DB yet.
+  maintenance_json=$(sqlite3 -readonly "$database" \
+    "SELECT value_json FROM system_settings WHERE key='maintenance_mode';") || {
+    echo "Cannot read maintenance mode before deployment" >&2
+    return 78
+  }
+  if [ "$maintenance_json" != '"normal"' ]; then
+    echo "Application deployment requires normal maintenance mode for its production render smoke" >&2
+    return 78
+  fi
+}
+
 restore_services_after_failure() {
   recovery_failed=false
   echo "Deployment did not finish; restoring local services on the active release." >&2
@@ -197,6 +214,7 @@ run_deployment_pnpm() {
     sh "$source_root/deploy/scripts/deployment-pnpm.sh" "$build_root" "$sync_pnpm_bin/pnpm" "$@"
 }
 # Reconcile relocated dependencies before any service stop or activation.
+require_normal_maintenance_for_smoke
 deployment_checkpoint dependency-install
 run_deployment_pnpm install --frozen-lockfile
 # Probe the same OAuth fallback and API read permissions used after cutover.
@@ -229,6 +247,7 @@ fi
 deployment_checkpoint quiesce-and-prepare-host
 sh "$source_root/deploy/scripts/quiesce-image-manager.sh"
 deployment_quiesced=true
+require_normal_maintenance_for_smoke
 "$source_root/deploy/scripts/prepare-host.sh" "$release_id"
 if [ "$deployment_mode" = cloudflare ]; then
   /opt/latex-renderer/current/deploy/scripts/configure-host-access.sh
