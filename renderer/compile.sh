@@ -42,7 +42,16 @@ publish_renderer_log() {
   status=$?
   trap - EXIT
   [ ! -d /work/output/compile.log ] || exit 80
-  mv -f -- "$renderer_log" /work/output/compile.log || exit 80
+  # A file moved from /tmp keeps its tmpfs ACL, so the host worker cannot read
+  # it through a rootless Docker bind mount. Create the replacement inside the
+  # output tree to inherit that tree's default ACL before publishing it.
+  publish_log_tmp=$(mktemp /work/output/.renderer-compile.XXXXXXXX) || exit 80
+  if ! cat "$renderer_log" > "$publish_log_tmp" ||
+     ! chmod 0660 "$publish_log_tmp" ||
+     ! mv -f -- "$publish_log_tmp" /work/output/compile.log; then
+    rm -f -- "$publish_log_tmp"
+    exit 80
+  fi
   exit "$status"
 }
 trap publish_renderer_log EXIT

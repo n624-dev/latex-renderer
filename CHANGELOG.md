@@ -10,6 +10,8 @@
 - Run SVG capture with multiple LaTeX passes so PDF and SVG resolve the same
   references. Add a real-TeX English/Japanese Runtime CI fixture covering
   include paths, decomposed Unicode input, logs, and reference-dependent SVG.
+- Publish the finished renderer log from the output tree so it inherits the
+  rootless bind mount's ACL and remains readable by the host Worker.
 - Refresh the pinned Debian base image, GitHub Actions, and development tooling
   with the TypeScript 7 compatibility adjustments. Keep the Base-only image
   publication policy, signed artifacts, Updater boundary, and canonical archive
