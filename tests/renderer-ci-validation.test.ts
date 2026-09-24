@@ -83,6 +83,7 @@ describe("Base-only CI validation failure boundaries", () => {
       "smoke-test-renderer-basic.sh",
       "smoke-test-renderer-en-jp.sh",
       "smoke-test-renderer-svg.sh",
+      "smoke-test-renderer-compat.sh",
     ])(
     "cleans temporary Runtime on success or failure at %s",
     (failedStage) => {
@@ -99,6 +100,7 @@ describe("Base-only CI validation failure boundaries", () => {
           "smoke-test-renderer-basic.sh",
           "smoke-test-renderer-en-jp.sh",
           "smoke-test-renderer-svg.sh",
+          "smoke-test-renderer-compat.sh",
         ];
         for (const name of names)
           writeFileSync(
@@ -147,6 +149,10 @@ describe("Base-only CI validation failure boundaries", () => {
           expect(
             commands.indexOf("smoke-test-renderer-svg.sh"),
           ).toBeGreaterThan(commands.indexOf("build-language-runtime.sh"));
+        if (!failedStage)
+          expect(
+            commands.indexOf("smoke-test-renderer-compat.sh"),
+          ).toBeGreaterThan(commands.indexOf("smoke-test-renderer-svg.sh"));
       } finally {
         rmSync(root, { recursive: true, force: true });
       }

@@ -210,6 +210,22 @@ describe("managed TeX Live image pipeline", () => {
     expect(manager).toContain("smoke-test-renderer-basic.sh");
   });
 
+  it("requires a real-TeX compatibility fixture with matching PDF/SVG references", () => {
+    const validation = read("deploy/scripts/ci-validate-texlive-base.sh");
+    const smoke = read("deploy/scripts/smoke-test-renderer-compat.sh");
+    const source = read("tests/fixtures/runtime-compat/compile.tex");
+    expect(validation).toContain(
+      'sh "$script_root/smoke-test-renderer-compat.sh"',
+    );
+    expect(smoke).toContain("LATEX_ENTRYPOINT=compile.tex");
+    expect(smoke).toContain("LATEX_OUTPUTS=pdf,svg");
+    expect(smoke).toContain("chapters/ch1.aux");
+    expect(smoke).toContain("LR-COMPAT-REF-(compile|objects)");
+    expect(source).toContain("\\include{chapters/ch1}");
+    expect(source).toContain("\\input{chapters/cafe\u0301}");
+    expect(source).not.toContain("\\input{chapters/caf\u00e9}");
+  });
+
   it("keeps desired languages separate from TeX Live dependency collections", () => {
     const manager = read("deploy/scripts/image-manager.mjs");
     const restore = read("deploy/scripts/restore-managed-runtime.sh");
