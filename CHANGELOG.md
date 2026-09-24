@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+## 1.3.9-rc.1 - 2026-09-25
+
+- Fix real multi-file TeX projects: create auxiliary output directories for
+  `\\include`, preserve accepted Unicode ZIP filename spelling while rejecting
+  canonical collisions, and keep renderer logs separate from `compile.tex`.
+- Run SVG capture with multiple LaTeX passes so PDF and SVG resolve the same
+  references. Add a real-TeX English/Japanese Runtime CI fixture covering
+  include paths, decomposed Unicode input, logs, and reference-dependent SVG.
+- Publish the finished renderer log from the output tree so it inherits the
+  rootless bind mount's ACL and remains readable by the host Worker.
+- Refresh the pinned Debian base image, GitHub Actions, and development tooling
+  with the TypeScript 7 compatibility adjustments. Keep the Base-only image
+  publication policy, signed artifacts, Updater boundary, and canonical archive
+  fallback unchanged.
+- Candidate preparation only. Require signed-artifact update/recovery E2E and
+  designated-host validation before Stable. This release does not update the
+  production VPS.
+
 ## 1.3.8 - 2026-09-24
 
 - Promote the published immutable `v1.3.8-rc.5` candidate with no functional

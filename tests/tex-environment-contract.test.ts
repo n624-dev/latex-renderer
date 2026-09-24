@@ -228,6 +228,18 @@ describe("managed TeX Live image pipeline", () => {
     expect(source).not.toContain("\\input{chapters/caf\u00e9}");
   });
 
+  it("publishes the renderer log with the bind-mounted output ACL", () => {
+    const compile = read("renderer/compile.sh");
+    expect(compile).toContain("mktemp /work/output/.renderer-compile.XXXXXXXX");
+    expect(compile).toContain('chmod 0660 "$publish_log_tmp"');
+    expect(compile).toContain(
+      'mv -f -- "$publish_log_tmp" /work/output/compile.log',
+    );
+    expect(compile).not.toContain(
+      'mv -f -- "$renderer_log" /work/output/compile.log',
+    );
+  });
+
   it("keeps desired languages separate from TeX Live dependency collections", () => {
     const manager = read("deploy/scripts/image-manager.mjs");
     const restore = read("deploy/scripts/restore-managed-runtime.sh");
