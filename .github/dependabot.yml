@@ -36,7 +36,6 @@ updates:
     directory: /renderer
     schedule:
       interval: monthly
-      day: "1"
       time: "04:30"
       timezone: Asia/Tokyo
     open-pull-requests-limit: 5

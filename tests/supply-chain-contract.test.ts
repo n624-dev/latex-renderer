@@ -24,6 +24,8 @@ describe("public supply-chain controls", () => {
     expect(dependabot).toContain("package-ecosystem: npm");
     expect(dependabot).toContain("package-ecosystem: github-actions");
     expect(dependabot).toContain("package-ecosystem: docker");
+    // schedule.day accepts weekdays, not a numeric day of the month.
+    expect(dependabot).not.toMatch(/^\s+day:\s*["']?\d+["']?\s*$/m);
     expect(read(".github/workflows/ci.yml")).toContain(
       "gitleaks/gitleaks-action@",
     );
@@ -92,7 +94,9 @@ describe("public supply-chain controls", () => {
     expect(updater).toContain('const githubCli = "/usr/local/bin/gh"');
     expect(updater).toContain("releaseAttestationArgs({");
     expect(updater).toContain("commit: release.commit");
-    expect(read("deploy/scripts/release-attestation.mjs")).toContain('"--predicate-type",');
+    expect(read("deploy/scripts/release-attestation.mjs")).toContain(
+      '"--predicate-type",',
+    );
     expect(release).toContain(
       '[[ "$GITHUB_REF" == "refs/tags/$RELEASE_TAG" ]]',
     );
