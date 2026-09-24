@@ -49,6 +49,13 @@ describe("renderer audit regressions", () => {
           { recursive: true },
         );
         await writeFile(join(work, "input", entrypoint), "test source");
+        await mkdir(join(work, "input", "chapters", "section space"), {
+          recursive: true,
+        });
+        await mkdir(join(work, "input", "cafe\u0301"));
+        const outside = join(root, "outside");
+        await mkdir(outside);
+        await symlink(outside, join(work, "input", "external"), "dir");
         await executable(
           join(bin, "latexmk"),
           `
@@ -56,6 +63,10 @@ const fs = require('node:fs'), path = require('node:path');
 const args = process.argv.slice(2);
 const out = args.find(x => x.startsWith('-outdir=')).slice(8);
 const name = args.find(x => x.startsWith('-jobname='))?.slice(9) ?? path.basename(args.at(-1)).replace(/\\.[^.]*$/, '');
+for (const nested of ['chapters/section space', 'cafe\\u0301']) {
+  if (!fs.statSync(path.join(out, nested)).isDirectory()) process.exit(97);
+}
+if (fs.existsSync(path.join(out, 'external'))) process.exit(98);
 fs.writeFileSync(path.join(out, name + '.pdf'), '%PDF-1.4\\n');
 fs.writeFileSync(path.join(out, name + '.synctex.gz'), 'map');
 fs.writeFileSync(path.join(out, name + '.log'), 'TeX-owned log');
@@ -80,13 +91,6 @@ for (let i = 1; i <= count; i++) fs.writeFileSync(prefix + '-' + String(i).padSt
         await executable(
           join(opt, "renderer/export-svg.pl"),
           "process.exit(0);",
-        );
-        await writeFile(
-          join(opt, "renderer/prepare-output-dirs.sh"),
-          await readFile(
-            new URL("../renderer/prepare-output-dirs.sh", import.meta.url),
-          ),
-          { mode: 0o700 },
         );
         const original = await readFile(
           new URL("../renderer/compile.sh", import.meta.url),
@@ -118,6 +122,19 @@ for (let i = 1; i <= count; i++) fs.writeFileSync(prefix + '-' + String(i).padSt
           await readFile(join(work, "output/result.pdf"), "utf8"),
           "%PDF-1.4\n",
         );
+        assert.equal(
+          (
+            await stat(join(work, "output", "chapters", "section space"))
+          ).isDirectory(),
+          true,
+        );
+        assert.equal(
+          (await stat(join(work, "output", "cafe\u0301"))).isDirectory(),
+          true,
+        );
+        await assert.rejects(stat(join(work, "output", "external")), {
+          code: "ENOENT",
+        });
         if (entrypoint === "compile.tex") {
           const log = await readFile(join(work, "output/compile.log"), "utf8");
           assert.match(log, /renderer stdout/);
@@ -140,40 +157,6 @@ for (let i = 1; i <= count; i++) fs.writeFileSync(prefix + '-' + String(i).padSt
       }
     });
   }
-
-  it("mirrors source subdirectories for TeX include aux files without following links", async () => {
-    const root = await mkdtemp(join(tmpdir(), "renderer-include-dirs-"));
-    try {
-      const input = join(root, "input"),
-        output = join(root, "output");
-      await mkdir(join(input, "chapters", "section space"), {
-        recursive: true,
-      });
-      await mkdir(join(input, "cafe\u0301"), { recursive: true });
-      const outside = join(root, "outside");
-      await mkdir(outside);
-      await symlink(outside, join(input, "external"), "dir");
-      await mkdir(output);
-      await execute("sh", [
-        fileURLToPath(
-          new URL("../renderer/prepare-output-dirs.sh", import.meta.url),
-        ),
-        input,
-        output,
-      ]);
-      assert.equal(
-        (await stat(join(output, "chapters", "section space"))).isDirectory(),
-        true,
-      );
-      assert.equal(
-        (await stat(join(output, "cafe\u0301"))).isDirectory(),
-        true,
-      );
-      await assert.rejects(stat(join(output, "external")), { code: "ENOENT" });
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
 
   for (const status of [0, 1]) {
     it(`preserves SyncTeX candidates and checks the query exit status (${status})`, async () => {

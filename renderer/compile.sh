@@ -13,7 +13,22 @@ export TEXMFCACHE=/tmp/texlive/texmf-var:/opt/texlive/2026/texmf-var
 # and never widen the bind mount to every host user.
 umask 0007
 mkdir -p "$HOME" "$TEXMFHOME" "$TEXMFCONFIG" "$TEXMFVAR" /work/output/previews
-/opt/renderer/prepare-output-dirs.sh /work/input /work/output
+prepare_output_dirs() {
+  output_root=$1
+  # TeX writes chapters/ch1.aux under -outdir for \include{chapters/ch1}.
+  # Mirror directories from the validated, read-only input; find does not
+  # follow symlinks, and -exec preserves spaces and Unicode in path names.
+  find /work/input -mindepth 1 -type d -exec sh -c '
+    output_root=$1
+    shift
+    for input_dir do
+      relative=${input_dir#/work/input/}
+      [ "$relative" != "$input_dir" ] || exit 78
+      mkdir -p -- "$output_root/$relative"
+    done
+  ' sh "$output_root" {} +
+}
+prepare_output_dirs /work/output
 mkdir -p "$TEXMFVAR/luatex-cache/generic"
 cp -R /opt/texlive/2026/texmf-var/luatex-cache/generic/names \
   "$TEXMFVAR/luatex-cache/generic/"
@@ -131,7 +146,7 @@ if [ "$svg_requested" = true ]; then
   capture=/tmp/svg-capture
   rm -rf "$capture"
   mkdir -p "$capture"
-  /opt/renderer/prepare-output-dirs.sh /work/input "$capture"
+  prepare_output_dirs "$capture"
   export LATEX_ENTRYPOINT_ABSOLUTE="/work/input/$entrypoint"
   export TEXINPUTS="/work/input//:"
   set +e

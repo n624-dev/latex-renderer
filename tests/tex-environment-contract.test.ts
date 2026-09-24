@@ -169,6 +169,36 @@ describe("managed TeX Live image pipeline", () => {
     expect(legacyDockerfile).toContain("rm -f /opt/renderer/compile.sh");
   });
 
+  it("includes every renderer script dependency in derived Runtime files and identity", () => {
+    const builder = read("deploy/scripts/build-language-runtime.sh");
+    const restore = read("deploy/scripts/restore-managed-runtime.sh");
+    const identity = read("deploy/scripts/runtime-image-identity.mjs");
+    const compile = read("renderer/compile.sh");
+    const shellFiles = (source: string): string[] => {
+      const declaration = /^runtime_files="([^"]+)"$/m.exec(source);
+      if (!declaration?.[1]) throw new Error("Runtime file list is missing");
+      return declaration[1].split(" ");
+    };
+    const buildFiles = shellFiles(builder);
+    expect(shellFiles(restore)).toEqual(buildFiles);
+    const identityDeclaration =
+      /export const RENDERER_RUNTIME_FILES = Object\.freeze\(\[([\s\S]*?)\]\);/.exec(
+        identity,
+      );
+    if (!identityDeclaration?.[1])
+      throw new Error("Runtime identity file list is missing");
+    const identityFiles = Array.from(
+      identityDeclaration[1].matchAll(/"([^"]+)"/g),
+      (match) => match[1] ?? "",
+    );
+    expect(identityFiles).toEqual(buildFiles);
+    for (const match of compile.matchAll(
+      /\/opt\/renderer\/([A-Za-z0-9._-]+)/g,
+    )) {
+      expect(buildFiles, `compile.sh requires ${match[1]}`).toContain(match[1]);
+    }
+  });
+
   it("requires a language-neutral PDF/SVG/seccomp smoke test before managed activation", () => {
     const smoke = read("deploy/scripts/smoke-test-renderer-basic.sh");
     const manager = read("deploy/scripts/image-manager.mjs");
