@@ -1,6 +1,11 @@
 import { createReadStream } from "node:fs";
 import { basename, normalize, sep } from "node:path";
-import { artifactStoragePath, artifactRetentionExpiresAt, bindArtifactDownloadLeases, ARTIFACT_DOWNLOAD_LEASE_MS } from "@latex-renderer/database";
+import {
+  artifactStoragePath,
+  artifactRetentionExpiresAt,
+  bindArtifactDownloadLeases,
+  ARTIFACT_DOWNLOAD_LEASE_MS,
+} from "@latex-renderer/database";
 import { Readable } from "node:stream";
 import { AppError, newId, nowIso } from "@latex-renderer/shared";
 import yazl from "yazl";
@@ -29,7 +34,9 @@ export function adminArtifactsArchiveResponse(
         "Artifacts are no longer available",
         410,
       );
-    const rows = deps.database.artifacts.listDownloadable(jobId, { retentionHours: deps.artifactRetentionHours ?? 24 });
+    const rows = deps.database.artifacts.listDownloadable(jobId, {
+      retentionHours: deps.artifactRetentionHours ?? 24,
+    });
     if (rows.length === 0)
       throw new AppError(
         "ARTIFACT_NOT_FOUND",
@@ -46,7 +53,9 @@ export function adminArtifactsArchiveResponse(
         id: leaseId,
         jobId,
         artifactId: row.id,
-        expiresAt: new Date(Date.now() + ARTIFACT_DOWNLOAD_LEASE_MS).toISOString(),
+        expiresAt: new Date(
+          Date.now() + ARTIFACT_DOWNLOAD_LEASE_MS,
+        ).toISOString(),
         createdAt: nowIso(),
       });
       return leaseId;
@@ -68,7 +77,11 @@ export function adminArtifactsArchiveResponse(
 
   const archive = new yazl.ZipFile();
   const output = archive.outputStream as unknown as Readable;
-  const cleanup = bindArtifactDownloadLeases(deps.database.artifacts, leased.leases, output);
+  const cleanup = bindArtifactDownloadLeases(
+    deps.database.artifacts,
+    leased.leases,
+    output,
+  );
   // yazl emits file stat/read failures on ZipFile, not just outputStream.
   // Install handlers before addFile/end and propagate failure to the response.
   archive.on("error", (error: Error) => {
@@ -89,24 +102,21 @@ export function adminArtifactsArchiveResponse(
     cleanup();
     throw error;
   }
-  return new Response(
-    Readable.toWeb(
-      archive.outputStream as unknown as Readable,
-    ) as ReadableStream<Uint8Array>,
-    {
-      headers: {
-        "Content-Type": "application/zip",
-        "Content-Disposition": `attachment; filename="${jobId}-artifacts.zip"`,
-        "Cache-Control":
-          "private, no-store, no-cache, max-age=0, must-revalidate",
-        "Cloudflare-CDN-Cache-Control": "no-store",
-        "CDN-Cache-Control": "no-store",
-        Pragma: "no-cache",
-        Expires: "0",
-        "X-Content-Type-Options": "nosniff",
-      },
+  // Bridge Node and DOM stream definitions for the Response body.
+  const responseBody = Readable.toWeb(output) as ReadableStream<Uint8Array>;
+  return new Response(responseBody, {
+    headers: {
+      "Content-Type": "application/zip",
+      "Content-Disposition": `attachment; filename="${jobId}-artifacts.zip"`,
+      "Cache-Control":
+        "private, no-store, no-cache, max-age=0, must-revalidate",
+      "Cloudflare-CDN-Cache-Control": "no-store",
+      "CDN-Cache-Control": "no-store",
+      Pragma: "no-cache",
+      Expires: "0",
+      "X-Content-Type-Options": "nosniff",
     },
-  );
+  });
 }
 
 export function adminArtifactResponse(
@@ -134,7 +144,9 @@ export function adminArtifactResponse(
         "Artifact is no longer available",
         410,
       );
-    const row = deps.database.artifacts.getDownloadable(jobId, relativePath, { retentionHours: deps.artifactRetentionHours ?? 24 });
+    const row = deps.database.artifacts.getDownloadable(jobId, relativePath, {
+      retentionHours: deps.artifactRetentionHours ?? 24,
+    });
     if (row === undefined)
       throw new AppError("ARTIFACT_NOT_FOUND", "Artifact does not exist", 404);
     artifactStoragePath(deps.storageRoot, row);
@@ -143,7 +155,9 @@ export function adminArtifactResponse(
       id: leaseId,
       jobId,
       artifactId: row.id,
-      expiresAt: new Date(Date.now() + ARTIFACT_DOWNLOAD_LEASE_MS).toISOString(),
+      expiresAt: new Date(
+        Date.now() + ARTIFACT_DOWNLOAD_LEASE_MS,
+      ).toISOString(),
       createdAt: nowIso(),
     });
     deps.database.audit({
@@ -218,7 +232,10 @@ export function retentionExpiresAt(
   deps: AdminDependencies,
   terminalAt: string,
 ): string {
-  return artifactRetentionExpiresAt(terminalAt, deps.artifactRetentionHours ?? 24);
+  return artifactRetentionExpiresAt(
+    terminalAt,
+    deps.artifactRetentionHours ?? 24,
+  );
 }
 
 function isPastRetention(deps: AdminDependencies, terminalAt: string): boolean {
