@@ -15,6 +15,6 @@
     "@modelcontextprotocol/server": "^2.0.0",
     "@latex-renderer/mcp-core": "workspace:*",
     "@latex-renderer/shared": "workspace:*",
-    "zod": "^4.6.2"
+    "zod": "^4.6.5"
   }
 }

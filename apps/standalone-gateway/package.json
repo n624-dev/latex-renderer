@@ -14,6 +14,6 @@
     "@hono/node-server": "^2.1.1",
     "@latex-renderer/gateway-core": "workspace:*",
     "@latex-renderer/shared": "workspace:*",
-    "hono": "^4.13.7"
+    "hono": "^4.13.8"
   }
 }
