@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 1.3.8 - 2026-09-24
+
+- Promote the published immutable `v1.3.8-rc.5` candidate with no functional
+  changes. Its signed update/recovery E2E passed, and the designated VPS completed
+  both application and independent Updater deployment successfully.
+- Include the RC series' owner-scoped saved Projects, durable Source retention,
+  transactional artifact publication, Web batch reliability, and strict update
+  safety checks. Keep existing provenance validation, frozen Updater bootstrap,
+  Base-only image publication and canonical archive fallback.
+- Stable artifacts must identify RC5 as the validated candidate and pass source
+  equivalence and signed-artifact release checks before publication. This
+  preparation does not deploy Stable to the host.
+
 ## 1.3.8-rc.5 - 2026-09-24
 
 - Fix saved Admin CLI credential initialization and keep the `--yes` confirmation
