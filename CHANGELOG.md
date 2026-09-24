@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 1.3.8-rc.5 - 2026-09-24
+
+- Fix saved Admin CLI credential initialization and keep the `--yes` confirmation
+  flag out of the strict maintenance API request body.
+- Make root recovery GC create the shared mutation lock with the group and umask
+  required by the non-root Update Manager, without relaxing recovery-point data.
+- Require normal maintenance mode before application deployment and recheck
+  before host preparation: the mandatory production render smoke submits a job.
+  Keep the full smoke, signed-artifact checks and recovery review gate intact.
+- Candidate preparation only. Require signed-artifact update/recovery E2E and
+  designated-host validation with a successful combined application/Updater
+  outcome before Stable. This version bump does not update production.
+
 ## 1.3.8-rc.4 - 2026-09-23
 
 - Share owner-scoped saved Projects and immutable revisions across Web, public API,
