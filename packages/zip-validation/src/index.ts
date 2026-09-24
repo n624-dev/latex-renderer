@@ -48,6 +48,7 @@ export async function validateAndExtract(
   const zip = await openZip(zipPath);
   const zipHandle = await open(zipPath, "r");
   const seen = new Set<string>();
+  const canonicalNames = new Map<string, string>();
   const paths: string[] = [];
   let entries = 0;
   let files = 0;
@@ -79,6 +80,21 @@ export async function validateAndExtract(
           422,
         );
       seen.add(duplicateKey);
+      // Compare every path component canonically, but keep the ZIP spelling on
+      // disk so TeX references written in NFD still resolve byte-for-byte.
+      const components = normalized.replace(/\/$/, "").split("/");
+      for (let index = 1; index <= components.length; index += 1) {
+        const original = components.slice(0, index).join("/");
+        const key = original.normalize("NFC").toLowerCase();
+        const prior = canonicalNames.get(key);
+        if (prior !== undefined && prior !== original)
+          throw new AppError(
+            "ZIP_DUPLICATE_PATH",
+            "ZIP contains duplicate normalized paths",
+            422,
+          );
+        canonicalNames.set(key, original);
+      }
       assertEntryType(entry, normalized);
       if (normalized.endsWith("/")) continue;
       files += 1;
@@ -320,7 +336,7 @@ function normalizeEntry(name: string, limits: ZipLimits): string {
       "ZIP path contains control characters",
       422,
     );
-  const replaced = name.replaceAll("\\", "/").normalize("NFC");
+  const replaced = name.replaceAll("\\", "/");
   if (
     replaced.startsWith("/") ||
     replaced.startsWith("//") ||
