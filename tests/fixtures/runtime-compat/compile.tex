@@ -1,0 +1,14 @@
+\documentclass{article}
+\usepackage{amsmath}
+\begin{document}
+\include{chapters/ch1}
+\input{chapters/café}
+The resolved reference is $\ref{eq:compat}+1$.
+\makeatletter
+\@ifundefined{r@eq:compat}{%
+  \typeout{LR-COMPAT-REF-\jobname=UNRESOLVED}%
+}{%
+  \typeout{LR-COMPAT-REF-\jobname=\expandafter\meaning\csname r@eq:compat\endcsname}%
+}
+\makeatother
+\end{document}

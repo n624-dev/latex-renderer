@@ -52,6 +52,7 @@ RUNTIME_NO_CACHE=true RUNTIME_BUILDX_BUILDER=default \
 sh "$script_root/smoke-test-renderer-basic.sh" "$validation_runtime"
 sh "$script_root/smoke-test-renderer-en-jp.sh" "$validation_runtime"
 sh "$script_root/smoke-test-renderer-svg.sh" "$validation_runtime"
+sh "$script_root/smoke-test-renderer-compat.sh" "$validation_runtime"
 # Success is the exit status of this complete sequence, never a cached marker.
 cleanup
 sh "$script_root/ci-renderer-disk.sh" after-language-validation 0

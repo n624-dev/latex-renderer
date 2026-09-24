@@ -445,6 +445,57 @@ describe("ZIP boundary", () => {
       ),
     ).rejects.toMatchObject({ code: "ZIP_TOO_MANY_ENTRIES" });
   });
+
+  it("preserves decomposed Unicode names used by TeX references", async () => {
+    const root = await mkdtemp(join(tmpdir(), "latex-zip-unicode-"));
+    temporaryPaths.push(root);
+    const decomposed = "cafe\u0301";
+    const archive = join(root, "source.zip");
+    await createZipWithDecomposedName(archive, [
+      ["main.tex", `\\input{chapters/${decomposed}}`],
+      [`chapters/${decomposed}.tex`, "Nested input"],
+    ]);
+    const output = join(root, "output");
+    const result = await validateAndExtract(
+      archive,
+      output,
+      limits,
+      `chapters/${decomposed}.tex`,
+    );
+    expect(result.paths).toContain(`chapters/${decomposed}.tex`);
+    expect(
+      await readFile(join(output, "chapters", `${decomposed}.tex`), "utf8"),
+    ).toBe("Nested input");
+  });
+
+  it("rejects composed/decomposed collisions in both files and parent directories", async () => {
+    const root = await mkdtemp(join(tmpdir(), "latex-zip-collision-"));
+    temporaryPaths.push(root);
+    for (const [name, entries] of [
+      [
+        "files",
+        [
+          ["main.tex", "main"],
+          ["cafe\u0301.tex", "one"],
+          ["caf\u00e9.tex", "two"],
+        ],
+      ],
+      [
+        "directories",
+        [
+          ["main.tex", "main"],
+          ["cafe\u0301/a.tex", "one"],
+          ["caf\u00e9/b.tex", "two"],
+        ],
+      ],
+    ] as const) {
+      const archive = join(root, `${name}.zip`);
+      await createZipWithDecomposedName(archive, entries);
+      await expect(
+        validateAndExtract(archive, join(root, name), limits),
+      ).rejects.toMatchObject({ code: "ZIP_DUPLICATE_PATH" });
+    }
+  });
 });
 
 const limits = {
@@ -464,6 +515,36 @@ async function createZip(
   for (const [name, value] of entries) zip.addBuffer(Buffer.from(value), name);
   zip.end();
   await done;
+}
+
+async function createZipWithDecomposedName(
+  path: string,
+  entries: ReadonlyArray<readonly [name: string, value: string]>,
+): Promise<void> {
+  // yazl normalizes ZIP names to NFC. Replace an equally sized UTF-8 name in
+  // both ZIP headers so this fixture exercises a real NFD archive instead.
+  const decomposed = "cafe\u0301";
+  const placeholder = "\u00e9\u00e9\u00e9";
+  expect(Buffer.byteLength(decomposed)).toBe(Buffer.byteLength(placeholder));
+  await createZip(
+    path,
+    entries.map(
+      ([name, value]) =>
+        [name.replaceAll(decomposed, placeholder), value] as const,
+    ),
+  );
+  const archive = await readFile(path);
+  const from = Buffer.from(placeholder);
+  const to = Buffer.from(decomposed);
+  let offset = 0;
+  let replacements = 0;
+  while ((offset = archive.indexOf(from, offset)) !== -1) {
+    to.copy(archive, offset);
+    offset += to.length;
+    replacements += 1;
+  }
+  expect(replacements).toBeGreaterThanOrEqual(2);
+  await writeFile(path, archive);
 }
 
 function seededDatabase(): RendererDatabase {
