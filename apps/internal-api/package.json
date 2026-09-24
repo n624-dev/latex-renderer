@@ -19,7 +19,7 @@
     "@latex-renderer/shared": "workspace:*",
     "@latex-renderer/ticket": "workspace:*",
     "@latex-renderer/zip-validation": "workspace:*",
-    "hono": "^4.13.7",
-    "zod": "^4.6.2"
+    "hono": "^4.13.8",
+    "zod": "^4.6.5"
   }
 }

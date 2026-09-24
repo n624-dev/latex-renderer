@@ -22,6 +22,6 @@
     "@latex-renderer/contracts": "workspace:*",
     "@latex-renderer/setup-core": "workspace:*",
     "@latex-renderer/shared": "workspace:*",
-    "zod": "^4.6.2"
+    "zod": "^4.6.5"
   }
 }

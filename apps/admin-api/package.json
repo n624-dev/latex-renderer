@@ -20,9 +20,9 @@
     "@latex-renderer/shared": "workspace:*",
     "@latex-renderer/ticket": "workspace:*",
     "@latex-renderer/zip-validation": "workspace:*",
-    "hono": "^4.13.7",
+    "hono": "^4.13.8",
     "yazl": "^3.3.1",
-    "zod": "^4.6.2"
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@types/yazl": "^3.3.1"

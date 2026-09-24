@@ -21,7 +21,7 @@
     "@hono/node-server": "^2.1.1",
     "@latex-renderer/shared": "workspace:*",
     "gray-matter": "4.0.3",
-    "hono": "^4.13.7",
-    "marked": "18.0.9"
+    "hono": "^4.13.8",
+    "marked": "18.0.13"
   }
 }

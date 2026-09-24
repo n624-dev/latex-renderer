@@ -18,6 +18,6 @@
     "@latex-renderer/setup-core": "workspace:*",
     "@latex-renderer/setup-web": "workspace:*",
     "@latex-renderer/shared": "workspace:*",
-    "commander": "^14.0.3"
+    "commander": "^15.0.0"
   }
 }
