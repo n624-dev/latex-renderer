@@ -3,6 +3,8 @@ import type { StructuredErrors } from "@latex-renderer/contracts";
 export function parseCompileLog(
   log: string,
   exitCode: number | null,
+  entrypoint = "main.tex",
+  fallbackMessage?: string,
 ): StructuredErrors {
   const errors: StructuredErrors["errors"] = [];
   const warnings: StructuredErrors["warnings"] = [];
@@ -10,32 +12,37 @@ export function parseCompileLog(
     const line = sanitize(raw);
     const fileError = parseFileError(line);
     if (fileError !== null) {
-      errors.push(fileError);
-      continue;
+      if (errors.length < 200) errors.push(fileError);
+    } else {
+      const box = /^(Overfull|Underfull) \\[hv]box\b/.exec(line);
+      if (box !== null && warnings.length < 500) {
+        const affectedLine = /\bat lines? (\d+)(?:--\d+)?\b/.exec(line);
+        warnings.push({
+          type: String(box[1]).toLowerCase(),
+          file: null,
+          line: affectedLine === null ? null : Number(affectedLine[1]),
+          message: line.slice(0, 2000),
+        });
+      } else if (
+        warnings.length < 500 &&
+        /^(LaTeX|Package .*?) Warning:/.test(line)
+      ) {
+        warnings.push({
+          type: "latex-warning",
+          file: null,
+          line: null,
+          message: line.slice(0, 2000),
+        });
+      }
     }
-    const overfull =
-      /^(Overfull|Underfull) \\[hv]box.*(?:at lines? (\d+))?/.exec(line);
-    if (overfull !== null)
-      warnings.push({
-        type: String(overfull[1]).toLowerCase(),
-        file: null,
-        line: overfull[2] === undefined ? null : Number(overfull[2]),
-        message: line.slice(0, 2000),
-      });
-    else if (/^(LaTeX|Package .*?) Warning:/.test(line))
-      warnings.push({
-        type: "latex-warning",
-        file: null,
-        line: null,
-        message: line.slice(0, 2000),
-      });
-    if (errors.length >= 200 || warnings.length >= 500) break;
+    if (errors.length >= 200 && warnings.length >= 500) break;
   }
   if (exitCode !== null && exitCode !== 0 && errors.length === 0) {
     errors.push({
-      file: "main.tex",
+      file: projectPath(entrypoint),
       line: null,
-      message: `Compilation failed with exit code ${exitCode}`,
+      message:
+        fallbackMessage ?? `Compilation failed with exit code ${exitCode}`,
     });
   }
   return { success: exitCode === 0, exitCode, errors, warnings };
@@ -44,21 +51,16 @@ export function parseCompileLog(
 function parseFileError(
   line: string,
 ): StructuredErrors["errors"][number] | null {
-  const fileEnd = line.indexOf(".tex:");
-  if (fileEnd < 0) return null;
-  const lineStart = fileEnd + ".tex:".length,
-    lineEnd = line.indexOf(":", lineStart);
-  if (lineEnd < 0 || lineEnd === lineStart) return null;
-  const lineNumber = line.slice(lineStart, lineEnd);
-  for (let index = 0; index < lineNumber.length; index += 1) {
-    const code = lineNumber.charCodeAt(index);
-    if (code < 48 || code > 57) return null;
-  }
-  const message = line.slice(lineEnd + 1).trimStart();
+  const marker = /\.(?:tex|sty|cls):(\d+):/i.exec(line);
+  if (marker === null) return null;
+  const extensionEnd = marker.index + marker[0].indexOf(":");
+  const lineNumber = Number(marker[1]);
+  if (!Number.isSafeInteger(lineNumber)) return null;
+  const message = line.slice(marker.index + marker[0].length).trimStart();
   if (message.length === 0) return null;
   return {
-    file: projectPath(line.slice(0, fileEnd + ".tex".length)),
-    line: Number(lineNumber),
+    file: projectPath(line.slice(0, extensionEnd)),
+    line: lineNumber,
     message: message.slice(0, 2000),
   };
 }
@@ -73,7 +75,12 @@ export function parseRecorder(recorder: string): {
     const match = /^(INPUT|OUTPUT) (.+)$/.exec(sanitize(raw));
     if (match === null) continue;
     const path = projectPath(String(match[2]));
-    if (path.startsWith("/") || /^[A-Za-z]:/.test(path) || path.split("/").includes("..")) continue;
+    if (
+      path.startsWith("/") ||
+      /^[A-Za-z]:/.test(path) ||
+      path.split("/").includes("..")
+    )
+      continue;
     (match[1] === "INPUT" ? inputs : outputs).add(path);
   }
   return {

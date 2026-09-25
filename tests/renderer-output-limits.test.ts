@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -18,9 +18,9 @@ afterEach(async () => {
 
 describe("renderer output resource limits", () => {
   it("fails closed when the output tree cannot be read", async () => {
-    await expect(directorySize("/definitely/missing/renderer-output")).rejects.toMatchObject(
-      { code: "ENOENT" },
-    );
+    await expect(
+      directorySize("/definitely/missing/renderer-output"),
+    ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("stops scanning as soon as file or directory limits are exceeded", async () => {
@@ -57,6 +57,35 @@ describe("renderer output resource limits", () => {
       "Renderer metadata input exceeds limit",
     );
   });
+
+  it.each([
+    ["thesis.tex", "thesis.fls"],
+    ["docs/thesis.tex", "thesis.fls"],
+    ["docs/THESIS.TEX", "THESIS.fls"],
+  ])(
+    "uses the recorder for entrypoint %s",
+    async (entrypoint, recorderName) => {
+      const root = await temporaryRoot();
+      await writeFile(join(root, "compile.log"), "No structured error\n");
+      await writeFile(join(root, "main.fls"), "INPUT /work/input/wrong.tex\n");
+      await writeFile(
+        join(root, recorderName),
+        `INPUT /work/input/${entrypoint}\nOUTPUT /work/output/thesis.aux\n`,
+      );
+      await generateMetadata(root, 1, 1024, entrypoint);
+      const dependencies: unknown = JSON.parse(
+        await readFile(join(root, "dependencies.json"), "utf8"),
+      );
+      const diagnostics: unknown = JSON.parse(
+        await readFile(join(root, "errors.json"), "utf8"),
+      );
+      expect(dependencies).toEqual({
+        inputs: [entrypoint],
+        outputs: ["thesis.aux"],
+      });
+      expect(diagnostics).toMatchObject({ errors: [{ file: entrypoint }] });
+    },
+  );
 });
 
 async function temporaryRoot(): Promise<string> {

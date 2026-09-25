@@ -49,6 +49,7 @@ fi
 
 [ -s "$output/result.pdf" ]
 [ -s "$output/compile.log" ]
+[ -s "$output/compile.fls" ]
 [ -s "$output/chapters/ch1.aux" ]
 [ -s "$output/svg/manifest.json" ]
 
