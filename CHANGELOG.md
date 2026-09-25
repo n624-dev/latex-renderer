@@ -2,11 +2,16 @@
 
 ## Unreleased
 
+## 1.3.9-rc.2 - 2026-09-25
+
 - Use each Job's actual TeX entrypoint for recorder dependencies and fallback
   diagnostics; preserve `.sty`, `.cls`, and uppercase `.TEX` file-line errors,
   enforce diagnostic caps, and retain Overfull/Underfull line numbers.
 - Distinguish LaTeX compile, PDF preview, SVG, and whole-Job timeouts in Job
   status/error metadata without changing the existing rendering limits.
+- Candidate preparation only. Require signed-artifact update/recovery E2E and
+  designated-host validation before Stable. This release does not update the
+  production VPS.
 
 ## 1.3.9-rc.1 - 2026-09-25
 
