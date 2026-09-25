@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Use each Job's actual TeX entrypoint for recorder dependencies and fallback
+  diagnostics; preserve `.sty`, `.cls`, and uppercase `.TEX` file-line errors,
+  enforce diagnostic caps, and retain Overfull/Underfull line numbers.
+- Distinguish LaTeX compile, PDF preview, SVG, and whole-Job timeouts in Job
+  status/error metadata without changing the existing rendering limits.
+
 ## 1.3.9-rc.1 - 2026-09-25
 
 - Fix real multi-file TeX projects: create auxiliary output directories for

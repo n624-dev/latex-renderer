@@ -11,6 +11,7 @@ import {
 import type { WorkerConfig } from "./config.js";
 import { dockerStop, spawnRenderer } from "./docker.js";
 import { generateMetadata } from "./metadata.js";
+import { classifyRenderResult } from "./render-result.js";
 
 export async function processJob(
   database: RendererDatabase,
@@ -207,13 +208,22 @@ export async function processJob(
       );
       return;
     }
+    const result = classifyRenderResult(exitCode, timedOut, stderr);
     await inspectOutputTree(config, staging);
-    await generateMetadata(staging, exitCode, config.maxLogBytes);
+    await generateMetadata(
+      staging,
+      result.status === "timeout" && exitCode === 0 ? 124 : exitCode,
+      config.maxLogBytes,
+      job.entrypoint,
+      result.status === "timeout"
+        ? (result.errorMessage ?? undefined)
+        : undefined,
+    );
     const artifacts = await validateArtifacts(
       config,
       staging,
-      exitCode === 0,
-      exitCode === 0 && outputs.includes("svg"),
+      result.status === "succeeded",
+      result.status === "succeeded" && outputs.includes("svg"),
     );
     await publishArtifacts(staging, candidateOutput, artifacts);
     renewLease();
@@ -257,35 +267,22 @@ export async function processJob(
           sha256: artifact.sha256,
           created_at: timestamp,
         });
-      const total = artifacts.reduce((sum, item) => sum + item.size, 0),
-        finalStatus = timedOut
-          ? "timeout"
-          : exitCode === 0
-            ? "succeeded"
-            : "failed";
+      const total = artifacts.reduce((sum, item) => sum + item.size, 0);
       if (
         database.worker.transitionOwned(
           job.id,
           config.workerId,
           job.lease_generation,
           ["running"],
-          finalStatus,
+          result.status,
           timestamp,
           {
-            render_status: finalStatus,
+            render_status: result.status,
             completed_at: timestamp,
             output_size: total,
             exit_code: exitCode,
-            error_code: timedOut
-              ? "JOB_TIMEOUT"
-              : exitCode === 0
-                ? null
-                : "LATEX_COMPILE_FAILED",
-            error_message: timedOut
-              ? "The renderer exceeded the overall job timeout"
-              : exitCode === 0
-                ? null
-                : `Renderer exited with ${exitCode}: ${stderr.slice(0, 500)}`,
+            error_code: result.errorCode,
+            error_message: result.errorMessage,
             lease_owner: null,
             lease_expires_at: null,
             heartbeat_at: timestamp,
@@ -296,14 +293,10 @@ export async function processJob(
       database.audit({
         actorType: "system",
         actorId: config.workerId,
-        action: timedOut
-          ? "render.timeout"
-          : exitCode === 0
-            ? "render.completed"
-            : "render.failed",
+        action: result.auditAction,
         targetType: "job",
         targetId: job.id,
-        result: exitCode === 0 ? "success" : "failed",
+        result: result.status === "succeeded" ? "success" : "failed",
         metadata: {
           outputSize: total,
           artifactCount: artifacts.length,

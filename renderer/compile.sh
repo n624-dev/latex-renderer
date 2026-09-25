@@ -103,6 +103,10 @@ compile_status=$?
 set -e
 
 if [ "$compile_status" -ne 0 ]; then
+  if [ "$compile_status" -eq 124 ] || [ "$compile_status" -eq 137 ]; then
+    printf '%s\n' 'renderer: LaTeX compile timed out' >> "$renderer_log"
+    exit 81
+  fi
   exit "$compile_status"
 fi
 
@@ -125,7 +129,19 @@ if [ "$svg_requested" = true ]; then
     mv "/work/output/$synctex_name" /work/output/result.synctex.gz
   fi
 fi
-pages=$(timeout -s TERM -k 2 10 pdfinfo /work/output/result.pdf | awk '/^Pages:/ {print $2}')
+set +e
+timeout -s TERM -k 2 10 pdfinfo /work/output/result.pdf > /tmp/output-pdf-info
+pdfinfo_status=$?
+set -e
+if [ "$pdfinfo_status" -eq 124 ] || [ "$pdfinfo_status" -eq 137 ]; then
+  printf '%s\n' 'renderer: PDF preview inspection timed out' >> "$renderer_log"
+  exit 82
+fi
+if [ "$pdfinfo_status" -ne 0 ]; then
+  printf '%s\n' 'renderer: PDF preview inspection failed' >> "$renderer_log"
+  exit 71
+fi
+pages=$(awk '/^Pages:/ {print $2}' /tmp/output-pdf-info)
 case "$pages" in
   ''|*[!0-9]*) exit 71 ;;
 esac
@@ -134,7 +150,17 @@ if [ "$pages" -gt 100 ]; then
   exit 72
 fi
 
+set +e
 timeout -s TERM -k 2 60 pdftoppm -png -r 150 /work/output/result.pdf /work/output/previews/page
+preview_status=$?
+set -e
+if [ "$preview_status" -eq 124 ] || [ "$preview_status" -eq 137 ]; then
+  printf '%s\n' 'renderer: PDF preview timed out' >> "$renderer_log"
+  exit 82
+fi
+if [ "$preview_status" -ne 0 ]; then
+  exit "$preview_status"
+fi
 
 # Poppler pads page numbers to the document's page-count width. Keep the
 # public preview names independent of page count (page-1.png, not page-01.png).
@@ -166,12 +192,26 @@ if [ "$svg_requested" = true ]; then
     >> "$renderer_log" 2>&1
   capture_status=$?
   set -e
+  if [ "$capture_status" -eq 124 ] || [ "$capture_status" -eq 137 ]; then
+    printf '%s\n' 'renderer: SVG capture timed out' >> "$renderer_log"
+    exit 83
+  fi
   if [ "$capture_status" -ne 0 ] || [ ! -f "$capture/objects.meta" ]; then
     printf '%s\n' 'renderer: SVG capture failed' >> "$renderer_log"
     exit 79
   fi
+  set +e
   timeout -s TERM -k 2 "${SVG_CONVERSION_TIMEOUT_SECONDS:-120}" \
     /opt/renderer/export-svg.pl "$capture/objects.pdf" "$capture/objects.meta" \
       /work/output/result.pdf /work/output/svg \
     >> "$renderer_log" 2>&1
+  export_status=$?
+  set -e
+  if [ "$export_status" -eq 124 ] || [ "$export_status" -eq 137 ]; then
+    printf '%s\n' 'renderer: SVG conversion timed out' >> "$renderer_log"
+    exit 83
+  fi
+  if [ "$export_status" -ne 0 ]; then
+    exit "$export_status"
+  fi
 fi
