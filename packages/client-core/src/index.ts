@@ -21,7 +21,10 @@ import type {
   RenderOutput,
 } from "@latex-renderer/contracts";
 import { AppError, DEFAULT_RESOURCE_LIMITS } from "@latex-renderer/shared";
-import { validateEntrypointPath } from "@latex-renderer/zip-validation";
+import {
+  validateEntrypointPath,
+  validateSourceFilePath,
+} from "@latex-renderer/zip-validation";
 import ignore, { type Ignore } from "ignore";
 import yazl from "yazl";
 import { shouldExcludeProjectPath } from "./project-files.js";
@@ -365,6 +368,20 @@ export async function createProjectArchive(
   try {
     const exclusions = await projectIgnore(root);
     for await (const { path, name, size } of walkProject(root, exclusions)) {
+      try {
+        validateSourceFilePath(name);
+      } catch (error) {
+        if (
+          error instanceof AppError &&
+          error.code === "ZIP_EXTENSION_REJECTED"
+        )
+          throw new AppError(
+            error.code,
+            `Unsupported project file: ${name}`,
+            error.status,
+          );
+        throw error;
+      }
       if (name === requiredEntrypoint) entrypointFound = true;
       if (extname(name).toLowerCase() === ".tex") texFound = true;
       files += 1;
