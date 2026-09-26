@@ -31,6 +31,7 @@ describe("renderer audit regressions", () => {
     ["main.tex", "pdf", 10],
     ["Main.TEX", "pdf", 100],
     ["compile.tex", "pdf", 1],
+    ["docs/main.tex", "pdf", 1],
     ["result.tex", "pdf,svg", 10],
     ["result.TeX", "pdf,svg", 1],
   ] as const;
@@ -48,6 +49,9 @@ describe("renderer audit regressions", () => {
           join(opt, "texlive/2026/texmf-var/luatex-cache/generic/names"),
           { recursive: true },
         );
+        await mkdir(dirname(join(work, "input", entrypoint)), {
+          recursive: true,
+        });
         await writeFile(join(work, "input", entrypoint), "test source");
         await mkdir(join(work, "input", "chapters", "section space"), {
           recursive: true,
@@ -63,6 +67,7 @@ const fs = require('node:fs'), path = require('node:path');
 const args = process.argv.slice(2);
 const out = args.find(x => x.startsWith('-outdir=')).slice(8);
 const name = args.find(x => x.startsWith('-jobname='))?.slice(9) ?? path.basename(args.at(-1)).replace(/\\.[^.]*$/, '');
+if (name !== 'objects' && (process.cwd() !== process.env.TEST_PROJECT_ROOT || args.at(-1) !== process.env.TEST_ENTRYPOINT_ABSOLUTE)) process.exit(96);
 for (const nested of ['chapters/section space', 'cafe\\u0301']) {
   if (!fs.statSync(path.join(out, nested)).isDirectory()) process.exit(97);
 }
@@ -116,6 +121,8 @@ for (let i = 1; i <= count; i++) fs.writeFileSync(prefix + '-' + String(i).padSt
             LATEX_ENTRYPOINT: entrypoint,
             LATEX_OUTPUTS: outputs,
             TEST_PAGE_COUNT: String(pages),
+            TEST_PROJECT_ROOT: join(work, "input"),
+            TEST_ENTRYPOINT_ABSOLUTE: join(work, "input", entrypoint),
           },
         });
         assert.equal(
