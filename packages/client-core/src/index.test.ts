@@ -215,11 +215,12 @@ describe("client core", () => {
     await writeFile(join(root, "private.pem"), "secret");
     await writeFile(
       join(root, ".latexrenderignore"),
-      "drafts/\n*.csv\n!.env\n",
+      "drafts/\n*.csv\nREADME.md\n!.env\n",
     );
     await mkdir(join(root, "drafts"));
     await writeFile(join(root, "drafts", "notes.tex"), "draft");
     await writeFile(join(root, "results.csv"), "data");
+    await writeFile(join(root, "README.md"), "ignored notes");
     await mkdir(join(root, "node_modules"));
     await symlink("/", join(root, "node_modules", "outside"));
     const client = new FakeClient([]);
@@ -227,6 +228,20 @@ describe("client core", () => {
     await uploadProjectSource(client, root);
 
     expect(client.archiveNames).toEqual(["main.tex"]);
+  });
+
+  it("rejects an unsupported directory file by path before reserving a Source", async () => {
+    const root = await temporaryRoot();
+    await writeFile(join(root, "main.tex"), "main");
+    await mkdir(join(root, "notes"));
+    await writeFile(join(root, "notes", "README.md"), "notes");
+    const client = new FakeClient([]);
+
+    await expect(uploadProjectSource(client, root)).rejects.toMatchObject({
+      code: "ZIP_EXTENSION_REJECTED",
+      message: "Unsupported project file: notes/README.md",
+    });
+    expect(client.createdTickets).toBe(0);
   });
 
   it("stops project collection as soon as the file limit is exceeded", async () => {
