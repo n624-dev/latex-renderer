@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 1.3.9 - 2026-09-26
+
+- Promote the published immutable `v1.3.9-rc.2` candidate with no functional
+  source changes. Its signed update/recovery E2E passed, and the designated VPS
+  completed both application and independent Updater deployment successfully.
+- Include the RC series' multi-file TeX compatibility fixes, renderer diagnostics
+  and stage-specific timeout classification. Keep the Base-only image policy,
+  provenance checks, Updater boundary, and canonical archive fallback unchanged.
+- Stable preparation only. Require candidate source equivalence and the signed
+  stable release workflow before publication. This version bump does not update
+  the production VPS.
+
 ## 1.3.9-rc.2 - 2026-09-25
 
 - Use each Job's actual TeX entrypoint for recorder dependencies and fallback
