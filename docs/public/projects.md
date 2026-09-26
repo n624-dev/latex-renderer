@@ -12,6 +12,8 @@ since: "v1.0.0"
 
 既定のentrypointはプロジェクトのルートにある `main.tex` です。CLIやMCPで明示すれば、Source内の任意の相対 `.tex` パスもentrypointにできます。画像、BibTeXデータ、ローカルのスタイルやクラスファイルは参照関係を保ったまま含めます。
 
+入れ子のentrypointでも、コンパイル時の作業ディレクトリはProjectのルートです。たとえば `docs/main.tex` の `\input{body.tex}` は `project/body.tex` を参照する構成にしてください。`project/docs/body.tex` を参照するなら `\input{docs/body.tex}` と記述します。entrypointのあるフォルダへ自動で移動はしません。
+
 ```text
 project/
 ├─ main.tex
