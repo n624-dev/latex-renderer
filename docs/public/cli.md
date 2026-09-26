@@ -59,6 +59,8 @@ latex-render render [directory-or-zip] [--entrypoint main.tex] [--output .render
 
 同じ出力先を再利用するときは、前回の`job.json`に記録された生成物のうち、今回存在しないPDF・プレビュー・SVGを整理します。無関係な利用者ファイルは削除しません。保存先のリンクは拒否します。POSIX環境では所有者とgroup／otherの書込み権限も検査しますが、WindowsにはPOSIXのmodeビット判定を適用しません。
 
+`--output` にProject内の別フォルダを指定した場合、そのフォルダだけを次回の入力ZIPから除外します。似た名前の他のフォルダは除外しません。Projectルートそのものは出力先に指定できません。
+
 ```text
 latex-render source upload ./project.zip --json
 latex-render render --source source_... --entrypoint reports/a.tex --output .render/a
@@ -91,7 +93,7 @@ latex-render jobs download <jobId> --output .render
 latex-render jobs delete <jobId> --yes
 ```
 
-ジョブ操作時はAPIキーで操作用トークンを更新します。削除は終了済みジョブだけが対象です。
+ジョブ操作時はAPIキーで操作用トークンを更新します。`jobs download` は指定Jobが終了するまで待ってから成果物を切り替えます。待機中にキャンセルした場合や待機が失敗した場合、保存済みの一式は変更しません。削除は終了済みジョブだけが対象です。
 
 ## 成果物
 

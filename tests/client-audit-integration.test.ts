@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "vitest";
 import type { JobArtifact, JobResponse } from "@latex-renderer/contracts";
-import { createProjectArchive, downloadJobArtifacts, renderSource, type ClientTransport } from "../packages/client-core/src/index.js";
+import { createProjectArchive, downloadJobArtifacts, renderProject, renderSource, type ClientTransport } from "../packages/client-core/src/index.js";
 
 const timestamp = "2026-01-01T00:00:00.000Z";
 function artifact(relativePath: string, type: string): JobArtifact {
@@ -40,6 +40,18 @@ async function fixture(run: (root: string) => Promise<void>) {
 }
 
 describe("client audit integration", () => {
+  it("renders twice into a project-local custom output without uploading its job metadata", async () => fixture(async root => {
+    const project = join(root, "project"), output = join(project, "build", "preview");
+    await mkdir(project);
+    await writeFile(join(project, "main.tex"), "project source");
+    const transport = client(() => job());
+
+    await renderProject(transport, project, { outputDirectory: output });
+    await renderProject(transport, project, { outputDirectory: output });
+
+    assert.match(await readFile(join(output, "job.json"), "utf8"), /"status": "succeeded"/);
+  }));
+
   it("keeps a pre-existing archive when exclusive creation fails", async () => fixture(async root => {
     const destination = join(root, "source.zip");
     await writeFile(join(root, "main.tex"), "source");

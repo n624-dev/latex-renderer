@@ -480,6 +480,7 @@ jobs
       await configuredClient(),
       id,
       options.output,
+      isJsonMode() ? {} : { onEvent: humanRenderEvent },
     );
     emitSuccess("jobs.download", result, () => {
       process.stdout.write(
