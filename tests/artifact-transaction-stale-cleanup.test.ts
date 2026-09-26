@@ -75,7 +75,7 @@ describe("stale artifacts on the host filesystem", () => {
         Promise.resolve({
           sourceId: `source_${"0".repeat(32)}`,
           uploadRequired: false,
-          expiresAt: "2026-09-27T00:00:00.000Z",
+          expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
         }),
       uploadSource: () =>
         Promise.reject(new Error("ready Source must not be uploaded")),
