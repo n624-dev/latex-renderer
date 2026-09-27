@@ -2140,10 +2140,19 @@ export class RemoteRenderService {
           maxExtractedBytes: this.resourceLimits.maxExtractedBytes,
           maxFileBytes: this.resourceLimits.maxUploadBytes,
         });
+        // A mutation can introduce case- or Unicode-colliding paths even
+        // though each path passed validation on its own. Validate the exact
+        // archive the worker will consume before making the Source ready.
+        const verified = await validateAndExtract(
+          archive,
+          join(archiveRoot, "inspection"),
+          this.zipLimits(),
+          "",
+        );
         const revision = await this.storeReadySourceArchive(
           userId,
           archive,
-          paths,
+          verified.paths,
           onReady,
         );
         return this.summarizeSource(revision, source.id);
