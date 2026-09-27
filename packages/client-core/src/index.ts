@@ -12,7 +12,7 @@ import {
   stat,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, extname, join, relative, resolve } from "node:path";
+import { dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pipeline } from "node:stream/promises";
 import type {
   JobResponse,
@@ -125,11 +125,12 @@ export async function renderProject(
   options: RenderOptions = {},
 ): Promise<RenderProjectResult> {
   const input = resolve(projectPath),
-    entrypoint = validateEntrypointPath(options.entrypoint ?? "main.tex");
+    entrypoint = validateEntrypointPath(options.entrypoint ?? "main.tex"),
+    requestedOutput = options.outputDirectory === undefined ? undefined : resolve(options.outputDirectory);
   const temporary = await mkdtemp(join(tmpdir(), "latex-render-"));
   try {
     const zipPath = join(temporary, "source.zip");
-    const prepared = await prepareInputArchive(input, zipPath, entrypoint);
+    const prepared = await prepareInputArchive(input, zipPath, entrypoint, requestedOutput);
     options.onEvent?.({ type: "archive.created", ...prepared.source });
     const source = await reserveAndUploadSource(
       client,
@@ -145,9 +146,7 @@ export async function renderProject(
     );
     options.onEvent?.({ type: "job.queued", jobId: ticket.jobId });
     const { job, jobTicket } = await pollUntilTerminal(client, ticket, options);
-    const outputDirectory = resolve(
-      options.outputDirectory ?? join(prepared.outputRoot, ".render"),
-    );
+    const outputDirectory = requestedOutput ?? resolve(join(prepared.outputRoot, ".render"));
     const artifacts = await downloadArtifacts(
       client,
       job,
@@ -256,15 +255,19 @@ export async function downloadJobArtifacts(
   client: ClientTransport,
   jobId: string,
   outputDirectory: string,
-  options: ClientCoreOptions = {},
+  options: RenderOptions = {},
 ): Promise<DownloadArtifactsResult> {
   const renewed = await client.renewJobTicket(jobId);
-  const job = await client.job(jobId, renewed.jobTicket);
+  const { job, jobTicket } = await pollUntilTerminal(client, {
+    jobId,
+    jobTicket: renewed.jobTicket,
+    expiresAt: renewed.expiresAt,
+  }, options);
   const output = resolve(outputDirectory);
   const artifacts = await downloadArtifacts(
     client,
     job,
-    renewed.jobTicket,
+    jobTicket,
     output,
     options,
   );
@@ -275,6 +278,7 @@ async function prepareInputArchive(
   input: string,
   destination: string,
   entrypoint?: string,
+  excludedOutputDirectory?: string,
 ): Promise<{
   source: { size: number; sha256: string; files: number };
   outputRoot: string;
@@ -282,7 +286,7 @@ async function prepareInputArchive(
   const info = await stat(input).catch(() => undefined);
   if (info?.isDirectory())
     return {
-      source: await createProjectArchive(input, destination, entrypoint),
+      source: await createProjectArchive(input, destination, entrypoint, excludedOutputDirectory),
       outputRoot: input,
     };
   if (info?.isFile() && extname(input).toLowerCase() === ".zip") {
@@ -348,9 +352,17 @@ export async function createProjectArchive(
   root: string,
   destination: string,
   entrypoint?: string,
+  excludedOutputDirectory?: string,
 ): Promise<{ size: number; sha256: string; files: number }> {
   const requiredEntrypoint =
     entrypoint === undefined ? undefined : validateEntrypointPath(entrypoint);
+  const excludedRelative = excludedOutputDirectory === undefined
+    ? undefined : relative(resolve(root), resolve(excludedOutputDirectory));
+  if (excludedRelative === "")
+    throw new AppError("INVALID_OUTPUT_DIRECTORY", "Artifact output directory cannot be the project root", 400);
+  const excludedName = excludedRelative === undefined || excludedRelative === ".." ||
+    excludedRelative.startsWith(`..${sep}`) || isAbsolute(excludedRelative)
+    ? undefined : excludedRelative.replaceAll("\\", "/");
   const zip = new yazl.ZipFile();
   // Await exclusive creation before entering cleanup: an EEXIST failure must
   // never cause us to remove a destination belonging to the caller.
@@ -367,7 +379,7 @@ export async function createProjectArchive(
   let ended = false;
   try {
     const exclusions = await projectIgnore(root);
-    for await (const { path, name, size } of walkProject(root, exclusions)) {
+    for await (const { path, name, size } of walkProject(root, exclusions, excludedName)) {
       try {
         validateSourceFilePath(name);
       } catch (error) {
@@ -692,6 +704,7 @@ async function projectIgnore(root: string): Promise<Ignore> {
 async function* walkProject(
   root: string,
   exclusions: Ignore,
+  excludedName?: string,
   directory = root,
 ): AsyncGenerator<{ path: string; name: string; size: number }> {
   const entries = await readdir(directory, { withFileTypes: true });
@@ -699,6 +712,8 @@ async function* walkProject(
   for (const entry of entries) {
     const path = join(directory, entry.name);
     const name = relative(root, path).replaceAll("\\", "/");
+    if (excludedName !== undefined && (process.platform === "win32"
+      ? name.toLowerCase() === excludedName.toLowerCase() : name === excludedName)) continue;
     const ignored =
       shouldExcludeProjectPath(name) ||
       exclusions.ignores(entry.isDirectory() ? `${name}/` : name);
@@ -711,7 +726,7 @@ async function* walkProject(
         400,
       );
     if (info.isDirectory()) {
-      yield* walkProject(root, exclusions, path);
+      yield* walkProject(root, exclusions, excludedName, path);
       continue;
     }
     if (!info.isFile())

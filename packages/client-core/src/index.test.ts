@@ -9,7 +9,7 @@ import {
   symlink,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import type {
   JobResponse,
   SourceRenderResponse,
@@ -130,6 +130,76 @@ describe("client core", () => {
     expect(
       await lstat(client.uploadedPath).catch(() => undefined),
     ).toBeUndefined();
+  });
+
+  it.each([
+    ["default", undefined],
+    ["custom", "out"],
+    ["nested", "build/out"],
+    ["outside", "../results"],
+  ] as const)("does not archive the %s output directory on rerender", async (_name, target) => {
+    const workspace = await temporaryRoot(), project = join(workspace, "project");
+    await mkdir(join(project, "out-copy"), { recursive: true });
+    await writeFile(join(project, "main.tex"), "main");
+    await writeFile(join(project, "out-copy", "keep.txt"), "user file");
+    const client = new FakeClient([job("succeeded"), job("succeeded")]);
+    const options = target === undefined ? {} : { outputDirectory: resolve(project, target) };
+
+    await renderProject(client, project, options);
+    await renderProject(client, project, options);
+
+    expect(client.archiveNames).toEqual([
+      "main.tex", "out-copy/keep.txt", "main.tex", "out-copy/keep.txt",
+    ]);
+    expect(await readFile(join(project, "out-copy", "keep.txt"), "utf8")).toBe("user file");
+  });
+
+  it("rejects the project root itself as an output directory before Source reservation", async () => {
+    const project = await temporaryRoot();
+    await writeFile(join(project, "main.tex"), "main");
+    const client = new FakeClient([]);
+
+    await expect(renderProject(client, project, { outputDirectory: project })).rejects.toMatchObject({
+      code: "INVALID_OUTPUT_DIRECTORY",
+    });
+    expect(client.createdTickets).toBe(0);
+  });
+
+  it("waits for a terminal Job without changing the previous artifact generation", async () => {
+    const root = await temporaryRoot(), output = join(root, ".render");
+    const first = job("succeeded"), last = job("succeeded");
+    last.updatedAt = "2026-09-27T00:00:00.000Z";
+    const client = new FakeClient([first, job("queued"), job("running"), last]);
+    await downloadJobArtifacts(client, first.id, output);
+    const previous = await readFile(join(output, "job.json"), "utf8");
+    let waits = 0;
+
+    const result = await downloadJobArtifacts(client, first.id, output, {
+      pollIntervalMs: 0,
+      sleep: async () => {
+        waits += 1;
+        expect(await readFile(join(output, "job.json"), "utf8")).toBe(previous);
+        expect(await readFile(join(output, "result.pdf"), "utf8")).toBe("result.pdf");
+      },
+    });
+
+    expect(waits).toBe(2);
+    expect(result.job.updatedAt).toBe(last.updatedAt);
+    expect(await readFile(join(output, "job.json"), "utf8")).not.toBe(previous);
+  });
+
+  it("leaves the previous generation intact when waiting for a Job times out", async () => {
+    const root = await temporaryRoot(), output = join(root, ".render");
+    const client = new FakeClient([job("succeeded"), job("running")]);
+    await downloadJobArtifacts(client, "job_test", output);
+    const previous = await readFile(join(output, "job.json"), "utf8");
+
+    await expect(downloadJobArtifacts(client, "job_test", output, {
+      pollIntervalMs: 1_000,
+      pollTimeoutMs: 20,
+    })).rejects.toMatchObject({ code: "RENDER_POLL_TIMEOUT" });
+    expect(await readFile(join(output, "job.json"), "utf8")).toBe(previous);
+    expect(await readFile(join(output, "result.pdf"), "utf8")).toBe("result.pdf");
   });
 
   it("bounds polling for long-running MCP and automation callers", async () => {
@@ -326,7 +396,7 @@ class FakeClient implements ClientTransport {
             uploadUrl: "https://example.test/upload",
           }
         : {}),
-      expiresAt: "2026-08-11T00:00:00.000Z",
+      expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
     });
   }
 
@@ -348,7 +418,7 @@ class FakeClient implements ClientTransport {
     return Promise.resolve({
       jobId: "job_test",
       jobTicket: "job-ticket-value",
-      expiresAt: "2026-08-11T00:00:00.000Z",
+      expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
     });
   }
 
@@ -362,7 +432,7 @@ class FakeClient implements ClientTransport {
     this.renewed += 1;
     return Promise.resolve({
       jobTicket: "renewed-job-ticket",
-      expiresAt: "2026-08-11T00:00:00.000Z",
+      expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
     });
   }
 
