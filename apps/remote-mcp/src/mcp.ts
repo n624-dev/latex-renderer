@@ -595,6 +595,8 @@ export function createRemoteMcpHandler(
                     sourceLimits: z
                       .object({
                         directBytes: z.number().int().positive(),
+                        directFiles: z.number().int().positive(),
+                        directFileBytes: z.number().int().positive(),
                         uploadBytes: z.number().int().positive(),
                         files: z.number().int().positive(),
                         fileBytes: z.number().int().positive(),
@@ -1706,6 +1708,8 @@ function capabilitiesContent(
     `Max compile seconds: ${numberField(capabilities, "maxCompileSeconds")}`,
     `Max PDF pages: ${numberField(capabilities, "maxPdfPages")}`,
     `Direct Source bytes: ${numberField(limits, "directBytes")}`,
+    `Direct Source files: ${numberField(limits, "directFiles")}`,
+    `Direct Source file bytes: ${numberField(limits, "directFileBytes")}`,
     `Upload Source bytes: ${numberField(limits, "uploadBytes")}`,
     `Max Source files: ${numberField(limits, "files")}`,
     `Max file bytes: ${numberField(limits, "fileBytes")}`,

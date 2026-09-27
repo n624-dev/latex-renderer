@@ -613,6 +613,8 @@ export interface RemoteRendererCapabilities {
   outputs: readonly ["pdf", "svg"];
   sourceLimits: {
     directBytes: number;
+    directFiles: number;
+    directFileBytes: number;
     uploadBytes: number;
     files: number;
     fileBytes: number;
@@ -725,10 +727,11 @@ export class RemoteRenderService {
     files: readonly RemoteSourceFileInput[],
   ): Promise<RemoteSourceSummary> {
     requireScope(identity.scopes, "mcp:render");
-    if (files.length < 1 || files.length > DIRECT_SOURCE_MAX_FILES)
+    const limits = this.directSourceLimits();
+    if (files.length < 1 || files.length > limits.files)
       throw new AppError(
         "SOURCE_FILE_COUNT",
-        `A direct Source must contain between 1 and ${DIRECT_SOURCE_MAX_FILES} files`,
+        `A direct Source must contain between 1 and ${limits.files} files`,
         400,
       );
     const seen = new Set<string>(),
@@ -754,30 +757,51 @@ export class RemoteRenderService {
         file.text === undefined
           ? decodeBase64(file.base64 as string)
           : Buffer.from(file.text, "utf8");
-      if (bytes.byteLength > DIRECT_SOURCE_MAX_FILE_BYTES)
+      if (bytes.byteLength > limits.fileBytes)
         throw new AppError(
           "SOURCE_FILE_SIZE",
-          "A direct Source file exceeds the 1 MiB limit",
+          `A direct Source file exceeds the ${limits.fileBytes}-byte limit`,
           400,
         );
       totalBytes += bytes.byteLength;
-      if (totalBytes > DIRECT_SOURCE_MAX_BYTES)
+      if (totalBytes > limits.contentBytes)
         throw new AppError(
           "SOURCE_TOTAL_SIZE",
-          "Direct Source content exceeds the 4 MiB limit",
+          `Direct Source content exceeds the ${limits.contentBytes}-byte limit`,
           400,
         );
       prepared.push({ path, bytes });
     }
     prepared.sort((left, right) => left.path.localeCompare(right.path));
     assertTexSource(prepared.map((file) => file.path));
-    const archive = await zipFiles(prepared),
-      source = await this.storeReadySource(
-        identity.userId,
-        archive,
-        prepared.map((file) => file.path),
+    const archive = await zipFiles(prepared);
+    if (archive.byteLength > this.resourceLimits.maxUploadBytes)
+      throw new AppError(
+        "SOURCE_ARCHIVE_SIZE",
+        "Source archive exceeds the configured upload limit",
+        422,
       );
-    return this.summarizeSource(source, null);
+    const archiveRoot = await mkdtemp(
+      join(this.storageRoot, ".remote-direct-"),
+    );
+    try {
+      const archivePath = join(archiveRoot, "source.zip");
+      await writeFile(archivePath, archive, { flag: "wx", mode: 0o660 });
+      const verified = await validateAndExtract(
+          archivePath,
+          join(archiveRoot, "inspection"),
+          this.zipLimits(),
+          "",
+        ),
+        source = await this.storeReadySource(
+          identity.userId,
+          archive,
+          verified.paths,
+        );
+      return this.summarizeSource(source, null);
+    } finally {
+      await rm(archiveRoot, { recursive: true, force: true });
+    }
   }
 
   async beginSourceUpload(
@@ -1544,6 +1568,7 @@ export class RemoteRenderService {
 
   capabilities(identity: RemoteMcpIdentity): RemoteRendererCapabilities {
     requireScope(identity.scopes, "mcp:read");
+    const direct = this.directSourceLimits();
     return {
       rendererVersion: this.rendererVersion,
       texliveVersion: "2026",
@@ -1554,7 +1579,9 @@ export class RemoteRenderService {
       maxPdfPages: 100,
       outputs: ["pdf", "svg"],
       sourceLimits: {
-        directBytes: DIRECT_SOURCE_MAX_BYTES,
+        directBytes: direct.contentBytes,
+        directFiles: direct.files,
+        directFileBytes: direct.fileBytes,
         uploadBytes: this.resourceLimits.maxUploadBytes,
         files: this.resourceLimits.maxFileCount,
         fileBytes: this.resourceLimits.maxUploadBytes,
@@ -2204,6 +2231,24 @@ export class RemoteRenderService {
       maxFiles: this.resourceLimits.maxFileCount,
       maxDepth: 10,
       maxNameLength: 200,
+    };
+  }
+
+  private directSourceLimits() {
+    return {
+      files: Math.min(
+        DIRECT_SOURCE_MAX_FILES,
+        this.resourceLimits.maxFileCount,
+      ),
+      fileBytes: Math.min(
+        DIRECT_SOURCE_MAX_FILE_BYTES,
+        this.resourceLimits.maxUploadBytes,
+        this.resourceLimits.maxExtractedBytes,
+      ),
+      contentBytes: Math.min(
+        DIRECT_SOURCE_MAX_BYTES,
+        this.resourceLimits.maxExtractedBytes,
+      ),
     };
   }
 

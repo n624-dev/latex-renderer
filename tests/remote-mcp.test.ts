@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import type { AccessJwtVerifier } from "@latex-renderer/auth";
 import { RendererDatabase } from "@latex-renderer/database";
+import type { ResourceLimits } from "@latex-renderer/shared";
 import { validateAndExtract } from "@latex-renderer/zip-validation";
 import {
   RemoteOAuthService,
@@ -634,9 +635,12 @@ describe("Remote MCP HTTP server", () => {
         protocolVersion,
       );
 
-      expect(
-        contentText(await invoke(101, "get_renderer_capabilities", {})),
-      ).toContain("TeX Live: 2026");
+      const capabilities = contentText(
+        await invoke(101, "get_renderer_capabilities", {}),
+      );
+      expect(capabilities).toContain("TeX Live: 2026");
+      expect(capabilities).toContain("Direct Source files: 100");
+      expect(capabilities).toContain("Direct Source file bytes: 1048576");
       const packages = contentText(
         await invoke(102, "check_packages", {
           names: ["tikz", "missing-package"],
@@ -1090,6 +1094,185 @@ describe("Remote MCP HTTP server", () => {
     expect(
       await readFile(join(inspection, "SECTIONS", "body.tex"), "utf8"),
     ).toBe("replacement");
+  });
+
+  it("enforces configured direct Source file and extracted-byte limits before readiness", async () => {
+    const fixture = await createFixture({
+        maxUploadBytes: 1024,
+        maxExtractedBytes: 1024,
+        maxFileCount: 1,
+        maxZipEntries: 1,
+      }),
+      identity = { userId: "user_test", scopes: ["mcp:render"] as const };
+    await expect(
+      fixture.renders.createSource(identity, [
+        { path: "main.tex", text: "one" },
+        { path: "other.tex", text: "two" },
+      ]),
+    ).rejects.toMatchObject({ code: "SOURCE_FILE_COUNT" });
+    await expect(
+      fixture.renders.createSource(identity, [
+        { path: "main.tex", text: "x".repeat(1025) },
+      ]),
+    ).rejects.toMatchObject({ code: "SOURCE_FILE_SIZE" });
+    expect(
+      fixture.renders.capabilities({ ...identity, scopes: ["mcp:read"] })
+        .sourceLimits,
+    ).toMatchObject({
+      directBytes: 1024,
+      directFiles: 1,
+      directFileBytes: 1024,
+      uploadBytes: 1024,
+      files: 1,
+      fileBytes: 1024,
+    });
+    expect(
+      fixture.database.raw
+        .prepare("SELECT COUNT(*) AS count FROM sources")
+        .get(),
+    ).toMatchObject({ count: 0 });
+    const token = issueAccessToken(fixture.oauth),
+      capabilities = await callTool(
+        fixture.app,
+        token,
+        2001,
+        "get_renderer_capabilities",
+        {},
+      );
+    expect(structuredObject(capabilities, "capabilities")).toMatchObject({
+      sourceLimits: { directFiles: 1, directFileBytes: 1024 },
+    });
+    const rejected = await callTool(fixture.app, token, 2002, "create_source", {
+      files: [
+        { path: "main.tex", text: "one" },
+        { path: "other.tex", text: "two" },
+      ],
+    });
+    expect(contentText(rejected)).toContain("SOURCE_FILE_COUNT");
+  });
+
+  it("rejects direct Source archives larger than configured upload bytes", async () => {
+    const limits = {
+        maxUploadBytes: 1024,
+        maxExtractedBytes: 1024,
+        maxFileCount: 2,
+        maxZipEntries: 2,
+      },
+      fixture = await createFixture(limits),
+      identity = { userId: "user_test", scopes: ["mcp:render"] as const },
+      bytes = Buffer.concat(
+        Array.from({ length: 30 }, (_, index) =>
+          createHash("sha256").update(`archive-fixture-${index}`).digest(),
+        ),
+      );
+    await expect(
+      fixture.renders.createSource(identity, [
+        { path: "main.tex", base64: bytes.toString("base64") },
+      ]),
+    ).rejects.toMatchObject({ code: "SOURCE_ARCHIVE_SIZE" });
+    expect(
+      fixture.database.raw
+        .prepare("SELECT COUNT(*) AS count FROM sources")
+        .get(),
+    ).toMatchObject({ count: 0 });
+  });
+
+  it("retains the fixed direct-operation caps when configured limits are higher", async () => {
+    const fixture = await createFixture(),
+      identity = { userId: "user_test", scopes: ["mcp:render"] as const };
+    expect(
+      fixture.renders.capabilities({ ...identity, scopes: ["mcp:read"] })
+        .sourceLimits,
+    ).toMatchObject({
+      directBytes: 4 * 1024 * 1024,
+      directFiles: 100,
+      directFileBytes: 1024 * 1024,
+      uploadBytes: 20 * 1024 * 1024,
+      files: 500,
+      fileBytes: 20 * 1024 * 1024,
+    });
+    await expect(
+      fixture.renders.createSource(identity, [
+        { path: "main.tex", text: "x".repeat(1024 * 1024 + 1) },
+      ]),
+    ).rejects.toMatchObject({ code: "SOURCE_FILE_SIZE" });
+    await expect(
+      fixture.renders.createSource(
+        identity,
+        Array.from({ length: 101 }, (_, index) => ({
+          path: index === 0 ? "main.tex" : `file-${index}.tex`,
+          text: "x",
+        })),
+      ),
+    ).rejects.toMatchObject({ code: "SOURCE_FILE_COUNT" });
+  });
+
+  it.skipIf(process.platform !== "linux")(
+    "does not publish a direct Source rejected by shared component-collision checks",
+    async () => {
+      const fixture = await createFixture(),
+        identity = { userId: "user_test", scopes: ["mcp:render"] as const };
+      await expect(
+        fixture.renders.createSource(identity, [
+          { path: "main.tex", text: "main" },
+          { path: "sections/body.tex", text: "first" },
+          { path: "SECTIONS/other.tex", text: "second" },
+        ]),
+      ).rejects.toMatchObject({ code: "ZIP_DUPLICATE_PATH" });
+      expect(
+        fixture.database.raw
+          .prepare("SELECT COUNT(*) AS count FROM sources")
+          .get(),
+      ).toMatchObject({ count: 0 });
+      expect(
+        (await readdir(fixture.storage)).filter((path) =>
+          path.startsWith(".remote-direct-"),
+        ),
+      ).toEqual([]);
+    },
+  );
+
+  it("accepts a configured-limit direct Source only when the worker ZIP validator can consume it", async () => {
+    const limits = {
+        maxUploadBytes: 1024,
+        maxExtractedBytes: 1024,
+        maxFileCount: 2,
+        maxZipEntries: 2,
+      },
+      fixture = await createFixture(limits),
+      identity = { userId: "user_test", scopes: ["mcp:render"] as const };
+    await expect(
+      fixture.renders.createSource(identity, [
+        { path: "main.tex", text: "x".repeat(600) },
+        { path: "other.tex", text: "y".repeat(600) },
+      ]),
+    ).rejects.toMatchObject({ code: "SOURCE_TOTAL_SIZE" });
+    const source = await fixture.renders.createSource(identity, [
+      { path: "main.tex", text: "valid" },
+    ]);
+    const result = await validateAndExtract(
+      join(fixture.storage, "sources", source.id, "source.zip"),
+      join(fixture.storage, "worker-inspection"),
+      {
+        maxExtractedBytes: limits.maxExtractedBytes,
+        maxFileBytes: limits.maxUploadBytes,
+        maxEntries: limits.maxZipEntries,
+        maxFiles: limits.maxFileCount,
+        maxDepth: 10,
+        maxNameLength: 200,
+      },
+      "main.tex",
+    );
+    expect(result.paths).toEqual(["main.tex"]);
+    expect(source.status).toBe("ready");
+    expect(
+      fixture.renders.capabilities({ ...identity, scopes: ["mcp:read"] })
+        .sourceLimits,
+    ).toMatchObject({
+      directBytes: 1024,
+      directFiles: 2,
+      directFileBytes: 1024,
+    });
   });
 
   it("rejects traversal and supports safe chunked ZIP upload", async () => {
@@ -1958,7 +2141,7 @@ describe("Remote MCP HTTP server", () => {
   });
 });
 
-async function createFixture() {
+async function createFixture(resourceLimits?: Readonly<ResourceLimits>) {
   const database = new RendererDatabase(":memory:");
   databases.push(database);
   database.migrate();
@@ -1997,6 +2180,7 @@ async function createFixture() {
       100,
       1024 * 1024 * 1024,
       environment,
+      resourceLimits,
     ),
     access = {
       verify: () =>

@@ -39,7 +39,7 @@ Remote MCPは次のツールを提供します。
 | Inspection  | `get_render_diagnostics`、`get_render_preview`、`get_render_artifacts`                                                                                                                                                |
 | Environment | `get_renderer_capabilities`、`check_packages`、`search_packages`、`check_fonts`、`search_fonts`                                                                                                                       |
 
-小さな複数ファイルSourceはtextまたはbase64を含む `create_source` で作成します。直接作成は合計4 MiB、1ファイル1 MiB、100ファイルまでです。大きなZIPは `begin_source_upload` で予約し、最大512 KiBのbase64 chunkをoffset順に送って `finalize_source_upload` します。ZIPは20 MiB、展開後100 MiB、500ファイル、1ファイル20 MiBまでで、未完了uploadは10分で期限切れになります。
+小さな複数ファイルSourceはtextまたはbase64を含む `create_source` で作成します。直接作成は合計4 MiB、1ファイル1 MiB、100ファイルまでです。ただしサーバーの設定上限がより小さい場合はその上限が適用され、完成ZIPも設定されたZIPサイズ・展開後サイズ・ファイル数で検証されます。`get_renderer_capabilities` の `directBytes`／`directFiles`／`directFileBytes` は直接作成の上限、`uploadBytes`／`files`／`fileBytes` はZIP uploadの上限です。大きなZIPは `begin_source_upload` で予約し、最大512 KiBのbase64 chunkをoffset順に送って `finalize_source_upload` します。ZIPの既定値は20 MiB、展開後100 MiB、500ファイル、1ファイル20 MiBで、未完了uploadは10分で期限切れになります。
 
 `update_source_file` と `delete_source_file` は元Sourceを書き換えず、新しい不変Source revisionを返します。Remote MCPで作ったSourceは `sourceId` のままrenderできます。`sourceRef` は別経路への15分間のowner-scoped handoffが必要な場合だけ `create_source_ref` で作成します。
 
