@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import type { AccessJwtVerifier } from "@latex-renderer/auth";
 import { RendererDatabase } from "@latex-renderer/database";
+import { validateAndExtract } from "@latex-renderer/zip-validation";
 import {
   RemoteOAuthService,
   RemoteRenderService,
@@ -198,11 +199,13 @@ describe("Remote MCP HTTP server", () => {
       `${ORIGIN}/app/jobs/${id}/`,
     );
   });
-  it.each([
-    "https://chatgpt.com",
-    "https://claude.ai",
-    "https://future-ai.example",
-  ])(
+  it
+    .skipIf(process.platform !== "linux")
+    .each([
+      "https://chatgpt.com",
+      "https://claude.ai",
+      "https://future-ai.example",
+    ])(
     "completes registration, same-origin consent, PKCE and exchange for %s",
     async (clientOrigin) => {
       const fixture = await createFixture(),
@@ -1001,6 +1004,92 @@ describe("Remote MCP HTTP server", () => {
       sourceId: sourceIdValue,
       retryOf: jobIdValue,
     });
+  });
+
+  it.each([
+    ["filename case", "main.tex", "MAIN.tex"],
+    ["Unicode normalization", "café.tex", "cafe\u0301.tex"],
+    ["directory component case", "sections/body.tex", "SECTIONS/other.tex"],
+  ])(
+    "rejects a revised Source with a %s collision before publishing it",
+    async (_kind, existingPath, newPath) => {
+      const fixture = await createFixture(),
+        identity = { userId: "user_test", scopes: ["mcp:render"] as const },
+        source = await fixture.renders.createSource(identity, [
+          { path: "main.tex", text: "original" },
+          ...(existingPath === "main.tex"
+            ? []
+            : [{ path: existingPath, text: "existing" }]),
+        ]);
+      const countReady = () =>
+        (
+          fixture.database.raw
+            .prepare(
+              "SELECT COUNT(*) AS count FROM sources WHERE status='ready'",
+            )
+            .get() as { count: number }
+        ).count;
+      const before = countReady();
+
+      await expect(
+        fixture.renders.updateSourceFile(identity, source.id, {
+          path: newPath,
+          text: "collision",
+        }),
+      ).rejects.toMatchObject({ code: "ZIP_DUPLICATE_PATH" });
+      expect(countReady()).toBe(before);
+      expect(fixture.database.sources.get(source.id)?.status).toBe("ready");
+      expect(
+        (await readdir(fixture.storage)).filter((path) =>
+          path.startsWith(".remote-"),
+        ),
+      ).toEqual([]);
+    },
+  );
+
+  it("accepts non-colliding revisions and replacement after removing the old spelling", async () => {
+    const fixture = await createFixture(),
+      identity = { userId: "user_test", scopes: ["mcp:render"] as const },
+      source = await fixture.renders.createSource(identity, [
+        { path: "main.tex", text: "original" },
+        { path: "sections/body.tex", text: "old" },
+      ]),
+      revised = await fixture.renders.updateSourceFile(identity, source.id, {
+        path: "different.tex",
+        text: "new",
+      }),
+      deleted = await fixture.renders.deleteSourceFile(
+        identity,
+        revised.id,
+        "sections/body.tex",
+      ),
+      replaced = await fixture.renders.updateSourceFile(identity, deleted.id, {
+        path: "SECTIONS/body.tex",
+        text: "replacement",
+      });
+    expect(replaced.paths).toEqual([
+      "different.tex",
+      "main.tex",
+      "SECTIONS/body.tex",
+    ]);
+    const inspection = join(fixture.storage, "revision-inspection"),
+      result = await validateAndExtract(
+        join(fixture.storage, "sources", replaced.id, "source.zip"),
+        inspection,
+        {
+          maxExtractedBytes: 1024 * 1024,
+          maxFileBytes: 1024 * 1024,
+          maxEntries: 10,
+          maxFiles: 10,
+          maxDepth: 10,
+          maxNameLength: 200,
+        },
+        "main.tex",
+      );
+    expect(new Set(result.paths)).toEqual(new Set(replaced.paths));
+    expect(
+      await readFile(join(inspection, "SECTIONS", "body.tex"), "utf8"),
+    ).toBe("replacement");
   });
 
   it("rejects traversal and supports safe chunked ZIP upload", async () => {
