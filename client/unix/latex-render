@@ -12,8 +12,6 @@ while [ -L "$script" ]; do
   esac
 done
 bin_dir=$(CDPATH= cd "$(dirname "$script")" && pwd)
-: "${LATEX_RENDER_BASE_URL:=https://latex-render.n624.jp}"
-export LATEX_RENDER_BASE_URL
 LATEX_RENDER_INSTALL_DIRECTORY=$(CDPATH= cd "$bin_dir/.." && pwd)
 export LATEX_RENDER_INSTALL_DIRECTORY
 if [ "$launcher_dir" != "$bin_dir" ]; then

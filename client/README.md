@@ -7,7 +7,7 @@ The Windows, Linux, and macOS clients use the single public origin `https://late
 - Render API: `/api/v1/`
 - Admin UI: `/admin/`
 
-Set `LATEX_RENDER_BASE_URL` only when overriding the production origin. The legacy `LATEX_RENDER_GATEWAY_URL` and `LATEX_RENDER_RENDERER_URL` variables remain migration fallbacks in the CLI but are no longer written by the Windows wrappers.
+Set `LATEX_RENDER_BASE_URL` only when overriding the production origin. The managed launchers leave endpoint selection to the CLI and MCP server: `LATEX_RENDER_BASE_URL`, then the legacy `LATEX_RENDER_RENDERER_URL`, then `LATEX_RENDER_GATEWAY_URL`, then the public origin. Legacy variables remain migration fallbacks; new configurations should use `LATEX_RENDER_BASE_URL`.
 
 The API key is stored with Windows DPAPI on Windows and in a user-owned mode `0600` configuration file on Linux/macOS. Never place API keys in project files, MCP arguments, logs, or prompts.
 
