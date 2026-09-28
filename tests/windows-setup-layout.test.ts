@@ -92,7 +92,7 @@ describe.runIf(process.platform === "win32")(
       expect(installed.status.state?.binDirectory).toBe(options.binDirectory);
       expect(
         await readFile(installed.status.paths.cliLauncher, "utf8"),
-      ).toContain("managed external launcher v1");
+      ).toContain("managed external launcher v2");
       expect(
         f.commands.some((command) => command.includes(options.binDirectory)),
       ).toBe(true);
