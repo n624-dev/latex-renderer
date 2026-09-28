@@ -166,7 +166,7 @@ for (let i = 1; i <= count; i++) fs.writeFileSync(prefix + '-' + String(i).padSt
   }
 
   for (const status of [0, 1]) {
-    it(`preserves SyncTeX candidates and checks the query exit status (${status})`, async () => {
+    it(`marks ambiguous SyncTeX placement unknown and checks the query exit status (${status})`, async () => {
       const root = await mkdtemp(
         join(tmpdir(), "renderer-synctex-regression-"),
       );
@@ -176,9 +176,9 @@ for (let i = 1; i <= count; i++) fs.writeFileSync(prefix + '-' + String(i).padSt
           metadata = join(root, "objects.meta");
         await writeFile(
           metadata,
-          "OBJECT:1\nKIND:math\nSOURCE:main.tex\nLINE:5\nOBJECT:2\nKIND:math\nSOURCE:main.tex\nLINE:5\n",
+          "OBJECT:1\nKIND:math\nSOURCE:main.tex\nLINE:5\nOBJECT:2\nKIND:math\nSOURCE:main.tex\nLINE:5\nOBJECT:3\nKIND:math\nSOURCE:main.tex\nLINE:6\nOBJECT:4\nKIND:math\nSOURCE:main.tex\nLINE:7\n",
         );
-        await executable(join(bin, "pdfinfo"), "console.log('Pages: 2');");
+        await executable(join(bin, "pdfinfo"), "console.log('Pages: 4');");
         await executable(
           join(bin, "pdftocairo"),
           "require('node:fs').writeFileSync(process.argv.at(-1), '<svg width=\"10pt\" height=\"10pt\"></svg>');",
@@ -187,7 +187,7 @@ for (let i = 1; i <= count; i++) fs.writeFileSync(prefix + '-' + String(i).padSt
           "SyncTeX result begin\nOutput:result.pdf\nPage:2\nx:10\ny:100\nW:200\nOutput:result.pdf\nPage:3\nx:70\ny:190\nW:300\nSyncTeX result end\n";
         await executable(
           join(bin, "synctex"),
-          `process.stdout.write(${JSON.stringify(response)}); process.exit(${status});`,
+          `process.stdout.write(process.argv.some((arg) => arg.includes('7:1:')) ? '' : process.argv.some((arg) => arg.includes('6:1:')) ? 'SyncTeX result begin\\nPage:4\\nx:25\\ny:60\\nSyncTeX result end\\n' : ${JSON.stringify(response)}); process.exit(${status});`,
         );
         const command = execute(
           "perl",
@@ -214,12 +214,62 @@ for (let i = 1; i <= count; i++) fs.writeFileSync(prefix + '-' + String(i).padSt
           await command;
           const manifest = JSON.parse(
             await readFile(join(output, "manifest.json"), "utf8"),
-          ) as { objects: Array<{ page: number; x: number; y: number }> };
+          ) as {
+            schemaVersion: number;
+            objects: Array<{
+              placementStatus: string;
+              page?: number;
+              x?: number;
+              y?: number;
+              width: number;
+              height: number;
+            }>;
+          };
+          assert.equal(manifest.schemaVersion, 2);
           assert.deepEqual(
-            manifest.objects.map(({ page, x, y }) => ({ page, x, y })),
+            manifest.objects.map(
+              ({ placementStatus, page, x, y, width, height }) => ({
+                placementStatus,
+                page,
+                x,
+                y,
+                width,
+                height,
+              }),
+            ),
             [
-              { page: 2, x: 10, y: 90 },
-              { page: 3, x: 70, y: 180 },
+              {
+                placementStatus: "unknown",
+                page: undefined,
+                x: undefined,
+                y: undefined,
+                width: 10,
+                height: 10,
+              },
+              {
+                placementStatus: "unknown",
+                page: undefined,
+                x: undefined,
+                y: undefined,
+                width: 10,
+                height: 10,
+              },
+              {
+                placementStatus: "known",
+                page: 4,
+                x: 25,
+                y: 50,
+                width: 10,
+                height: 10,
+              },
+              {
+                placementStatus: "unknown",
+                page: undefined,
+                x: undefined,
+                y: undefined,
+                width: 10,
+                height: 10,
+              },
             ],
           );
         }

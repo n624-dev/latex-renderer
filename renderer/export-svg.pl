@@ -41,7 +41,7 @@ my $page_count = @objects ? pdf_pages($capture_pdf) : 0;
 die "renderer: SVG capture count mismatch\n" unless $page_count == @objects;
 make_path("$output_root/objects", { mode => 0770 });
 
-my (%source_occurrence, %source_count);
+my %source_count;
 for my $object (@objects) {
   my $key = "$object->{sourceFile}:$object->{sourceLine}";
   $source_count{$key} = ($source_count{$key} // 0) + 1;
@@ -64,27 +64,26 @@ for my $index (0 .. $#objects) {
   die "renderer: SVG output exceeds total limit\n" if $total_bytes > $max_total_bytes;
   my ($width, $height) = svg_dimensions($destination);
   my $key = "$object->{sourceFile}:$object->{sourceLine}";
-  my $occurrence = $source_occurrence{$key} // 0;
-  $source_occurrence{$key} = $occurrence + 1;
   my $placement = synctex_placement(
     $canonical_pdf,
     $object->{sourceFile},
     $object->{sourceLine},
-    $occurrence,
     $source_count{$key},
     $width,
     $height,
   );
   $object->{id} = $index + 1;
   $object->{artifact} = "svg/$relative_path";
+  $object->{placementStatus} = $placement->{placementStatus};
   for my $coordinate (qw(page x y width height)) {
+    next unless exists $placement->{$coordinate};
     $object->{$coordinate} = $placement->{$coordinate};
   }
   delete $object->{sequence};
 }
 
 my $manifest = {
-  schemaVersion => 1,
+  schemaVersion => 2,
   coordinateSystem => {
     unit => 'pdf-point',
     origin => 'top-left',
@@ -137,7 +136,7 @@ sub svg_dimensions {
 }
 
 sub synctex_placement {
-  my ($canonical_pdf, $source, $line, $occurrence, $source_count, $width, $height) = @_;
+  my ($canonical_pdf, $source, $line, $source_count, $width, $height) = @_;
   my $absolute = "/work/input/$source";
   open my $pipe, '-|', 'synctex', 'view', '-i', "$line:1:$absolute", '-o', $canonical_pdf
     or die "renderer: synctex query failed: $!\n";
@@ -158,26 +157,26 @@ sub synctex_placement {
     }
     $current{x} = 0 + $1 if $row =~ /^x:([-0-9.]+)/;
     $current{y} = 0 + $1 if $row =~ /^y:([-0-9.]+)/;
-    $current{lineWidth} = 0 + $1 if $row =~ /^W:([-0-9.]+)/;
   }
   close $pipe or die "renderer: synctex query failed\n";
   push @matches, { %current } if defined $current{page};
-  die "renderer: no canonical PDF placement for $source:$line\n" unless @matches;
-  my $match = $matches[$occurrence] // $matches[-1];
-  my $x = $match->{x} // 0;
-  if (@matches < $source_count && ($match->{lineWidth} // 0) > 0) {
-    # SyncTeX may collapse repeated inline objects on one source line into a
-    # single line box. Distribute those objects within that measured box in
-    # execution order so every source instance has a stable placement.
-    my $slot = $match->{lineWidth} / $source_count;
-    $x += ($slot * ($occurrence + 0.5)) - ($width / 2);
-  }
-  return {
-    page => $match->{page},
-    x => round_point($x),
-    y => round_point(($match->{y} // $height) - $height),
+  my $dimensions = {
     width => round_point($width),
     height => round_point($height),
+  };
+  # SyncTeX line boxes cannot identify which object on a repeated source line
+  # produced a candidate. Even multiple candidates have no reliable ordering
+  # relative to the independently captured SVG objects.
+  return { %$dimensions, placementStatus => 'unknown' }
+    if $source_count != 1 || @matches != 1 ||
+       !defined $matches[0]->{x} || !defined $matches[0]->{y};
+  my $match = $matches[0];
+  return {
+    placementStatus => 'known',
+    page => $match->{page},
+    x => round_point($match->{x}),
+    y => round_point($match->{y} - $height),
+    %$dimensions,
   };
 }
 

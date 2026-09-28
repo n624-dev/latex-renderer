@@ -46,33 +46,45 @@ node --input-type=module - "$output/svg/manifest.json" <<'NODE'
 import { readFile } from "node:fs/promises";
 
 const manifest = JSON.parse(await readFile(process.argv[2], "utf8"));
-if (manifest.schemaVersion !== 1 || manifest.objects.length !== 10)
+if (manifest.schemaVersion !== 2 || manifest.objects.length !== 18)
   throw new Error("unexpected SVG manifest object count");
 if (manifest.objects.filter(({ kind }) => kind === "tikz").length !== 2)
   throw new Error("TikZ/PGF outermost capture is invalid");
 const mainMath = manifest.objects.filter(
   ({ kind, sourceFile }) => kind === "math" && sourceFile === "main.tex",
 );
-if (mainMath.length !== 7)
+if (mainMath.length !== 15)
   throw new Error("inline/display math capture regressed around TikZ");
 if (!manifest.objects.some(({ sourceFile }) => sourceFile === "section.tex"))
   throw new Error("included-file attribution is missing");
 const repeated = manifest.objects.filter(
   ({ sourceFile, sourceLine }) => sourceFile === "main.tex" && sourceLine === 37,
 );
-if (
-  repeated.length !== 3 ||
-  new Set(repeated.map(({ x }) => x)).size !== 3
-)
-  throw new Error("repeated inline math placements are not distinct");
+if (repeated.length !== 3 || repeated.some(({ placementStatus }) => placementStatus !== "unknown"))
+  throw new Error("ambiguous inline math placement was not marked unknown");
+const uneven = manifest.objects.filter(
+  ({ sourceFile, sourceLine }) => sourceFile === "main.tex" && sourceLine === 38,
+);
+if (uneven.length !== 8 || uneven.some(({ placementStatus }) => placementStatus !== "unknown"))
+  throw new Error("uneven inline math placement was not marked unknown");
 for (const [index, object] of manifest.objects.entries()) {
   if (object.id !== index + 1)
     throw new Error("SVG IDs are not in execution order");
   if (!/^svg\/objects\/(?:math|tikz)-[0-9]{6}\.svg$/.test(object.artifact))
     throw new Error("unexpected SVG artifact path");
-  for (const key of ["page", "x", "y", "width", "height"])
+  for (const key of ["width", "height"])
     if (!Number.isFinite(object[key]))
       throw new Error(`invalid SVG placement ${key}`);
+  if (object.placementStatus === "unknown") {
+    if ("page" in object || "x" in object || "y" in object)
+      throw new Error("unknown placement has guessed PDF coordinates");
+  } else if (object.placementStatus === "known") {
+    for (const key of ["page", "x", "y"])
+      if (!Number.isFinite(object[key]))
+        throw new Error(`invalid SVG placement ${key}`);
+  } else {
+    throw new Error("unexpected SVG placement status");
+  }
 }
 NODE
 
