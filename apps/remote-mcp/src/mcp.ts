@@ -129,6 +129,9 @@ const errorSchema = z
 const MAX_INLINE_RESOURCE_BASE64_BYTES = Math.ceil(
   4 * Math.ceil(REMOTE_MCP_MAX_INLINE_ARTIFACT_BYTES / 3),
 );
+// A 4 MiB direct Source can exceed the SDK's 4 MiB HTTP default after base64
+// encoding. Keep the transport bounded while allowing ordinary direct uploads.
+const MAX_MCP_REQUEST_BODY_BYTES = 8 * 1024 * 1024;
 
 export function createRemoteMcpHandler(
   renders: RemoteRenderService,
@@ -670,6 +673,7 @@ export function createRemoteMcpHandler(
     {
       responseMode: "json",
       legacy: "stateless",
+      maxRequestBodySize: MAX_MCP_REQUEST_BODY_BYTES,
       onerror: () =>
         console.error(JSON.stringify({ event: "remote_mcp.protocol_error" })),
     },

@@ -896,6 +896,36 @@ describe("Remote MCP HTTP server", () => {
     expect(serialized).not.toContain("compile.log\n");
   });
 
+  it("accepts a direct Source whose base64 request exceeds the SDK default body limit", async () => {
+    const fixture = await createFixture();
+    const token = issueAccessToken(fixture.oauth);
+    const encoded = Buffer.alloc(900 * 1024, 0x61).toString("base64");
+    const files = [
+      {
+        path: "main.tex",
+        text: "\\documentclass{article}\\begin{document}ok\\end{document}",
+      },
+      ...Array.from({ length: 4 }, (_, index) => ({
+        path: `assets/large-${index}.dat`,
+        base64: encoded,
+      })),
+    ];
+    const request = {
+      jsonrpc: "2.0",
+      id: 29,
+      method: "tools/call",
+      params: { name: "create_source", arguments: { files } },
+    };
+    expect(Buffer.byteLength(JSON.stringify(request))).toBeGreaterThan(
+      4 * 1024 * 1024,
+    );
+    const created = await mcpRequest(fixture.app, token, request);
+    expect(structuredObject(created, "source")).toMatchObject({
+      status: "ready",
+      paths: files.map((file) => file.path).sort(),
+    });
+  });
+
   it("creates, revises, renders, hands off, and retries a multi-file Source", async () => {
     const fixture = await createFixture(),
       token = issueAccessToken(fixture.oauth),

@@ -15,8 +15,8 @@
     "@latex-renderer/database": "workspace:*",
     "@latex-renderer/remote-mcp-core": "workspace:*",
     "@latex-renderer/shared": "workspace:*",
-    "@modelcontextprotocol/server": "^2.0.0",
-    "hono": "^4.13.8",
+    "@modelcontextprotocol/server": "^2.1.0",
+    "hono": "^4.13.9",
     "zod": "^4.6.5"
   }
 }
