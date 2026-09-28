@@ -505,8 +505,12 @@ async function loadJobs(fetcher: Fetcher, container: HTMLElement, limit = 50) {
     const next = document.querySelector<HTMLButtonElement>("#app-jobs-next");
     if (next)
       next.onclick = () => {
+        if (next.disabled) return;
         next.disabled = true;
-        void loadPage(true).catch(showError);
+        void loadPage(true).catch((error: unknown) => {
+          if (next.isConnected) next.disabled = false;
+          showError(error);
+        });
       };
   };
   let items: Array<Record<string, unknown>> = [];
@@ -829,8 +833,12 @@ function installProjects(fetcher: Fetcher) {
         document.querySelector<HTMLButtonElement>("#app-projects-next");
       if (next)
         next.onclick = () => {
+          if (next.disabled) return;
           next.disabled = true;
-          void loadPage(true).catch(showError);
+          void loadPage(true).catch((error: unknown) => {
+            if (next.isConnected) next.disabled = false;
+            showError(error);
+          });
         };
     };
     await loadPage();
@@ -986,8 +994,12 @@ function installProjects(fetcher: Fetcher) {
       );
       if (nextRevision)
         nextRevision.onclick = () => {
+          if (nextRevision.disabled) return;
           nextRevision.disabled = true;
-          void loadDetail(true).catch(showError);
+          void loadDetail(true).catch((error: unknown) => {
+            if (nextRevision.isConnected) nextRevision.disabled = false;
+            showError(error);
+          });
         };
     };
     void loadDetail().catch(showError);
