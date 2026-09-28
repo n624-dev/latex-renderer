@@ -183,11 +183,17 @@ for (let i = 1; i <= count; i++) fs.writeFileSync(prefix + '-' + String(i).padSt
           join(bin, "pdftocairo"),
           "require('node:fs').writeFileSync(process.argv.at(-1), '<svg width=\"10pt\" height=\"10pt\"></svg>');",
         );
-        const response =
-          "SyncTeX result begin\nOutput:result.pdf\nPage:2\nx:10\ny:100\nW:200\nOutput:result.pdf\nPage:3\nx:70\ny:190\nW:300\nSyncTeX result end\n";
         await executable(
           join(bin, "synctex"),
-          `process.stdout.write(process.argv.some((arg) => arg.includes('7:1:')) ? '' : process.argv.some((arg) => arg.includes('6:1:')) ? 'SyncTeX result begin\\nPage:4\\nx:25\\ny:60\\nSyncTeX result end\\n' : ${JSON.stringify(response)}); process.exit(${status});`,
+          String.raw`
+const args = process.argv;
+if (!args.some((arg) => arg.includes('7:1:'))) {
+  const lines = args.some((arg) => arg.includes('6:1:'))
+    ? ['SyncTeX result begin', 'Page:4', 'x:25', 'y:60', 'SyncTeX result end']
+    : ['SyncTeX result begin', 'Output:result.pdf', 'Page:2', 'x:10', 'y:100', 'W:200', 'Output:result.pdf', 'Page:3', 'x:70', 'y:190', 'W:300', 'SyncTeX result end'];
+  process.stdout.write(lines.join('\n') + '\n');
+}
+process.exit(Number(process.env.TEST_SYNCTEX_STATUS));`,
         );
         const command = execute(
           "perl",
@@ -205,6 +211,7 @@ for (let i = 1; i <= count; i++) fs.writeFileSync(prefix + '-' + String(i).padSt
             env: {
               ...process.env,
               PATH: `${bin}:${process.env.PATH ?? "/usr/bin:/bin"}`,
+              TEST_SYNCTEX_STATUS: String(status),
             },
           },
         );
