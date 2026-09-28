@@ -17,7 +17,7 @@ import {
 import {
   AppError,
   CLIENT_VERSION,
-  PUBLIC_ORIGIN,
+  clientRendererBaseUrl,
 } from "@latex-renderer/shared";
 import {
   DEFAULT_DISTRIBUTION_URI,
@@ -122,11 +122,7 @@ const setup = program
       await runSetupWeb({
         ...setupCoreOptions(options),
         distributionBaseUri: options.baseUri ?? DEFAULT_DISTRIBUTION_URI,
-        rendererBaseUrl:
-          process.env.LATEX_RENDER_BASE_URL ??
-          process.env.LATEX_RENDER_RENDERER_URL ??
-          process.env.LATEX_RENDER_GATEWAY_URL ??
-          PUBLIC_ORIGIN,
+        rendererBaseUrl: clientRendererBaseUrl(process.env),
       });
       return;
     }
@@ -513,11 +509,7 @@ void program.parseAsync().catch((error: unknown) => {
 });
 
 async function configuredClient(): Promise<RendererClient> {
-  const base =
-    process.env.LATEX_RENDER_BASE_URL ??
-    process.env.LATEX_RENDER_RENDERER_URL ??
-    process.env.LATEX_RENDER_GATEWAY_URL ??
-    PUBLIC_ORIGIN;
+  const base = clientRendererBaseUrl(process.env);
   return new RendererClient(base, await loadCredential());
 }
 

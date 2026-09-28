@@ -24,7 +24,11 @@ import {
   type JobResponse,
 } from "@latex-renderer/contracts";
 import { loadCredential } from "@latex-renderer/setup-core";
-import { AppError, PUBLIC_ORIGIN, safeError } from "@latex-renderer/shared";
+import {
+  AppError,
+  clientRendererBaseUrl,
+  safeError,
+} from "@latex-renderer/shared";
 import { z } from "zod";
 
 export const MCP_TOOL_NAMES = [
@@ -674,12 +678,7 @@ function notFoundOnly(error: unknown): undefined {
 }
 
 function rendererBaseUrl(): string {
-  return (
-    process.env.LATEX_RENDER_BASE_URL ??
-    process.env.LATEX_RENDER_RENDERER_URL ??
-    process.env.LATEX_RENDER_GATEWAY_URL ??
-    PUBLIC_ORIGIN
-  );
+  return clientRendererBaseUrl(process.env);
 }
 
 export function assertValidMcpOutput(output: McpToolOutput): McpToolOutput {

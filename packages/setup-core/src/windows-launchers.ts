@@ -1,4 +1,12 @@
-import { lstat, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import {
+  lstat,
+  mkdir,
+  readFile,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { join, win32 } from "node:path";
 
 /** ASCII-only CMD source: Unicode/%/!/quotes in install paths stay in data, not
@@ -8,6 +16,15 @@ export function windowsLauncherContents(
   binDirectory: string,
   name: "latex-render" | "latex-renderer-mcp",
 ): string {
+  return launcherContents(installDirectory, binDirectory, name, false);
+}
+
+function launcherContents(
+  installDirectory: string,
+  binDirectory: string,
+  name: "latex-render" | "latex-renderer-mcp",
+  legacy: boolean,
+): string {
   const encoded = Buffer.from(
     JSON.stringify({
       install: installDirectory,
@@ -16,8 +33,8 @@ export function windowsLauncherContents(
       cli: win32.join(binDirectory, "latex-render.cmd"),
     }),
   ).toString("base64");
-  const script = `const c=JSON.parse(Buffer.from('${encoded}','base64').toString('utf8'));process.env.LATEX_RENDER_INSTALL_DIRECTORY=c.install;process.env.LATEX_RENDER_BIN_DIRECTORY=c.bin;process.env.LATEX_RENDER_CLI_PATH=c.cli;process.env.LATEX_RENDER_BASE_URL||='https://latex-render.n624.jp';process.argv.splice(1,0,c.entry);require(c.entry)`;
-  return `@echo off\r\n@rem latex-renderer managed external launcher v1\r\nsetlocal DisableDelayedExpansion\r\nnode -e "${script}" -- %*\r\n`;
+  const script = `const c=JSON.parse(Buffer.from('${encoded}','base64').toString('utf8'));process.env.LATEX_RENDER_INSTALL_DIRECTORY=c.install;process.env.LATEX_RENDER_BIN_DIRECTORY=c.bin;process.env.LATEX_RENDER_CLI_PATH=c.cli;${legacy ? "process.env.LATEX_RENDER_BASE_URL||='https://latex-render.n624.jp';" : ""}process.argv.splice(1,0,c.entry);require(c.entry)`;
+  return `@echo off\r\n@rem latex-renderer managed external launcher v${legacy ? "1" : "2"}\r\nsetlocal DisableDelayedExpansion\r\nnode -e "${script}" -- %*\r\n`;
 }
 
 export function hasExternalWindowsBin(
@@ -51,13 +68,27 @@ export async function manageWindowsLaunchers(
         await writeFile(destination, expected, { flag: "wx", mode: 0o600 });
         result.repaired.push(`launcher:${name}`);
       }
-    } else if (
-      info.isFile() &&
-      info.nlink === 1 &&
-      info.size < 16_384 &&
-      (await readFile(destination, "utf8")) === expected
-    ) {
-      if (remove) await rm(destination);
+    } else if (info.isFile() && info.nlink === 1 && info.size < 16_384) {
+      const contents = await readFile(destination, "utf8");
+      const legacy = launcherContents(
+        installDirectory,
+        binDirectory,
+        name,
+        true,
+      );
+      if (contents === expected || contents === legacy) {
+        if (remove) await rm(destination);
+        else if (contents === legacy) {
+          const temporary = `${destination}.part-${randomUUID()}`;
+          try {
+            await writeFile(temporary, expected, { flag: "wx", mode: 0o600 });
+            await rename(temporary, destination);
+            result.repaired.push(`launcher:${name}`);
+          } finally {
+            await rm(temporary, { force: true });
+          }
+        }
+      } else result.preserved.push(`launcher:${name}`);
     } else result.preserved.push(`launcher:${name}`);
   }
   return result;

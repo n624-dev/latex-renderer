@@ -13,7 +13,10 @@ on:
       - "tests/artifact-transaction*"
       - "tests/fixtures/artifact-transaction-child.mjs"
       - "tests/client-audit-integration.test.ts"
+      - "tests/client-launcher-endpoints.test.ts"
       - "tests/windows-setup-layout.test.ts"
+      - "client/unix/**"
+      - "client/windows/**"
       - "client/mcpb/**"
       - "client/*mcpb*.mjs"
       - "package.json"
@@ -32,7 +35,10 @@ on:
       - "tests/artifact-transaction*"
       - "tests/fixtures/artifact-transaction-child.mjs"
       - "tests/client-audit-integration.test.ts"
+      - "tests/client-launcher-endpoints.test.ts"
       - "tests/windows-setup-layout.test.ts"
+      - "client/unix/**"
+      - "client/windows/**"
       - "client/mcpb/**"
       - "client/*mcpb*.mjs"
       - "package.json"
@@ -66,7 +72,7 @@ jobs:
       - name: Build shared client libraries
         run: pnpm --filter @latex-renderer/setup-core... --filter @latex-renderer/client-core... --filter @latex-renderer/api-client... --filter @latex-renderer/mcp-core... --filter @latex-renderer/log-parser... build
       - name: Exercise client integrity, recovery, and native launchers
-        run: pnpm exec vitest run packages/setup-core/src/windows-launchers.test.ts packages/client-core/src/open-local-target.test.ts tests/artifact-transaction.test.ts tests/artifact-transaction-faults.test.ts tests/artifact-transaction-platform.test.ts tests/artifact-transaction-stale-cleanup.test.ts tests/client-audit-integration.test.ts packages/api-client/src/index.test.ts tests/windows-setup-layout.test.ts packages/mcp-core/src/index.test.ts packages/log-parser/src/index.test.ts
+        run: pnpm exec vitest run packages/setup-core/src/windows-launchers.test.ts packages/client-core/src/open-local-target.test.ts tests/artifact-transaction.test.ts tests/artifact-transaction-faults.test.ts tests/artifact-transaction-platform.test.ts tests/artifact-transaction-stale-cleanup.test.ts tests/client-audit-integration.test.ts tests/client-launcher-endpoints.test.ts packages/api-client/src/index.test.ts tests/windows-setup-layout.test.ts packages/mcp-core/src/index.test.ts packages/log-parser/src/index.test.ts
       - name: Select OpenSSL on macOS
         if: runner.os == 'macOS'
         run: echo "$(brew --prefix openssl@3)/bin" >> "$GITHUB_PATH"
