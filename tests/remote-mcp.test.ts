@@ -1815,6 +1815,121 @@ describe("Remote MCP HTTP server", () => {
     });
   });
 
+  it("reads every advertised PDF and SVG artifact URI through the MCP resource handler", async () => {
+    const fixture = await createFixture(),
+      token = issueAccessToken(fixture.oauth),
+      jobId = await seedCompletedRemoteJob(fixture, "succeeded");
+    await mkdir(
+      join(fixture.storage, "jobs", jobId, "output", "svg", "objects"),
+      { recursive: true },
+    );
+    const additions = [
+      ["errors", "errors.json", Buffer.from('{"errors":[]}')],
+      ["dependencies", "dependencies.json", Buffer.from('{"files":[]}')],
+      ["svg_manifest", "svg/manifest.json", Buffer.from('{"objects":[]}')],
+      ["svg", "svg/objects/math-000001.svg", Buffer.from('<svg id="math"/>')],
+      ["svg", "svg/objects/tikz-000002.svg", Buffer.from('<svg id="tikz"/>')],
+    ] as const;
+    const expectedBytes = new Map<string, Buffer>([
+      ["result.pdf", TEST_PDF],
+      ["previews/page-1.png", TEST_PNG],
+      ...additions.map(([, path, bytes]) => [path, bytes] as const),
+    ]);
+    for (const [type, path, bytes] of additions)
+      await seedRemoteArtifact(fixture, jobId, type, path, bytes);
+    const status = await callTool(
+        fixture.app,
+        token,
+        3001,
+        "get_render_status",
+        {
+          jobId,
+        },
+      ),
+      artifacts = structuredObject(status, "job").artifacts as Array<{
+        relativePath: string;
+        resourceUri: string;
+        mimeType: string;
+      }>;
+    expect(artifacts).toHaveLength(7);
+    for (const [index, artifact] of artifacts.entries()) {
+      const response = await mcpRequest(fixture.app, token, {
+          jsonrpc: "2.0",
+          id: 3002 + index,
+          method: "resources/read",
+          params: { uri: artifact.resourceUri },
+        }).catch((error: unknown) => {
+          throw new Error(`Resource failed: ${artifact.relativePath}`, {
+            cause: error,
+          });
+        }),
+        content = response.result.contents?.[0];
+      expect(content).toMatchObject({
+        uri: artifact.resourceUri,
+        mimeType: artifact.mimeType,
+      });
+      const expected = expectedBytes.get(artifact.relativePath);
+      expect(expected).toBeDefined();
+      if (typeof content?.text === "string")
+        expect(content.text).toBe(expected?.toString("utf8"));
+      else {
+        expect(typeof content?.blob).toBe("string");
+        expect(Buffer.from(content?.blob as string, "base64")).toEqual(
+          expected,
+        );
+      }
+    }
+  });
+
+  it("does not expose SVG resources to a different MCP owner", async () => {
+    const fixture = await createFixture(),
+      jobId = await seedCompletedRemoteJob(fixture, "succeeded"),
+      path = "svg/objects/math-000001.svg";
+    await mkdir(
+      join(fixture.storage, "jobs", jobId, "output", "svg", "objects"),
+      { recursive: true },
+    );
+    await seedRemoteArtifact(
+      fixture,
+      jobId,
+      "svg",
+      path,
+      Buffer.from('<svg id="private"/>'),
+    );
+    fixture.database.users.insertInvitation({
+      id: "user_other",
+      email: "other@example.test",
+      displayName: "Other User",
+      role: "user",
+      createdBy: "test",
+      timestamp: "2026-08-12T00:00:00.000Z",
+    });
+    const token = issueAccessToken(fixture.oauth, "user_other"),
+      response = await fixture.app.request("/mcp", {
+        method: "POST",
+        headers: {
+          Host: "latex.example.com",
+          Authorization: `Bearer ${token}`,
+          Accept: "application/json, text/event-stream",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 3050,
+          method: "resources/read",
+          params: {
+            uri: `latex-renderer://jobs/${jobId}/artifact/${encodeURIComponent(path)}`,
+          },
+        }),
+      }),
+      body = await response.text();
+    expect(body).toContain("Job does not exist");
+    expect(body).not.toContain("private");
+    expect(body).not.toContain(
+      Buffer.from('<svg id="private"/>').toString("base64"),
+    );
+  });
+
   it.each(["failed", "succeeded"] as const)(
     "reads %s artifacts from the DB-selected generation",
     async (status) => {
@@ -2410,7 +2525,10 @@ async function testZip(
   return Buffer.concat(chunks);
 }
 
-function issueAccessToken(oauth: RemoteOAuthService): string {
+function issueAccessToken(
+  oauth: RemoteOAuthService,
+  userId = "user_test",
+): string {
   const client = oauth.registerClient({
       clientName: "Compatibility test",
       redirectUris: ["http://127.0.0.1:49152/callback"],
@@ -2428,7 +2546,7 @@ function issueAccessToken(oauth: RemoteOAuthService): string {
         code_challenge_method: "S256",
       }),
     ),
-    redirect = oauth.authorize("user_test", request);
+    redirect = oauth.authorize(userId, request);
   return oauth.exchangeAuthorizationCode({
     code: redirect.searchParams.get("code") as string,
     clientId: client.clientId,

@@ -47,6 +47,8 @@ Remote MCPは次のツールを提供します。
 
 Remote MCPの結果は3層で返します。標準 `content` には、AIが判断や次のtool呼び出しに必要なSource ID、Job ID、status、offset、cursor、availability、bounded diagnosticsを必ず含めます。`structuredContent` は同じvalidated resultの完全な機械処理表現として維持します。PDF、完全なcompile log、raw JSON等の大容量データは、同じOAuth利用者だけが読める `latex-renderer://jobs/...` Resourceとして返します。
 
+SVG出力を指定したJobでは、結果に含まれる `svg/manifest.json` と `svg/objects/*.svg` の `resourceUri` も同じMCP Resource読取で取得できます。所有者・保持期限・Resourceのサイズ上限はPDF等と共通です。
+
 `structuredContent` やcustom Resourceをモデルへ公開しないMCPクライアントでも、標準 `content` だけでSource作成、chunk upload、render、状態確認、修正、再renderまで継続できます。Resource対応クライアントは完全PDFや完全ログも取得できます。APIキー、OAuth token、upload/render ticket、Source本文、raw base64は結果へ追加しません。
 
 AIクライアントはWeb UIを開かず、`create_source` → `create_render` → `get_render_status` → `get_render_diagnostics` / `get_render_preview` → Source revision → `retry_render`または再render → Resource読取の順でレンダリング、修正、再確認まで進められます。Web結果リンクは人が確認する場合の補助です。
