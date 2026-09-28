@@ -1,4 +1,5 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { PUBLIC_ORIGIN } from "./version.js";
 
 export * from "./version.js";
 export * from "./pagination.js";
@@ -8,6 +9,18 @@ export interface ResourceLimits {
   maxExtractedBytes: number;
   maxFileCount: number;
   maxZipEntries: number;
+}
+
+/** Keep the direct client, MCP server, and managed launcher fallback order aligned. */
+export function clientRendererBaseUrl(
+  environment: Readonly<Record<string, string | undefined>>,
+): string {
+  return (
+    environment.LATEX_RENDER_BASE_URL ??
+    environment.LATEX_RENDER_RENDERER_URL ??
+    environment.LATEX_RENDER_GATEWAY_URL ??
+    PUBLIC_ORIGIN
+  );
 }
 
 export const DEFAULT_RESOURCE_LIMITS: Readonly<ResourceLimits> = Object.freeze({
