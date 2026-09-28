@@ -1285,13 +1285,17 @@ function registerJobResources(
       list: undefined,
     }),
     {
-      title: "Render metadata artifact",
-      description: "Owned JSON diagnostic or dependency artifact",
-      mimeType: "application/json",
+      title: "Render metadata or SVG artifact",
+      description: "Owned JSON metadata or validated SVG output",
     },
     async (uri, variables) => {
       const name = decodeURIComponent(resourceVariable(variables.name));
-      if (name !== "errors.json" && name !== "dependencies.json")
+      const json =
+          name === "errors.json" ||
+          name === "dependencies.json" ||
+          name === "svg/manifest.json",
+        svg = /^svg\/objects\/(?:math|tikz)-[0-9]{6}\.svg$/.test(name);
+      if (!json && !svg)
         throw new AppError(
           "ARTIFACT_NOT_FOUND",
           "Artifact does not exist",
@@ -1303,11 +1307,12 @@ function registerJobResources(
         resourceJobId(variables.jobId),
         name,
       );
+      if (svg) return binaryResource(uri, artifact);
       return {
         contents: [
           {
             uri: uri.href,
-            mimeType: "application/json",
+            mimeType: artifact.mimeType,
             text: artifact.bytes.toString("utf8"),
           },
         ],
