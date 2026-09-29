@@ -39,7 +39,10 @@ async function request(method, path, body) {
   const value = await response.json().catch(() => null);
   if (!response.ok) {
     const message = value?.error?.message ?? `Image manager returned HTTP ${response.status}`;
-    throw new Error(message);
+    throw Object.assign(new Error(message), {
+      status: response.status,
+      code: value?.error?.code,
+    });
   }
   return value;
 }
@@ -55,24 +58,40 @@ const desired = state?.desired ?? {};
 const current = state?.current ?? null;
 let operation;
 
-if (desired.autoUpdate === true && desired.selector?.mode === "latest") {
-  const desiredLanguages = normalizedLanguages(desired.languages);
-  const currentLanguages = normalizedLanguages(current?.languages);
-  const runtimeDrift =
-    current?.selector?.mode !== "latest" ||
-    desiredLanguages.length !== currentLanguages.length ||
-    desiredLanguages.some((language, index) => language !== currentLanguages[index]);
+try {
+  if (desired.autoUpdate === true && desired.selector?.mode === "latest") {
+    const desiredLanguages = normalizedLanguages(desired.languages);
+    const currentLanguages = normalizedLanguages(current?.languages);
+    const runtimeDrift =
+      current?.selector?.mode !== "latest" ||
+      desiredLanguages.length !== currentLanguages.length ||
+      desiredLanguages.some((language, index) => language !== currentLanguages[index]);
 
-  operation = runtimeDrift
-    ? await request("POST", "/v1/apply", {
-        selector: { mode: "latest", value: null },
-        languages: desiredLanguages,
-        autoUpdate: true,
-        rebuildIfMissing: false,
-      })
-    : await request("POST", "/v1/refresh", {});
-} else {
-  operation = await request("POST", "/v1/refresh", {});
+    operation = runtimeDrift
+      ? await request("POST", "/v1/apply", {
+          selector: { mode: "latest", value: null },
+          languages: desiredLanguages,
+          autoUpdate: true,
+          rebuildIfMissing: false,
+        })
+      : await request("POST", "/v1/refresh", {});
+  } else {
+    operation = await request("POST", "/v1/refresh", {});
+  }
+} catch (error) {
+  // The timer will retry. A concurrent application/Image Manager mutation is
+  // expected during deployment; do not leave a failed systemd unit for it.
+  if (!deferredByMutation(error)) throw error;
+  console.log(JSON.stringify({ event: "image_refresh.deferred", code: error.code }));
+  process.exit(0);
+}
+
+function deferredByMutation(error) {
+  return (
+    (error?.status === 409 &&
+      ["MUTATION_LOCK_BUSY", "IMAGE_OPERATION_ACTIVE"].includes(error.code)) ||
+    (error?.status === 503 && error.code === "IMAGE_MANAGER_QUIESCING")
+  );
 }
 
 if (!operation || typeof operation.id !== "string")

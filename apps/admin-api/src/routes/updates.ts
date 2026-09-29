@@ -93,6 +93,15 @@ export function createUpdatesRouter(deps: AdminDependencies): Hono {
       mutationRequestSchema,
       await context.req.json<unknown>(),
     );
+    if (
+      deps.database.settings.value<unknown>("maintenance_mode", "normal") !==
+      "normal"
+    )
+      throw new AppError(
+        "UPDATE_MAINTENANCE_ACTIVE",
+        "Application update requires normal maintenance mode for its production render smoke; disable maintenance and drain active jobs first",
+        409,
+      );
     const result = (await manager().apply(input.version)) as OperationResponse;
     audit(
       deps,

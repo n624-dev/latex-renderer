@@ -133,6 +133,9 @@ describe("deployment prerequisite failure boundary", () => {
         ).toBeLessThan(
           source.indexOf('"$source_root/deploy/scripts/prepare-host.sh"'),
         );
+        expect(
+          readFileSync("deploy/scripts/update-manager-helper.mjs", "utf8"),
+        ).toContain("requireNormalMaintenance: true");
 
         const database = join(root, "renderer.sqlite3");
         const sqlite3 = join(root, "sqlite3");

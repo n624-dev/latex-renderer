@@ -443,8 +443,11 @@ Use this release order:
    repository immutable-release setting, then publish the draft as a
    **prerelease** with Latest disabled. Confirm the API reports
    `immutable=true`, `prerelease=true`, and `draft=false`.
-3. Put the validation host in maintenance mode, drain active jobs, and take the
-   encrypted pre-update backup. Apply the exact RC explicitly; never enable an
+3. Keep the validation host in **normal** maintenance mode, wait for active
+   jobs to drain, and take the encrypted pre-update backup. Do not enable
+   `reject-new-jobs` for this deployment: its production render smoke submits
+   a Job, and the Update Manager quiesces writers before its full recovery
+   point. Apply the exact RC explicitly; never enable an
    RC through the stable policy. A legacy v1.2.x host uses the one-time
    transition command, while a split-manager host uses
    `latex-render-admin update apply X.Y.Z-rc.N --reason "Validate release candidate" --yes`.

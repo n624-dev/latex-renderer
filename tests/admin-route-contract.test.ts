@@ -167,6 +167,7 @@ describe("admin route contract", () => {
       return Promise.resolve({ id: "imgop_test" });
     });
     let role: "owner" | "admin" = "admin";
+    let maintenanceMode = "normal";
     let scopes = new Set(["admin:update:write", "admin:tex-environment:write"]);
     const authenticate = vi.fn((_token: string, requiredScope?: string) => {
       if (requiredScope !== undefined && !scopes.has(requiredScope)) {
@@ -190,6 +191,9 @@ describe("admin route contract", () => {
       database: {
         users: {
           get: () => ({ id: "user_owner", status: "active", role }),
+        },
+        settings: {
+          value: () => maintenanceMode,
         },
         audit: (entry: Record<string, unknown>) => audits.push(entry),
       } as never,
@@ -231,6 +235,17 @@ describe("admin route contract", () => {
     role = "owner";
     expect((await post("/updates/apply", {})).status).toBe(400);
     expect(updateApply).not.toHaveBeenCalled();
+    maintenanceMode = "reject-new-jobs";
+    const blocked = await post("/updates/apply", {
+      version: "v1.2.3",
+      reason: "planned maintenance",
+    });
+    expect(blocked.status).toBe(409);
+    await expect(blocked.json()).resolves.toMatchObject({
+      error: { code: "UPDATE_MAINTENANCE_ACTIVE" },
+    });
+    expect(updateApply).not.toHaveBeenCalled();
+    maintenanceMode = "normal";
     expect(
       (
         await post("/updates/apply", {
