@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { verifyRendererCompat } from "../deploy/scripts/verify-renderer-compat.mjs";
 
-const manifest = { schemaVersion: 1, objects: [{}, {}] };
+const manifest = { schemaVersion: 2, objects: [{}, {}] };
 
 function logFor(compile: string, objects: string): string {
   return [

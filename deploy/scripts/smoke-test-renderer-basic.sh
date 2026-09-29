@@ -62,7 +62,7 @@ import { resolve } from "node:path";
 const manifestPath = process.argv[2];
 const outputRoot = process.argv[3];
 const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
-if (manifest.schemaVersion !== 1 || !Array.isArray(manifest.objects) || manifest.objects.length < 2)
+if (manifest.schemaVersion !== 2 || !Array.isArray(manifest.objects) || manifest.objects.length < 2)
   throw new Error("language-neutral SVG manifest is incomplete");
 if (!manifest.objects.some(({ kind }) => kind === "math"))
   throw new Error("language-neutral SVG math capture is missing");

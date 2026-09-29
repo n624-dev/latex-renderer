@@ -22,7 +22,7 @@ export function verifyRendererCompat(log, manifest) {
   if (resolved.compile !== "1" || resolved.objects !== resolved.compile)
     throw new Error(`PDF/SVG reference mismatch: ${JSON.stringify(resolved)}`);
   if (
-    manifest.schemaVersion !== 1 ||
+    manifest.schemaVersion !== 2 ||
     !Array.isArray(manifest.objects) ||
     manifest.objects.length < 2
   )

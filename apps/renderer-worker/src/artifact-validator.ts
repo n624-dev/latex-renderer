@@ -262,7 +262,7 @@ async function validateSvgSet(
       coordinateValues.xAxis === "right" &&
       coordinateValues.yAxis === "down";
   if (
-    manifest.schemaVersion !== 1 ||
+    (manifest.schemaVersion !== 1 && manifest.schemaVersion !== 2) ||
     !coordinatesValid ||
     manifest.objects.length !== svgArtifacts.length
   )
@@ -280,7 +280,11 @@ async function validateSvgSet(
     const item = object as Record<string, unknown>,
       sequence = index + 1,
       expectedId = String(sequence).padStart(6, "0"),
-      numericCoordinates = ["x", "y", "width", "height"] as const;
+      numericCoordinates = ["width", "height"] as const,
+      knownPlacement =
+        manifest.schemaVersion === 1 || item.placementStatus === "known",
+      unknownPlacement =
+        manifest.schemaVersion === 2 && item.placementStatus === "unknown";
     if (
       (item.kind !== "math" && item.kind !== "tikz") ||
       item.id !== sequence ||
@@ -292,8 +296,16 @@ async function validateSvgSet(
       item.sourceFile.split("/").includes("..") ||
       !Number.isSafeInteger(item.sourceLine) ||
       Number(item.sourceLine) < 1 ||
-      !Number.isSafeInteger(item.page) ||
-      Number(item.page) < 1 ||
+      (manifest.schemaVersion === 1 && "placementStatus" in item) ||
+      (!knownPlacement && !unknownPlacement) ||
+      (knownPlacement &&
+        (!Number.isSafeInteger(item.page) ||
+          Number(item.page) < 1 ||
+          typeof item.x !== "number" ||
+          !Number.isFinite(item.x) ||
+          typeof item.y !== "number" ||
+          !Number.isFinite(item.y))) ||
+      (unknownPlacement && ("page" in item || "x" in item || "y" in item)) ||
       !numericCoordinates.every(
         (key) => typeof item[key] === "number" && Number.isFinite(item[key]),
       ) ||

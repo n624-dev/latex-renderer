@@ -136,7 +136,7 @@ Idempotency-Key: <16〜200文字>
 
 ZIP送信時は `Content-Length` と予約時のサイズ・SHA-256が一致する必要があります。正常時はHTTP 204です。
 
-SVG出力は `svg/objects/math-NNNNNN.svg` または `tikz-NNNNNN.svg` として保存され、`svg/manifest.json` が実行順、ソースファイル・行、PDFページ上の座標を対応付けます。各オブジェクトは次の形式です。
+SVG出力は `svg/objects/math-NNNNNN.svg` または `tikz-NNNNNN.svg` として保存され、`svg/manifest.json` が実行順、ソースファイル・行、特定できた場合のPDFページ上の座標を対応付けます。新しいmanifestは `schemaVersion: 2` です。位置を特定できるオブジェクトは次の形式です。
 
 ```json
 {
@@ -145,6 +145,7 @@ SVG出力は `svg/objects/math-NNNNNN.svg` または `tikz-NNNNNN.svg` として
   "artifact": "svg/objects/math-000001.svg",
   "sourceFile": "chapters/formula.tex",
   "sourceLine": 18,
+  "placementStatus": "known",
   "page": 2,
   "x": 123.4,
   "y": 85.2,
@@ -153,7 +154,9 @@ SVG出力は `svg/objects/math-NNNNNN.svg` または `tikz-NNNNNN.svg` として
 }
 ```
 
-`id` は文書の実行順に1から始まります。`page` も1始まりです。座標単位はPDF point（1/72 inch）、原点はページ左上、x軸は右向き、y軸は下向きで、`x`・`y`・`width`・`height` は `result.pdf` 上の描画範囲を表します。この規約はmanifest直下の `coordinateSystem` にも記録されます。
+同じソース行の複数の数式など、SyncTeXから個々の位置を確定できない場合もSVG画像は生成しますが、推測座標は返しません。そのオブジェクトは `placementStatus: "unknown"` とし、`page`・`x`・`y` を省略します。例えば `{"id":2,"kind":"math","artifact":"svg/objects/math-000002.svg","sourceFile":"main.tex","sourceLine":20,"placementStatus":"unknown","width":10,"height":5}` です。このとき `width`・`height` は抽出したSVG自体の寸法であり、PDF上の配置を意味しません。
+
+`id` は文書の実行順に1から始まります。位置が既知なら `page` も1始まりです。座標単位はPDF point（1/72 inch）、原点はページ左上、x軸は右向き、y軸は下向きです。この規約はmanifest直下の `coordinateSystem` にも記録されます。クライアントは `schemaVersion` と `placementStatus` を確認してからPDF上へ重ねてください。既存の `schemaVersion: 1` 成果物の読取りは引き続き受け付けますが、新しい出力には常にバージョン2を使用します。
 
 SVG取得時のContent-Typeは `image/svg+xml`、Content-Dispositionは `attachment` です。個数不一致、外部参照、scriptやイベント属性などの能動コンテンツがあればJob全体が失敗します。
 

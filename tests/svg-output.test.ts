@@ -54,7 +54,8 @@ describe("optional SVG artifacts", () => {
     ]);
     const manifest = JSON.parse(
       await readFile(join(output, "manifest.json"), "utf8"),
-    ) as { objects: unknown[] };
+    ) as { schemaVersion: number; objects: unknown[] };
+    expect(manifest.schemaVersion).toBe(2);
     expect(manifest.objects).toEqual([]);
   });
   it("accepts a complete, self-contained SVG set", async () => {
@@ -72,6 +73,62 @@ describe("optional SVG artifacts", () => {
       "svg/manifest.json",
       "svg/objects/math-000001.svg",
     ]);
+  });
+
+  it("accepts version 2 when SVG placement is explicitly unknown", async () => {
+    const directory = await fixture();
+    await writeFile(
+      join(directory, "svg", "manifest.json"),
+      JSON.stringify({
+        schemaVersion: 2,
+        coordinateSystem,
+        objects: [
+          {
+            id: 1,
+            kind: "math",
+            artifact: "svg/objects/math-000001.svg",
+            sourceFile: "main.tex",
+            sourceLine: 3,
+            placementStatus: "unknown",
+            width: 10,
+            height: 5,
+          },
+        ],
+      }),
+    );
+    await expect(
+      validateArtifacts(config(directory), directory, false, true),
+    ).resolves.toBeDefined();
+  });
+
+  it("accepts version 2 with a measured placement", async () => {
+    const directory = await fixture();
+    const manifestPath = join(directory, "svg", "manifest.json");
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as {
+      schemaVersion: number;
+      objects: [{ placementStatus?: string }];
+    };
+    manifest.schemaVersion = 2;
+    manifest.objects[0].placementStatus = "known";
+    await writeFile(manifestPath, JSON.stringify(manifest));
+    await expect(
+      validateArtifacts(config(directory), directory, false, true),
+    ).resolves.toBeDefined();
+  });
+
+  it("rejects guessed PDF coordinates alongside unknown placement", async () => {
+    const directory = await fixture();
+    const manifestPath = join(directory, "svg", "manifest.json");
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as {
+      schemaVersion: number;
+      objects: [{ placementStatus?: string }];
+    };
+    manifest.schemaVersion = 2;
+    manifest.objects[0].placementStatus = "unknown";
+    await writeFile(manifestPath, JSON.stringify(manifest));
+    await expect(
+      validateArtifacts(config(directory), directory, false, true),
+    ).rejects.toMatchObject({ code: "SVG_MANIFEST_INVALID" });
   });
 
   it.each([
