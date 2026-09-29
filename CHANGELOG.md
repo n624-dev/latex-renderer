@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+## 1.4.0-rc.1 - 2026-09-29
+
+- Stop inventing PDF coordinates for SVG objects that share a source line or
+  lack an unambiguous SyncTeX placement. SVG manifest schema v2 marks their
+  placement as unknown and omits PDF page/x/y; historical v1 results remain
+  readable. Clients that overlay SVGs on PDF pages must check placement status.
+- Keep existing client artifacts intact while an active Job completes, exclude
+  only the selected project-local output subtree from the next Source archive,
+  and reject unsupported Project files before upload.
+- Validate revised and directly created Remote MCP Sources with the shared ZIP
+  rules and configured limits; make advertised SVG resources readable through
+  the owned MCP resource handler.
+- Restore legacy endpoint fallback in managed Unix and Windows launchers and
+  make Jobs, Projects, and revision pagination retryable after transient errors.
+- Include the September dependency updates and regenerated Cloudflare Worker
+  runtime types. Keep the Base-only image publication policy and canonical
+  archive fallback unchanged.
+- Candidate preparation only. Require signed-artifact update/recovery E2E and
+  explicit validation-host acceptance before Stable. This version bump does
+  not update the production VPS.
+
 ## 1.3.9 - 2026-09-26
 
 - Promote the published immutable `v1.3.9-rc.2` candidate with no functional
