@@ -8,9 +8,14 @@ export function withQuiescedRecovery<T>(
     owner?: (
       pid?: number,
     ) => Promise<{ pid: number; start: string; boot: string }>;
+    preflight?: () => Promise<void> | void;
   },
   action: (point: RecoveryPoint) => Promise<T>,
 ): Promise<T>;
 export function withHostRecovery<T>(
   action: (point: RecoveryPoint | null) => Promise<T>,
+  options?: { requireNormalMaintenance?: boolean },
 ): Promise<T>;
+export function assertNormalMaintenanceForDeployment(
+  databasePath?: string,
+): Promise<void>;

@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { lstat, readFile, realpath, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { acquireMutationLock } from "./mutation-lock.mjs";
 import { RecoveryStore, recoveryPolicy } from "./update-recovery.mjs";
@@ -123,7 +124,14 @@ async function restoreUnits(original, run = systemctl) {
 // Injection is for isolated tests; the privileged CLI exposes no paths, unit
 // names, executable arguments, or untrusted helper verbs.
 export async function withQuiescedRecovery(
-  { store, create, inspect = active, run = systemctl, owner = ownerIdentity },
+  {
+    store,
+    create,
+    inspect = active,
+    run = systemctl,
+    owner = ownerIdentity,
+    preflight,
+  },
   action,
 ) {
   await store.initialize();
@@ -158,6 +166,10 @@ export async function withQuiescedRecovery(
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
   }
+  // Reject known deployment preconditions before stopping services or making
+  // a protected recovery point. A failed action after that point still needs
+  // explicit operator review; this check does not weaken that boundary.
+  await preflight?.();
   const original = units.filter(inspect);
   const journal = {
     format: 1,
@@ -207,7 +219,35 @@ export async function withQuiescedRecovery(
   }
 }
 
-export async function withHostRecovery(action) {
+export async function assertNormalMaintenanceForDeployment(
+  databasePath = "/var/lib/latex-renderer/renderer.sqlite3",
+) {
+  let info;
+  try {
+    info = await lstat(databasePath);
+  } catch (error) {
+    if (error.code === "ENOENT") return; // First install has no DB yet.
+    throw error;
+  }
+  if (!info.isFile()) throw new Error("Application database is not a file");
+  const database = new DatabaseSync(databasePath, { readOnly: true });
+  try {
+    const row = database
+      .prepare("SELECT value_json FROM system_settings WHERE key='maintenance_mode'")
+      .get();
+    if (row?.value_json !== '"normal"')
+      throw new Error(
+        "Application update requires normal maintenance mode for its production render smoke; disable maintenance and drain active jobs first",
+      );
+  } finally {
+    database.close();
+  }
+}
+
+export async function withHostRecovery(
+  action,
+  { requireNormalMaintenance = false } = {},
+) {
   if (process.getuid() !== 0) throw new Error("Recovery requires root");
   const current = "/opt/latex-renderer/current";
   let source;
@@ -251,6 +291,9 @@ export async function withHostRecovery(action) {
           identity,
           release: { version: release.version, commit: release.commit },
         }),
+      preflight: requireNormalMaintenance
+        ? () => assertNormalMaintenanceForDeployment()
+        : undefined,
     },
     async (point) => {
       console.log(

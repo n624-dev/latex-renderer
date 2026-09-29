@@ -13,10 +13,19 @@ Check `systemctl status` and JSON journal events for every application service e
 
 Health endpoints are loopback `/health`; Renderer API also has `/ready`, which checks storage availability.
 
-- Pause new work with maintenance mode `reject-new-jobs` before upgrades.
-- Let active jobs drain, stop the worker, take the required database backup, deploy, migrate, start APIs/Web/Remote MCP, run health checks, then start the worker and disable maintenance.
+- For a normal application Update Manager release, keep maintenance mode
+  `normal`, let active jobs drain, and verify an encrypted backup before applying
+  the exact version. Its production smoke submits a real Job. The Update
+  Manager quiesces writers and takes a full recovery point; do not manually
+  stop/restart its services. A non-normal mode is rejected before that point.
+- For a separately planned manual database migration, follow
+  [MIGRATIONS.md](MIGRATIONS.md): pause new work with `reject-new-jobs`, drain
+  jobs, stop writers, back up, migrate, check health, and restore normal mode.
 - Alert on queue depth, free space, stale leases, render failure/timeout rate, audit export lag, backup failure, and Tunnel health.
 - Cleanup runs hourly and must skip active artifact download leases. Backups and audit exports run daily; perform the documented restore test quarterly.
+- A scheduled TeX image refresh deferred by an application/Image Manager
+  mutation is normal; the next timer run retries. Other refresh failures still
+  require investigation.
 - Do not print credential files, request authorization headers, source ZIPs, PDFs, or raw unescaped logs during diagnosis.
 - Application update state and redacted logs are available from `latex-render-admin update status` and `latex-render-admin update operation <id>`. The helper accepts only immutable public project releases; do not bypass that check with a mutable source archive.
 - `latex-renderer-update-refresh.timer` checks stable releases daily with jitter. Its default `notify` policy never applies code; `automatic` must be explicitly selected in Web or with `latex-render-admin update policy --mode automatic --reason "Approve automatic verified updates" --yes`.

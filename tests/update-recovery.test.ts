@@ -19,7 +19,10 @@ import {
   RecoveryStore,
   recoveryPolicy,
 } from "../deploy/scripts/update-recovery.mjs";
-import { withQuiescedRecovery } from "../deploy/scripts/update-recovery-host.mjs";
+import {
+  assertNormalMaintenanceForDeployment,
+  withQuiescedRecovery,
+} from "../deploy/scripts/update-recovery-host.mjs";
 
 const roots: string[] = [];
 const now = 1789430400000;
@@ -444,6 +447,38 @@ it("quiesces writers through deployment, restores only original units, and remov
     return Promise.resolve();
   });
   expect([...f.enabled].sort()).toEqual(f.original.sort());
+  expect(await readdir(f.store.root)).not.toContain("operation.json");
+});
+it("rejects non-normal maintenance before stopping writers or protecting a recovery point", async () => {
+  const f = await quiescedFixture();
+  const database = new DatabaseSync(f.database);
+  database.exec(
+    'CREATE TABLE system_settings(key TEXT PRIMARY KEY,value_json TEXT); INSERT INTO system_settings VALUES (\'maintenance_mode\',\'"reject-new-jobs"\');',
+  );
+  database.close();
+  const action = vi.fn(() => Promise.resolve());
+  const options = {
+    ...f.options,
+    preflight: () => assertNormalMaintenanceForDeployment(f.database),
+  };
+  await expect(withQuiescedRecovery(options, action)).rejects.toThrow(
+    "requires normal maintenance mode",
+  );
+  expect(action).not.toHaveBeenCalled();
+  expect(f.options.create).not.toHaveBeenCalled();
+  expect(f.calls).toEqual([]);
+  expect([...f.enabled].sort()).toEqual(f.original.sort());
+  expect(await readdir(f.store.root)).not.toContain("operation.json");
+  expect(await f.store.points()).toEqual([]);
+
+  const ready = new DatabaseSync(f.database);
+  ready.prepare("UPDATE system_settings SET value_json=? WHERE key=?").run(
+    '"normal"',
+    "maintenance_mode",
+  );
+  ready.close();
+  await withQuiescedRecovery(options, action);
+  expect(action).toHaveBeenCalledOnce();
   expect(await readdir(f.store.root)).not.toContain("operation.json");
 });
 it("restores services without deploying when point creation fails", async () => {

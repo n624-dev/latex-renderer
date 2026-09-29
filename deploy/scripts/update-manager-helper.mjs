@@ -753,15 +753,17 @@ async function deployFromAssembly(
     delete environment.UPDATE_MANAGER_STATE_ROOT;
     delete environment.UPDATE_MANAGER_SOCKET;
   }
-  await withHostRecovery(() =>
-    runLogged(
-      "sh",
-      [
-        join(assembly, "deploy/scripts/deploy-production-release.sh"),
-        releaseId,
-      ],
-      { env: environment },
-    ),
+  await withHostRecovery(
+    () =>
+      runLogged(
+        "sh",
+        [
+          join(assembly, "deploy/scripts/deploy-production-release.sh"),
+          releaseId,
+        ],
+        { env: environment },
+      ),
+    { requireNormalMaintenance: true },
   );
 }
 
