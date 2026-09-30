@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Verify GHCR version deletion against the active registry inventory instead of
+  counting HTTP 404 as success. Log per-version status, stop on failed retention,
+  and verify weekly aliases and untagged manifest references before cleanup.
+- End legacy public Runtime retention and add a source-validated maintenance-only
+  daily workflow path without building or publishing images. Current hosts retain
+  local Runtime builds and the existing Base-only publication policy.
+
 ## 1.4.0-rc.2 - 2026-09-30
 
 - Reject application updates in non-normal maintenance mode before requesting

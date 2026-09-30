@@ -15,9 +15,10 @@ describe("post-review TeX environment regressions", () => {
     expect(retention).toContain('"--prefer-index=false"');
     expect(retention).toContain("GHCR_PURGE_LEGACY_RUNTIMES");
     expect(retention).toContain("if (!purgeLegacyRuntimes) continue");
-    expect(read(".github/workflows/renderer-image-daily.yml")).toContain(
-      "inputs.purge_legacy_runtimes != true",
-    );
+    const daily = read(".github/workflows/renderer-image-daily.yml");
+    expect(daily).not.toContain("continue-on-error:");
+    expect(daily).toContain("registry-maintenance-only:");
+    expect(daily).toContain("inputs.maintenance_only == true");
     expect(read(".github/workflows/renderer-image-daily.yml")).toContain(
       '[[ "$REQUESTED_DATE" == latest ]]',
     );
