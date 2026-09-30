@@ -35,6 +35,7 @@ import {
 } from "./environment.mjs";
 import { assembleBuildArtifacts } from "./release-assembly.mjs";
 import { validateReleaseArchive } from "./release-archive.mjs";
+import { assertReleaseExtractor, prepareReleaseExtraction } from "./release-extraction.mjs";
 import { releaseAttestationArgs } from "./release-attestation.mjs";
 import { validatedReleaseRendererFingerprint } from "./runtime-image-identity.mjs";
 import {
@@ -712,6 +713,7 @@ async function validateArchive(bundle, topLevel) {
 }
 
 async function prepareRelease(operation, release) {
+  await assertReleaseExtractor();
   const stage = await mkdtemp(join(stagingRoot, `v${release.version}-`));
   const bundle = join(stage, release.name);
   const topLevel = `latex-renderer-server-${release.version}`;
@@ -722,14 +724,8 @@ async function prepareRelease(operation, release) {
     await chmod(bundle, 0o600);
     const verified = join(stage, "verified");
     await mkdir(verified, { mode: 0o700 });
-    await runLogged(operation, "tar", [
-      "-xzf",
-      bundle,
-      "--directory",
-      verified,
-      "--no-same-owner",
-      "--no-same-permissions",
-    ]);
+    const extraction = await prepareReleaseExtraction(bundle, verified);
+    await runLogged(operation, extraction.command, extraction.args);
     const verifiedSource = join(verified, topLevel);
     const manifest = JSON.parse(
       await readFile(

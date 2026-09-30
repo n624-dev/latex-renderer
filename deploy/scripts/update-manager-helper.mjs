@@ -37,6 +37,7 @@ import {
   assertSealedControlTree,
 } from "./release-assembly.mjs";
 import { validateReleaseArchive } from "./release-archive.mjs";
+import { prepareReleaseExtraction } from "./release-extraction.mjs";
 import { releaseAttestationArgs } from "./release-attestation.mjs";
 import { validatedReleaseRendererFingerprint } from "./runtime-image-identity.mjs";
 import { acquireMutationLock } from "./mutation-lock.mjs";
@@ -527,14 +528,8 @@ async function verifyAndExtractTrustedBundle(
   });
   const verified = join(rootStage, "verified");
   await mkdir(verified, { mode: 0o700 });
-  await runLogged("tar", [
-    "-xzf",
-    trustedBundle,
-    "--directory",
-    verified,
-    "--no-same-owner",
-    "--no-same-permissions",
-  ]);
+  const extraction = await prepareReleaseExtraction(trustedBundle, verified);
+  await runLogged(extraction.command, extraction.args);
   const source = join(verified, topLevel);
   const manifest = await verifyExtractedRelease(release, source);
   return { release, source, manifest };

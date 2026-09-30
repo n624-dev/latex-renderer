@@ -21,6 +21,10 @@ if ! command -v setfacl >/dev/null 2>&1; then
   echo "setfacl is required; install the acl package before preparing the host" >&2
   exit 69
 fi
+if [ ! -x /usr/bin/bsdtar ]; then
+  echo "libarchive-tools is required; install it before preparing the host" >&2
+  exit 69
+fi
 sh "$source_root/deploy/scripts/install-github-cli.sh"
 # Stage the independent controller before copying files or moving current.
 /usr/local/bin/node "$source_root/deploy/scripts/install-updater.mjs"

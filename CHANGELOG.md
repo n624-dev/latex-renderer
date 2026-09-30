@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Keep the Updater's RestrictSUIDSGID sandbox while extracting verified release
+  archives with the system libarchive-tools bsdtar. Preserve the frozen bootstrap,
+  mandatory provenance and archive limits, and private staging destinations.
 - Verify GHCR version deletion against the active registry inventory instead of
   counting HTTP 404 as success. Log per-version status, stop on failed retention,
   and verify weekly aliases and untagged manifest references before cleanup.
