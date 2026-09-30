@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+## 1.4.0-rc.2 - 2026-09-30
+
+- Reject application updates in non-normal maintenance mode before requesting
+  an Updater operation, and recheck the persisted mode before stopping services
+  or creating a recovery point. Keep the mandatory production render smoke.
+- Defer scheduled image refresh when an existing mutation, image operation, or
+  Image Manager quiesce prevents starting it; retry on the next timer tick.
+  Unexpected failures and failures of accepted operations still fail normally.
+- Correct the deployment and recovery documentation to require normal
+  maintenance mode for application updates. Preserve backup, signed-artifact
+  verification, and recovery review requirements.
+- Use the Windows runner's existing, version-checked OpenSSL for MCPB CI
+  instead of downloading a pinned installer whose upstream URL disappeared.
+  Require the signing commands and keep the real CMS signature verification.
+- Candidate preparation only. Require signed-artifact update/recovery E2E and
+  designated-host validation before Stable. This version bump does not update
+  the production VPS.
+
 ## 1.4.0-rc.1 - 2026-09-29
 
 - Stop inventing PDF coordinates for SVG objects that share a source line or
