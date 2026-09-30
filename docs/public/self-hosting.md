@@ -336,7 +336,7 @@ shred -u "$password_file"
 
 Daily workflowは、候補Base自体を検査し、そのBaseから英語／日本語入りRuntimeをCI内だけで構築してPDF、PNG、通常描画、SVGのsmoke testを通した後に、合格したBaseだけを公開します。検査用Runtimeはpushせず終了時に削除します。GHCRの公開Packageはdated Base tagの上書きを禁止するimmutable tags設定を有効にしてください。公開workflowは既存dated tagへのpushを拒否し、push後にmanifest digestと匿名pullを照合します。ホスト側は`latest`や日付tagを検出用に一度だけ使い、取得後は`@sha256:...`（ローカルではDocker image ID）へ固定してRuntimeをbuild・実行します。GHCRでtag immutabilityを設定できない場合は、dated tagを本番のauthorityにしないでください。
 
-旧版が参照する既存の`runtime-v1-*` Packageは移行中に自動削除しません。このBase-only対応版へのアプリ更新時には、稼働中の旧Runtimeを同じ検証済みBaseから作るローカルRuntimeへ自動移行します。同じPackageを利用する全サーバーで更新と描画を確認した後だけ、`renderer-image-daily`を`latest`、公開On、`purge_legacy_runtimes` Onで手動実行して旧Runtimeを整理します。
+旧`runtime-v1-*` Packageのサポートは終了しました。現在のサーバーは検証済みBaseからRuntimeをローカル構築し、公開Registryの旧Runtimeを使いません。旧Runtimeは通常のRegistry GCで整理します。旧版アプリへの復元に旧Runtimeが取得できることは保証しません。整理のみ実行する場合は`renderer-image-daily`を`texlive_date=latest`、`publish=true`、`maintenance_only=true`で手動実行します。この経路はイメージをビルド・公開せず、VPSのsnapshotやバックアップにも触れません。
 
 画面を閉じても開始済みoperationは継続します。Webへ再接続できない場合は、Admin CLIまたはsystemd journalからoperation IDを確認します。
 

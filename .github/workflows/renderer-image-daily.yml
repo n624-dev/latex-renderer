@@ -17,7 +17,12 @@ on:
         default: true
         type: boolean
       purge_legacy_runtimes:
-        description: "After every server is upgraded, remove legacy public runtime-v1 images"
+        description: "Remove unsupported legacy public runtime-v1 images"
+        required: true
+        default: true
+        type: boolean
+      maintenance_only:
+        description: "Run validated registry retention only, without image build or publication"
         required: true
         default: false
         type: boolean
@@ -52,6 +57,7 @@ jobs:
           pnpm check
 
   build-and-publish:
+    if: github.event_name != 'workflow_dispatch' || inputs.maintenance_only != true
     needs: validate-source
     runs-on: ubuntu-24.04
     timeout-minutes: 360
@@ -276,13 +282,12 @@ jobs:
 
       - name: Registry maintenance
         if: steps.publish.outcome == 'success' && env.REQUESTED_DATE == 'latest'
-        continue-on-error: ${{ github.event_name != 'workflow_dispatch' || inputs.purge_legacy_runtimes != true }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GHCR_OWNER: n624-dev
           GHCR_PACKAGE: latex-renderer-texlive
           GHCR_REPOSITORY: ghcr.io/n624-dev/latex-renderer-texlive
-          GHCR_PURGE_LEGACY_RUNTIMES: ${{ github.event_name == 'workflow_dispatch' && inputs.purge_legacy_runtimes == true }}
+          GHCR_PURGE_LEGACY_RUNTIMES: ${{ github.event_name == 'schedule' || inputs.purge_legacy_runtimes == true }}
         run: node deploy/scripts/ghcr-retention.mjs
 
       - name: Clean local image state
@@ -313,3 +318,41 @@ jobs:
           TEXLIVE_CI_ACCESS_CLIENT_ID: ${{ secrets.TEXLIVE_CI_ACCESS_CLIENT_ID }}
           TEXLIVE_CI_ACCESS_CLIENT_SECRET: ${{ secrets.TEXLIVE_CI_ACCESS_CLIENT_SECRET }}
         run: sh deploy/scripts/ci-texlive-mirror-lease.sh release '${{ steps.mirror.outputs.token }}' '${{ steps.mirror.outputs.owner }}'
+
+  registry-maintenance-only:
+    if: github.event_name == 'workflow_dispatch' && inputs.maintenance_only == true
+    needs: validate-source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "24"
+      - name: Validate maintenance-only request
+        env:
+          PUBLISH_REQUESTED: ${{ inputs.publish }}
+          REQUESTED_DATE: ${{ inputs.texlive_date }}
+        run: |
+          set -euo pipefail
+          [[ "$PUBLISH_REQUESTED" == true ]]
+          [[ "$REQUESTED_DATE" == latest ]]
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+      - name: Authenticate registry metadata operations
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+          GHCR_ACTOR: ${{ github.actor }}
+        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_ACTOR" --password-stdin
+      - name: Verify and perform registry retention
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GHCR_PURGE_LEGACY_RUNTIMES: ${{ inputs.purge_legacy_runtimes }}
+        run: node deploy/scripts/ghcr-retention.mjs
+      - name: Clear registry login
+        if: always()
+        run: docker logout ghcr.io

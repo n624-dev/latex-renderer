@@ -1,5 +1,32 @@
 # Base-only renderer image CI
 
+## Verified registry retention
+
+Registry Runtime support (`runtime-v1-*`) has ended; current hosts build Runtime
+locally from verified Base. Daily retention removes unsupported legacy versions
+by default. Keep recent daily Base, weekly Base, `latest`, unknown/mixed tags and
+the bounded on-demand hold. This does not delete VPS snapshots or backups.
+
+Deletion requires package Admin for this repository in **Manage Actions access**,
+not just registry push/Write. CLI classic tokens need `read:packages` and
+`delete:packages`. A read-only deleted-inventory preflight catches missing access;
+every DELETE still logs its status and must be verified against an active list.
+An HTTP 404 never counts as a newly deleted version. Remaining versions after
+three bounded checks fail the job, and retention errors are not hidden by daily.
+Weekly tag promotion is verified before deleting the previous weekly source.
+Untagged manifests reachable from retained indexes/subjects are preserved.
+
+For cleanup without any image build/publication, manually dispatch
+`renderer-image-daily` with `texlive_date=latest`, `publish=true`,
+`maintenance_only=true`, and `purge_legacy_runtimes=true`. Source checks still run,
+and the same workflow concurrency group serializes publication and retention.
+The default `maintenance_only=false` keeps ordinary daily validation/publication.
+Locally, `GHCR_DRY_RUN=true` plans retention without DELETE or tag promotion;
+its weekly changes are hypothetical until a real run verifies the aliases.
+The diagnostic `GHCR_PURGE_LEGACY_RUNTIMES=false` override is not a compatibility
+support guarantee. Public versions over GitHub's download deletion limit must
+not be forcibly removed. Version counts do not measure shared-layer GiB savings.
+
 This is the workflow policy for issue #62. It targets native amd64 on the
 ephemeral GitHub-hosted Ubuntu runner. ARM64 and multi-platform indexes are
 deferred. The server setup features in #50–#53 are a separate change.
