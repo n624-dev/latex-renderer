@@ -4,13 +4,14 @@
 
 Registry Runtime support (`runtime-v1-*`) has ended; current hosts build Runtime
 locally from verified Base. Daily retention removes unsupported legacy versions
-by default. Keep recent daily Base, weekly Base, `latest`, unknown/mixed tags and
+first, by default. Keep recent daily Base, weekly Base, `latest`, unknown/mixed tags and
 the bounded on-demand hold. This does not delete VPS snapshots or backups.
 
 Deletion requires package Admin for this repository in **Manage Actions access**,
 not just registry push/Write. CLI classic tokens need `read:packages` and
 `delete:packages`. A read-only deleted-inventory preflight catches missing access;
-every DELETE still logs its status and must be verified against an active list.
+reading deleted inventory does not prove Admin, so every DELETE still logs its
+status and must be verified against an active list.
 An HTTP 404 never counts as a newly deleted version. Remaining versions after
 three bounded checks fail the job, and retention errors are not hidden by daily.
 Weekly tag promotion is verified before deleting the previous weekly source.

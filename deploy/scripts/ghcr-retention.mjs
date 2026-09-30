@@ -440,9 +440,13 @@ export async function runGhcrRetention({
       }
     }
   }
-  const planned = candidates.filter(
-    ({ version }) => !protectedDigests.has(version.name),
-  );
+  const planned = candidates
+    .filter(({ version }) => !protectedDigests.has(version.name))
+    .sort(
+      (left, right) =>
+        Number(left.kind !== "legacy-runtime") -
+        Number(right.kind !== "legacy-runtime"),
+    );
   inventoryBaseline = new Map(
     list.map((version) => [version.id, fingerprint(version)]),
   );

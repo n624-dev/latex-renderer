@@ -245,6 +245,31 @@ describe("verified GHCR retention", () => {
       }),
     ).toMatchObject({ deletedVersions: 0 });
   });
+  it("prioritizes unsupported Runtime cleanup before dated Base", async () => {
+    const f = fixture({
+      list: [
+        version(1, ["latest"]),
+        version(2, ["2026-08-26"]),
+        version(5, ["2026-08-30"]),
+        version(3, [`runtime-v1-2026-09-05-${"a".repeat(32)}`]),
+      ],
+    });
+    expect(await runGhcrRetention(f.config)).toMatchObject({
+      deletedVersions: 2,
+    });
+    expect(
+      deleteCalls(f).map(([input]) =>
+        (typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.href
+            : input.url
+        )
+          .split("/")
+          .at(-1),
+      ),
+    ).toEqual(["3", "2"]);
+  });
   it("protects latest, recent dates, unknown tags and newly requested old dates", async () => {
     const f = fixture({
       list: [
