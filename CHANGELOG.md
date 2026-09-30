@@ -13,6 +13,9 @@
 - Correct the deployment and recovery documentation to require normal
   maintenance mode for application updates. Preserve backup, signed-artifact
   verification, and recovery review requirements.
+- Use the Windows runner's existing, version-checked OpenSSL for MCPB CI
+  instead of downloading a pinned installer whose upstream URL disappeared.
+  Require the signing commands and keep the real CMS signature verification.
 - Candidate preparation only. Require signed-artifact update/recovery E2E and
   designated-host validation before Stable. This version bump does not update
   the production VPS.
