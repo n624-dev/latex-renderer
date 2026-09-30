@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.4.0-rc.3 - 2026-10-01
+
 - Keep the Updater's RestrictSUIDSGID sandbox while extracting verified release
   archives with the system libarchive-tools bsdtar. Preserve the frozen bootstrap,
   mandatory provenance and archive limits, and private staging destinations.
@@ -11,6 +13,11 @@
 - End legacy public Runtime retention and add a source-validated maintenance-only
   daily workflow path without building or publishing images. Current hosts retain
   local Runtime builds and the existing Base-only publication policy.
+- Add a nested-archive regression under the actual non-root systemd sandbox to
+  signed update/recovery CI. For affected old controllers, document the existing
+  signed bootstrap upgrade of the independent Updater before normal app update.
+- Candidate preparation only. Require final signed artifacts and designated-host
+  validation before Stable; preparing this version does not switch production.
 
 ## 1.4.0-rc.2 - 2026-09-30
 
