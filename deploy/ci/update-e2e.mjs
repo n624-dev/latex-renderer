@@ -92,6 +92,9 @@ try {
     root,
   ]);
   const candidate = join(root, `latex-renderer-server-${tag.slice(1)}`);
+  // Exercise the candidate's actual extraction module under the controller's
+  // seccomp/mount/user restrictions, not only the root E2E deployment helper.
+  run("/usr/local/bin/node", [join(candidate, "deploy/ci/restricted-release-extraction.mjs")]);
   const helper = await import(
     pathToFileURL(join(candidate, "deploy/scripts/update-manager-helper.mjs"))
   );

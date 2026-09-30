@@ -4,6 +4,22 @@ import { describe, expect, it } from "vitest";
 const read = (path: string) => readFileSync(path, "utf8");
 
 describe("application updater privilege boundary", () => {
+  it("keeps the sandbox and frozen bootstrap while extracting only after provenance/archive validation", () => {
+    expect(read("deploy/systemd/latex-renderer-update-manager.service")).toContain("RestrictSUIDSGID=true");
+    for (const file of ["deploy/scripts/update-manager.mjs", "deploy/scripts/update-manager-helper.mjs"]) {
+      const script = read(file);
+      const start = script.indexOf(file.endsWith("helper.mjs") ? "async function verifyAndExtractTrustedBundle(" : "async function prepareRelease(");
+      const section = script.slice(start);
+      const extraction = section.indexOf("await prepareReleaseExtraction(");
+      expect(extraction).toBeGreaterThan(section.indexOf(file.endsWith("helper.mjs") ? "await validateReleaseArchive(" : "await validateArchive("));
+      expect(extraction).toBeGreaterThan(section.indexOf(file.endsWith("helper.mjs") ? "releaseAttestationArgs({" : "await downloadBundle("));
+      expect(section.slice(0, extraction)).not.toContain('runLogged(operation, "tar",');
+    }
+    expect(JSON.parse(read("deploy/updater-files.json")) as string[]).toContain("deploy/scripts/release-extraction.mjs");
+    expect(read("deploy/ci/update-e2e.mjs")).toContain("deploy/ci/restricted-release-extraction.mjs");
+    expect(read("deploy/scripts/prepare-host.sh")).toContain("libarchive-tools is required");
+    expect(read("deploy/scripts/install-host.sh")).toContain("libarchive-tools");
+  });
   it("keeps nested normal and bootstrap builds on their operation-local frozen store", () => {
     for (const file of [
       "deploy/scripts/update-manager.mjs",

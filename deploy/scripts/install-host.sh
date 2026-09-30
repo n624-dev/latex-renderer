@@ -11,7 +11,7 @@ if [ ! -x /usr/local/bin/corepack ] || ! /usr/local/bin/corepack --version >/dev
   exit 69
 fi
 apt-get update
-DEBIAN_FRONTEND=noninteractive apt-get install -y acl ca-certificates curl age apparmor apparmor-utils jq openssl psmisc rsync sqlite3 uidmap dbus-user-session slirp4netns fuse-overlayfs sudo util-linux xz-utils
+DEBIAN_FRONTEND=noninteractive apt-get install -y acl ca-certificates curl age apparmor apparmor-utils jq openssl psmisc rsync sqlite3 uidmap dbus-user-session slirp4netns fuse-overlayfs sudo util-linux xz-utils libarchive-tools
 sh "$source_root/deploy/scripts/install-github-cli.sh"
 getent group latex-renderer >/dev/null || groupadd --system latex-renderer
 id latex-renderer >/dev/null 2>&1 || useradd --system --gid latex-renderer --home-dir /var/lib/latex-renderer --shell /usr/sbin/nologin latex-renderer

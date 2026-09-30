@@ -140,11 +140,12 @@ bundle_root="$work_dir/latex-renderer-server-$version"
 
 ## ホストを準備
 
-新規導入・旧版からの更新ともに、ストレージ権限設定用の`setfacl`が必要です。Ubuntu／Debianでは、サービスを停止する前に次を実行して確認します。
+新規導入・旧版からの更新ともに、ストレージ権限設定用の`setfacl`と、制限されたUpdater内でReleaseを展開する`bsdtar`が必要です。Ubuntu／Debianでは、サービスを停止する前に次を実行して確認します。
 
 ```bash
-sudo apt-get install --no-install-recommends acl
+sudo apt-get install --no-install-recommends acl libarchive-tools
 command -v setfacl
+/usr/bin/bsdtar --version
 ```
 
 RC.1以前でこの不足により更新が失敗した場合、`current`だけが新版へ切り替わり、新旧のサービス設定が混在している可能性があります。同じ更新コマンドを再実行せず、稼働サービス・DB migration・バックアップの状態を先に確認してください。DBが更新済みならコードだけを旧版へ戻してはいけません。
@@ -446,6 +447,23 @@ systemctl is-active \
 ```
 
 途中で失敗したら同じコマンドをそのまま再実行せず、最初のエラー、`/opt/latex-renderer/current`の指すRelease、停止中serviceを確認します。host固有の設定・credential・データベースはRelease外に保持し、bundle、Git、Issue、未編集のlogへコピーしません。
+
+### GNU tarの展開がFunction not implementedで停止する場合
+
+UbuntuのGNU tarが`openat2`を使う環境では、Updaterの`RestrictSUIDSGID=true`によって展開が`ENOSYS`（Function not implemented）で失敗することがあります。平坦なファイルだけのテストでは再現しないため、階層付きarchiveで検証します。新しいUpdaterは署名・checksum・GNU tarによるarchive検査を維持し、展開だけ固定の`/usr/bin/bsdtar`に切り替えます。所有者・ACL・拡張属性等をarchiveから取り込まず、私有の空stagingだけに展開します。`RestrictSUIDSGID`を解除したり、システム全体の`tar`を置き換えたりしません。
+
+旧Updaterは修正版自身の展開にも失敗するため、この場合の初回移行だけは既にインストール済みの管理者向けbootstrapを使用します。先にoperationが終了済み、アプリとDBが正常、復旧処理がpendingでないことと暗号化backupの復元可能性を確認します。`VERSION`には、この修正を含む**公開済みimmutable Release**を指定してください。例のversionが未公開の場合は実行しません。
+
+```bash
+sudo apt-get install --no-install-recommends libarchive-tools
+VERSION=1.4.0-rc.3
+sudo /usr/local/bin/node \
+  /opt/latex-renderer/updater/bootstrap-v1/updater-bootstrap.mjs upgrade "$VERSION"
+```
+
+bootstrapは通常の管理者shellから実行します。固定Releaseをroot側で再取得してdigest・tag/commit attestation・archive制限とUpdater envelopeを検証し、共有mutation lockの下で独立Updaterだけを更新します。アプリの`current`やDBはこの操作で切り替えません。凍結されたbootstrap-v1自体も差し替えません。途中で失敗した場合は状態とログを確認し、無条件に再実行しません。Updaterの新version/commit、ready/pending=false、active operationなしを確認後、同じ固定versionを通常のWeb／Admin CLI `update apply`で適用します。署名検証を迂回する手動コピーは使用しません。
+
+root/systemd環境が必要な展開検証は、修正済みソースの`sudo /usr/local/bin/node deploy/ci/restricted-release-extraction.mjs`で実施できます。専用の小fixtureと短命非root unitを使い、実際の`RestrictSUIDSGID=true`等の制限下で現行の展開moduleを実行します。既存serviceの設定は変えず、一時ファイルは終了時に削除します。リリース前の署名付き更新・復旧E2Eもこの検証を実行します。
 
 ### mutation lockが使用中と表示される場合
 
