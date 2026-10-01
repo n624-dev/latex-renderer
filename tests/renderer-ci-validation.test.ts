@@ -84,6 +84,7 @@ describe("Base-only CI validation failure boundaries", () => {
       "smoke-test-renderer-en-jp.sh",
       "smoke-test-renderer-svg.sh",
       "smoke-test-renderer-compat.sh",
+      "ci-source-pipeline-e2e.sh",
     ])(
     "cleans temporary Runtime on success or failure at %s",
     (failedStage) => {
@@ -101,6 +102,7 @@ describe("Base-only CI validation failure boundaries", () => {
           "smoke-test-renderer-en-jp.sh",
           "smoke-test-renderer-svg.sh",
           "smoke-test-renderer-compat.sh",
+          "ci-source-pipeline-e2e.sh",
         ];
         for (const name of names)
           writeFileSync(
@@ -153,6 +155,10 @@ describe("Base-only CI validation failure boundaries", () => {
           expect(
             commands.indexOf("smoke-test-renderer-compat.sh"),
           ).toBeGreaterThan(commands.indexOf("smoke-test-renderer-svg.sh"));
+        if (!failedStage)
+          expect(commands.indexOf("ci-source-pipeline-e2e.sh")).toBeGreaterThan(
+            commands.indexOf("smoke-test-renderer-compat.sh"),
+          );
       } finally {
         rmSync(root, { recursive: true, force: true });
       }
@@ -165,6 +171,7 @@ describe("Base-only CI validation failure boundaries", () => {
       for (const script of [
         "ci-renderer-disk.sh",
         "ci-validate-texlive-base.sh",
+        "ci-source-pipeline-e2e.sh",
       ]) {
         const result = spawnSync(
           "sh",

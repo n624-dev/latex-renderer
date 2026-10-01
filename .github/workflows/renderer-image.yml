@@ -11,6 +11,10 @@ on:
       - "deploy/scripts/build-language-runtime.sh"
       - "deploy/scripts/smoke-test-renderer-*.sh"
       - "tests/fixtures/svg/**"
+      - "tests/fixtures/source-pipeline-renderer.mjs"
+      - "tests/helpers/source-pipeline.ts"
+      - "tests/source-pipeline-e2e.test.ts"
+      - "vitest.source-pipeline.config.ts"
       - ".github/workflows/renderer-image.yml"
   push:
     branches: [main]
@@ -23,6 +27,10 @@ on:
       - "deploy/scripts/build-language-runtime.sh"
       - "deploy/scripts/smoke-test-renderer-*.sh"
       - "tests/fixtures/svg/**"
+      - "tests/fixtures/source-pipeline-renderer.mjs"
+      - "tests/helpers/source-pipeline.ts"
+      - "tests/source-pipeline-e2e.test.ts"
+      - "vitest.source-pipeline.config.ts"
       - ".github/workflows/renderer-image.yml"
   workflow_dispatch:
 
@@ -44,6 +52,9 @@ jobs:
       TEXLIVE_CI_MIRROR_HOST: ${{ secrets.TEXLIVE_CI_MIRROR_HOST }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "24"
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
         id: buildx
       - name: Check disk before Base build
