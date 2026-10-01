@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Extend Source pipeline acceptance to configured limits below/above direct
+  MCP safety caps and root/nested non-default entrypoints, including real TeX
+  recorder checks in the existing temporary validation Runtime.
 - Add real client/HTTP/SQLite/Worker Source pipeline regressions and reuse the
   temporary validation TeX Runtime for these checks before Base publication.
   Ordinary tests retain a small deterministic renderer boundary and clearly

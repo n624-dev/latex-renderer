@@ -229,4 +229,176 @@ describe(`Source pipeline HTTP/DB/Worker E2E (${realPipelineImage === undefined 
       await f.close();
     }
   });
+
+  it.each(["thesis.tex", "papers/thesis.tex"])(
+    "enforces reduced instance limits and renders an accepted MCP Source with entrypoint %s",
+    async (entrypoint) => {
+      const f = await sourcePipelineFixture({
+        maxUploadBytes: 1024,
+        maxExtractedBytes: 1024,
+        maxFileCount: 2,
+        maxZipEntries: 2,
+      });
+      const identity = {
+        userId: "pipeline_user",
+        scopes: ["mcp:render", "mcp:read"] as const,
+      };
+      try {
+        expect(f.renders.capabilities(identity).sourceLimits).toMatchObject({
+          directBytes: 1024,
+          directFiles: 2,
+          directFileBytes: 1024,
+          uploadBytes: 1024,
+          files: 2,
+        });
+        await expect(
+          f.renders.createSource(identity, [
+            { path: entrypoint, text: pipelineDocument() },
+            { path: "body.tex", text: "Body" },
+            { path: "extra.tex", text: "Extra" },
+          ]),
+        ).rejects.toMatchObject({ code: "SOURCE_FILE_COUNT" });
+        await expect(
+          f.renders.createSource(identity, [
+            { path: entrypoint, text: "x".repeat(1025) },
+          ]),
+        ).rejects.toMatchObject({ code: "SOURCE_FILE_SIZE" });
+        await expect(
+          f.renders.createSource(identity, [
+            { path: entrypoint, text: "x".repeat(600) },
+            { path: "body.tex", text: "y".repeat(600) },
+          ]),
+        ).rejects.toMatchObject({ code: "SOURCE_TOTAL_SIZE" });
+        const incompressible = Buffer.concat(
+          Array.from({ length: 30 }, (_, index) =>
+            createHash("sha256").update(`pipeline-archive-${index}`).digest(),
+          ),
+        );
+        await expect(
+          f.renders.createSource(identity, [
+            { path: entrypoint, base64: incompressible.toString("base64") },
+          ]),
+        ).rejects.toMatchObject({ code: "SOURCE_ARCHIVE_SIZE" });
+        expect(
+          f.database.raw.prepare("SELECT COUNT(*) AS n FROM sources").get(),
+        ).toMatchObject({ n: 0 });
+        expect(await readdir(f.storage)).not.toContain("sources");
+        expect(
+          (await readdir(f.storage)).filter((path) =>
+            path.startsWith(".remote-direct-"),
+          ),
+        ).toEqual([]);
+
+        const source = await f.renders.createSource(identity, [
+          { path: entrypoint, text: pipelineDocument(1, "\\input{body.tex}") },
+          { path: "body.tex", text: "Shared project-root body." },
+        ]);
+        expect(source).toMatchObject({ status: "ready" });
+        expect(
+          (await stat(join(f.storage, "sources", source.id, "source.zip")))
+            .size,
+        ).toBeLessThanOrEqual(1024);
+        const result = await renderSource(f.sibling, source.id, {
+          entrypoint,
+          outputDirectory: join(f.root, "limited-result"),
+          pollTimeoutMs: 120_000,
+          sleep: f.runNext,
+        });
+        expect(result.job).toMatchObject({
+          status: "succeeded",
+          sourceId: source.id,
+        });
+        expect(f.database.jobs.get(result.job.id)).toMatchObject({
+          entrypoint,
+          status: "succeeded",
+        });
+        const metadata = result.job.artifacts.find(
+          (artifact) => artifact.type === "dependencies",
+        );
+        if (!metadata) throw new Error("Worker must publish recorder metadata");
+        const ticket = await f.sibling.renewJobTicket(result.job.id);
+        const path = join(f.root, "recorder-dependencies.json");
+        await f.sibling.download(
+          f.sibling.artifactUrl(result.job.id, metadata.relativePath),
+          ticket.jobTicket,
+          path,
+          metadata,
+        );
+        const dependencies = JSON.parse(await readFile(path, "utf8")) as {
+          inputs: string[];
+        };
+        // The small child fixture does not execute TeX or generate a recorder.
+        // Only explicit real-container mode proves root/nested TeX resolution.
+        if (realPipelineImage !== undefined)
+          expect(
+            dependencies.inputs.map((input) => input.replace(/^\.\//, "")),
+          ).toEqual(expect.arrayContaining([entrypoint, "body.tex"]));
+        expect(
+          f.database.raw.prepare("PRAGMA foreign_key_check").all(),
+        ).toEqual([]);
+      } finally {
+        await f.close();
+      }
+    },
+  );
+
+  it("keeps direct-operation caps with larger instance limits and renders an accepted Source", async () => {
+    const f = await sourcePipelineFixture();
+    const identity = {
+      userId: "pipeline_user",
+      scopes: ["mcp:render", "mcp:read"] as const,
+    };
+    try {
+      expect(f.renders.capabilities(identity).sourceLimits).toMatchObject({
+        directBytes: 4 * 1024 * 1024,
+        directFiles: 100,
+        directFileBytes: 1024 * 1024,
+        uploadBytes: 20 * 1024 * 1024,
+        files: 500,
+      });
+      await expect(
+        f.renders.createSource(identity, [
+          { path: "main.tex", text: "x".repeat(1024 * 1024 + 1) },
+        ]),
+      ).rejects.toMatchObject({ code: "SOURCE_FILE_SIZE" });
+      await expect(
+        f.renders.createSource(
+          identity,
+          Array.from({ length: 101 }, (_, index) => ({
+            path: `file-${index}.tex`,
+            text: "x",
+          })),
+        ),
+      ).rejects.toMatchObject({ code: "SOURCE_FILE_COUNT" });
+      await expect(
+        f.renders.createSource(
+          identity,
+          Array.from({ length: 5 }, (_, index) => ({
+            path: `file-${index}.tex`,
+            text: "x".repeat(900_000),
+          })),
+        ),
+      ).rejects.toMatchObject({ code: "SOURCE_TOTAL_SIZE" });
+      expect(
+        f.database.raw.prepare("SELECT COUNT(*) AS n FROM sources").get(),
+      ).toMatchObject({ n: 0 });
+      const source = await f.renders.createSource(identity, [
+        { path: "main.tex", text: pipelineDocument() },
+      ]);
+      const result = await renderSource(f.client, source.id, {
+        outputDirectory: join(f.root, "large-limits-result"),
+        pollTimeoutMs: 120_000,
+        sleep: f.runNext,
+      });
+      expect(result.job).toMatchObject({
+        status: "succeeded",
+        sourceId: source.id,
+      });
+      expect((await stat(result.artifacts.pdf as string)).size).toBeGreaterThan(
+        0,
+      );
+    } finally {
+      await f.close();
+    }
+  });
 });
