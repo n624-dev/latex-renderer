@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fix privileged Updater release copies retaining their non-root source owner; explicitly seal only fresh root-private copies and test that ownership boundary in signed update validation.
+
 ## 1.4.0-rc.3 - 2026-10-01
 
 - Keep the Updater's RestrictSUIDSGID sandbox while extracting verified release

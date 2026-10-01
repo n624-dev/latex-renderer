@@ -37,7 +37,10 @@ import {
   assertSealedControlTree,
 } from "./release-assembly.mjs";
 import { validateReleaseArchive } from "./release-archive.mjs";
-import { prepareReleaseExtraction } from "./release-extraction.mjs";
+import {
+  copyRootReleaseBundle,
+  prepareReleaseExtraction,
+} from "./release-extraction.mjs";
 import { releaseAttestationArgs } from "./release-attestation.mjs";
 import { validatedReleaseRendererFingerprint } from "./runtime-image-identity.mjs";
 import { acquireMutationLock } from "./mutation-lock.mjs";
@@ -544,8 +547,7 @@ async function prepareTrustedSource(request, rootStage) {
   if (bundleDigest !== release.digest)
     throw new Error("Staged release bundle digest does not match GitHub");
   const trustedBundle = join(rootStage, release.name);
-  await copyFile(bundle, trustedBundle);
-  await chmod(trustedBundle, 0o600);
+  await copyRootReleaseBundle(bundle, trustedBundle);
   if ((await hashFile(trustedBundle, release.size)) !== release.digest)
     throw new Error("Root-owned release bundle digest does not match GitHub");
   return {

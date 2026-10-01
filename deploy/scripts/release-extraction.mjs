@@ -1,11 +1,59 @@
 import { constants } from "node:fs";
-import { access, lstat, realpath, readdir } from "node:fs/promises";
-import { resolve } from "node:path";
+import {
+  access,
+  chmod,
+  chown,
+  copyFile,
+  lstat,
+  realpath,
+  readdir,
+} from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 
 // GNU tar's Ubuntu openat2 backport conflicts with RestrictSUIDSGID. Keep the
 // service restriction and use the distro's libarchive extractor instead. No
 // PATH override, configurable executable, or fallback to unrestricted tar.
 export const releaseExtractor = "/usr/bin/bsdtar";
+
+// libuv can preserve a non-root source owner when root copies a file. The
+// privileged helper must claim only its NEW private copy, never the controller
+// input. Its caller still rehashes the copy against the immutable release and
+// verifies attestation/archive limits before extraction.
+export async function copyRootReleaseBundle(source, destination) {
+  if (process.getuid?.() !== 0)
+    throw new Error("Root release bundle copy requires root");
+  const parent = dirname(destination);
+  if (
+    typeof source !== "string" ||
+    resolve(source) !== source ||
+    (await realpath(source)) !== source ||
+    resolve(destination) !== destination ||
+    (await realpath(parent)) !== parent
+  )
+    throw new Error("Root release bundle copy requires canonical paths");
+  const input = await lstat(source),
+    directory = await lstat(parent);
+  if (!input.isFile() || input.nlink !== 1 || input.mode & 0o022)
+    throw new Error(
+      "Root release bundle source must be a private regular file",
+    );
+  if (!directory.isDirectory() || directory.uid !== 0 || directory.mode & 0o077)
+    throw new Error(
+      "Root release bundle destination must be a private root directory",
+    );
+  await copyFile(source, destination, constants.COPYFILE_EXCL);
+  await chown(destination, 0, 0);
+  await chmod(destination, 0o600);
+  const output = await lstat(destination);
+  if (
+    !output.isFile() ||
+    output.uid !== 0 ||
+    output.gid !== 0 ||
+    output.nlink !== 1 ||
+    (output.mode & 0o7777) !== 0o600
+  )
+    throw new Error("Root release bundle copy is not sealed");
+}
 
 export async function assertReleaseExtractor() {
   let info;

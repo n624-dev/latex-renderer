@@ -456,14 +456,16 @@ UbuntuのGNU tarが`openat2`を使う環境では、Updaterの`RestrictSUIDSGID=
 
 ```bash
 sudo apt-get install --no-install-recommends libarchive-tools
-VERSION=1.4.0-rc.3
+VERSION=... # この修正を含む公開済みimmutable Releaseのversionに置換
 sudo /usr/local/bin/node \
   /opt/latex-renderer/updater/bootstrap-v1/updater-bootstrap.mjs upgrade "$VERSION"
 ```
 
 bootstrapは通常の管理者shellから実行します。固定Releaseをroot側で再取得してdigest・tag/commit attestation・archive制限とUpdater envelopeを検証し、共有mutation lockの下で独立Updaterだけを更新します。アプリの`current`やDBはこの操作で切り替えません。凍結されたbootstrap-v1自体も差し替えません。途中で失敗した場合は状態とログを確認し、無条件に再実行しません。Updaterの新version/commit、ready/pending=false、active operationなしを確認後、同じ固定versionを通常のWeb／Admin CLI `update apply`で適用します。署名検証を迂回する手動コピーは使用しません。
 
-root/systemd環境が必要な展開検証は、修正済みソースの`sudo /usr/local/bin/node deploy/ci/restricted-release-extraction.mjs`で実施できます。専用の小fixtureと短命非root unitを使い、実際の`RestrictSUIDSGID=true`等の制限下で現行の展開moduleを実行します。既存serviceの設定は変えず、一時ファイルは終了時に削除します。リリース前の署名付き更新・復旧E2Eもこの検証を実行します。
+`v1.4.0-rc.3`のUpdaterには、rootがコピーしたbundleの所有者が非rootのまま残る環境で、アプリ適用が`Release extraction requires a private regular bundle`で停止する既知の問題があります。このエラーに対して所有者検査を解除したり、公開済みslotを直接編集したりしません。所有者修正を含む新しい公開済みReleaseへUpdaterのみ先行更新し、その後アプリを適用してください。Updater更新の成功だけではアプリ更新の成功を意味しません。アプリのcurrent、DB、service、recovery pendingを別々に確認します。
+
+root/systemd環境が必要な展開検証は、修正済みソースの`sudo /usr/local/bin/node deploy/ci/restricted-release-extraction.mjs`で実施できます。専用の小fixtureで実際のhelperのコピー処理を呼び、非root所有の入力を変更せず、新しいroot専用コピーだけがroot:root/0600/単一inodeとなることと、そのコピーの展開を検証します。さらに短命非root unitで、実際の`RestrictSUIDSGID=true`等の制限下で現行の展開moduleを実行します。既存serviceの設定は変えず、一時ファイルは終了時に削除します。リリース前の署名付き更新・復旧E2Eも両方の検証を実行します。
 
 ### mutation lockが使用中と表示される場合
 
