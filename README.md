@@ -42,6 +42,9 @@ Development setup and contribution requirements are in
 procedures are in [DEPLOYMENT.md](DEPLOYMENT.md); general users should start
 with the Web-visible self-hosting guide instead.
 
+The [Source pipeline E2E guide](docs/source-pipeline-e2e.md) distinguishes ordinary
+HTTP/DB/Worker regressions from the real TeX container integration checks.
+
 ## Security and support
 
 Read [SECURITY.md](SECURITY.md) before deploying. Vulnerabilities must be reported through GitHub Private Vulnerability Reporting, not a public issue. The supported Cloudflare and standalone profiles, their deliberately different network-level protections, and the required authentication configuration are documented in the [self-hosting guide](https://latex-render.n624.jp/docs/self-hosting/).

@@ -53,6 +53,9 @@ sh "$script_root/smoke-test-renderer-basic.sh" "$validation_runtime"
 sh "$script_root/smoke-test-renderer-en-jp.sh" "$validation_runtime"
 sh "$script_root/smoke-test-renderer-svg.sh" "$validation_runtime"
 sh "$script_root/smoke-test-renderer-compat.sh" "$validation_runtime"
+# Reuse this exact immutable local Runtime before the existing cleanup trap;
+# Source/client integration success is also mandatory before Base publication.
+sh "$script_root/ci-source-pipeline-e2e.sh" "$validation_runtime"
 # Success is the exit status of this complete sequence, never a cached marker.
 cleanup
 sh "$script_root/ci-renderer-disk.sh" after-language-validation 0

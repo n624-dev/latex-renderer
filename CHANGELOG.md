@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Add real client/HTTP/SQLite/Worker Source pipeline regressions and reuse the
+  temporary validation TeX Runtime for these checks before Base publication.
+  Ordinary tests retain a small deterministic renderer boundary and clearly
+  distinguish that result from real TeX container verification.
+
 ## 1.4.0-rc.4 - 2026-10-01
 
 - Fix privileged Updater release copies retaining their non-root source owner.
