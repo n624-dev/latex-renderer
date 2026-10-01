@@ -2,7 +2,19 @@
 
 ## Unreleased
 
-- Fix privileged Updater release copies retaining their non-root source owner; explicitly seal only fresh root-private copies and test that ownership boundary in signed update validation.
+## 1.4.0-rc.4 - 2026-10-01
+
+- Fix privileged Updater release copies retaining their non-root source owner.
+  Exclusively create a fresh copy in a canonical root-private directory and seal
+  only that copy to root:root/0600 before immutable digest and provenance checks.
+  Keep the controller input, frozen bootstrap and extraction policy unchanged.
+- Exercise the real cross-owner bundle preparation function in signed update
+  validation, in addition to the restricted non-root nested-archive regression.
+  Cover existing targets, symlinks, shared inodes and failed ownership sealing.
+- Document the RC3 application-update limitation and the signed Updater-first
+  migration path. Do not rewrite published RC3 assets or patch installed slots.
+- Candidate preparation only. Require final signed artifacts and designated-host
+  validation before Stable; preparing this version does not switch production.
 
 ## 1.4.0-rc.3 - 2026-10-01
 
