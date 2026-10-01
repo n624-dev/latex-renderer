@@ -5,19 +5,123 @@ import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   assertReleaseExtractor,
+  copyRootReleaseBundle,
   prepareReleaseExtraction,
 } from "../deploy/scripts/release-extraction.mjs";
 import { validateReleaseArchive } from "../deploy/scripts/release-archive.mjs";
 
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
-  return { ...actual, lstat: vi.fn(actual.lstat) };
+  return { ...actual, lstat: vi.fn(actual.lstat), chown: vi.fn(actual.chown) };
 });
 const roots: string[] = [];
 afterEach(async () => {
+  vi.restoreAllMocks();
   vi.mocked(fs.lstat).mockReset();
+  vi.mocked(fs.chown).mockReset();
   for (const root of roots.splice(0))
     await fs.rm(root, { recursive: true, force: true });
+});
+async function simulateRootCopy(root: string, destination: string) {
+  const actual = await vi.importActual<typeof fs>("node:fs/promises");
+  vi.spyOn(process, "getuid").mockReturnValue(0);
+  vi.mocked(fs.chown).mockResolvedValue(undefined);
+  vi.mocked(fs.lstat).mockImplementation(async (path) => {
+    const info = await actual.lstat(path);
+    return path === root || path === destination
+      ? Object.assign(info, { uid: 0, gid: 0 })
+      : info;
+  });
+}
+
+it("seals only the new root copy and preserves input content/owner/mode", async () => {
+  const f = await fixture(),
+    destination = join(f.root, "root-copy.tar.gz");
+  const before = await fs.lstat(f.bundle);
+  await simulateRootCopy(f.root, destination);
+  await copyRootReleaseBundle(f.bundle, destination);
+  expect(fs.chown).toHaveBeenCalledExactlyOnceWith(destination, 0, 0);
+  const copied = await fs.stat(destination),
+    after = await fs.stat(f.bundle);
+  expect(copied.mode & 0o7777).toBe(0o600);
+  expect(copied.nlink).toBe(1);
+  expect(copied.ino).not.toBe(after.ino);
+  expect(after.uid).toBe(before.uid);
+  expect(after.mode).toBe(before.mode);
+  expect(await fs.readFile(destination)).toEqual(await fs.readFile(f.bundle));
+});
+
+it("rejects non-root copies before any ownership mutation", async () => {
+  const f = await fixture();
+  vi.spyOn(process, "getuid").mockReturnValue(12345);
+  await expect(
+    copyRootReleaseBundle(f.bundle, join(f.root, "root-copy")),
+  ).rejects.toThrow("requires root");
+  expect(fs.chown).not.toHaveBeenCalled();
+});
+
+it("never overwrites or takes ownership of an existing destination", async () => {
+  const f = await fixture(),
+    destination = join(f.root, "existing");
+  await fs.writeFile(destination, "keep existing");
+  await simulateRootCopy(f.root, destination);
+  await expect(
+    copyRootReleaseBundle(f.bundle, destination),
+  ).rejects.toMatchObject({ code: "EEXIST" });
+  expect(fs.chown).not.toHaveBeenCalled();
+  expect(await fs.readFile(destination, "utf8")).toBe("keep existing");
+});
+
+it("rejects non-private root destination and shared source inodes", async () => {
+  const f = await fixture(),
+    destination = join(f.root, "root-copy");
+  await simulateRootCopy(f.root, destination);
+  await fs.chmod(f.root, 0o750);
+  await expect(copyRootReleaseBundle(f.bundle, destination)).rejects.toThrow(
+    "private root directory",
+  );
+  await fs.chmod(f.root, 0o700);
+  await fs.link(f.bundle, join(f.root, "source-alias"));
+  await expect(copyRootReleaseBundle(f.bundle, destination)).rejects.toThrow(
+    "private regular file",
+  );
+  expect(fs.chown).not.toHaveBeenCalled();
+});
+
+it("rejects source or destination-parent symlinks before root copying", async () => {
+  const f = await fixture(),
+    destination = join(f.root, "root-copy"),
+    link = join(f.root, "source-link"),
+    parent = join(f.root, "parent-link");
+  await simulateRootCopy(f.root, destination);
+  await fs.symlink(f.bundle, link);
+  await fs.symlink(f.root, parent);
+  await expect(copyRootReleaseBundle(link, destination)).rejects.toThrow(
+    "canonical paths",
+  );
+  await expect(
+    copyRootReleaseBundle(f.bundle, join(parent, "root-copy")),
+  ).rejects.toThrow("canonical paths");
+  expect(fs.chown).not.toHaveBeenCalled();
+});
+
+it("rejects a copy whose ownership did not become root after sealing", async () => {
+  const f = await fixture(),
+    destination = join(f.root, "root-copy");
+  const actual = await vi.importActual<typeof fs>("node:fs/promises");
+  vi.spyOn(process, "getuid").mockReturnValue(0);
+  vi.mocked(fs.chown).mockResolvedValue(undefined);
+  vi.mocked(fs.lstat).mockImplementation(async (path) => {
+    const info = await actual.lstat(path);
+    return path === f.root
+      ? Object.assign(info, { uid: 0 })
+      : path === destination
+        ? Object.assign(info, { uid: 12345 })
+        : info;
+  });
+  await expect(copyRootReleaseBundle(f.bundle, destination)).rejects.toThrow(
+    "not sealed",
+  );
 });
 async function fixture() {
   const root = await fs.mkdtemp(join(tmpdir(), "release-extraction-"));

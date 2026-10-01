@@ -64,6 +64,16 @@ override, Draft flag or verification-disable option. Downloads are temporary;
 interrupted bootstrap downloads are collected under the shared lock on activation or
 the next bootstrap mutation. Upgrade requires 4 GiB free for its bounded peak.
 
+The privileged application helper must not assume that copying a controller-
+owned bundle as root changes its owner. It exclusively creates a new copy in a
+canonical root-owned private directory, sets only that copy to root:root/0600,
+and checks its single inode before rehashing and independently verifying
+provenance/archive limits. It never changes the controller's input or relaxes
+the extraction ownership check. The root integration probe exercises this same
+copy function with a genuinely non-root-owned fixture as well as the restricted
+non-root extractor. This covers a preparation path that the pre-publication
+`deploySealedAssembly` test alone does not run.
+
 The schema-1 envelope pins version, commit, Node major and each file's size/hash.
 deploy/updater-files.json may change internal modules without changing this
 protocol. At most 64 files of 4 MiB each are accepted within allowed package/
