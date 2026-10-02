@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Add a shared authentication-selection and per-method browser-session
+  foundation: internal Password/OIDC coexistence preserves actual session
+  provenance, enabled-method/issuer checks and existing security rules. Keep
+  host configuration behind an explicit rollout gate until deployment,
+  bootstrap, login/admin UI and session-retirement integration are complete.
 - Introduce a dependency-free server profile Setup Core, shared with privileged
   deployment preflight, and a strict secret-free import/review model. Preserve
   existing authentication, secret-file and HTTPS checks; full setup/apply,

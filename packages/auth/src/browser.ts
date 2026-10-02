@@ -15,6 +15,13 @@ import type {
   WebSessionRow,
 } from "@latex-renderer/database";
 import { AppError, newId } from "@latex-renderer/shared";
+import {
+  browserAuthenticationFromMode,
+  isBrowserAuthenticationMethodEnabled,
+  legacyBrowserAuthenticationMode,
+  validateBrowserAuthenticationSelection,
+  type BrowserAuthenticationSelection,
+} from "@latex-renderer/server-setup-core";
 import type { AccessJwtVerifier, ExternalIdentity } from "./access.js";
 import { OidcClient, safeReturnTo } from "./oidc.js";
 
@@ -61,9 +68,8 @@ interface SessionAuditContext {
   userAgent?: string | undefined;
 }
 
-export interface BrowserAuthenticationOptions {
+interface BrowserAuthenticationBaseOptions {
   database: RendererDatabase;
-  mode: BrowserAuthMode;
   publicOrigin: string;
   access?: AccessJwtVerifier | undefined;
   oidc?: OidcClient | undefined;
@@ -74,8 +80,16 @@ export interface BrowserAuthenticationOptions {
   now?: (() => Date) | undefined;
 }
 
+export type BrowserAuthenticationOptions = BrowserAuthenticationBaseOptions &
+  (
+    | { mode: BrowserAuthMode; selection?: never }
+    | { selection: BrowserAuthenticationSelection; mode?: never }
+  );
+
 export class BrowserAuthenticationService {
-  readonly mode: BrowserAuthMode;
+  /** Compatibility hint only; sessions always retain their actual method. */
+  readonly mode: BrowserAuthMode | "native";
+  readonly selection: BrowserAuthenticationSelection;
   readonly publicOrigin: string;
   readonly externalProvider?: ExternalIdentityProvider | undefined;
   readonly externalIssuer?: string | undefined;
@@ -92,7 +106,24 @@ export class BrowserAuthenticationService {
 
   constructor(options: BrowserAuthenticationOptions) {
     this.database = options.database;
-    this.mode = options.mode;
+    // Validate at runtime too: callers are not necessarily typed TypeScript.
+    const selection: unknown = options.selection;
+    if (options.mode !== undefined && selection !== undefined)
+      throw new Error(
+        "Specify either authentication mode or selection, not both",
+      );
+    this.selection =
+      selection === undefined
+        ? browserAuthenticationFromMode(options.mode)
+        : validateBrowserAuthenticationSelection(selection);
+    this.mode =
+      this.selection.backend === "cloudflare-access"
+        ? "cloudflare-access"
+        : this.selection.passwordEnabled && this.selection.oidcEnabled
+          ? "native"
+          : this.selection.passwordEnabled
+            ? "password"
+            : "oidc";
     this.publicOrigin = exactHttpsOrigin(options.publicOrigin);
     this.access = options.access;
     this.oidc = options.oidc;
@@ -117,7 +148,7 @@ export class BrowserAuthenticationService {
       throw new Error("scrypt log N must be between 12 and 18");
     this.now = options.now ?? (() => new Date());
 
-    if (this.mode === "cloudflare-access") {
+    if (this.selection.backend === "cloudflare-access") {
       if (this.access === undefined)
         throw new Error("Cloudflare Access verifier is required");
       this.externalProvider = "cloudflare-access";
@@ -130,11 +161,12 @@ export class BrowserAuthenticationService {
             deterministicLegacyIdentityId(userId, this.access?.issuer ?? ""),
         ),
       );
-    } else if (this.mode === "oidc") {
+    } else if (this.isMethodEnabled("oidc")) {
       if (this.oidc === undefined) throw new Error("OIDC client is required");
       this.externalProvider = "oidc";
       this.externalIssuer = this.oidc.issuer;
-    } else {
+    }
+    if (this.isMethodEnabled("password")) {
       if (
         options.passwordPepper === undefined ||
         options.passwordPepper.length < 32
@@ -157,15 +189,35 @@ export class BrowserAuthenticationService {
     }
   }
 
+  isMethodEnabled(method: BrowserAuthMode): boolean {
+    return isBrowserAuthenticationMethodEnabled(this.selection, method);
+  }
+
   configuration(): {
-    mode: BrowserAuthMode;
+    mode: BrowserAuthMode | "native";
+    backend: "cloudflare-access" | "native";
+    methods: Array<{ id: "password" } | { id: "oidc"; displayName: string }>;
     loginPath: string;
     passwordMinimumLength: number | null;
   } {
     return {
       mode: this.mode,
+      backend: this.selection.backend,
+      methods: [
+        ...(this.isMethodEnabled("password")
+          ? [{ id: "password" as const }]
+          : []),
+        ...(this.selection.backend === "native" && this.selection.oidcEnabled
+          ? [
+              {
+                id: "oidc" as const,
+                displayName: this.selection.oidcDisplayName ?? "OIDC",
+              },
+            ]
+          : []),
+      ],
       loginPath: this.mode === "oidc" ? "/auth/oidc/start" : "/login/",
-      passwordMinimumLength: this.mode === "password" ? 12 : null,
+      passwordMinimumLength: this.isMethodEnabled("password") ? 12 : null,
     };
   }
 
@@ -199,7 +251,7 @@ export class BrowserAuthenticationService {
       user === undefined ||
       user.status !== "active" ||
       user.security_version !== row.user_security_version ||
-      row.auth_mode !== this.mode
+      !this.isMethodEnabled(row.auth_mode)
     ) {
       this.database.browserAuth.revokeSession(row.token_hash, timestamp);
       return undefined;
@@ -211,10 +263,11 @@ export class BrowserAuthenticationService {
             .identitiesForUser(user.id)
             .find((candidate) => candidate.id === row.identity_id);
     const identityMatchesMode =
-      this.mode === "password"
+      row.auth_mode === "password"
         ? row.identity_id === null
         : identity !== undefined &&
           identity.provider === this.externalProvider &&
+          identity.provider === row.auth_mode &&
           identity.issuer === this.externalIssuer;
     if (!identityMatchesMode) {
       this.database.browserAuth.revokeSession(row.token_hash, timestamp);
@@ -277,7 +330,7 @@ export class BrowserAuthenticationService {
     const principal = this.resolveExternal(identity);
     return this.createSession(
       principal.user,
-      this.mode,
+      "cloudflare-access",
       principal.identity,
       identity.expiresAt,
       sessionAuditContext(request),
@@ -290,7 +343,7 @@ export class BrowserAuthenticationService {
     ipAddress: string;
     request: Request;
   }): Promise<CreatedBrowserSession> {
-    if (this.mode !== "password" || this.passwordPepper === undefined)
+    if (!this.isMethodEnabled("password") || this.passwordPepper === undefined)
       throw new AppError(
         "AUTH_MODE_MISMATCH",
         "Password authentication is not enabled",
@@ -401,7 +454,7 @@ export class BrowserAuthenticationService {
   }
 
   async beginOidc(returnTo?: string, clientAddress = "unavailable") {
-    if (this.mode !== "oidc" || this.oidc === undefined)
+    if (!this.isMethodEnabled("oidc") || this.oidc === undefined)
       throw new AppError(
         "AUTH_MODE_MISMATCH",
         "OIDC authentication is not enabled",
@@ -416,7 +469,7 @@ export class BrowserAuthenticationService {
     stateCookie: string;
     request?: Request | undefined;
   }): Promise<CreatedBrowserSession & { returnTo: string }> {
-    if (this.mode !== "oidc" || this.oidc === undefined)
+    if (!this.isMethodEnabled("oidc") || this.oidc === undefined)
       throw new AppError(
         "AUTH_MODE_MISMATCH",
         "OIDC authentication is not enabled",
@@ -530,7 +583,7 @@ export class BrowserAuthenticationService {
     password: string;
     timestamp?: string | undefined;
   }): Promise<void> {
-    if (this.mode !== "password")
+    if (!this.isMethodEnabled("password"))
       throw new AppError(
         "AUTH_MODE_MISMATCH",
         "Password credentials are not enabled",
@@ -802,9 +855,9 @@ export class BrowserAuthenticationService {
 }
 
 export function parseAuthMode(value: string | undefined): BrowserAuthMode {
-  if (value === "cloudflare-access" || value === "oidc" || value === "password")
-    return value;
-  throw new Error("AUTH_MODE must be cloudflare-access, oidc, or password");
+  return legacyBrowserAuthenticationMode(
+    new Map(value === undefined ? [] : [["AUTH_MODE", value]]),
+  );
 }
 
 export function parseDeploymentMode(value: string | undefined): DeploymentMode {

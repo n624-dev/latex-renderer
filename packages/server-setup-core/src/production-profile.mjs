@@ -1,8 +1,13 @@
 import { URL } from "node:url";
+import { legacyBrowserAuthenticationMode } from "./browser-auth-selection.mjs";
 
 const PROFILE_KEYS = new Set([
   "ADMIN_API_URL",
   "AUTH_MODE",
+  "AUTH_BACKEND",
+  "AUTH_PASSWORD_ENABLED",
+  "AUTH_OIDC_ENABLED",
+  "OIDC_DISPLAY_NAME",
   "CLOUDFLARE_ACCESS_ISSUER",
   "CLOUDFLARE_ADMIN_AUDIENCE",
   "CLOUDFLARE_REMOTE_MCP_AUDIENCE",
@@ -51,7 +56,9 @@ export function validateProfileValues(values) {
   const deploymentMode = required(values, "DEPLOYMENT_MODE");
   if (deploymentMode !== "cloudflare" && deploymentMode !== "standalone")
     throw new Error("DEPLOYMENT_MODE must be cloudflare or standalone");
-  const authMode = required(values, "AUTH_MODE");
+  const authMode = legacyBrowserAuthenticationMode(values);
+  // Retain the stricter production placeholder/whitespace checks as well.
+  required(values, "AUTH_MODE");
   if (!["cloudflare-access", "oidc", "password"].includes(authMode))
     throw new Error("AUTH_MODE must be cloudflare-access, oidc, or password");
   if (deploymentMode === "standalone" && authMode === "cloudflare-access")

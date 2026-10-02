@@ -4,6 +4,33 @@ export interface ValidatedProductionProfile {
   publicOrigin: string;
 }
 
+export type BrowserAuthenticationSelection =
+  | Readonly<{ backend: "cloudflare-access" }>
+  | Readonly<{
+      backend: "native";
+      passwordEnabled: boolean;
+      oidcEnabled: boolean;
+      oidcDisplayName?: string;
+    }>;
+
+export function browserAuthenticationFromMode(
+  mode: unknown,
+): BrowserAuthenticationSelection;
+export function parseBrowserAuthenticationSelection(
+  values: ReadonlyMap<string, string>,
+): BrowserAuthenticationSelection;
+export function validateBrowserAuthenticationSelection(
+  input: unknown,
+): BrowserAuthenticationSelection;
+export function isBrowserAuthenticationMethodEnabled(
+  selection: BrowserAuthenticationSelection,
+  method: string,
+): boolean;
+/** Rollout gate for adapters that still require the existing AUTH_MODE profile. */
+export function legacyBrowserAuthenticationMode(
+  values: ReadonlyMap<string, string>,
+): "cloudflare-access" | "password" | "oidc";
+
 export type ServerSetupAuthentication =
   | Readonly<{ mode: "password" }>
   | Readonly<{

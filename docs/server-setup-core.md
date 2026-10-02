@@ -66,11 +66,68 @@ the existing default allowlist. Import/review does not rewrite installed files.
 
 ## Verification and remaining milestones
 
+### Authentication selection / session foundation (D2a)
+
+Core now also provides `browserAuthenticationFromMode`,
+`parseBrowserAuthenticationSelection`, `validateBrowserAuthenticationSelection`
+and `isBrowserAuthenticationMethodEnabled`. These are **internal building blocks,
+not a supported new host configuration yet**. They read caller-supplied values
+and return a detached, frozen, non-secret selection:
+
+```js
+{ backend: "cloudflare-access" }
+// OR (at least one native method must be enabled)
+{
+  backend: "native",
+  passwordEnabled: true,
+  oidcEnabled: true,
+  oidcDisplayName: "School Account", // optional presentation text only
+}
+```
+
+Existing `AUTH_MODE` values map to the same single enabled method; no database
+identity, credential or installed environment is migrated by parsing. The
+prospective `AUTH_BACKEND` model requires both native flags to be explicitly
+`true`/`false`. Legacy and new keys may not be mixed, and Access may not configure
+native methods. Unknown model fields, accessors/prototypes, secrets, empty
+method selections and unbounded/control-character provider labels are rejected.
+Provider labels must be rendered as text, never trusted markup or identity data.
+
+`BrowserAuthenticationService` accepts this validated selection for internal
+callers and tests. Password and OIDC can operate together, while each persisted
+session still records its actual method. Session use checks that method is
+enabled and that identity/issuer, status, security version and expiry remain
+valid. Disabling one method rejects/revokes its sessions **when used**, without
+rejecting the other method. Once revoked, a session does not revive when the
+method is re-enabled. Password resets still revoke all of that user's sessions,
+including OIDC sessions, under the existing security-version rule. Configuration
+apply must additionally retire unused sessions across method changes before
+host-level opt-in is enabled; this milestone does not implement that apply step.
+
+External identities continue to require explicit provider/issuer/subject
+provisioning. Matching email addresses never link accounts automatically.
+Password limits, Origin/CSRF, OIDC signed-token/state/PKCE validation, Cloudflare
+JWT verification and its existing legacy identity migration are retained.
+Public auth configuration adds backend/method metadata, without exposing
+issuer/client secrets/peppers; existing single-mode fields remain compatible.
+
+**Do not replace `AUTH_MODE` in an installed `renderer.env` yet.** The production
+preflight and runtime both call `legacyBrowserAuthenticationMode`, which rejects
+new backend/method keys before secret reads or provider/DB operations. The legacy
+profile parser retains these keys specifically so they cannot be silently
+ignored during import. Deployment, bootstrap, login/admin DOM and reviewed apply
+integration are the next D2b milestone; the rollout gate stays until they and
+their end-to-end tests are complete. No service or production setting changes
+are part of this foundation.
+
 ```sh
 pnpm install --frozen-lockfile
 pnpm exec vitest run tests/server-setup-core.test.ts \
   tests/production-profile-validation.test.ts tests/production-hardening.test.ts \
   tests/ci-standalone-fixture.test.ts
+pnpm --filter @latex-renderer/auth... build
+pnpm exec vitest run tests/browser-auth-selection.test.ts \
+  tests/browser-auth-method-policy.test.ts tests/browser-auth-security.test.ts
 pnpm check
 ```
 
@@ -81,8 +138,9 @@ They do not certify a completed setup or actual ingress/TLS operation.
 
 Remaining work proceeds in separate review/release boundaries:
 
-1. Native Password/OIDC method selection and provenance-aware sessions (#51),
-   with predictable migration from the current single-method profile.
+1. Finish native Password/OIDC host configuration, method-aware login/admin UI,
+   bootstrap/deployment and session retirement on apply (#51), using the D2a
+   selection/session foundation with predictable migration from legacy profiles.
 2. Explicit access scope and HTTPS provider configuration, including custom
    certificate validation and fail-closed unsupported automatic HTTPS (#52).
 3. Shared secret generation, owner creation, environment/service planning,
