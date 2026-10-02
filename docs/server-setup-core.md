@@ -156,6 +156,76 @@ pnpm check
 pnpm test:browser
 ```
 
+### Explicit format-2 authentication review and initial owner policy
+
+The next pure review boundary adds `importServerSetupAuthenticationReview`,
+`validateServerSetupAuthenticationReview`,
+`serverSetupAuthenticationReviewEnvironment` and
+`migrateServerSetupAuthenticationReview`. Existing format-1 APIs and their
+validation/deployment behavior stay unchanged; no installed file is migrated
+on import. The separately named format-2 APIs can review Access, Password,
+OIDC or native Password + OIDC. Every enabled method must satisfy the existing
+production URL, origin, issuer/client, audience and asymmetric-algorithm checks.
+The review is detached and frozen and contains no passwords, peppers, client
+secrets or their file paths.
+
+```js
+import {
+  importServerSetupAuthenticationReview,
+  migrateServerSetupAuthenticationReview,
+  serverSetupInitialOwnerPlan,
+} from "@latex-renderer/server-setup-core";
+
+const review = importServerSetupAuthenticationReview(environmentContents);
+// Explicit conversion of an existing validated format-1 JSON profile:
+const migratedReview = migrateServerSetupAuthenticationReview(existingProfile);
+const ownerPlan = serverSetupInitialOwnerPlan(review);
+```
+
+Format 2 keeps the existing deployment model. Its authentication field is
+either the Access backend and its existing issuer/audiences, or:
+
+```js
+{
+  backend: "native",
+  passwordEnabled: true,
+  oidcEnabled: true,
+  oidc: {
+    issuer: "https://identity.example.test/tenant",
+    clientId: "renderer-client",
+    allowedAlgorithms: ["RS256", "ES256"],
+    displayName: "School Account", // optional, presentation only
+  },
+}
+```
+
+OIDC metadata is required exactly when OIDC is enabled. During environment
+import, unused provider remnants are excluded rather than made mandatory for
+the active backend; secret-free JSON reviews reject extraneous settings. Legacy
+single-method imports map to that same single method, never enable an additional
+one, and do not invent Cloudflare dependencies for native authentication.
+
+For Password + OIDC, the approved owner plan is
+`{ bootstrapMethod: "password", followUpOidcRegistration: true }`: create the
+initial owner using Password, then explicitly register the OIDC issuer/subject
+for that same owner. Email matching never links accounts. Password-only plans
+Password bootstrap without follow-up; OIDC-only and Access retain external
+identity bootstrap. This function **only returns the policy**, not credentials,
+owner creation, provider discovery or a completed CUI/Web setup.
+
+**Format-2 output is not a deployable host configuration yet.** The runtime and
+privileged preflight still reject `AUTH_BACKEND`. The export returns only
+non-secret profile keys and is not a complete `renderer.env`; never use it to
+replace an installed environment. Runtime/deployment/bootstrap integration and
+persistent session retirement remain prerequisites for removing the rollout
+gate. Review/migration/owner planning do not read host secrets, contact providers,
+write files or mutate a database.
+
+```sh
+pnpm exec vitest run tests/server-authentication-review.test.ts \
+  tests/server-setup-core.test.ts tests/production-profile-validation.test.ts
+```
+
 Tests cover every current deployment/authentication combination, normalized
 review round-trips, secret exclusion, unchanged validator identity, malformed
 models and copied verified-source operation without workspace dependencies.

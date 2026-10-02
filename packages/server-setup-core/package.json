@@ -13,6 +13,6 @@
     }
   },
   "scripts": {
-    "build": "node --check src/index.mjs && node --check src/production-profile.mjs && node --check src/profile-model.mjs && node --check src/browser-auth-selection.mjs"
+    "build": "node --check src/index.mjs && node --check src/production-profile.mjs && node --check src/profile-model.mjs && node --check src/browser-auth-selection.mjs && node --check src/profile-shape.mjs && node --check src/authentication-review.mjs"
   }
 }

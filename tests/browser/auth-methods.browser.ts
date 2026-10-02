@@ -212,13 +212,26 @@ async function fixture(options: FixtureOptions = {}) {
 }
 
 async function ready(page: Page, admin = false) {
-  await vi.waitFor(async () => {
-    expect(
-      await page
-        .locator(admin ? "#user-create" : "#login-methods button")
-        .count(),
-    ).toBeGreaterThan(0);
-  });
+  try {
+    await page
+      .locator(admin ? "#user-create" : "#login-methods button")
+      .first()
+      .waitFor({ state: "visible", timeout: 10_000 });
+  } catch (error) {
+    const messages = await page
+      .locator("#error, #login-message")
+      .allTextContents();
+    throw new Error(
+      `Authentication UI did not become ready: ${messages.join("; ")}`,
+      { cause: error },
+    );
+  }
+}
+
+// Wait for explicit fixture/UI conditions, allowing slow local/CI scheduling.
+// No test retry: an actual application failure still fails within this bound.
+function waitFor(assertion: () => void | Promise<void>) {
+  return vi.waitFor(assertion, { timeout: 10_000, interval: 50 });
 }
 
 describe("shipped login UI", () => {
@@ -228,7 +241,7 @@ describe("shipped login UI", () => {
       const { page, errors, writes, sessionReads } = await fixture({
         configFailure,
       });
-      await vi.waitFor(async () =>
+      await waitFor(async () =>
         expect(
           await page.locator("#login-message").textContent(),
         ).not.toContain("確認しています"),
@@ -280,7 +293,7 @@ describe("shipped login UI", () => {
     const configGate = gate();
     const { page, configRequests } = await fixture({ configGate });
     try {
-      await vi.waitFor(() => expect(configRequests).toHaveLength(1));
+      await waitFor(() => expect(configRequests).toHaveLength(1));
       expect(
         await page.locator("#password-login, #external-login").count(),
       ).toBe(0);
@@ -300,7 +313,7 @@ describe("shipped login UI", () => {
     { mode: "password", backend: "native" },
   ])("fails closed for invalid config: %j", async (config) => {
     const { page, errors, sessionReads } = await fixture({ config });
-    await vi.waitFor(async () =>
+    await waitFor(async () =>
       expect(await page.locator("#login-message").textContent()).toContain(
         "管理者へ",
       ),
@@ -342,7 +355,7 @@ describe("shipped login UI", () => {
         form.dispatchEvent(new Event("submit", { cancelable: true }));
         form.dispatchEvent(new Event("submit", { cancelable: true }));
       });
-      await vi.waitFor(() => expect(writes).toHaveLength(1));
+      await waitFor(() => expect(writes).toHaveLength(1));
       expect(writes[0]?.body).toEqual({
         loginName: "member",
         password: "fixture-password-123",
@@ -354,7 +367,7 @@ describe("shipped login UI", () => {
     } finally {
       loginGate.release();
     }
-    await vi.waitFor(async () =>
+    await waitFor(async () =>
       expect(await page.locator("#password-login button").isEnabled()).toBe(
         true,
       ),
@@ -363,7 +376,7 @@ describe("shipped login UI", () => {
       "fixture login denied",
     );
     await page.locator("#password-login button").click();
-    await vi.waitFor(() => expect(writes).toHaveLength(2));
+    await waitFor(() => expect(writes).toHaveLength(2));
     expect(errors).toEqual([]);
   });
 
@@ -420,7 +433,7 @@ describe("shipped login UI", () => {
     });
     await ready(page);
     await page.locator("#external-login").click();
-    await vi.waitFor(async () =>
+    await waitFor(async () =>
       expect(await page.locator("#login-message").textContent()).toContain(
         "fixture access denied",
       ),
@@ -428,13 +441,28 @@ describe("shipped login UI", () => {
     expect(await page.locator("#external-login").isEnabled()).toBe(true);
     expect(await page.locator("#password-login").count()).toBe(0);
     await page.locator("#external-login").click();
-    await vi.waitFor(() => expect(sessionReads).toHaveLength(2));
+    await waitFor(() => expect(sessionReads).toHaveLength(2));
     expect(writes).toEqual([]);
     expect(errors).toEqual([]);
   });
 });
 
 describe("shipped admin authentication controls", () => {
+  it("waits for admin initialization when configuration takes more than one second", async () => {
+    const configGate = gate();
+    const { page, errors, writes } = await fixture({ admin: true, configGate });
+    const timer = setTimeout(() => configGate.release(), 1_500);
+    try {
+      await ready(page, true);
+      expect(await page.locator("[data-u-password]").count()).toBe(1);
+      expect(errors).toEqual([]);
+      expect(writes).toEqual([]);
+    } finally {
+      clearTimeout(timer);
+      configGate.release();
+    }
+  });
+
   it.each([
     [native([password]), "oidc", "owner", true, true, false],
     [native([oidc]), "password", "owner", false, false, true],
@@ -522,7 +550,7 @@ describe("shipped admin authentication controls", () => {
         };
       }
       await dialog.locator('button[type="submit"]').click();
-      await vi.waitFor(() => expect(writes).toHaveLength(1));
+      await waitFor(() => expect(writes).toHaveLength(1));
       expect(writes[0]).toEqual({
         path: "/admin/api/v1/users",
         csrf: "fixture-csrf",
@@ -533,7 +561,7 @@ describe("shipped admin authentication controls", () => {
           authentication,
         },
       });
-      await vi.waitFor(async () =>
+      await waitFor(async () =>
         expect(await page.locator("dialog").count()).toBe(0),
       );
       expect(errors).toEqual([]);
@@ -548,7 +576,7 @@ describe("shipped admin authentication controls", () => {
       if (failure === "invalid-json") state.invalidJson = true;
       else state.config = { backend: "native", methods: [] };
       await page.locator("#refresh").click();
-      await vi.waitFor(async () =>
+      await waitFor(async () =>
         expect(await page.locator("#error").textContent()).not.toBe(""),
       );
       expect(
