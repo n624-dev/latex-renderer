@@ -187,7 +187,7 @@ describe("shared browser authentication selection", () => {
     ).toEqual(browserAuthenticationFromMode("password"));
   });
 
-  it("keeps production/profile import behind the same explicit rollout gate", () => {
+  it("keeps format-1 import legacy-only rather than dropping enabled methods", () => {
     for (const selection of [
       { AUTH_BACKEND: "cloudflare-access" },
       {
@@ -203,7 +203,7 @@ describe("shared browser authentication selection", () => {
     ]) {
       const entries = new Map(Object.entries(selection));
       expect(() => legacyBrowserAuthenticationMode(entries)).toThrow(
-        /not deployable yet/,
+        /Format-1 profiles/,
       );
       const contents = [
         ...entries,
@@ -215,7 +215,7 @@ describe("shared browser authentication selection", () => {
         .join("\n");
       expect(parseEnvironmentFile(contents).has("AUTH_BACKEND")).toBe(true);
       expect(() => importServerSetupProfile(contents)).toThrow(
-        /not deployable yet/,
+        /Format-1 profiles/,
       );
     }
   });

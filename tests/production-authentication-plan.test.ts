@@ -135,15 +135,19 @@ describe("shared production authentication consumer plan", () => {
       }),
     ).toThrow();
   });
-  it("rejects new installed configuration before producing a deployable plan", () => {
+  it("produces a dual-method plan with both credential requirements", () => {
     const input = values();
     input.delete("AUTH_MODE");
     input.set("AUTH_BACKEND", "native");
     input.set("AUTH_PASSWORD_ENABLED", "true");
     input.set("AUTH_OIDC_ENABLED", "true");
-    expect(() => productionAuthenticationPlan(input)).toThrow(
-      /not deployable yet/,
-    );
+    expect(productionAuthenticationPlan(input)).toMatchObject({
+      authMode: "native",
+      passwordEnabled: true,
+      oidcEnabled: true,
+      bootstrapMethod: "password",
+      followUpOidcRegistration: true,
+    });
   });
   it.each([
     "OIDC_CLIENT_SECRET",

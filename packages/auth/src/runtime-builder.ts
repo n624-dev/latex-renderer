@@ -20,8 +20,8 @@ export interface BrowserAuthEnvironmentResult {
   publicOrigin: string;
 }
 
-// Internal construction boundary. The public environment factory must pass its
-// rollout gate first; this function is deliberately not exported by index.ts.
+// Internal construction boundary, not exported by index.ts. Both services use
+// the public environment factory and the same validated method selection.
 export function buildBrowserAuthentication(
   database: RendererDatabase,
   input: BrowserAuthenticationSelection,

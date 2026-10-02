@@ -1,6 +1,8 @@
 [Unit]
 Description=LaTeX Renderer Remote MCP and OAuth Server
 After=network-online.target latex-renderer-image-manager.service
+After=latex-renderer-authentication-recovery.service
+Requires=latex-renderer-authentication-recovery.service
 Wants=network-online.target
 Requires=latex-renderer-image-manager.service
 PartOf=latex-renderer-image-manager.service

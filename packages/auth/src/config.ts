@@ -1,8 +1,5 @@
 import type { RendererDatabase } from "@latex-renderer/database";
-import {
-  browserAuthenticationFromMode,
-  legacyBrowserAuthenticationMode,
-} from "@latex-renderer/server-setup-core";
+import { parseBrowserAuthenticationSelection } from "@latex-renderer/server-setup-core";
 import { buildBrowserAuthentication } from "./runtime-builder.js";
 import type { BrowserAuthEnvironmentResult } from "./runtime-builder.js";
 export type { BrowserAuthEnvironmentResult } from "./runtime-builder.js";
@@ -12,9 +9,9 @@ export function createBrowserAuthenticationFromEnvironment(
   audienceVariable = "CLOUDFLARE_ADMIN_AUDIENCE",
   environment: NodeJS.ProcessEnv = process.env,
 ): BrowserAuthEnvironmentResult {
-  // Keep the host rollout gate before all secret reads, provider setup and DB
-  // writes. The selection-aware builder is internal, not a new host opt-in.
-  const mode = legacyBrowserAuthenticationMode(
+  // Validate the entire selection before secret reads and durable retirement.
+  // Legacy AUTH_MODE retains exactly its old single-method behavior.
+  const selection = parseBrowserAuthenticationSelection(
     new Map(
       Object.entries(environment).filter(
         (entry): entry is [string, string] => entry[1] !== undefined,
@@ -23,7 +20,7 @@ export function createBrowserAuthenticationFromEnvironment(
   );
   return buildBrowserAuthentication(
     database,
-    browserAuthenticationFromMode(mode),
+    selection,
     audienceVariable,
     environment,
   );

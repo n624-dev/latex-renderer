@@ -2,6 +2,7 @@ import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { exportJWK, generateKeyPair, SignJWT } from "jose";
 import { RendererDatabase } from "@latex-renderer/database";
 import { createBrowserAuthenticationFromEnvironment } from "@latex-renderer/auth";
 import { buildBrowserAuthentication } from "../packages/auth/src/runtime-builder.js";
@@ -44,6 +45,113 @@ const dual = {
   oidcDisplayName: "School Account",
 } as const;
 describe("internal selection-aware runtime construction", () => {
+  it.each(["CLOUDFLARE_ADMIN_AUDIENCE", "CLOUDFLARE_REMOTE_MCP_AUDIENCE"])(
+    "accepts every native method selection through the public %s factory",
+    (audience) => {
+      for (const [passwordEnabled, oidcEnabled] of [
+        [true, false],
+        [false, true],
+        [true, true],
+      ]) {
+        const f = fixture();
+        const result = createBrowserAuthenticationFromEnvironment(
+          f.database,
+          audience,
+          {
+            ...f.environment,
+            AUTH_BACKEND: "native",
+            AUTH_PASSWORD_ENABLED: String(passwordEnabled),
+            AUTH_OIDC_ENABLED: String(oidcEnabled),
+          },
+        );
+        expect(
+          result.browserAuth.configuration().methods.map((method) => method.id),
+        ).toEqual([
+          ...(passwordEnabled ? ["password"] : []),
+          ...(oidcEnabled ? ["oidc"] : []),
+        ]);
+      }
+    },
+  );
+  it("keeps new Cloudflare Access configuration and independently enforced Admin/MCP JWT audiences", async () => {
+    const f = fixture();
+    const issuer = "https://fixture.cloudflareaccess.com";
+    const { publicKey, privateKey } = await generateKeyPair("RS256");
+    const jwk = {
+      ...(await exportJWK(publicKey)),
+      kid: "fixture",
+      alg: "RS256",
+      use: "sig",
+    };
+    vi.spyOn(globalThis, "fetch").mockImplementation(() =>
+      Promise.resolve(Response.json({ keys: [jwk] })),
+    );
+    const env = {
+      ...f.environment,
+      DEPLOYMENT_MODE: "cloudflare",
+      AUTH_BACKEND: "cloudflare-access",
+      CLOUDFLARE_ACCESS_ISSUER: issuer,
+      CLOUDFLARE_ADMIN_AUDIENCE: "a".repeat(64),
+      CLOUDFLARE_REMOTE_MCP_AUDIENCE: "b".repeat(64),
+      AUTH_PASSWORD_PEPPER_FILE: "/must-not-read/password",
+      OIDC_CLIENT_SECRET_FILE: "/must-not-read/oidc",
+    };
+    const admin = createBrowserAuthenticationFromEnvironment(
+      f.database,
+      "CLOUDFLARE_ADMIN_AUDIENCE",
+      env,
+    ).browserAuth;
+    const remote = createBrowserAuthenticationFromEnvironment(
+      f.database,
+      "CLOUDFLARE_REMOTE_MCP_AUDIENCE",
+      env,
+    ).browserAuth;
+    f.database.users.insertInvitation({
+      id: "user_owner",
+      displayName: "Owner",
+      role: "owner",
+      createdBy: "fixture",
+      timestamp: new Date().toISOString(),
+    });
+    admin.createExternalIdentity({
+      userId: "user_owner",
+      subject: "explicit-owner",
+    });
+    const token = (audience: string) =>
+      new SignJWT({ type: "app", email: "owner@example.test" })
+        .setProtectedHeader({ alg: "RS256", kid: "fixture" })
+        .setIssuer(issuer)
+        .setSubject("explicit-owner")
+        .setAudience(audience)
+        .setIssuedAt()
+        .setExpirationTime("5m")
+        .sign(privateKey);
+    const adminToken = await token(env.CLOUDFLARE_ADMIN_AUDIENCE),
+      remoteToken = await token(env.CLOUDFLARE_REMOTE_MCP_AUDIENCE);
+    const request = (assertion: string) =>
+      new Request(`${f.environment.PUBLIC_ORIGIN ?? ""}/auth/session`, {
+        headers: { "Cf-Access-Jwt-Assertion": assertion },
+      });
+    expect(
+      (await admin.establishSession(request(adminToken))).principal.authMode,
+    ).toBe("cloudflare-access");
+    expect(
+      (await remote.establishSession(request(remoteToken))).principal.user.id,
+    ).toBe("user_owner");
+    await expect(
+      remote.establishSession(request(adminToken)),
+    ).rejects.toThrow();
+    await expect(
+      admin.establishSession(request(remoteToken)),
+    ).rejects.toThrow();
+    expect(admin.configuration()).toMatchObject({
+      backend: "cloudflare-access",
+      methods: [],
+    });
+    expect(
+      f.database.browserAuth.getCredentialForUser("user_owner"),
+    ).toBeUndefined();
+  });
   it.each(["CLOUDFLARE_ADMIN_AUDIENCE", "CLOUDFLARE_REMOTE_MCP_AUDIENCE"])(
     "constructs both native methods for %s using real credential files",
     (audience) => {
@@ -123,17 +231,17 @@ describe("internal selection-aware runtime construction", () => {
     ).toThrow();
     expect(retire).not.toHaveBeenCalled();
   });
-  it("does not expose the internal builder or enable installed new keys through the public entry point", async () => {
+  it("keeps the builder private and enables validated new keys through the shared public factory", async () => {
     const f = fixture();
     const publicApi = await import("@latex-renderer/auth");
     expect(Object.hasOwn(publicApi, "buildBrowserAuthentication")).toBe(false);
-    expect(() =>
+    expect(
       createBrowserAuthenticationFromEnvironment(f.database, undefined, {
         ...f.environment,
         AUTH_BACKEND: "native",
         AUTH_PASSWORD_ENABLED: "true",
         AUTH_OIDC_ENABLED: "true",
-      }),
-    ).toThrow(/not deployable yet/);
+      }).browserAuth.configuration().methods,
+    ).toEqual([{ id: "password" }, { id: "oidc", displayName: "OIDC" }]);
   });
 });
