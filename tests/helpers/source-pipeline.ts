@@ -11,7 +11,10 @@ import { vi } from "vitest";
 import { ApiKeyService } from "@latex-renderer/auth";
 import { RendererDatabase } from "@latex-renderer/database";
 import { TicketService } from "@latex-renderer/ticket";
-import { DEFAULT_RESOURCE_LIMITS } from "@latex-renderer/shared";
+import {
+  DEFAULT_RESOURCE_LIMITS,
+  type ResourceLimits,
+} from "@latex-renderer/shared";
 import { RendererClient } from "../../packages/api-client/src/index.js";
 import { RemoteRenderService } from "../../packages/remote-mcp-core/src/index.js";
 import {
@@ -37,7 +40,11 @@ export function pipelineDocument(pages = 1, text = "Pipeline") {
 
 // Three independent loopback HTTP listeners; no global fetch or service mocks.
 // Only the Docker child boundary is replaced in ordinary (no-image) tests.
-export async function sourcePipelineFixture() {
+export async function sourcePipelineFixture(
+  overrides: Partial<ResourceLimits> = {},
+) {
+  // All consumers must see the same instance limits, not only the MCP producer.
+  const limits = { ...DEFAULT_RESOURCE_LIMITS, ...overrides };
   const root = await mkdtemp(join(tmpdir(), "source-pipeline-"));
   const gatePath = join(root, "renderer-gate");
   const database = await createFixtureDatabase(root);
@@ -189,7 +196,7 @@ export async function sourcePipelineFixture() {
       database,
       tickets,
       storageRoot: storage,
-      ...DEFAULT_RESOURCE_LIMITS,
+      ...limits,
       minFreeStorageBytes: 0,
       artifactRetentionHours: 24,
     });
@@ -206,7 +213,7 @@ export async function sourcePipelineFixture() {
       tickets,
       rendererPublicUrl: rendererOrigin,
       rendererVersion: "pipeline-test",
-      maxUploadBytes: DEFAULT_RESOURCE_LIMITS.maxUploadBytes,
+      maxUploadBytes: limits.maxUploadBytes,
       maxOutputBytes: 1024 * 1024,
       maxQueueLength: 20,
       maxUserStorageBytes: 20 * 1024 * 1024,
@@ -247,7 +254,7 @@ export async function sourcePipelineFixture() {
     const [client, sibling, outsider] = clients;
     assert.ok(client && sibling && outsider);
     const config: WorkerConfig = {
-      ...DEFAULT_RESOURCE_LIMITS,
+      ...limits,
       databasePath: join(root, "test.sqlite3"),
       storageRoot: storage,
       image: realPipelineImage ?? `sha256:${"0".repeat(64)}`,
@@ -336,7 +343,7 @@ export async function sourcePipelineFixture() {
       20,
       20 * 1024 * 1024,
       join(root, "environment"),
-      DEFAULT_RESOURCE_LIMITS,
+      limits,
       1024 * 1024,
     );
     return {

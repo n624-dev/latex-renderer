@@ -21,6 +21,12 @@ The scenarios cover:
 - Rejecting a case-colliding MCP revision without creating a ready Source, then
   consuming a valid immutable revision through HTTP and the Worker using a
   second API key of the same owner. Another owner cannot queue that Source.
+- Enforcing reduced instance file-count, per-file/content and ZIP-size limits
+  before Source readiness, then consuming an accepted Source with the same
+  limits in the HTTP APIs and Worker. Larger instance limits do not remove the
+  direct-operation safety caps. Root and nested non-`main.tex` entrypoints are
+  included; explicit real-container mode also checks their actual recorder and
+  project-root `\input` resolution. The ordinary child produces no recorder.
 
 ## Ordinary automated tests
 
