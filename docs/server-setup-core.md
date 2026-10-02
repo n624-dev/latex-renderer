@@ -97,12 +97,38 @@ Provider labels must be rendered as text, never trusted markup or identity data.
 callers and tests. Password and OIDC can operate together, while each persisted
 session still records its actual method. Session use checks that method is
 enabled and that identity/issuer, status, security version and expiry remain
-valid. Disabling one method rejects/revokes its sessions **when used**, without
-rejecting the other method. Once revoked, a session does not revive when the
-method is re-enabled. Password resets still revoke all of that user's sessions,
-including OIDC sessions, under the existing security-version rule. Configuration
-apply must additionally retire unused sessions across method changes before
-host-level opt-in is enabled; this milestone does not implement that apply step.
+valid. Disabling one method rejects/revokes its sessions without rejecting the
+other method. Once revoked, a session does not revive when the method is
+re-enabled. Password resets still revoke all of that user's sessions, including
+OIDC sessions, under the existing security-version rule.
+
+### Durable retirement before serving browser requests
+
+The common environment factory used by Admin API and Remote MCP now calls
+`BrowserAuthenticationService.retireIncompatibleSessions()` before returning a
+service. It permanently retires **unused as well as used** sessions whose method
+is disabled, whose external issuer/provider has changed, or whose identity
+provenance no longer matches. The other enabled method's valid sessions remain
+unchanged. Session retirement and its count-only, non-secret audit event commit
+in one database transaction. Database/audit failure aborts startup, rather than
+returning a partially prepared authentication service. Repeated starts with the
+same configuration change no rows and add no retirement audit event.
+
+Constructing a service alone does **not** retire sessions: the local CLI also
+constructs password-only services for credential hashing. Those helpers must not
+change a running installation's authentication policy. Direct service consumers
+must explicitly call the retirement method when applying a reviewed policy.
+No credentials or external identities are deleted, and no schema migration or
+permanent policy history is added. Existing audit-log retention still applies.
+
+Policy cutover requires stopping **all** old Admin/Remote MCP service instances
+before starting them with one consistent configuration; this is not a live
+reload API. A stale instance could otherwise still create sessions under its
+previous configuration. Existing session-use/security-version checks remain in
+place. Restart/re-enable and startup failure recovery are tested using disposable
+SQLite databases, not the production database. Reviewed host apply, dual-method
+secret/credential wiring and all deployment/bootstrap consumers still need
+integration before host-level opt-in is enabled.
 
 External identities continue to require explicit provider/issuer/subject
 provisioning. Matching email addresses never link accounts automatically.
@@ -151,7 +177,8 @@ pnpm exec vitest run tests/server-setup-core.test.ts \
   tests/ci-standalone-fixture.test.ts
 pnpm --filter @latex-renderer/auth... build
 pnpm exec vitest run tests/browser-auth-selection.test.ts \
-  tests/browser-auth-method-policy.test.ts tests/browser-auth-security.test.ts
+  tests/browser-auth-method-policy.test.ts tests/browser-auth-security.test.ts \
+  tests/browser-session-retirement.test.ts
 pnpm check
 pnpm test:browser
 ```

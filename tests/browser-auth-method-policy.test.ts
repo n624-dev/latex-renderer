@@ -114,6 +114,41 @@ describe("per-method browser authentication policy", () => {
   );
 
   it.each(["password", "oidc"] as const)(
+    "retirement invalidates unused real %s sessions without reviving them on re-enable",
+    async (disabled) => {
+      const f = await fixture();
+      const sessions = {
+        password: await f.passwordLogin(),
+        oidc: await f.oidcLogin(),
+      };
+      const changed = f.withSelection({
+        backend: "native",
+        passwordEnabled: disabled !== "password",
+        oidcEnabled: disabled !== "oidc",
+      });
+      // Neither cookie has been used since issuance. Retirement is not lazy.
+      expect(changed.retireIncompatibleSessions()).toBe(1);
+      const restored = f.withSelection(dual);
+      expect(restored.retireIncompatibleSessions()).toBe(0);
+      expect(
+        restored.authenticateSession(request(sessions[disabled].token)),
+      ).toBeUndefined();
+      const retained = disabled === "password" ? "oidc" : "password";
+      expect(
+        restored.authenticateSession(request(sessions[retained].token))
+          ?.authMode,
+      ).toBe(retained);
+      expect(f.database.users.get("user_owner")?.security_version).toBe(1);
+      expect(
+        f.database.browserAuth.getCredentialForUser("user_owner"),
+      ).toBeDefined();
+      expect(
+        f.database.browserAuth.identitiesForUser("user_owner"),
+      ).toHaveLength(1);
+    },
+  );
+
+  it.each(["password", "oidc"] as const)(
     "enabling the other method preserves a legacy %s session",
     async (mode) => {
       const f = await fixture();
