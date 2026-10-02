@@ -16,3 +16,10 @@ export {
   isBrowserAuthenticationMethodEnabled,
   legacyBrowserAuthenticationMode,
 } from "./browser-auth-selection.mjs";
+export {
+  importServerSetupAuthenticationReview,
+  migrateServerSetupAuthenticationReview,
+  validateServerSetupAuthenticationReview,
+  serverSetupAuthenticationReviewEnvironment,
+  serverSetupInitialOwnerPlan,
+} from "./authentication-review.mjs";

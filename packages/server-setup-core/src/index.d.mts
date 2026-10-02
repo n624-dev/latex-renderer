@@ -68,3 +68,52 @@ export function validateServerSetupProfile(input: unknown): ServerSetupProfile;
 export function serverSetupProfileEnvironment(
   input: unknown,
 ): Map<string, string>;
+
+export type ServerSetupAuthenticationReviewMethod =
+  | Readonly<{
+      backend: "cloudflare-access";
+      issuer: string;
+      adminAudience: string;
+      remoteMcpAudience: string;
+    }>
+  | Readonly<{
+      backend: "native";
+      passwordEnabled: true;
+      oidcEnabled: false;
+    }>
+  | Readonly<{
+      backend: "native";
+      passwordEnabled: boolean;
+      oidcEnabled: true;
+      oidc: Readonly<{
+        issuer: string;
+        clientId: string;
+        allowedAlgorithms: readonly string[];
+        displayName?: string;
+      }>;
+    }>;
+
+/** Format 2 is review-only until all host/runtime consumers are integrated. */
+export interface ServerSetupAuthenticationReview {
+  readonly format: 2;
+  readonly deployment: ServerSetupProfile["deployment"];
+  readonly authentication: ServerSetupAuthenticationReviewMethod;
+}
+export function importServerSetupAuthenticationReview(
+  contents: string,
+): ServerSetupAuthenticationReview;
+/** Explicit conversion of validated format-1 JSON; no installed file writes. */
+export function migrateServerSetupAuthenticationReview(
+  input: unknown,
+): ServerSetupAuthenticationReview;
+export function validateServerSetupAuthenticationReview(
+  input: unknown,
+): ServerSetupAuthenticationReview;
+/** Non-secret profile keys only; the output still fails the host rollout gate. */
+export function serverSetupAuthenticationReviewEnvironment(
+  input: unknown,
+): Map<string, string>;
+export function serverSetupInitialOwnerPlan(input: unknown): Readonly<{
+  bootstrapMethod: "password" | "oidc" | "cloudflare-access";
+  followUpOidcRegistration: boolean;
+}>;
