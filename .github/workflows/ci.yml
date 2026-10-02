@@ -41,7 +41,7 @@ jobs:
         run: pnpm check
       - name: Install Chromium for Web regression tests
         run: pnpm exec playwright install --with-deps --only-shell chromium
-      - name: Verify Web selection and bounded batch behavior in Chromium
+      - name: Verify Web selection, batches, and authentication UI in Chromium
         run: pnpm test:browser
       - name: Build workspaces and Windows distribution
         run: pnpm build

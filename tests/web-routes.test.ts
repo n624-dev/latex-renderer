@@ -65,12 +65,15 @@ describe("unified web", () => {
     expect((await app.request("/admin/assets/render.js")).status).toBe(200);
     expect((await app.request("/assets/render.js")).status).toBe(404);
   });
-  it("serves the login controller and keeps inactive methods hidden", async () => {
+  it("serves the login controller without pre-rendering inactive methods", async () => {
     const app = createWebApp(dist),
       page = await (await app.request("/login/")).text(),
       script = await app.request("/assets/login.js"),
       css = await (await app.request("/assets/styles.css")).text();
     expect(page).toContain('src="/assets/login.js"');
+    expect(page).toContain('id="login-methods"');
+    expect(page).not.toContain('id="password-login"');
+    expect(page).not.toContain('id="external-login"');
     expect(script.status).toBe(200);
     expect(await script.text()).toContain("/auth/config");
     expect(css).toContain("[hidden] { display: none !important; }");
