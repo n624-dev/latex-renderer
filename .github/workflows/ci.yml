@@ -36,16 +36,23 @@ jobs:
           sudo apt-get update
           sudo apt-get install --no-install-recommends --yes age acl libarchive-tools
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-      - name: Typecheck, test, and lint
-        run: pnpm check
+        run: node deploy/ci/measure-phase.mjs dependencies -- pnpm install --frozen-lockfile
+      # Same checks as pnpm check, measured separately. One fresh recursive
+      # build also creates the client/Windows/MCPB assets and both Worker bundles.
+      # Only this checkout/job's outputs are reused; there is no build cache.
+      - name: Typecheck
+        run: node deploy/ci/measure-phase.mjs typecheck -- pnpm typecheck
+      - name: Build all workspaces and client distributions once
+        run: node deploy/ci/measure-phase.mjs build -- pnpm build:workspaces
+      - name: Check documentation
+        run: node deploy/ci/measure-phase.mjs docs -- pnpm check:docs
+      - name: Run regression and integration tests
+        run: node deploy/ci/measure-phase.mjs test -- pnpm test
+      - name: Lint
+        run: node deploy/ci/measure-phase.mjs lint -- pnpm lint
       - name: Install Chromium for Web regression tests
-        run: pnpm exec playwright install --with-deps --only-shell chromium
+        run: node deploy/ci/measure-phase.mjs chromium -- pnpm exec playwright install --with-deps --only-shell chromium
       - name: Verify Web selection, batches, and authentication UI in Chromium
-        run: pnpm test:browser
-      - name: Build workspaces and Windows distribution
-        run: pnpm build
+        run: node deploy/ci/measure-phase.mjs browser -- pnpm test:browser:built
       - name: Verify signed MCPB distribution
-        run: pnpm verify:mcpb
-      - name: Verify Gateway Worker bundle
-        run: pnpm --filter @latex-renderer/gateway-worker build
+        run: node deploy/ci/measure-phase.mjs mcpb -- pnpm verify:mcpb

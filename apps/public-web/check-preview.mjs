@@ -4,6 +4,7 @@ import { createServer } from "node:net";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 import { URL } from "node:url";
+import { stopPreview } from "./stop-preview.mjs";
 
 const host = "127.0.0.1";
 const port = await availablePort();
@@ -63,11 +64,7 @@ try {
     `Local Workers Static Assets preview passed at ${baseUrl}.`,
   );
 } finally {
-  worker.kill("SIGTERM");
-  if ((await Promise.race([exited, delay(5_000, "timeout")])) === "timeout") {
-    worker.kill("SIGKILL");
-    await exited;
-  }
+  await stopPreview(worker, exited);
 }
 
 async function availablePort() {

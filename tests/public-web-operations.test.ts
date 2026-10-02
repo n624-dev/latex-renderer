@@ -27,7 +27,8 @@ describe("public Web operations", () => {
     const preview = read("apps/public-web/check-preview.mjs");
 
     expect(workflow).toContain("permissions:\n  contents: read");
-    expect(workflow).toContain("run: pnpm check");
+    expect(workflow).toContain("-- pnpm build:workspaces");
+    expect(workflow).toContain("-- pnpm typecheck");
     expect(workflow).not.toContain("CLOUDFLARE_API_TOKEN");
     expect(workflow).not.toContain("secrets.");
     expect(packageJson).toContain("pnpm check:preview");
