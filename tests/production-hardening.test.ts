@@ -166,6 +166,7 @@ describe("production hardening", () => {
   it("validates authentication profiles and secret permissions before builds or service quiescing", () => {
     const deploy = read("deploy/scripts/deploy-production-release.sh"),
       validator = read("deploy/scripts/validate-production-profile.mjs"),
+      core = read("packages/server-setup-core/src/production-profile.mjs"),
       validation = "validate-production-profile.mjs";
     expect(deploy.indexOf(validation)).toBeLessThan(
       deploy.indexOf("build:production-services"),
@@ -173,12 +174,13 @@ describe("production hardening", () => {
     expect(deploy.indexOf(validation)).toBeLessThan(
       deploy.indexOf("quiesce-image-manager.sh"),
     );
-    expect(validator).toContain(
+    expect(core).toContain(
       "AUTH_MODE=cloudflare-access requires DEPLOYMENT_MODE=cloudflare",
     );
-    expect(validator).toContain(
+    expect(core).toContain(
       "OIDC_ALLOWED_ALGORITHMS must be a unique asymmetric allowlist",
     );
+    expect(validator).toContain("packages/server-setup-core/src/index.mjs");
     expect(validator).toContain("password authentication pepper");
     expect(validator).toContain("OIDC client secret");
     expect(validator).not.toContain("process.stdout.write(readFileSync");
