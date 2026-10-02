@@ -44,6 +44,8 @@ with the Web-visible self-hosting guide instead.
 
 The [Source pipeline E2E guide](docs/source-pipeline-e2e.md) distinguishes ordinary
 HTTP/DB/Worker regressions from the real TeX container integration checks.
+The server setup foundation and its remaining milestones are described in
+[Server Setup Core](docs/server-setup-core.md).
 
 ## Security and support
 

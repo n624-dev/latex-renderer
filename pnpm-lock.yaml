@@ -452,6 +452,8 @@ importers:
         specifier: ^3.3.1
         version: 3.3.1
 
+  packages/server-setup-core: {}
+
   packages/setup-core:
     dependencies:
       '@latex-renderer/shared':

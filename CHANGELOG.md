@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Introduce a dependency-free server profile Setup Core, shared with privileged
+  deployment preflight, and a strict secret-free import/review model. Preserve
+  existing authentication, secret-file and HTTPS checks; full setup/apply,
+  dual-method authentication and ingress configuration remain separate work.
 - Extend Source pipeline acceptance to configured limits below/above direct
   MCP safety caps and root/nested non-default entrypoints, including real TeX
   recorder checks in the existing temporary validation Runtime.
