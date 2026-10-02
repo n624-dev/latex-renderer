@@ -1,9 +1,9 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { RendererDatabase } from "@latex-renderer/database";
+import { legacyBrowserAuthenticationMode } from "@latex-renderer/server-setup-core";
 import {
   BrowserAuthenticationService,
-  parseAuthMode,
   parseDeploymentMode,
   type DeploymentMode,
 } from "./browser.js";
@@ -21,7 +21,13 @@ export function createBrowserAuthenticationFromEnvironment(
   audienceVariable = "CLOUDFLARE_ADMIN_AUDIENCE",
   environment: NodeJS.ProcessEnv = process.env,
 ): BrowserAuthEnvironmentResult {
-  const mode = parseAuthMode(environment.AUTH_MODE);
+  const mode = legacyBrowserAuthenticationMode(
+    new Map(
+      Object.entries(environment).filter(
+        (entry): entry is [string, string] => entry[1] !== undefined,
+      ),
+    ),
+  );
   const deploymentMode = parseDeploymentMode(environment.DEPLOYMENT_MODE);
   const publicOrigin = required(environment, "PUBLIC_ORIGIN");
   if (deploymentMode === "standalone" && mode === "cloudflare-access")
@@ -46,7 +52,11 @@ export function createBrowserAuthenticationFromEnvironment(
   }
 
   if (mode === "oidc") {
-    const secret = readSecret(environment, "oidc-client-secret", "OIDC_CLIENT_SECRET_FILE");
+    const secret = readSecret(
+      environment,
+      "oidc-client-secret",
+      "OIDC_CLIENT_SECRET_FILE",
+    );
     return {
       deploymentMode,
       publicOrigin,

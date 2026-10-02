@@ -36,6 +36,7 @@ export function legacyTestBrowserAuth(
   };
   return {
     mode: "cloudflare-access",
+    isMethodEnabled: (method: string) => method === "cloudflare-access",
     publicOrigin: "https://latex.example.com",
     externalProvider: "cloudflare-access",
     externalIssuer: "https://team.cloudflareaccess.com",

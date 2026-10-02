@@ -22,11 +22,13 @@ function redactAuditReason(reason: string): string {
 export class UsersService {
   constructor(private readonly deps: AdminDependencies) {}
 
-  list(options: {
-    cursor?: string | undefined;
-    limit?: number | undefined;
-    query?: string | undefined;
-  } = {}) {
+  list(
+    options: {
+      cursor?: string | undefined;
+      limit?: number | undefined;
+      query?: string | undefined;
+    } = {},
+  ) {
     const page = this.deps.database.users.listPage(options);
     return {
       ...page,
@@ -66,12 +68,13 @@ export class UsersService {
       );
     }
     if (
-      (this.deps.browserAuth.mode === "password") !==
-      (input.authentication.type === "password")
+      input.authentication.type === "password"
+        ? !this.deps.browserAuth.isMethodEnabled("password")
+        : this.deps.browserAuth.externalProvider === undefined
     )
       throw new AppError(
         "AUTH_MODE_MISMATCH",
-        "User authentication must match the configured authentication mode",
+        "User authentication must use an enabled authentication method",
         409,
       );
     if (input.authentication.type === "password") {
@@ -222,7 +225,7 @@ export class UsersService {
         "Only an owner can reset passwords",
         403,
       );
-    if (this.deps.browserAuth.mode !== "password")
+    if (!this.deps.browserAuth.isMethodEnabled("password"))
       throw new AppError(
         "AUTH_MODE_MISMATCH",
         "Password authentication is not enabled",
@@ -402,7 +405,9 @@ function mapLoginNameConflict(error: unknown): unknown {
   const candidate = error as { message?: unknown };
   const message =
     typeof candidate.message === "string" ? candidate.message : "";
-  if (message.includes("UNIQUE constraint failed: local_credentials.login_name"))
+  if (
+    message.includes("UNIQUE constraint failed: local_credentials.login_name")
+  )
     return new AppError(
       "LOGIN_NAME_CONFLICT",
       "Login name is already assigned",

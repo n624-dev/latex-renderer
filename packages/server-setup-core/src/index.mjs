@@ -9,3 +9,10 @@ export {
   validateServerSetupProfile,
   serverSetupProfileEnvironment,
 } from "./profile-model.mjs";
+export {
+  browserAuthenticationFromMode,
+  parseBrowserAuthenticationSelection,
+  validateBrowserAuthenticationSelection,
+  isBrowserAuthenticationMethodEnabled,
+  legacyBrowserAuthenticationMode,
+} from "./browser-auth-selection.mjs";
