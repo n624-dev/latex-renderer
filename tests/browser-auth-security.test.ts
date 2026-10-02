@@ -27,6 +27,8 @@ afterEach(() => {
 });
 
 describe("strict browser authentication", () => {
+  // N=2^18 deliberately uses 256 MiB per derivation. Allow bounded scheduling /
+  // swap delay on small hosts without reducing the cost or skipping assertions.
   it("supports the documented upper scrypt cost and rejects invalid costs", async () => {
     const database = databaseFixture();
     const options = {
@@ -53,7 +55,7 @@ describe("strict browser authentication", () => {
     await expect(
       service.verifyPassword("a different password 2026", encoded),
     ).resolves.toBe(false);
-  });
+  }, 120_000);
   it.each([
     undefined,
     ["client_secret_basic"],

@@ -184,9 +184,13 @@ describe("production hardening", () => {
     expect(validator).toContain("password authentication pepper");
     expect(validator).toContain("OIDC client secret");
     expect(validator).not.toContain("process.stdout.write(readFileSync");
-    expect(deploy.indexOf("auth-password-pepper")).toBeLessThan(
-      deploy.indexOf(validation),
+    expect(deploy.indexOf("--profile-plan")).toBeLessThan(
+      deploy.indexOf("auth-password-pepper"),
     );
+    expect(deploy.indexOf("auth-password-pepper")).toBeLessThan(
+      deploy.indexOf('"$environment_file" --plan)'),
+    );
+    expect(deploy).toContain('profile_plan" != "$verified_plan');
   });
   it("exercises secret-free structured CLI output in the production render smoke test", () => {
     const smoke = read("deploy/scripts/smoke-test-production.sh");

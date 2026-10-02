@@ -7,6 +7,8 @@ import {
 import {
   parseBrowserAuthenticationSelection,
   validateBrowserAuthenticationSelection,
+  browserAuthenticationRequirements,
+  legacyBrowserAuthenticationMode,
 } from "./browser-auth-selection.mjs";
 import { profileRecord as record } from "./profile-shape.mjs";
 
@@ -168,15 +170,48 @@ export function serverSetupAuthenticationReviewEnvironment(input) {
 export function serverSetupInitialOwnerPlan(input) {
   const { authentication: auth } =
     validateServerSetupAuthenticationReview(input);
+  const requirements = browserAuthenticationRequirements(
+    auth.backend === "cloudflare-access"
+      ? { backend: auth.backend }
+      : {
+          backend: auth.backend,
+          passwordEnabled: auth.passwordEnabled,
+          oidcEnabled: auth.oidcEnabled,
+        },
+  );
   return Object.freeze({
-    bootstrapMethod:
+    bootstrapMethod: requirements.bootstrapMethod,
+    followUpOidcRegistration: requirements.followUpOidcRegistration,
+  });
+}
+
+// Host consumers share this gated, validated, non-secret execution plan. The
+// legacy profile APIs remain unchanged and new installed configurations still
+// fail before any file/secret mutation. No full EnvironmentFile is exported.
+export function productionAuthenticationPlan(values) {
+  legacyBrowserAuthenticationMode(values);
+  const review = importServerSetupAuthenticationReview(
+    environmentContents(values),
+  );
+  const selection = parseBrowserAuthenticationSelection(values);
+  const requirements = browserAuthenticationRequirements(selection);
+  const auth = review.authentication;
+  return Object.freeze({
+    deploymentMode: review.deployment.mode,
+    publicOrigin: review.deployment.publicOrigin,
+    ...requirements,
+    authMode:
       auth.backend === "cloudflare-access"
         ? "cloudflare-access"
-        : auth.passwordEnabled
-          ? "password"
-          : "oidc",
-    followUpOidcRegistration:
-      auth.backend === "native" && auth.passwordEnabled && auth.oidcEnabled,
+        : auth.passwordEnabled && auth.oidcEnabled
+          ? "native"
+          : requirements.bootstrapMethod,
+    externalIssuer:
+      auth.backend === "cloudflare-access"
+        ? auth.issuer
+        : auth.oidcEnabled
+          ? auth.oidc.issuer
+          : "",
   });
 }
 

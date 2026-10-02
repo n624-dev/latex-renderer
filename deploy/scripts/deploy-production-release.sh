@@ -131,8 +131,10 @@ if [ ! -f "$environment_file" ]; then
   echo "renderer environment file not found: $environment_file" >&2
   exit 66
 fi
-preflight_auth_mode=$(sed -n 's/^AUTH_MODE=//p' "$environment_file" | tail -n 1)
-if [ "$preflight_auth_mode" = password ] && \
+profile_validator="$source_root/deploy/scripts/validate-production-profile.mjs"
+profile_plan=$(/usr/local/bin/node "$profile_validator" "$environment_file" --profile-plan)
+preflight_password_enabled=$(/usr/local/bin/node "$profile_validator" --plan-field passwordEnabled "$profile_plan")
+if [ "$preflight_password_enabled" = true ] && \
    [ ! -f /etc/latex-renderer/secrets/auth-password-pepper ]; then
   (umask 077; dd if=/dev/urandom \
     of=/etc/latex-renderer/secrets/auth-password-pepper \
@@ -141,10 +143,15 @@ if [ "$preflight_auth_mode" = password ] && \
     /etc/latex-renderer/secrets/auth-password-pepper
   chmod 0440 /etc/latex-renderer/secrets/auth-password-pepper
 fi
-/usr/local/bin/node "$source_root/deploy/scripts/validate-production-profile.mjs" \
-  "$environment_file"
-deployment_mode=$(sed -n 's/^DEPLOYMENT_MODE=//p' "$environment_file" | tail -n 1)
-case "$deployment_mode" in cloudflare|standalone) ;; *) echo "DEPLOYMENT_MODE must be cloudflare or standalone" >&2; exit 65 ;; esac
+verified_plan=$(/usr/local/bin/node "$profile_validator" "$environment_file" --plan)
+if [ "$profile_plan" != "$verified_plan" ]; then
+  echo "Production authentication plan changed during secret preparation" >&2
+  exit 75
+fi
+profile_field() {
+  /usr/local/bin/node "$profile_validator" --plan-field "$1" "$verified_plan"
+}
+deployment_mode=$(profile_field deploymentMode)
 if [ "$deployment_mode" = cloudflare ]; then
   deployment_environment_file=${LATEX_RENDERER_DEPLOYMENT_ENV_FILE:-/etc/latex-renderer/deployment.env}
   case "$deployment_environment_file" in /*) ;; *) echo "LATEX_RENDERER_DEPLOYMENT_ENV_FILE must be an absolute path" >&2; exit 64 ;; esac
@@ -162,12 +169,6 @@ if [ "$deployment_mode" = cloudflare ]; then
   # This is trusted root-owned shell syntax so values can be quoted safely.
   . "$deployment_environment_file"
   set +a
-fi
-auth_mode=$(sed -n 's/^AUTH_MODE=//p' "$environment_file" | tail -n 1)
-case "$auth_mode" in cloudflare-access|oidc|password) ;; *) echo "AUTH_MODE must be cloudflare-access, oidc, or password" >&2; exit 65 ;; esac
-if [ "$deployment_mode" = standalone ] && [ "$auth_mode" = cloudflare-access ]; then
-  echo "AUTH_MODE=cloudflare-access requires DEPLOYMENT_MODE=cloudflare" >&2
-  exit 65
 fi
 if [ "$deployment_mode" = cloudflare ]; then
   if ! printf '%s\n' "${CLOUDFLARE_ACCOUNT_ID:-}" | grep -Eq '^[0-9a-fA-F]{32}$'; then
@@ -192,11 +193,7 @@ if [ "$deployment_mode" = cloudflare ]; then
     exit 78
   fi
 fi
-public_origin=$(sed -n 's/^PUBLIC_ORIGIN=//p' "$environment_file" | tail -n 1)
-case "$public_origin" in
-  https://*) ;;
-  *) echo "PUBLIC_ORIGIN must be configured as an HTTPS origin in $environment_file" >&2; exit 65 ;;
-esac
+public_origin=$(profile_field publicOrigin)
 export PUBLIC_ORIGIN="$public_origin"
 
 sync_user=${SUDO_USER:-$(stat -c '%U' "$source_root")}

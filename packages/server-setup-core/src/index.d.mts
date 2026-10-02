@@ -26,6 +26,25 @@ export function isBrowserAuthenticationMethodEnabled(
   selection: BrowserAuthenticationSelection,
   method: string,
 ): boolean;
+export interface BrowserAuthenticationRequirements {
+  readonly passwordEnabled: boolean;
+  readonly oidcEnabled: boolean;
+  readonly bootstrapMethod: "password" | "oidc" | "cloudflare-access";
+  readonly followUpOidcRegistration: boolean;
+}
+export function browserAuthenticationRequirements(
+  input: unknown,
+): Readonly<BrowserAuthenticationRequirements>;
+/** Validated non-secret host plan; the new-config rollout gate still applies. */
+export interface ProductionAuthenticationPlan extends BrowserAuthenticationRequirements {
+  readonly deploymentMode: "cloudflare" | "standalone";
+  readonly publicOrigin: string;
+  readonly authMode: "cloudflare-access" | "password" | "oidc" | "native";
+  readonly externalIssuer: string;
+}
+export function productionAuthenticationPlan(
+  values: ReadonlyMap<string, string>,
+): Readonly<ProductionAuthenticationPlan>;
 /** Rollout gate for adapters that still require the existing AUTH_MODE profile. */
 export function legacyBrowserAuthenticationMode(
   values: ReadonlyMap<string, string>,

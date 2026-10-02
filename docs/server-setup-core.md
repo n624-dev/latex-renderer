@@ -146,6 +146,56 @@ remain pending; the rollout gate stays until they and
 their end-to-end tests are complete. No service or production setting changes
 are part of this foundation.
 
+### Shared runtime / privileged deployment requirements
+
+`browserAuthenticationRequirements(selection)` is the single pure source for
+which native credentials are required and for the approved initial-owner policy.
+Password + OIDC requires **both** credentials, chooses Password for bootstrap,
+and requests later explicit OIDC issuer/subject registration on that same owner.
+It never creates an owner, links matching email addresses or resets credentials.
+`serverSetupInitialOwnerPlan` delegates to the same policy.
+
+The runtime environment entry point now uses an internal selection-aware builder.
+Enabled methods alone read their credential files; disabled methods do not read
+their stale/missing files. Both enabled methods must be constructed successfully
+before session retirement. The builder is not exported by the public auth barrel,
+and the environment entry point retains the rollout gate before any I/O.
+
+`productionAuthenticationPlan(values)` validates the complete production profile
+and returns only a frozen non-secret execution plan. New installed keys are still
+gated. The existing format-1 profile API and default privileged validator command
+remain compatible. The privileged adapter has these explicit modes:
+
+- `RENDERER_ENV_FILE`: validate environment ownership/mode/size and all enabled
+  auth secrets, then print the existing safe success summary.
+- `RENDERER_ENV_FILE --profile-plan`: validate the file and complete profile/gate,
+  returning JSON **without certifying secret readiness**. Deployment uses this
+  before generating a missing Password pepper, so invalid profiles are rejected
+  before that mutation.
+- `RENDERER_ENV_FILE --plan`: additionally verify every required auth secret,
+  returning the same non-secret JSON plan.
+- `--plan-field FIELD PLAN_JSON`: read one whitelisted field from a strictly
+  checked plan, without reading host files. No arbitrary property, environment
+  key or shell `eval` is allowed. All command modes still require root.
+
+Deploy, bootstrap-owner and configure-host-access consume these checked plans,
+not raw `sed` extraction of `AUTH_MODE`. Deployment compares the initial and
+secret-verified method plans before proceeding. This is not a whole-file lock or
+a live configuration apply mechanism; do not edit configuration during deployment.
+The auth-secret preflight uses independent enabled-method checks rather than an
+exclusive `else if`, preserving root/group/mode/size and OIDC trimmed-length checks.
+Owner-count queries are read-only; query failure, empty/non-numeric results or
+multiple owners fail closed without invoking bootstrap. One existing owner
+retains its credentials. No filesystem/provider/production configuration was
+changed to implement this adapter integration.
+
+Tests use disposable actual credential files and SQLite for the internal builder,
+synthetic file metadata for the privileged secret preflight, and non-privileged
+shell harnesses for owner-count failure branches. They do **not** certify an
+actual root deployment, external IdP or Cloudflare service. Whole reviewed host
+apply, coordinated service cutover and complete deployment acceptance are still
+required before lifting the rollout gate.
+
 ### Method-aware browser UI (D2b, UI portion)
 
 Login and administrator user controls now read the public `/auth/config`

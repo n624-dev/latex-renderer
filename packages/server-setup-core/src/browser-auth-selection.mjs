@@ -127,6 +127,27 @@ export function isBrowserAuthenticationMethodEnabled(selection, method) {
   );
 }
 
+// A single source for credential requirements and the approved bootstrap policy.
+export function browserAuthenticationRequirements(input) {
+  const selection = validateBrowserAuthenticationSelection(input);
+  const passwordEnabled = isBrowserAuthenticationMethodEnabled(
+    selection,
+    "password",
+  );
+  const oidcEnabled = isBrowserAuthenticationMethodEnabled(selection, "oidc");
+  return Object.freeze({
+    passwordEnabled,
+    oidcEnabled,
+    bootstrapMethod:
+      selection.backend === "cloudflare-access"
+        ? "cloudflare-access"
+        : passwordEnabled
+          ? "password"
+          : "oidc",
+    followUpOidcRegistration: passwordEnabled && oidcEnabled,
+  });
+}
+
 // A deliberate rollout gate. Deployment/bootstrap/UI still expect AUTH_MODE;
 // never ignore new keys or let only the runtime adopt a new auth configuration.
 export function legacyBrowserAuthenticationMode(values) {
