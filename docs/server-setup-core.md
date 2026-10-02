@@ -6,7 +6,9 @@ layer for the self-host setup work in issues #50–#52. It is separate from
 
 This milestone provides a pure production-profile parser, a structured review
 model and the exact validation used by the privileged deployment preflight.
-It does **not** provide a completed wizard or apply configuration.
+It does **not** provide a completed wizard. A separate privileged host adapter
+can apply a reviewed authentication-only change; see
+[the authentication cutover runbook](authentication-cutover.md).
 
 ## Existing installations stay unchanged
 
@@ -70,8 +72,8 @@ the existing default allowlist. Import/review does not rewrite installed files.
 
 Core now also provides `browserAuthenticationFromMode`,
 `parseBrowserAuthenticationSelection`, `validateBrowserAuthenticationSelection`
-and `isBrowserAuthenticationMethodEnabled`. These are **internal building blocks,
-not a supported new host configuration yet**. They read caller-supplied values
+and `isBrowserAuthenticationMethodEnabled`. They support explicit host
+configuration and read caller-supplied values
 and return a detached, frozen, non-secret selection:
 
 ```js
@@ -126,9 +128,8 @@ before starting them with one consistent configuration; this is not a live
 reload API. A stale instance could otherwise still create sessions under its
 previous configuration. Existing session-use/security-version checks remain in
 place. Restart/re-enable and startup failure recovery are tested using disposable
-SQLite databases, not the production database. Reviewed host apply, dual-method
-secret/credential wiring and all deployment/bootstrap consumers still need
-integration before host-level opt-in is enabled.
+SQLite databases, not the production database. The privileged authentication
+adapter coordinates these consumers and journals configuration recovery.
 
 External identities continue to require explicit provider/issuer/subject
 provisioning. Matching email addresses never link accounts automatically.
@@ -137,14 +138,12 @@ JWT verification and its existing legacy identity migration are retained.
 Public auth configuration adds backend/method metadata, without exposing
 issuer/client secrets/peppers; existing single-mode fields remain compatible.
 
-**Do not replace `AUTH_MODE` in an installed `renderer.env` yet.** The production
-preflight and runtime both call `legacyBrowserAuthenticationMode`, which rejects
-new backend/method keys before secret reads or provider/DB operations. The legacy
-profile parser retains these keys specifically so they cannot be silently
-ignored during import. Deployment, bootstrap and reviewed apply integration
-remain pending; the rollout gate stays until they and
-their end-to-end tests are complete. No service or production setting changes
-are part of this foundation.
+Production preflight and runtime accept either legacy `AUTH_MODE` or explicit
+`AUTH_BACKEND` with native method flags; they must not be mixed. The format-1
+JSON/import API remains legacy-only: use the format-2 review API instead of
+silently losing a method or label. Existing installations retain their behavior
+on upgrade. Use reviewed cutover, not live file edits, to change installed policy.
+Implementing this feature does not change production authentication settings.
 
 ### Shared runtime / privileged deployment requirements
 
@@ -159,16 +158,16 @@ The runtime environment entry point now uses an internal selection-aware builder
 Enabled methods alone read their credential files; disabled methods do not read
 their stale/missing files. Both enabled methods must be constructed successfully
 before session retirement. The builder is not exported by the public auth barrel,
-and the environment entry point retains the rollout gate before any I/O.
+and the environment entry point validates selection before any I/O.
 
 `productionAuthenticationPlan(values)` validates the complete production profile
-and returns only a frozen non-secret execution plan. New installed keys are still
-gated. The existing format-1 profile API and default privileged validator command
+and returns only a frozen non-secret execution plan. The existing format-1
+profile API and default privileged validator command
 remain compatible. The privileged adapter has these explicit modes:
 
 - `RENDERER_ENV_FILE`: validate environment ownership/mode/size and all enabled
   auth secrets, then print the existing safe success summary.
-- `RENDERER_ENV_FILE --profile-plan`: validate the file and complete profile/gate,
+- `RENDERER_ENV_FILE --profile-plan`: validate the file and complete profile,
   returning JSON **without certifying secret readiness**. Deployment uses this
   before generating a missing Password pepper, so invalid profiles are rejected
   before that mutation.
@@ -192,9 +191,10 @@ changed to implement this adapter integration.
 Tests use disposable actual credential files and SQLite for the internal builder,
 synthetic file metadata for the privileged secret preflight, and non-privileged
 shell harnesses for owner-count failure branches. They do **not** certify an
-actual root deployment, external IdP or Cloudflare service. Whole reviewed host
-apply, coordinated service cutover and complete deployment acceptance are still
-required before lifting the rollout gate.
+actual root deployment, external IdP or Cloudflare service. Authentication
+transaction tests include actual temporary files, injected service failures and
+SIGKILL/reopened-store recovery. CUI/Web server setup, ingress and owner creation
+through the shared wizard remain separate unfinished milestones.
 
 ### Method-aware browser UI (D2b, UI portion)
 
@@ -214,9 +214,8 @@ the owner signed in with OIDC. Users with both links show both in the list.
 Server-side role, provisioning and authentication checks remain authoritative.
 Email addresses still never auto-link identities.
 
-These UI changes **do not enable dual-method host configuration**. The same
-runtime/preflight gate remains until deployment/bootstrap and reviewed session
-retirement have been integrated. Real Chromium regression tests execute the
+These UI changes are connected to dual-method runtime/preflight and the reviewed
+host adapter. Real Chromium regression tests execute the
 compiled browser assets against isolated API fixtures; they do not certify an
 external OIDC provider, Cloudflare deployment or production login.
 
@@ -290,12 +289,10 @@ Password bootstrap without follow-up; OIDC-only and Access retain external
 identity bootstrap. This function **only returns the policy**, not credentials,
 owner creation, provider discovery or a completed CUI/Web setup.
 
-**Format-2 output is not a deployable host configuration yet.** The runtime and
-privileged preflight still reject `AUTH_BACKEND`. The export returns only
+Runtime and privileged preflight accept format-2 authentication. The export returns only
 non-secret profile keys and is not a complete `renderer.env`; never use it to
-replace an installed environment. Runtime/deployment/bootstrap integration and
-persistent session retirement remain prerequisites for removing the rollout
-gate. Review/migration/owner planning do not read host secrets, contact providers,
+replace an installed environment; use the reviewed host adapter to merge changes.
+Review/migration/owner planning do not read host secrets, contact providers,
 write files or mutate a database.
 
 ```sh

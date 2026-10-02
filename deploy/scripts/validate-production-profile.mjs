@@ -49,6 +49,14 @@ function main() {
     );
     return;
   }
+  // Do not deploy another release over an interrupted configuration cutover.
+  // Even a committed-but-uncleaned journal requires explicit recovery first.
+  try {
+    lstatSync("/etc/latex-renderer/authentication-transaction/journal.json");
+    throw new Error("Recover the authentication transaction before deployment");
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
   const action = process.argv[3];
   if (
     process.argv.length !== (action === undefined ? 3 : 4) ||
@@ -70,7 +78,7 @@ function main() {
     parseEnvironmentFile(readFileSync(environmentPath, "utf8")),
   );
   // Profile-only planning is used before generating a missing password pepper.
-  // It validates the complete profile and gate, but certifies no secret files.
+  // It validates the complete profile, but certifies no secret files.
   if (action !== "--profile-plan")
     verifyProductionAuthSecrets(profile, rendererGid);
   if (action !== undefined)

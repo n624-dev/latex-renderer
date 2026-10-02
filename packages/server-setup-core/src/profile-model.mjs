@@ -6,6 +6,7 @@ import {
   profileRecord as record,
   profileText as text,
 } from "./profile-shape.mjs";
+import { legacyBrowserAuthenticationMode } from "./browser-auth-selection.mjs";
 
 // Format 1 intentionally models the existing single-method production profile.
 // Password+OIDC, ingress/TLS apply and owner creation are separate milestones;
@@ -23,6 +24,9 @@ export function serverSetupProfileEnvironment(input) {
 }
 
 function profileFromValues(values) {
+  // Format 1 cannot represent two methods or a presentation label. Never
+  // silently drop new configuration while importing into the old model.
+  legacyBrowserAuthenticationMode(values);
   const summary = validateProfileValues(values);
   const deployment = {
     mode: summary.deploymentMode,

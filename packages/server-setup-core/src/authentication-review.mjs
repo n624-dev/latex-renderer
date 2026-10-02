@@ -8,7 +8,6 @@ import {
   parseBrowserAuthenticationSelection,
   validateBrowserAuthenticationSelection,
   browserAuthenticationRequirements,
-  legacyBrowserAuthenticationMode,
 } from "./browser-auth-selection.mjs";
 import { profileRecord as record } from "./profile-shape.mjs";
 
@@ -19,8 +18,7 @@ const SELECTION_KEYS = [
   "OIDC_DISPLAY_NAME",
 ];
 
-// Explicit review API only. Production/runtime adapters retain their rollout
-// gate. Every enabled method must pass existing production-profile validation.
+// Every enabled method must pass existing production-profile validation.
 export function importServerSetupAuthenticationReview(contents) {
   const values = parseEnvironmentFile(contents);
   const selection = parseBrowserAuthenticationSelection(values);
@@ -185,11 +183,9 @@ export function serverSetupInitialOwnerPlan(input) {
   });
 }
 
-// Host consumers share this gated, validated, non-secret execution plan. The
-// legacy profile APIs remain unchanged and new installed configurations still
-// fail before any file/secret mutation. No full EnvironmentFile is exported.
+// Host consumers share this validated, non-secret execution plan. Format-1
+// profile APIs remain legacy-only. No full EnvironmentFile is exported.
 export function productionAuthenticationPlan(values) {
-  legacyBrowserAuthenticationMode(values);
   const review = importServerSetupAuthenticationReview(
     environmentContents(values),
   );

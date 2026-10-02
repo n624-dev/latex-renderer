@@ -1,0 +1,22 @@
+[Unit]
+Description=Recover interrupted LaTeX Renderer authentication configuration
+After=local-fs.target
+Before=latex-renderer-image-manager.service latex-renderer-admin-api.service latex-renderer-remote-mcp.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=root
+Group=latex-renderer
+RuntimeDirectory=latex-renderer
+RuntimeDirectoryMode=0770
+RuntimeDirectoryPreserve=yes
+WorkingDirectory=/opt/latex-renderer/current
+ExecStart=/usr/local/bin/node deploy/scripts/configure-authentication.mjs --recover-before-start
+TimeoutStartSec=60
+UMask=0077
+NoNewPrivileges=true
+ProtectHome=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/etc/latex-renderer /run/latex-renderer

@@ -1,6 +1,8 @@
 [Unit]
 Description=LaTeX Renderer TeX Image Manager
 After=network-online.target
+After=latex-renderer-authentication-recovery.service
+Requires=latex-renderer-authentication-recovery.service
 Wants=network-online.target latex-renderer-image-log-cleanup.timer
 Before=latex-renderer-worker.service latex-renderer-internal-api.service latex-renderer-admin-api.service latex-renderer-remote-mcp.service
 

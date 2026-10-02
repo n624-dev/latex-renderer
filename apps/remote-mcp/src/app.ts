@@ -42,7 +42,7 @@ const registerSchema = z
       .optional(),
     response_types: z.array(z.literal("code")).length(1).optional(),
   })
-    .loose();
+  .loose();
 
 const OAUTH_CSRF_COOKIE = "oauth_csrf";
 const OAUTH_CSRF_TOKEN_PATTERN = /^[A-Za-z0-9_-]{32}$/;
@@ -100,6 +100,14 @@ export function createRemoteMcpApp(deps: RemoteMcpAppDependencies) {
     await next();
   });
 
+  // Register after the common Host/security/no-store middleware, just like
+  // other public metadata. Never bypass those checks for readiness traffic.
+  app.get("/auth/config", (c) =>
+    c.json({
+      ...deps.browserAuth.configuration(),
+      publicOrigin: deps.publicOrigin,
+    }),
+  );
   const oauthMetadata = {
       issuer: deps.oauth.issuer,
       authorization_endpoint: `${deps.publicOrigin}/oauth/authorize`,
@@ -193,12 +201,11 @@ export function createRemoteMcpApp(deps: RemoteMcpAppDependencies) {
     deps.browserAuth.requireExactOrigin(c.req.raw);
     const body = await readForm(c.req.raw, 16_384),
       csrf = stringField(body.get("csrf")),
-      cookie = parseCookie(
-        c.req.header("Cookie"),
-        OAUTH_CSRF_TOKEN_PATTERN.test(csrf)
-          ? oauthCsrfCookieName(csrf)
-          : "",
-      ) || parseCookie(c.req.header("Cookie"), OAUTH_CSRF_COOKIE);
+      cookie =
+        parseCookie(
+          c.req.header("Cookie"),
+          OAUTH_CSRF_TOKEN_PATTERN.test(csrf) ? oauthCsrfCookieName(csrf) : "",
+        ) || parseCookie(c.req.header("Cookie"), OAUTH_CSRF_COOKIE);
     if (!safeEqual(csrf, cookie))
       throw new AppError(
         "OAUTH_CSRF",

@@ -1,4 +1,7 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
 import {
   ApiKeyService,
@@ -12,8 +15,15 @@ import {
 import { RendererDatabase } from "@latex-renderer/database";
 import type { BrowserAuthenticationSelection } from "../packages/server-setup-core/src/index.mjs";
 import { createAdminApp } from "../apps/admin-api/src/app.js";
+import { createRemoteMcpApp } from "../apps/remote-mcp/src/app.js";
+import { createRemoteMcpHandler } from "../apps/remote-mcp/src/mcp.js";
+import {
+  RemoteOAuthService,
+  RemoteRenderService,
+} from "../packages/remote-mcp-core/src/index.js";
 
 const databases: RendererDatabase[] = [];
+const directories: string[] = [];
 const origin = "https://renderer.example.test";
 const issuer = "https://identity.example.test/tenant";
 const password = "a correct horse battery staple 2026";
@@ -24,9 +34,107 @@ const dual = {
 } as const;
 afterEach(() => {
   for (const database of databases.splice(0)) database.close();
+  for (const directory of directories.splice(0))
+    rmSync(directory, { recursive: true });
+  vi.restoreAllMocks();
 });
 
 describe("per-method browser authentication policy", () => {
+  it("uses the installed dual-method environment through real Admin/Remote MCP routes and selective cutover", async () => {
+    const f = await fixture("owner-subject", true);
+    const config = await f.app.request(`${origin}/auth/config`);
+    expect(await config.json()).toMatchObject({
+      backend: "native",
+      mode: "native",
+      methods: [
+        { id: "password" },
+        { id: "oidc", displayName: "School Account" },
+      ],
+    });
+    const passwordSession = await f.passwordLogin(),
+      oidcSession = await f.oidcLogin();
+    const remoteAuth = f.fromEnvironment("CLOUDFLARE_REMOTE_MCP_AUDIENCE");
+    const oauth = new RemoteOAuthService(f.database, origin, `${origin}/mcp`);
+    const remote = createRemoteMcpApp({
+      database: f.database,
+      browserAuth: remoteAuth,
+      oauth,
+      mcp: createRemoteMcpHandler(
+        new RemoteRenderService(f.database, "/nonexistent", "fixture", origin),
+        "fixture",
+      ),
+      publicOrigin: origin,
+    });
+    expect(
+      await (
+        await remote.request(`${origin}/auth/config`, {
+          headers: { Host: new URL(origin).host },
+        })
+      ).json(),
+    ).toEqual(await (await f.app.request(`${origin}/auth/config`)).json());
+    const policyResponse = await remote.request(`${origin}/auth/config`, {
+      headers: { Host: new URL(origin).host },
+    });
+    expect(policyResponse.headers.get("Cache-Control")).toContain("no-store");
+    expect(policyResponse.headers.get("X-Content-Type-Options")).toBe(
+      "nosniff",
+    );
+    expect(
+      (
+        await remote.request(`${origin}/auth/config`, {
+          headers: { Host: "untrusted.example.test" },
+        })
+      ).status,
+    ).toBe(400);
+    const client = oauth.registerClient({
+      clientName: "Fixture",
+      redirectUris: ["http://127.0.0.1:8765/callback"],
+    });
+    const query = new URLSearchParams({
+      client_id: client.clientId,
+      redirect_uri: "http://127.0.0.1:8765/callback",
+      response_type: "code",
+      resource: `${origin}/mcp`,
+      scope: "mcp:read",
+      state: "fixture-state",
+      code_challenge: "a".repeat(43),
+      code_challenge_method: "S256",
+    });
+    for (const session of [passwordSession, oidcSession]) {
+      const response = await remote.request(
+        `${origin}/oauth/authorize?${query.toString()}`,
+        {
+          headers: {
+            Host: new URL(origin).host,
+            Cookie: `${SESSION_COOKIE}=${session.token}; ${CSRF_COOKIE}=${session.csrfToken}`,
+          },
+        },
+      );
+      expect(response.status).toBe(200);
+      expect(await response.text()).toContain("接続を承認");
+      expect(
+        remoteAuth.authenticateSession(request(session.token))?.user.id,
+      ).toBe("user_owner");
+    }
+    const oidcOnly = f.withSelection({
+      backend: "native",
+      passwordEnabled: false,
+      oidcEnabled: true,
+    });
+    expect(
+      oidcOnly.authenticateSession(request(passwordSession.token)),
+    ).toBeUndefined();
+    expect(
+      oidcOnly.authenticateSession(request(oidcSession.token))?.authMode,
+    ).toBe("oidc");
+    const restored = f.fromEnvironment("CLOUDFLARE_ADMIN_AUDIENCE");
+    expect(
+      restored.authenticateSession(request(passwordSession.token)),
+    ).toBeUndefined();
+    expect(
+      restored.authenticateSession(request(oidcSession.token))?.authMode,
+    ).toBe("oidc");
+  });
   it("logs in with both real password derivation and signed OIDC on the same explicitly provisioned user", async () => {
     const f = await fixture();
     const passwordSession = await f.passwordLogin();
@@ -479,7 +587,7 @@ describe("per-method browser authentication policy", () => {
     },
   );
 
-  it("rejects environment opt-in before reading secrets or mutating the database", () => {
+  it("rejects incomplete dual credentials before mutating the database", () => {
     const database = new RendererDatabase(":memory:");
     databases.push(database);
     database.migrate();
@@ -492,7 +600,7 @@ describe("per-method browser authentication policy", () => {
         AUTH_OIDC_ENABLED: "true",
         OIDC_CLIENT_SECRET_FILE: "/must-not-be-read",
       }),
-    ).toThrow(/not deployable yet/);
+    ).toThrow();
     expect(
       database.raw
         .prepare("SELECT count(*) AS count FROM user_identities")
@@ -501,7 +609,10 @@ describe("per-method browser authentication policy", () => {
   });
 });
 
-async function fixture(providerSubject = "owner-subject") {
+async function fixture(
+  providerSubject = "owner-subject",
+  environmentFactory = false,
+) {
   const database = new RendererDatabase(":memory:");
   databases.push(database);
   database.migrate();
@@ -521,46 +632,93 @@ async function fixture(providerSubject = "owner-subject") {
     use: "sig",
   };
   let nonce = "";
+  const providerFetch: typeof fetch = async (input) => {
+    const url = input instanceof Request ? input.url : input.toString();
+    if (url.endsWith("/.well-known/openid-configuration"))
+      return Response.json({
+        issuer,
+        authorization_endpoint: `${issuer}/authorize`,
+        token_endpoint: `${issuer}/token`,
+        jwks_uri: `${issuer}/jwks`,
+        response_types_supported: ["code"],
+        code_challenge_methods_supported: ["S256"],
+      });
+    if (url === `${issuer}/jwks`) return Response.json({ keys: [jwk] });
+    if (url === `${issuer}/token`)
+      return Response.json({
+        id_token: await new SignJWT({ nonce, email: "same@example.test" })
+          .setProtectedHeader({ alg: "RS256", kid: "fixture-key" })
+          .setIssuer(issuer)
+          .setSubject(providerSubject)
+          .setAudience("fixture-client")
+          .setIssuedAt()
+          .setExpirationTime("1h")
+          .sign(privateKey),
+      });
+    throw new Error("Unexpected fixture provider request");
+  };
   const oidc = new OidcClient({
     issuer,
     clientId: "fixture-client",
     clientSecret: "fixture-client-secret-marker",
     publicOrigin: origin,
-    fetchImpl: async (input) => {
-      const url = input instanceof Request ? input.url : input.toString();
-      if (url.endsWith("/.well-known/openid-configuration"))
-        return Response.json({
-          issuer,
-          authorization_endpoint: `${issuer}/authorize`,
-          token_endpoint: `${issuer}/token`,
-          jwks_uri: `${issuer}/jwks`,
-          response_types_supported: ["code"],
-          code_challenge_methods_supported: ["S256"],
-        });
-      if (url === `${issuer}/jwks`) return Response.json({ keys: [jwk] });
-      if (url === `${issuer}/token`)
-        return Response.json({
-          id_token: await new SignJWT({ nonce, email: "same@example.test" })
-            .setProtectedHeader({ alg: "RS256", kid: "fixture-key" })
-            .setIssuer(issuer)
-            .setSubject(providerSubject)
-            .setAudience("fixture-client")
-            .setIssuedAt()
-            .setExpirationTime("1h")
-            .sign(privateKey),
-        });
-      throw new Error("Unexpected fixture provider request");
-    },
+    fetchImpl: providerFetch,
   });
+  let credentialDirectory = "";
+  if (environmentFactory) {
+    credentialDirectory = mkdtempSync(
+      join(tmpdir(), "auth-consumer-acceptance-"),
+    );
+    directories.push(credentialDirectory);
+    writeFileSync(
+      join(credentialDirectory, "auth-password-pepper"),
+      Buffer.alloc(32, 7),
+      { mode: 0o600 },
+    );
+    writeFileSync(
+      join(credentialDirectory, "oidc-client-secret"),
+      "fixture-client-secret-marker",
+      { mode: 0o600 },
+    );
+    vi.spyOn(globalThis, "fetch").mockImplementation(providerFetch);
+  }
+  const fromEnvironment = (
+    audience: string,
+    selection: BrowserAuthenticationSelection = {
+      ...dual,
+      oidcDisplayName: "School Account",
+    },
+  ) => {
+    if (selection.backend !== "native") throw new Error("Native fixture only");
+    return createBrowserAuthenticationFromEnvironment(database, audience, {
+      DEPLOYMENT_MODE: "standalone",
+      PUBLIC_ORIGIN: origin,
+      AUTH_BACKEND: "native",
+      AUTH_PASSWORD_ENABLED: String(selection.passwordEnabled),
+      AUTH_OIDC_ENABLED: String(selection.oidcEnabled),
+      ...(selection.oidcEnabled
+        ? {
+            OIDC_ISSUER: issuer,
+            OIDC_CLIENT_ID: "fixture-client",
+            ...(selection.oidcDisplayName
+              ? { OIDC_DISPLAY_NAME: selection.oidcDisplayName }
+              : {}),
+          }
+        : {}),
+      CREDENTIALS_DIRECTORY: credentialDirectory,
+    }).browserAuth;
+  };
   const withSelection = (selection: BrowserAuthenticationSelection) =>
-    new BrowserAuthenticationService({
-      database,
-      selection,
-      publicOrigin: origin,
-      oidc,
-      passwordPepper: Buffer.alloc(32, 7),
-      scryptLogN: 12,
-    });
+    environmentFactory
+      ? fromEnvironment("CLOUDFLARE_ADMIN_AUDIENCE", selection)
+      : new BrowserAuthenticationService({
+          database,
+          selection,
+          publicOrigin: origin,
+          oidc,
+          passwordPepper: Buffer.alloc(32, 7),
+          scryptLogN: 12,
+        });
   const service = withSelection({ ...dual, oidcDisplayName: "School Account" });
   await service.createPasswordCredential({
     userId: "user_owner",
@@ -608,6 +766,7 @@ async function fixture(providerSubject = "owner-subject") {
     service,
     app,
     oidc,
+    fromEnvironment,
     withSelection,
     oidcLogin,
     passwordLogin: () => service.loginPassword(loginInput()),

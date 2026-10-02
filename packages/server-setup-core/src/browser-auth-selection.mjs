@@ -148,13 +148,12 @@ export function browserAuthenticationRequirements(input) {
   });
 }
 
-// A deliberate rollout gate. Deployment/bootstrap/UI still expect AUTH_MODE;
-// never ignore new keys or let only the runtime adopt a new auth configuration.
+// Legacy format-1 and single-method CLI boundary, not a production rollout gate.
 export function legacyBrowserAuthenticationMode(values) {
   const selection = parseBrowserAuthenticationSelection(values);
   if (SELECTION_KEYS.some((key) => values.has(key)))
     throw new Error(
-      "AUTH_BACKEND configuration is not deployable yet; keep AUTH_MODE until deployment and UI integration is complete",
+      "Format-1 profiles require AUTH_MODE; use the format-2 authentication review for AUTH_BACKEND",
     );
   return selection.backend === "cloudflare-access"
     ? "cloudflare-access"

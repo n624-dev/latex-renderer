@@ -1,6 +1,8 @@
 [Unit]
 Description=LaTeX Renderer Admin API
 After=network-online.target latex-renderer-image-manager.service latex-renderer-update-manager.service
+After=latex-renderer-authentication-recovery.service
+Requires=latex-renderer-authentication-recovery.service
 Wants=network-online.target latex-renderer-image-manager.service latex-renderer-update-manager.service
 
 [Service]

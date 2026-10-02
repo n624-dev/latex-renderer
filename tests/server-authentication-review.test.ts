@@ -201,18 +201,16 @@ describe("shared format-2 authentication review", () => {
     );
   });
 
-  it("keeps runtime and privileged deployment gated before secret or database operations", () => {
+  it("enables format-2 deployment but keeps format-1 lossless and missing credentials fail closed", () => {
     const values = environmentMap(importReview(environment()));
     expect(deployment.validateProfileValues).toBe(validateProfileValues);
-    expect(() => validateProfileValues(values)).toThrow("not deployable yet");
-    expect(() => deployment.validateProfileValues(values)).toThrow(
-      "not deployable yet",
-    );
+    expect(validateProfileValues(values).authMode).toBe("native");
+    expect(deployment.validateProfileValues(values).authMode).toBe("native");
     expect(() => legacyBrowserAuthenticationMode(values)).toThrow(
-      "not deployable yet",
+      "Format-1 profiles",
     );
     expect(() => importServerSetupProfile(serialize(values))).toThrow(
-      "not deployable yet",
+      "Format-1 profiles",
     );
     const database = new RendererDatabase(":memory:");
     try {
@@ -222,7 +220,7 @@ describe("shared format-2 authentication review", () => {
           "CLOUDFLARE_ADMIN_AUDIENCE",
           Object.fromEntries(values),
         ),
-      ).toThrow("not deployable yet");
+      ).toThrow("AUTH_PASSWORD_PEPPER_FILE");
       expect(
         database.raw
           .prepare(

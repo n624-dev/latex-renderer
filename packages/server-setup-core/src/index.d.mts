@@ -1,5 +1,5 @@
 export interface ValidatedProductionProfile {
-  authMode: "cloudflare-access" | "oidc" | "password";
+  authMode: "cloudflare-access" | "oidc" | "password" | "native";
   deploymentMode: "cloudflare" | "standalone";
   publicOrigin: string;
 }
@@ -35,7 +35,7 @@ export interface BrowserAuthenticationRequirements {
 export function browserAuthenticationRequirements(
   input: unknown,
 ): Readonly<BrowserAuthenticationRequirements>;
-/** Validated non-secret host plan; the new-config rollout gate still applies. */
+/** Validated non-secret host plan for legacy and format-2 authentication. */
 export interface ProductionAuthenticationPlan extends BrowserAuthenticationRequirements {
   readonly deploymentMode: "cloudflare" | "standalone";
   readonly publicOrigin: string;
@@ -45,7 +45,7 @@ export interface ProductionAuthenticationPlan extends BrowserAuthenticationRequi
 export function productionAuthenticationPlan(
   values: ReadonlyMap<string, string>,
 ): Readonly<ProductionAuthenticationPlan>;
-/** Rollout gate for adapters that still require the existing AUTH_MODE profile. */
+/** Legacy format-1 boundary; rejects new keys instead of losing methods. */
 export function legacyBrowserAuthenticationMode(
   values: ReadonlyMap<string, string>,
 ): "cloudflare-access" | "password" | "oidc";
@@ -112,7 +112,7 @@ export type ServerSetupAuthenticationReviewMethod =
       }>;
     }>;
 
-/** Format 2 is review-only until all host/runtime consumers are integrated. */
+/** Format 2 preserves all configured authentication methods. */
 export interface ServerSetupAuthenticationReview {
   readonly format: 2;
   readonly deployment: ServerSetupProfile["deployment"];
@@ -128,7 +128,7 @@ export function migrateServerSetupAuthenticationReview(
 export function validateServerSetupAuthenticationReview(
   input: unknown,
 ): ServerSetupAuthenticationReview;
-/** Non-secret profile keys only; the output still fails the host rollout gate. */
+/** Non-secret profile keys only; never replace a complete EnvironmentFile. */
 export function serverSetupAuthenticationReviewEnvironment(
   input: unknown,
 ): Map<string, string>;

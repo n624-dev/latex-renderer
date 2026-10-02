@@ -1,5 +1,5 @@
 import { URL } from "node:url";
-import { legacyBrowserAuthenticationMode } from "./browser-auth-selection.mjs";
+import { parseBrowserAuthenticationSelection } from "./browser-auth-selection.mjs";
 
 const PROFILE_KEYS = new Set([
   "ADMIN_API_URL",
@@ -56,11 +56,16 @@ export function validateProfileValues(values) {
   const deploymentMode = required(values, "DEPLOYMENT_MODE");
   if (deploymentMode !== "cloudflare" && deploymentMode !== "standalone")
     throw new Error("DEPLOYMENT_MODE must be cloudflare or standalone");
-  const authMode = legacyBrowserAuthenticationMode(values);
-  // Retain the stricter production placeholder/whitespace checks as well.
-  required(values, "AUTH_MODE");
-  if (!["cloudflare-access", "oidc", "password"].includes(authMode))
-    throw new Error("AUTH_MODE must be cloudflare-access, oidc, or password");
+  const selection = parseBrowserAuthenticationSelection(values);
+  if (values.has("AUTH_MODE")) required(values, "AUTH_MODE");
+  const authMode =
+    selection.backend === "cloudflare-access"
+      ? "cloudflare-access"
+      : selection.passwordEnabled && selection.oidcEnabled
+        ? "native"
+        : selection.passwordEnabled
+          ? "password"
+          : "oidc";
   if (deploymentMode === "standalone" && authMode === "cloudflare-access")
     throw new Error(
       "AUTH_MODE=cloudflare-access requires DEPLOYMENT_MODE=cloudflare",
@@ -99,7 +104,7 @@ export function validateProfileValues(values) {
       if (!/^[A-Za-z0-9_-]{16,500}$/.test(audience))
         throw new Error(`${key} has an invalid format`);
     }
-  } else if (authMode === "oidc") {
+  } else if (selection.oidcEnabled) {
     strictHttpsUrl(required(values, "OIDC_ISSUER"), "OIDC_ISSUER");
     const clientId = required(values, "OIDC_CLIENT_ID");
     if (

@@ -220,7 +220,7 @@ describe("durable browser-session policy retirement", () => {
     expect(audits(database)).toHaveLength(0);
   });
 
-  it.each(["missing-secret", "invalid-origin", "new-model-gated"] as const)(
+  it.each(["missing-secret", "invalid-origin", "mixed-model"] as const)(
     "invalid configuration (%s) does not retire sessions",
     (failure) => {
       const database = fixture();
@@ -232,7 +232,6 @@ describe("durable browser-session policy retirement", () => {
       else if (failure === "invalid-origin")
         environment.PUBLIC_ORIGIN = "http://insecure.example.test";
       else {
-        delete environment.AUTH_MODE;
         environment.AUTH_BACKEND = "native";
         environment.AUTH_PASSWORD_ENABLED = "true";
         environment.AUTH_OIDC_ENABLED = "true";
