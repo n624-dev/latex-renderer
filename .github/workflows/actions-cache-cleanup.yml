@@ -4,10 +4,6 @@ on:
   schedule:
     - cron: "23 19 * * *"
   workflow_dispatch:
-  workflow_run:
-    workflows:
-      [ci, renderer-image, renderer-image-daily, security, mcpb, server-release]
-    types: [completed]
 
 permissions:
   actions: write
@@ -21,7 +17,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      # No checkout, artifacts or code from the triggering workflow are used.
+      # Daily/manual safety net only; workflows do not intentionally save caches.
+      # No checkout, artifacts or code from other workflows are used.
       # Caches are disposable; this does not delete GHCR images/release assets.
       - name: Remove disposable Actions caches
         env:

@@ -29,6 +29,16 @@ pnpm exec playwright install --only-shell chromium
 pnpm test:browser
 ```
 
+For a cache-free local run of the optimized normal CI path, build once with
+`pnpm check`, then run `pnpm test:browser:built` and `pnpm verify:mcpb`.
+`test:browser:built` requires fresh workspace output from the same checkout;
+use `test:browser` when no fresh build has run. Recursive workspace build already
+generates the signed MCPB, Windows/client distribution, Gateway Worker dry-run
+bundle, and public Worker assets/preview, so CI does not build them again.
+Normal CI measures the five `check` phases separately and keeps the `validate`
+required-check name. It does not exchange build artifacts between jobs or use
+Actions caches. See [Actions efficiency](docs/actions-efficiency.md).
+
 On a fresh Linux test machine, use `playwright install --with-deps --only-shell chromium`
 to install OS dependencies (requires administrator privileges). Do not run this
 privileged setup on a production host without approval. CI installs the pinned

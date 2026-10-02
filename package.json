@@ -19,6 +19,7 @@
     "typecheck": "pnpm --filter @latex-renderer/gateway-worker typecheck && tsc -p tsconfig.json",
     "test": "vitest run",
     "test:browser": "pnpm --filter @latex-renderer/web build && vitest run --config vitest.browser.config.ts",
+    "test:browser:built": "vitest run --config vitest.browser.config.ts",
     "test:watch": "vitest",
     "lint": "eslint .",
     "check:docs": "tsx docs-check.ts",
