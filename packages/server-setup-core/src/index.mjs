@@ -14,6 +14,7 @@ export {
   parseBrowserAuthenticationSelection,
   validateBrowserAuthenticationSelection,
   isBrowserAuthenticationMethodEnabled,
+  browserAuthenticationRequirements,
   legacyBrowserAuthenticationMode,
 } from "./browser-auth-selection.mjs";
 export {
@@ -22,4 +23,5 @@ export {
   validateServerSetupAuthenticationReview,
   serverSetupAuthenticationReviewEnvironment,
   serverSetupInitialOwnerPlan,
+  productionAuthenticationPlan,
 } from "./authentication-review.mjs";

@@ -13,7 +13,7 @@ admin_cli=/opt/latex-renderer/current/apps/admin-local/dist/index.js
 env_file=/etc/latex-renderer/renderer.env
 owner_name=${LATEX_RENDER_OWNER_NAME:-}
 owner_email=${LATEX_RENDER_OWNER_EMAIL:-}
-auth_mode=$(sed -n 's/^AUTH_MODE=//p' "$env_file" | tail -n 1)
+profile_validator=/opt/latex-renderer/current/deploy/scripts/validate-production-profile.mjs
 
 if [ -z "$owner_name" ]; then
   echo "LATEX_RENDER_OWNER_NAME is required" >&2
@@ -21,14 +21,15 @@ if [ -z "$owner_name" ]; then
 fi
 case "$owner_name$owner_email" in *"'"*|*"
 "*) echo "owner attributes must not contain quotes or newlines" >&2; exit 64 ;; esac
-case "$auth_mode" in cloudflare-access|oidc|password) ;; *) echo "AUTH_MODE is invalid" >&2; exit 64 ;; esac
 if [ ! -f "$api_pepper" ] || [ ! -f "$admin_cli" ]; then
   echo "host preparation is incomplete" >&2
   exit 66
 fi
-/usr/local/bin/node \
-  /opt/latex-renderer/current/deploy/scripts/validate-production-profile.mjs \
-  "$env_file"
+profile_plan=$(/usr/local/bin/node "$profile_validator" "$env_file" --plan)
+profile_field() {
+  /usr/local/bin/node "$profile_validator" --plan-field "$1" "$profile_plan"
+}
+auth_mode=$(profile_field bootstrapMethod)
 
 set -- bootstrap --auth-mode "$auth_mode" --display-name "$owner_name"
 [ -z "$owner_email" ] || set -- "$@" --email "$owner_email"
@@ -56,7 +57,7 @@ case "$auth_mode" in
     ;;
   cloudflare-access)
     owner_subject=${LATEX_RENDER_OWNER_SUBJECT:-${LATEX_RENDER_OWNER_ACCESS_SUBJECT:-}}
-    owner_issuer=$(sed -n 's/^CLOUDFLARE_ACCESS_ISSUER=//p' "$env_file" | tail -n 1)
+    owner_issuer=$(profile_field externalIssuer)
     [ -n "$owner_subject" ] && [ -n "$owner_issuer" ] || { echo "Cloudflare bootstrap requires LATEX_RENDER_OWNER_SUBJECT and CLOUDFLARE_ACCESS_ISSUER" >&2; exit 64; }
     case "$owner_subject$owner_issuer" in *"'"*|*"
 "*) echo "external identity must not contain quotes or newlines" >&2; exit 64 ;; esac
@@ -64,7 +65,7 @@ case "$auth_mode" in
     ;;
   oidc)
     owner_subject=${LATEX_RENDER_OWNER_SUBJECT:-}
-    owner_issuer=$(sed -n 's/^OIDC_ISSUER=//p' "$env_file" | tail -n 1)
+    owner_issuer=$(profile_field externalIssuer)
     [ -n "$owner_subject" ] && [ -n "$owner_issuer" ] || { echo "OIDC bootstrap requires LATEX_RENDER_OWNER_SUBJECT and OIDC_ISSUER" >&2; exit 64; }
     case "$owner_subject$owner_issuer" in *"'"*|*"
 "*) echo "external identity must not contain quotes or newlines" >&2; exit 64 ;; esac
@@ -72,7 +73,11 @@ case "$auth_mode" in
     ;;
 esac
 
-owner_count=$(sqlite3 "$database" "SELECT COUNT(*) FROM users WHERE role='owner';" 2>/dev/null || printf '0')
+owner_count=$(sqlite3 -readonly "$database" "SELECT COUNT(*) FROM users WHERE role='owner';") || {
+  echo "Cannot determine existing owners; refusing bootstrap" >&2
+  exit 78
+}
+case "$owner_count" in ''|*[!0-9]*) echo "Invalid existing owner count; refusing bootstrap" >&2; exit 78 ;; esac
 if [ "$owner_count" = 0 ]; then
   env \
     DATABASE_PATH="$database" \
@@ -85,6 +90,9 @@ elif [ "$owner_count" = 1 ]; then
 else
   echo "multiple owners already exist; refusing bootstrap automation" >&2
   exit 73
+fi
+if [ "$(profile_field followUpOidcRegistration)" = true ]; then
+  echo "Password owner bootstrap selected. Register OIDC issuer and subject explicitly on the same owner; no automatic linking was performed."
 fi
 
 find /var/lib/latex-renderer -maxdepth 1 -type f -name 'renderer.sqlite3*' \

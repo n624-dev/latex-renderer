@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
 import { lstatSync, readFileSync } from "node:fs";
-import { pathToFileURL } from "node:url";
+import { URL, pathToFileURL } from "node:url";
 
 import {
   parseEnvironmentFile,
-  validateProfileValues,
+  productionAuthenticationPlan,
+  browserAuthenticationRequirements,
 } from "../../packages/server-setup-core/src/index.mjs";
 export {
   parseEnvironmentFile,
@@ -40,8 +41,22 @@ function assertSecureFile(path, options) {
 function main() {
   if (process.geteuid?.() !== 0)
     throw new Error("validate-production-profile.mjs must run as root");
-  if (process.argv.length !== 3)
-    throw new Error("usage: validate-production-profile.mjs RENDERER_ENV_FILE");
+  if (process.argv[2] === "--plan-field") {
+    if (process.argv.length !== 5)
+      throw new Error("Invalid production plan field arguments");
+    process.stdout.write(
+      `${productionAuthPlanField(process.argv[4], process.argv[3])}\n`,
+    );
+    return;
+  }
+  const action = process.argv[3];
+  if (
+    process.argv.length !== (action === undefined ? 3 : 4) ||
+    (action !== undefined && action !== "--profile-plan" && action !== "--plan")
+  )
+    throw new Error(
+      "usage: validate-production-profile.mjs RENDERER_ENV_FILE [--profile-plan|--plan]",
+    );
   const environmentPath = process.argv[2];
   const rendererGid = groupId("latex-renderer");
   assertSecureFile(environmentPath, {
@@ -51,10 +66,23 @@ function main() {
     minimumBytes: 1,
     maximumBytes: 128 * 1024,
   });
-  const profile = validateProfileValues(
+  const profile = productionAuthenticationPlan(
     parseEnvironmentFile(readFileSync(environmentPath, "utf8")),
   );
-  if (profile.authMode === "oidc") {
+  // Profile-only planning is used before generating a missing password pepper.
+  // It validates the complete profile and gate, but certifies no secret files.
+  if (action !== "--profile-plan")
+    verifyProductionAuthSecrets(profile, rendererGid);
+  if (action !== undefined)
+    process.stdout.write(`${JSON.stringify(profile)}\n`);
+  else
+    process.stdout.write(
+      `Production profile verified: ${profile.deploymentMode}/${profile.authMode}\n`,
+    );
+}
+
+export function verifyProductionAuthSecrets(profile, rendererGid) {
+  if (profile.oidcEnabled) {
     const secretPath = "/etc/latex-renderer/secrets/oidc-client-secret";
     assertSecureFile(secretPath, {
       label: "OIDC client secret",
@@ -66,7 +94,8 @@ function main() {
     const length = readFileSync(secretPath, "utf8").trim().length;
     if (length < 16 || length > 4096)
       throw new Error("OIDC client secret has an invalid trimmed length");
-  } else if (profile.authMode === "password") {
+  }
+  if (profile.passwordEnabled) {
     assertSecureFile("/etc/latex-renderer/secrets/auth-password-pepper", {
       label: "password authentication pepper",
       gid: rendererGid,
@@ -75,9 +104,108 @@ function main() {
       maximumBytes: 16 * 1024,
     });
   }
-  process.stdout.write(
-    `Production profile verified: ${profile.deploymentMode}/${profile.authMode}\n`,
-  );
+}
+
+const PLAN_FIELDS = [
+  "deploymentMode",
+  "authMode",
+  "publicOrigin",
+  "passwordEnabled",
+  "oidcEnabled",
+  "bootstrapMethod",
+  "followUpOidcRegistration",
+  "externalIssuer",
+];
+export function productionAuthPlanField(contents, field) {
+  if (!PLAN_FIELDS.includes(field))
+    throw new Error("Unsupported production plan field");
+  let plan;
+  try {
+    plan = JSON.parse(contents);
+  } catch {
+    throw new Error("Invalid production auth plan JSON");
+  }
+  if (
+    plan === null ||
+    typeof plan !== "object" ||
+    Array.isArray(plan) ||
+    Object.keys(plan).length !== PLAN_FIELDS.length ||
+    PLAN_FIELDS.some((key) => !Object.hasOwn(plan, key)) ||
+    Object.keys(plan).some((key) => !PLAN_FIELDS.includes(key))
+  )
+    throw new Error("Invalid production auth plan fields");
+  for (const key of PLAN_FIELDS) {
+    const value = plan[key];
+    if (
+      ["passwordEnabled", "oidcEnabled", "followUpOidcRegistration"].includes(
+        key,
+      )
+    ) {
+      if (typeof value !== "boolean")
+        throw new Error("Invalid production auth plan boolean");
+    } else if (
+      typeof value !== "string" ||
+      value.length > 2048 ||
+      [...value].some(
+        (c) => c.charCodeAt(0) <= 0x1f || c.charCodeAt(0) === 0x7f,
+      )
+    )
+      throw new Error("Invalid production auth plan text");
+  }
+  if (
+    !["cloudflare", "standalone"].includes(plan.deploymentMode) ||
+    !["password", "oidc", "native", "cloudflare-access"].includes(
+      plan.authMode,
+    ) ||
+    (plan.authMode === "cloudflare-access" &&
+      plan.deploymentMode !== "cloudflare")
+  )
+    throw new Error("Invalid production auth plan mode");
+  let requirements;
+  try {
+    requirements = browserAuthenticationRequirements(
+      plan.authMode === "cloudflare-access"
+        ? { backend: "cloudflare-access" }
+        : {
+            backend: "native",
+            passwordEnabled: plan.passwordEnabled,
+            oidcEnabled: plan.oidcEnabled,
+          },
+    );
+  } catch {
+    throw new Error("Invalid production auth plan methods");
+  }
+  const expectedMode =
+    plan.authMode === "cloudflare-access"
+      ? "cloudflare-access"
+      : plan.passwordEnabled && plan.oidcEnabled
+        ? "native"
+        : requirements.bootstrapMethod;
+  if (
+    expectedMode !== plan.authMode ||
+    Object.entries(requirements).some(([key, value]) => plan[key] !== value)
+  )
+    throw new Error("Invalid production auth plan requirements");
+  try {
+    const origin = new URL(plan.publicOrigin);
+    if (origin.protocol !== "https:" || origin.origin !== plan.publicOrigin)
+      throw new Error();
+    if (plan.oidcEnabled || plan.authMode === "cloudflare-access") {
+      const issuer = new URL(plan.externalIssuer);
+      if (
+        issuer.protocol !== "https:" ||
+        issuer.username ||
+        issuer.password ||
+        issuer.search ||
+        issuer.hash ||
+        /[\s\\]/u.test(plan.externalIssuer)
+      )
+        throw new Error();
+    } else if (plan.externalIssuer !== "") throw new Error();
+  } catch {
+    throw new Error("Invalid production auth plan origin or issuer");
+  }
+  return String(plan[field]);
 }
 
 if (
