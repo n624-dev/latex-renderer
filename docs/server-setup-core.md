@@ -115,10 +115,34 @@ issuer/client secrets/peppers; existing single-mode fields remain compatible.
 preflight and runtime both call `legacyBrowserAuthenticationMode`, which rejects
 new backend/method keys before secret reads or provider/DB operations. The legacy
 profile parser retains these keys specifically so they cannot be silently
-ignored during import. Deployment, bootstrap, login/admin DOM and reviewed apply
-integration are the next D2b milestone; the rollout gate stays until they and
+ignored during import. Deployment, bootstrap and reviewed apply integration
+remain pending; the rollout gate stays until they and
 their end-to-end tests are complete. No service or production setting changes
 are part of this foundation.
+
+### Method-aware browser UI (D2b, UI portion)
+
+Login and administrator user controls now read the public `/auth/config`
+capabilities, not the method used by the current session. Only enabled methods
+are added to the login DOM after configuration has been validated. Native
+Password/OIDC combinations show both choices; Cloudflare Access retains its
+existing session endpoint. Legacy configuration responses remain compatible.
+Unknown, malformed or partial configurations fail visibly instead of falling
+back to Cloudflare Access. Provider display names are rendered as plain text.
+
+Administrator user creation offers an explicit method choice when both native
+methods are enabled. Switching methods removes the previous credential inputs;
+only the selected authentication payload is sent, with existing CSRF checks.
+Owner-only password reset controls depend on Password being enabled, even when
+the owner signed in with OIDC. Users with both links show both in the list.
+Server-side role, provisioning and authentication checks remain authoritative.
+Email addresses still never auto-link identities.
+
+These UI changes **do not enable dual-method host configuration**. The same
+runtime/preflight gate remains until deployment/bootstrap and reviewed session
+retirement have been integrated. Real Chromium regression tests execute the
+compiled browser assets against isolated API fixtures; they do not certify an
+external OIDC provider, Cloudflare deployment or production login.
 
 ```sh
 pnpm install --frozen-lockfile
@@ -129,6 +153,7 @@ pnpm --filter @latex-renderer/auth... build
 pnpm exec vitest run tests/browser-auth-selection.test.ts \
   tests/browser-auth-method-policy.test.ts tests/browser-auth-security.test.ts
 pnpm check
+pnpm test:browser
 ```
 
 Tests cover every current deployment/authentication combination, normalized
