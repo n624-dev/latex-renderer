@@ -26,6 +26,8 @@ const authKeys = new Set([
   "CLOUDFLARE_ADMIN_AUDIENCE",
   "CLOUDFLARE_REMOTE_MCP_AUDIENCE",
 ]);
+// Exact-byte optimistic-concurrency fingerprint, NOT a password verifier.
+// Password credentials are managed separately by the runtime's scrypt policy.
 export const authenticationEnvironmentHash = (contents) =>
   createHash("sha256").update(contents).digest("hex");
 

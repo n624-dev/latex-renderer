@@ -155,8 +155,10 @@ export function serverSetupAuthenticationReviewEnvironment(input) {
   values.delete("AUTH_MODE");
   values.set("AUTH_BACKEND", auth.backend);
   if (auth.backend === "native") {
-    values.set("AUTH_PASSWORD_ENABLED", String(auth.passwordEnabled));
-    values.set("AUTH_OIDC_ENABLED", String(auth.oidcEnabled));
+    // These are validated policy flags, not credentials. Emit fixed literals
+    // rather than propagating arbitrary input into the host EnvironmentFile.
+    values.set("AUTH_PASSWORD_ENABLED", auth.passwordEnabled ? "true" : "false");
+    values.set("AUTH_OIDC_ENABLED", auth.oidcEnabled ? "true" : "false");
     if (auth.oidc && Object.hasOwn(auth.oidc, "displayName"))
       values.set("OIDC_DISPLAY_NAME", auth.oidc.displayName);
   }
