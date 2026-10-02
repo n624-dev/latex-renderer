@@ -193,6 +193,39 @@ export class BrowserAuthenticationService {
     return isBrowserAuthenticationMethodEnabled(this.selection, method);
   }
 
+  /**
+   * Apply the validated policy before accepting requests, after old service
+   * instances have stopped. Not a constructor side effect: CLI credential
+   * helpers also construct services and must not change the running policy.
+   */
+  retireIncompatibleSessions(): number {
+    return this.database.transaction(() => {
+      const count = this.database.browserAuth.retireSessionsOutsidePolicy(
+        {
+          passwordEnabled: this.isMethodEnabled("password"),
+          externalProvider: this.externalProvider,
+          externalIssuer: this.externalIssuer,
+        },
+        this.timestamp(),
+      );
+      if (count > 0)
+        this.database.audit({
+          actorType: "system",
+          actorId: "browser-auth",
+          action: "auth.sessions-retired",
+          targetType: "auth-configuration",
+          targetId: "browser",
+          result: "success",
+          metadata: {
+            count,
+            passwordEnabled: this.isMethodEnabled("password"),
+            externalProvider: this.externalProvider ?? null,
+          },
+        });
+      return count;
+    });
+  }
+
   configuration(): {
     mode: BrowserAuthMode | "native";
     backend: "cloudflare-access" | "native";

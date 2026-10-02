@@ -280,10 +280,7 @@ export class BrowserAuthRepository {
     );
   }
 
-  revokeOldestActiveSessions(
-    timestamp: string,
-    maximum: number,
-  ): number {
+  revokeOldestActiveSessions(timestamp: string, maximum: number): number {
     if (maximum <= 0) return 0;
     return Number(
       this.db
@@ -343,6 +340,40 @@ export class BrowserAuthRepository {
           "UPDATE web_sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL",
         )
         .run(timestamp, userId).changes,
+    );
+  }
+
+  retireSessionsOutsidePolicy(
+    policy: {
+      passwordEnabled: boolean;
+      externalProvider?: ExternalIdentityProvider | undefined;
+      externalIssuer?: string | undefined;
+    },
+    timestamp: string,
+  ): number {
+    // One statement, including never-used sessions. A missing external provider
+    // must not become SQL NULL (which could make NOT evaluate to UNKNOWN).
+    return Number(
+      this.db
+        .prepare(
+          `UPDATE web_sessions SET revoked_at=?
+           WHERE revoked_at IS NULL AND NOT (
+             (?=1 AND auth_mode='password' AND identity_id IS NULL)
+             OR EXISTS (
+               SELECT 1 FROM user_identities AS identity
+               WHERE identity.id=web_sessions.identity_id
+                 AND identity.user_id=web_sessions.user_id
+                 AND identity.provider=web_sessions.auth_mode
+                 AND identity.provider=? AND identity.issuer=?
+             )
+           )`,
+        )
+        .run(
+          timestamp,
+          Number(policy.passwordEnabled),
+          policy.externalProvider ?? "",
+          policy.externalIssuer ?? "",
+        ).changes,
     );
   }
 

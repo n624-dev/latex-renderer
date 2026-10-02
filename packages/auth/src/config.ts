@@ -36,7 +36,7 @@ export function createBrowserAuthenticationFromEnvironment(
     );
 
   if (mode === "cloudflare-access") {
-    return {
+    return prepared({
       deploymentMode,
       publicOrigin,
       browserAuth: new BrowserAuthenticationService({
@@ -48,7 +48,7 @@ export function createBrowserAuthenticationFromEnvironment(
           required(environment, audienceVariable),
         ),
       }),
-    };
+    });
   }
 
   if (mode === "oidc") {
@@ -57,7 +57,7 @@ export function createBrowserAuthenticationFromEnvironment(
       "oidc-client-secret",
       "OIDC_CLIENT_SECRET_FILE",
     );
-    return {
+    return prepared({
       deploymentMode,
       publicOrigin,
       browserAuth: new BrowserAuthenticationService({
@@ -78,10 +78,10 @@ export function createBrowserAuthenticationFromEnvironment(
             : {}),
         }),
       }),
-    };
+    });
   }
 
-  return {
+  return prepared({
     deploymentMode,
     publicOrigin,
     browserAuth: new BrowserAuthenticationService({
@@ -94,7 +94,17 @@ export function createBrowserAuthenticationFromEnvironment(
         "AUTH_PASSWORD_PEPPER_FILE",
       ),
     }),
-  };
+  });
+}
+
+function prepared(
+  result: BrowserAuthEnvironmentResult,
+): BrowserAuthEnvironmentResult {
+  // Admin and Remote MCP use this factory before starting their listeners.
+  // Complete retirement durably, or fail startup rather than serve a partial
+  // policy. Repeated starts with the same policy are a no-op.
+  result.browserAuth.retireIncompatibleSessions();
+  return result;
 }
 
 function readSecret(
