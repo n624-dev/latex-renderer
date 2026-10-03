@@ -8,14 +8,26 @@ import {
   existsSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 const source = readFileSync("renderer/install-debian-packages.sh", "utf8");
-const timeoutCommand = ["gnutimeout", "timeout"].find((command) => {
-  const version = spawnSync(command, ["--version"], { encoding: "utf8" });
-  return version.status === 0 && version.stdout.includes("(GNU coreutils)");
-});
+function resolveGnuTimeout(searchPath = process.env.PATH ?? "") {
+  // Resolve before prepending the fixture bin directory. A bare "timeout"
+  // would recursively execute our own wrapper on GitHub-hosted runners.
+  for (const name of ["gnutimeout", "timeout"])
+    for (const directory of searchPath.split(delimiter)) {
+      const command = resolve(directory, name);
+      const version = spawnSync(command, ["--version"], {
+        encoding: "utf8",
+        timeout: 1_000,
+      });
+      if (version.status === 0 && version.stdout.includes("(GNU coreutils)"))
+        return command;
+    }
+}
+const timeoutCommand = resolveGnuTimeout();
+const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 const roots: string[] = [];
 afterEach(() => {
   for (const root of roots.splice(0)) {
@@ -36,8 +48,8 @@ afterEach(() => {
     rmSync(root, { recursive: true, force: true });
   }
 });
-function fixture() {
-  if (!timeoutCommand)
+function fixture(timeoutExecutable = timeoutCommand) {
+  if (!timeoutExecutable)
     throw new Error("GNU timeout or gnutimeout is required to match Debian");
   const root = mkdtempSync(join(tmpdir(), "debian-acquisition-"));
   roots.push(root);
@@ -64,7 +76,7 @@ function fixture() {
   writeFileSync(script, body);
   writeFileSync(
     join(root, "bin/timeout"),
-    `#!/bin/sh\nexec ${timeoutCommand} "$@"\n`,
+    `#!/bin/sh\nexec ${shellQuote(timeoutExecutable)} "$@"\n`,
     { mode: 0o700 },
   );
   writeFileSync(
@@ -120,9 +132,44 @@ printf 'z-package\\t2\\na-package\\t1\\n'
 describe.skipIf(process.platform === "win32")(
   "bounded signed Debian acquisition",
   () => {
+    it("resolves a timeout-only PATH absolutely before shadowing it with the fixture wrapper", () => {
+      if (!timeoutCommand) throw new Error("GNU timeout is required");
+      const root = mkdtempSync(join(tmpdir(), "debian-acquisition-"));
+      roots.push(root);
+      const bin = join(root, "GNU tools 'quoted'");
+      mkdirSync(bin);
+      const command = join(bin, "timeout");
+      writeFileSync(
+        command,
+        `#!/bin/sh\nexec ${shellQuote(timeoutCommand)} "$@"\n`,
+        { mode: 0o700 },
+      );
+      expect(resolveGnuTimeout(bin)).toBe(command);
+      const f = fixture(resolveGnuTimeout(bin));
+      const result = f.run();
+      expect(result.error, result.stderr).toBeUndefined();
+      expect(result.status, result.stderr).toBe(0);
+      const expired = f.run({
+        TEST_HANG: "5",
+        DEBIAN_INSTALL_TIMEOUT_SECONDS: "1",
+      });
+      expect(expired.error, expired.stderr).toBeUndefined();
+      expect(expired.status, expired.stderr).toBe(124);
+    });
+    it("does not accept a non-GNU timeout or fall through to the ambient PATH", () => {
+      const root = mkdtempSync(join(tmpdir(), "debian-acquisition-"));
+      roots.push(root);
+      writeFileSync(
+        join(root, "timeout"),
+        "#!/bin/sh\nprintf 'timeout (uutils) 0.10.0\\n'\n",
+        { mode: 0o700 },
+      );
+      expect(resolveGnuTimeout(root)).toBeUndefined();
+    });
     it("bounds every request, uses strict updates and keeps the pinned bootstrap/HTTPS sequence", () => {
       const f = fixture(),
         result = f.run();
+      expect(result.error, result.stderr).toBeUndefined();
       expect(result.status, result.stderr).toBe(0);
       const trace = readFileSync(f.trace, "utf8");
       const commands = trace
@@ -168,6 +215,7 @@ describe.skipIf(process.platform === "win32")(
       (stage) => {
         const f = fixture(),
           result = f.run({ TEST_FAIL: String(stage) });
+        expect(result.error, result.stderr).toBeUndefined();
         expect(result.status, result.stderr).toBe(42);
         expect(readFileSync(join(f.root, "count"), "utf8").trim()).toBe(
           String(stage),
@@ -181,6 +229,7 @@ describe.skipIf(process.platform === "win32")(
     it("does not hide failed inventory collection behind a successful sort", () => {
       const f = fixture(),
         result = f.run({ TEST_DPKG_FAIL: "true" });
+      expect(result.error, result.stderr).toBeUndefined();
       expect(result.status).toBe(42);
       expect(existsSync(join(f.root, "opt/renderer/debian-packages.txt"))).toBe(
         false,

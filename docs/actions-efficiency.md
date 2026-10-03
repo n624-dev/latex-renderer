@@ -84,7 +84,8 @@ runs Engine's embedded BuildKit and loads images into the local image store;
 the previous [container driver](https://docs.docker.com/build/builders/drivers/docker-container/)
 uses a separate BuildKit container and export/load transfer. The candidate aims
 to avoid that extra transfer, but the hosted cold build must establish the
-actual duration and disk benefit. No native-driver speedup is claimed yet.
+actual duration and disk benefit. A completed candidate result is recorded below;
+an overall native-driver speedup has not been established.
 The helper checks the driver and bootstrap status without creating or removing
 the default builder. A mismatch fails rather than silently choosing another.
 Only ephemeral GitHub-hosted Actions runners may use the helper/cleanup.
@@ -129,3 +130,32 @@ Debian helper now bounds inactivity, retries and total phase time and logs
 each APT stage. Fixed snapshot and signature/checksum checks are unchanged;
 failure stops the build rather than choosing a floating mirror. See
 [Debian bootstrap limits and verification](renderer-image-ci.md#bounded-debian-bootstrap).
+
+The bounded candidate [run 37102958662](https://github.com/n624-dev/latex-renderer/actions/runs/37102958662)
+completed successfully in 23m09s. Debian phases took 4s / 4s / 1s / 76s
+(bootstrap update / CA install / HTTPS update / packages). Base build took
+821s, TeX install 688s, font cache 10s, and native Base layer export 26.3s;
+there was no separate tar transfer/import stage. Runtime validation took 292s,
+including language install 77s, format generation 123s and font cache 10s.
+Base/basic/English-Japanese/SVG/compatibility/Source checks all passed.
+Trivy and SBOM steps took 132s and 101s.
+The TeX package phase measured 550.129s wall / 509.170s CPU / 65.952s
+download wait, with 1,444,834,392 verified archive bytes and 108,588,132 peak
+reserved prefetch bytes. CPU and wait can overlap and must not be summed.
+These measurements justify investigating installation/format CPU work before
+increasing prefetch workers solely on a network-bottleneck assumption.
+
+The previous container run's export/load took 120.7s, but its whole job was
+shorter at 19m37s. Different dates, runner performance and installation times
+make these observations an uncontrolled comparison, not proof of an overall
+speedup or disk reduction. Keep the explicit same-snapshot driver comparison
+available. The successful bounded run demonstrates that the earlier APT stall
+did not recur in that run; it does not establish its exact network cause.
+
+The accompanying normal CI initially failed only its new Debian fixtures:
+using a bare `timeout` executable in the private wrapper recursively invoked
+that wrapper on a runner without `gnutimeout`. Fixtures now resolve the GNU
+executable to an absolute path **before** prepending the private bin directory.
+A timeout-only PATH regression checks successful execution and a real deadline,
+including executable paths containing spaces and quotes. Non-GNU tools are not
+accepted, and Node's watchdog expiry remains a test failure.
