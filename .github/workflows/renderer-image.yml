@@ -33,6 +33,16 @@ on:
       - "vitest.source-pipeline.config.ts"
       - ".github/workflows/renderer-image.yml"
   workflow_dispatch:
+    inputs:
+      texlive_date:
+        description: "Snapshot for comparison: latest or YYYY-MM-DD"
+        type: string
+        default: latest
+      builder_driver:
+        description: "Native Docker image store or previous container/export path"
+        type: choice
+        options: [docker, docker-container]
+        default: docker
 
 permissions:
   contents: read
@@ -47,6 +57,8 @@ jobs:
     timeout-minutes: 360
     env:
       DOCKER_BUILD_RECORD_UPLOAD: "false"
+      CI_RENDERER_DRIVER: ${{ inputs.builder_driver || 'docker' }}
+      REQUESTED_DATE: ${{ inputs.texlive_date || 'latest' }}
       # Register the private distribution hostname with the runner's log
       # masker before any step can emit a snapshot URL.
       TEXLIVE_CI_MIRROR_HOST: ${{ secrets.TEXLIVE_CI_MIRROR_HOST }}
@@ -56,12 +68,20 @@ jobs:
         with:
           node-version: "24"
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+        if: env.CI_RENDERER_DRIVER == 'docker-container'
         id: buildx
+        with:
+          driver: docker-container
+      - name: Select and verify renderer builder
+        id: renderer-builder
+        env:
+          CONTAINER_BUILDER: ${{ steps.buildx.outputs.name }}
+        run: sh deploy/scripts/ci-select-renderer-builder.sh "$CI_RENDERER_DRIVER" "$CONTAINER_BUILDER"
       - name: Check disk before Base build
         run: sh deploy/scripts/ci-renderer-disk.sh before-base-build 12
       - name: Resolve snapshot
         id: snapshot
-        run: sh deploy/scripts/resolve-texlive-snapshot.sh latest
+        run: sh deploy/scripts/resolve-texlive-snapshot.sh "$REQUESTED_DATE"
       - name: Install pinned cloudflared client when mirror credentials are available
         env:
           TEXLIVE_CI_HOST: ${{ secrets.TEXLIVE_CI_HOST }}
@@ -111,6 +131,7 @@ jobs:
         env:
           TEXLIVE_DOWNLOAD_REPOSITORY: ${{ steps.mirror.outputs.repository }}
         with:
+          builder: ${{ steps.renderer-builder.outputs.name }}
           context: renderer
           file: renderer/Dockerfile.base
           no-cache: true
@@ -130,7 +151,7 @@ jobs:
         env:
           TEXLIVE_DOWNLOAD_REPOSITORY: ${{ steps.mirror.outputs.repository }}
           TEXLIVE_REPOSITORY: ${{ steps.snapshot.outputs.repository }}
-          BUILDX_BUILDER: ${{ steps.buildx.outputs.name }}
+          BUILDX_BUILDER: ${{ steps.renderer-builder.outputs.name }}
         run: sh deploy/scripts/ci-validate-texlive-base.sh latex-renderer:ci "$TEXLIVE_DOWNLOAD_REPOSITORY" "$TEXLIVE_REPOSITORY"
       - name: Scan renderer image for known vulnerabilities
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0

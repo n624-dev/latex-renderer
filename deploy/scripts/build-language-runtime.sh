@@ -32,14 +32,6 @@ esac
 # locally rebuilt dated Base has no RepoDigest and uses an ID-locked local tag.
 base_repo_digest=$(docker image inspect "$base_image" --format '{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}')
 base_lock_tag=
-case "$base_repo_digest" in
-  *@sha256:[0-9a-f][0-9a-f]*) base_lock_ref=$base_repo_digest ;;
-  *)
-    base_lock_tag="latex-renderer:base-lock-$(printf '%s' "${base_image_id#sha256:}" | cut -c1-24)"
-    docker image tag "$base_image_id" "$base_lock_tag"
-    base_lock_ref=$base_lock_tag
-    ;;
-esac
 
 languages=
 for language in "$@"; do
@@ -83,7 +75,18 @@ cleanup() {
     docker image rm "$base_lock_tag" >/dev/null 2>&1 || true
   fi
 }
-trap cleanup EXIT HUP INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' HUP TERM
+# No lock tag is created until inputs are validated and cleanup is installed.
+case "$base_repo_digest" in
+  *@sha256:[0-9a-f][0-9a-f]*) base_lock_ref=$base_repo_digest ;;
+  *)
+    base_lock_tag="latex-renderer:base-lock-$(printf '%s' "${base_image_id#sha256:}" | cut -c1-24)"
+    docker image tag "$base_image_id" "$base_lock_tag"
+    base_lock_ref=$base_lock_tag
+    ;;
+esac
 # TMPDIR is setgid in production. GNU chmod preserves directory setgid bits
 # unless an extra leading zero explicitly clears them; RestrictSUIDSGID then
 # rejects the implicit 02755 chmod with EPERM.
@@ -102,22 +105,33 @@ FROM ${BASE_IMAGE}
 USER root
 ARG TEXLIVE_REPOSITORY
 ARG TEXLIVE_LANGUAGES
-ARG RENDERER_RUNTIME_FINGERPRINT
-COPY runtime/ /opt/renderer/
-RUN if [ -n "${TEXLIVE_LANGUAGES}" ]; then \
-      tlmgr option repository "${TEXLIVE_REPOSITORY}" \
-      && for language in ${TEXLIVE_LANGUAGES}; do \
+# Only the installer helper affects the expensive language layer. Renderer
+# source and its ARG enter scope afterwards; build args in RUN's environment
+# otherwise invalidate this layer even when the command does not use them.
+COPY runtime/install-language-packages.sh /opt/renderer/install-language-packages.sh
+RUN set -eu; \
+    if [ -n "${TEXLIVE_LANGUAGES}" ]; then \
+      language_started=$(date +%s); \
+      tlmgr option repository "${TEXLIVE_REPOSITORY}"; \
+      for language in ${TEXLIVE_LANGUAGES}; do \
            tlmgr info --repository "${TEXLIVE_REPOSITORY}" --data name "$language" \
              | sed 's/^name: //' \
              | grep -qx "$language" \
              || { echo "Selected TeX Live language collection is unavailable in this snapshot: $language" >&2; exit 65; }; \
-         done \
-      && sh /opt/renderer/install-language-packages.sh ${TEXLIVE_LANGUAGES} \
-      && mktexlsr \
-      && fmtutil-sys --all \
-      && fc-cache -f \
-      && TEXMFCACHE=/opt/texlive/2026/texmf-var luaotfload-tool --update --force --no-compress; \
+      done; \
+      sh /opt/renderer/install-language-packages.sh ${TEXLIVE_LANGUAGES}; \
+      printf 'RUNTIME_LANGUAGE_INSTALL_SECONDS=%s\n' "$(($(date +%s) - language_started))"; \
+      formats_started=$(date +%s); \
+      mktexlsr; \
+      fmtutil-sys --all; \
+      printf 'RUNTIME_FORMAT_SECONDS=%s\n' "$(($(date +%s) - formats_started))"; \
+      fonts_started=$(date +%s); \
+      fc-cache -f; \
+      TEXMFCACHE=/opt/texlive/2026/texmf-var luaotfload-tool --update --force --no-compress; \
+      printf 'RUNTIME_FONT_CACHE_SECONDS=%s\n' "$(($(date +%s) - fonts_started))"; \
     fi
+ARG RENDERER_RUNTIME_FINGERPRINT
+COPY runtime/ /opt/renderer/
 COPY languages.txt /opt/renderer/language-collections.txt
 RUN chmod 0555 /opt/renderer/compile.sh /opt/renderer/export-svg.pl \
  && chmod 0444 /opt/renderer/texmf.cnf /opt/renderer/latexmkrc /opt/renderer/svg-wrapper.tex /opt/renderer/language-collections.txt

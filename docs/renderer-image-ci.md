@@ -39,8 +39,81 @@ Both `renderer-image` and `renderer-image-daily` use
 2. Discard the Base builder's redundant local build cache after loading Base.
 3. Build one temporary English/Japanese Runtime from that exact Base using the
    application's language-runtime builder, with layer-cache reuse disabled.
-4. Run basic rendering, English/Japanese PDF + PNG, and SVG smoke tests.
+4. Run basic rendering, English/Japanese PDF + PNG, SVG and compatibility smoke
+   tests, then Source/client integration.
 5. Remove the temporary Runtime and unused default-builder cache, even on failure.
+
+On ephemeral hosted runners, both workflows select and verify the native
+`default` Docker builder by default, avoiding a separate builder container.
+`builder_driver=docker-container` in manual dispatch retains the previous
+export/load path for comparison and rollback. `renderer-image` also accepts an
+explicit `texlive_date` for a same-snapshot, non-publishing cold comparison.
+The default builder is pruned only on the disposable runner; it is never
+removed. Native selection does not enable cache reuse or skip verification.
+Actual hosted native-driver results are still required before claiming a
+performance or disk improvement. See [measurement and comparison](actions-efficiency.md).
+
+### Bounded Debian bootstrap
+
+Both Dockerfiles bind-mount `renderer/install-debian-packages.sh` only for their
+APT phase. It keeps the exact Debian snapshot, signed Release/package checks,
+HTTP bootstrap of CA certificates and subsequent verified HTTPS. No floating
+Debian mirror, unverified data or permanent download cache is introduced.
+
+Every request has an explicit 30-second connect/inactivity timeout and three
+retries. HTTP pipelining is disabled for proxy/CDN compatibility, and unneeded
+APT description translations are not fetched. Both index updates use
+`--error-on=any`, so a transient index failure cannot produce a successful build
+with incomplete package lists. The entire bootstrap and package installation
+has a separate 20-minute deadline with a 15-second forced-termination grace;
+request timeouts alone would not bound slow responses or retry delays.
+The supervising shell waits for the actual APT process even after TERM, so
+the force-kill timer still applies to a request ignoring TERM. Normal failures
+and timeouts remain fatal. The small inventory is collected before sorting,
+so a failed `dpkg-query` is not hidden by a successful `sort`.
+
+Build arguments (validated by the helper):
+
+- `DEBIAN_INSTALL_TIMEOUT_SECONDS=1200`, range 1..3600.
+- `DEBIAN_ACQUIRE_TIMEOUT_SECONDS=30`, range 1..120.
+- `DEBIAN_ACQUIRE_RETRIES=3`, range 0..5 (additional attempts).
+
+`DEBIAN_INSTALL_PHASE` identifies the active operation, and `DEBIAN_APT_STAGE`
+records its wall time and exit status. A timeout may terminate before a stage's
+completion record; absence of that record is not success. GNU timeout returns
+124 on a normal timeout, or SIGKILL/137 if forced termination is necessary.
+These limits concern Debian only, not the VPS mirror sync's three-hour limit.
+See the Debian [transport](https://manpages.debian.org/bookworm/apt/apt-transport-http.1.en.html),
+[retry configuration](https://manpages.debian.org/bookworm/apt/apt.conf.5.en.html)
+and [strict-update](https://manpages.debian.org/bookworm/apt/apt-get.8.en.html) references.
+
+The PR168 old-head run stalled at the first HTTP Packages index, before any
+TeX installation or image export. VPS HEAD probes returned HTTP 200 for both
+transports, but do not establish hosted-runner connectivity or identify the
+precise CDN/network fault. The transport workaround and native-driver speedup
+still require a completed hosted cold build; the old run is not a benchmark.
+Fixture tests use fake APT commands and isolated destinations, but real GNU
+timeout, including a TERM-ignoring process. No host APT configuration is changed.
+They select `gnutimeout` or a `timeout --version` identifying GNU coreutils;
+having a same-named uutils/BusyBox command is not equivalent to testing Debian's
+implementation. If neither GNU command exists, the POSIX fixture tests fail
+with a dependency error rather than silently treating an untested deadline as
+success. Temporary command wrappers, destinations and process groups are
+removed on success or failure.
+
+For an optional real Debian-only check, on a disposable machine with Docker:
+
+```sh
+docker run --rm --user 0 \
+  --mount "type=bind,src=$PWD/renderer/install-debian-packages.sh,dst=/tmp/install-debian-packages.sh,readonly" \
+  --env DEBIAN_FRONTEND=noninteractive \
+  debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251 \
+  sh /tmp/install-debian-packages.sh 20260812T235959Z curl
+```
+
+This installs only inside the disposable container, requires network access,
+and leaves Docker's normal pulled-image storage. Do not prune a production
+daemon to clean it up. This check was not run on the VPS.
 
 PR CI does not log in to GHCR or publish images. Daily publishes only Base after
 the entire sequence succeeds. No language Runtime is published. Installer
@@ -157,6 +230,16 @@ workflow imports or exports an Actions build cache. Runtime tags include the run
 ID and attempt, are removed before use, and are discarded after testing.
 Runtime cache policy on end-user servers is unchanged.
 
+Only the language-install helper is copied before the expensive language layer
+in a managed Runtime build; renderer sources and their fingerprint ARG follow
+it. Host builds can reuse existing language layers on renderer-only changes,
+without adding a new cache. Runtime identity still covers all current sources,
+the Base ID and selected languages; installer changes invalidate that layer.
+CI still cold-builds the Runtime. Language install, format generation and font
+caches have separate wall-time log markers; each command's failure remains
+fatal. `TEXLIVE_CI_STAGE` also records each required validation stage and its
+exit status, including failure, without recording private URLs or arguments.
+
 Daily checks the public registry for the immutable dated Base. A manifest 404
 means missing; authentication/network/server failures stop the run. It does not
 use GitHub's potentially permission-masked package-list 404 as proof of absence.
@@ -188,13 +271,14 @@ Do not run CI cleanup helpers against production Docker: they require
 Validation commands:
 
 ```sh
-pnpm exec vitest run tests/renderer-ci-validation.test.ts tests/application-update-contract.test.ts tests/tex-environment-contract.test.ts tests/supply-chain-contract.test.ts
+pnpm exec vitest run tests/renderer-ci-validation.test.ts tests/renderer-builder-selection.test.ts tests/runtime-build-layer.test.ts tests/application-update-contract.test.ts tests/tex-environment-contract.test.ts tests/supply-chain-contract.test.ts
 ```
 
 The command-level failure tests use isolated fake Docker/smoke commands, never
 production images. Real rendering still requires the GitHub-hosted image CI.
 Run a non-publishing Daily dispatch to exercise registry reuse; run PR image CI
 to exercise a cold build. Long image CI is not continuously monitored.
+
 ## Smoke-test output isolation
 
 Renderer and Base smoke fixtures use a temporary Docker-managed output volume,
