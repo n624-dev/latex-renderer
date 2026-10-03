@@ -47,13 +47,15 @@ on:
         description: "Runtime format generation workers (1 keeps the serial baseline)"
         type: choice
         options: ["1", "2", "4"]
-        default: "2"
+        default: "4"
 
 permissions:
   contents: read
 
 concurrency:
-  group: renderer-image-${{ github.ref }}
+  # Manual comparisons must not cancel push/PR validation, or one another.
+  # Each comparison remains non-publishing, on its own disposable runner.
+  group: renderer-image-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || 'validation' }}
   cancel-in-progress: true
 
 jobs:
@@ -63,7 +65,7 @@ jobs:
     env:
       DOCKER_BUILD_RECORD_UPLOAD: "false"
       CI_RENDERER_DRIVER: ${{ inputs.builder_driver || 'docker' }}
-      CI_FORMAT_JOBS: ${{ inputs.format_jobs || '2' }}
+      CI_FORMAT_JOBS: ${{ inputs.format_jobs || '4' }}
       REQUESTED_DATE: ${{ inputs.texlive_date || 'latest' }}
       # Register the private distribution hostname with the runner's log
       # masker before any step can emit a snapshot URL.

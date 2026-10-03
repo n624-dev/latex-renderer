@@ -111,7 +111,7 @@ describe("Base-only CI validation failure boundaries", () => {
         for (const name of names)
           writeFileSync(
             join(root, name),
-            `#!/bin/sh\necho '${name}' >> "$TEST_TRACE"\nif [ '${name}' = build-language-runtime.sh ]; then [ "$RUNTIME_NO_CACHE" = true ] && [ "$RUNTIME_FORMAT_JOBS" = 2 ] || exit 91; fi\n[ "$FAIL_STAGE" != '${name}' ] || exit 42\n`,
+            `#!/bin/sh\necho '${name}' >> "$TEST_TRACE"\nif [ '${name}' = build-language-runtime.sh ]; then [ "$RUNTIME_NO_CACHE" = true ] && [ "$RUNTIME_FORMAT_JOBS" = 4 ] || exit 91; fi\n[ "$FAIL_STAGE" != '${name}' ] || exit 42\n`,
             { mode: 0o700 },
           );
         writeFileSync(
@@ -137,6 +137,7 @@ describe("Base-only CI validation failure boundaries", () => {
               GITHUB_RUN_ID: "123",
               GITHUB_RUN_ATTEMPT: "2",
               BUILDX_BUILDER: builder,
+              CI_FORMAT_JOBS: "",
               TEST_TRACE: trace,
               FAIL_STAGE: failedStage,
             },
@@ -224,6 +225,133 @@ describe("Base-only CI validation failure boundaries", () => {
       }
     },
   );
+
+  it
+    .skipIf(process.platform === "win32")
+    .each(["", "1", "2", "4", "0", "3", "8", "20", "-1", "4\n", " 4"])(
+    "validates and forwards the CI format worker setting %j before any mutation",
+    (jobs) => {
+      const root = mkdtempSync(join(tmpdir(), "renderer-ci-format-jobs-"));
+      try {
+        const trace = join(root, "trace");
+        writeFileSync(trace, "");
+        writeFileSync(
+          join(root, "validate.sh"),
+          readFileSync("deploy/scripts/ci-validate-texlive-base.sh"),
+        );
+        for (const name of [
+          "smoke-test-texlive-base.sh",
+          "ci-renderer-disk.sh",
+          "build-language-runtime.sh",
+          "smoke-test-renderer-basic.sh",
+          "smoke-test-renderer-en-jp.sh",
+          "smoke-test-renderer-svg.sh",
+          "smoke-test-renderer-compat.sh",
+          "ci-source-pipeline-e2e.sh",
+        ]) {
+          writeFileSync(
+            join(root, name),
+            `#!/bin/sh
+echo '${name}' >> "$TEST_TRACE"
+if [ '${name}' = build-language-runtime.sh ]; then
+  [ "$RUNTIME_NO_CACHE" = true ] || exit 91
+  [ "$RUNTIME_FORMAT_JOBS" = "$EXPECTED_JOBS" ] || exit 92
+  printf 'format-jobs=%s\\n' "$RUNTIME_FORMAT_JOBS" >> "$TEST_TRACE"
+fi
+`,
+            { mode: 0o700 },
+          );
+        }
+        writeFileSync(
+          join(root, "docker"),
+          `#!/bin/sh
+echo "docker $*" >> "$TEST_TRACE"
+case "$*" in
+  *Config.Labels*languages*) echo collection-langenglish,collection-langjapanese ;;
+  *Config.Labels*runtime-kind*) echo managed-local-v1 ;;
+esac
+`,
+          { mode: 0o700 },
+        );
+        const valid = ["", "1", "2", "4"].includes(jobs);
+        const result = spawnSync(
+          "sh",
+          [
+            join(root, "validate.sh"),
+            "fixture-base",
+            "https://example.test/tlnet",
+          ],
+          {
+            encoding: "utf8",
+            timeout: 5_000,
+            env: {
+              ...process.env,
+              PATH: `${root}:${process.env.PATH}`,
+              GITHUB_ACTIONS: "true",
+              RUNNER_ENVIRONMENT: "github-hosted",
+              GITHUB_RUN_ID: "123",
+              GITHUB_RUN_ATTEMPT: "2",
+              BUILDX_BUILDER: "default",
+              CI_FORMAT_JOBS: jobs,
+              EXPECTED_JOBS: jobs || "4",
+              TEST_TRACE: trace,
+            },
+          },
+        );
+        expect(result.error).toBeUndefined();
+        expect(result.status, result.stderr).toBe(valid ? 0 : 64);
+        const commands = readFileSync(trace, "utf8");
+        if (valid) {
+          expect(commands).toContain(`format-jobs=${jobs || "4"}\n`);
+          expect(commands).toContain("smoke-test-renderer-svg.sh");
+          expect(commands).toContain("ci-source-pipeline-e2e.sh");
+          expect(commands).toContain("docker image rm");
+        } else {
+          expect(commands).toBe("");
+          expect(result.stderr).toContain("CI_FORMAT_JOBS must be 1, 2 or 4");
+        }
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("uses the measured hosted default but keeps dispatch rollback and host serial defaults", () => {
+    for (const name of ["renderer-image", "renderer-image-daily"]) {
+      const workflow = readFileSync(`.github/workflows/${name}.yml`, "utf8");
+      expect(workflow).toContain(
+        "CI_FORMAT_JOBS: ${{ inputs.format_jobs || '4' }}",
+      );
+      expect(workflow).toMatch(/options: \["1", "2", "4"\]\s+default: "4"/);
+    }
+    expect(
+      readFileSync("deploy/scripts/build-language-runtime.sh", "utf8"),
+    ).toContain("format_jobs=${RUNTIME_FORMAT_JOBS:-1}");
+  });
+
+  it("isolates manual comparisons without removing normal cancellation or serializing publication differently", () => {
+    const workflow = readFileSync(
+      ".github/workflows/renderer-image.yml",
+      "utf8",
+    );
+    const concurrency = workflow.slice(
+      workflow.indexOf("\nconcurrency:"),
+      workflow.indexOf("\njobs:"),
+    );
+    expect(concurrency).toContain(
+      "group: renderer-image-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || 'validation' }}",
+    );
+    expect(concurrency).toContain("cancel-in-progress: true");
+    expect(workflow).not.toContain("packages: write");
+    expect(workflow).toContain("push: false");
+    const daily = readFileSync(
+      ".github/workflows/renderer-image-daily.yml",
+      "utf8",
+    );
+    expect(daily).toContain(
+      "group: renderer-image-daily\n  cancel-in-progress: false",
+    );
+  });
 
   it("gates publication on fresh validation and anonymous verification", () => {
     const daily = readFileSync(
