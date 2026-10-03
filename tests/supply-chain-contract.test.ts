@@ -69,10 +69,12 @@ describe("public supply-chain controls", () => {
       const dockerfile = read(path);
       expect(dockerfile).toContain("FROM debian:bookworm-slim@sha256:");
       expect(dockerfile).toContain("ARG DEBIAN_SNAPSHOT=20260812T235959Z");
-      expect(dockerfile).toContain("mkdir -p /opt/renderer");
-      expect(dockerfile).toContain("dpkg-query -W -f='");
-      expect(dockerfile).toContain("debian-packages.txt");
+      expect(dockerfile).toContain("sh /tmp/install-debian-packages.sh");
     }
+    const acquisition = read("renderer/install-debian-packages.sh");
+    expect(acquisition).toContain("mkdir -p /opt/renderer");
+    expect(acquisition).toContain("dpkg-query -W -f='");
+    expect(acquisition).toContain("debian-packages.txt");
   });
 
   it("locks Base by digest and never publishes a derived Runtime", () => {

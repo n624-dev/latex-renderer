@@ -41,8 +41,8 @@ describe("managed TeX Live image pipeline", () => {
       'jp.n624.latex-renderer.base-kind="texlive-only-v1"',
     );
     expect(baseDockerfile).toContain("ARG DEBIAN_SNAPSHOT=20260812T235959Z");
-    expect(baseDockerfile).toContain(
-      "snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}",
+    expect(read("renderer/install-debian-packages.sh")).toContain(
+      "snapshot.debian.org/archive/debian/${snapshot}",
     );
     expect(baseDockerfile).toContain(
       "TEXLIVE_SIGNING_FINGERPRINT=C78B82D8C79512F79CC0D7C80D5E5D9106BAB6BC",

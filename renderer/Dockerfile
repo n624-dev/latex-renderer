@@ -5,6 +5,9 @@ ARG TEXLIVE_INSTALLER_SHA512=f59a83d71f4d4cd6a1265fa7984fa20f5a9204382e1365b01f3
 ARG TEXLIVE_SIGNING_FINGERPRINT=C78B82D8C79512F79CC0D7C80D5E5D9106BAB6BC
 ARG TEXLIVE_PROFILE_KIND=legacy-custom
 ARG DEBIAN_SNAPSHOT=20260812T235959Z
+ARG DEBIAN_INSTALL_TIMEOUT_SECONDS=1200
+ARG DEBIAN_ACQUIRE_TIMEOUT_SECONDS=30
+ARG DEBIAN_ACQUIRE_RETRIES=3
 
 LABEL org.opencontainers.image.title="latex-renderer-texlive" \
       org.opencontainers.image.version="2026" \
@@ -16,22 +19,9 @@ LABEL org.opencontainers.image.title="latex-renderer-texlive" \
       jp.n624.latex-renderer.debian.snapshot="${DEBIAN_SNAPSHOT}"
 
 ARG DEBIAN_FRONTEND=noninteractive
-RUN set -eu; \
-    case "${DEBIAN_SNAPSHOT}" in [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z) ;; *) exit 64 ;; esac; \
-    printf '%s\n' \
-      "deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}/ bookworm main" \
-      "deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/${DEBIAN_SNAPSHOT}/ bookworm-security main" \
-      > /etc/apt/sources.list; \
-    rm -f /etc/apt/sources.list.d/debian.sources; \
-    apt-get -o Acquire::Check-Valid-Until=false -o Acquire::Retries=5 update; \
-    apt-get -o Acquire::Retries=5 install -y --no-install-recommends ca-certificates; \
-    sed -i 's|http://snapshot.debian.org/|https://snapshot.debian.org/|g' /etc/apt/sources.list; \
-    apt-get -o Acquire::Check-Valid-Until=false -o Acquire::Retries=5 update; \
-    mkdir -p /opt/renderer; \
-    apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
-      ca-certificates curl fontconfig gnupg gpgv imagemagick libfontconfig1 perl poppler-utils qpdf tar xz-utils; \
-    dpkg-query -W -f='${binary:Package}\t${Version}\n' | LC_ALL=C sort > /opt/renderer/debian-packages.txt; \
-    rm -rf /var/lib/apt/lists/*
+RUN --mount=type=bind,source=install-debian-packages.sh,target=/tmp/install-debian-packages.sh \
+    sh /tmp/install-debian-packages.sh "${DEBIAN_SNAPSHOT}" \
+      ca-certificates curl fontconfig gnupg gpgv imagemagick libfontconfig1 perl poppler-utils qpdf tar xz-utils
 
 COPY texlive.profile /tmp/texlive.profile
 RUN mkdir -p /tmp/install-tl \

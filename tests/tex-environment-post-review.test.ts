@@ -126,16 +126,23 @@ describe("post-review TeX environment regressions", () => {
     for (const path of ["renderer/Dockerfile.base", "renderer/Dockerfile"]) {
       const dockerfile = read(path);
       expect(dockerfile).toContain("ARG DEBIAN_SNAPSHOT=20260812T235959Z");
-      expect(dockerfile).toContain(
-        "http://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}/",
-      );
-      expect(dockerfile).toContain(
-        "sed -i 's|http://snapshot.debian.org/|https://snapshot.debian.org/|g'",
-      );
-      expect(dockerfile).toContain("Acquire::Retries=5");
+      expect(dockerfile).toContain("sh /tmp/install-debian-packages.sh");
+      expect(dockerfile).toContain("ARG DEBIAN_ACQUIRE_RETRIES=3");
       expect(dockerfile).toContain("--connect-timeout 15");
       expect(dockerfile).toContain("--max-time 600");
     }
+    const acquisition = read("renderer/install-debian-packages.sh");
+    expect(acquisition).toContain(
+      "http://snapshot.debian.org/archive/debian/${snapshot}/",
+    );
+    expect(acquisition).toContain(
+      "sed -i 's|http://snapshot.debian.org/|https://snapshot.debian.org/|g'",
+    );
+    expect(acquisition).toContain('"Acquire::Retries=$retries"');
+    expect(acquisition).toContain("update --error-on=any");
+    expect(acquisition).toContain(
+      "exec timeout --signal=TERM --kill-after=15s",
+    );
     const resolver = read("deploy/scripts/resolve-texlive-snapshot.sh");
     const profile = read("deploy/scripts/generate-texlive-profile.sh");
     expect(resolver).toContain("TEXLIVE_CURL_CONNECT_TIMEOUT_SECONDS");

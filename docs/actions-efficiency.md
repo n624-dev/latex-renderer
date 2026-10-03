@@ -121,3 +121,11 @@ remain separate. No long-lived performance artifact is introduced.
 Neither stage enables Base caching, skips cold Base/Runtime validation,
 changes canonical fallback, weakens checksum/signature/provenance checks,
 changes Base-only GHCR publication, or skips real update/recovery host tests.
+
+PR168's initial native-driver run remained in the first Debian HTTP Packages
+index acquisition for almost six hours; it never reached TeX installation or
+export. It cannot support a claim about the native export speed. The shared
+Debian helper now bounds inactivity, retries and total phase time and logs
+each APT stage. Fixed snapshot and signature/checksum checks are unchanged;
+failure stops the build rather than choosing a floating mirror. See
+[Debian bootstrap limits and verification](renderer-image-ci.md#bounded-debian-bootstrap).
