@@ -111,7 +111,7 @@ describe("Base-only CI validation failure boundaries", () => {
         for (const name of names)
           writeFileSync(
             join(root, name),
-            `#!/bin/sh\necho '${name}' >> "$TEST_TRACE"\nif [ '${name}' = build-language-runtime.sh ]; then [ "$RUNTIME_NO_CACHE" = true ] || exit 91; fi\n[ "$FAIL_STAGE" != '${name}' ] || exit 42\n`,
+            `#!/bin/sh\necho '${name}' >> "$TEST_TRACE"\nif [ '${name}' = build-language-runtime.sh ]; then [ "$RUNTIME_NO_CACHE" = true ] && [ "$RUNTIME_FORMAT_JOBS" = 2 ] || exit 91; fi\n[ "$FAIL_STAGE" != '${name}' ] || exit 42\n`,
             { mode: 0o700 },
           );
         writeFileSync(

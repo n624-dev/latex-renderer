@@ -116,6 +116,7 @@ describe.skipIf(process.platform === "win32")(
       ).toBeGreaterThan(install);
       expect(built.args).toContain("--no-cache\n");
       expect(built.args).toContain("--load\n");
+      expect(built.args).toContain("TEXLIVE_FORMAT_JOBS=1\n");
       expect(built.args).toContain(
         "TEXLIVE_LANGUAGES=collection-langenglish collection-langjapanese",
       );
@@ -169,6 +170,24 @@ describe.skipIf(process.platform === "win32")(
       expect(readFileSync(f.trace, "utf8")).not.toContain("image tag");
       expect(readdirSync(f.temporary)).toEqual([]);
     });
+    it.each(["2", "4"])(
+      "passes explicit format concurrency %s into the language layer",
+      (jobs) => {
+        const built = fixture().build(undefined, { RUNTIME_FORMAT_JOBS: jobs });
+        expect(built.result.status, built.result.stderr).toBe(0);
+        expect(built.args).toContain(`TEXLIVE_FORMAT_JOBS=${jobs}\n`);
+      },
+    );
+    it.each(["0", "3", "8", "2; echo unsafe"])(
+      "rejects format concurrency %s before Docker mutations",
+      (jobs) => {
+        const f = fixture(),
+          built = f.build(undefined, { RUNTIME_FORMAT_JOBS: jobs });
+        expect(built.result.status).toBe(64);
+        expect(readFileSync(f.trace, "utf8")).toBe("");
+        expect(readdirSync(f.temporary)).toEqual([]);
+      },
+    );
     it("removes its context and Base lock tag when the Docker build fails", () => {
       const f = fixture(),
         built = f.build(undefined, { TEST_BUILD_EXIT: "42" });
@@ -202,14 +221,14 @@ describe.skipIf(process.platform === "win32")(
           built.dockerfile,
         );
       if (!match?.[1]) throw new Error("Language RUN is missing");
-      const command = `set -eu;${match[1].replace(/\\\n/g, " ").replace("sh /opt/renderer/install-language-packages.sh", 'sh "$TEST_INSTALLER"')}`;
+      const command = `set -eu;${match[1].replace(/\\\n/g, " ").replaceAll("sh /opt/renderer/install-language-packages.sh", 'sh "$TEST_INSTALLER"')}`;
       const run = join(f.root, "run.sh"),
         installer = join(f.root, "installer.sh"),
         stages = join(f.root, "stages");
       writeFileSync(run, command);
       writeFileSync(
         installer,
-        '#!/bin/sh\necho installer >> "$TEST_STAGES"\n[ "$TEST_FAIL" != installer ] || exit 42\n',
+        '#!/bin/sh\nif [ "$1" = --rebuild-formats ]; then exec fmtutil-sys --all; fi\necho installer >> "$TEST_STAGES"\n[ "$TEST_FAIL" != installer ] || exit 42\n',
       );
       for (const name of [
         "tlmgr",

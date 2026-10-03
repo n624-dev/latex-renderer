@@ -1,6 +1,8 @@
 #!/bin/sh
 set -eu
 [ "${GITHUB_ACTIONS:-}" = true ] && [ "${RUNNER_ENVIRONMENT:-}" = github-hosted ] || exit 77
+format_jobs=${CI_FORMAT_JOBS:-2}
+case "$format_jobs" in 1|2|4) ;; *) echo 'CI_FORMAT_JOBS must be 1, 2 or 4' >&2; exit 64 ;; esac
 base=${1:?Base image required}
 repository=${2:?download repository required}
 canonical_repository=${3:-$repository}
@@ -52,7 +54,7 @@ if [ -n "${BUILDX_BUILDER:-}" ] && [ "$BUILDX_BUILDER" != default ]; then
 fi
 docker builder prune --all --force
 sh "$script_root/ci-renderer-disk.sh" before-language-validation 6
-RUNTIME_NO_CACHE=true RUNTIME_BUILDX_BUILDER=default run_stage language-runtime \
+RUNTIME_NO_CACHE=true RUNTIME_BUILDX_BUILDER=default RUNTIME_FORMAT_JOBS="$format_jobs" run_stage language-runtime \
   sh "$script_root/build-language-runtime.sh" "$base" "$repository" "$validation_runtime" \
     collection-langenglish collection-langjapanese
 [ "$(docker image inspect "$validation_runtime" --format '{{index .Config.Labels "jp.n624.latex-renderer.languages"}}')" = collection-langenglish,collection-langjapanese ]
