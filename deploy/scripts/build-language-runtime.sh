@@ -5,6 +5,8 @@ base_image=${1:?usage: build-language-runtime.sh BASE_IMAGE TEXLIVE_REPOSITORY O
 repository=${2:?usage: build-language-runtime.sh BASE_IMAGE TEXLIVE_REPOSITORY OUTPUT_TAG [collection-lang...]}
 output_tag=${3:?usage: build-language-runtime.sh BASE_IMAGE TEXLIVE_REPOSITORY OUTPUT_TAG [collection-lang...]}
 shift 3
+format_jobs=${RUNTIME_FORMAT_JOBS:-1}
+case "$format_jobs" in 1|2|4) ;; *) echo 'RUNTIME_FORMAT_JOBS must be 1, 2 or 4' >&2; exit 64 ;; esac
 
 case "$repository" in
   https://*/*/tlnet) ;;
@@ -105,6 +107,7 @@ FROM ${BASE_IMAGE}
 USER root
 ARG TEXLIVE_REPOSITORY
 ARG TEXLIVE_LANGUAGES
+ARG TEXLIVE_FORMAT_JOBS=1
 # Only the installer helper affects the expensive language layer. Renderer
 # source and its ARG enter scope afterwards; build args in RUN's environment
 # otherwise invalidate this layer even when the command does not use them.
@@ -123,7 +126,7 @@ RUN set -eu; \
       printf 'RUNTIME_LANGUAGE_INSTALL_SECONDS=%s\n' "$(($(date +%s) - language_started))"; \
       formats_started=$(date +%s); \
       mktexlsr; \
-      fmtutil-sys --all; \
+      sh /opt/renderer/install-language-packages.sh --rebuild-formats; \
       printf 'RUNTIME_FORMAT_SECONDS=%s\n' "$(($(date +%s) - formats_started))"; \
       fonts_started=$(date +%s); \
       fc-cache -f; \
@@ -162,6 +165,7 @@ esac
   --build-arg "BASE_IMAGE=$base_lock_ref" \
   --build-arg "TEXLIVE_REPOSITORY=$repository" \
   --build-arg "TEXLIVE_LANGUAGES=$languages" \
+  --build-arg "TEXLIVE_FORMAT_JOBS=$format_jobs" \
   --build-arg "RENDERER_RUNTIME_FINGERPRINT=$runtime_fingerprint" \
   --label "jp.n624.latex-renderer.languages=$(printf '%s' "$languages" | sed 's/ /,/g')" \
   --label "jp.n624.latex-renderer.base-image-id=$base_image_id" \

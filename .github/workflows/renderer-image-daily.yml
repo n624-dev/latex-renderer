@@ -31,6 +31,11 @@ on:
         type: choice
         options: [docker, docker-container]
         default: docker
+      format_jobs:
+        description: "Runtime format generation workers (1 keeps the serial baseline)"
+        type: choice
+        options: ["1", "2", "4"]
+        default: "2"
 
 permissions:
   contents: read
@@ -75,6 +80,7 @@ jobs:
       PUBLISH_REQUESTED: ${{ github.event_name == 'schedule' || inputs.publish == true }}
       DOCKER_BUILD_RECORD_UPLOAD: "false"
       CI_RENDERER_DRIVER: ${{ inputs.builder_driver || 'docker' }}
+      CI_FORMAT_JOBS: ${{ inputs.format_jobs || '2' }}
       # Register the private distribution hostname with the runner's log
       # masker before any step can emit a snapshot URL.
       TEXLIVE_CI_MIRROR_HOST: ${{ secrets.TEXLIVE_CI_MIRROR_HOST }}

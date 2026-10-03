@@ -159,3 +159,46 @@ executable to an absolute path **before** prepending the private bin directory.
 A timeout-only PATH regression checks successful execution and a real deadline,
 including executable paths containing spaces and quotes. Non-GNU tools are not
 accepted, and Node's watchdog expiry remains a test failure.
+
+PR168 was merged after all ten checks passed on its final head. The final cold
+Renderer [run 37117088460](https://github.com/n624-dev/latex-renderer/actions/runs/37117088460)
+took 20m46s (Base 729s, validation 247s, Trivy 116s, SBOM 102s).
+TeX install was 608s, with package wall/CPU/wait 497.745s / 422.350s / 69.386s;
+Runtime language/format/font took 69s / 99s / 8s. This variation reinforces the
+need for matched-snapshot comparisons rather than claims based on one run.
+
+## Bounded Runtime format generation candidate
+
+The next candidate only parallelizes **post-install format generation** in the
+temporary validation Runtime. Base installation and its formats are unchanged;
+`tlmgr install` remains sequential, with the same dependency/file checks and
+bounded reinstallation recovery. No extra persistent cache is introduced.
+
+The existing language helper's `--rebuild-formats` mode uses the standard
+[TeX Live fmtutil options](https://github.com/TeX-Live/texlive-source/blob/trunk/texk/texlive/linked_scripts/texlive/fmtutil.pl)
+to enumerate merged configuration and rebuild by engine. Every enabled format
+must have a successful status record; unknown/missing/duplicate results are
+fatal. Each engine keeps fmtutil's own internal ordering and temporary directory.
+Workers use `--strict --nohash`; the shared file index is updated once with
+`mktexlsr` after all workers succeed. No language/font/format is excluded, and
+this is not `--missing` reuse of potentially stale formats.
+The bounded coordinator is our implementation, not an upstream built-in
+parallel-mode switch. `TEXLIVE_FORMAT_PLAN` and `TEXLIVE_FORMAT_COMPLETED` record
+the expected and successfully completed counts without adding log artifacts.
+
+Normal host builds default to `RUNTIME_FORMAT_JOBS=1`, retaining the exact
+`fmtutil-sys --all` execution path. Hosted CI defaults to two workers;
+`format_jobs=1`, `2`, or `4` in either Renderer dispatch selects the candidate
+or serial comparison. Invalid values fail before Docker mutations. Two is a
+conservative starting point, not a proven optimal value; four can use more
+memory and temporary space. The parallel phase has a ten-minute deadline,
+and failure/interruption terminates and reaps its private process groups,
+including the final index writer. Small status files are removed afterwards.
+
+The algorithm resides in the already fingerprinted language helper, so it
+changes Runtime identity without adding a new release archive schema. The full
+renderer fingerprint, Base provenance and cold/no-cache policy remain intact.
+All Base/basic/English-Japanese/PDF/PNG/SVG/compatibility/Source tests remain
+mandatory before Base-only publication. Fixture tests establish scheduling,
+completion checks and cleanup, not real TeX output equivalence or speedup;
+those still require the next completed hosted Renderer run.
