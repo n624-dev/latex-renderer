@@ -48,6 +48,11 @@ On ephemeral hosted runners, both workflows select and verify the native
 `builder_driver=docker-container` in manual dispatch retains the previous
 export/load path for comparison and rollback. `renderer-image` also accepts an
 explicit `texlive_date` for a same-snapshot, non-publishing cold comparison.
+Manual Renderer comparisons have their own run-ID concurrency group and do not
+cancel push/PR validation or other comparisons. Daily publication and retention
+still share their original serialized group. Hosted validation defaults to four
+format workers; `format_jobs=1` or `2` retains serial/lower-parallelism comparison
+and rollback, without changing the one-worker default for normal host builds.
 The default builder is pruned only on the disposable runner; it is never
 removed. Native selection does not enable cache reuse or skip verification.
 Actual hosted native-driver results are still required before claiming a

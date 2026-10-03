@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 [ "${GITHUB_ACTIONS:-}" = true ] && [ "${RUNNER_ENVIRONMENT:-}" = github-hosted ] || exit 77
-format_jobs=${CI_FORMAT_JOBS:-2}
+format_jobs=${CI_FORMAT_JOBS:-4}
 case "$format_jobs" in 1|2|4) ;; *) echo 'CI_FORMAT_JOBS must be 1, 2 or 4' >&2; exit 64 ;; esac
 base=${1:?Base image required}
 repository=${2:?download repository required}

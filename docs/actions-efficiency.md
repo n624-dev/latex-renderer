@@ -167,9 +167,9 @@ TeX install was 608s, with package wall/CPU/wait 497.745s / 422.350s / 69.386s;
 Runtime language/format/font took 69s / 99s / 8s. This variation reinforces the
 need for matched-snapshot comparisons rather than claims based on one run.
 
-## Bounded Runtime format generation candidate
+## Bounded Runtime format generation
 
-The next candidate only parallelizes **post-install format generation** in the
+The implementation only parallelizes **post-install format generation** in the
 temporary validation Runtime. Base installation and its formats are unchanged;
 `tlmgr install` remains sequential, with the same dependency/file checks and
 bounded reinstallation recovery. No extra persistent cache is introduced.
@@ -187,18 +187,68 @@ parallel-mode switch. `TEXLIVE_FORMAT_PLAN` and `TEXLIVE_FORMAT_COMPLETED` recor
 the expected and successfully completed counts without adding log artifacts.
 
 Normal host builds default to `RUNTIME_FORMAT_JOBS=1`, retaining the exact
-`fmtutil-sys --all` execution path. Hosted CI defaults to two workers;
+`fmtutil-sys --all` execution path. Hosted CI defaults to four workers;
 `format_jobs=1`, `2`, or `4` in either Renderer dispatch selects the candidate
-or serial comparison. Invalid values fail before Docker mutations. Two is a
-conservative starting point, not a proven optimal value; four can use more
-memory and temporary space. The parallel phase has a ten-minute deadline,
-and failure/interruption terminates and reaps its private process groups,
-including the final index writer. Small status files are removed afterwards.
+or serial comparison. Invalid values fail before Docker mutations. Four uses
+the four CPUs observed on the tested hosted runner, but is not a proven optimal
+value and can use more memory and temporary space than two. The parallel phase
+has a ten-minute deadline. Failure/interruption terminates and reaps its private
+process groups, including the final index writer. Small status files are removed
+afterwards.
 
 The algorithm resides in the already fingerprinted language helper, so it
 changes Runtime identity without adding a new release archive schema. The full
 renderer fingerprint, Base provenance and cold/no-cache policy remain intact.
 All Base/basic/English-Japanese/PDF/PNG/SVG/compatibility/Source tests remain
 mandatory before Base-only publication. Fixture tests establish scheduling,
-completion checks and cleanup, not real TeX output equivalence or speedup;
-those still require the next completed hosted Renderer run.
+completion checks and cleanup, not real TeX output equivalence or speedup.
+
+### Completed format comparisons
+
+PR169's two-worker [run 37120657574](https://github.com/n624-dev/latex-renderer/actions/runs/37120657574)
+passed all 45 enabled formats across 11 engines and all Base/basic/English-Japanese/
+SVG/compatibility/Source checks. The four-worker
+[run 37122195676](https://github.com/n624-dev/latex-renderer/actions/runs/37122195676)
+used the same 2026-10-03 snapshot and implementation after merge, with the same
+complete format and validation checks succeeding. Both were non-publishing cold
+builds without Actions caches. The baseline before the coordinator (PR168,
+run 37117088460) used that snapshot but a different implementation.
+
+| Measurement                      | Serial before PR169 |  2 workers | 4 workers |
+| -------------------------------- | ------------------: | ---------: | --------: |
+| Runtime format generation        |                 99s |        79s |       49s |
+| Runtime language install         |                 69s |        77s |       74s |
+| Runtime font cache               |                  8s |        10s |        6s |
+| Complete Runtime validation step |                247s |       247s |      183s |
+| Base build                       |                729s |       736s |      610s |
+| Trivy / SBOM steps               |         116s / 102s | 127s / 95s | 94s / 85s |
+| Whole workflow elapsed           |              20m46s |     20m52s |    17m11s |
+
+Runner performance also changed: Base package CPU was 504.590s with two workers
+and 366.020s with four, although Base installation did not use the Runtime format
+coordinator. These are single-run observations, **not** a controlled claim that
+four workers alone saved the whole 3m41s. The measured format reduction and
+successful complete validation support selecting four as the hosted default;
+dispatch remains available with one/two workers for rollback and further trials.
+
+The four-worker run kept the same 1,444,834,392 verified Base archive bytes and
+108,588,132 peak reserved prefetch bytes. Package download wait was 90.209s,
+compared with 56.253s in the two-worker run. The disk checkpoints showed about
+82 GiB available around Runtime validation and Source integration, but these
+point-in-time filesystem readings are **not** exact temporary-disk peaks or
+parallel-worker memory measurements. Existing low-disk checks and cleanup remain
+mandatory; neither the VPS capacity budget nor the host default is increased.
+
+### Independent manual comparisons
+
+The original ref-only concurrency group made a manual comparison on `main`
+cancel the merge-triggered Renderer job. Manual `renderer-image` runs now use
+their own run ID in the concurrency group. Push/PR runs keep a shared per-ref
+validation group and cancel superseded validation as before. Comparisons do not
+cancel ordinary validation or other manual trials, do not publish, and still
+require an exact snapshot lease when mirror credentials are configured. A
+missing/deleted snapshot fails rather than being silently replaced.
+
+This separation does **not** apply to Daily: publication and registry retention
+remain serialized in the existing `renderer-image-daily` group, with cancellation
+disabled. Do not use a publishing Daily run solely for a benchmark.
