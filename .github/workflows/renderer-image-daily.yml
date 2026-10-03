@@ -26,6 +26,11 @@ on:
         required: true
         default: false
         type: boolean
+      builder_driver:
+        description: "Native Docker image store or previous container/export path"
+        type: choice
+        options: [docker, docker-container]
+        default: docker
 
 permissions:
   contents: read
@@ -69,6 +74,7 @@ jobs:
       REQUESTED_DATE: ${{ github.event.inputs.texlive_date || 'latest' }}
       PUBLISH_REQUESTED: ${{ github.event_name == 'schedule' || inputs.publish == true }}
       DOCKER_BUILD_RECORD_UPLOAD: "false"
+      CI_RENDERER_DRIVER: ${{ inputs.builder_driver || 'docker' }}
       # Register the private distribution hostname with the runner's log
       # masker before any step can emit a snapshot URL.
       TEXLIVE_CI_MIRROR_HOST: ${{ secrets.TEXLIVE_CI_MIRROR_HOST }}
@@ -95,11 +101,17 @@ jobs:
         run: node deploy/scripts/verify-ghcr-write-access.mjs "$IMAGE_REPOSITORY"
 
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+        if: env.CI_RENDERER_DRIVER == 'docker-container'
         id: buildx
         with:
           name: latex-renderer-ghcr
           driver: docker-container
           cleanup: true
+      - name: Select and verify renderer builder
+        id: renderer-builder
+        env:
+          CONTAINER_BUILDER: ${{ steps.buildx.outputs.name }}
+        run: sh deploy/scripts/ci-select-renderer-builder.sh "$CI_RENDERER_DRIVER" "$CONTAINER_BUILDER"
 
       - name: Resolve TeX Live snapshot
         id: snapshot
@@ -154,7 +166,7 @@ jobs:
           TEXLIVE_REPOSITORY: ${{ steps.snapshot.outputs.repository }}
           TEXLIVE_DOWNLOAD_REPOSITORY: ${{ steps.mirror.outputs.repository }}
           TEXLIVE_INSTALLER_SHA512: ${{ steps.snapshot.outputs.installer_sha512 }}
-          BUILDX_BUILDER: ${{ steps.buildx.outputs.name }}
+          BUILDX_BUILDER: ${{ steps.renderer-builder.outputs.name }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GHCR_OWNER: n624-dev
           GHCR_PACKAGE: latex-renderer-texlive
@@ -294,7 +306,7 @@ jobs:
         if: always()
         env:
           SNAPSHOT_DATE: ${{ steps.snapshot.outputs.date }}
-          BUILDX_BUILDER: ${{ steps.buildx.outputs.name }}
+          BUILDX_BUILDER: ${{ steps.renderer-builder.outputs.name }}
         run: |
           set +e
           docker image rm \
@@ -304,8 +316,12 @@ jobs:
             "$IMAGE_REPOSITORY:latest" \
             "latex-renderer:base-${SNAPSHOT_DATE:-unknown}" \
             >/dev/null 2>&1 || true
-          docker buildx prune --builder "${BUILDX_BUILDER:-latex-renderer-ghcr}" --all --force >/dev/null 2>&1 || true
-          docker buildx rm --force "${BUILDX_BUILDER:-latex-renderer-ghcr}" >/dev/null 2>&1 || true
+          if [[ "${BUILDX_BUILDER:-default}" == default ]]; then
+            docker builder prune --all --force >/dev/null 2>&1 || true
+          else
+            docker buildx prune --builder "$BUILDX_BUILDER" --all --force >/dev/null 2>&1 || true
+            docker buildx rm --force "$BUILDX_BUILDER" >/dev/null 2>&1 || true
+          fi
           docker logout ghcr.io >/dev/null 2>&1 || true
 
       - name: Release CI mirror reservation

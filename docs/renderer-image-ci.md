@@ -39,8 +39,19 @@ Both `renderer-image` and `renderer-image-daily` use
 2. Discard the Base builder's redundant local build cache after loading Base.
 3. Build one temporary English/Japanese Runtime from that exact Base using the
    application's language-runtime builder, with layer-cache reuse disabled.
-4. Run basic rendering, English/Japanese PDF + PNG, and SVG smoke tests.
+4. Run basic rendering, English/Japanese PDF + PNG, SVG and compatibility smoke
+   tests, then Source/client integration.
 5. Remove the temporary Runtime and unused default-builder cache, even on failure.
+
+On ephemeral hosted runners, both workflows select and verify the native
+`default` Docker builder by default, avoiding a separate builder container.
+`builder_driver=docker-container` in manual dispatch retains the previous
+export/load path for comparison and rollback. `renderer-image` also accepts an
+explicit `texlive_date` for a same-snapshot, non-publishing cold comparison.
+The default builder is pruned only on the disposable runner; it is never
+removed. Native selection does not enable cache reuse or skip verification.
+Actual hosted native-driver results are still required before claiming a
+performance or disk improvement. See [measurement and comparison](actions-efficiency.md).
 
 PR CI does not log in to GHCR or publish images. Daily publishes only Base after
 the entire sequence succeeds. No language Runtime is published. Installer
@@ -157,6 +168,16 @@ workflow imports or exports an Actions build cache. Runtime tags include the run
 ID and attempt, are removed before use, and are discarded after testing.
 Runtime cache policy on end-user servers is unchanged.
 
+Only the language-install helper is copied before the expensive language layer
+in a managed Runtime build; renderer sources and their fingerprint ARG follow
+it. Host builds can reuse existing language layers on renderer-only changes,
+without adding a new cache. Runtime identity still covers all current sources,
+the Base ID and selected languages; installer changes invalidate that layer.
+CI still cold-builds the Runtime. Language install, format generation and font
+caches have separate wall-time log markers; each command's failure remains
+fatal. `TEXLIVE_CI_STAGE` also records each required validation stage and its
+exit status, including failure, without recording private URLs or arguments.
+
 Daily checks the public registry for the immutable dated Base. A manifest 404
 means missing; authentication/network/server failures stop the run. It does not
 use GitHub's potentially permission-masked package-list 404 as proof of absence.
@@ -188,13 +209,14 @@ Do not run CI cleanup helpers against production Docker: they require
 Validation commands:
 
 ```sh
-pnpm exec vitest run tests/renderer-ci-validation.test.ts tests/application-update-contract.test.ts tests/tex-environment-contract.test.ts tests/supply-chain-contract.test.ts
+pnpm exec vitest run tests/renderer-ci-validation.test.ts tests/renderer-builder-selection.test.ts tests/runtime-build-layer.test.ts tests/application-update-contract.test.ts tests/tex-environment-contract.test.ts tests/supply-chain-contract.test.ts
 ```
 
 The command-level failure tests use isolated fake Docker/smoke commands, never
 production images. Real rendering still requires the GitHub-hosted image CI.
 Run a non-publishing Daily dispatch to exercise registry reuse; run PR image CI
 to exercise a cold build. Long image CI is not continuously monitored.
+
 ## Smoke-test output isolation
 
 Renderer and Base smoke fixtures use a temporary Docker-managed output volume,

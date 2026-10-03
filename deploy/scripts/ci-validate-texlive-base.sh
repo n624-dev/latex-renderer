@@ -13,9 +13,17 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
+run_stage() {
+  stage=$1
+  shift
+  started=$(date +%s)
+  if "$@"; then status=0; else status=$?; fi
+  printf 'TEXLIVE_CI_STAGE stage=%s seconds=%s exit=%s\n' "$stage" "$(($(date +%s) - started))" "$status"
+  return "$status"
+}
 # Remove any previous attempt's tag, not just its cached build layers.
 docker image rm "$validation_runtime" >/dev/null 2>&1 || true
-sh "$script_root/smoke-test-texlive-base.sh" "$base"
+run_stage base-smoke sh "$script_root/smoke-test-texlive-base.sh" "$base"
 if [ "$repository" != "$canonical_repository" ]; then
   if docker history --no-trunc "$base" | grep -F -- "$repository" >/dev/null; then
     echo "CI mirror URL remains in image history" >&2
@@ -39,23 +47,23 @@ docker run --rm --network none --read-only \
   '
 # The Base has been loaded. Its now-redundant BuildKit export state need not
 # coexist with the language layer build. Only this job's builder is pruned.
-if [ -n "${BUILDX_BUILDER:-}" ]; then
+if [ -n "${BUILDX_BUILDER:-}" ] && [ "$BUILDX_BUILDER" != default ]; then
   docker buildx prune --builder "$BUILDX_BUILDER" --all --force
 fi
 docker builder prune --all --force
 sh "$script_root/ci-renderer-disk.sh" before-language-validation 6
-RUNTIME_NO_CACHE=true RUNTIME_BUILDX_BUILDER=default \
+RUNTIME_NO_CACHE=true RUNTIME_BUILDX_BUILDER=default run_stage language-runtime \
   sh "$script_root/build-language-runtime.sh" "$base" "$repository" "$validation_runtime" \
     collection-langenglish collection-langjapanese
 [ "$(docker image inspect "$validation_runtime" --format '{{index .Config.Labels "jp.n624.latex-renderer.languages"}}')" = collection-langenglish,collection-langjapanese ]
 [ "$(docker image inspect "$validation_runtime" --format '{{index .Config.Labels "jp.n624.latex-renderer.runtime-kind"}}')" = managed-local-v1 ]
-sh "$script_root/smoke-test-renderer-basic.sh" "$validation_runtime"
-sh "$script_root/smoke-test-renderer-en-jp.sh" "$validation_runtime"
-sh "$script_root/smoke-test-renderer-svg.sh" "$validation_runtime"
-sh "$script_root/smoke-test-renderer-compat.sh" "$validation_runtime"
+run_stage basic sh "$script_root/smoke-test-renderer-basic.sh" "$validation_runtime"
+run_stage en-jp sh "$script_root/smoke-test-renderer-en-jp.sh" "$validation_runtime"
+run_stage svg sh "$script_root/smoke-test-renderer-svg.sh" "$validation_runtime"
+run_stage compat sh "$script_root/smoke-test-renderer-compat.sh" "$validation_runtime"
 # Reuse this exact immutable local Runtime before the existing cleanup trap;
 # Source/client integration success is also mandatory before Base publication.
-sh "$script_root/ci-source-pipeline-e2e.sh" "$validation_runtime"
+run_stage source-pipeline sh "$script_root/ci-source-pipeline-e2e.sh" "$validation_runtime"
 # Success is the exit status of this complete sequence, never a cached marker.
 cleanup
 sh "$script_root/ci-renderer-disk.sh" after-language-validation 0

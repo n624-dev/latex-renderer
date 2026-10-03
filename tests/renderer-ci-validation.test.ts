@@ -76,18 +76,22 @@ describe("Base-only CI validation failure boundaries", () => {
 
   it
     .skipIf(process.platform === "win32")
-    .each([
-      "",
-      "smoke-test-texlive-base.sh",
-      "build-language-runtime.sh",
-      "smoke-test-renderer-basic.sh",
-      "smoke-test-renderer-en-jp.sh",
-      "smoke-test-renderer-svg.sh",
-      "smoke-test-renderer-compat.sh",
-      "ci-source-pipeline-e2e.sh",
-    ])(
-    "cleans temporary Runtime on success or failure at %s",
-    (failedStage) => {
+    .each(
+      ["", "default", "fixture-container"].flatMap((builder) =>
+        [
+          "",
+          "smoke-test-texlive-base.sh",
+          "build-language-runtime.sh",
+          "smoke-test-renderer-basic.sh",
+          "smoke-test-renderer-en-jp.sh",
+          "smoke-test-renderer-svg.sh",
+          "smoke-test-renderer-compat.sh",
+          "ci-source-pipeline-e2e.sh",
+        ].map((failedStage) => ({ builder, failedStage })),
+      ),
+    )(
+    "cleans temporary Runtime on success or failure at $failedStage with builder $builder",
+    ({ builder, failedStage }) => {
       const root = mkdtempSync(join(tmpdir(), "renderer-ci-contract-"));
       try {
         writeFileSync(
@@ -132,12 +136,34 @@ describe("Base-only CI validation failure boundaries", () => {
               RUNNER_ENVIRONMENT: "github-hosted",
               GITHUB_RUN_ID: "123",
               GITHUB_RUN_ATTEMPT: "2",
+              BUILDX_BUILDER: builder,
               TEST_TRACE: trace,
               FAIL_STAGE: failedStage,
             },
           },
         );
         expect(result.status, result.stderr).toBe(failedStage ? 42 : 0);
+        const stages: Record<string, string> = {
+          "smoke-test-texlive-base.sh": "base-smoke",
+          "build-language-runtime.sh": "language-runtime",
+          "smoke-test-renderer-basic.sh": "basic",
+          "smoke-test-renderer-en-jp.sh": "en-jp",
+          "smoke-test-renderer-svg.sh": "svg",
+          "smoke-test-renderer-compat.sh": "compat",
+          "ci-source-pipeline-e2e.sh": "source-pipeline",
+        };
+        if (failedStage) {
+          expect(result.stdout).toMatch(
+            new RegExp(
+              `TEXLIVE_CI_STAGE stage=${stages[failedStage]} seconds=\\d+ exit=42`,
+            ),
+          );
+        } else {
+          for (const stage of Object.values(stages))
+            expect(result.stdout).toMatch(
+              new RegExp(`TEXLIVE_CI_STAGE stage=${stage} seconds=\\d+ exit=0`),
+            );
+        }
         const commands = readFileSync(trace, "utf8");
         expect(
           commands.match(/docker image rm latex-renderer:ci-validation-123-2/g)
@@ -145,6 +171,16 @@ describe("Base-only CI validation failure boundaries", () => {
         ).toBeGreaterThanOrEqual(2);
         expect(commands).not.toContain("docker push");
         expect(commands).toContain("docker builder prune --all --force");
+        if (
+          builder === "fixture-container" &&
+          failedStage !== "smoke-test-texlive-base.sh"
+        ) {
+          expect(commands).toContain(
+            "docker buildx prune --builder fixture-container --all --force",
+          );
+        } else {
+          expect(commands).not.toContain("docker buildx prune");
+        }
         if (failedStage === "smoke-test-texlive-base.sh")
           expect(commands).not.toContain("build-language-runtime.sh");
         if (!failedStage)
