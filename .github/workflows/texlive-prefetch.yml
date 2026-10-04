@@ -6,6 +6,7 @@ on:
       - "renderer/TeXLivePrefetch.pm"
       - "renderer/Dockerfile.base"
       - "tests/texlive_prefetch_test.py"
+      - "tests/texlive_package_metrics_test.py"
       - ".github/workflows/texlive-prefetch.yml"
   push:
     branches: [main]
@@ -13,6 +14,7 @@ on:
       - "renderer/TeXLivePrefetch.pm"
       - "renderer/Dockerfile.base"
       - "tests/texlive_prefetch_test.py"
+      - "tests/texlive_package_metrics_test.py"
       - ".github/workflows/texlive-prefetch.yml"
 
 permissions:
@@ -30,5 +32,5 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libwww-perl liblwp-protocol-https-perl openssl
-      - name: Test bounded prefetch against a local HTTPS server
-        run: python3 -m unittest -v tests/texlive_prefetch_test.py
+      - name: Test bounded prefetch and upstream package measurements
+        run: python3 -m unittest -v tests/texlive_prefetch_test.py tests/texlive_package_metrics_test.py

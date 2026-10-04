@@ -9,7 +9,7 @@ use IO::Select ();
 use JSON::PP qw(encode_json decode_json);
 use POSIX ();
 use Socket qw(AF_UNIX SOCK_STREAM PF_UNSPEC);
-use Time::HiRes qw(time);
+use Time::HiRes qw(time clock_gettime CLOCK_MONOTONIC);
 use TeXLive::TLUtils ();
 
 # Preload before install-tl imports TLUtils. The signed installer and its
@@ -18,6 +18,91 @@ use TeXLive::TLUtils ();
 my $original_install = \&TeXLive::TLUtils::install_packages;
 my $original_download = \&TeXLive::TLUtils::download_file;
 my $pool;
+our $package_metrics;
+my %profile_functions = (
+    checksum => 'check_file_and_remove',
+    decompress => 'system_pipe',
+    extract => 'untar',
+);
+my %profile_original = map {
+    $_ => TeXLive::TLUtils->can($profile_functions{$_})
+} keys %profile_functions;
+
+sub cpu_total {
+    my @cpu = times;
+    return $cpu[0] + $cpu[1] + $cpu[2] + $cpu[3];
+}
+
+# Observe the upstream routine without changing its arguments, calling context,
+# return values or exception. Only the installer parent records package work;
+# forked download workers and metadata calls outside install_packages do not.
+# CPU includes waited descendants, not still-running background downloaders.
+sub measured {
+    my $stage = shift;
+    my $original = shift;
+    # Keep the remaining @_ aliases intact for upstream argument mutations.
+    return $original->(@_) unless $package_metrics && $package_metrics->{pid} == $$;
+    my $context = wantarray;
+    my ($value, @values, $ok, $error);
+    my $started = clock_gettime(CLOCK_MONOTONIC);
+    my $cpu = cpu_total();
+    {
+        local $@;
+        $ok = eval {
+            if (!defined $context) { $original->(@_); }
+            elsif ($context) { @values = $original->(@_); }
+            else { $value = $original->(@_); }
+            1;
+        };
+        $error = $@;
+    }
+    my $record = $package_metrics->{stages}{$stage};
+    $record->{calls}++;
+    $record->{exceptions}++ unless $ok;
+    $record->{elapsed_seconds} += clock_gettime(CLOCK_MONOTONIC) - $started;
+    $record->{cpu_seconds} += cpu_total() - $cpu;
+    die $error unless $ok;
+    return unless defined $context;
+    return $context ? @values : $value;
+}
+
+sub install {
+    my $context = wantarray;
+    local $package_metrics = {pid => $$, stages => {}};
+    for my $stage (keys %profile_functions) {
+        # A future installer can move a helper. Report unavailable explicitly;
+        # do not claim zero CPU or change/fail its otherwise valid installation.
+        $package_metrics->{stages}{$stage} = $profile_original{$stage}
+            ? {calls => 0, exceptions => 0, elapsed_seconds => 0, cpu_seconds => 0}
+            : undef;
+    }
+    my $started = clock_gettime(CLOCK_MONOTONIC);
+    my $cpu = cpu_total();
+    my ($result, @results, $ok, $error);
+    {
+        local $@;
+        $ok = eval {
+            if (!defined $context) { measured_install(@_); }
+            elsif ($context) { @results = measured_install(@_); }
+            else { $result = measured_install(@_); }
+            1;
+        };
+        $error = $@;
+    }
+    my $report = {schema => 1, returned => $ok ? 1 : 0,
+        elapsed_seconds => clock_gettime(CLOCK_MONOTONIC) - $started,
+        cpu_seconds => cpu_total() - $cpu, stages => $package_metrics->{stages}};
+    for my $record ($report, values %{$report->{stages}}) {
+        next unless defined $record;
+        $record->{$_} = 0 + sprintf('%.3f', $record->{$_})
+            for qw(elapsed_seconds cpu_seconds);
+    }
+    # Fixed labels and numbers only: no arguments, paths, URLs or error text.
+    print 'TEXLIVE_PACKAGE_METRICS ', encode_json($report), "\n";
+    die $error unless $ok;
+    return unless defined $context;
+    return $context ? @results : $result;
+}
 
 sub setting {
     my ($name, $default, $min, $max) = @_;
@@ -275,7 +360,7 @@ sub stop {
 
 sub DESTROY { $_[0]->stop unless $_[0]->{stopped}; }
 
-sub install {
+sub measured_install {
     my ($db, $media, $target, $packages, $src, $doc) = @_;
     my $workers = setting('TEXLIVE_PREFETCH_WORKERS', 4, 0, 8);
     return $original_install->(@_) if !$workers || $media ne 'NET' || $src || $doc
@@ -292,15 +377,22 @@ sub install {
     }
     return $original_install->(@_) unless @plan;
     $pool = __PACKAGE__->new(\@plan);
-    my ($result, $error);
-    { local $@; $result = eval { $original_install->(@_) }; $error = $@; }
+    my ($result, $ok, $error);
+    { local $@; $ok = eval { $result = $original_install->(@_); 1; }; $error = $@; }
     $pool->stop;
     undef $pool;
-    die $error if $error;
+    die $error unless $ok;
     return $result;
 }
 
 { no warnings 'redefine';
+    no strict 'refs';
+    for my $stage (keys %profile_original) {
+        my $original = $profile_original{$stage} or next;
+        *{"TeXLive::TLUtils::$profile_functions{$stage}"} = sub {
+            return measured($stage, $original, @_);
+        };
+    }
     *TeXLive::TLUtils::install_packages = \&install;
     *TeXLive::TLUtils::download_file = sub {
         if ($pool) {
