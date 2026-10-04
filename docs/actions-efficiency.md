@@ -294,8 +294,127 @@ allowing future matched-snapshot comparisons without losing the breakdown.
 Installation order, checksum/signature verification, canonical identity,
 prefetch bounds and cache-free CI are unchanged. Small automated fixtures test
 measurement contracts and cleanup, not real TeX installation performance.
-**No further hosted speedup has been measured for this instrumentation.** Use
-the next completed cold Renderer log to select an actual CPU optimization.
+The instrumentation itself does not optimize installation. The completed hosted
+measurements below identify and compare a separate database-save optimization.
+
+## Disposable Base database-save comparison
+
+PR172's completed cold Renderer run took 22m20s: Base 832s, Runtime validation
+265s, Trivy 124s and SBOM 75s. The package phase used 529.500s of CPU in 570.128s
+elapsed; its checksum, decompressor and extraction helpers used 4.560s, 93.110s
+and 36.820s of CPU respectively. These overlapping spans do not establish that
+all remaining CPU belongs to database saves. The upstream installer nevertheless
+serializes and replaces the entire local TLPDB after each package, making save
+frequency a measurable candidate. The audited implementation is
+[TeX-Live/installer at 58d75a8](https://github.com/TeX-Live/installer/blob/58d75a899f1bc86bab25285181c90d6b01095a31/tlpkg/TeXLive/TLPDB.pm).
+
+The new `TEXLIVE_DATABASE_SAVES` record measures standard saves as well as the
+candidate, including physical/requested/deferred counts, save elapsed/CPU,
+verification elapsed/CPU, peak verification-file bytes, pending requests and
+final local-DB SHA-512. As with
+package metrics, `returned` means no exception, not successful installation.
+No extra metrics file, download cache or private URL is recorded.
+
+The GitHub-hosted default is **64 requests per physical save**, selected from
+the successful matched-snapshot trials below. The Dockerfile/host default stays
+**one save per upstream request**. Hosted dispatch can select 1 for rollback
+or 16 for non-publishing comparisons. This changes only the local target
+DB inside standard `install_packages`; the source database, package order,
+archive verification and extraction are unchanged. A pending batch is saved
+before package postactions and when installation returns. Every candidate
+checkpoint, and the final DB in either mode, must exactly match the current
+upstream `writeout` serialization by SHA-512. A real temporary file beside the
+local DB supports upstream Perl `format`/`write` output (not just `print`) and
+is removed after verification or exceptions. Only one DB-sized verification
+file exists at a time; its measured maximum size is recorded, not treated as
+the peak of the whole build. Truncated or failed
+writes cannot become successful checkpoints. Verification time is recorded
+separately, not hidden from package/install elapsed time.
+
+Batching requires an explicitly disposable, network-mode, non-resuming
+`install-tl --no-continue` invocation with the current supported TLPDB API;
+unsupported scope or new save arguments fail rather than silently batch.
+Source/other databases and forked workers are not intercepted. The preload is
+mounted only during the Base build, before the existing prefetch preload; it is
+not installed into public images or applied to later `tlmgr` operations. A
+failed/killed build is discarded and rebuilt cold, never resumed from its last
+checkpoint. Daily allows the validated 64 setting or standard 1 on its existing
+publication path, with every existing validation and immutable-tag check intact.
+The experimental 16 setting cannot publish or reuse a dated Base for comparison.
+Normal Daily reuse remains valid with 64: it still pulls an existing immutable
+Base by digest and validates it, rather than changing its contents or relabeling
+it as a benchmark. Use ordinary non-publishing Renderer for cold comparisons.
+No production server database is changed.
+
+Small local fixture comparison (1,500 packages with 512-byte payloads; final DB
+802,500 bytes, identical bytes in all three modes):
+
+| Batch | Physical saves | Save wall | Save CPU | Verify wall | Verify CPU | Fixture wall |
+| ----- | -------------- | --------- | -------- | ----------- | ---------- | ------------ |
+| 1     | 1,501          | 1.306s    | 1.270s   | 0.007s      | 0.010s     | 1.380s       |
+| 16    | 94             | 0.097s    | 0.150s   | 0.354s      | 0.300s     | 0.515s       |
+| 64    | 24             | 0.027s    | 0.020s   | 0.098s      | 0.110s     | 0.177s       |
+
+The peak verification file was 802,500 bytes in each mode, with no residual
+verification files. These are synthetic fixture measurements, **not real TeX installation timings or
+a guaranteed hosted speedup**. Temporary fixture directories are automatically
+removed; peak runner memory/temporary disk still requires real measurements.
+The benchmark can be repeated without downloading TeX:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 tests/texlive_database_batch_test.py --benchmark
+```
+
+Use matched commit/date/snapshot identity, builder and Runtime format-worker
+settings for real 1/16/64 trials. Inspect save/verification/package CPU, complete
+installer time, whole job duration, prefetch bytes/wait and existing disk
+checkpoints, alongside all rendering validations. Cross-run DB hashes are not a
+substitute for provenance or tests. Do not monitor new long jobs continuously
+or treat fixture speed alone as adoption evidence.
+
+### Hosted 1 / 16 / 64 comparison and selection
+
+All three successful cold runs used commit
+`750658ef14cddf877ba9078ead891a1b19eb2cbf`, the 2026-10-04 snapshot, native
+Docker builder, four prefetch workers and four Runtime format workers. They ran
+sequentially, on separate GitHub-hosted runners, without Actions/build caches.
+The signed installer identity, final local DB SHA-512, verified archive bytes
+and verification-file size matched. All Base/basic/English-Japanese/SVG/compat/
+Source stages, 45 formats, Trivy and SBOM succeeded in every run.
+
+| Measurement                  | [Standard 1](https://github.com/n624-dev/latex-renderer/actions/runs/37193518848) | [16](https://github.com/n624-dev/latex-renderer/actions/runs/37199521582) | [64](https://github.com/n624-dev/latex-renderer/actions/runs/37197789883) |
+| ---------------------------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| Physical saves / requests    | 4,576 / 4,576                                                                     | 289 / 4,576                                                               | 73 / 4,576                                                                |
+| DB save wall / CPU           | 354.207s / 353.110s                                                               | 17.441s / 15.760s                                                         | 6.010s / 5.970s                                                           |
+| Verification wall / CPU      | 0.197s / 0.190s                                                                   | 20.733s / 20.760s                                                         | 7.665s / 7.640s                                                           |
+| Package wall / CPU           | 577.180s / 521.910s                                                               | 357.376s / 165.730s                                                       | 255.885s / 178.770s                                                       |
+| Download wait                | 79.427s                                                                           | 205.822s                                                                  | 101.744s                                                                  |
+| Installer                    | 719s                                                                              | 443s                                                                      | 398s                                                                      |
+| Base build step              | 784s                                                                              | 523s                                                                      | 507s                                                                      |
+| Runtime validation step      | 263s                                                                              | 185s                                                                      | 245s                                                                      |
+| Trivy / SBOM                 | 119s / 94s                                                                        | 101s / 104s                                                               | 119s / 85s                                                                |
+| Whole job                    | 21m39s                                                                            | 16m02s                                                                    | 16m36s                                                                    |
+| Peak verification-file bytes | 15,501,345                                                                        | 15,501,345                                                                | 15,501,345                                                                |
+| Peak reserved prefetch bytes | 108,588,132                                                                       | 108,588,132                                                               | 105,522,924                                                               |
+
+Select **64 for disposable hosted CI**, not because its whole job was fastest
+(16 was 34s shorter), but because it minimized the targeted save-plus-verify
+CPU: 13.610s versus 36.520s with 16 and 353.300s with standard saves. Installer
+wall time was also lowest with 64. The 16 runner used less CPU on unchanged
+decompression/extraction and spent less time on unrelated Runtime validation;
+download wait also varied substantially. A single whole-job ranking is not a
+controlled estimate of the batching effect, nor proof of sustained stability.
+The 64 trial saved 5m03s overall versus standard in this observation, not a
+guaranteed 23% speedup for every runner/snapshot.
+
+Each mode verified 1,444,850,036 archive bytes. The final DB hash was
+`b47c4b5e4c8e0e7e960ced567fec997650d53281c2ffb094ccc7d21830b4b77417ba01a71496f955d098271d39065f2a5c19031ca3ea4678b79bfb9acd734438`.
+The verification file adds at most one local DB at a time (about 14.78 MiB in
+these runs) and is removed after each check. Observed 16/64 runner free space
+was 87 GiB before Base and about 82 GiB around Runtime/Source validation.
+These are checkpoints, not a measured exact whole-build peak or instantaneous
+transfer speed. No VPS cache/quota change is needed. Host fallback stays at one;
+use the dispatch setting 1 for hosted rollback without disabling verification.
 
 Both image analyzers remain separate and unchanged: Trivy keeps its vulnerability,
 misconfiguration and secret coverage; Syft still produces the uploaded CycloneDX
