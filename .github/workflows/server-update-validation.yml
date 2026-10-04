@@ -35,7 +35,7 @@ jobs:
         run: |
           corepack enable
           sudo apt-get update
-          sudo apt-get install --no-install-recommends --yes age acl libarchive-tools
+          sudo apt-get install --no-install-recommends --yes age acl libarchive-tools nginx-light
       - name: Check pinned branch source and build
         id: source
         run: |

@@ -7,7 +7,12 @@ import {
   parseEnvironmentFile,
   productionAuthenticationPlan,
   browserAuthenticationRequirements,
+  serverIngressFromEnvironment,
 } from "../../packages/server-setup-core/src/index.mjs";
+import {
+  verifyProductionIngressTls,
+  verifyIngressInterface,
+} from "./server-ingress.mjs";
 export {
   parseEnvironmentFile,
   validateProfileValues,
@@ -74,13 +79,16 @@ function main() {
     minimumBytes: 1,
     maximumBytes: 128 * 1024,
   });
-  const profile = productionAuthenticationPlan(
-    parseEnvironmentFile(readFileSync(environmentPath, "utf8")),
-  );
+  const values = parseEnvironmentFile(readFileSync(environmentPath, "utf8"));
+  const profile = productionAuthenticationPlan(values);
   // Profile-only planning is used before generating a missing password pepper.
   // It validates the complete profile, but certifies no secret files.
-  if (action !== "--profile-plan")
+  if (action !== "--profile-plan") {
+    const ingress = serverIngressFromEnvironment(values);
+    verifyProductionIngressTls(ingress, rendererGid);
+    verifyIngressInterface(ingress);
     verifyProductionAuthSecrets(profile, rendererGid);
+  }
   if (action !== undefined)
     process.stdout.write(`${JSON.stringify(profile)}\n`);
   else

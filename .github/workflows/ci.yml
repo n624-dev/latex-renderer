@@ -34,7 +34,7 @@ jobs:
       - name: Install backup integration-test dependency
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends --yes age acl libarchive-tools
+          sudo apt-get install --no-install-recommends --yes age acl libarchive-tools nginx-light
       - name: Install dependencies
         run: node deploy/ci/measure-phase.mjs dependencies -- pnpm install --frozen-lockfile
       # Same checks as pnpm check, measured separately. One fresh recursive

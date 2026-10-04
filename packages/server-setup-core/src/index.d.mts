@@ -4,6 +4,69 @@ export interface ValidatedProductionProfile {
   publicOrigin: string;
 }
 
+export type ServerIngressReview =
+  | Readonly<{
+      format: 1;
+      mode: "cloudflare";
+      publicOrigin: string;
+      accessScope: "internet";
+      tlsProvider: "cloudflare";
+    }>
+  | Readonly<{
+      format: 1;
+      mode: "standalone";
+      publicOrigin: string;
+      accessScope: "local" | "lan" | "internet";
+      tlsProvider: "custom" | "automatic";
+      listenAddress: string;
+      allowedNetworks?: readonly string[];
+    }>;
+export const INGRESS_PROFILE_KEYS: readonly string[];
+export function serverIngressFromEnvironment(
+  values: ReadonlyMap<string, string>,
+): ServerIngressReview | null;
+export function validateServerIngressReview(
+  input: unknown,
+): ServerIngressReview;
+/** Ingress keys ONLY. Merge with the matching auth/deployment profile, never replace a full EnvironmentFile. */
+export function serverIngressReviewEnvironment(
+  input: unknown,
+): Map<string, string>;
+export function serverIngressContainsAddress(
+  network: string,
+  address: string,
+): boolean;
+export function validateServerIngressTls(
+  input: unknown,
+  certificate: Buffer,
+  privateKey: Buffer,
+  now?: number,
+): Readonly<{
+  fingerprint256: string;
+  expiresAt: string;
+  publicOrigin: string;
+}>;
+export const SERVER_INGRESS_TLS_PATHS: Readonly<{
+  certificate: string;
+  privateKey: string;
+}>;
+export function renderServerIngressNginx(input: unknown): string;
+export interface ServerSetupDeploymentReview {
+  readonly format: 3;
+  readonly authentication: ServerSetupAuthenticationReview;
+  readonly ingress: ServerIngressReview | null;
+}
+export function importServerSetupDeploymentReview(
+  contents: string,
+): ServerSetupDeploymentReview;
+export function validateServerSetupDeploymentReview(
+  input: unknown,
+): ServerSetupDeploymentReview;
+/** Non-secret configuration ONLY, not an installed EnvironmentFile writer. */
+export function serverSetupDeploymentReviewEnvironment(
+  input: unknown,
+): Map<string, string>;
+
 export type BrowserAuthenticationSelection =
   | Readonly<{ backend: "cloudflare-access" }>
   | Readonly<{

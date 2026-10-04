@@ -1,7 +1,12 @@
 import { URL } from "node:url";
 import { parseBrowserAuthenticationSelection } from "./browser-auth-selection.mjs";
+import {
+  INGRESS_PROFILE_KEYS,
+  serverIngressFromEnvironment,
+} from "./ingress-review.mjs";
 
 const PROFILE_KEYS = new Set([
+  ...INGRESS_PROFILE_KEYS,
   "ADMIN_API_URL",
   "AUTH_MODE",
   "AUTH_BACKEND",
@@ -129,6 +134,7 @@ export function validateProfileValues(values) {
         "OIDC_ALLOWED_ALGORITHMS must be a unique asymmetric allowlist",
       );
   }
+  serverIngressFromEnvironment(values);
   return { authMode, deploymentMode, publicOrigin };
 }
 

@@ -9,6 +9,10 @@ model and the exact validation used by the privileged deployment preflight.
 It does **not** provide a completed wizard. A separate privileged host adapter
 can apply a reviewed authentication-only change; see
 [the authentication cutover runbook](authentication-cutover.md).
+Explicit scope/TLS review, standalone Nginx generation and read-only host
+preflight are now connected in one implementation; see
+[reviewed standalone HTTPS ingress](standalone-ingress.md). This does not
+automatically apply network settings or complete the CUI/Web wizard.
 
 ## Existing installations stay unchanged
 
@@ -62,6 +66,15 @@ this map:** that would discard unrelated renderer/storage/internal settings and
 secret references. This API is a validation/review boundary, not a file writer.
 Existing legacy duplicate/control-character checks still apply to all lines,
 including keys excluded from the review model.
+
+Use `importServerSetupDeploymentReview`, `validateServerSetupDeploymentReview`
+and `serverSetupDeploymentReviewEnvironment` for the aggregate format-3 model
+that preserves authentication **and** explicit ingress. Format-1 and auth-only
+format-2 imports reject ingress keys instead of losing them. Legacy format-3
+imports retain `ingress: null` without guessing exposure. The shared
+`serverIngressFromEnvironment` / `validateServerIngressReview` checks are also
+used by production preflight; active automatic TLS is explicitly not implemented.
+Like the existing maps, format-3 export is not a full EnvironmentFile writer.
 
 Origin spellings normalize during review, and omitted OIDC algorithms become
 the existing default allowlist. Import/review does not rewrite installed files.

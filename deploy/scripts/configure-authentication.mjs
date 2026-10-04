@@ -10,8 +10,13 @@ import {
   parseEnvironmentFile,
   parseBrowserAuthenticationSelection,
   productionAuthenticationPlan,
+  serverIngressFromEnvironment,
 } from "../../packages/server-setup-core/src/index.mjs";
 import { verifyProductionAuthSecrets } from "./validate-production-profile.mjs";
+import {
+  verifyProductionIngressTls,
+  verifyIngressInterface,
+} from "./server-ingress.mjs";
 import { acquireMutationLock } from "./mutation-lock.mjs";
 import {
   AuthenticationChangeStore,
@@ -150,9 +155,11 @@ async function main() {
       },
       health: hostHealth,
       preflight: (contents) => {
-        const plan = productionAuthenticationPlan(
-          parseEnvironmentFile(contents),
-        );
+        const values = parseEnvironmentFile(contents);
+        const plan = productionAuthenticationPlan(values);
+        const ingress = serverIngressFromEnvironment(values);
+        verifyProductionIngressTls(ingress, gid);
+        verifyIngressInterface(ingress);
         verifyProductionAuthSecrets(plan, gid);
         const database = new DatabaseSync(
           "/var/lib/latex-renderer/renderer.sqlite3",

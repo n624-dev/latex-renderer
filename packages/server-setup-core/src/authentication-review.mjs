@@ -10,6 +10,10 @@ import {
   browserAuthenticationRequirements,
 } from "./browser-auth-selection.mjs";
 import { profileRecord as record } from "./profile-shape.mjs";
+import {
+  INGRESS_PROFILE_KEYS,
+  serverIngressFromEnvironment,
+} from "./ingress-review.mjs";
 
 const SELECTION_KEYS = [
   "AUTH_BACKEND",
@@ -21,6 +25,10 @@ const SELECTION_KEYS = [
 // Every enabled method must pass existing production-profile validation.
 export function importServerSetupAuthenticationReview(contents) {
   const values = parseEnvironmentFile(contents);
+  if (INGRESS_PROFILE_KEYS.some((key) => values.has(key)))
+    throw new Error(
+      "Authentication-only import cannot preserve ingress settings; use the deployment review API",
+    );
   const selection = parseBrowserAuthenticationSelection(values);
   const legacy = (mode) => {
     const projected = new Map(values);
@@ -157,7 +165,10 @@ export function serverSetupAuthenticationReviewEnvironment(input) {
   if (auth.backend === "native") {
     // These are validated policy flags, not credentials. Emit fixed literals
     // rather than propagating arbitrary input into the host EnvironmentFile.
-    values.set("AUTH_PASSWORD_ENABLED", auth.passwordEnabled ? "true" : "false");
+    values.set(
+      "AUTH_PASSWORD_ENABLED",
+      auth.passwordEnabled ? "true" : "false",
+    );
     values.set("AUTH_OIDC_ENABLED", auth.oidcEnabled ? "true" : "false");
     if (auth.oidc && Object.hasOwn(auth.oidc, "displayName"))
       values.set("OIDC_DISPLAY_NAME", auth.oidc.displayName);
@@ -188,8 +199,12 @@ export function serverSetupInitialOwnerPlan(input) {
 // Host consumers share this validated, non-secret execution plan. Format-1
 // profile APIs remain legacy-only. No full EnvironmentFile is exported.
 export function productionAuthenticationPlan(values) {
+  // Validate ingress before projecting the explicitly auth-only execution plan.
+  serverIngressFromEnvironment(values);
+  const authenticationValues = new Map(values);
+  for (const key of INGRESS_PROFILE_KEYS) authenticationValues.delete(key);
   const review = importServerSetupAuthenticationReview(
-    environmentContents(values),
+    environmentContents(authenticationValues),
   );
   const selection = parseBrowserAuthenticationSelection(values);
   const requirements = browserAuthenticationRequirements(selection);
