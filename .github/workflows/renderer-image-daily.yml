@@ -37,10 +37,10 @@ on:
         options: ["1", "2", "4"]
         default: "4"
       database_save_batch:
-        description: "Non-publishing comparison only (1 keeps standard saves)"
+        description: "Validated hosted default 64; 16 is non-publishing only"
         type: choice
         options: ["1", "16", "64"]
-        default: "1"
+        default: "64"
 
 permissions:
   contents: read
@@ -86,7 +86,7 @@ jobs:
       DOCKER_BUILD_RECORD_UPLOAD: "false"
       CI_RENDERER_DRIVER: ${{ inputs.builder_driver || 'docker' }}
       CI_FORMAT_JOBS: ${{ inputs.format_jobs || '4' }}
-      CI_DATABASE_SAVE_BATCH: ${{ inputs.database_save_batch || '1' }}
+      CI_DATABASE_SAVE_BATCH: ${{ inputs.database_save_batch || '64' }}
       # Register the private distribution hostname with the runner's log
       # masker before any step can emit a snapshot URL.
       TEXLIVE_CI_MIRROR_HOST: ${{ secrets.TEXLIVE_CI_MIRROR_HOST }}
@@ -98,7 +98,7 @@ jobs:
         with:
           node-version: "24"
 
-      - name: Validate disposable database save comparison
+      - name: Validate disposable database save settings
         run: sh deploy/scripts/ci-texlive-database-save-settings.sh
 
       - name: Validate legacy Runtime cleanup request
@@ -193,7 +193,7 @@ jobs:
 
           printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
           tag_status=$(GITHUB_TOKEN= node deploy/scripts/ghcr-tag-status.mjs "$SNAPSHOT_DATE")
-          if [[ "$CI_DATABASE_SAVE_BATCH" != 1 && "$tag_status" == present ]]; then
+          if [[ "$CI_DATABASE_SAVE_BATCH" == 16 && "$tag_status" == present ]]; then
             echo 'Database save comparison requires a cold build; use non-publishing renderer-image.' >&2
             exit 64
           fi

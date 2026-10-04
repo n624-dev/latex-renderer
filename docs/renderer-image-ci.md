@@ -286,12 +286,17 @@ to exercise a cold build. Long image CI is not continuously monitored.
 
 ## Disposable local-DB save trials
 
-`renderer-image` dispatch exposes `database_save_batch` (1/16/64, default 1).
+`renderer-image` dispatch exposes `database_save_batch` (1/16/64, default 64).
 Use the same source commit, explicit `texlive_date`, `builder_driver=docker`
 and `format_jobs=4` for comparisons. This workflow never publishes. Ordinary
-PR/push validation, Daily publication and host fallback retain standard saves.
-The setting is checked before Docker mutation; batching candidates require a
-disposable GitHub-hosted runner and cannot publish or reuse a dated Base.
+PR/push validation and fresh Daily builds use the validated 64 setting; host
+fallback and the Dockerfile default retain standard 1-request saves.
+The setting is checked before Docker mutation and batching requires a
+disposable GitHub-hosted runner. Daily can publish with validated 64 or rollback
+1 only after all existing validation, provenance and immutable-tag gates.
+The experimental 16 setting cannot publish or reuse a dated Base for comparison.
+Normal Daily reuse with 64 remains digest-qualified and freshly validated,
+without rebuilding or overwriting that dated Base.
 
 For example, after the comparison branch is pushed, dispatch a candidate using
 its actual ref (replace the placeholders, do not use a moving `latest` date):
@@ -307,8 +312,10 @@ trial. A missing/deleted snapshot fails; do not switch silently to another date.
 Read completed logs for `TEXLIVE_DATABASE_SAVES` plus existing installer,
 package, prefetch, Runtime and disk metrics. Every candidate must still pass
 Base/basic/en-jp/PDF/PNG/SVG/compatibility/Source validation and both image
-analyzers. Candidate success alone does not change the default or authorize
-publication. See [comparison semantics and fixture limits](actions-efficiency.md#disposable-base-database-save-comparison).
+analyzers. The matched 1/16/64 trials selected 64 based on save-plus-verify CPU
+and installer time, not the whole-job ranking on different runners. To roll
+back hosted behavior, dispatch with `database_save_batch=1`; do not turn off
+checks or resume a failed install. See [measured comparison and selection](actions-efficiency.md#hosted-1--16--64-comparison-and-selection).
 
 The standard installer remains sequential. The preload defers only local target
 DB saves, bounded by the chosen request count, verifies every saved checkpoint,

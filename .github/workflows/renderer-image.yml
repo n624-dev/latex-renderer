@@ -49,10 +49,10 @@ on:
         options: ["1", "2", "4"]
         default: "4"
       database_save_batch:
-        description: "Disposable Base DB save comparison (1 keeps standard saves)"
+        description: "Disposable Base DB checkpoints (1 selects standard saves)"
         type: choice
         options: ["1", "16", "64"]
-        default: "1"
+        default: "64"
 
 permissions:
   contents: read
@@ -71,7 +71,7 @@ jobs:
       DOCKER_BUILD_RECORD_UPLOAD: "false"
       CI_RENDERER_DRIVER: ${{ inputs.builder_driver || 'docker' }}
       CI_FORMAT_JOBS: ${{ inputs.format_jobs || '4' }}
-      CI_DATABASE_SAVE_BATCH: ${{ inputs.database_save_batch || '1' }}
+      CI_DATABASE_SAVE_BATCH: ${{ inputs.database_save_batch || '64' }}
       REQUESTED_DATE: ${{ inputs.texlive_date || 'latest' }}
       # Register the private distribution hostname with the runner's log
       # masker before any step can emit a snapshot URL.
@@ -81,7 +81,7 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "24"
-      - name: Validate disposable database save comparison
+      - name: Validate disposable database save settings
         run: sh deploy/scripts/ci-texlive-database-save-settings.sh
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
         if: env.CI_RENDERER_DRIVER == 'docker-container'
