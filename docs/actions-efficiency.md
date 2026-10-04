@@ -252,3 +252,57 @@ missing/deleted snapshot fails rather than being silently replaced.
 This separation does **not** apply to Daily: publication and registry retention
 remain serialized in the existing `renderer-image-daily` group, with cancellation
 disabled. Do not use a publishing Daily run solely for a benchmark.
+
+## Base package CPU breakdown
+
+The successful four-worker PR170 run still spent 469.720s in the Base package
+phase, including 405.740s of CPU and 84.934s of download wait. These overlapping
+measurements do not tell us how much time was spent hashing, decompressing, or
+extracting archives. Increasing network prefetch alone is not an established
+solution for the remaining CPU work.
+
+`TeXLivePrefetch.pm` now emits one `TEXLIVE_PACKAGE_METRICS` JSON record per
+standard `install_packages` call, with aggregate monotonic elapsed time and CPU
+for these unmodified upstream helpers:
+
+| Stage        | Upstream helper         | Includes                                                |
+| ------------ | ----------------------- | ------------------------------------------------------- |
+| `checksum`   | `check_file_and_remove` | Container checksum/size checks and failure handling     |
+| `decompress` | `system_pipe`           | The package decompressor pipe and its waited subprocess |
+| `extract`    | `untar`                 | Tar extraction, directory changes and tar cleanup       |
+
+The wrappers preserve helper arguments, scalar/list/void context, return values
+and exceptions. An upstream false/failure result is not changed into success.
+The whole call's `returned` field means it returned without an exception, **not**
+that installation or validation succeeded. Existing installer exit handling and
+all subsequent Base/Runtime validation remain mandatory. A thrown exception
+still fails and emits partial measurements; missing future helper symbols are
+reported as `null`, not zero. Uncalled available helpers have zero calls.
+
+Only the installer parent records these spans; metadata outside package install
+and forked prefetch workers are excluded. CPU is the Perl process plus waited
+descendants, not instantaneous process-tree CPU. Hashing in download workers is
+not attributed to the parent checksum stage. Package total CPU also includes
+other package management and reaped prefetch work. Stages may nest and overlap
+background downloading, so **do not add them or subtract their sum** to derive
+a post-install/format time. Installer total and font-cache wall timings remain
+separate. No arguments, package names, private URLs, credentials or exception
+messages are added to the metric record, and no extra metric file is retained.
+
+Measurement also works with `TEXLIVE_PREFETCH_WORKERS=0` (standard downloading),
+allowing future matched-snapshot comparisons without losing the breakdown.
+Installation order, checksum/signature verification, canonical identity,
+prefetch bounds and cache-free CI are unchanged. Small automated fixtures test
+measurement contracts and cleanup, not real TeX installation performance.
+**No further hosted speedup has been measured for this instrumentation.** Use
+the next completed cold Renderer log to select an actual CPU optimization.
+
+Both image analyzers remain separate and unchanged: Trivy keeps its vulnerability,
+misconfiguration and secret coverage; Syft still produces the uploaded CycloneDX
+artifact before Daily publication. Syft already chooses catalog workers from
+CPU count (default CPU count × 4), per its
+[configuration reference](https://oss.anchore.com/docs/reference/syft/configuration/).
+Blindly adding workers, excluding catalogs, or replacing Trivy with an SBOM scan
+is not justified by the current measurements. Concurrent analyzers and archive
+reuse remain candidates requiring real memory/disk and output-parity measurements,
+not enabled defaults.
