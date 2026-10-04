@@ -36,6 +36,11 @@ on:
         type: choice
         options: ["1", "2", "4"]
         default: "4"
+      database_save_batch:
+        description: "Non-publishing comparison only (1 keeps standard saves)"
+        type: choice
+        options: ["1", "16", "64"]
+        default: "1"
 
 permissions:
   contents: read
@@ -81,6 +86,7 @@ jobs:
       DOCKER_BUILD_RECORD_UPLOAD: "false"
       CI_RENDERER_DRIVER: ${{ inputs.builder_driver || 'docker' }}
       CI_FORMAT_JOBS: ${{ inputs.format_jobs || '4' }}
+      CI_DATABASE_SAVE_BATCH: ${{ inputs.database_save_batch || '1' }}
       # Register the private distribution hostname with the runner's log
       # masker before any step can emit a snapshot URL.
       TEXLIVE_CI_MIRROR_HOST: ${{ secrets.TEXLIVE_CI_MIRROR_HOST }}
@@ -91,6 +97,9 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "24"
+
+      - name: Validate disposable database save comparison
+        run: sh deploy/scripts/ci-texlive-database-save-settings.sh
 
       - name: Validate legacy Runtime cleanup request
         if: github.event_name == 'workflow_dispatch' && inputs.purge_legacy_runtimes == true
@@ -184,6 +193,10 @@ jobs:
 
           printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
           tag_status=$(GITHUB_TOKEN= node deploy/scripts/ghcr-tag-status.mjs "$SNAPSHOT_DATE")
+          if [[ "$CI_DATABASE_SAVE_BATCH" != 1 && "$tag_status" == present ]]; then
+            echo 'Database save comparison requires a cold build; use non-publishing renderer-image.' >&2
+            exit 64
+          fi
           if [[ "$tag_status" == present ]]; then
             reused_digest=$(docker buildx imagetools inspect "$dated_ref" | awk '$1 == "Digest:" { print $2; exit }')
             [[ "$reused_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
@@ -206,6 +219,8 @@ jobs:
               --build-arg "TEXLIVE_REPOSITORY=$TEXLIVE_REPOSITORY" \
               --build-arg "TEXLIVE_INSTALLER_SHA512=$TEXLIVE_INSTALLER_SHA512" \
               --build-arg "TEXLIVE_PROFILE_KIND=language-neutral-maximal" \
+              --build-arg "TEXLIVE_DATABASE_SAVE_BATCH=$CI_DATABASE_SAVE_BATCH" \
+              --build-arg "TEXLIVE_DISPOSABLE_CI=1" \
               --secret id=texlive_download_repository,env=TEXLIVE_DOWNLOAD_REPOSITORY \
               --tag "$base" \
               renderer

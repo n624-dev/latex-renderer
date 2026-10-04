@@ -284,6 +284,45 @@ production images. Real rendering still requires the GitHub-hosted image CI.
 Run a non-publishing Daily dispatch to exercise registry reuse; run PR image CI
 to exercise a cold build. Long image CI is not continuously monitored.
 
+## Disposable local-DB save trials
+
+`renderer-image` dispatch exposes `database_save_batch` (1/16/64, default 1).
+Use the same source commit, explicit `texlive_date`, `builder_driver=docker`
+and `format_jobs=4` for comparisons. This workflow never publishes. Ordinary
+PR/push validation, Daily publication and host fallback retain standard saves.
+The setting is checked before Docker mutation; batching candidates require a
+disposable GitHub-hosted runner and cannot publish or reuse a dated Base.
+
+For example, after the comparison branch is pushed, dispatch a candidate using
+its actual ref (replace the placeholders, do not use a moving `latest` date):
+
+```sh
+gh workflow run renderer-image.yml --ref <comparison-ref> \
+  -f texlive_date=<YYYY-MM-DD> -f builder_driver=docker \
+  -f format_jobs=4 -f database_save_batch=64
+```
+
+Run or identify the matched standard-1 baseline and, if needed, a 16-request
+trial. A missing/deleted snapshot fails; do not switch silently to another date.
+Read completed logs for `TEXLIVE_DATABASE_SAVES` plus existing installer,
+package, prefetch, Runtime and disk metrics. Every candidate must still pass
+Base/basic/en-jp/PDF/PNG/SVG/compatibility/Source validation and both image
+analyzers. Candidate success alone does not change the default or authorize
+publication. See [comparison semantics and fixture limits](actions-efficiency.md#disposable-base-database-save-comparison).
+
+The standard installer remains sequential. The preload defers only local target
+DB saves, bounded by the chosen request count, verifies every saved checkpoint,
+and flushes before postactions and return. Failed or interrupted CI builds are
+not resumed. The source DB and signed installer/archives are not rewritten;
+canonical identity, Base provenance and public fallback remain mandatory.
+
+Local regression commands, requiring no TeX download:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tests/texlive_prefetch_test.py tests/texlive_package_metrics_test.py tests/texlive_database_batch_test.py
+pnpm exec vitest run tests/texlive-database-save-settings.test.ts
+```
+
 ## Smoke-test output isolation
 
 Renderer and Base smoke fixtures use a temporary Docker-managed output volume,

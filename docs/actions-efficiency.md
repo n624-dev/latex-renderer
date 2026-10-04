@@ -297,6 +297,76 @@ measurement contracts and cleanup, not real TeX installation performance.
 **No further hosted speedup has been measured for this instrumentation.** Use
 the next completed cold Renderer log to select an actual CPU optimization.
 
+## Disposable Base database-save comparison
+
+PR172's completed cold Renderer run took 22m20s: Base 832s, Runtime validation
+265s, Trivy 124s and SBOM 75s. The package phase used 529.500s of CPU in 570.128s
+elapsed; its checksum, decompressor and extraction helpers used 4.560s, 93.110s
+and 36.820s of CPU respectively. These overlapping spans do not establish that
+all remaining CPU belongs to database saves. The upstream installer nevertheless
+serializes and replaces the entire local TLPDB after each package, making save
+frequency a measurable candidate. The audited implementation is
+[TeX-Live/installer at 58d75a8](https://github.com/TeX-Live/installer/blob/58d75a899f1bc86bab25285181c90d6b01095a31/tlpkg/TeXLive/TLPDB.pm).
+
+The new `TEXLIVE_DATABASE_SAVES` record measures standard saves as well as the
+candidate, including physical/requested/deferred counts, save elapsed/CPU,
+verification elapsed/CPU, peak verification-file bytes, pending requests and
+final local-DB SHA-512. As with
+package metrics, `returned` means no exception, not successful installation.
+No extra metrics file, download cache or private URL is recorded.
+
+The default remains **one save per upstream request**, including host fallback
+and normal publishing Daily runs. Manual non-publishing hosted comparisons can
+select 16 or 64 requests per physical save. This changes only the local target
+DB inside standard `install_packages`; the source database, package order,
+archive verification and extraction are unchanged. A pending batch is saved
+before package postactions and when installation returns. Every candidate
+checkpoint, and the final DB in either mode, must exactly match the current
+upstream `writeout` serialization by SHA-512. A real temporary file beside the
+local DB supports upstream Perl `format`/`write` output (not just `print`) and
+is removed after verification or exceptions. Only one DB-sized verification
+file exists at a time; its measured maximum size is recorded, not treated as
+the peak of the whole build. Truncated or failed
+writes cannot become successful checkpoints. Verification time is recorded
+separately, not hidden from package/install elapsed time.
+
+Batching requires an explicitly disposable, network-mode, non-resuming
+`install-tl --no-continue` invocation with the current supported TLPDB API;
+unsupported scope or new save arguments fail rather than silently batch.
+Source/other databases and forked workers are not intercepted. The preload is
+mounted only during the Base build, before the existing prefetch preload; it is
+not installed into public images or applied to later `tlmgr` operations. A
+failed/killed build is discarded and rebuilt cold, never resumed from its last
+checkpoint. Candidate publication and reuse of an already published dated Base
+for this comparison are rejected. No production server database is changed.
+
+Small local fixture comparison (1,500 packages with 512-byte payloads; final DB
+802,500 bytes, identical bytes in all three modes):
+
+| Batch | Physical saves | Save wall | Save CPU | Verify wall | Verify CPU | Fixture wall |
+| ----- | -------------- | --------- | -------- | ----------- | ---------- | ------------ |
+| 1     | 1,501          | 1.306s    | 1.270s   | 0.007s      | 0.010s     | 1.380s       |
+| 16    | 94             | 0.097s    | 0.150s   | 0.354s      | 0.300s     | 0.515s       |
+| 64    | 24             | 0.027s    | 0.020s   | 0.098s      | 0.110s     | 0.177s       |
+
+The peak verification file was 802,500 bytes in each mode, with no residual
+verification files. These are synthetic fixture measurements, **not real TeX installation timings or
+a guaranteed hosted speedup**. Temporary fixture directories are automatically
+removed; peak runner memory/temporary disk still requires real measurements.
+The benchmark can be repeated without downloading TeX:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 tests/texlive_database_batch_test.py --benchmark
+```
+
+Use matched commit/date/snapshot identity, builder and Runtime format-worker
+settings for real 1/16/64 trials. Inspect save/verification/package CPU, complete
+installer time, whole job duration, prefetch bytes/wait and existing disk
+checkpoints, alongside all rendering validations. Cross-run DB hashes are not a
+substitute for provenance or tests. Keep the default at one until completed
+hosted runs support adopting a candidate; do not monitor new long jobs
+continuously or treat fixture speed as adoption evidence.
+
 Both image analyzers remain separate and unchanged: Trivy keeps its vulnerability,
 misconfiguration and secret coverage; Syft still produces the uploaded CycloneDX
 artifact before Daily publication. Syft already chooses catalog workers from
