@@ -110,7 +110,9 @@ jobs:
           echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           pnpm install --frozen-lockfile
           pnpm check
-          pnpm build:client
+          # The fresh recursive build inside check already created the assets.
+          # Verify those exact files; do not regenerate a second signature.
+          pnpm verify:mcpb
       - name: Build versioned server source bundle
         env:
           CANDIDATE_TAG: ${{ inputs.candidate_tag }}

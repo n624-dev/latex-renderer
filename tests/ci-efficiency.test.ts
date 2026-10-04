@@ -60,6 +60,26 @@ describe("cache-free CI validation", () => {
     );
   });
 
+  it.each(["server-release", "server-update-validation"])(
+    "%s checks fresh distributions without regenerating the same signed assets",
+    (name) => {
+      const workflow = read(`.github/workflows/${name}.yml`);
+      expect(scripts("package.json").check).toContain("pnpm build:workspaces");
+      expect(workflow.match(/^\s+pnpm check$/gm)).toHaveLength(1);
+      expect(workflow).not.toMatch(/^\s+pnpm build:client$/m);
+      const check = workflow.indexOf("          pnpm check\n");
+      const verify = workflow.indexOf("          pnpm verify:mcpb\n");
+      const bundle = workflow.indexOf(
+        "          sh deploy/scripts/build-server-release-assets.sh",
+      );
+      expect(verify).toBeGreaterThan(check);
+      expect(bundle).toBeGreaterThan(verify);
+      expect(workflow).toContain("--frozen-lockfile");
+      expect(workflow).toContain("actions/attest-build-provenance");
+      expect(workflow).not.toContain("actions/cache");
+    },
+  );
+
   it("disables implicit Trivy Actions caches without skipping scanners", () => {
     for (const path of ["security", "renderer-image"]) {
       const workflow = read(`.github/workflows/${path}.yml`);

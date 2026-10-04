@@ -127,7 +127,8 @@ node deploy/scripts/server-ingress.mjs --health /etc/latex-renderer/renderer.env
 ```
 
 This GETs the exact configured HTTPS origin's `/api/v1/health`, using normal
-system/client CA trust, a 5-second total deadline and 16KiB response bound.
+system/client CA trust and explicit certificate verification (even if the caller
+disabled it globally), a 5-second total deadline and 16KiB response bound.
 Require HTTP 200 and `status: "ok"`; redirects, HTTP fallback, wrong hosts,
 untrusted certificates and unavailable upstreams fail. Success proves only
 that host's HTTPS health path. Also test from an intended client and a denied

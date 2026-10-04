@@ -48,7 +48,8 @@ jobs:
           echo "version-tag=v$version" >> "$GITHUB_OUTPUT"
           pnpm install --frozen-lockfile
           pnpm check
-          pnpm build:client
+          # Same job/commit fresh outputs, not a cache or another job's assets.
+          pnpm verify:mcpb
           # Version label only: no local or remote Git tag is created.
           sh deploy/scripts/build-server-release-assets.sh \
             "v$version" "$RUNNER_TEMP/validation-assets" "" --validation-only

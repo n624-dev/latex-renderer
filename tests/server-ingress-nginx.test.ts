@@ -211,7 +211,11 @@ describe("standalone Nginx configuration and actual HTTPS proxy", () => {
         );
         // This IP-origin intentionally fails the generated DNS Host check.
         expect((await once(check, "exit"))[0]).not.toBe(0);
-        const untrustedEnv = { ...process.env };
+        // Even a caller's unsafe global Node setting must not bypass health TLS.
+        const untrustedEnv: NodeJS.ProcessEnv = {
+          ...process.env,
+          NODE_TLS_REJECT_UNAUTHORIZED: "0",
+        };
         delete untrustedEnv.NODE_EXTRA_CA_CERTS;
         const untrusted = spawn(
           process.execPath,

@@ -141,7 +141,12 @@ export function checkIngressHttpsHealth(publicOrigin) {
       );
     const call = request(
       url,
-      { method: "GET", minVersion: "TLSv1.2", agent: false },
+      {
+        method: "GET",
+        minVersion: "TLSv1.2",
+        rejectUnauthorized: true,
+        agent: false,
+      },
       (response) => {
         let bytes = 0;
         const chunks = [];
