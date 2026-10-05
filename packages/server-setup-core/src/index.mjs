@@ -1,5 +1,15 @@
 // Pure, secret-free server configuration core. Importing does not read host
 // files/environment, open listeners, contact providers or apply configuration.
+// Discovery I/O is explicit and shared with runtime; importing still does none.
+export {
+  serverOidcDiscoveryUrl,
+  validateServerOidcMetadata,
+  discoverServerOidcProvider,
+} from "./oidc-discovery.mjs";
+export {
+  reviewServerSetupReadiness,
+  checkServerSetupOidc,
+} from "./setup-readiness.mjs";
 export {
   INGRESS_PROFILE_KEYS,
   serverIngressFromEnvironment,

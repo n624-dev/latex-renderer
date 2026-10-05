@@ -76,6 +76,51 @@ imports retain `ingress: null` without guessing exposure. The shared
 used by production preflight; active automatic TLS is explicitly not implemented.
 Like the existing maps, format-3 export is not a full EnvironmentFile writer.
 
+### Shared readiness and opt-in OIDC Discovery
+
+`reviewServerSetupReadiness(format3Review)` gives CUI/Web consumers the same
+non-secret credential-file requirements, initial-owner policy and ingress review
+status. It performs no I/O and always reports `readyForApply: false`: validating
+a profile does not certify host files, owners, services or a completed installation.
+Legacy ingress stays `unreviewed`; planned automatic HTTPS stays explicitly
+unsupported. This is not a full storage/renderer/secrets provisioning plan.
+
+The source-only read-only diagnostic needs no root or installed workspace build:
+
+```sh
+node deploy/scripts/server-setup-review.mjs < deployment-review.json
+node deploy/scripts/server-setup-review.mjs --oidc-check < deployment-review.json
+```
+
+Input is the **non-secret format-3 JSON**, not `renderer.env`. Input is limited to
+64KiB, and unknown credential fields are rejected. By default the command is
+offline. `--oidc-check` explicitly contacts only a configured, enabled native
+OIDC provider. Password-only and Cloudflare Access do not contact an OIDC
+provider, read stale OIDC settings or use a fallback. No credentials, keys,
+owners, configuration or services are created/changed by either command.
+
+`checkServerSetupOidc` and the runtime `OidcClient` use the same Discovery
+validation: exact issuer identity, HTTPS endpoints, authorization code,
+PKCE S256 and `client_secret_basic` (including its standard omitted-metadata
+default). Discovery has a 10-second total deadline and 64KiB response bound;
+redirects and invalid responses fail without logging provider bodies or errors.
+The diagnostic's default helper transport explicitly verifies CA/hostname trust
+even if Node's global TLS check was disabled; private IdPs need an explicitly
+configured trusted CA, not an HTTP/TLS bypass. Runtime retains its existing fetch
+transport (also used for token/JWKS requests), including explicit test injection;
+the helper does not reconfigure it. Injected transports are caller-controlled.
+Provider-specific unrelated metadata is not returned. Discovery checks do not
+request tokens or JWKS or establish an identity.
+
+Setup success is not used as a login cache: each runtime does its own bounded
+Discovery and signed-token/JWKS validation. A failed runtime Discovery remains
+retryable; concurrent login starts share only that runtime's successful metadata.
+State, nonce, PKCE, issuer/audience, asymmetric algorithms and session checks are
+unchanged. Secret/owner provisioning, CUI/Web wizard interaction and transactional
+ingress apply/recovery remain unfinished, not implied by this diagnostic.
+
+Protocol reference: [OpenID Connect Discovery 1.0](https://openid.net/specs/openid-connect-discovery-1_0.html).
+
 Origin spellings normalize during review, and omitted OIDC algorithms become
 the existing default allowlist. Import/review does not rewrite installed files.
 

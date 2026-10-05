@@ -199,3 +199,50 @@ export function serverSetupInitialOwnerPlan(input: unknown): Readonly<{
   bootstrapMethod: "password" | "oidc" | "cloudflare-access";
   followUpOidcRegistration: boolean;
 }>;
+export interface ServerOidcMetadata {
+  readonly issuer: string;
+  readonly authorization_endpoint: string;
+  readonly token_endpoint: string;
+  readonly jwks_uri: string;
+}
+export interface ServerOidcDiscoveryOptions {
+  readonly fetchImpl?: typeof fetch;
+  readonly signal?: AbortSignal;
+  readonly timeoutMs?: number;
+}
+export function serverOidcDiscoveryUrl(issuer: string): string;
+export function validateServerOidcMetadata(
+  issuer: string,
+  input: unknown,
+): Readonly<ServerOidcMetadata>;
+export function discoverServerOidcProvider(
+  issuer: string,
+  options?: ServerOidcDiscoveryOptions,
+): Promise<Readonly<ServerOidcMetadata>>;
+export interface ServerSetupReadiness {
+  readonly format: 1;
+  readonly review: ServerSetupDeploymentReview;
+  readonly initialOwner: Readonly<{
+    bootstrapMethod: "password" | "oidc" | "cloudflare-access";
+    followUpOidcRegistration: boolean;
+  }>;
+  readonly requiredCredentialFiles: readonly Readonly<{
+    id: string;
+    path: string;
+  }>[];
+  readonly oidcDiscoveryRequired: boolean;
+  readonly ingressStatus: "unreviewed" | "unsupported-automatic" | "reviewed";
+  readonly readyForApply: false;
+}
+export function reviewServerSetupReadiness(
+  input: unknown,
+): Readonly<ServerSetupReadiness>;
+export function checkServerSetupOidc(
+  input: unknown,
+  options?: ServerOidcDiscoveryOptions,
+): Promise<
+  Readonly<
+    | { status: "not-required"; metadata: null }
+    | { status: "checked"; metadata: Readonly<ServerOidcMetadata> }
+  >
+>;
