@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 export const requiredProductionBuildOutputs = [
   "apps/admin-api/dist/server.js",
   "apps/admin-local/dist/index.js",
+  "packages/auth/dist/bootstrap-owner.js",
   "apps/admin-web/dist/server.js",
   "apps/internal-api/dist/server.js",
   "apps/remote-mcp/dist/server.js",

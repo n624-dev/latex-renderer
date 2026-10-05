@@ -2,6 +2,10 @@
 // files/environment, open listeners, contact providers or apply configuration.
 // Discovery I/O is explicit and shared with runtime; importing still does none.
 export {
+  createServerSetupSession,
+  ServerSetupSessionError,
+} from "./setup-session.mjs";
+export {
   SERVER_RUNTIME_LIMITS,
   validateServerRuntimeReview,
   importServerRuntimeReview,

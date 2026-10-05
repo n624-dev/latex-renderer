@@ -14,6 +14,12 @@ preflight are now connected in one implementation; see
 [reviewed standalone HTTPS ingress](standalone-ingress.md). This does not
 automatically apply network settings or complete the CUI/Web wizard.
 
+An interactive CUI/Web frontend now exists for **existing prepared hosts**,
+sharing one review/confirmation state machine and the runtime transaction.
+See [the prepared-host settings frontend](server-settings-wizard.md) for its
+scope and temporary loopback bootstrap. Fresh-install coordination remains
+unfinished; shared owner/secret primitives are not a completed installer.
+
 ## Existing installations stay unchanged
 
 `deploy/scripts/validate-production-profile.mjs` remains the privileged adapter.

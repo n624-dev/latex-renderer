@@ -365,6 +365,9 @@ describe("release-based application updates", () => {
   });
 
   it("never overlays build-user changes to root-executed control scripts", async () => {
+    expect(requiredProductionBuildOutputs).toContain(
+      "packages/auth/dist/bootstrap-owner.js",
+    );
     const root = mkdtempSync(join(tmpdir(), "latex-release-assembly-test-"));
     try {
       const verifiedSource = join(root, "verified");

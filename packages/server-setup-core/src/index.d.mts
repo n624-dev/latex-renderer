@@ -3,6 +3,35 @@ export interface ValidatedProductionProfile {
   deploymentMode: "cloudflare" | "standalone";
   publicOrigin: string;
 }
+export class ServerSetupSessionError extends Error {
+  readonly code: string;
+  constructor(code: string);
+}
+export interface ServerSetupSessionHost {
+  current(this: void): unknown | Promise<unknown>;
+  preview(this: void, review: ServerSetupReview): unknown | Promise<unknown>;
+  apply(this: void, envelope: unknown): void | Promise<void>;
+}
+export interface ServerSetupSession {
+  status(): Promise<{
+    phase: string;
+    review: ServerSetupReview;
+    scope: "existing-prepared-host";
+  }>;
+  preview(
+    input: unknown,
+  ): Promise<{
+    review: ServerSetupReview;
+    readiness: ReturnType<typeof reviewServerSetupReadiness>;
+    confirmation: string;
+  }>;
+  apply(token: unknown): Promise<{ phase: "complete" }>;
+  close(): void;
+}
+export function createServerSetupSession(
+  host: ServerSetupSessionHost,
+  options?: { clock?: () => number; lifetimeMs?: number },
+): ServerSetupSession;
 
 export interface ServerRuntimeLimits {
   readonly maxUploadBytes: number;

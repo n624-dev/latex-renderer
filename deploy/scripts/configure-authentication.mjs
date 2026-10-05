@@ -27,7 +27,24 @@ import {
   recoverAuthenticationChange,
   serverSetupChangeReview,
   applyServerSetupChange,
+  serverSetupUnits,
 } from "./authentication-change.mjs";
+
+export function requireServerSetupRecoveryOrdering(before, apiRequires) {
+  const words = (value) =>
+    typeof value === "string" && value.length <= 16 * 1024
+      ? value.trim().split(/\s+/)
+      : [];
+  const ordering = words(before),
+    requirements = words(apiRequires);
+  if (
+    !serverSetupUnits.every((unit) => ordering.includes(unit)) ||
+    !requirements.includes("latex-renderer-authentication-recovery.service")
+  )
+    throw new Error(
+      "Compatible recovery ordering is required before applying server settings",
+    );
+}
 
 // Read-only check: no owner creation/reset, credential repair or email linking.
 export function requireAuthenticationOwner(database, plan) {
@@ -218,6 +235,21 @@ async function main() {
         )
           throw new Error(
             "Install and start the compatible recovery unit before server setup cutover",
+          );
+        if (setupOperation)
+          requireServerSetupRecoveryOrdering(
+            systemctl(
+              "show",
+              "--property=Before",
+              "--value",
+              "latex-renderer-authentication-recovery.service",
+            ),
+            systemctl(
+              "show",
+              "--property=Requires",
+              "--value",
+              "latex-renderer-api.service",
+            ),
           );
         const values = parseEnvironmentFile(contents);
         const plan = productionAuthenticationPlan(values);
