@@ -6,12 +6,12 @@ import {
   checkServerSetupOidc,
 } from "../../packages/server-setup-core/src/index.mjs";
 
-// Non-privileged diagnostic path: accepts only the secret-free format-3 review
+// Non-privileged diagnostic path: accepts only the secret-free format-3/4 review
 // over stdin; no root files, writes, owner mutation or service/provider fallback.
 export async function runServerSetupReview(args, input, output) {
   if (args.length > 1 || (args.length === 1 && args[0] !== "--oidc-check"))
     throw new Error(
-      "usage: server-setup-review.mjs [--oidc-check] < FORMAT_3_JSON",
+      "usage: server-setup-review.mjs [--oidc-check] < FORMAT_3_OR_4_JSON",
     );
   const chunks = [];
   let length = 0;

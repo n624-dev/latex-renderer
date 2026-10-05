@@ -1,7 +1,8 @@
 [Unit]
-Description=Recover interrupted LaTeX Renderer authentication configuration
+Description=Recover interrupted LaTeX Renderer authentication and runtime configuration
 After=local-fs.target
 Before=latex-renderer-image-manager.service latex-renderer-admin-api.service latex-renderer-remote-mcp.service
+Before=latex-renderer-api.service latex-renderer-internal-api.service latex-renderer-worker.service
 
 [Service]
 Type=oneshot

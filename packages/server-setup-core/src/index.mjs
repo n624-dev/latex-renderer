@@ -2,6 +2,15 @@
 // files/environment, open listeners, contact providers or apply configuration.
 // Discovery I/O is explicit and shared with runtime; importing still does none.
 export {
+  SERVER_RUNTIME_LIMITS,
+  validateServerRuntimeReview,
+  importServerRuntimeReview,
+  serverRuntimeReviewEnvironment,
+  validateServerSetupReview,
+  importServerSetupReview,
+  serverSetupReviewEnvironment,
+} from "./runtime-review.mjs";
+export {
   serverOidcDiscoveryUrl,
   validateServerOidcMetadata,
   discoverServerOidcProvider,

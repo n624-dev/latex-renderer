@@ -116,6 +116,10 @@ the other enabled method's valid sessions are retained.
 
 ## Failure, interruption and restart
 
+The same recovery command handles authentication-only (journal format 1) and
+authentication+runtime-limit (journal format 2) changes. Do not downgrade to a
+release without format-2 recovery while a setup transaction journal exists.
+
 Ordinary failure attempts a coordinated stop, old config restore and restart with
 readiness checks. Incomplete recovery retains the private journal and refuses
 further apply/deployment. Inspect only private host state and run:
@@ -148,6 +152,64 @@ This command does not downgrade an application release. Older releases cannot
 understand new host keys, and a dual-method policy cannot be represented by old
 `AUTH_MODE`. Do not downgrade with a new-format EnvironmentFile or live consumers;
 release/legacy-format migration requires a separate reviewed operator procedure.
+
+## Runtime settings on an existing host
+
+The same root-only entry point supports a format-4 **existing-host** setup review.
+It is not an initial installer. Use a verified release containing format-2 journal
+recovery and the updated API recovery dependency; keep that recovery unit active.
+First export a non-secret copy of the installed choices:
+
+```sh
+umask 077
+/usr/local/bin/node /opt/latex-renderer/current/deploy/scripts/configure-authentication.mjs \
+  --setup-export > /etc/latex-renderer/proposed-setup.json
+```
+
+Edit the explicit `runtime.limits` and/or `deployment.authentication` fields in
+that private JSON, then review and explicitly apply:
+
+```sh
+/usr/local/bin/node /opt/latex-renderer/current/deploy/scripts/configure-authentication.mjs \
+  --setup-review /etc/latex-renderer/proposed-setup.json \
+  > /etc/latex-renderer/reviewed-setup.json
+/usr/local/bin/node /opt/latex-renderer/current/deploy/scripts/configure-authentication.mjs \
+  --setup-apply /etc/latex-renderer/reviewed-setup.json
+```
+
+Both JSON files must be root-owned `0600`, single-link regular files, under
+root-controlled directories. `--setup-export` does not emit the full environment,
+secret references, deletion/retention policies or credentials. Read the complete
+review before applying; hashes bind the full private environment, not only the
+selected limits. Regenerate the review after any outside configuration change.
+
+Database/storage paths, managed renderer identity, deployment/public origin and
+ingress must remain unchanged. This avoids pretending that an env replacement
+migrates data, reconciles Image Manager, changes TLS or safely adjusts network
+exposure. The 16 limits use current runtime defaults for omitted env keys and
+must be positive bounded integers with valid cross-limit relationships. They do
+not set disk quotas or change retention. Job timeouts must remain at most 840
+seconds to leave grace within the existing 15-minute worker stop budget; changing
+that service policy is a separate operation.
+
+All five limit consumers must already be active. Preflight verifies secrets,
+the existing active owner's explicitly provisioned login method, TLS/interface
+requirements and enabled native OIDC Discovery. It then checks current health
+before journaling/stopping anything. The renderer API, Admin, Remote MCP and
+Internal API stop before the worker, whose active render drains normally. Only
+after all are stopped is one env published. All five restart and must be active;
+both `/auth/config` policies and the renderer `3100`/Internal API `3103` health
+responses must match. No root shell, dynamic unit list, new sudo permission,
+automatic disk expansion, provider fallback, credential generation, DB restore
+or Image Manager operation is introduced. Nginx/Cloudflare/Web are not restarted.
+
+Failure uses the same durable recovery command and journal as auth-only changes.
+Format-2 recovery checks the five consumers are stopped at boot before restoring
+an uncommitted configuration. A committed record retains the new config; corrupt
+state or outside edits require operator review and block further apply/deployment.
+Old release recovery that understands only format 1 must not be used for a live
+format-2 journal. Verify real owner login and a representative render afterwards;
+local health does not prove external login or successful Docker rendering.
 
 ## Test coverage and limits
 

@@ -121,6 +121,47 @@ ingress apply/recovery remain unfinished, not implied by this diagnostic.
 
 Protocol reference: [OpenID Connect Discovery 1.0](https://openid.net/specs/openid-connect-discovery-1_0.html).
 
+### Runtime review and coordinated existing-host changes
+
+`importServerSetupReview` / `validateServerSetupReview` use **format 4**:
+`{format:4, deployment: <format-3>, runtime: {databasePath, storageRoot,
+rendererImage, limits}}`. Older APIs keep their existing format and do not
+silently upgrade or discard settings. The runtime model includes an immutable
+renderer image identity and 16 API/worker limits: upload/extracted bytes and
+file/ZIP counts; output bytes/files/directories; log bytes; SVG objects/per-image
+and total bytes; SVG and job timeouts; queue length; per-user storage and minimum
+filesystem free bytes. Explicit positive safe integers are required in JSON.
+Import uses current runtime defaults only for omitted limit environment keys.
+Cross-limit constraints and the worker's 86400-second duration cap are checked.
+Bytes are bytes: these settings do **not** establish an OS quota or alter the
+separate 15GiB TeX Live mirror budget. Container isolation/CPU/memory settings,
+retention/deletion policy and unrelated settings remain unchanged.
+
+`serverSetupReviewEnvironment` is still a non-secret map, not a full-file writer.
+Database/storage paths must be canonical absolute paths; mutable image tags,
+unknown fields, inherited properties, accessors and inline credentials fail.
+`reviewServerSetupReadiness`, `checkServerSetupOidc` and the read-only stdin
+diagnostic accept either format 3 or 4. They still never certify apply readiness.
+
+The privileged adapter can export an installed format-4 review and apply a
+hash-bound **existing-host** authentication+limits change. It uses the same
+exclusive mutation lock, secure full-EnvironmentFile store, private durable
+journal and boot recovery as authentication-only changes; see
+[the configuration cutover runbook](authentication-cutover.md#runtime-settings-on-an-existing-host).
+All five long-lived limit consumers stop before publishing one configuration;
+the worker drains last using its existing graceful stop budget. Successful apply
+checks all consumers are active, both auth policies, and the actual renderer and
+internal API health endpoints. Enabled native OIDC gets a bounded Discovery
+preflight; runtime still validates independently. No password/login test is
+implied by local health.
+
+This path refuses storage/database migration, managed-image replacement,
+deployment/origin or ingress changes. Job timeouts above 840 seconds require a
+separate review of the existing 15-minute worker stop budget. Use Image Manager
+for managed renderer changes. Network/TLS cutover, initial credential/owner
+creation, automatic HTTPS and the interactive CUI/Web wizard remain unfinished;
+the existing-host transaction is not a first-install wizard.
+
 Origin spellings normalize during review, and omitted OIDC algorithms become
 the existing default allowlist. Import/review does not rewrite installed files.
 
