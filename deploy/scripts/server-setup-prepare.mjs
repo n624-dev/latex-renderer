@@ -120,6 +120,15 @@ export async function prepareServerApplication() {
     )
   )
     throw new Error("Prepared accounts required");
+  if (
+    !run("/usr/bin/id", ["-G", "latex-render-worker"])
+      .trim()
+      .split(/\s+/)
+      .includes(String(gid))
+  )
+    throw new Error(
+      "Prepared worker must belong to the application service group",
+    );
   for (const executable of [
     "/usr/bin/age-keygen",
     "/usr/sbin/nginx",
@@ -130,12 +139,20 @@ export async function prepareServerApplication() {
     "/usr/bin/setfacl",
     "/usr/sbin/visudo",
     "/usr/bin/systemd-tmpfiles",
+    "/usr/bin/rsync",
+    "/usr/bin/bsdtar",
+    "/usr/local/bin/corepack",
+    "/usr/local/bin/gh",
+    "/usr/bin/ss",
   ])
     if (
       !(await lstat(executable)).isFile() &&
       !(await lstat(executable)).isSymbolicLink()
     )
       throw new Error("Prepared OS tooling required");
+  if (process.versions.node.split(".")[0] !== "24")
+    throw new Error("Prepared Node 24 required");
+  run("/usr/local/bin/gh", ["attestation", "verify", "--help"]);
   const socket = await lstat(`/run/user/${worker}/docker.sock`);
   if (!socket.isSocket() || socket.uid !== worker)
     throw new Error("Prepared rootless Docker required");

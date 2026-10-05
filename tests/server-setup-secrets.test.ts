@@ -29,7 +29,7 @@ async function fixture() {
   return { root, store };
 }
 describe("prepared-host generated secrets", () => {
-  it.each(["image-manager-token", "update-manager-token"])(
+  it.each(["image-manager-token", "update-manager-token"] as const)(
     "creates printable %s compatible with existing bearer-token readers",
     async (slot) => {
       const f = await fixture();

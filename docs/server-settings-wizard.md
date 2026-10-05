@@ -39,6 +39,8 @@ runuser/flock, systemd, sudo/visudo and normal Updater verification/build tools.
 The worker's rootless Docker must run and the chosen immutable renderer image
 must already exist. Review does not pull/build an image. Choose an existing
 non-root deployment user with a non-root primary group for later Updater builds.
+The Docker worker must belong to the application service group. Missing
+prerequisites fail; the wizard never changes group membership to repair them.
 
 Ingress scope requires an existing dedicated managed standalone/custom TLS
 service. Owner/auth/image/keys and unknown environment settings are preserved.
@@ -75,7 +77,9 @@ creation uses the actual atomic SQLite bootstrap, not a parallel implementation.
 Standalone uses `latex-renderer-ingress.service` and
 `/etc/latex-renderer/ingress-nginx.conf`, independent of co-hosted
 `nginx.service`. TLS has fixed private slots under `/etc/latex-renderer/secrets`.
-Access logging is off; HTTP stays on loopback behind verified HTTPS. Custom
+Access logging is off; HTTP stays on loopback behind verified HTTPS.
+Socket inspection rejects occupied fresh ports, unavailable backends and any
+unexpected non-loopback listener on internal application ports. Custom
 certificate renewal is operator-managed and applied through a new review.
 See [standalone ingress](standalone-ingress.md).
 

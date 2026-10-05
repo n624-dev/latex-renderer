@@ -3,6 +3,21 @@ import { randomBytes, createHash } from "node:crypto";
 const digest = (value) =>
   createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const phases = new Set(["pending", "owner-ready", "committed"]);
+export function installationUnitActive(loadState, activeState) {
+  if (
+    loadState !== "loaded" ||
+    ![
+      "active",
+      "inactive",
+      "failed",
+      "activating",
+      "deactivating",
+      "reloading",
+    ].includes(activeState)
+  )
+    throw new Error("Cannot determine installation service state");
+  return !["inactive", "failed"].includes(activeState);
+}
 const allowedUnits = new Set(
   [
     "api",
@@ -106,6 +121,8 @@ async function stop(host, units) {
 }
 async function finish(store, host, journal) {
   await stop(host, journal.units);
+  // Also covers a crash between SQLite commit and the owner's phase update.
+  await store.saveJournal({ ...journal, phase: "owner-ready" });
   await store.replace(journal.after);
   await host.validatePublished(journal.after);
   for (const unit of journal.units) await host.start(unit);
@@ -122,6 +139,23 @@ async function finish(store, host, journal) {
   await store.saveJournal({ ...journal, phase: "committed" });
   await host.finalize?.(journal.units);
   await store.clear();
+}
+/** Read-only boot handoff while a foreground installer owns the lock. Exact
+ * owner proof, published files and stopped consumers are mandatory. No repair
+ * or journal cleanup is permitted here; foreground health must still commit.
+ */
+export async function installationReadyForConsumerStart(store, host) {
+  const journal = await store.journal();
+  if (!journal || journal.kind !== "initial" || journal.phase !== "owner-ready")
+    return false;
+  await store.assertCompatible(journal);
+  if ((await host.ownerState(journal.id)) !== "ours") return false;
+  if (
+    digest(await store.snapshotFiles(journal.after)) !== digest(journal.after)
+  )
+    return false;
+  for (const unit of journal.units) if (await host.active(unit)) return false;
+  return true;
 }
 export async function recoverInstallation(store, host, beforeStart = false) {
   const journal = await store.journal();

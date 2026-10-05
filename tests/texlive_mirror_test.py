@@ -312,6 +312,27 @@ class MirrorTest(unittest.TestCase):
         self.config = mirror.Config.load(self.config_path)
         mirror.ensure_layout(self.config)
         mirror.save_state(self.config, mirror.default_state())
+        # Unit fixtures must also run on a small tmpfs. Keep real hardlink-aware
+        # allocation accounting, but model available space/inodes explicitly;
+        # capacity tests override these metrics and OS quotas have separate
+        # integration procedures. No production capacity guard is bypassed.
+        actual_metrics = mirror.filesystem_metrics
+
+        def fixture_metrics(root):
+            metrics = actual_metrics(root)
+            return {
+                **metrics,
+                "filesystemFreeBytes": 20 * mirror.GIB,
+                "osFilesystemFreeBytes": 20 * mirror.GIB,
+                "inodeFree": 10000,
+                "inodeTotal": 20000,
+            }
+
+        self.metrics_patch = mock.patch.object(
+            mirror, "filesystem_metrics", side_effect=fixture_metrics
+        )
+        self.metrics_patch.start()
+        self.addCleanup(self.metrics_patch.stop)
 
     def tearDown(self):
         self.temp.cleanup()
@@ -801,6 +822,24 @@ class MirrorTest(unittest.TestCase):
                     dt.datetime(2026, 9, 7, tzinfo=dt.timezone.utc),
                 )
         self.assertEqual(mirror.load_state(self.config)["latest"], latest)
+
+    def test_metadata_capacity_shortage_stops_before_download(self):
+        latest, _ = self.publish(1)
+        metrics = mirror.filesystem_metrics(self.root)
+        metrics["filesystemFreeBytes"] = 1024 * 1024
+        with (
+            mock.patch.object(mirror, "filesystem_metrics", return_value=metrics),
+            mock.patch.object(mirror, "verified_metadata") as metadata,
+        ):
+            with self.assertRaises(mirror.CapacityBlocked):
+                mirror.sync(
+                    self.config,
+                    "2026-09-07",
+                    dt.datetime(2026, 9, 7, tzinfo=dt.timezone.utc),
+                )
+        metadata.assert_not_called()
+        self.assertEqual(mirror.load_state(self.config)["latest"], latest)
+        self.assertEqual(list((self.root / "staging").iterdir()), [])
 
     def test_hardlink_is_counted_once_and_survives_old_snapshot_delete(self):
         old, first = self.publish(1, hours_ago=100)

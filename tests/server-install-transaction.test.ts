@@ -10,6 +10,7 @@ import {
 } from "node:fs/promises";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { spawn } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ServerInstallStore } from "../deploy/scripts/server-install-store.mjs";
 import {
@@ -17,6 +18,8 @@ import {
   recoverInstallation,
   reviewInstallation,
   validateInstallationJournal,
+  installationReadyForConsumerStart,
+  installationUnitActive,
   type InstallationHost,
 } from "../deploy/scripts/server-install-transaction.mjs";
 import {
@@ -118,6 +121,132 @@ async function fixture(kind: "initial" | "ingress" = "initial") {
 }
 
 describe("durable prepared-host installation", () => {
+  it("fails closed on unknown/missing unit state and treats transitions as active", () => {
+    for (const state of ["active", "activating", "deactivating", "reloading"])
+      expect(installationUnitActive("loaded", state)).toBe(true);
+    for (const state of ["inactive", "failed"])
+      expect(installationUnitActive("loaded", state)).toBe(false);
+    expect(() => installationUnitActive("not-found", "inactive")).toThrow();
+    expect(() => installationUnitActive("loaded", "unknown")).toThrow();
+  });
+  it("recovers real SIGKILL after actual SQLite owner commit without creating a second owner", async () => {
+    const f = await fixture();
+    const databasePath = join(f.root, "killed-owner.sqlite3");
+    const transaction = new URL(
+      "../deploy/scripts/server-install-transaction.mjs",
+      import.meta.url,
+    ).href;
+    const fileStore = new URL(
+      "../deploy/scripts/server-install-store.mjs",
+      import.meta.url,
+    ).href;
+    const ownerModule = new URL(
+      "../deploy/scripts/server-setup-owner.mjs",
+      import.meta.url,
+    ).href;
+    const script = `
+      const {ServerInstallStore} = await import(${JSON.stringify(fileStore)});
+      const {applyInstallation,reviewInstallation} = await import(${JSON.stringify(transaction)});
+      const {createSetupOwner} = await import(${JSON.stringify(ownerModule)});
+      const root = process.argv[1];
+      const slots = Object.fromEntries(["environment","certificate","privateKey","nginx","oidcSecret"].map(name=>[name,{path:root+"/"+name,mode:0o600,maximum:600*1024,gid:process.getgid()}]));
+      const store = new ServerInstallStore(root,slots,process.getuid());
+      const review = ${JSON.stringify(model())};
+      const host = { kind:"initial", preflight(){},validateCredentials(){},
+        files:()=>({environment:"new-environment",certificate:"new-cert",privateKey:"new-key",nginx:"new-nginx",oidcSecret:null}),
+        units:()=>["latex-renderer-api.service","latex-renderer-worker.service"],
+        active:()=>false,stop(){},start(){},ownerState:()=>"none",ensureSecrets(){},validatePublished(){},health(){},
+        async createOwner(id){
+          const databasePath = root+"/killed-owner.sqlite3";
+          await createSetupOwner({id,databasePath,review:{...review,runtime:{...review.runtime,databasePath}},owner:{displayName:"Fixture",loginName:"owner",password:"long-not-common-passphrase"},pepper:Buffer.alloc(32,1).toString("base64")},{databasePath});
+          process.kill(process.pid,"SIGKILL");
+        }
+      };
+      await applyInstallation(store,host,await reviewInstallation(store,host,review),{});
+    `;
+    const signal = await new Promise<NodeJS.Signals | null>(
+      (resolve, reject) => {
+        const child = spawn(
+          process.execPath,
+          ["--input-type=module", "--eval", script, f.root],
+          { stdio: "ignore" },
+        );
+        const timer = setTimeout(() => {
+          child.kill("SIGKILL");
+          reject(new Error("Fixture timed out"));
+        }, 10_000);
+        child.on("error", (error) => {
+          clearTimeout(timer);
+          reject(error);
+        });
+        child.on("exit", (_code, signal) => {
+          clearTimeout(timer);
+          resolve(signal);
+        });
+      },
+    );
+    expect(signal).toBe("SIGKILL");
+    const journal = await f.store.journal();
+    expect(journal?.phase).toBe("pending");
+    const db = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(db.prepare("SELECT id FROM server_setup_bootstrap").get()).toEqual(
+        { id: journal?.id },
+      );
+      expect(
+        db.prepare("SELECT count(*) AS n FROM users WHERE role='owner'").get(),
+      ).toEqual({ n: 1 });
+      expect(
+        db
+          .prepare(
+            "SELECT count(*) AS n FROM audit_logs WHERE actor_id=? AND action='user.created'",
+          )
+          .get(`server-setup:${journal?.id ?? ""}`),
+      ).toEqual({ n: 1 });
+    } finally {
+      db.close();
+    }
+    f.setOwner("ours");
+    expect(await recoverInstallation(f.store, f.host)).toMatchObject({
+      committed: true,
+    });
+    expect(f.host.createOwner).not.toHaveBeenCalled();
+    expect(await f.store.journal()).toBeNull();
+  });
+  it("permits only an exact stopped owner-ready read-only boot handoff under a foreground lock", async () => {
+    const f = await fixture();
+    expect(await installationReadyForConsumerStart(f.store, f.host)).toBe(
+      false,
+    );
+    f.host.validatePublished = () => {
+      throw new Error("interrupt before consumers start");
+    };
+    await expect(
+      applyInstallation(
+        f.store,
+        f.host,
+        await reviewInstallation(f.store, f.host, model()),
+        {},
+      ),
+    ).rejects.toThrow();
+    expect(await installationReadyForConsumerStart(f.store, f.host)).toBe(true);
+    expect((await f.store.journal())?.phase).toBe("owner-ready");
+    expect(f.host.start).not.toHaveBeenCalled();
+    f.active.add("latex-renderer-api.service");
+    expect(await installationReadyForConsumerStart(f.store, f.host)).toBe(
+      false,
+    );
+    f.active.clear();
+    f.setOwner("none");
+    expect(await installationReadyForConsumerStart(f.store, f.host)).toBe(
+      false,
+    );
+    f.setOwner("ours");
+    await f.store.write(f.store.slot("privateKey"), null);
+    expect(await installationReadyForConsumerStart(f.store, f.host)).toBe(
+      false,
+    );
+  });
   it("enables persistent services only after durable commit and retries finalization without owner reset", async () => {
     const f = await fixture();
     f.host.finalize = vi.fn(async () => {

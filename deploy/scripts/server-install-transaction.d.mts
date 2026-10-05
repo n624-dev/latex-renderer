@@ -1,5 +1,9 @@
 import type { ServerSetupReview } from "../../packages/server-setup-core/src/index.mjs";
 export type InstallationFiles = Record<string, string | null>;
+export function installationUnitActive(
+  loadState: unknown,
+  activeState: unknown,
+): boolean;
 export interface InstallationJournal {
   format: 1;
   kind: "initial" | "ingress";
@@ -69,6 +73,10 @@ export function reviewInstallation(
   host: InstallationHost,
   candidate: ServerSetupReview,
 ): Promise<{ candidate: ServerSetupReview; baseSha256: string }>;
+export function installationReadyForConsumerStart(
+  store: InstallationStore,
+  host: InstallationHost,
+): Promise<boolean>;
 export function applyInstallation(
   store: InstallationStore,
   host: InstallationHost,

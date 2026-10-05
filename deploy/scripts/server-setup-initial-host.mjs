@@ -15,11 +15,14 @@ import {
   importServerSetupReview,
 } from "../../packages/server-setup-core/src/index.mjs";
 import { ServerSetupSecrets } from "./server-setup-secrets.mjs";
+import { assertServerSetupSockets } from "./server-setup-network.mjs";
 import { ServerInstallStore } from "./server-install-store.mjs";
 import {
   reviewInstallation,
   applyInstallation,
   recoverInstallation,
+  installationReadyForConsumerStart,
+  installationUnitActive,
 } from "./server-install-transaction.mjs";
 import { acquireMutationLock } from "./mutation-lock.mjs";
 import {
@@ -360,7 +363,13 @@ export async function createInitialServerSetupHost(kind = "initial") {
       if (
         !(await adapter.active(
           "latex-renderer-authentication-recovery.service",
-        ))
+        )) &&
+        !(
+          kind === "initial" &&
+          pending &&
+          pending.phase === "pending" &&
+          (await pendingOwner(pending.id)) === "none"
+        )
       )
         throw new Error(
           "Activate the prepared recovery unit before starting setup",
@@ -384,6 +393,15 @@ export async function createInitialServerSetupHost(kind = "initial") {
       if (!/^sha256:[a-f0-9]{64}\s*$/.test(inspected))
         throw new Error("Prepared immutable runtime image required");
       verifyIngressInterface(review.deployment.ingress);
+      assertServerSetupSockets(
+        command("/usr/bin/ss", ["-H", "-ltn"]),
+        review.deployment.ingress,
+        {
+          fresh: kind === "initial",
+          requireInternal: kind === "ingress",
+          checkIngressPort: kind === "initial",
+        },
+      );
       if (review.deployment.ingress.mode === "standalone") {
         if (
           systemctl(
@@ -448,14 +466,22 @@ export async function createInitialServerSetupHost(kind = "initial") {
       if (kind === "initial") systemctl("enable", ...units);
     },
     active(unit) {
-      try {
-        return systemctl("is-active", unit).trim() === "active";
-      } catch {
-        return false;
-      }
+      return installationUnitActive(
+        systemctl("show", "--property=LoadState", "--value", unit).trim(),
+        systemctl("show", "--property=ActiveState", "--value", unit).trim(),
+      );
     },
     stop: (unit) => systemctl("stop", unit),
-    start: (unit) => systemctl("start", unit),
+    start: async (unit) => {
+      if (
+        kind === "initial" &&
+        !(await adapter.active(
+          "latex-renderer-authentication-recovery.service",
+        ))
+      )
+        systemctl("start", "latex-renderer-authentication-recovery.service");
+      return systemctl("start", unit);
+    },
     ownerState: async (id) => {
       if (kind === "initial") return pendingOwner(id);
       const pending = await store.journal();
@@ -608,6 +634,11 @@ export async function createInitialServerSetupHost(kind = "initial") {
     },
     async health(files) {
       const review = importServerSetupReview(files.environment);
+      assertServerSetupSockets(
+        command("/usr/bin/ss", ["-H", "-ltn"]),
+        review.deployment.ingress,
+        { requireInternal: true },
+      );
       await checkAuthenticationHealth(files.environment, true);
       await checkIngressHttpsHealth(
         review.deployment.authentication.deployment.publicOrigin,
@@ -675,7 +706,36 @@ export async function createInitialServerSetupHost(kind = "initial") {
       locked(() => reviewInstallation(store, adapter, review)),
     apply: (envelope, credentials) =>
       locked(() => applyInstallation(store, adapter, envelope, credentials)),
-    recover: (beforeStart = false) =>
-      locked(() => recoverInstallation(store, adapter, beforeStart)),
+    recover: async (beforeStart = false) => {
+      try {
+        return await locked(() =>
+          recoverInstallation(store, adapter, beforeStart),
+        );
+      } catch (error) {
+        // Reactivating a failed boot guard during initial apply must not acquire
+        // its parent's live lock or start consumers recursively. Only verify
+        // the exact owner-ready published state; keep journal until health.
+        if (
+          beforeStart &&
+          error.code === "MUTATION_LOCK_BUSY" &&
+          (await installationReadyForConsumerStart(store, adapter))
+        ) {
+          const journal = await store.journal();
+          const review = importServerSetupReview(journal.after.environment);
+          if (review.deployment.ingress.mode === "standalone")
+            verifyProductionIngressTls(review.deployment.ingress, gid);
+          for (const name of [
+            "api-key-pepper",
+            "auth-password-pepper",
+            "image-manager-token",
+            "update-manager-token",
+          ])
+            (await keys.read(name)).fill(0);
+          (await tickets.read("v1.key")).fill(0);
+          return { recovered: true, pendingHealth: true };
+        }
+        throw error;
+      }
+    },
   });
 }

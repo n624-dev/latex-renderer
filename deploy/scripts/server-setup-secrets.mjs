@@ -125,7 +125,7 @@ export class ServerSetupSecrets {
         throw new Error("Secret changed while reading");
       if (
         slot.hex &&
-        !/^[a-f0-9]{64}\n?$/.test(value.subarray(0, length).toString("ascii"))
+        !/^[a-f0-9]{64}\n?$/.test(value.subarray(0, length).toString("utf8"))
       )
         throw new Error(
           "Existing token encoding is invalid; never rotate it automatically",

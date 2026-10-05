@@ -165,9 +165,9 @@ implied by local health.
 This path refuses storage/database migration, managed-image replacement,
 deployment/origin or ingress changes. Job timeouts above 840 seconds require a
 separate review of the existing 15-minute worker stop budget. Use Image Manager
-for managed renderer changes. Network/TLS cutover, initial credential/owner
-creation, automatic HTTPS and the interactive CUI/Web wizard remain unfinished;
-the existing-host transaction is not a first-install wizard.
+for managed renderer changes. The existing-host transaction is not a first-install
+wizard; initial setup and managed custom ingress use separate durable transactions
+through the same CUI/Web frontends. Automatic HTTPS remains unsupported.
 
 Origin spellings normalize during review, and omitted OIDC algorithms become
 the existing default allowlist. Import/review does not rewrite installed files.
@@ -299,8 +299,8 @@ synthetic file metadata for the privileged secret preflight, and non-privileged
 shell harnesses for owner-count failure branches. They do **not** certify an
 actual root deployment, external IdP or Cloudflare service. Authentication
 transaction tests include actual temporary files, injected service failures and
-SIGKILL/reopened-store recovery. CUI/Web server setup, ingress and owner creation
-through the shared wizard remain separate unfinished milestones.
+SIGKILL/reopened-store recovery. CUI/Web setup, ingress and owner creation use
+their own integration tests; actual prepared-host acceptance remains separate.
 
 ### Method-aware browser UI (D2b, UI portion)
 
