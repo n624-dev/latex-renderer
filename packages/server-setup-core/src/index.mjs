@@ -65,3 +65,7 @@ export {
   serverSetupInitialOwnerPlan,
   productionAuthenticationPlan,
 } from "./authentication-review.mjs";
+export {
+  validateServerInitialInput,
+  validateServerIngressInput,
+} from "./initial-input.mjs";

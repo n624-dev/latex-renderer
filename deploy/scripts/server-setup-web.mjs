@@ -3,9 +3,13 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { setTimeout, clearTimeout } from "node:timers";
 import { URL } from "node:url";
+import { networkInterfaces } from "node:os";
+import { isIP } from "node:net";
 import {
   createServerSetupSession,
   ServerSetupSessionError,
+  serverIngressContainsAddress,
+  validateServerIngressReview,
 } from "../../packages/server-setup-core/src/index.mjs";
 import { setupHtml, setupScript, setupStyle } from "./server-setup-assets.mjs";
 
@@ -28,7 +32,7 @@ function record(value, keys) {
     throw new ServerSetupSessionError("INVALID_REQUEST");
   return value;
 }
-async function readBody(request) {
+async function readBody(request, maximum = 128 * 1024) {
   if (
     request.headers["content-type"] !== "application/json" ||
     request.headers["content-encoding"] !== undefined
@@ -38,7 +42,7 @@ async function readBody(request) {
   const chunks = [];
   for await (const chunk of request) {
     length += chunk.length;
-    if (length > 128 * 1024)
+    if (length > maximum)
       throw new ServerSetupSessionError("REQUEST_TOO_LARGE");
     chunks.push(chunk);
   }
@@ -49,11 +53,49 @@ async function readBody(request) {
   }
 }
 
-/** Short-lived loopback bootstrap, not a production route or systemd service.
- * No LAN/wildcard listener, shell command, secret-file path or arbitrary host
- * action can be requested by the browser. Forward this port over SSH if needed.
+/** Short-lived bootstrap, loopback by default, not a production route/service.
+ * Private LAN requires explicit operator acknowledgement and an allowlist.
+ * No wildcard listener, shell command, secret-file path or arbitrary host
+ * action can be requested by the browser. Prefer SSH forwarding.
  */
 export async function startServerSetupWeb(host, options = {}) {
+  const listenAddress = options.listenAddress ?? "127.0.0.1";
+  const networks = options.allowedNetworks ?? [];
+  const lan = listenAddress !== "127.0.0.1";
+  if (lan) {
+    const assigned = Object.values(options.interfaces ?? networkInterfaces())
+      .flat()
+      .some((entry) => entry?.address === listenAddress);
+    const privateAddress = [
+      "10.0.0.0/8",
+      "172.16.0.0/12",
+      "192.168.0.0/16",
+    ].some((network) => serverIngressContainsAddress(network, listenAddress));
+    if (
+      options.acknowledgePlaintextLan !== true ||
+      isIP(listenAddress) !== 4 ||
+      !assigned ||
+      !privateAddress ||
+      !Array.isArray(networks) ||
+      !networks.length ||
+      networks.length > 32 ||
+      networks.some((network) => !/^(?:10\.|172\.|192\.168\.)/.test(network)) ||
+      !networks.some((network) =>
+        serverIngressContainsAddress(network, listenAddress),
+      )
+    )
+      throw new ServerSetupSessionError("EXPLICIT_TRUSTED_LAN_REQUIRED");
+    validateServerIngressReview({
+      format: 1,
+      mode: "standalone",
+      publicOrigin: "https://bootstrap.example.test",
+      accessScope: "lan",
+      tlsProvider: "custom",
+      listenAddress,
+      allowedNetworks: networks,
+    });
+  } else if (networks.length)
+    throw new ServerSetupSessionError("EXPLICIT_TRUSTED_LAN_REQUIRED");
   const lifetimeMs = options.lifetimeMs ?? 30 * 60_000;
   const idleMs = options.idleMs ?? 10 * 60_000;
   if (!Number.isSafeInteger(idleMs) || idleMs < 1000 || idleMs > lifetimeMs)
@@ -123,7 +165,14 @@ export async function startServerSetupWeb(host, options = {}) {
     try {
       if (
         closed ||
-        request.socket.remoteAddress !== "127.0.0.1" ||
+        !(lan
+          ? networks.some((network) =>
+              serverIngressContainsAddress(
+                network,
+                request.socket.remoteAddress,
+              ),
+            )
+          : request.socket.remoteAddress === "127.0.0.1") ||
         request.headers.host !== new URL(origin).host
       )
         throw new ServerSetupSessionError("FORBIDDEN");
@@ -152,6 +201,7 @@ export async function startServerSetupWeb(host, options = {}) {
           "/api/preview",
           "/api/apply",
           "/api/close",
+          "/api/recover",
         ].includes(url.pathname)
       )
         throw new ServerSetupSessionError("NOT_FOUND");
@@ -167,7 +217,14 @@ export async function startServerSetupWeb(host, options = {}) {
           !equal(request.headers["x-csrf-token"], csrf))
       )
         throw new ServerSetupSessionError("FORBIDDEN");
-      const body = await readBody(request);
+      const body = await readBody(
+        request,
+        ["initial-prepared-host", "ingress-prepared-host"].includes(
+          host.scope,
+        ) && url.pathname === "/api/apply"
+          ? 768 * 1024
+          : 128 * 1024,
+      );
       if (url.pathname === "/api/session") {
         record(body, ["bootstrap"]);
         if (
@@ -191,13 +248,38 @@ export async function startServerSetupWeb(host, options = {}) {
         record(body, ["review"]);
         send(response, 200, await session.preview(body.review));
       } else if (url.pathname === "/api/apply") {
-        record(body, ["confirmation"]);
+        record(
+          body,
+          ["initial-prepared-host", "ingress-prepared-host"].includes(
+            host.scope,
+          )
+            ? ["confirmation", "credentials"]
+            : ["confirmation"],
+        );
         if (applying) throw new ServerSetupSessionError("SESSION_BUSY");
         applying = true;
         clearTimeout(idle);
         try {
-          const result = await session.apply(body.confirmation);
+          const result = await session.apply(
+            body.confirmation,
+            body.credentials,
+          );
           response.once("finish", shutdown);
+          send(response, 200, result);
+        } finally {
+          applying = false;
+          touch();
+        }
+      } else if (url.pathname === "/api/recover") {
+        record(body, ["confirmation"]);
+        if (body.confirmation !== "RECOVER")
+          throw new ServerSetupSessionError("INVALID_REQUEST");
+        if (applying) throw new ServerSetupSessionError("SESSION_BUSY");
+        applying = true;
+        clearTimeout(idle);
+        try {
+          const result = await session.recover();
+          if (result.phase === "complete") response.once("finish", shutdown);
           send(response, 200, result);
         } finally {
           applying = false;
@@ -230,10 +312,10 @@ export async function startServerSetupWeb(host, options = {}) {
   }
   await new Promise((resolve, reject) => {
     server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
+    server.listen(0, listenAddress, resolve);
   });
   const address = server.address();
-  origin = `http://127.0.0.1:${address.port}`;
+  origin = `http://${listenAddress}:${address.port}`;
   touch();
   deadline = setTimeout(shutdown, lifetimeMs);
   deadline.unref();

@@ -7,10 +7,16 @@ import { randomBytes } from "node:crypto";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline/promises";
+import { Writable } from "node:stream";
 import { validateServerSetupReview } from "../../packages/server-setup-core/src/index.mjs";
 import { runServerSetupCui } from "./server-setup-cui.mjs";
 import { startServerSetupWeb } from "./server-setup-web.mjs";
 import { cleanupServerSetupInputs } from "./server-setup-inputs.mjs";
+import { runServerInitialCui } from "./server-setup-initial-cui.mjs";
+import { createInitialServerSetupHost } from "./server-setup-initial-host.mjs";
+import { prepareServerApplication } from "./server-setup-prepare.mjs";
+import { AuthenticationChangeStore } from "./authentication-change.mjs";
+import { importServerSetupReview } from "../../packages/server-setup-core/src/index.mjs";
 
 const command = promisify(execFile);
 const inputRoot = "/etc/latex-renderer/setup-inputs";
@@ -122,7 +128,9 @@ export async function createPreparedServerSetupHost() {
           env: childEnvironment,
         },
       );
-      return action === "--setup-apply" ? undefined : JSON.parse(stdout);
+      return ["--setup-apply", "--recover"].includes(action)
+        ? undefined
+        : JSON.parse(stdout);
     } catch {
       throw new Error(
         "Prepared host operation failed; inspect private recovery state",
@@ -143,11 +151,31 @@ export async function createPreparedServerSetupHost() {
   }
   // Probe before opening the frontend; an unprepared/fresh host must not be
   // misreported as an installed environment or cause an implicit bootstrap.
-  validateServerSetupReview(await run("--setup-export"));
+  async function current() {
+    try {
+      return await run("--setup-export");
+    } catch {
+      const gid = directory.gid;
+      const store = new AuthenticationChangeStore(
+        "/etc/latex-renderer/renderer.env",
+        "/etc/latex-renderer/authentication-transaction",
+        0,
+        gid,
+      );
+      const journal = await store.journal();
+      if (!journal) throw new Error("Existing host is unavailable");
+      return importServerSetupReview(journal.before);
+    }
+  }
+  validateServerSetupReview(await current());
   return Object.freeze({
-    current: () => run("--setup-export"),
+    current,
     preview: (review) => run("--setup-review", review),
     apply: (envelope) => run("--setup-apply", envelope),
+    recover: async () => {
+      await run("--recover");
+      return {};
+    },
   });
 }
 
@@ -155,30 +183,100 @@ async function main() {
   const [mode, scope, ...rest] = process.argv.slice(2);
   if (
     !["--cui", "--web"].includes(mode) ||
-    scope !== "--existing" ||
-    rest.length
+    !["--existing", "--initial", "--ingress"].includes(scope)
   )
     throw new Error(
-      "usage: server-setup.mjs --cui|--web --existing (prepared managed host only)",
+      "usage: server-setup.mjs --cui|--web --existing|--initial|--ingress [--lan ADDRESS --allow-network CIDR --acknowledge-plaintext-lan] (prepared host only)",
     );
-  const host = await createPreparedServerSetupHost();
+  const webOptions = {};
+  for (let i = 0; i < rest.length; i++) {
+    if (mode !== "--web") throw new Error("LAN options require Web frontend");
+    if (rest[i] === "--lan" && !webOptions.listenAddress)
+      webOptions.listenAddress = rest[++i];
+    else if (rest[i] === "--allow-network")
+      (webOptions.allowedNetworks ??= []).push(rest[++i]);
+    else if (
+      rest[i] === "--acknowledge-plaintext-lan" &&
+      !webOptions.acknowledgePlaintextLan
+    )
+      webOptions.acknowledgePlaintextLan = true;
+    else throw new Error("Invalid setup listener options");
+  }
+  if (webOptions.acknowledgePlaintextLan && !webOptions.listenAddress)
+    throw new Error("LAN acknowledgement requires explicit address");
+  if (scope === "--initial") await prepareServerApplication();
+  const host =
+    scope === "--existing"
+      ? await createPreparedServerSetupHost()
+      : await createInitialServerSetupHost(
+          scope === "--initial" ? "initial" : "ingress",
+        );
   if (mode === "--cui") {
     if (!process.stdin.isTTY || !process.stdout.isTTY)
       throw new Error("CUI requires a trusted interactive terminal");
+    let muted = false;
+    const output = new Writable({
+      write(chunk, _encoding, callback) {
+        if (!muted) process.stdout.write(chunk);
+        callback();
+      },
+    });
     const terminal = createInterface({
       input: process.stdin,
-      output: process.stdout,
+      output,
+      terminal: true,
+      historySize: 0,
     });
     try {
-      await runServerSetupCui(host, {
-        ask: (prompt) => terminal.question(prompt),
-        print: (message) => process.stdout.write(`${message}\n`),
-      });
+      await (scope === "--existing" ? runServerSetupCui : runServerInitialCui)(
+        host,
+        {
+          ask: (prompt) => terminal.question(prompt),
+          askSecret: async (prompt) => {
+            process.stdout.write(prompt);
+            muted = true;
+            try {
+              return await terminal.question("");
+            } finally {
+              muted = false;
+              process.stdout.write("\n");
+            }
+          },
+          readFile: async (path, maximum) => {
+            const handle = await open(
+              path,
+              constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+            );
+            try {
+              const info = await handle.stat();
+              if (!info.isFile() || info.size < 1 || info.size > maximum)
+                throw new Error("Invalid bounded PEM file");
+              const bytes = Buffer.alloc(maximum + 1);
+              const { bytesRead } = await handle.read(
+                bytes,
+                0,
+                bytes.length,
+                0,
+              );
+              if (bytesRead !== info.size)
+                throw new Error("PEM file changed while reading");
+              return bytes.subarray(0, bytesRead).toString("utf8");
+            } finally {
+              await handle.close();
+            }
+          },
+          print: (message) => process.stdout.write(`${message}\n`),
+        },
+      );
     } finally {
       terminal.close();
     }
   } else {
-    const web = await startServerSetupWeb(host);
+    if (webOptions.listenAddress)
+      process.stdout.write(
+        "WARNING: temporary plaintext HTTP on a trusted LAN exposes bootstrap credentials to that network. Prefer SSH forwarding. Never use an untrusted/public network.\n",
+      );
+    const web = await startServerSetupWeb(host, webOptions);
     process.stdout.write(
       `Private one-use setup URL (expires in 5 minutes):\n${web.bootstrapUrl}\nUse a same-host browser or SSH port forwarding. Never publish this port or share this URL.\n`,
     );

@@ -31,6 +31,27 @@ async function fixture() {
   return { root, path, uid: process.getuid?.() ?? 0 };
 }
 describe("prepared settings child environment", () => {
+  it("also rejects recovery ordering missing fresh-host Web/HTTPS consumers", () => {
+    const consumers = [
+      ...serverSetupUnits,
+      "latex-renderer-web.service",
+      "latex-renderer-ingress.service",
+    ];
+    expect(() =>
+      requireServerSetupRecoveryOrdering(
+        serverSetupUnits.join(" "),
+        "latex-renderer-authentication-recovery.service",
+        consumers,
+      ),
+    ).toThrow("Compatible recovery ordering");
+    expect(() =>
+      requireServerSetupRecoveryOrdering(
+        consumers.join(" "),
+        "latex-renderer-authentication-recovery.service",
+        consumers,
+      ),
+    ).not.toThrow();
+  });
   it("requires the actually loaded five-consumer recovery ordering, not merely an active old unit", () => {
     expect(() =>
       requireServerSetupRecoveryOrdering(

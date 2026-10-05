@@ -30,7 +30,11 @@ import {
   serverSetupUnits,
 } from "./authentication-change.mjs";
 
-export function requireServerSetupRecoveryOrdering(before, apiRequires) {
+export function requireServerSetupRecoveryOrdering(
+  before,
+  apiRequires,
+  consumers = serverSetupUnits,
+) {
   const words = (value) =>
     typeof value === "string" && value.length <= 16 * 1024
       ? value.trim().split(/\s+/)
@@ -38,7 +42,7 @@ export function requireServerSetupRecoveryOrdering(before, apiRequires) {
   const ordering = words(before),
     requirements = words(apiRequires);
   if (
-    !serverSetupUnits.every((unit) => ordering.includes(unit)) ||
+    !consumers.every((unit) => ordering.includes(unit)) ||
     !requirements.includes("latex-renderer-authentication-recovery.service")
   )
     throw new Error(

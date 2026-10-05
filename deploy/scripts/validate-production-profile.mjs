@@ -57,6 +57,10 @@ function main() {
   // Do not deploy another release over an interrupted configuration cutover.
   // Even a committed-but-uncleaned journal requires explicit recovery first.
   try {
+    lstatSync("/etc/latex-renderer/installation-transaction/journal.json");
+    throw new Error("Recover the initial installation before deployment");
+  } catch (error) { if (error.code !== "ENOENT") throw error; }
+  try {
     lstatSync("/etc/latex-renderer/authentication-transaction/journal.json");
     throw new Error("Recover the authentication transaction before deployment");
   } catch (error) {

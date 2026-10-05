@@ -72,6 +72,7 @@ button, .button, input, select, textarea {
   padding: 0.58rem 0.78rem;
 }
 button, .button {
+  min-height: 44px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -114,7 +115,7 @@ nav { display: flex; flex-wrap: wrap; align-items: center; gap: 0.8rem; }
 nav a { text-decoration: none; color: var(--muted); }
 nav a:hover, nav a[aria-current="page"] { color: var(--text); }
 nav a[aria-current="page"] { font-weight: 750; text-decoration: underline; }
-.header-meta { display: flex; align-items: center; gap: 0.55rem; color: var(--muted); font-size: 0.9rem; }
+.header-meta { display: flex; flex-wrap: wrap; min-width: 0; align-items: center; gap: 0.55rem; color: var(--muted); font-size: 0.9rem; overflow-wrap: anywhere; }
 
 main { width: min(1180px, 100%); margin: 0 auto; padding: 2rem 1.25rem 4rem; }
 .hero { padding: clamp(2.5rem, 8vw, 6rem) 0 3rem; max-width: 780px; }
@@ -250,9 +251,9 @@ dialog.wide { width: min(900px, calc(100vw - 2rem)); }
 @media (max-width: 820px) {
   .site-header { align-items: flex-start; flex-wrap: wrap; }
   .site-header strong { width: 100%; }
-  nav { order: 3; width: 100%; overflow-x: auto; flex-wrap: nowrap; padding-bottom: 0.2rem; }
-  nav a { white-space: nowrap; }
-  .header-meta { margin-left: auto; }
+  nav { order: 3; width: 100%; min-width: 0; overflow-x: auto; flex-wrap: nowrap; padding-bottom: 0.2rem; }
+  nav a { white-space: nowrap; min-height: 44px; display: inline-flex; align-items: center; }
+  .header-meta { margin-left: 0; width: 100%; }
   main { padding-top: 1.25rem; }
   dialog, dialog.wide { width: calc(100vw - 1rem); max-height: calc(100vh - 1rem); padding: 0.9rem; }
   .dialog-actions { display: grid; grid-template-columns: 1fr; }

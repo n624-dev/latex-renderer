@@ -8,24 +8,62 @@ export class ServerSetupSessionError extends Error {
   constructor(code: string);
 }
 export interface ServerSetupSessionHost {
+  readonly scope?:
+    | "initial-prepared-host"
+    | "existing-prepared-host"
+    | "ingress-prepared-host";
   current(this: void): unknown | Promise<unknown>;
   preview(this: void, review: ServerSetupReview): unknown | Promise<unknown>;
-  apply(this: void, envelope: unknown): void | Promise<void>;
+  apply(
+    this: void,
+    envelope: unknown,
+    credentials?: ServerInitialCredentials | ServerIngressCredentials,
+  ): unknown | Promise<unknown>;
+  recover?(
+    this: void,
+  ):
+    | { committed?: boolean; awaitingCredentials?: boolean }
+    | Promise<{ committed?: boolean; awaitingCredentials?: boolean }>;
 }
+export interface ServerInitialCredentials {
+  deploymentUser?: string;
+  owner: {
+    displayName: string;
+    email?: string;
+    loginName?: string;
+    password?: string;
+    subject?: string;
+  };
+  oidcClientSecret?: string;
+  tls?: { certificate: string; privateKey: string };
+}
+export function validateServerInitialInput(
+  review: unknown,
+  credentials: unknown,
+): ServerInitialCredentials;
+export interface ServerIngressCredentials {
+  tls: { certificate: string; privateKey: string };
+}
+export function validateServerIngressInput(
+  review: unknown,
+  credentials: unknown,
+): ServerIngressCredentials;
 export interface ServerSetupSession {
   status(): Promise<{
     phase: string;
     review: ServerSetupReview;
-    scope: "existing-prepared-host";
+    scope:
+      | "existing-prepared-host"
+      | "initial-prepared-host"
+      | "ingress-prepared-host";
   }>;
-  preview(
-    input: unknown,
-  ): Promise<{
+  preview(input: unknown): Promise<{
     review: ServerSetupReview;
     readiness: ReturnType<typeof reviewServerSetupReadiness>;
     confirmation: string;
   }>;
-  apply(token: unknown): Promise<{ phase: "complete" }>;
+  apply(token: unknown, credentials?: unknown): Promise<{ phase: "complete" }>;
+  recover(): Promise<{ phase: string; awaitingCredentials: boolean }>;
   close(): void;
 }
 export function createServerSetupSession(

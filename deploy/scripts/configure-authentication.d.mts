@@ -3,6 +3,7 @@ import type { ProductionAuthenticationPlan } from "../../packages/server-setup-c
 export function requireServerSetupRecoveryOrdering(
   before: unknown,
   apiRequires: unknown,
+  consumers?: readonly string[],
 ): void;
 export function checkAuthenticationHealth(
   contents: string,

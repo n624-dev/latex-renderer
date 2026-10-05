@@ -6,6 +6,17 @@ import { resolve } from "node:path";
 const slots = Object.freeze({
   "api-key-pepper": Object.freeze({ mode: 0o400, rendererGroup: false }),
   "auth-password-pepper": Object.freeze({ mode: 0o440, rendererGroup: true }),
+  "image-manager-token": Object.freeze({
+    mode: 0o400,
+    rendererGroup: false,
+    hex: true,
+  }),
+  "update-manager-token": Object.freeze({
+    mode: 0o400,
+    rendererGroup: false,
+    hex: true,
+  }),
+  "v1.key": Object.freeze({ mode: 0o440, rendererGroup: true }),
 });
 
 /** Prepared-host secret primitive; importing or constructing does not generate
@@ -14,7 +25,13 @@ const slots = Object.freeze({
  * This class is not reachable from an arbitrary browser file-path operation.
  */
 export class ServerSetupSecrets {
-  constructor(root, rendererGid, uid = 0, rootGid = 0) {
+  constructor(
+    root,
+    rendererGid,
+    uid = 0,
+    rootGid = 0,
+    allowServiceDirectory = false,
+  ) {
     if (
       typeof root !== "string" ||
       !root.startsWith("/") ||
@@ -29,6 +46,7 @@ export class ServerSetupSecrets {
     this.rendererGid = rendererGid;
     this.uid = uid;
     this.rootGid = rootGid;
+    this.allowServiceDirectory = allowServiceDirectory;
   }
   slot(name) {
     if (!Object.hasOwn(slots, name))
@@ -44,7 +62,12 @@ export class ServerSetupSecrets {
     if (
       !info.isDirectory() ||
       info.uid !== this.uid ||
-      (info.mode & 0o7777) !== 0o700 ||
+      !(
+        (info.mode & 0o7777) === 0o700 ||
+        (this.allowServiceDirectory &&
+          (info.mode & 0o7777) === 0o750 &&
+          info.gid === this.rendererGid)
+      ) ||
       (await realpath(this.root)) !== this.root
     )
       throw new Error(
@@ -67,12 +90,12 @@ export class ServerSetupSecrets {
         info.uid !== this.uid ||
         info.gid !== slot.gid ||
         (info.mode & 0o7777) !== slot.mode ||
-        info.size !== 32
+        !(slot.hex ? [64, 65].includes(info.size) : info.size === 32)
       )
         throw new Error(
           "Existing secret is invalid; never rotate it automatically",
         );
-      value = Buffer.alloc(33);
+      value = Buffer.alloc(slot.hex ? 66 : 33);
       let length = 0;
       while (length < value.length) {
         const result = await handle.read(
@@ -87,7 +110,7 @@ export class ServerSetupSecrets {
       const after = await handle.stat(),
         entry = await lstat(slot.path);
       if (
-        length !== 32 ||
+        length !== info.size ||
         !entry.isFile() ||
         entry.dev !== info.dev ||
         entry.ino !== info.ino ||
@@ -100,7 +123,14 @@ export class ServerSetupSecrets {
         after.ctimeMs !== info.ctimeMs
       )
         throw new Error("Secret changed while reading");
-      return Buffer.from(value.subarray(0, 32));
+      if (
+        slot.hex &&
+        !/^[a-f0-9]{64}\n?$/.test(value.subarray(0, length).toString("ascii"))
+      )
+        throw new Error(
+          "Existing token encoding is invalid; never rotate it automatically",
+        );
+      return Buffer.from(value.subarray(0, length));
     } finally {
       value?.fill(0);
       await handle.close();
@@ -126,7 +156,7 @@ export class ServerSetupSecrets {
         info.uid !== this.uid ||
         ![this.rootGid, this.rendererGid].includes(info.gid) ||
         ![0o600, 0o400, 0o440].includes(info.mode & 0o7777) ||
-        info.size > 32 ||
+        info.size > 65 ||
         ![1, 2].includes(info.nlink)
       )
         throw new Error("Unexpected secret recovery entry");
@@ -142,7 +172,7 @@ export class ServerSetupSecrets {
             entry?.isFile() &&
             entry.dev === info.dev &&
             entry.ino === info.ino &&
-            entry.size === 32 &&
+            (slot.hex ? [64, 65].includes(entry.size) : entry.size === 32) &&
             entry.nlink === 2 &&
             (entry.mode & 0o7777) === slot.mode &&
             entry.uid === this.uid &&
@@ -195,7 +225,11 @@ export class ServerSetupSecrets {
     }
     const temporary = `${this.root}/.setup-secret-${randomBytes(24).toString("hex")}`;
     let linked = false;
-    const value = randomBytes(32);
+    const seed = randomBytes(32);
+    const value = slot.hex
+      ? Buffer.from(`${seed.toString("hex")}\n`)
+      : Buffer.from(seed);
+    seed.fill(0);
     const handle = await open(
       temporary,
       constants.O_WRONLY |

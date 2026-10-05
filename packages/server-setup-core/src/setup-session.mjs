@@ -3,6 +3,10 @@ import { Buffer } from "node:buffer";
 import { performance } from "node:perf_hooks";
 import { validateServerSetupReview } from "./runtime-review.mjs";
 import { reviewServerSetupReadiness } from "./setup-readiness.mjs";
+import {
+  validateServerInitialInput,
+  validateServerIngressInput,
+} from "./initial-input.mjs";
 
 export class ServerSetupSessionError extends Error {
   constructor(code) {
@@ -37,6 +41,7 @@ export function createServerSetupSession(host, options = {}) {
     busy = false;
   let installed = null,
     pending = null,
+    pendingReview = null,
     confirmation = null,
     reviews = 0;
   function alive() {
@@ -73,11 +78,15 @@ export function createServerSetupSession(host, options = {}) {
           }
         });
       }
-      return { phase, review: installed, scope: "existing-prepared-host" };
+      return {
+        phase,
+        review: installed,
+        scope: host.scope ?? "existing-prepared-host",
+      };
     },
     async preview(input) {
       return exclusive(async () => {
-        pending = confirmation = null;
+        pending = pendingReview = confirmation = null;
         phase = "editing";
         if (++reviews > 128) throw new ServerSetupSessionError("REVIEW_LIMIT");
         let candidate;
@@ -88,6 +97,7 @@ export function createServerSetupSession(host, options = {}) {
         }
         try {
           pending = await host.preview(candidate);
+          pendingReview = candidate;
         } catch {
           throw new ServerSetupSessionError("HOST_REVIEW_FAILED");
         }
@@ -100,15 +110,27 @@ export function createServerSetupSession(host, options = {}) {
         };
       });
     },
-    async apply(token) {
+    async apply(token, credentials) {
       return exclusive(async () => {
         if (phase !== "reviewed" || !sameToken(token, confirmation))
           throw new ServerSetupSessionError("REVIEW_CONFIRMATION_REQUIRED");
         const envelope = pending;
+        let initial;
+        try {
+          if (host.scope === "initial-prepared-host")
+            initial = validateServerInitialInput(pendingReview, credentials);
+          else if (host.scope === "ingress-prepared-host")
+            initial = validateServerIngressInput(pendingReview, credentials);
+          else if (credentials !== undefined)
+            throw new Error("Existing setup does not accept credentials");
+        } catch {
+          throw new ServerSetupSessionError("INVALID_INITIAL_CREDENTIALS");
+        }
         pending = confirmation = null;
         phase = "applying";
         try {
-          await host.apply(envelope);
+          if (initial) await host.apply(envelope, initial);
+          else await host.apply(envelope);
           phase = "complete";
           return { phase: "complete" };
         } catch {
@@ -118,6 +140,34 @@ export function createServerSetupSession(host, options = {}) {
           throw new ServerSetupSessionError(
             "APPLY_FAILED_RECOVERY_MAY_BE_REQUIRED",
           );
+        } finally {
+          if (initial) {
+            if (initial.owner) initial.owner.password = undefined;
+            initial.oidcClientSecret = undefined;
+            initial.tls = undefined;
+          }
+          pendingReview = null;
+        }
+      });
+    },
+    async recover() {
+      return exclusive(async () => {
+        if (!host.recover)
+          throw new ServerSetupSessionError("RECOVERY_UNAVAILABLE");
+        pending = pendingReview = confirmation = null;
+        try {
+          const result = await host.recover();
+          phase = result?.committed ? "complete" : "editing";
+          installed = null;
+          return {
+            phase,
+            awaitingCredentials: result?.awaitingCredentials === true,
+          };
+        } catch {
+          phase = "failed";
+          throw new ServerSetupSessionError(
+            "RECOVERY_FAILED_PRIVATE_STATE_RETAINED",
+          );
         }
       });
     },
@@ -125,7 +175,7 @@ export function createServerSetupSession(host, options = {}) {
       if (busy) throw new ServerSetupSessionError("SESSION_BUSY");
       phase = "closed";
       expires = 0;
-      installed = pending = confirmation = null;
+      installed = pending = pendingReview = confirmation = null;
     },
   };
   return Object.freeze(session);

@@ -54,6 +54,39 @@ function deferred() {
 }
 
 describe("common server setup session", () => {
+  it.each([
+    {},
+    {
+      listenAddress: "0.0.0.0",
+      acknowledgePlaintextLan: true,
+      allowedNetworks: ["10.0.0.0/8"],
+    },
+    { listenAddress: "192.168.1.10", allowedNetworks: ["192.168.1.0/24"] },
+    {
+      listenAddress: "192.168.1.10",
+      acknowledgePlaintextLan: true,
+      allowedNetworks: ["0.0.0.0/0"],
+    },
+    {
+      listenAddress: "172.16.1.10",
+      acknowledgePlaintextLan: true,
+      allowedNetworks: ["172.0.0.0/8"],
+    },
+  ])(
+    "rejects implicit/public/unassigned LAN bootstrap %j before opening a listener",
+    async (options) => {
+      const selected = Object.keys(options).length
+        ? options
+        : {
+            listenAddress: "192.168.1.10",
+            allowedNetworks: ["192.168.1.0/24"],
+            acknowledgePlaintextLan: true,
+          };
+      await expect(
+        startServerSetupWeb(fixture().host, { ...selected, interfaces: {} }),
+      ).rejects.toThrow("EXPLICIT_TRUSTED_LAN_REQUIRED");
+    },
+  );
   it("only returns checked non-secret state and never writes on status/preview", async () => {
     const f = fixture(),
       session = createServerSetupSession(f.host);

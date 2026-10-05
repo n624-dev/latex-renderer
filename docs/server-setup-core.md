@@ -6,19 +6,20 @@ layer for the self-host setup work in issues #50–#52. It is separate from
 
 This milestone provides a pure production-profile parser, a structured review
 model and the exact validation used by the privileged deployment preflight.
-It does **not** provide a completed wizard. A separate privileged host adapter
+The pure Core does not install a host. A separate privileged host adapter
 can apply a reviewed authentication-only change; see
 [the authentication cutover runbook](authentication-cutover.md).
 Explicit scope/TLS review, standalone Nginx generation and read-only host
 preflight are now connected in one implementation; see
 [reviewed standalone HTTPS ingress](standalone-ingress.md). This does not
-automatically apply network settings or complete the CUI/Web wizard.
+automatically apply network settings merely by importing the model.
 
-An interactive CUI/Web frontend now exists for **existing prepared hosts**,
-sharing one review/confirmation state machine and the runtime transaction.
+Interactive CUI/Web frontends cover prepared-host existing settings, initial
+application provisioning and managed custom HTTPS, sharing a reviewed state
+machine and durable transactions.
 See [the prepared-host settings frontend](server-settings-wizard.md) for its
-scope and temporary loopback bootstrap. Fresh-install coordination remains
-unfinished; shared owner/secret primitives are not a completed installer.
+scope, recovery and temporary bootstrap. OS provisioning is outside this scope;
+real prepared-host acceptance is separate from fixture/browser verification.
 
 ## Existing installations stay unchanged
 
@@ -122,8 +123,8 @@ Setup success is not used as a login cache: each runtime does its own bounded
 Discovery and signed-token/JWKS validation. A failed runtime Discovery remains
 retryable; concurrent login starts share only that runtime's successful metadata.
 State, nonce, PKCE, issuer/audience, asymmetric algorithms and session checks are
-unchanged. Secret/owner provisioning, CUI/Web wizard interaction and transactional
-ingress apply/recovery remain unfinished, not implied by this diagnostic.
+unchanged. Secret/owner provisioning and transactional ingress apply/recovery
+are separate privileged operations, never implied by this diagnostic.
 
 Protocol reference: [OpenID Connect Discovery 1.0](https://openid.net/specs/openid-connect-discovery-1_0.html).
 
@@ -410,9 +411,10 @@ review round-trips, secret exclusion, unchanged validator identity, malformed
 models and copied verified-source operation without workspace dependencies.
 They do not certify a completed setup or actual ingress/TLS operation.
 
-Remaining work proceeds in separate review/release boundaries:
+The implementation now connects these capabilities in the prepared-host
+frontends and transactions (see the wizard runbook above):
 
-1. Finish native Password/OIDC host configuration, method-aware login/admin UI,
+1. Native Password/OIDC host configuration, method-aware login/admin UI,
    bootstrap/deployment and session retirement on apply (#51), using the D2a
    selection/session foundation with predictable migration from legacy profiles.
 2. Explicit access scope and HTTPS provider configuration, including custom
@@ -422,6 +424,7 @@ Remaining work proceeds in separate review/release boundaries:
 4. Equivalent CUI and temporary Web-bootstrap adapters over those capabilities,
    including one-time frontend choice and bootstrap security (#50).
 
-Until these milestones are implemented, format 1 rejects dual-method settings
-instead of claiming they work. No new setup command, host changes, certificate
-issuance, partition/quota changes or automatic deployment are introduced here.
+Legacy format 1 still rejects dual-method settings; use explicit format 2/4
+reviews. Source implementation and fixture tests are not real-host acceptance.
+Automatic certificate issuance, OS provisioning and partition/quota changes
+remain out of scope. No deployment happens by importing/reviewing a model.

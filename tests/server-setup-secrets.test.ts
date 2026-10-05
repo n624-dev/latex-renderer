@@ -29,6 +29,46 @@ async function fixture() {
   return { root, store };
 }
 describe("prepared-host generated secrets", () => {
+  it.each(["image-manager-token", "update-manager-token"])(
+    "creates printable %s compatible with existing bearer-token readers",
+    async (slot) => {
+      const f = await fixture();
+      await f.store.ensure(slot);
+      const value = await readFile(join(f.root, slot), "utf8");
+      expect(value).toMatch(/^[a-f0-9]{64}\n$/);
+      expect((await lstat(join(f.root, slot))).mode & 0o7777).toBe(0o400);
+      expect(await f.store.ensure(slot)).toEqual({ slot, status: "preserved" });
+      expect((await f.store.read(slot)).toString()).toBe(value);
+    },
+  );
+  it("preserves valid legacy hex tokens and rejects binary/invalid token files", async () => {
+    const f = await fixture(),
+      path = join(f.root, "image-manager-token");
+    await writeFile(path, "a".repeat(64), { mode: 0o400 });
+    await chmod(path, 0o400);
+    expect(await f.store.ensure("image-manager-token")).toMatchObject({
+      status: "preserved",
+    });
+    await chmod(path, 0o600);
+    await writeFile(path, Buffer.alloc(65, 255));
+    await chmod(path, 0o400);
+    await expect(f.store.ensure("image-manager-token")).rejects.toThrow(
+      "encoding",
+    );
+    expect(await readFile(path)).toEqual(Buffer.alloc(65, 255));
+  });
+  it("supports only explicitly opted-in read-only service-group key directories", async () => {
+    const f = await fixture(),
+      uid = process.getuid?.() ?? 0,
+      gid = process.getgid?.() ?? 0;
+    await chmod(f.root, 0o750);
+    const store = new ServerSetupSecrets(f.root, gid, uid, gid, true);
+    await store.ensure("v1.key");
+    expect((await store.read("v1.key")).length).toBe(32);
+    expect((await lstat(join(f.root, "v1.key"))).mode & 0o7777).toBe(0o440);
+    await chmod(f.root, 0o770);
+    await expect(store.ensure("v1.key")).rejects.toThrow("prepared");
+  });
   it.each(["api-key-pepper", "auth-password-pepper"] as const)(
     "creates %s once with exact permissions and never outputs its contents",
     async (slot) => {
