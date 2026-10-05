@@ -20,7 +20,7 @@
     "@latex-renderer/contracts": "workspace:*",
     "@latex-renderer/shared": "workspace:*",
     "@latex-renderer/zip-validation": "workspace:*",
-    "ignore": "^7.0.10",
+    "ignore": "^7.0.11",
     "yazl": "^3.3.1"
   },
   "devDependencies": {
