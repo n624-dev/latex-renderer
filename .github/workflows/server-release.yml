@@ -50,7 +50,7 @@ jobs:
       - name: Install integration-test dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends --yes age acl libarchive-tools
+          sudo apt-get install --no-install-recommends --yes age acl libarchive-tools nginx-light
       - name: Validate tag and source
         id: source
         env:
@@ -110,7 +110,9 @@ jobs:
           echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           pnpm install --frozen-lockfile
           pnpm check
-          pnpm build:client
+          # The fresh recursive build inside check already created the assets.
+          # Verify those exact files; do not regenerate a second signature.
+          pnpm verify:mcpb
       - name: Build versioned server source bundle
         env:
           CANDIDATE_TAG: ${{ inputs.candidate_tag }}

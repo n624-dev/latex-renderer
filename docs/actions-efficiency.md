@@ -12,6 +12,20 @@ second Web build, second client package generation, or second Gateway dry-run.
 Developer-facing `pnpm check`, `pnpm build`, `pnpm test:browser`, and standalone
 public Web build/deploy remain self-contained; only CI opts into output reuse.
 
+The Release and branch update/recovery validation jobs now apply the same rule:
+`pnpm check` performs a fresh recursive build (including client and signed MCPB
+assets), followed by `pnpm verify:mcpb` on those exact files before assembling
+the attested source bundle. The redundant second `pnpm build:client` is removed.
+No input from another job/cache is substituted; full checks, attestation and
+update/recovery E2E remain required. This removes regeneration, not validation,
+and has not yet been benchmarked on a released hosted job.
+On the small development VPS, an already-built client regeneration took 3.89s
+(user/system CPU 2.27/0.32s), while signature verification took 0.93s
+(0.91/0.12s). These are individual local operations, not a measured hosted
+workflow speedup or a guarantee. Regenerating a signed MCPB also changes its
+wrapper bytes; reusing the fresh files preserves consistency with the copies
+already embedded by the public Web build.
+
 The preview shutdown still sends SIGTERM, waits up to five seconds, then SIGKILL
 and reaps an unresponsive process. On success the unused timeout is cancelled,
 so it no longer adds five seconds of idle process lifetime.
