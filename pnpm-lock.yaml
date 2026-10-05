@@ -42,7 +42,7 @@ importers:
         specifier: workspace:*
         version: link:packages/zip-validation
       '@types/node':
-        specifier: ^26.6.3
+        specifier: ^26.6.4
         version: 26.6.4
       '@types/yazl':
         specifier: ^3.3.1

@@ -36,7 +36,7 @@
     "@latex-renderer/shared": "workspace:*",
     "@latex-renderer/ticket": "workspace:*",
     "@latex-renderer/zip-validation": "workspace:*",
-    "@types/node": "^26.6.3",
+    "@types/node": "^26.6.4",
     "@types/yazl": "^3.3.1",
     "@typescript/native": "npm:typescript@^7.0.2",
     "esbuild": "0.28.2",
