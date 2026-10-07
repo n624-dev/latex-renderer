@@ -1,11 +1,26 @@
 import type {
   ProductionAuthenticationPlan,
   ServerSetupAuthenticationReview,
+  ServerSetupReview,
 } from "../../packages/server-setup-core/src/index.mjs";
 export const authenticationUnits: readonly [
   "latex-renderer-admin-api.service",
   "latex-renderer-remote-mcp.service",
 ];
+export const serverSetupUnits: readonly string[];
+export interface ServerSetupChangeEnvelope {
+  readonly format: 2;
+  readonly baseSha256: string;
+  readonly candidateSha256: string;
+  readonly review: ServerSetupReview;
+}
+export function serverSetupChangeReview(
+  contents: string,
+  input: unknown,
+): {
+  envelope: Readonly<ServerSetupChangeEnvelope>;
+  after: string;
+};
 export function authenticationEnvironmentHash(contents: string): string;
 export interface AuthenticationChangeEnvelope {
   format: 1;
@@ -21,7 +36,7 @@ export function authenticationChangeReview(
   after: string;
 };
 export interface AuthenticationJournal {
-  format: 1;
+  format: 1 | 2;
   phase: "pending" | "committed";
   before: string;
   after: string;
@@ -68,3 +83,8 @@ export function applyAuthenticationChange(
   host: AuthenticationChangeHost,
   envelope: unknown,
 ): Promise<ProductionAuthenticationPlan>;
+export function applyServerSetupChange(
+  store: AuthenticationChangeStore,
+  host: AuthenticationChangeHost,
+  envelope: unknown,
+): Promise<ServerSetupReview>;

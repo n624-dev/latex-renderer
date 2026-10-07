@@ -1,5 +1,28 @@
 // Pure, secret-free server configuration core. Importing does not read host
 // files/environment, open listeners, contact providers or apply configuration.
+// Discovery I/O is explicit and shared with runtime; importing still does none.
+export {
+  createServerSetupSession,
+  ServerSetupSessionError,
+} from "./setup-session.mjs";
+export {
+  SERVER_RUNTIME_LIMITS,
+  validateServerRuntimeReview,
+  importServerRuntimeReview,
+  serverRuntimeReviewEnvironment,
+  validateServerSetupReview,
+  importServerSetupReview,
+  serverSetupReviewEnvironment,
+} from "./runtime-review.mjs";
+export {
+  serverOidcDiscoveryUrl,
+  validateServerOidcMetadata,
+  discoverServerOidcProvider,
+} from "./oidc-discovery.mjs";
+export {
+  reviewServerSetupReadiness,
+  checkServerSetupOidc,
+} from "./setup-readiness.mjs";
 export {
   INGRESS_PROFILE_KEYS,
   serverIngressFromEnvironment,
@@ -42,3 +65,7 @@ export {
   serverSetupInitialOwnerPlan,
   productionAuthenticationPlan,
 } from "./authentication-review.mjs";
+export {
+  validateServerInitialInput,
+  validateServerIngressInput,
+} from "./initial-input.mjs";

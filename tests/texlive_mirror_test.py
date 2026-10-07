@@ -312,6 +312,27 @@ class MirrorTest(unittest.TestCase):
         self.config = mirror.Config.load(self.config_path)
         mirror.ensure_layout(self.config)
         mirror.save_state(self.config, mirror.default_state())
+        # Unit fixtures must also run on a small tmpfs. Keep real hardlink-aware
+        # allocation accounting, but model available space/inodes explicitly;
+        # capacity tests override these metrics and OS quotas have separate
+        # integration procedures. No production capacity guard is bypassed.
+        actual_metrics = mirror.filesystem_metrics
+
+        def fixture_metrics(root):
+            metrics = actual_metrics(root)
+            return {
+                **metrics,
+                "filesystemFreeBytes": 20 * mirror.GIB,
+                "osFilesystemFreeBytes": 20 * mirror.GIB,
+                "inodeFree": 10000,
+                "inodeTotal": 20000,
+            }
+
+        self.metrics_patch = mock.patch.object(
+            mirror, "filesystem_metrics", side_effect=fixture_metrics
+        )
+        self.metrics_patch.start()
+        self.addCleanup(self.metrics_patch.stop)
 
     def tearDown(self):
         self.temp.cleanup()
@@ -726,6 +747,59 @@ class MirrorTest(unittest.TestCase):
         with self.assertRaises(mirror.StateError):
             mirror.validate_snapshot_payload(snapshot, manifest)
 
+    def test_identical_daily_sync_reserves_requested_verified_date(self):
+        def download(_url, target, expected_size=None):
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(b"payload")
+
+        now = dt.datetime(2026, 9, 7, tzinfo=dt.timezone.utc)
+        with (
+            mock.patch.object(mirror, "verified_metadata", side_effect=self.fake_metadata),
+            mock.patch.object(mirror, "curl_download", side_effect=download),
+        ):
+            first = mirror.sync(self.config, "2026-09-07", now)
+            snapshot = self.root / "snapshots" / first["snapshotId"]
+            manifest_before = (snapshot / ".snapshot.json").read_bytes()
+            next_day = now + dt.timedelta(days=1)
+            second = mirror.sync(self.config, "2026-09-08", next_day)
+        self.assertEqual(second["status"], "unchanged")
+        self.assertEqual(first["snapshotId"], second["snapshotId"])
+        self.assertEqual((snapshot / ".snapshot.json").read_bytes(), manifest_before)
+        record = mirror.load_state(self.config)["snapshots"][first["snapshotId"]]
+        self.assertEqual(record["publishedAt"], mirror.iso(now))
+        self.assertEqual(record["canonicalDates"], ["2026-09-07", "2026-09-08"])
+        lease = mirror.reserve(
+            self.config, None, "2026-09-08", "50:1:build:amd64", "amd64", next_day
+        )
+        self.assertEqual(lease["canonicalDate"], "2026-09-08")
+        self.assertEqual(lease["snapshotId"], first["snapshotId"])
+        self.assertEqual(lease["installerSha512"], "d" * 128)
+        self.assertEqual(lease["databaseSha512"], "c" * 128)
+        with self.assertRaises(mirror.MirrorError):
+            mirror.reserve(
+                self.config, None, "2026-09-09", "51:1:build:amd64", "amd64", next_day
+            )
+
+    def test_duplicate_lease_for_verified_alias_does_not_rewrite_or_extend(self):
+        sid, _ = self.publish(1)
+        state = mirror.load_state(self.config)
+        state["snapshots"][sid]["canonicalDates"].append("2026-09-02")
+        mirror.save_state(self.config, state)
+        now = dt.datetime(2026, 9, 7, tzinfo=dt.timezone.utc)
+        first = mirror.reserve(
+            self.config, None, "2026-09-01", "50:1:build:amd64", "amd64", now
+        )
+        path = self.root / "state/reservations" / f"{first['token']}.json"
+        before = path.read_bytes()
+        second = mirror.reserve(
+            self.config, None, "2026-09-02", "50:1:build:amd64", "amd64",
+            now + dt.timedelta(hours=1),
+        )
+        self.assertEqual(second["canonicalDate"], "2026-09-02")
+        self.assertEqual(first["token"], second["token"])
+        self.assertEqual(first["expiresAt"], second["expiresAt"])
+        self.assertEqual(path.read_bytes(), before)
+
     def test_delete_crash_state_is_reconciled(self):
         old, _ = self.publish(1, hours_ago=100)
         latest, _ = self.publish(2)
@@ -801,6 +875,24 @@ class MirrorTest(unittest.TestCase):
                     dt.datetime(2026, 9, 7, tzinfo=dt.timezone.utc),
                 )
         self.assertEqual(mirror.load_state(self.config)["latest"], latest)
+
+    def test_metadata_capacity_shortage_stops_before_download(self):
+        latest, _ = self.publish(1)
+        metrics = mirror.filesystem_metrics(self.root)
+        metrics["filesystemFreeBytes"] = 1024 * 1024
+        with (
+            mock.patch.object(mirror, "filesystem_metrics", return_value=metrics),
+            mock.patch.object(mirror, "verified_metadata") as metadata,
+        ):
+            with self.assertRaises(mirror.CapacityBlocked):
+                mirror.sync(
+                    self.config,
+                    "2026-09-07",
+                    dt.datetime(2026, 9, 7, tzinfo=dt.timezone.utc),
+                )
+        metadata.assert_not_called()
+        self.assertEqual(mirror.load_state(self.config)["latest"], latest)
+        self.assertEqual(list((self.root / "staging").iterdir()), [])
 
     def test_hardlink_is_counted_once_and_survives_old_snapshot_delete(self):
         old, first = self.publish(1, hours_ago=100)

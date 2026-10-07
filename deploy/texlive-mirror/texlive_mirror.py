@@ -829,7 +829,14 @@ def reserve(
         )
         if existing:
             # Duplicate acquisition is idempotent and never extends the original TTL.
-            return existing
+            # A checksum-identical snapshot may represent several verified dates.
+            # Return the requested, resolved date without rewriting the lease or
+            # the immutable snapshot's original publication identity.
+            return (
+                {**existing, "canonicalDate": canonical_date}
+                if canonical_date is not None
+                else existing
+            )
         distinct = {value["snapshotId"] for value in reservations}
         if (
             snapshot_id not in distinct
@@ -847,7 +854,7 @@ def reserve(
             "createdAt": iso(now),
             "expiresAt": iso(now + dt.timedelta(seconds=config.reservation_ttl)),
             "url": f"{config.public_base_url}/snapshots/{snapshot_id}/tlnet",
-            "canonicalDate": entry["canonicalDate"],
+            "canonicalDate": canonical_date or entry["canonicalDate"],
             "databaseSha512": entry["databaseSha512"],
             "installerSha512": entry["installerSha512"],
         }

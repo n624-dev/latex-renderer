@@ -102,7 +102,7 @@ describe("browser authentication audit remediations", () => {
       fetchImpl,
     });
     await expect(client.begin("/app/", "192.0.2.30")).rejects.toThrow(
-      "temporary discovery outage",
+      "OIDC discovery failed;",
     );
     available = true;
     const started = await client.begin("/app/", "192.0.2.31");

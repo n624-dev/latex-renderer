@@ -3,6 +3,124 @@ export interface ValidatedProductionProfile {
   deploymentMode: "cloudflare" | "standalone";
   publicOrigin: string;
 }
+export class ServerSetupSessionError extends Error {
+  readonly code: string;
+  constructor(code: string);
+}
+export interface ServerSetupSessionHost {
+  readonly scope?:
+    | "initial-prepared-host"
+    | "existing-prepared-host"
+    | "ingress-prepared-host";
+  current(this: void): unknown | Promise<unknown>;
+  preview(this: void, review: ServerSetupReview): unknown | Promise<unknown>;
+  apply(
+    this: void,
+    envelope: unknown,
+    credentials?: ServerInitialCredentials | ServerIngressCredentials,
+  ): unknown | Promise<unknown>;
+  recover?(
+    this: void,
+  ):
+    | { committed?: boolean; awaitingCredentials?: boolean }
+    | Promise<{ committed?: boolean; awaitingCredentials?: boolean }>;
+}
+export interface ServerInitialCredentials {
+  deploymentUser?: string;
+  owner: {
+    displayName: string;
+    email?: string;
+    loginName?: string;
+    password?: string;
+    subject?: string;
+  };
+  oidcClientSecret?: string;
+  tls?: { certificate: string; privateKey: string };
+}
+export function validateServerInitialInput(
+  review: unknown,
+  credentials: unknown,
+): ServerInitialCredentials;
+export interface ServerIngressCredentials {
+  tls: { certificate: string; privateKey: string };
+}
+export function validateServerIngressInput(
+  review: unknown,
+  credentials: unknown,
+): ServerIngressCredentials;
+export interface ServerSetupSession {
+  status(): Promise<{
+    phase: string;
+    review: ServerSetupReview;
+    scope:
+      | "existing-prepared-host"
+      | "initial-prepared-host"
+      | "ingress-prepared-host";
+  }>;
+  preview(input: unknown): Promise<{
+    review: ServerSetupReview;
+    readiness: ReturnType<typeof reviewServerSetupReadiness>;
+    confirmation: string;
+  }>;
+  apply(token: unknown, credentials?: unknown): Promise<{ phase: "complete" }>;
+  recover(): Promise<{ phase: string; awaitingCredentials: boolean }>;
+  close(): void;
+}
+export function createServerSetupSession(
+  host: ServerSetupSessionHost,
+  options?: { clock?: () => number; lifetimeMs?: number },
+): ServerSetupSession;
+
+export interface ServerRuntimeLimits {
+  readonly maxUploadBytes: number;
+  readonly maxExtractedBytes: number;
+  readonly maxFileCount: number;
+  readonly maxZipEntries: number;
+  readonly maxOutputBytes: number;
+  readonly maxOutputFileCount: number;
+  readonly maxOutputDirectoryCount: number;
+  readonly maxLogBytes: number;
+  readonly maxSvgObjects: number;
+  readonly maxSvgBytes: number;
+  readonly maxSvgTotalBytes: number;
+  readonly svgConversionTimeoutSeconds: number;
+  readonly maxQueueLength: number;
+  readonly maxUserStorageBytes: number;
+  readonly minFreeStorageBytes: number;
+  readonly jobTimeoutSeconds: number;
+}
+export interface ServerRuntimeReview {
+  readonly databasePath: string;
+  readonly storageRoot: string;
+  readonly rendererImage: string;
+  readonly limits: Readonly<ServerRuntimeLimits>;
+}
+export const SERVER_RUNTIME_LIMITS: Readonly<
+  Record<keyof ServerRuntimeLimits, readonly [string, number, number?]>
+>;
+export interface ServerSetupReview {
+  readonly format: 4;
+  readonly deployment: ServerSetupDeploymentReview;
+  readonly runtime: Readonly<ServerRuntimeReview>;
+}
+export function validateServerRuntimeReview(
+  input: unknown,
+): Readonly<ServerRuntimeReview>;
+export function importServerRuntimeReview(
+  contents: string,
+): Readonly<ServerRuntimeReview>;
+export function serverRuntimeReviewEnvironment(
+  input: unknown,
+): Map<string, string>;
+export function validateServerSetupReview(
+  input: unknown,
+): Readonly<ServerSetupReview>;
+export function importServerSetupReview(
+  contents: string,
+): Readonly<ServerSetupReview>;
+export function serverSetupReviewEnvironment(
+  input: unknown,
+): Map<string, string>;
 
 export type ServerIngressReview =
   | Readonly<{
@@ -199,3 +317,50 @@ export function serverSetupInitialOwnerPlan(input: unknown): Readonly<{
   bootstrapMethod: "password" | "oidc" | "cloudflare-access";
   followUpOidcRegistration: boolean;
 }>;
+export interface ServerOidcMetadata {
+  readonly issuer: string;
+  readonly authorization_endpoint: string;
+  readonly token_endpoint: string;
+  readonly jwks_uri: string;
+}
+export interface ServerOidcDiscoveryOptions {
+  readonly fetchImpl?: typeof fetch;
+  readonly signal?: AbortSignal;
+  readonly timeoutMs?: number;
+}
+export function serverOidcDiscoveryUrl(issuer: string): string;
+export function validateServerOidcMetadata(
+  issuer: string,
+  input: unknown,
+): Readonly<ServerOidcMetadata>;
+export function discoverServerOidcProvider(
+  issuer: string,
+  options?: ServerOidcDiscoveryOptions,
+): Promise<Readonly<ServerOidcMetadata>>;
+export interface ServerSetupReadiness {
+  readonly format: 1;
+  readonly review: ServerSetupDeploymentReview | ServerSetupReview;
+  readonly initialOwner: Readonly<{
+    bootstrapMethod: "password" | "oidc" | "cloudflare-access";
+    followUpOidcRegistration: boolean;
+  }>;
+  readonly requiredCredentialFiles: readonly Readonly<{
+    id: string;
+    path: string;
+  }>[];
+  readonly oidcDiscoveryRequired: boolean;
+  readonly ingressStatus: "unreviewed" | "unsupported-automatic" | "reviewed";
+  readonly readyForApply: false;
+}
+export function reviewServerSetupReadiness(
+  input: unknown,
+): Readonly<ServerSetupReadiness>;
+export function checkServerSetupOidc(
+  input: unknown,
+  options?: ServerOidcDiscoveryOptions,
+): Promise<
+  Readonly<
+    | { status: "not-required"; metadata: null }
+    | { status: "checked"; metadata: Readonly<ServerOidcMetadata> }
+  >
+>;

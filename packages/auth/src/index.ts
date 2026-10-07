@@ -115,3 +115,4 @@ export * from "./access.js";
 export * from "./browser.js";
 export * from "./oidc.js";
 export * from "./config.js";
+export * from "./bootstrap-owner.js";

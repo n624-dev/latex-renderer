@@ -2,6 +2,8 @@
 Description=LaTeX Renderer Application Update Manager
 After=network-online.target latex-renderer-updater-recovery.service
 Requires=latex-renderer-updater-recovery.service
+After=latex-renderer-authentication-recovery.service
+Requires=latex-renderer-authentication-recovery.service
 Wants=network-online.target
 
 [Service]

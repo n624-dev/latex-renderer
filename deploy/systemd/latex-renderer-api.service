@@ -1,6 +1,8 @@
 [Unit]
 Description=LaTeX Renderer API
 After=network-online.target
+After=latex-renderer-authentication-recovery.service
+Requires=latex-renderer-authentication-recovery.service
 Wants=network-online.target
 
 [Service]

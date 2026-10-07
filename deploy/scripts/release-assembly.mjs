@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 export const requiredProductionBuildOutputs = [
   "apps/admin-api/dist/server.js",
   "apps/admin-local/dist/index.js",
+  "packages/auth/dist/bootstrap-owner.js",
   "apps/admin-web/dist/server.js",
   "apps/internal-api/dist/server.js",
   "apps/remote-mcp/dist/server.js",
@@ -39,6 +40,15 @@ export async function assembleBuildArtifacts({
     `${assembly}/`,
   ]);
   for (const requiredPath of requiredProductionBuildOutputs) {
+    // This helper also rebuilds independently verified historical Releases for
+    // update/recovery. Do not require a module those sources never contained.
+    // Any release containing the owner primitive or its setup consumer must
+    // still produce the compiled module; never infer this from build outputs.
+    if (
+      requiredPath === "packages/auth/dist/bootstrap-owner.js" &&
+      !(await ownerBootstrapRequired(verifiedSource))
+    )
+      continue;
     const entry = await lstat(join(assembly, requiredPath));
     if (!entry.isFile())
       throw new Error(
@@ -46,6 +56,22 @@ export async function assembleBuildArtifacts({
       );
   }
   await assertContainedSymlinks(assembly, assembly);
+}
+
+async function ownerBootstrapRequired(source) {
+  for (const path of [
+    "packages/auth/src/bootstrap-owner.ts",
+    "deploy/scripts/server-setup-initial-host.mjs",
+  ]) {
+    try {
+      if (!(await lstat(join(source, path))).isFile())
+        throw new Error("Invalid owner bootstrap source entry");
+      return true;
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+  }
+  return false;
 }
 
 export async function assertContainedSymlinks(root, directory) {

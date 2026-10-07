@@ -1,0 +1,35 @@
+[Unit]
+Description=Dedicated LaTeX Renderer Standalone HTTPS ingress
+After=network-online.target latex-renderer-authentication-recovery.service
+Requires=latex-renderer-authentication-recovery.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=latex-renderer
+RuntimeDirectory=latex-renderer-ingress
+RuntimeDirectoryMode=0750
+ExecStartPre=/usr/sbin/nginx -t -c /etc/latex-renderer/ingress-nginx.conf
+ExecStart=/usr/sbin/nginx -c /etc/latex-renderer/ingress-nginx.conf -g "daemon off;"
+ExecReload=/bin/kill -HUP $MAINPID
+TimeoutStartSec=30
+TimeoutStopSec=30
+KillSignal=SIGQUIT
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadWritePaths=/var/lib/latex-renderer/ingress /run/latex-renderer-ingress
+UMask=0027
+
+[Install]
+WantedBy=multi-user.target

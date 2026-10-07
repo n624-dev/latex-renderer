@@ -4,6 +4,7 @@ import { Command } from "commander";
 import {
   ApiKeyService,
   BrowserAuthenticationService,
+  bootstrapInitialOwner,
   normalizeLoginName,
   parseAuthMode,
 } from "@latex-renderer/auth";
@@ -60,11 +61,8 @@ program
       passwordFile?: string | undefined;
     }) => {
       const authMode = parseAuthMode(o.authMode);
-      const displayName = boundedText(o.displayName, "display name", 200);
-      const email =
-        o.email === undefined ? undefined : normalizedEmail(o.email);
-      let passwordHash: string | undefined;
-      let loginName: string | undefined;
+      const metadata = { displayName: o.displayName, email: o.email };
+      let id: string;
       if (authMode === "password") {
         if (o.loginName === undefined || o.passwordFile === undefined)
           throw new AppError(
@@ -72,74 +70,36 @@ program
             "Password bootstrap requires --login-name and --password-file",
             400,
           );
-        loginName = normalizeLoginName(o.loginName);
-        const password = readBootstrapPassword(o.passwordFile);
-        const passwordAuth = new BrowserAuthenticationService({
+        id = await bootstrapInitialOwner(
           database,
-          mode: "password",
-          publicOrigin: "https://bootstrap.invalid",
-          passwordPepper: readFileSync(required("AUTH_PASSWORD_PEPPER_FILE")),
-        });
-        passwordHash = await passwordAuth.hashPassword(password, loginName);
+          {
+            ...metadata,
+            method: "password",
+            loginName: o.loginName,
+            password: readBootstrapPassword(o.passwordFile),
+            passwordPepper: readFileSync(required("AUTH_PASSWORD_PEPPER_FILE")),
+          },
+          String(process.geteuid?.() ?? -1),
+        );
       } else if (o.subject === undefined || o.issuer === undefined) {
         throw new AppError(
           "BOOTSTRAP_OPTIONS_INVALID",
           "External bootstrap requires --subject and --issuer",
           400,
         );
-      } else boundedText(o.subject, "external identity subject", 500);
-      database.transaction(() => {
-        const count = database.raw
-          .prepare("SELECT COUNT(*) AS count FROM users WHERE role='owner'")
-          .get() as { count: number };
-        if (count.count !== 0)
-          throw new AppError("OWNER_EXISTS", "An owner already exists", 409);
-        const id = newId("user"),
-          now = nowIso();
-        database.users.insertInvitation({
-          id,
-          email: email ?? null,
-          displayName,
-          role: "owner",
-          createdBy: "local-bootstrap",
-          timestamp: now,
-        });
-        if (authMode === "password") {
-          database.browserAuth.upsertCredential({
-            user_id: id,
-            login_name: loginName ?? "",
-            password_hash: passwordHash ?? "",
-            password_updated_at: now,
-          });
-        } else {
-          database.browserAuth.insertIdentity({
-            id: newId("identity"),
-            user_id: id,
-            provider: authMode,
-            issuer: strictIssuer(o.issuer ?? "", authMode),
-            subject: boundedText(
-              o.subject ?? "",
-              "external identity subject",
-              500,
-            ),
-            preferred_username: null,
-            email_at_provider: email ?? null,
-            linked_at: now,
-            last_seen_at: now,
-          });
-        }
-        database.webPrincipals.ensure(id);
-        database.audit({
-          actorType: "local",
-          actorId: String(process.geteuid?.() ?? -1),
-          action: "user.created",
-          targetType: "user",
-          targetId: id,
-          result: "success",
-          metadata: { role: "owner", authMode },
-        });
-        process.stdout.write(`${id}\n`);
-      });
+      } else {
+        id = await bootstrapInitialOwner(
+          database,
+          {
+            ...metadata,
+            method: authMode,
+            issuer: o.issuer,
+            subject: o.subject,
+          },
+          String(process.geteuid?.() ?? -1),
+        );
+      }
+      process.stdout.write(`${id}\n`);
     },
   );
 const localAuth = program.command("auth");
@@ -669,26 +629,13 @@ function boundedText(value: string, label: string, maximum: number): string {
   return value;
 }
 
-function normalizedEmail(value: string): string {
-  const email = boundedText(value, "email", 320);
-  if (!/^[^\s@]+@[^\s@]+$/.test(email))
-    throw new AppError("BOOTSTRAP_VALUE_INVALID", "email is invalid", 400);
-  return email;
-}
-
 function readBootstrapPassword(path: string): string {
   const stat = lstatSync(path);
   const allowedOwners = new Set([
     process.geteuid?.(),
     process.env.SUDO_UID === undefined
       ? undefined
-      : boundedIntegerEnvironment(
-          process.env,
-          "SUDO_UID",
-          0,
-          0,
-          4_294_967_295,
-        ),
+      : boundedIntegerEnvironment(process.env, "SUDO_UID", 0, 0, 4_294_967_295),
   ]);
   if (
     !stat.isFile() ||

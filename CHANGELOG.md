@@ -2,15 +2,34 @@
 
 ## Unreleased
 
-- Add a shared authentication-selection and per-method browser-session
-  foundation: internal Password/OIDC coexistence preserves actual session
-  provenance, enabled-method/issuer checks and existing security rules. Keep
-  host configuration behind an explicit rollout gate until deployment,
-  bootstrap, login/admin UI and session-retirement integration are complete.
-- Introduce a dependency-free server profile Setup Core, shared with privileged
-  deployment preflight, and a strict secret-free import/review model. Preserve
-  existing authentication, secret-file and HTTPS checks; full setup/apply,
-  dual-method authentication and ingress configuration remain separate work.
+## 1.4.0-rc.5 - 2026-10-06
+
+- Connect prepared-host initial setup, existing settings and managed custom
+  HTTPS changes through equivalent CUI/Web review, secret input and recovery.
+  Keep OS/account/Docker/firewall/Cloudflare/disk provisioning outside the wizard.
+- Coordinate atomic configuration/TLS publication, real owner bootstrap,
+  immutable prepared image checks, fixed services and maintenance timers.
+  Recover forward after owner commit; never delete/restore DB or rotate secrets
+  to undo a failed start. Existing managed HTTPS failures restore old settings.
+- Support native Password/OIDC coexistence with method-aware sessions and
+  explicit owner policy. Preserve issuer/subject authority, signature checks,
+  session retirement and source-only deployment validation.
+- Isolate standalone Nginx from co-hosted TeX HTTPS, add explicit trusted-LAN
+  bootstrap guards, and improve actual mobile login/Admin/setup layouts.
+- Include merged Dependabot production/development updates. Add SQLite,
+  interruption, ENOSPC, key encoding and actual Chromium regressions.
+- Make TeX mirror unit fixtures independent of small tmpfs free space while
+  retaining real hardlink accounting and explicit pre-download capacity tests.
+  Keep production capacity thresholds and snapshot protection unchanged.
+- Fix dated CI reservations of checksum-identical snapshots shared across
+  verified archive dates, without changing immutable manifests or extending
+  lease expiry. Retain exact date/hash checks and reject unverified dates.
+- Require compiled owner setup outputs only for verified source Releases that
+  contain the corresponding feature, preserving real historical update baselines
+  and fail-closed checks for new Releases. Test TLS verification without globally
+  disabling certificate validation in the test process.
+- Candidate preparation only. Signed update/recovery CI and real prepared-host
+  acceptance remain release gates; this does not switch production or Stable.
 - Extend Source pipeline acceptance to configured limits below/above direct
   MCP safety caps and root/nested non-default entrypoints, including real TeX
   recorder checks in the existing temporary validation Runtime.

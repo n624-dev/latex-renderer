@@ -29,6 +29,7 @@ function shippedScript(file: string, name: string): string {
 }
 const loginScript = shippedScript("login-script", "loginScript");
 const adminScript = shippedScript("admin-script", "adminScript");
+const shippedStyles = shippedScript("styles", "styles");
 const origin = "http://127.0.0.1:43129";
 const password = { id: "password" };
 const oidc = { id: "oidc", displayName: "School Account" };
@@ -178,7 +179,7 @@ async function fixture(options: FixtureOptions = {}) {
         contentType: url.pathname.endsWith(".css")
           ? "text/css"
           : "application/javascript",
-        body: "",
+        body: url.pathname.endsWith(".css") ? shippedStyles : "",
       });
     } else if (
       url.pathname === "/auth/oidc/start" ||
@@ -235,6 +236,28 @@ function waitFor(assertion: () => void | Promise<void>) {
 }
 
 describe("shipped login UI", () => {
+  it.each([390, 768])(
+    "keeps login and admin controls usable at %ipx with shipped CSS",
+    async (width) => {
+      for (const admin of [false, true]) {
+        const f = await fixture({ admin });
+        await f.page.setViewportSize({ width, height: 900 });
+        await ready(f.page, admin);
+        expect(
+          await f.page.evaluate(
+            () => document.documentElement.scrollWidth <= innerWidth,
+          ),
+        ).toBe(true);
+        for (const button of await f.page
+          .locator("button:visible, a.button:visible")
+          .all()) {
+          const box = await button.boundingBox();
+          expect(box?.height).toBeGreaterThanOrEqual(44);
+        }
+        expect(f.errors).toEqual([]);
+      }
+    },
+  );
   it.each(["http", "json"] as const)(
     "shows configuration %s failures without alternative login controls",
     async (configFailure) => {

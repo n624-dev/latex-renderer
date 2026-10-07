@@ -6,9 +6,13 @@ import {
   type JWTPayload,
 } from "jose";
 import { AppError } from "@latex-renderer/shared";
+import {
+  discoverServerOidcProvider,
+  serverOidcDiscoveryUrl,
+  type ServerOidcMetadata,
+} from "@latex-renderer/server-setup-core";
 import type { ExternalIdentity } from "./access.js";
 
-const MAXIMUM_DISCOVERY_BYTES = 64 * 1024;
 const MAXIMUM_TOKEN_BYTES = 64 * 1024;
 const MAXIMUM_JWKS_BYTES = 256 * 1024;
 const MAXIMUM_EXP_SECONDS = 253_402_300_799;
@@ -27,15 +31,7 @@ export interface OidcClientOptions {
   now?: (() => Date) | undefined;
 }
 
-interface OidcMetadata {
-  issuer: string;
-  authorization_endpoint: string;
-  token_endpoint: string;
-  jwks_uri: string;
-  response_types_supported?: unknown;
-  code_challenge_methods_supported?: unknown;
-  token_endpoint_auth_methods_supported?: unknown;
-}
+type OidcMetadata = ServerOidcMetadata;
 
 interface OidcFlow {
   nonce: string;
@@ -69,9 +65,7 @@ export class OidcClient {
   private jwks?: ReturnType<typeof createRemoteJWKSet>;
 
   constructor(options: OidcClientOptions) {
-    strictHttpsUrl(options.issuer, "OIDC issuer");
-    if (/[\s\\]/u.test(options.issuer))
-      throw new Error("OIDC issuer must be an exact HTTPS identifier");
+    serverOidcDiscoveryUrl(options.issuer);
     // URL validation must not change the identifier used for discovery/iss.
     this.issuer = options.issuer;
     this.clientId = bounded(options.clientId, "OIDC client id", 1, 500);
@@ -270,46 +264,12 @@ export class OidcClient {
   }
 
   private async loadMetadata(): Promise<OidcMetadata> {
-    const discovery = new URL(this.issuer);
-    discovery.pathname = `${discovery.pathname.replace(/\/$/, "")}/.well-known/openid-configuration`;
-    const response = await this.fetchImpl(discovery, {
-      headers: { Accept: "application/json" },
-      redirect: "error",
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (!response.ok)
-      throw new Error(`OIDC discovery failed with HTTP ${response.status}`);
-    const value = parseJsonObject(
-      await readLimitedResponse(response, MAXIMUM_DISCOVERY_BYTES),
-      "OIDC discovery document",
-    ) as unknown as OidcMetadata;
-    if (value.issuer !== this.issuer)
-      throw new Error(
-        "OIDC discovery issuer does not exactly match OIDC_ISSUER",
-      );
-    value.authorization_endpoint = strictHttpsUrl(
-      value.authorization_endpoint,
-      "OIDC authorization endpoint",
+    return discoverServerOidcProvider(
+      this.issuer,
+      // Preserve the existing fetch injection/global transport used by token
+      // and JWKS requests; setup does not replace an installation's transport.
+      { fetchImpl: this.fetchImpl },
     );
-    value.token_endpoint = strictHttpsUrl(
-      value.token_endpoint,
-      "OIDC token endpoint",
-    );
-    value.jwks_uri = strictHttpsUrl(value.jwks_uri, "OIDC JWKS endpoint");
-    if (
-      !arrayIncludes(value.response_types_supported, "code") ||
-      !arrayIncludes(value.code_challenge_methods_supported, "S256") ||
-      !arrayIncludes(
-        value.token_endpoint_auth_methods_supported === undefined
-          ? ["client_secret_basic"]
-          : value.token_endpoint_auth_methods_supported,
-        "client_secret_basic",
-      )
-    )
-      throw new Error(
-        "OIDC provider must support code, PKCE S256, and client_secret_basic",
-      );
-    return value;
   }
 
   private pruneFlows(): void {
@@ -407,22 +367,6 @@ function strictHttpsOrigin(value: string, label: string): string {
   return url.origin;
 }
 
-function strictHttpsUrl(value: unknown, label: string): string {
-  if (typeof value !== "string") throw new Error(`${label} is required`);
-  const url = new URL(value);
-  if (
-    url.protocol !== "https:" ||
-    url.username !== "" ||
-    url.password !== "" ||
-    url.search !== "" ||
-    url.hash !== ""
-  )
-    throw new Error(
-      `${label} must be an HTTPS URL without credentials, query, or fragment`,
-    );
-  return url.toString();
-}
-
 function bounded(
   value: string,
   label: string,
@@ -455,10 +399,6 @@ function safeEqual(left: string, right: string): boolean {
   const a = Buffer.from(left);
   const b = Buffer.from(right);
   return a.length === b.length && a.length > 0 && timingSafeEqual(a, b);
-}
-
-function arrayIncludes(value: unknown, expected: string): boolean {
-  return Array.isArray(value) && value.includes(expected);
 }
 
 function formComponent(value: string): string {

@@ -6,13 +6,20 @@ layer for the self-host setup work in issues #50–#52. It is separate from
 
 This milestone provides a pure production-profile parser, a structured review
 model and the exact validation used by the privileged deployment preflight.
-It does **not** provide a completed wizard. A separate privileged host adapter
+The pure Core does not install a host. A separate privileged host adapter
 can apply a reviewed authentication-only change; see
 [the authentication cutover runbook](authentication-cutover.md).
 Explicit scope/TLS review, standalone Nginx generation and read-only host
 preflight are now connected in one implementation; see
 [reviewed standalone HTTPS ingress](standalone-ingress.md). This does not
-automatically apply network settings or complete the CUI/Web wizard.
+automatically apply network settings merely by importing the model.
+
+Interactive CUI/Web frontends cover prepared-host existing settings, initial
+application provisioning and managed custom HTTPS, sharing a reviewed state
+machine and durable transactions.
+See [the prepared-host settings frontend](server-settings-wizard.md) for its
+scope, recovery and temporary bootstrap. OS provisioning is outside this scope;
+real prepared-host acceptance is separate from fixture/browser verification.
 
 ## Existing installations stay unchanged
 
@@ -75,6 +82,92 @@ imports retain `ingress: null` without guessing exposure. The shared
 `serverIngressFromEnvironment` / `validateServerIngressReview` checks are also
 used by production preflight; active automatic TLS is explicitly not implemented.
 Like the existing maps, format-3 export is not a full EnvironmentFile writer.
+
+### Shared readiness and opt-in OIDC Discovery
+
+`reviewServerSetupReadiness(format3Review)` gives CUI/Web consumers the same
+non-secret credential-file requirements, initial-owner policy and ingress review
+status. It performs no I/O and always reports `readyForApply: false`: validating
+a profile does not certify host files, owners, services or a completed installation.
+Legacy ingress stays `unreviewed`; planned automatic HTTPS stays explicitly
+unsupported. This is not a full storage/renderer/secrets provisioning plan.
+
+The source-only read-only diagnostic needs no root or installed workspace build:
+
+```sh
+node deploy/scripts/server-setup-review.mjs < deployment-review.json
+node deploy/scripts/server-setup-review.mjs --oidc-check < deployment-review.json
+```
+
+Input is the **non-secret format-3 JSON**, not `renderer.env`. Input is limited to
+64KiB, and unknown credential fields are rejected. By default the command is
+offline. `--oidc-check` explicitly contacts only a configured, enabled native
+OIDC provider. Password-only and Cloudflare Access do not contact an OIDC
+provider, read stale OIDC settings or use a fallback. No credentials, keys,
+owners, configuration or services are created/changed by either command.
+
+`checkServerSetupOidc` and the runtime `OidcClient` use the same Discovery
+validation: exact issuer identity, HTTPS endpoints, authorization code,
+PKCE S256 and `client_secret_basic` (including its standard omitted-metadata
+default). Discovery has a 10-second total deadline and 64KiB response bound;
+redirects and invalid responses fail without logging provider bodies or errors.
+The diagnostic's default helper transport explicitly verifies CA/hostname trust
+even if Node's global TLS check was disabled; private IdPs need an explicitly
+configured trusted CA, not an HTTP/TLS bypass. Runtime retains its existing fetch
+transport (also used for token/JWKS requests), including explicit test injection;
+the helper does not reconfigure it. Injected transports are caller-controlled.
+Provider-specific unrelated metadata is not returned. Discovery checks do not
+request tokens or JWKS or establish an identity.
+
+Setup success is not used as a login cache: each runtime does its own bounded
+Discovery and signed-token/JWKS validation. A failed runtime Discovery remains
+retryable; concurrent login starts share only that runtime's successful metadata.
+State, nonce, PKCE, issuer/audience, asymmetric algorithms and session checks are
+unchanged. Secret/owner provisioning and transactional ingress apply/recovery
+are separate privileged operations, never implied by this diagnostic.
+
+Protocol reference: [OpenID Connect Discovery 1.0](https://openid.net/specs/openid-connect-discovery-1_0.html).
+
+### Runtime review and coordinated existing-host changes
+
+`importServerSetupReview` / `validateServerSetupReview` use **format 4**:
+`{format:4, deployment: <format-3>, runtime: {databasePath, storageRoot,
+rendererImage, limits}}`. Older APIs keep their existing format and do not
+silently upgrade or discard settings. The runtime model includes an immutable
+renderer image identity and 16 API/worker limits: upload/extracted bytes and
+file/ZIP counts; output bytes/files/directories; log bytes; SVG objects/per-image
+and total bytes; SVG and job timeouts; queue length; per-user storage and minimum
+filesystem free bytes. Explicit positive safe integers are required in JSON.
+Import uses current runtime defaults only for omitted limit environment keys.
+Cross-limit constraints and the worker's 86400-second duration cap are checked.
+Bytes are bytes: these settings do **not** establish an OS quota or alter the
+separate 15GiB TeX Live mirror budget. Container isolation/CPU/memory settings,
+retention/deletion policy and unrelated settings remain unchanged.
+
+`serverSetupReviewEnvironment` is still a non-secret map, not a full-file writer.
+Database/storage paths must be canonical absolute paths; mutable image tags,
+unknown fields, inherited properties, accessors and inline credentials fail.
+`reviewServerSetupReadiness`, `checkServerSetupOidc` and the read-only stdin
+diagnostic accept either format 3 or 4. They still never certify apply readiness.
+
+The privileged adapter can export an installed format-4 review and apply a
+hash-bound **existing-host** authentication+limits change. It uses the same
+exclusive mutation lock, secure full-EnvironmentFile store, private durable
+journal and boot recovery as authentication-only changes; see
+[the configuration cutover runbook](authentication-cutover.md#runtime-settings-on-an-existing-host).
+All five long-lived limit consumers stop before publishing one configuration;
+the worker drains last using its existing graceful stop budget. Successful apply
+checks all consumers are active, both auth policies, and the actual renderer and
+internal API health endpoints. Enabled native OIDC gets a bounded Discovery
+preflight; runtime still validates independently. No password/login test is
+implied by local health.
+
+This path refuses storage/database migration, managed-image replacement,
+deployment/origin or ingress changes. Job timeouts above 840 seconds require a
+separate review of the existing 15-minute worker stop budget. Use Image Manager
+for managed renderer changes. The existing-host transaction is not a first-install
+wizard; initial setup and managed custom ingress use separate durable transactions
+through the same CUI/Web frontends. Automatic HTTPS remains unsupported.
 
 Origin spellings normalize during review, and omitted OIDC algorithms become
 the existing default allowlist. Import/review does not rewrite installed files.
@@ -206,8 +299,8 @@ synthetic file metadata for the privileged secret preflight, and non-privileged
 shell harnesses for owner-count failure branches. They do **not** certify an
 actual root deployment, external IdP or Cloudflare service. Authentication
 transaction tests include actual temporary files, injected service failures and
-SIGKILL/reopened-store recovery. CUI/Web server setup, ingress and owner creation
-through the shared wizard remain separate unfinished milestones.
+SIGKILL/reopened-store recovery. CUI/Web setup, ingress and owner creation use
+their own integration tests; actual prepared-host acceptance remains separate.
 
 ### Method-aware browser UI (D2b, UI portion)
 
@@ -318,9 +411,10 @@ review round-trips, secret exclusion, unchanged validator identity, malformed
 models and copied verified-source operation without workspace dependencies.
 They do not certify a completed setup or actual ingress/TLS operation.
 
-Remaining work proceeds in separate review/release boundaries:
+The implementation now connects these capabilities in the prepared-host
+frontends and transactions (see the wizard runbook above):
 
-1. Finish native Password/OIDC host configuration, method-aware login/admin UI,
+1. Native Password/OIDC host configuration, method-aware login/admin UI,
    bootstrap/deployment and session retirement on apply (#51), using the D2a
    selection/session foundation with predictable migration from legacy profiles.
 2. Explicit access scope and HTTPS provider configuration, including custom
@@ -330,6 +424,7 @@ Remaining work proceeds in separate review/release boundaries:
 4. Equivalent CUI and temporary Web-bootstrap adapters over those capabilities,
    including one-time frontend choice and bootstrap security (#50).
 
-Until these milestones are implemented, format 1 rejects dual-method settings
-instead of claiming they work. No new setup command, host changes, certificate
-issuance, partition/quota changes or automatic deployment are introduced here.
+Legacy format 1 still rejects dual-method settings; use explicit format 2/4
+reviews. Source implementation and fixture tests are not real-host acceptance.
+Automatic certificate issuance, OS provisioning and partition/quota changes
+remain out of scope. No deployment happens by importing/reviewing a model.
