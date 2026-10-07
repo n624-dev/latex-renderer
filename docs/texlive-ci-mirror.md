@@ -56,8 +56,15 @@ introduces symlinks that could escape the managed snapshot.
 The snapshot ID contains the TeX Live year and prefixes of the database,
 installer and selection hashes plus the mirror format version. Selection hashes
 cover architectures, profile hash and the complete package set. Re-running the
-same input returns the existing snapshot without adding a generation. Existing
-files are hardlinked only after their content checksum is recomputed. New files
+same input returns the existing snapshot without adding a generation. Verified
+canonical dates with identical database, installer and selection identity
+are recorded as verified aliases in state, not rewritten into the immutable
+manifest. A dated reservation returns that requested verified date, while keeping
+the same snapshot ID, hashes and fixed URL. Duplicate acquisition for another
+verified date alias does not rewrite the lease or extend its original expiry.
+Unknown dates are rejected; CI still compares the exact requested date and
+canonical installer checksum before building. Existing files are hardlinked
+only after their content checksum is recomputed. New files
 are downloaded and verified in staging. The completed tree is read-only before
 one atomic rename into `snapshots/`; published inodes are never updated in place.
 

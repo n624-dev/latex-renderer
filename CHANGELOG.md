@@ -21,6 +21,13 @@
 - Make TeX mirror unit fixtures independent of small tmpfs free space while
   retaining real hardlink accounting and explicit pre-download capacity tests.
   Keep production capacity thresholds and snapshot protection unchanged.
+- Fix dated CI reservations of checksum-identical snapshots shared across
+  verified archive dates, without changing immutable manifests or extending
+  lease expiry. Retain exact date/hash checks and reject unverified dates.
+- Require compiled owner setup outputs only for verified source Releases that
+  contain the corresponding feature, preserving real historical update baselines
+  and fail-closed checks for new Releases. Test TLS verification without globally
+  disabling certificate validation in the test process.
 - Candidate preparation only. Signed update/recovery CI and real prepared-host
   acceptance remain release gates; this does not switch production or Stable.
 - Extend Source pipeline acceptance to configured limits below/above direct

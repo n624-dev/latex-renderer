@@ -364,50 +364,103 @@ describe("release-based application updates", () => {
     }
   });
 
-  it("never overlays build-user changes to root-executed control scripts", async () => {
-    expect(requiredProductionBuildOutputs).toContain(
-      "packages/auth/dist/bootstrap-owner.js",
-    );
-    const root = mkdtempSync(join(tmpdir(), "latex-release-assembly-test-"));
-    try {
-      const verifiedSource = join(root, "verified");
-      const buildSource = join(root, "build");
-      const assembly = join(root, "assembly");
-      for (const directory of [verifiedSource, buildSource, assembly])
-        mkdirSync(directory, { recursive: true });
-      const controlPath = "deploy/scripts/prepare-host.sh";
-      writeFixture(verifiedSource, controlPath, "trusted-control\n");
-      writeFixture(buildSource, controlPath, "build-user-payload\n");
-      const firstOutput = requiredProductionBuildOutputs[0];
-      if (!firstOutput) throw new Error("production output allowlist is empty");
-      for (const output of requiredProductionBuildOutputs)
-        writeFixture(buildSource, output, `built:${output}\n`);
-      const legacyManifests = [
-        "apps/public-web/dist/downloads/client/manifest.json",
-        "apps/public-web/dist/downloads/mcpb/mcpb.json",
-      ];
-      for (const path of legacyManifests)
-        writeFixture(buildSource, path, `derived:${path}\n`);
+  it.each(["legacy", "owner-source", "setup-consumer"])(
+    "assembles %s sources without overlaying root-executed control scripts",
+    async (contract) => {
+      expect(requiredProductionBuildOutputs).toContain(
+        "packages/auth/dist/bootstrap-owner.js",
+      );
+      const root = mkdtempSync(join(tmpdir(), "latex-release-assembly-test-"));
+      try {
+        const verifiedSource = join(root, "verified");
+        const buildSource = join(root, "build");
+        const assembly = join(root, "assembly");
+        for (const directory of [verifiedSource, buildSource, assembly])
+          mkdirSync(directory, { recursive: true });
+        const controlPath = "deploy/scripts/prepare-host.sh";
+        writeFixture(verifiedSource, controlPath, "trusted-control\n");
+        writeFixture(buildSource, controlPath, "build-user-payload\n");
+        if (contract !== "legacy")
+          writeFixture(
+            verifiedSource,
+            contract === "owner-source"
+              ? "packages/auth/src/bootstrap-owner.ts"
+              : "deploy/scripts/server-setup-initial-host.mjs",
+            "verified-owner-contract\n",
+          );
+        const firstOutput = requiredProductionBuildOutputs[0];
+        if (!firstOutput)
+          throw new Error("production output allowlist is empty");
+        for (const output of requiredProductionBuildOutputs)
+          if (
+            contract !== "legacy" ||
+            output !== "packages/auth/dist/bootstrap-owner.js"
+          )
+            writeFixture(buildSource, output, `built:${output}\n`);
+        const legacyManifests = [
+          "apps/public-web/dist/downloads/client/manifest.json",
+          "apps/public-web/dist/downloads/mcpb/mcpb.json",
+        ];
+        for (const path of legacyManifests)
+          writeFixture(buildSource, path, `derived:${path}\n`);
 
-      await assembleBuildArtifacts({
-        verifiedSource,
-        buildSource,
-        assembly,
-        runCommand(command, args) {
-          const result = spawnSync(command, args, { encoding: "utf8" });
-          if (result.status !== 0)
-            throw new Error(result.stderr || `${command} failed`);
-        },
-      });
+        await assembleBuildArtifacts({
+          verifiedSource,
+          buildSource,
+          assembly,
+          runCommand(command, args) {
+            const result = spawnSync(command, args, { encoding: "utf8" });
+            if (result.status !== 0)
+              throw new Error(result.stderr || `${command} failed`);
+          },
+        });
 
-      expect(read(join(assembly, controlPath))).toBe("trusted-control\n");
-      expect(read(join(assembly, firstOutput))).toBe(`built:${firstOutput}\n`);
-      for (const path of legacyManifests)
-        expect(read(join(assembly, path))).toBe(`derived:${path}\n`);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
+        expect(read(join(assembly, controlPath))).toBe("trusted-control\n");
+        expect(read(join(assembly, firstOutput))).toBe(
+          `built:${firstOutput}\n`,
+        );
+        for (const path of legacyManifests)
+          expect(read(join(assembly, path))).toBe(`derived:${path}\n`);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each([
+    "packages/auth/src/bootstrap-owner.ts",
+    "deploy/scripts/server-setup-initial-host.mjs",
+  ])(
+    "rejects missing compiled owner when verified source contains %s",
+    async (marker) => {
+      const root = mkdtempSync(join(tmpdir(), "latex-owner-assembly-test-"));
+      try {
+        const verifiedSource = join(root, "verified");
+        const buildSource = join(root, "build");
+        const assembly = join(root, "assembly");
+        for (const directory of [verifiedSource, buildSource, assembly])
+          mkdirSync(directory, { recursive: true });
+        writeFixture(verifiedSource, marker, "verified-owner-contract\n");
+        // A build user's marker cannot remove the signed source requirement.
+        for (const output of requiredProductionBuildOutputs)
+          if (output !== "packages/auth/dist/bootstrap-owner.js")
+            writeFixture(buildSource, output, `built:${output}\n`);
+        await expect(
+          assembleBuildArtifacts({
+            verifiedSource,
+            buildSource,
+            assembly,
+            runCommand(command, args) {
+              const result = spawnSync(command, args, { encoding: "utf8" });
+              if (result.status !== 0) throw new Error(result.stderr);
+            },
+          }),
+        ).rejects.toThrow(/bootstrap-owner/);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("seals contained pnpm-style symlinks without trusting writable entries", async () => {
     const root = mkdtempSync(join(tmpdir(), "latex-sealed-tree-test-"));

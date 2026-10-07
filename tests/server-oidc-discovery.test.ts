@@ -1,6 +1,6 @@
 import { execFile, spawnSync } from "node:child_process";
 import { promisify } from "node:util";
-import { createServer } from "node:https";
+import { createServer, request } from "node:https";
 import { once } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -13,6 +13,8 @@ import {
 } from "../packages/server-setup-core/src/index.mjs";
 import { OidcClient } from "../packages/auth/src/oidc.js";
 import { ingressTlsFixture } from "./fixtures/server-ingress.js";
+
+vi.mock("node:https", { spy: true });
 
 const issuer = "https://id.example.test/tenant";
 const execFileAsync = promisify(execFile);
@@ -310,7 +312,7 @@ describe("shared runtime/setup OIDC discovery", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it("does not accept an untrusted actual HTTPS provider even when global TLS verification is disabled", async () => {
+  it("explicitly enforces certificate validation for an actual untrusted HTTPS provider", async () => {
     const fixture = ingressTlsFixture();
     const server = createServer(
       { key: fixture.key, cert: fixture.certificate },
@@ -318,21 +320,24 @@ describe("shared runtime/setup OIDC discovery", () => {
         res.end(JSON.stringify(metadata()));
       },
     );
-    const previous = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
     try {
       server.listen(0, "127.0.0.1");
       await once(server, "listening");
       const address = server.address();
       if (!address || typeof address === "string")
         throw new Error("No fixture port");
-      process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+      vi.mocked(request).mockClear();
       await expect(
         discoverServerOidcProvider(`https://127.0.0.1:${address.port}`),
       ).rejects.toThrow(/discovery failed/);
+      // Verify the actual transport's explicit policy, not Node's ambient
+      // default, without weakening TLS globally in this test process.
+      expect(request).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ rejectUnauthorized: true, agent: false }),
+        expect.any(Function),
+      );
     } finally {
-      if (previous === undefined)
-        delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
-      else process.env.NODE_TLS_REJECT_UNAUTHORIZED = previous;
       server.closeAllConnections();
       await new Promise<void>((resolve, reject) =>
         server.close((error) => (error ? reject(error) : resolve())),
