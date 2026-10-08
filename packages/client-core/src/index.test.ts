@@ -139,7 +139,7 @@ describe("client core", () => {
     ["outside", "../results"],
   ] as const)("does not archive the %s output directory on rerender", async (_name, target) => {
     const workspace = await temporaryRoot(), project = join(workspace, "project");
-    await mkdir(join(project, "out-copy"), { recursive: true });
+    await mkdir(join(project, "out-copy"), { recursive: true, mode: 0o700 });
     await writeFile(join(project, "main.tex"), "main");
     await writeFile(join(project, "out-copy", "keep.txt"), "user file");
     const client = new FakeClient([job("succeeded"), job("succeeded")]);

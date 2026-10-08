@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";
 
-it("keeps all locked sharp copies outside GHSA-rgj7-g3m4-5g8c", () => {
+it("keeps all locked sharp copies outside the libheif and librsvg advisories", () => {
   const lock = readFileSync("pnpm-lock.yaml", "utf8");
   const versions = [...lock.matchAll(/^ {2}sharp@(\d+)\.(\d+)\.(\d+):/gm)];
   expect(versions.length).toBeGreaterThan(0);
@@ -10,7 +10,7 @@ it("keeps all locked sharp copies outside GHSA-rgj7-g3m4-5g8c", () => {
     expect(
       Number(major) > 0 ||
         Number(minor) > 35 ||
-        (Number(minor) === 35 && Number(patch) >= 4),
+        (Number(minor) === 35 && Number(patch) >= 5),
     ).toBe(true);
   }
 });
@@ -35,8 +35,9 @@ it("loads patched native image decoding through the actual Wrangler dependency",
       }
       return true;
     };
-    assert(atLeast(sharp.versions.sharp, [0, 35, 4]));
+    assert(atLeast(sharp.versions.sharp, [0, 35, 5]));
     assert(atLeast(sharp.versions.heif, [1, 23, 2]));
+    assert(atLeast(sharp.versions.rsvg, [2, 63, 2]));
     for (const format of ["png", "avif"]) {
       const input = await sharp({ create: {
         width: 4, height: 4, channels: 3, background: "#ff0000"
@@ -48,6 +49,13 @@ it("loads patched native image decoding through the actual Wrangler dependency",
       assert.equal(info.format, "png");
       await assert.rejects(sharp(input.subarray(0, 8)).toBuffer());
     }
+    const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"><rect width="4" height="4" fill="red"/></svg>');
+    const { info } = await sharp(svg).resize(2, 2).png()
+      .toBuffer({ resolveWithObject: true });
+    assert.equal(info.width, 2);
+    assert.equal(info.height, 2);
+    assert.equal(info.format, "png");
+    await assert.rejects(sharp(Buffer.from('<svg><invalid')).toBuffer());
     await assert.rejects(sharp(Buffer.from("not an image")).toBuffer());
   `,
     ],

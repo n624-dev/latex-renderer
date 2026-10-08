@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- Update the scoped Miniflare/Sharp and PostCSS/source-map-js dependencies to
+  published security fixes. Exercise real native PNG/AVIF/SVG decoding, bounded
+  indexed source maps and independent MCPB signature rejection.
+- Make sealed Updater and artifact test fixtures independent of the ambient
+  umask without relaxing production file-permission checks. Map ordinary setup
+  coverage to the remaining disposable-host, real-IdP and desktop acceptance.
+
+## 1.4.0-rc.6 - 2026-10-08
+
+- Resolve Node CLI main-module identity through real paths so verified release
+  commands still execute through the installed `current` symlink. Include the
+  shared main-module guard in the independent Updater's verified envelope.
+- Reconnect to the existing accepted update operation across Admin API restarts
+  with bounded waits, without resending the apply request. Keep exact combined
+  application/Updater completion checks.
+- Check untracked source fixtures as well as committed files for stale active
+  release versions, and exercise alias entry points in signed update validation.
+
 ## 1.4.0-rc.5 - 2026-10-06
 
 - Connect prepared-host initial setup, existing settings and managed custom
