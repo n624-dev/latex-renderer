@@ -239,6 +239,20 @@ not modify the host-wide unattended-upgrades policy. Package-manager installs
 cannot use cloudflared's built-in updater, so the tunnel service may retain
 `--no-autoupdate`.
 
+Use only the official **Stable** source in `deploy/apt/cloudflared.list`
+(`https://pkg.cloudflare.com/cloudflared any main`); never use the Nightly
+`next.pkg.cloudflare.com` source or Beta/RC packages. The updater requires
+root-controlled regular source/key files, rejects extra or unsigned sources,
+isolates every APT operation to this source and rejects non-calendar-version
+candidates, downgrades and simulated changes to other packages. A failed index
+refresh stops the update instead of using stale indexes. The oneshot has a
+15-minute limit; network retries and waits are bounded. An unchanged version
+does not restart the tunnel. After enabling the source, run
+`systemctl start cloudflared-update.service` once and check its result, the
+tunnel readiness and application/mirror health; a timer being active alone is
+not evidence that updates succeed. Do not disable signature verification to
+work around a signing-key or network failure.
+
 ```sh
 install -o root -g root -m 0755 deploy/scripts/cloudflared-update.sh /usr/local/sbin/cloudflared-update
 install -o root -g root -m 0644 deploy/systemd/cloudflared-update.service /etc/systemd/system/cloudflared-update.service

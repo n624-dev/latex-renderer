@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Restrict weekly cloudflared updates to the signed official Stable source,
+  isolate all APT operations and reject prereleases, downgrades or changes to
+  other packages. Bound retries and preserve the tunnel on failed acquisition.
 - Update the scoped Miniflare/Sharp and PostCSS/source-map-js dependencies to
   published security fixes. Exercise real native PNG/AVIF/SVG decoding, bounded
   indexed source maps and independent MCPB signature rejection.
