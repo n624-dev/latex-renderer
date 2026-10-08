@@ -1,8 +1,8 @@
 #!/usr/bin/env node
+import { isMainModule } from "./is-main-module.mjs";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
-import { realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { compareReleaseVersions } from "./release-version.mjs";
@@ -150,7 +150,7 @@ async function main() {
   else throw new Error(`Unsupported output format: ${format}`);
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === realpathSync(process.argv[1])) {
+if (isMainModule(import.meta.url)) {
   await main().catch((error) => {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     process.exitCode = 1;

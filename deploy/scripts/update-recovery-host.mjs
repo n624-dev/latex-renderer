@@ -1,8 +1,8 @@
+import { isMainModule } from "./is-main-module.mjs";
 import { execFileSync } from "node:child_process";
 import { lstat, readFile, realpath, rm } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { fileURLToPath } from "node:url";
 import { acquireMutationLock } from "./mutation-lock.mjs";
 import { RecoveryStore, recoveryPolicy } from "./update-recovery.mjs";
 
@@ -308,10 +308,7 @@ export async function withHostRecovery(
   );
 }
 
-if (
-  process.argv[1] &&
-  resolve(process.argv[1]) === fileURLToPath(import.meta.url)
-) {
+if (isMainModule(import.meta.url)) {
   const verb = process.argv[2];
   if (
     process.getuid() !== 0 ||

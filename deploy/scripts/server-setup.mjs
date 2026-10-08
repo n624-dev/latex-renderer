@@ -1,11 +1,11 @@
 #!/usr/bin/env node
+import { isMainModule } from "./is-main-module.mjs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { constants } from "node:fs";
 import { lstat, mkdir, open, realpath, unlink } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { dirname } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { Writable } from "node:stream";
 import { validateServerSetupReview } from "../../packages/server-setup-core/src/index.mjs";
@@ -288,10 +288,7 @@ async function main() {
     process.removeListener("SIGTERM", stop);
   }
 }
-if (
-  process.argv[1] &&
-  resolve(process.argv[1]) === fileURLToPath(import.meta.url)
-) {
+if (isMainModule(import.meta.url)) {
   main().catch(() => {
     process.stderr.write(
       "Server setup failed. Use a prepared managed host and inspect private recovery state; no installation was certified.\n",

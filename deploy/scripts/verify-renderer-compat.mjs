@@ -1,5 +1,5 @@
+import { isMainModule } from "./is-main-module.mjs";
 import { readFile } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
 
 export function verifyRendererCompat(log, manifest) {
   const references = { compile: [], objects: [] };
@@ -29,7 +29,7 @@ export function verifyRendererCompat(log, manifest) {
     throw new Error("SVG capture is missing reference-dependent math objects");
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isMainModule(import.meta.url)) {
   if (process.argv.length !== 4)
     throw new Error("Usage: verify-renderer-compat.mjs LOG MANIFEST");
   const log = await readFile(process.argv[2], "utf8");

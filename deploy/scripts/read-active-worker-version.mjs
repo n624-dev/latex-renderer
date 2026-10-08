@@ -1,7 +1,6 @@
 #!/usr/bin/env node
+import { isMainModule } from "./is-main-module.mjs";
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 
 export function activeWorkerVersion(deployments) {
   if (!Array.isArray(deployments) || deployments.length === 0) {
@@ -24,10 +23,7 @@ export function activeWorkerVersion(deployments) {
   return version;
 }
 
-if (
-  process.argv[1] &&
-  resolve(process.argv[1]) === fileURLToPath(import.meta.url)
-) {
+if (isMainModule(import.meta.url)) {
   const path = process.argv[2];
   if (path === undefined)
     throw new Error("usage: read-active-worker-version.mjs DEPLOYMENTS_JSON");

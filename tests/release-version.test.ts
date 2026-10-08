@@ -1,5 +1,11 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,13 +30,8 @@ describe("application release versions", () => {
         ? metadata.version
         : undefined;
     if (!version?.includes("-rc.")) return;
-    const result = spawnSync(
-      "git",
-      ["grep", "-l", "--fixed-strings", version, "--", "."],
-      { encoding: "utf8" },
-    );
-    expect(result.status, result.stderr).toBe(0);
-    const paths = result.stdout.trim().split(/\r?\n/).filter(Boolean);
+    const paths = activeReleaseReferences(".", version);
+    expect(paths).toContain("package.json");
     for (const path of paths) {
       const allowed =
         path === "CHANGELOG.md" ||
@@ -42,6 +43,37 @@ describe("application release versions", () => {
         path === "tests/markdown-docs.test.ts" ||
         /^(?:apps|packages)\/[^/]+\/package\.json$/.test(path);
       expect(allowed, `unexpected active RC string in ${path}`).toBe(true);
+    }
+  });
+
+  it("checks new source files before git add as well as after, without scanning generated outputs", () => {
+    const root = mkdtempSync(join(tmpdir(), "release inventory "));
+    const version = "7.8.9-rc.4";
+    try {
+      runGit(root, "init", "--quiet");
+      writeFileSync(join(root, ".gitignore"), "**/dist/\n");
+      writeFileSync(join(root, "package.json"), JSON.stringify({ version }));
+      mkdirSync(join(root, "tests", "dist"), { recursive: true });
+      mkdirSync(join(root, "test-results"));
+      writeFileSync(join(root, "tests", "new-fixture.test.ts"), version);
+      writeFileSync(join(root, "new-root.mjs"), version);
+      writeFileSync(join(root, "tests", "dist", "generated.js"), version);
+      writeFileSync(join(root, "test-results", "result.json"), version);
+      // Tracked files stay in scope even outside the source directories.
+      writeFileSync(join(root, "tracked.md"), version);
+      runGit(root, "add", ".gitignore", "package.json", "tracked.md");
+      const expected = [
+        "new-root.mjs",
+        "package.json",
+        "tests/new-fixture.test.ts",
+        "tracked.md",
+      ];
+      expect(activeReleaseReferences(root, version)).toEqual(expected);
+      runGit(root, "add", "tests/new-fixture.test.ts", "new-root.mjs");
+      expect(activeReleaseReferences(root, version)).toEqual(expected);
+      expect(activeReleaseReferences(root, "7.8.9-rc.99")).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 
@@ -175,6 +207,46 @@ describe("application release versions", () => {
     }
   });
 });
+
+function activeReleaseReferences(root: string, version: string): string[] {
+  const paths = new Set<string>();
+  // Retain the whole tracked-tree check. Also inspect untracked source and
+  // root files before staging; unrelated local result directories are not
+  // source, and Git's standard ignores exclude generated dist/dependencies.
+  for (const untracked of [false, true]) {
+    const pathspecs = untracked
+      ? [
+          "apps",
+          "packages",
+          "tests",
+          "deploy",
+          "client",
+          ".github",
+          ":(top,glob)*",
+        ]
+      : ["."];
+    const result = spawnSync(
+      "git",
+      [
+        "grep",
+        "-l",
+        "-z",
+        "--fixed-strings",
+        ...(untracked ? ["--untracked", "--exclude-standard"] : []),
+        "-e",
+        version,
+        "--",
+        ...pathspecs,
+      ],
+      { cwd: root, encoding: "utf8" },
+    );
+    if (result.status !== 0 && result.status !== 1)
+      throw new Error(result.stderr || "Release source inventory failed");
+    for (const path of result.stdout.split("\0").filter(Boolean))
+      paths.add(path);
+  }
+  return [...paths].sort();
+}
 
 function runGit(root: string, ...args: string[]): void {
   const result = spawnSync("git", args, { cwd: root, encoding: "utf8" });

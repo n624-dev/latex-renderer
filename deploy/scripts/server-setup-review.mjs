@@ -1,6 +1,6 @@
 #!/usr/bin/env node
+import { isMainModule } from "./is-main-module.mjs";
 import { Buffer } from "node:buffer";
-import { pathToFileURL } from "node:url";
 import {
   reviewServerSetupReadiness,
   checkServerSetupOidc,
@@ -38,10 +38,7 @@ export async function runServerSetupReview(args, input, output) {
   output.write(`${JSON.stringify(result, null, 2)}\n`);
 }
 
-if (
-  process.argv[1] &&
-  import.meta.url === pathToFileURL(process.argv[1]).href
-) {
+if (isMainModule(import.meta.url)) {
   runServerSetupReview(
     process.argv.slice(2),
     process.stdin,

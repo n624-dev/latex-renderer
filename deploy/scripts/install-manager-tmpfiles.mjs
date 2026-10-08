@@ -1,8 +1,9 @@
+import { isMainModule } from "./is-main-module.mjs";
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { lstat, open, readFile, realpath, rename, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { fileURLToPath, URL } from "node:url";
+import { URL } from "node:url";
 
 // Keep the historical filename: installing a second policy leaves conflicting
 // legacy ownership/age rules active on upgrades from old hosts.
@@ -57,10 +58,7 @@ export async function installManagerTmpfiles(
   }
 }
 
-if (
-  process.argv[1] &&
-  resolve(process.argv[1]) === fileURLToPath(import.meta.url)
-) {
+if (isMainModule(import.meta.url)) {
   if (process.getuid() !== 0 || process.argv.length !== 2)
     throw new Error(
       "Manager tmpfiles installation requires root without arguments",

@@ -1,6 +1,6 @@
+import { isMainModule } from "./is-main-module.mjs";
 import { lstat, readdir, readlink, realpath } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 
 export const requiredProductionBuildOutputs = [
   "apps/admin-api/dist/server.js",
@@ -174,10 +174,7 @@ async function main() {
   await assertSealedControlTree(root);
 }
 
-if (
-  process.argv[1] &&
-  fileURLToPath(import.meta.url) === resolve(process.argv[1])
-) {
+if (isMainModule(import.meta.url)) {
   await main().catch((error) => {
     process.stderr.write(
       `${error instanceof Error ? error.message : String(error)}\n`,

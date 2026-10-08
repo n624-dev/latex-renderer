@@ -20,6 +20,10 @@ import {
   PUBLIC_ORIGIN,
 } from "@latex-renderer/shared";
 import { adminApiBaseUrl } from "./base-url.js";
+import {
+  pollUpdateOperation,
+  UpdateOperationUnconfirmedError,
+} from "./update-operation.js";
 
 const credentialPath =
   process.platform === "win32"
@@ -536,37 +540,21 @@ async function runUpdateMutation(path: string, body: unknown): Promise<void> {
 }
 
 async function waitUpdateOperation(initial: unknown): Promise<unknown> {
-  const value = asRecord(initial);
-  if (typeof value.id !== "string") return initial;
-  const id = value.id;
-  let lastStatus = "";
-  let failures = 0;
-  for (;;) {
-    try {
-      const current = await request(
-        "GET",
-        `/updates/operations/${encodeURIComponent(id)}`,
-      );
-      failures = 0;
-      const record = asRecord(current);
-      const status =
-        typeof record.status === "string" ? record.status : "unknown";
-      if (status !== lastStatus) {
-        process.stderr.write(`Application update: ${status}\n`);
-        lastStatus = status;
-      }
-      if (status === "succeeded" || status === "failed") return current;
-    } catch (error) {
-      failures += 1;
-      if (failures >= 120) throw error;
-      if (lastStatus !== "reconnecting") {
-        process.stderr.write(
-          "Application update: reconnecting to Admin API...\n",
-        );
-        lastStatus = "reconnecting";
-      }
-    }
-    await sleep(1_500);
+  try {
+    return await pollUpdateOperation(initial, {
+      read: (id) =>
+        request("GET", `/updates/operations/${encodeURIComponent(id)}`),
+      sleep,
+      now: () => performance.now(),
+      onOperation: (id) =>
+        process.stderr.write(`Application update operation: ${id}\n`),
+      onStatus: (status) =>
+        process.stderr.write(`Application update: ${status}\n`),
+    });
+  } catch (error) {
+    if (error instanceof UpdateOperationUnconfirmedError)
+      throw new AppError("UPDATE_OPERATION_UNCONFIRMED", error.message, 503);
+    throw error;
   }
 }
 

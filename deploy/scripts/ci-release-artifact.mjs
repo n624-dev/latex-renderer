@@ -1,9 +1,8 @@
+import { isMainModule } from "./is-main-module.mjs";
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { lstat } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
-import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { releaseAttestationArgs } from "./release-attestation.mjs";
 import { validateReleaseArchive } from "./release-archive.mjs";
 import { assertValidatedCandidateTag } from "./release-version.mjs";
@@ -131,10 +130,7 @@ async function verifyCiArtifact(
   return { tag, commit, digest };
 }
 
-if (
-  process.argv[1] &&
-  resolve(process.argv[1]) === fileURLToPath(import.meta.url)
-) {
+if (isMainModule(import.meta.url)) {
   if (process.argv.length !== 6 && process.argv.length !== 7)
     throw new Error(
       "usage: ci-release-artifact.mjs ABSOLUTE_ARTIFACT TAG COMMIT sha256:DIGEST [ABSOLUTE_ATTESTATION]",

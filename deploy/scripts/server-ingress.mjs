@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isMainModule } from "./is-main-module.mjs";
 import {
   constants,
   openSync,
@@ -10,7 +11,7 @@ import {
 import { execFileSync } from "node:child_process";
 import { networkInterfaces } from "node:os";
 import { request } from "node:https";
-import { URL, pathToFileURL } from "node:url";
+import { URL } from "node:url";
 import { setTimeout, clearTimeout } from "node:timers";
 import {
   parseEnvironmentFile,
@@ -237,10 +238,7 @@ async function main() {
     );
 }
 
-if (
-  process.argv[1] !== undefined &&
-  import.meta.url === pathToFileURL(process.argv[1]).href
-) {
+if (isMainModule(import.meta.url)) {
   main().catch((error) => {
     process.stderr.write(
       `Ingress command failed: ${error instanceof Error ? error.message : "unknown error"}; no configuration was applied\n`,

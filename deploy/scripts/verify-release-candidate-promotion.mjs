@@ -1,7 +1,7 @@
 #!/usr/bin/env node
+import { isMainModule } from "./is-main-module.mjs";
 import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 import {
   isReleaseCandidate,
   validReleaseVersion,
@@ -120,10 +120,7 @@ async function main() {
   verifyReleaseCandidatePromotion(candidateTag, stableTag);
 }
 
-if (
-  process.argv[1] &&
-  import.meta.url === pathToFileURL(resolve(process.argv[1])).href
-) {
+if (isMainModule(import.meta.url)) {
   await main().catch((error) => {
     process.stderr.write(
       `${error instanceof Error ? error.message : String(error)}\n`,

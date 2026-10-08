@@ -1,7 +1,7 @@
 #!/usr/bin/env node
+import { isMainModule } from "./is-main-module.mjs";
 import { execFileSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
-import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 import { lstat, realpath } from "node:fs/promises";
 import { dirname } from "node:path";
@@ -334,10 +334,7 @@ async function main() {
     await lock.release();
   }
 }
-if (
-  process.argv[1] &&
-  resolve(process.argv[1]) === fileURLToPath(import.meta.url)
-) {
+if (isMainModule(import.meta.url)) {
   main().catch(() => {
     // Provider/DB/filesystem errors can contain secrets or raw EnvironmentFile
     // fragments. Use a fixed diagnostic; inspect only private host state.

@@ -1,7 +1,8 @@
 #!/usr/bin/env node
+import { isMainModule } from "./is-main-module.mjs";
 import { execFileSync } from "node:child_process";
 import { lstatSync, readFileSync } from "node:fs";
-import { URL, pathToFileURL } from "node:url";
+import { URL } from "node:url";
 
 import {
   parseEnvironmentFile,
@@ -228,10 +229,7 @@ export function productionAuthPlanField(contents, field) {
   return String(plan[field]);
 }
 
-if (
-  process.argv[1] !== undefined &&
-  import.meta.url === pathToFileURL(process.argv[1]).href
-) {
+if (isMainModule(import.meta.url)) {
   try {
     main();
   } catch (error) {
