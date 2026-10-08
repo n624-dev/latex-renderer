@@ -1,9 +1,9 @@
-import { spawn, execFileSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import { lstat, mkdir, realpath, open } from "node:fs/promises";
 import { constants } from "node:fs";
 import { dirname } from "node:path";
-import { setTimeout, clearTimeout } from "node:timers";
+import { runServerSetupChild } from "./server-setup-child.mjs";
 import {
   validateServerSetupReview,
   validateServerInitialInput,
@@ -190,29 +190,18 @@ function ownerState(id) {
   }
 }
 async function runOwner(release, input) {
-  await new Promise((resolve, reject) => {
-    const child = spawn(
-      "/usr/sbin/runuser",
-      [
-        "-u",
-        "latex-renderer",
-        "--",
-        "/usr/local/bin/node",
-        `${release}/deploy/scripts/server-setup-owner.mjs`,
-      ],
-      { env: childEnvironment, stdio: ["pipe", "ignore", "ignore"] },
-    );
-    const timeout = setTimeout(() => child.kill("SIGTERM"), 60_000);
-    child.on("error", reject);
-    child.stdin.on("error", () => {});
-    child.on("close", (code) => {
-      clearTimeout(timeout);
-      code === 0
-        ? resolve()
-        : reject(new Error("Initial owner operation failed"));
-    });
-    child.stdin.end(JSON.stringify(input));
-  });
+  await runServerSetupChild(
+    "/usr/sbin/runuser",
+    [
+      "-u",
+      "latex-renderer",
+      "--",
+      "/usr/local/bin/node",
+      `${release}/deploy/scripts/server-setup-owner.mjs`,
+    ],
+    JSON.stringify(input),
+    { timeoutMs: 60_000 },
+  );
 }
 /** Fresh application setup on prepared infrastructure. No OS installer, user
  * creation, Docker reconfiguration, downloads, Cloudflare API or shell input.
@@ -533,27 +522,15 @@ export async function createInitialServerSetupHost(kind = "initial") {
           throw new Error("Invalid generated backup identity");
         await store.write(identitySlot, identity);
       }
-      const expectedRecipient = await new Promise((resolve, reject) => {
-        const child = spawn("/usr/bin/age-keygen", ["-y"], {
-          env: childEnvironment,
-          stdio: ["pipe", "pipe", "ignore"],
-        });
-        let output = "";
-        const timer = setTimeout(() => child.kill("SIGTERM"), 5000);
-        child.stdout.on("data", (chunk) => {
-          output += String(chunk);
-          if (output.length > 1024) child.kill("SIGTERM");
-        });
-        child.on("error", reject);
-        child.stdin.on("error", () => {});
-        child.on("close", (code) => {
-          clearTimeout(timer);
-          code === 0 && /^age1[a-z0-9]+\n?$/.test(output)
-            ? resolve(output.trim())
-            : reject(new Error("Invalid backup recipient"));
-        });
-        child.stdin.end(identity);
-      });
+      const output = await runServerSetupChild(
+        "/usr/bin/age-keygen",
+        ["-y"],
+        identity,
+        { timeoutMs: 5000, maxOutputBytes: 1024 },
+      );
+      if (!/^age1[a-z0-9]+\n?$/.test(output))
+        throw new Error("Invalid backup recipient");
+      const expectedRecipient = output.trim();
       if (recipient && recipient.trim() !== expectedRecipient)
         throw new Error("Existing backup key pair does not match");
       if (!recipient)

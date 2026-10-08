@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 1.4.0-rc.7 - 2026-10-09
+
+- Bound prepared-host owner/backup-key subprocesses through a private process
+  group, enforce deadlines and output limits even on late successful exits,
+  and keep setup recovery state intact on failure.
 - Restrict weekly cloudflared updates to the signed official Stable source,
   isolate all APT operations and reject prereleases, downgrades or changes to
   other packages. Bound retries and preserve the tunnel on failed acquisition.
@@ -11,6 +16,9 @@
 - Make sealed Updater and artifact test fixtures independent of the ambient
   umask without relaxing production file-permission checks. Map ordinary setup
   coverage to the remaining disposable-host, real-IdP and desktop acceptance.
+- Candidate preparation only. Require exact-head CI, signed update/recovery
+  validation and immutable release verification before publication or deployment.
+  Preparing this version does not switch the application or Stable channel.
 
 ## 1.4.0-rc.6 - 2026-10-08
 

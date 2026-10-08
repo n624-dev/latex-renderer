@@ -60,6 +60,20 @@ session checks and real Chromium flows with shipped mobile login/Admin CSS.
 They never invoke privileged initial preparation or write production paths.
 Any step not actually executed must be recorded as **unverified**, not passed.
 
+Owner provisioning retains its 60-second deadline and backup-recipient
+derivation its 5-second deadline. Internal child commands use a private POSIX
+process group, bounded stdin and (when captured) at most 1 KiB of stdout. A
+deadline or output-limit violation remains a failure even if the child later
+exits zero. TERM is followed by KILL after at most 2 seconds when needed, and
+failure does not return before the child closes and Linux process-group members
+are confirmed stopped (zombies awaiting reaping cannot execute). If kernel I/O
+prevents termination or process state cannot be read, retain the mutation lock
+and require operator investigation rather than starting another owner operation.
+A committed owner is recovered through the existing durable journal,
+never removed to retry setup. Ordinary `tests/server-setup-child.test.ts` covers
+these process boundaries without provisioning users, services, keys or a host;
+its age-keygen control uses a disposable key in memory, not a production key.
+
 ## Ordinary regression coverage and remaining gates
 
 Run the ordinary checks as the development user, not root:
