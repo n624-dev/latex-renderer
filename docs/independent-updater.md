@@ -26,6 +26,29 @@ release. Controller and root helper independently verify archive digest,
 publisher workflow, tag, source commit and Sigstore provenance. Renderer identity,
 encrypted backup and production validation remain mandatory.
 
+Deployment diagnostic/validation CLIs must work through the application's
+`/opt/latex-renderer/current` symlink as well as a resolved release path. Node
+resolves `import.meta.url` but normally preserves the invoked `process.argv[1]`;
+comparing their path spelling can silently skip the CLI and return success with
+empty output. Shared `is-main-module.mjs` compares canonical file identities;
+importing a module still does not execute its CLI. It is a declared, hash-pinned
+Updater dependency, not a new bootstrap protocol.
+
+Unit tests execute aliased valid/invalid production-plan and PDF/SVG validation
+CLIs, including `--preserve-symlinks-main`. Signed update E2E additionally runs
+the real root production-plan CLI through `current`, requires nonempty parsed
+output, and checks both hosting-mode fields without reconfiguring Cloudflare.
+Standalone E2E is not proof that a real Cloudflare production deployment passed.
+
+The Admin CLI prints the operation ID immediately and polls only that original
+operation. A service restart may temporarily disconnect the Admin API while a
+Runtime is rebuilt: reconnects have a ten-minute continuous-outage budget and
+the whole wait has a ninety-minute monotonic deadline. Successful contacts reset
+only the outage budget. Reaching either limit reports **unconfirmed**, not a
+failed deployment, and prints `update operation ID` to resume checking. It never
+reissues apply or changes the requested version. Only a terminal `failed` result
+from the server is treated as an update failure.
+
 The initial migration captures the installed old controller into a sealed slot
 before changing service paths. The new controller is staged separately. A
 delayed systemd service activates it after application deployment succeeds and

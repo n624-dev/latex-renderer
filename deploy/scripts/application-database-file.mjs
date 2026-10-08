@@ -1,7 +1,7 @@
+import { isMainModule } from "./is-main-module.mjs";
 import { constants } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 
 export async function prepareApplicationDatabase(
@@ -87,10 +87,7 @@ export function applicationDatabaseIdentity() {
   return { uid: id("-u"), gid: id("-g") };
 }
 
-if (
-  process.argv[1] &&
-  resolve(process.argv[1]) === fileURLToPath(import.meta.url)
-) {
+if (isMainModule(import.meta.url)) {
   if (process.getuid() !== 0 || process.argv.length !== 2)
     throw new Error("Database preparation requires root without arguments");
   await prepareApplicationDatabase(

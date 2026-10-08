@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isMainModule } from "./is-main-module.mjs";
 
 /*
  * Privileged side of the application updater.
@@ -1043,10 +1044,7 @@ async function scheduleManagerRestart() {
   await writeOutput('{"ok":true}\n');
 }
 
-if (
-  process.argv[1] &&
-  resolve(process.argv[1]) === fileURLToPath(import.meta.url)
-) {
+if (isMainModule(import.meta.url)) {
   const request = await readRequest();
   switch (request.verb) {
     case "bootstrap":

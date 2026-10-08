@@ -1,6 +1,6 @@
 #!/usr/bin/env node
+import { isMainModule } from "./is-main-module.mjs";
 import { execFileSync } from "node:child_process";
-import { resolve } from "node:path";
 import { fileURLToPath, URL, URLSearchParams } from "node:url";
 
 const repositoryRoot = fileURLToPath(new URL("../..", import.meta.url));
@@ -188,9 +188,6 @@ async function main() {
   );
 }
 
-if (
-  process.argv[1] &&
-  resolve(process.argv[1]) === fileURLToPath(import.meta.url)
-) {
+if (isMainModule(import.meta.url)) {
   await main();
 }

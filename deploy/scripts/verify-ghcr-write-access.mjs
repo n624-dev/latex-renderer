@@ -1,6 +1,6 @@
 #!/usr/bin/env node
+import { isMainModule } from "./is-main-module.mjs";
 
-import { pathToFileURL } from "node:url";
 
 const requestTimeoutMs = 30_000;
 
@@ -84,7 +84,7 @@ export async function verifyGhcrWriteAccess({ repository, actor, token, fetchImp
   process.stdout.write(`GHCR package write access is available for ${repositoryPath}.\n`);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isMainModule(import.meta.url)) {
   await verifyGhcrWriteAccess({
     repository: process.argv[2] ?? "",
     actor: process.env.GHCR_ACTOR ?? "",

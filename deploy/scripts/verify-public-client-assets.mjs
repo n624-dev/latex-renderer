@@ -1,7 +1,7 @@
+import { isMainModule } from "./is-main-module.mjs";
 import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
-import { pathToFileURL } from "node:url";
 
 const releaseVersionPattern =
   "(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-rc\\.[1-9][0-9]*)?";
@@ -119,10 +119,7 @@ function nonnegativeInteger(value, fallback) {
   return Number.isInteger(value) && value >= 0 ? value : fallback;
 }
 
-if (
-  process.argv[1] !== undefined &&
-  import.meta.url === pathToFileURL(process.argv[1]).href
-) {
+if (isMainModule(import.meta.url)) {
   const [clientBaseUrl, localManifestPath, archiveOutputPath, releaseId] =
     process.argv.slice(2);
   if (

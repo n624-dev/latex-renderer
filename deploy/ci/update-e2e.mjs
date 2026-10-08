@@ -94,7 +94,9 @@ try {
   const candidate = join(root, `latex-renderer-server-${tag.slice(1)}`);
   // Exercise the candidate's actual extraction module under the controller's
   // seccomp/mount/user restrictions, not only the root E2E deployment helper.
-  run("/usr/local/bin/node", [join(candidate, "deploy/ci/restricted-release-extraction.mjs")]);
+  run("/usr/local/bin/node", [
+    join(candidate, "deploy/ci/restricted-release-extraction.mjs"),
+  ]);
   const helper = await import(
     pathToFileURL(join(candidate, "deploy/scripts/update-manager-helper.mjs"))
   );
@@ -256,6 +258,32 @@ try {
     baselineDatabase.close();
   }
   await deploy(candidate, { version: tag.slice(1), tag, commit }, false);
+  // Imports and resolved source paths cannot expose a silent CLI no-op.
+  // Exercise the actual current alias used by configure-host-access and both
+  // checked hosting modes, without changing this standalone host's config.
+  const planCli =
+    "/opt/latex-renderer/current/deploy/scripts/validate-production-profile.mjs";
+  const hostPlan = JSON.parse(
+    execFileSync(
+      "/usr/local/bin/node",
+      [planCli, "/etc/latex-renderer/renderer.env", "--plan"],
+      { encoding: "utf8", timeout: 30_000 },
+    ),
+  );
+  for (const deploymentMode of ["cloudflare", "standalone"]) {
+    const result = execFileSync(
+      "/usr/local/bin/node",
+      [
+        planCli,
+        "--plan-field",
+        "deploymentMode",
+        JSON.stringify({ ...hostPlan, deploymentMode }),
+      ],
+      { encoding: "utf8", timeout: 30_000 },
+    );
+    if (result !== `${deploymentMode}\n`)
+      throw new Error("Production plan CLI was not executed through current");
+  }
   if (
     !(await readFile(tmpfilesPath)).equals(
       await readFile(

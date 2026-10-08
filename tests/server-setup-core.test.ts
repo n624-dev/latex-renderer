@@ -286,6 +286,10 @@ describe("shared server setup production profile core", () => {
         join(root, "deploy/scripts/server-ingress.mjs"),
       );
       await cp(
+        "deploy/scripts/is-main-module.mjs",
+        join(root, "deploy/scripts/is-main-module.mjs"),
+      );
+      await cp(
         "deploy/scripts/validate-production-profile.mjs",
         join(root, "deploy/scripts/validate-production-profile.mjs"),
       );

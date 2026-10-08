@@ -1,8 +1,7 @@
 #!/usr/bin/env node
+import { isMainModule } from "./is-main-module.mjs";
 // Fixed child of the privileged prepared-host adapter. All credentials arrive
 // through a bounded anonymous pipe, not argv, env, logs or a shared temp file.
-import { fileURLToPath } from "node:url";
-import { resolve } from "node:path";
 
 export async function createSetupOwner(input, options = {}) {
   if (
@@ -84,10 +83,7 @@ async function main() {
     for (const chunk of chunks) chunk.fill(0);
   }
 }
-if (
-  process.argv[1] &&
-  resolve(process.argv[1]) === fileURLToPath(import.meta.url)
-)
+if (isMainModule(import.meta.url))
   main().catch(() => {
     process.stderr.write(
       "Initial owner provisioning failed; recover private setup state.\n",
