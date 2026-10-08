@@ -10,6 +10,7 @@ import {
   productionAuthenticationPlan,
 } from "../packages/server-setup-core/src/index.mjs";
 import { updaterEnvelope } from "../deploy/scripts/updater-slots.mjs";
+import { PLATFORM_VERSION } from "../packages/shared/src/version.js";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -147,10 +148,11 @@ it("cannot silently skip PDF/SVG reference validation through current", async ()
 it("includes the shared entrypoint dependency in the sealed Updater envelope", async () => {
   const source = resolve("."),
     envelope = await updaterEnvelope(source, {
-      version: "1.4.0-rc.6",
+      version: PLATFORM_VERSION,
       commit: "a".repeat(40),
     });
   const entry = envelope.files["deploy/scripts/is-main-module.mjs"];
+  expect(envelope.version).toBe(PLATFORM_VERSION);
   if (!entry) throw new Error("Updater entrypoint dependency is missing");
   expect(entry.bytes).toBeGreaterThan(0);
   expect(entry.sha256).toMatch(/^[0-9a-f]{64}$/);
