@@ -25,12 +25,13 @@ async function fixture() {
   roots.push(root);
   const source = join(root, "source"),
     slots = new UpdaterSlots(join(root, "slots-root"));
-  await mkdir(join(source, "deploy/scripts"), { recursive: true });
+  await mkdir(join(source, "deploy/scripts"), { recursive: true, mode: 0o755 });
   for (const path of UPDATER_FILES)
-    await writeFile(join(source, path), `fixture ${path}`);
+    await writeFile(join(source, path), `fixture ${path}`, { mode: 0o644 });
   await writeFile(
     join(source, "deploy/updater-files.json"),
     JSON.stringify(UPDATER_FILES),
+    { mode: 0o644 },
   );
   const envelope = await updaterEnvelope(source, {
     version: "9.0.0",

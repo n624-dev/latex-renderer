@@ -59,3 +59,71 @@ transaction interruption/ENOSPC fault injection, file-link boundaries, CUI/Web
 session checks and real Chromium flows with shipped mobile login/Admin CSS.
 They never invoke privileged initial preparation or write production paths.
 Any step not actually executed must be recorded as **unverified**, not passed.
+
+Owner provisioning retains its 60-second deadline and backup-recipient
+derivation its 5-second deadline. Internal child commands use a private POSIX
+process group, bounded stdin and (when captured) at most 1 KiB of stdout. A
+deadline or output-limit violation remains a failure even if the child later
+exits zero. TERM is followed by KILL after at most 2 seconds when needed, and
+failure does not return before the child closes and Linux process-group members
+are confirmed stopped (zombies awaiting reaping cannot execute). If kernel I/O
+prevents termination or process state cannot be read, retain the mutation lock
+and require operator investigation rather than starting another owner operation.
+A committed owner is recovered through the existing durable journal,
+never removed to retry setup. Ordinary `tests/server-setup-child.test.ts` covers
+these process boundaries without provisioning users, services, keys or a host;
+its age-keygen control uses a disposable key in memory, not a production key.
+
+## Ordinary regression coverage and remaining gates
+
+Run the ordinary checks as the development user, not root:
+
+```sh
+pnpm install --frozen-lockfile
+pnpm check
+pnpm test:browser
+pnpm verify:mcpb
+```
+
+The table maps evidence to its scope, not to an automatic production sign-off.
+The normal CI already executes these checks; do not add a duplicate full build
+or persistent Actions cache for this matrix.
+
+| Requirement                                              | Ordinary evidence                                                                                                | Independent acceptance still required                                                                                   |
+| -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| Setup choices, CUI/Web parity and stale review rejection | `tests/server-setup-core.test.ts`, `tests/server-setup-session.test.ts`, `tests/browser/server-setup.browser.ts` | Complete initial setup in each frontend on a disposable prepared host                                                   |
+| Initial owner and interrupted SQLite commit              | `tests/bootstrap-initial-owner.test.ts`, `tests/server-install-transaction.test.ts`                              | Actual service activation, reboot recovery, no existing production owner reset                                          |
+| Password/OIDC/dual methods and session provenance        | Auth package tests, `tests/server-authentication-review.test.ts`, browser authentication tests                   | Real test IdP discovery, login and disabled-method rejection; never substitute email linking                            |
+| Discovery/TLS validation                                 | `tests/server-oidc-discovery.test.ts`, `tests/server-ingress-tls.test.ts`                                        | Operator-selected CA trust and actual selected ingress hostname                                                         |
+| Standalone scopes and private backends                   | `tests/server-ingress-host.test.ts`, `tests/server-setup-network.test.ts`, `tests/ci-standalone-fixture.test.ts` | Actual interfaces, listening sockets, dedicated HTTPS and other co-hosted services                                      |
+| Cloudflare compatibility                                 | Shared gateway/auth tests and standard deployment's public boundary smoke                                        | Standard verified update and render on a Cloudflare-enabled host; initial test connector remains separate               |
+| File publication, interruption, ENOSPC and recovery      | Setup transaction tests and `tests/server-setup-host-boundary.test.ts`                                           | Actual systemd/reboot and isolated ENOSPC procedure above                                                               |
+| Mobile application/Admin/login/setup                     | `tests/browser/` Chromium flows using shipped CSS                                                                | Representative touch devices; Chromium viewport success is not physical-device acceptance                               |
+| Versioned update and recovery                            | Signed `server-release` workflow's legacy and installed E2E jobs                                                 | Exact published artifacts, installed app/Updater identity, authenticated complete outcome and actual post-update render |
+| Interactive clients                                      | MCPB Windows/macOS clean-install CI, client-core regressions                                                     | Actual desktop PDF/browser launch and custom installation/PATH handling                                                 |
+
+Do not close #51–#54 solely because fixture tests pass. Keep deployment and
+authentication dimensions separate: a successful Cloudflare update does not
+prove a fresh standalone install or an actual OIDC provider login.
+
+## Acceptance record template
+
+Keep the completed record outside the public source tree if it includes private
+host identifiers. Record only evidence, never tokens, keys, user documents,
+provider subjects, environment contents or raw production logs.
+
+```text
+Release/tag and exact commit:
+OS / Node / Docker versions:
+Deployment / scope / TLS trust:
+Authentication and frontend (CUI or Web):
+Check | passed / failed / unverified | command or workflow ID | observed evidence
+Source/Project counts and integrity before/after (if applicable):
+Application and independent Updater identities / complete outcome:
+Cleanup of test-only jobs, credentials, fixtures and temporary files:
+Remaining external/device gates:
+```
+
+No failure injection, initial provisioning, credential rotation or restoration
+is authorized on a production host by these instructions. Use read-only
+production checks and the normal isolated smoke's cleanup for its own test data.

@@ -32,12 +32,15 @@ async function fixture() {
   roots.push(root);
   const source = join(root, "source"),
     slots = new UpdaterSlots(join(root, "updater"));
-  await mkdir(join(source, "deploy/scripts"), { recursive: true });
+  // This is a sealed release fixture, even with an ambient umask of 0002.
+  // Do not relax the production source-permission checks to accommodate it.
+  await mkdir(join(source, "deploy/scripts"), { recursive: true, mode: 0o755 });
   for (const path of UPDATER_FILES)
-    await writeFile(join(source, path), `fixture: ${path}`);
+    await writeFile(join(source, path), `fixture: ${path}`, { mode: 0o644 });
   await writeFile(
     join(source, "deploy/updater-files.json"),
     JSON.stringify(UPDATER_FILES),
+    { mode: 0o644 },
   );
   const stage = async (version: string) =>
     slots.stage(
@@ -256,6 +259,7 @@ it("allows new internal modules without changing the bootstrap protocol", async 
   await writeFile(
     join(f.source, "deploy/scripts/new-updater-module.mjs"),
     "export const feature = true;",
+    { mode: 0o644 },
   );
   await writeFile(
     join(f.source, "deploy/updater-files.json"),

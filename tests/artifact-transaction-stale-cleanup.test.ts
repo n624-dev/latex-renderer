@@ -139,7 +139,7 @@ describe("stale artifacts on the host filesystem", () => {
     const root = await mkdtemp(join(tmpdir(), "artifact-stale-cleanup-"));
     roots.push(root);
     const output = join(root, ".render");
-    await mkdir(join(output, "previews"), { recursive: true });
+    await mkdir(join(output, "previews"), { recursive: true, mode: 0o700 });
     await writeFile(join(output, "result.pdf"), "old-pdf");
     await writeFile(join(output, "notes.txt"), "user-notes");
     for (let page = 1; page <= 3; page += 1)

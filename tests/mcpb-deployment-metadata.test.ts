@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import {
   copyFileSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -56,7 +57,8 @@ describe("MCPB deployment metadata", () => {
         // Isolate the metadata/signature subprocess from the external manifest CLI.
         writeFileSync(
           join(cli, "cli.js"),
-          "if (process.argv[2] !== 'validate') process.exit(42);\n",
+          "if (process.argv[2] !== 'validate') process.exit(42);\n" +
+            "require('node:fs').writeFileSync('manifest-validated', 'yes');\n",
         );
         copyFileSync(
           "client/verify-mcpb.mjs",
@@ -123,6 +125,8 @@ describe("MCPB deployment metadata", () => {
           run(process.execPath, ["client/verify-mcpb.mjs", archive, ...args]);
         expect(verify().stderr).toContain("MCPB SHA-256 does not match");
         expect(verify(published).status).toBe(0);
+        expect(existsSync(join(root, "manifest-validated"))).toBe(true);
+        rmSync(join(root, "manifest-validated"));
         const tampered = Buffer.from(bytes);
         tampered[0] = (tampered[0] ?? 0) ^ 1;
         writeFileSync(archive, tampered);
@@ -134,9 +138,40 @@ describe("MCPB deployment metadata", () => {
           JSON.stringify({ ...metadata, sha256: hash(tampered) }),
         );
         expect(verify(published).status).not.toBe(0);
+        expect(existsSync(join(root, "manifest-validated"))).toBe(false);
+        const alteredSignature = Buffer.from(bytes);
+        const signatureStart =
+          readFileSync(join(root, "content")).length +
+          Buffer.byteLength("MCPB_SIG_V1") +
+          4;
+        alteredSignature[signatureStart + signature.length - 1] =
+          (alteredSignature[signatureStart + signature.length - 1] ?? 0) ^ 1;
+        const invalidLength = Buffer.from(bytes);
+        invalidLength.writeUInt32LE(signature.length + 1, signatureStart - 4);
+        // Matching metadata is not a substitute for independent CMS verification.
+        // Invalid bundles must never proceed to the upstream manifest CLI.
+        for (const invalid of [
+          alteredSignature,
+          invalidLength,
+          readFileSync(join(root, "content")),
+          bytes.subarray(0, bytes.length - 1),
+        ]) {
+          writeFileSync(archive, invalid);
+          writeFileSync(
+            published,
+            JSON.stringify({
+              ...metadata,
+              size: invalid.length,
+              sha256: hash(invalid),
+            }),
+          );
+          expect(verify(published).status).not.toBe(0);
+          expect(existsSync(join(root, "manifest-validated"))).toBe(false);
+        }
         writeFileSync(archive, bytes);
         writeFileSync(stale, JSON.stringify(metadata));
         expect(verify().status).toBe(0);
+        expect(existsSync(join(root, "manifest-validated"))).toBe(true);
       } finally {
         rmSync(root, { recursive: true, force: true });
       }

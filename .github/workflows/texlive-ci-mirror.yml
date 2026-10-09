@@ -15,6 +15,7 @@ on:
       - "deploy/logrotate/texlive-ci-mirror"
       - "tests/texlive_mirror_test.py"
       - "tests/ci_texlive_mirror_lease_test.py"
+      - "tests/cloudflared_update_test.py"
       - "docs/texlive-ci-mirror.md"
       - ".github/workflows/texlive-ci-mirror.yml"
   push:
@@ -32,6 +33,7 @@ on:
       - "deploy/logrotate/texlive-ci-mirror"
       - "tests/texlive_mirror_test.py"
       - "tests/ci_texlive_mirror_lease_test.py"
+      - "tests/cloudflared_update_test.py"
       - "docs/texlive-ci-mirror.md"
       - ".github/workflows/texlive-ci-mirror.yml"
   workflow_dispatch:
@@ -52,7 +54,8 @@ jobs:
           python3 -m py_compile deploy/texlive-mirror/texlive_mirror.py
           python3 -m unittest -v \
             tests/texlive_mirror_test.py \
-            tests/ci_texlive_mirror_lease_test.py
+            tests/ci_texlive_mirror_lease_test.py \
+            tests/cloudflared_update_test.py
       - name: Validate shell syntax
         run: |
           sh -n \
