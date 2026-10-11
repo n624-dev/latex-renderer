@@ -158,6 +158,33 @@ describe("shared initial-owner bootstrap", () => {
       expect(ownerCount(db)).toBe(1);
     },
   );
+  it.each([
+    "https://identity.example.test",
+    "https://identity.example.test/",
+    "https://identity.example.test:443",
+    "https://IDENTITY.example.test/tenant",
+    "https://identity.example.test/tenant/%7eowner",
+  ])("preserves the exact OIDC issuer identifier %s", async (issuer) => {
+    const db = database();
+    const id = await bootstrapInitialOwner(
+      db,
+      {
+        method: "oidc",
+        displayName: "Owner",
+        issuer,
+        subject: "immutable-subject",
+      },
+      "fixture",
+    );
+    const identities = db.browserAuth.identitiesForUser(id);
+    expect(identities).toHaveLength(1);
+    expect(identities[0]).toMatchObject({
+      provider: "oidc",
+      issuer,
+      subject: "immutable-subject",
+    });
+    expect(ownerCount(db)).toBe(1);
+  });
   it("does not replace an existing owner, even when disabled", async () => {
     const db = database();
     const id = await bootstrapInitialOwner(

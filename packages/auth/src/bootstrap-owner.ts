@@ -99,7 +99,11 @@ export async function bootstrapInitialOwner(
         "Initial owner issuer must be HTTPS",
         400,
       );
-    issuer = input.method === "cloudflare-access" ? url.origin : url.toString();
+    // OIDC's configured issuer, discovery issuer and ID-token iss are exact
+    // identifiers. URL serialization can append '/', remove :443 or lowercase
+    // the host, leaving a valid initial owner unable to log in. Validate with
+    // URL above, but preserve the supplied OIDC identity just as OidcClient does.
+    issuer = input.method === "cloudflare-access" ? url.origin : input.issuer;
   }
   return database.transaction(() => {
     requireNoOwner();
