@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.4.0-rc.8 - 2026-10-11
 
 - Preserve exact OIDC issuer identities in initial-owner setup and explicit
   owner provisioning. Repair prepared-host database/backup permissions and
@@ -12,6 +12,10 @@
   unzip before mutations, and handle both current and legacy Web services in
   deployment/recovery. RC7 failed disposable-host Stable acceptance; these
   source fixes still require a new signed candidate and formal acceptance.
+- Candidate preparation only. Require exact-head CI, signed update/recovery
+  validation and immutable release verification before publication or deployment.
+  RC7's failed Stable acceptance is not cleared by ordinary CI; the new formal
+  candidate must be tested on a disposable prepared host before Stable.
 
 ## 1.4.0-rc.7 - 2026-10-09
 
