@@ -22,6 +22,7 @@ const writers = [
   "internal-api",
   "admin-api",
   "admin-web",
+  "web",
   "remote-mcp",
   "worker",
 ].map((name) => `latex-renderer-${name}.service`);
@@ -233,7 +234,9 @@ export async function assertNormalMaintenanceForDeployment(
   const database = new DatabaseSync(databasePath, { readOnly: true });
   try {
     const row = database
-      .prepare("SELECT value_json FROM system_settings WHERE key='maintenance_mode'")
+      .prepare(
+        "SELECT value_json FROM system_settings WHERE key='maintenance_mode'",
+      )
       .get();
     if (row?.value_json !== '"normal"')
       throw new Error(

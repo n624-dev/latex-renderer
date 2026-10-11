@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { lstat } from "node:fs/promises";
 import { URL } from "node:url";
 import { createInitialServerSetupHost } from "./server-setup-initial-host.mjs";
+import { prepareServerSetupMutationLock } from "./server-setup-prepare.mjs";
 
 // Recovery shares the SAME RemainAfterExit dependency as historical auth
 // recovery. It must finish before consumers and never starts them recursively
@@ -10,6 +11,7 @@ import { createInitialServerSetupHost } from "./server-setup-initial-host.mjs";
 async function main() {
   if (process.geteuid?.() !== 0 || process.argv.length !== 2)
     throw new Error("Privileged boot recovery only");
+  await prepareServerSetupMutationLock();
   const journal = await lstat(
     "/etc/latex-renderer/installation-transaction/journal.json",
   ).catch((error) => {

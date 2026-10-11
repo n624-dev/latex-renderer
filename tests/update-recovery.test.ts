@@ -406,6 +406,7 @@ async function quiescedFixture() {
   const enabled = new Set([
     "latex-renderer-api.service",
     "latex-renderer-worker.service",
+    "latex-renderer-web.service",
     "latex-renderer-cleanup.timer",
   ]);
   const original = [...enabled],
@@ -447,13 +448,19 @@ it("quiesces writers through deployment, restores only original units, and remov
     return Promise.resolve();
   });
   expect([...f.enabled].sort()).toEqual(f.original.sort());
+  expect(f.calls).toContainEqual(["stop", "latex-renderer-web.service"]);
+  expect(f.calls).toContainEqual(["start", "latex-renderer-web.service"]);
+  expect(f.calls).not.toContainEqual([
+    "start",
+    "latex-renderer-admin-web.service",
+  ]);
   expect(await readdir(f.store.root)).not.toContain("operation.json");
 });
 it("rejects non-normal maintenance before stopping writers or protecting a recovery point", async () => {
   const f = await quiescedFixture();
   const database = new DatabaseSync(f.database);
   database.exec(
-    'CREATE TABLE system_settings(key TEXT PRIMARY KEY,value_json TEXT); INSERT INTO system_settings VALUES (\'maintenance_mode\',\'"reject-new-jobs"\');',
+    "CREATE TABLE system_settings(key TEXT PRIMARY KEY,value_json TEXT); INSERT INTO system_settings VALUES ('maintenance_mode','\"reject-new-jobs\"');",
   );
   database.close();
   const action = vi.fn(() => Promise.resolve());
@@ -472,10 +479,9 @@ it("rejects non-normal maintenance before stopping writers or protecting a recov
   expect(await f.store.points()).toEqual([]);
 
   const ready = new DatabaseSync(f.database);
-  ready.prepare("UPDATE system_settings SET value_json=? WHERE key=?").run(
-    '"normal"',
-    "maintenance_mode",
-  );
+  ready
+    .prepare("UPDATE system_settings SET value_json=? WHERE key=?")
+    .run('"normal"', "maintenance_mode");
   ready.close();
   await withQuiescedRecovery(options, action);
   expect(action).toHaveBeenCalledOnce();

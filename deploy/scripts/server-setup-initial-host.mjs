@@ -26,6 +26,10 @@ import {
 } from "./server-install-transaction.mjs";
 import { acquireMutationLock } from "./mutation-lock.mjs";
 import {
+  prepareApplicationDatabase,
+  applicationDatabaseIdentity,
+} from "./application-database-file.mjs";
+import {
   verifyIngressInterface,
   verifyProductionIngressTls,
   checkIngressHttpsHealth,
@@ -89,8 +93,19 @@ const systemctl = (...args) =>
       ? 16 * 60_000
       : 60_000,
   );
-async function rootDirectory(path, gid, mode) {
+export async function prepareServerSetupDirectory(path, gid, mode, uid = 0) {
   // Only application-owned fixed directories, never OS/account/Docker setup.
+  if (
+    typeof path !== "string" ||
+    !path.startsWith("/") ||
+    ![uid, gid].every((value) => Number.isSafeInteger(value) && value >= 0) ||
+    !Number.isSafeInteger(mode) ||
+    mode < 0 ||
+    mode > 0o7777 ||
+    mode & 0o022 ||
+    (await realpath(dirname(path))) !== dirname(path)
+  )
+    throw new Error("Prepared application directory identity is unsafe");
   let created = false;
   await mkdir(path, { mode })
     .then(() => {
@@ -105,7 +120,7 @@ async function rootDirectory(path, gid, mode) {
       constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
     );
     try {
-      await handle.chown(0, gid);
+      await handle.chown(uid, gid);
       await handle.chmod(mode);
     } finally {
       await handle.close();
@@ -114,7 +129,7 @@ async function rootDirectory(path, gid, mode) {
   const info = await lstat(path);
   if (
     !info.isDirectory() ||
-    info.uid !== 0 ||
+    info.uid !== uid ||
     info.mode & 0o022 ||
     (await realpath(path)) !== path
   )
@@ -216,11 +231,11 @@ export async function createInitialServerSetupHost(kind = "initial") {
   if (!Number.isSafeInteger(gid) || gid <= 0)
     throw new Error("Renderer group is not prepared");
   const workerUid = account("latex-render-worker");
-  account("latex-renderer");
+  const rendererUid = account("latex-renderer");
   account("latex-renderer-update");
   account("latex-renderer-backup");
   const release = await controlledServerSetupRelease();
-  await rootDirectory(journalRoot, 0, 0o700);
+  await prepareServerSetupDirectory(journalRoot, 0, 0o700);
   const file = (path, mode, maximum, group = gid) => ({
     path,
     mode,
@@ -589,36 +604,59 @@ export async function createInitialServerSetupHost(kind = "initial") {
         Object.assign(result, {
           certificate: credentials.tls.certificate,
           privateKey: credentials.tls.privateKey,
-          nginx: `# Managed LaTeX Renderer HTTPS; independent of co-hosted nginx.service.\nuser latex-renderer;\nworker_processes 1;\npid /run/latex-renderer-ingress/nginx.pid;\nerror_log stderr warn;\nevents { worker_connections 256; }\nhttp {\naccess_log off;\ninclude /etc/nginx/mime.types;\nclient_body_temp_path /var/lib/latex-renderer/ingress/client;\nproxy_temp_path /var/lib/latex-renderer/ingress/proxy;\n${renderServerIngressNginx(review.deployment.ingress)}\n}\n`,
+          nginx: `# Managed LaTeX Renderer HTTPS; independent of co-hosted nginx.service.\n# systemd sets the same non-root master/worker identity.\nworker_processes 1;\npid /run/latex-renderer-ingress/nginx.pid;\nerror_log stderr warn;\nevents { worker_connections 256; }\nhttp {\naccess_log off;\ninclude /etc/nginx/mime.types;\nclient_body_temp_path /var/lib/latex-renderer/ingress/client;\nproxy_temp_path /var/lib/latex-renderer/ingress/proxy;\n${renderServerIngressNginx(review.deployment.ingress)}\n}\n`,
         });
       return result;
     },
     async validatePublished(files, beforeStart = false) {
       const review = importServerSetupReview(files.environment);
-      if (kind === "initial")
+      if (kind === "initial") {
+        // SQLite's default 0644 cannot grant the worker group write access via
+        // umask. Preserve the committed owner and sidecars while preparing the
+        // shared mode before any consumer starts, including forward recovery.
+        await prepareApplicationDatabase(
+          databasePath,
+          applicationDatabaseIdentity(),
+        );
         command("/bin/sh", [
           `${release}/deploy/scripts/configure-renderer-storage-acl.sh`,
           "/var/lib/latex-renderer/storage",
           "/etc/latex-renderer/renderer.env",
         ]);
+      }
       if (review.deployment.ingress.mode === "standalone") {
         verifyProductionIngressTls(review.deployment.ingress, gid);
         if (!beforeStart) {
-          await rootDirectory("/run/latex-renderer-ingress", gid, 0o750);
-          command("/usr/sbin/nginx", ["-t", "-c", nginxPath]);
+          await prepareServerSetupDirectory(
+            "/run/latex-renderer-ingress",
+            gid,
+            0o750,
+            rendererUid,
+          );
+          command("/usr/sbin/runuser", [
+            "-u",
+            "latex-renderer",
+            "--",
+            "/usr/sbin/nginx",
+            "-t",
+            "-c",
+            nginxPath,
+          ]);
         }
       }
     },
     async health(files) {
       const review = importServerSetupReview(files.environment);
+      // Type=simple is active before Node has opened its listeners. Allow the
+      // bounded readiness checks to finish before verifying socket exposure.
+      await checkAuthenticationHealth(files.environment, true);
+      await checkIngressHttpsHealth(
+        review.deployment.authentication.deployment.publicOrigin,
+      );
       assertServerSetupSockets(
         command("/usr/bin/ss", ["-H", "-ltn"]),
         review.deployment.ingress,
         { requireInternal: true },
-      );
-      await checkAuthenticationHealth(files.environment, true);
-      await checkIngressHttpsHealth(
-        review.deployment.authentication.deployment.publicOrigin,
       );
     },
   };

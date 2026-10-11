@@ -400,6 +400,33 @@ operation-private non-root build tree, verifies the resulting version, and then
 performs the frozen-lockfile install. Nested workspace scripts receive only that
 private shim on `PATH`; no user or global pnpm installation is modified.
 
+The production deployment driver also prepares its manifest-pinned Corepack
+shim/cache in `.deployment-tooling` below the non-root-owned build tree. It
+does not require `~/.local/share/pnpm/bin`, write tooling into the sealed control
+tree, or change global package-manager installations. `unzip`, `bsdtar` and
+`setfacl` must already be installed; missing prerequisites fail before service
+quiescing. Prepared-host setup does not install these OS dependencies itself.
+
+Fresh setup keeps backup/audit directories at exactly `0750` (without inherited
+setgid), preserves the initial owner while preparing SQLite and its sidecars
+for shared service writes, and installs the complete declared Updater payload
+and GC entry. Boot recovery recreates the volatile shared mutation lock in
+place before reading the installation journal; repeated preparation never
+replaces a held lock inode. The standalone ingress runs as `latex-renderer` with
+only `CAP_NET_BIND_SERVICE`, retaining `NoNewPrivileges` and the filesystem
+sandbox. Its runtime directory and `nginx -t` use that same service identity.
+
+Published RC7 failed disposable Ubuntu 24.04 Stable acceptance. Its immutable
+tag/assets must not be replaced, and successful operation on an already
+configured Cloudflare host is not fresh-install acceptance. Issue
+[#180](https://github.com/n624-dev/latex-renderer/issues/180) tracks the integrated
+fixes. Before Stable promotion, publish a new signed candidate and test the
+actual candidate's signed Web update/recovery paths on a disposable host.
+Local fixture success and the supplied local-patch VM report are separate
+evidence, not a formal candidate pass. Remaining boundaries include DB/storage
+write-back, each ENOSPC location, interrupted publication, disabled OIDC at the
+correct direct URL, and external OIDC/Cloudflare/ACME integrations.
+
 After verification, the controller builds in its private non-root tree. The
 root helper independently copies and verifies the bundle into a root-owned
 `verified` tree, allows only production build outputs into a sealed `assembly`,

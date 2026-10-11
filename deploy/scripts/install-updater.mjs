@@ -9,7 +9,8 @@ import {
 import { dirname, join, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { UpdaterSlots, updaterEnvelope } from "./updater-slots.mjs";
+import { UpdaterSlots } from "./updater-slots.mjs";
+import { installedUpdaterEnvelope } from "./installed-updater-envelope.mjs";
 
 if (process.getuid() !== 0 || process.argv.length !== 2)
   throw new Error(
@@ -43,7 +44,7 @@ try {
       await readFile(join(old, ".latex-renderer-release.json"), "utf8"),
     );
     await slots.nominate(
-      await slots.stage(old, await updaterEnvelope(old, manifest, true)),
+      await slots.stage(old, await installedUpdaterEnvelope(old, manifest)),
     );
   } catch (legacyError) {
     if (legacyError.code !== "ENOENT") throw legacyError;

@@ -5,6 +5,12 @@ import type {
   ServerIngressCredentials,
 } from "../../packages/server-setup-core/src/index.mjs";
 export function controlledServerSetupRelease(): Promise<string>;
+export function prepareServerSetupDirectory(
+  path: string,
+  gid: number,
+  mode: number,
+  uid?: number,
+): Promise<void>;
 export function createInitialServerSetupHost(
   kind?: "initial" | "ingress" | "auto",
 ): Promise<

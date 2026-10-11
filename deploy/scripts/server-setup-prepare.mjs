@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { constants } from "node:fs";
 import { mkdir, lstat, open, realpath } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
 import { ServerInstallStore } from "./server-install-store.mjs";
 import { controlledServerSetupRelease } from "./server-setup-initial-host.mjs";
 import { acquireMutationLock } from "./mutation-lock.mjs";
@@ -84,6 +85,73 @@ async function directory(path, uid, gid, mode) {
     await handle.close();
   }
 }
+// Fixture injection covers the same filesystem operations without root, account
+// changes or touching /run. The privileged entry point always supplies fixed
+// application paths and identities; no CLI argument selects either one.
+export async function prepareRuntimeMutationLockForPath(
+  path,
+  { rootUid, updaterUid, gid },
+) {
+  if (
+    typeof path !== "string" ||
+    resolve(path) !== path ||
+    !path.startsWith("/") ||
+    ![rootUid, updaterUid, gid].every(
+      (value) => Number.isSafeInteger(value) && value >= 0,
+    ) ||
+    (await realpath(dirname(path))) !== dirname(path)
+  )
+    throw new Error("Unsafe runtime directory identity or path");
+  const previous = await lstat(path).catch((error) => {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  });
+  // systemd also manages this shared RuntimeDirectory for the non-root Updater.
+  if (previous && ![rootUid, updaterUid].includes(previous.uid))
+    throw new Error("Unsafe runtime directory owner");
+  await directory(path, previous?.uid ?? rootUid, gid, 0o770);
+  const lockHandle = await open(
+    join(path, "mutation.lock"),
+    constants.O_RDWR | constants.O_CREAT | constants.O_NOFOLLOW,
+    0o660,
+  );
+  try {
+    const info = await lockHandle.stat();
+    if (
+      !info.isFile() ||
+      ![rootUid, updaterUid].includes(info.uid) ||
+      info.nlink !== 1 ||
+      info.size !== 0
+    )
+      throw new Error("Unsafe mutation lock");
+    await lockHandle.chown(rootUid, gid);
+    await lockHandle.chmod(0o660);
+  } finally {
+    await lockHandle.close();
+  }
+}
+async function prepareRuntimeMutationLock(gid) {
+  const updaterUid = Number(
+    run("/usr/bin/id", ["-u", "latex-renderer-update"]).trim(),
+  );
+  if (!Number.isSafeInteger(updaterUid) || updaterUid <= 0)
+    throw new Error("Prepared updater account required");
+  await prepareRuntimeMutationLockForPath("/run/latex-renderer", {
+    rootUid: 0,
+    updaterUid,
+    gid,
+  });
+}
+export async function prepareServerSetupMutationLock() {
+  if (process.geteuid?.() !== 0)
+    throw new Error("Mutation lock preparation requires root");
+  const gid = Number(
+    run("/usr/bin/getent", ["group", "latex-renderer"]).split(":")[2],
+  );
+  if (!Number.isSafeInteger(gid) || gid <= 0)
+    throw new Error("Prepared application group required");
+  await prepareRuntimeMutationLock(gid);
+}
 /** Only application files/dirs from the verified managed release. This never
  * invokes install-host/prepare-host, apt, useradd, systemctl enable, rootless
  * setup, firewall, Cloudflare, partition or quota tools. Missing prerequisites
@@ -94,6 +162,11 @@ export async function prepareServerApplication() {
   if (process.geteuid?.() !== 0)
     throw new Error("Application preparation requires root");
   const release = await controlledServerSetupRelease();
+  const gid = Number(
+    run("/usr/bin/getent", ["group", "latex-renderer"]).split(":")[2],
+  );
+  if (!Number.isSafeInteger(gid) || gid <= 0)
+    throw new Error("Prepared application group required");
   // A pending initial/ingress journal belongs to recovery, not fresh staging.
   const pending = await lstat(
     "/etc/latex-renderer/installation-transaction/journal.json",
@@ -101,13 +174,15 @@ export async function prepareServerApplication() {
     if (error.code === "ENOENT") return null;
     throw error;
   });
-  if (pending) return;
+  if (pending) {
+    // /run disappears on reboot. Recovery still needs the shared lock before
+    // any consumer has started its RuntimeDirectory; retain all durable state.
+    await prepareRuntimeMutationLock(gid);
+    return;
+  }
   await absent("/etc/latex-renderer/renderer.env");
   await absent("/var/lib/latex-renderer/renderer.sqlite3");
   await absent("/etc/latex-renderer/authentication-transaction/journal.json");
-  const gid = Number(
-    run("/usr/bin/getent", ["group", "latex-renderer"]).split(":")[2],
-  );
   const uid = (name) => Number(run("/usr/bin/id", ["-u", name]).trim());
   const renderer = uid("latex-renderer"),
     web = uid("latex-renderer-web"),
@@ -141,6 +216,7 @@ export async function prepareServerApplication() {
     "/usr/bin/systemd-tmpfiles",
     "/usr/bin/rsync",
     "/usr/bin/bsdtar",
+    "/usr/bin/unzip",
     "/usr/local/bin/corepack",
     "/usr/local/bin/gh",
     "/usr/bin/ss",
@@ -190,7 +266,6 @@ export async function prepareServerApplication() {
     ["/var/lib/latex-renderer/ingress", renderer, 0o750],
     ["/var/lib/latex-renderer/ingress/client", renderer, 0o750],
     ["/var/lib/latex-renderer/ingress/proxy", renderer, 0o750],
-    ["/run/latex-renderer", 0, 0o770],
     ["/opt/latex-renderer/update-staging", 0, 0o711],
     ["/usr/local/libexec", 0, 0o755],
   ])
@@ -204,22 +279,7 @@ export async function prepareServerApplication() {
         : gid,
       mode,
     );
-  const lockHandle = await open(
-    "/run/latex-renderer/mutation.lock",
-    constants.O_RDWR | constants.O_CREAT | constants.O_NOFOLLOW,
-    0o660,
-  );
-  try {
-    const info = await lockHandle.stat();
-    if (!info.isFile() || info.uid !== 0 || info.nlink !== 1 || info.size !== 0)
-      throw new Error("Unsafe mutation lock");
-    // This initial-only application lock has no secret content; it must be
-    // usable by the already-prepared application service group.
-    await lockHandle.chown(0, gid);
-    await lockHandle.chmod(0o660);
-  } finally {
-    await lockHandle.close();
-  }
+  await prepareRuntimeMutationLock(gid);
   const lock = await acquireMutationLock();
   try {
     await absent("/etc/latex-renderer/renderer.env");
@@ -253,6 +313,12 @@ export async function prepareServerApplication() {
       mode: 0o644,
       maximum: 64 * 1024,
     };
+    files.recoveryEntry = {
+      path: "/usr/local/libexec/latex-renderer-update-recovery.mjs",
+      gid: 0,
+      mode: 0o644,
+      maximum: 64 * 1024,
+    };
     const store = new ServerInstallStore(
       "/etc/latex-renderer/installation-transaction",
       files,
@@ -264,7 +330,9 @@ export async function prepareServerApplication() {
           ? `${release}/deploy/security/seccomp.json`
           : name === "tmpfiles"
             ? `${release}/deploy/tmpfiles.d/latex-renderer-image-manager.conf`
-            : `${release}/deploy/systemd/${INITIAL_APPLICATION_UNITS[Number(name.slice(4))]}`;
+            : name === "recoveryEntry"
+              ? `${release}/deploy/scripts/update-recovery-entry.mjs`
+              : `${release}/deploy/systemd/${INITIAL_APPLICATION_UNITS[Number(name.slice(4))]}`;
       const info = await lstat(source);
       if (
         ![0, gid].includes(info.gid) ||

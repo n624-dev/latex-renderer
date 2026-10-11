@@ -163,6 +163,8 @@ describe("shared initial-owner bootstrap", () => {
     "https://identity.example.test/",
     "https://identity.example.test:443",
     "https://IDENTITY.example.test/tenant",
+    "https://IDENTITY.example.test:443/tenant/",
+    "https://identity.example.test/a/../tenant/",
     "https://identity.example.test/tenant/%7eowner",
   ])("preserves the exact OIDC issuer identifier %s", async (issuer) => {
     const db = database();
@@ -183,6 +185,14 @@ describe("shared initial-owner bootstrap", () => {
       issuer,
       subject: "immutable-subject",
     });
+    expect(
+      db.browserAuth.findIdentity("oidc", issuer, "immutable-subject")?.user_id,
+    ).toBe(id);
+    const serialized = new URL(issuer).toString();
+    if (serialized !== issuer)
+      expect(
+        db.browserAuth.findIdentity("oidc", serialized, "immutable-subject"),
+      ).toBeUndefined();
     expect(ownerCount(db)).toBe(1);
   });
   it("does not replace an existing owner, even when disabled", async () => {

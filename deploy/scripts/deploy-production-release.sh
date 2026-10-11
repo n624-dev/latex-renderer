@@ -29,6 +29,15 @@ if ! command -v setfacl >/dev/null 2>&1; then
   echo "setfacl is required; install the acl package before starting deployment" >&2
   exit 69
 fi
+if ! command -v unzip >/dev/null 2>&1; then
+  echo "unzip is required; install the unzip package before starting deployment" >&2
+  exit 69
+fi
+web_service=latex-renderer-admin-web.service
+if systemctl is-enabled --quiet latex-renderer-web.service || \
+   systemctl is-active --quiet latex-renderer-web.service; then
+  web_service=latex-renderer-web.service
+fi
 cd "$source_root"
 build_root=${LATEX_RENDERER_BUILD_ROOT:-$source_root}
 case "$build_root" in /*) ;; *) echo "LATEX_RENDERER_BUILD_ROOT must be an absolute path" >&2; exit 64 ;; esac
@@ -85,7 +94,7 @@ restore_services_after_failure() {
     latex-renderer-api.service \
     latex-renderer-internal-api.service \
     latex-renderer-admin-api.service \
-    latex-renderer-admin-web.service \
+    "$web_service" \
     latex-renderer-remote-mcp.service \
     latex-renderer-worker.service >/dev/null 2>&1 || recovery_failed=true
   systemctl start \
@@ -198,7 +207,27 @@ export PUBLIC_ORIGIN="$public_origin"
 
 sync_user=${SUDO_USER:-$(stat -c '%U' "$source_root")}
 sync_home=$(getent passwd "$sync_user" | cut -d: -f6)
-sync_pnpm_bin="$sync_home/.local/share/pnpm/bin"
+sync_uid=$(id -u "$sync_user")
+if [ "$sync_uid" -eq 0 ] || [ "$(stat -c '%u' "$build_root")" != "$sync_uid" ]; then
+  echo "Deployment requires a non-root-owned build tree and its non-root owner" >&2
+  exit 77
+fi
+case "$sync_home" in /*) ;; *) echo "Deployment user requires an absolute home path" >&2; exit 78 ;; esac
+sync_pnpm_bin="$build_root/.deployment-tooling/bin"
+sync_corepack_home="$build_root/.deployment-tooling/corepack"
+sync_package_manager=$(/usr/local/bin/node -e '
+  const value=require(process.argv[1]).packageManager;
+  if(typeof value!=="string"||!/^pnpm@\d+\.\d+\.\d+$/.test(value))process.exit(65);
+  process.stdout.write(value);
+' "$source_root/package.json")
+# Initial setup uses operation-scoped Corepack and does not install a home shim.
+# Prepare the verified release version in this writable deployment tree as its
+# non-root owner, before stopping services or changing the application pointer.
+runuser -u "$sync_user" -- mkdir -p "$sync_pnpm_bin" "$sync_corepack_home"
+runuser -u "$sync_user" -- env HOME="$sync_home" COREPACK_HOME="$sync_corepack_home" \
+  /usr/local/bin/corepack enable --install-directory "$sync_pnpm_bin" pnpm
+runuser -u "$sync_user" -- env HOME="$sync_home" COREPACK_HOME="$sync_corepack_home" \
+  /usr/local/bin/corepack prepare "$sync_package_manager" --activate
 if [ ! -x "$sync_pnpm_bin/pnpm" ]; then
   echo "pnpm executable not found for deployment user: $sync_pnpm_bin/pnpm" >&2
   exit 69
@@ -207,6 +236,7 @@ sync_path="$sync_pnpm_bin:/usr/local/bin:/usr/bin:/bin"
 sync_group=$(id -gn "$sync_user")
 run_deployment_pnpm() {
   runuser -u "$sync_user" -- env HOME="$sync_home" USER="$sync_user" LOGNAME="$sync_user" PNPM_HOME="$sync_pnpm_bin" PATH="$sync_path" \
+    COREPACK_HOME="$sync_corepack_home" \
     LATEX_RENDERER_BUILD_ROOT="$build_root" \
     sh "$source_root/deploy/scripts/deployment-pnpm.sh" "$build_root" "$sync_pnpm_bin/pnpm" "$@"
 }
@@ -290,7 +320,7 @@ systemctl restart \
   latex-renderer-api \
   latex-renderer-internal-api \
   latex-renderer-admin-api \
-  latex-renderer-admin-web \
+  "$web_service" \
   latex-renderer-remote-mcp \
   latex-renderer-worker
 if [ "$deployment_mode" = standalone ]; then
@@ -307,7 +337,7 @@ systemctl enable --now \
   latex-renderer-image-log-cleanup.timer
 
 deployment_checkpoint local-service-readiness
-for unit in latex-renderer-update-manager latex-renderer-image-manager latex-renderer-api latex-renderer-internal-api latex-renderer-admin-api latex-renderer-admin-web latex-renderer-remote-mcp latex-renderer-worker; do
+for unit in latex-renderer-update-manager latex-renderer-image-manager latex-renderer-api latex-renderer-internal-api latex-renderer-admin-api "$web_service" latex-renderer-remote-mcp latex-renderer-worker; do
   systemctl is-active --quiet "$unit"
 done
 if [ "$deployment_mode" = standalone ]; then
