@@ -171,8 +171,15 @@ export async function recoverInstallation(store, host, beforeStart = false) {
       digest(await store.snapshotFiles(journal.after)) !== digest(journal.after)
     )
       throw new Error("Committed installation state does not match");
-    await host.finalize?.(journal.units);
-    await store.clear();
+    if (beforeStart) {
+      // Boot recovery is a dependency of consumers; never start recursively.
+      await host.finalize?.(journal.units);
+      await store.clear();
+    } else {
+      // Durable commit may precede persistent enable. Foreground recovery must
+      // prove that consumers actually run before claiming a verified result.
+      await finish(store, host, journal);
+    }
     return { recovered: true, committed: true };
   }
   if (journal.kind === "ingress") {

@@ -1,10 +1,70 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { serverSetupIngressCheckArgs } from "../deploy/scripts/server-setup-initial-host.mjs";
 
 const read = (path: string) =>
   readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 describe("prepared-host deployment wiring regressions", () => {
+  it("checks low-port HTTPS with the same non-root, bind-only service sandbox and a bounded transient lifetime", () => {
+    const args = serverSetupIngressCheckArgs();
+    expect(args.slice(-4)).toEqual([
+      "/usr/sbin/nginx",
+      "-t",
+      "-c",
+      "/etc/latex-renderer/ingress-nginx.conf",
+    ]);
+    expect(args).toEqual(
+      expect.arrayContaining([
+        "--wait",
+        "--pipe",
+        "--collect",
+        "--property=RuntimeMaxSec=30s",
+        "--property=TimeoutStartSec=30s",
+        "--property=TimeoutStopSec=5s",
+      ]),
+    );
+    const properties = new Map(
+      args
+        .filter((arg) => arg.startsWith("--property="))
+        .map((arg) => {
+          const property = arg.slice("--property=".length),
+            at = property.indexOf("=");
+          return [property.slice(0, at), property.slice(at + 1)];
+        }),
+    );
+    const unit = read("deploy/systemd/latex-renderer-ingress.service");
+    for (const key of [
+      "User",
+      "Group",
+      "CapabilityBoundingSet",
+      "AmbientCapabilities",
+      "NoNewPrivileges",
+      "ProtectSystem",
+      "ProtectHome",
+      "PrivateTmp",
+      "PrivateDevices",
+      "RestrictSUIDSGID",
+      "ProtectKernelTunables",
+      "ProtectKernelModules",
+      "ProtectControlGroups",
+      "LockPersonality",
+      "ReadWritePaths",
+      "UMask",
+    ]) {
+      const value = unit.match(new RegExp(`^${key}=(.+)$`, "m"))?.[1];
+      expect(properties.get(key), key).toBe(value === "true" ? "yes" : value);
+    }
+    expect(args.join(" ")).not.toMatch(
+      /CAP_SETUID|CAP_SETGID|CAP_DAC_OVERRIDE|User=root|sysctl|RuntimeDirectory=/,
+    );
+    expect(read("deploy/scripts/server-setup-initial-host.mjs")).toContain(
+      'command("/usr/bin/systemd-run", serverSetupIngressCheckArgs())',
+    );
+    expect(read("deploy/scripts/server-setup-prepare.mjs")).toContain(
+      '"/usr/bin/systemd-run"',
+    );
+  });
   it.each([
     [false, false, "latex-renderer-admin-web.service"],
     [true, false, "latex-renderer-web.service"],
