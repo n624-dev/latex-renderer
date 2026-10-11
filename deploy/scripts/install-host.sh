@@ -11,7 +11,7 @@ if [ ! -x /usr/local/bin/corepack ] || ! /usr/local/bin/corepack --version >/dev
   exit 69
 fi
 apt-get update
-DEBIAN_FRONTEND=noninteractive apt-get install -y acl ca-certificates curl age apparmor apparmor-utils jq openssl psmisc rsync sqlite3 uidmap dbus-user-session slirp4netns fuse-overlayfs sudo util-linux xz-utils libarchive-tools
+DEBIAN_FRONTEND=noninteractive apt-get install -y acl ca-certificates curl age apparmor apparmor-utils jq openssl psmisc rsync sqlite3 uidmap dbus-user-session slirp4netns fuse-overlayfs sudo util-linux xz-utils libarchive-tools unzip
 sh "$source_root/deploy/scripts/install-github-cli.sh"
 getent group latex-renderer >/dev/null || groupadd --system latex-renderer
 id latex-renderer >/dev/null 2>&1 || useradd --system --gid latex-renderer --home-dir /var/lib/latex-renderer --shell /usr/sbin/nologin latex-renderer
@@ -36,6 +36,9 @@ install -d -o root -g latex-renderer -m 0750 /etc/latex-renderer /etc/latex-rend
 install -d -o root -g latex-renderer -m 0750 /etc/latex-renderer/ticket-keys
 install -d -o latex-renderer-backup -g latex-renderer -m 0750 /var/lib/latex-renderer/backups
 install -d -o latex-renderer-backup -g latex-renderer -m 0750 /var/lib/latex-renderer/audit
+# The application parent is setgid. GNU install can retain that inherited bit,
+# but initial setup requires these private backup directories to be exactly 0750.
+chmod 00750 /var/lib/latex-renderer/backups /var/lib/latex-renderer/audit
 install -d -o root -g root -m 0755 /opt/latex-renderer/releases
 install -d -o root -g cloudflared -m 0750 /etc/cloudflared
 install -d -o root -g root -m 0755 /usr/local/libexec

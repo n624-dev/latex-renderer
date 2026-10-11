@@ -144,12 +144,13 @@ bundle_root="$work_dir/latex-renderer-server-$version"
 
 ## ホストを準備
 
-新規導入・旧版からの更新ともに、ストレージ権限設定用の`setfacl`と、制限されたUpdater内でReleaseを展開する`bsdtar`が必要です。Ubuntu／Debianでは、サービスを停止する前に次を実行して確認します。
+新規導入・旧版からの更新ともに、ストレージ権限設定用の`setfacl`、制限されたUpdater内でReleaseを展開する`bsdtar`、更新時の配布ZIP検査用の`unzip`が必要です。Ubuntu／Debianでは、サービスを停止する前に次を実行して確認します。
 
 ```bash
-sudo apt-get install --no-install-recommends acl libarchive-tools
+sudo apt-get install --no-install-recommends acl libarchive-tools unzip
 command -v setfacl
 /usr/bin/bsdtar --version
+command -v unzip
 ```
 
 RC.1以前でこの不足により更新が失敗した場合、`current`だけが新版へ切り替わり、新旧のサービス設定が混在している可能性があります。同じ更新コマンドを再実行せず、稼働サービス・DB migration・バックアップの状態を先に確認してください。DBが更新済みならコードだけを旧版へ戻してはいけません。

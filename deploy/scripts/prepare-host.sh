@@ -72,6 +72,7 @@ if [ -d /var/lib/latex-renderer/storage/jobs ]; then
 fi
 install -d -o latex-renderer-backup -g latex-renderer -m 0750 /var/lib/latex-renderer/backups
 install -d -o latex-renderer-backup -g latex-renderer -m 0750 /var/lib/latex-renderer/audit
+chmod 00750 /var/lib/latex-renderer/backups /var/lib/latex-renderer/audit
 install -d -o root -g latex-renderer -m 0750 /etc/latex-renderer /etc/latex-renderer/secrets /etc/latex-renderer/ticket-keys
 install -d -o root -g latex-renderer -m 0750 /var/lib/latex-renderer/image-manager /var/lib/latex-renderer/image-manager/operations /var/lib/latex-renderer/image-manager/tmp
 install -d -o latex-renderer-update -g latex-renderer -m 0750 /var/lib/latex-renderer/update-manager /var/lib/latex-renderer/update-manager/operations /var/lib/latex-renderer/update-manager/staging
@@ -181,7 +182,7 @@ if grep -q '^BACKUP_DIRECTORY=/var/backups/latex-renderer$' /etc/latex-renderer/
   sed -i 's|^BACKUP_DIRECTORY=/var/backups/latex-renderer$|BACKUP_DIRECTORY=/var/lib/latex-renderer/backups|' /etc/latex-renderer/backup.env
 fi
 chown -R latex-renderer-backup:latex-renderer /var/lib/latex-renderer/backups
-chmod 0750 /var/lib/latex-renderer/backups
+chmod 00750 /var/lib/latex-renderer/backups
 chown root:latex-renderer /etc/latex-renderer/backup.env
 chmod 0640 /etc/latex-renderer/backup.env
 

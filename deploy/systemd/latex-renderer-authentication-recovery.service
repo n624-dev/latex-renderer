@@ -23,4 +23,4 @@ NoNewPrivileges=true
 ProtectHome=true
 PrivateTmp=true
 ProtectSystem=strict
-ReadWritePaths=/etc/latex-renderer /run/latex-renderer /var/lib/latex-renderer/storage
+ReadWritePaths=/etc/latex-renderer /run/latex-renderer /var/lib/latex-renderer

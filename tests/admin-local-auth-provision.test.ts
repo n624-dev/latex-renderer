@@ -12,6 +12,102 @@ afterEach(() => {
 });
 
 describe("local authentication-mode recovery", () => {
+  it("provisions the exact OIDC issuer for an existing password owner", () => {
+    const root = mkdtempSync(join(tmpdir(), "latex-renderer-oidc-provision-"));
+    roots.push(root);
+    const databasePath = join(root, "renderer.sqlite3");
+    const environment = {
+      ...process.env,
+      DATABASE_PATH: databasePath,
+      API_KEY_PEPPER_ID: "v1",
+      API_KEY_PEPPER_FILE: privateFile(root, "api-pepper", "a".repeat(32)),
+      AUTH_PASSWORD_PEPPER_FILE: privateFile(
+        root,
+        "password-pepper",
+        "b".repeat(32),
+      ),
+      LATEX_RENDERER_ADMIN_GID: String(process.getgid?.() ?? 0),
+    };
+    const bootstrap = runAdminLocal(
+      [
+        "bootstrap",
+        "--auth-mode",
+        "password",
+        "--display-name",
+        "Owner",
+        "--login-name",
+        "owner",
+        "--password-file",
+        privateFile(root, "password", "correct horse battery staple"),
+      ],
+      environment,
+    );
+    expect(bootstrap.status, bootstrap.stderr).toBe(0);
+    const ownerId = bootstrap.stdout.trim();
+    const issuer = "https://identity.example";
+    const provision = runAdminLocal(
+      [
+        "auth",
+        "provision-owner",
+        "--owner-id",
+        ownerId,
+        "--auth-mode",
+        "oidc",
+        "--issuer",
+        issuer,
+        "--subject",
+        "exact-subject",
+        "--yes",
+      ],
+      environment,
+    );
+    expect(provision.status, provision.stderr).toBe(0);
+    for (const invalid of [
+      ` ${issuer}`,
+      `${issuer} `,
+      "https://identity.\nexample",
+      `${issuer}/?query=forbidden`,
+      `${issuer}/#fragment`,
+      "https://user:password@identity.example",
+      "http://identity.example",
+      `${issuer}/${"a".repeat(2048)}`,
+    ]) {
+      const rejected = runAdminLocal(
+        [
+          "auth",
+          "provision-owner",
+          "--owner-id",
+          ownerId,
+          "--auth-mode",
+          "oidc",
+          "--issuer",
+          invalid,
+          "--subject",
+          "invalid-subject",
+          "--yes",
+        ],
+        environment,
+      );
+      expect(rejected.status).not.toBe(0);
+    }
+    const database = new RendererDatabase(databasePath);
+    try {
+      expect(
+        database.browserAuth.findIdentity("oidc", issuer, "exact-subject"),
+      ).toMatchObject({ user_id: ownerId });
+      expect(
+        database.browserAuth.findIdentity(
+          "oidc",
+          `${issuer}/`,
+          "exact-subject",
+        ),
+      ).toBeUndefined();
+      expect(database.browserAuth.getCredentialForUser(ownerId)).toBeDefined();
+      expect(database.browserAuth.identitiesForUser(ownerId)).toHaveLength(1);
+    } finally {
+      database.close();
+    }
+  });
   it("creates an expiring smoke key and revokes only that credential", () => {
     const root = mkdtempSync(join(tmpdir(), "latex-renderer-smoke-key-"));
     roots.push(root);

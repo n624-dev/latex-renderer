@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Preserve exact OIDC issuer identities in initial-owner setup and explicit
+  owner provisioning. Repair prepared-host database/backup permissions and
+  install the complete verified Updater and recovery entry points.
+- Restore the shared mutation lock after reboot without replacing held inodes,
+  run standalone HTTPS under its service identity with only bind capability,
+  and wait for listeners before checking socket exposure.
+- Prepare release-pinned pnpm in the non-root deployment build tree, require
+  unzip before mutations, and handle both current and legacy Web services in
+  deployment/recovery. RC7 failed disposable-host Stable acceptance; these
+  source fixes still require a new signed candidate and formal acceptance.
+
 ## 1.4.0-rc.7 - 2026-10-09
 
 - Bound prepared-host owner/backup-key subprocesses through a private process

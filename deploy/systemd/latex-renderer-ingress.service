@@ -6,7 +6,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=root
+User=latex-renderer
 Group=latex-renderer
 RuntimeDirectory=latex-renderer-ingress
 RuntimeDirectoryMode=0750
@@ -26,6 +26,10 @@ PrivateDevices=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
+# Both master and workers use the prepared service identity. Only binding the
+# HTTPS port needs a capability; no runtime user/group transition is required.
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_BIND_SERVICE
 RestrictSUIDSGID=true
 LockPersonality=true
 ReadWritePaths=/var/lib/latex-renderer/ingress /run/latex-renderer-ingress

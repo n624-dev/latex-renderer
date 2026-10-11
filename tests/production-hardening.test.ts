@@ -268,7 +268,7 @@ describe("production hardening", () => {
     const deploy = read("deploy/scripts/deploy-production-release.sh");
     expect(deploy).toContain("--filter @latex-renderer/public-web run deploy");
     expect(deploy).toContain(
-      'sync_pnpm_bin="$sync_home/.local/share/pnpm/bin"',
+      'sync_pnpm_bin="$build_root/.deployment-tooling/bin"',
     );
     expect(deploy).toContain('PNPM_HOME="$sync_pnpm_bin" PATH="$sync_path"');
     expect(deploy).toContain('if [ ! -x "$sync_pnpm_bin/pnpm" ]');

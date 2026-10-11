@@ -672,7 +672,9 @@ function strictIssuer(
   value: string,
   mode: "cloudflare-access" | "oidc",
 ): string {
-  const url = new URL(value);
+  // Validate the raw identifier before parsing: URL would silently remove
+  // whitespace/control characters that must not enter an exact OIDC identity.
+  const url = new URL(boundedText(value, "external identity issuer", 2048));
   if (
     url.protocol !== "https:" ||
     url.username !== "" ||
@@ -687,5 +689,5 @@ function strictIssuer(
       "Cloudflare Access issuer must be an HTTPS origin",
       400,
     );
-  return mode === "cloudflare-access" ? url.origin : url.toString();
+  return mode === "cloudflare-access" ? url.origin : value;
 }
