@@ -214,6 +214,7 @@ export async function prepareServerApplication() {
     "/usr/bin/setfacl",
     "/usr/sbin/visudo",
     "/usr/bin/systemd-tmpfiles",
+    "/usr/bin/systemd-run",
     "/usr/bin/rsync",
     "/usr/bin/bsdtar",
     "/usr/bin/unzip",

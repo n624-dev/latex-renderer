@@ -61,8 +61,17 @@ const fs = require('node:fs');
 const path = process.argv[2];
 try {
   const state = JSON.parse(fs.readFileSync(path, 'utf8'));
-  const currentManaged = state.current && state.current.legacy !== true ? state.current : null;
-  const previousManaged = state.previous && state.previous.legacy !== true ? state.previous : null;
+  if (!state || typeof state !== 'object' || Array.isArray(state)) throw new Error('Invalid state');
+  // Initial prepared runtimes can have any tag; preserve recorded immutable IDs.
+  const currentManaged = state.current ?? null;
+  const previousManaged = state.previous ?? null;
+  for (const target of [currentManaged, previousManaged]) {
+    if (target !== null && (
+      typeof target !== 'object' || Array.isArray(target) ||
+      !/^sha256:[a-f0-9]{64}$/.test(target.runtimeImageId ?? '') ||
+      (target.baseImageId != null && !/^sha256:[a-f0-9]{64}$/.test(target.baseImageId))
+    )) throw new Error('Invalid protected image identity');
+  }
   for (const value of [
     currentManaged?.runtimeImageId,
     previousManaged?.runtimeImageId,

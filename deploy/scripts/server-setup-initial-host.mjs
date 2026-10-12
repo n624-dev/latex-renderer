@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import { lstat, mkdir, realpath, open } from "node:fs/promises";
 import { constants } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, resolve } from "node:path";
 import { runServerSetupChild } from "./server-setup-child.mjs";
 import {
   validateServerSetupReview,
@@ -173,10 +173,18 @@ function account(name) {
     throw new Error("Prepared non-root account required");
   return value;
 }
-function ownerState(id) {
+function ownerState(id, path = databasePath) {
   let db;
   try {
-    db = new DatabaseSync(databasePath, { readOnly: true });
+    db = new DatabaseSync(path, { readOnly: true });
+    if (
+      !db
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type='table' AND name='server_setup_bootstrap'",
+        )
+        .get()
+    )
+      return "foreign";
     const marker = db.prepare("SELECT id FROM server_setup_bootstrap").all();
     if (marker.length !== 1 || marker[0].id !== id) return "foreign";
     // A crash can happen between the durable marker and schema migration.
@@ -203,6 +211,89 @@ function ownerState(id) {
   } finally {
     db?.close();
   }
+}
+/** Read-only initial recovery inspection. Zero bytes are recoverable only for
+ * the exact pending initial journal, never an existing database or sidecar. */
+export async function inspectInitialSetupDatabase(path, id, identity, journal) {
+  if (
+    typeof path !== "string" ||
+    !path.startsWith("/") ||
+    resolve(path) !== path ||
+    !/^[a-f0-9]{48}$/.test(id) ||
+    ![identity?.uid, identity?.gid].every(
+      (value) => Number.isSafeInteger(value) && value >= 0,
+    ) ||
+    (await realpath(dirname(path))) !== dirname(path)
+  )
+    throw new Error("Initial database identity is unsafe");
+  const info = await lstat(path).catch((error) => {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  });
+  if (!info) return "none";
+  if (
+    !info.isFile() ||
+    info.nlink !== 1 ||
+    info.uid !== identity.uid ||
+    info.gid !== identity.gid ||
+    ![0o640, 0o660].includes(info.mode & 0o7777)
+  )
+    throw new Error("Initial database is unsafe");
+  if (info.size === 0) {
+    if (
+      journal?.kind !== "initial" ||
+      journal.id !== id ||
+      journal.phase !== "pending"
+    )
+      throw new Error(
+        "Empty initial database has no matching pending transaction",
+      );
+    for (const suffix of ["-wal", "-shm", "-journal"])
+      if (
+        await lstat(`${path}${suffix}`).catch((error) => {
+          if (error.code === "ENOENT") return null;
+          throw error;
+        })
+      )
+        throw new Error("Empty initial database has a SQLite sidecar");
+    return "none";
+  }
+  return ownerState(id, path);
+}
+/** Fixed transient unit, matching the ingress service's non-root bind-only
+ * identity. Never lower the host port threshold or run nginx validation root. */
+export function serverSetupIngressCheckArgs() {
+  return [
+    "--quiet",
+    "--wait",
+    "--pipe",
+    "--collect",
+    "--unit=latex-renderer-ingress-config-check",
+    "--property=Type=exec",
+    "--property=User=latex-renderer",
+    "--property=Group=latex-renderer",
+    "--property=CapabilityBoundingSet=CAP_NET_BIND_SERVICE",
+    "--property=AmbientCapabilities=CAP_NET_BIND_SERVICE",
+    "--property=NoNewPrivileges=yes",
+    "--property=ProtectSystem=strict",
+    "--property=ProtectHome=yes",
+    "--property=PrivateTmp=yes",
+    "--property=PrivateDevices=yes",
+    "--property=RestrictSUIDSGID=yes",
+    "--property=ProtectKernelTunables=yes",
+    "--property=ProtectKernelModules=yes",
+    "--property=ProtectControlGroups=yes",
+    "--property=LockPersonality=yes",
+    "--property=RuntimeMaxSec=30s",
+    "--property=TimeoutStartSec=30s",
+    "--property=TimeoutStopSec=5s",
+    "--property=UMask=0027",
+    "--property=ReadWritePaths=/var/lib/latex-renderer/ingress /run/latex-renderer-ingress",
+    "/usr/sbin/nginx",
+    "-t",
+    "-c",
+    nginxPath,
+  ];
 }
 async function runOwner(release, input) {
   await runServerSetupChild(
@@ -263,19 +354,12 @@ export async function createInitialServerSetupHost(kind = "initial") {
       true,
     );
   async function pendingOwner(id) {
-    const info = await lstat(databasePath).catch((error) => {
-      if (error.code === "ENOENT") return null;
-      throw error;
-    });
-    if (!info) return "none";
-    if (
-      !info.isFile() ||
-      info.nlink !== 1 ||
-      info.uid !== account("latex-renderer") ||
-      info.mode & 0o007
-    )
-      throw new Error("Initial database is unsafe");
-    return ownerState(id);
+    return inspectInitialSetupDatabase(
+      databasePath,
+      id,
+      { uid: rendererUid, gid },
+      existingJournal,
+    );
   }
   const adapter = {
     kind,
@@ -633,15 +717,7 @@ export async function createInitialServerSetupHost(kind = "initial") {
             0o750,
             rendererUid,
           );
-          command("/usr/sbin/runuser", [
-            "-u",
-            "latex-renderer",
-            "--",
-            "/usr/sbin/nginx",
-            "-t",
-            "-c",
-            nginxPath,
-          ]);
+          command("/usr/bin/systemd-run", serverSetupIngressCheckArgs());
         }
       }
     },

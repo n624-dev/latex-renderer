@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.4.0-rc.9 - 2026-10-11
+
+- Validate managed HTTPS through a bounded non-root transient systemd unit with
+  the ingress service's bind-only capability and filesystem sandbox. Require
+  `systemd-run` during prepared-host prerequisite checks; do not lower host
+  privileged-port restrictions or validate Nginx as root.
+- Protect recorded current/previous Runtime and Base image identities during
+  cleanup, including legacy prepared runtimes without the historical fixed tag.
+  Reject malformed protected image state instead of falling back to tag lookup.
+- Recover an ENOSPC-created empty initial SQLite file only for its matching
+  pending setup transaction, exact owner/group and safe modes, and no SQLite
+  sidecars. Do not delete databases or recreate an existing owner to retry.
+- Require service startup and health verification before foreground committed
+  recovery reports success; retain the journal on startup/health/finalization
+  failures. Preserve the non-recursive boot recovery handoff.
+- Public RC8 failed disposable-host Stable acceptance. Integrate the four fixes
+  and regression tests in one candidate; local patched-host results and ordinary
+  CI do not certify a formal signed RC9 or permit Stable promotion.
+
 ## 1.4.0-rc.8 - 2026-10-11
 
 - Preserve exact OIDC issuer identities in initial-owner setup and explicit

@@ -263,11 +263,90 @@ describe("durable prepared-host installation", () => {
     ).rejects.toThrow("RECOVERY_REQUIRED");
     expect((await f.store.journal())?.phase).toBe("committed");
     f.host.finalize = vi.fn();
+    // A reboot after commit but before persistent enable stops consumers.
+    for (const unit of f.host.units(model())) await f.host.stop(unit);
+    vi.mocked(f.host.health).mockClear();
     expect(await recoverInstallation(f.store, f.host)).toMatchObject({
       committed: true,
     });
+    for (const unit of f.host.units(model()))
+      expect(await f.host.active(unit)).toBe(true);
+    expect(f.host.health).toHaveBeenCalledOnce();
     expect(f.host.createOwner).toHaveBeenCalledOnce();
     expect(f.host.finalize).toHaveBeenCalledOnce();
+  });
+  it.each(["start", "health", "finalize"])(
+    "retains a committed recovery journal after %s failure and permits a verified retry",
+    async (boundary) => {
+      const f = await fixture();
+      f.host.finalize = vi.fn(() => {
+        throw new Error("enable interrupted");
+      });
+      await expect(
+        applyInstallation(
+          f.store,
+          f.host,
+          await reviewInstallation(f.store, f.host, model()),
+          {},
+        ),
+      ).rejects.toThrow("RECOVERY_REQUIRED");
+      f.active.clear();
+      f.host.finalize = vi.fn();
+      const start = f.host.start,
+        health = f.host.health;
+      if (boundary === "start")
+        f.host.start = vi.fn(() => {
+          throw new Error("start failed");
+        });
+      if (boundary === "health")
+        f.host.health = vi.fn(() => {
+          throw new Error("health failed");
+        });
+      if (boundary === "finalize")
+        f.host.finalize = vi.fn(() => {
+          throw new Error("enable failed");
+        });
+      await expect(recoverInstallation(f.store, f.host)).rejects.toThrow(
+        "failed",
+      );
+      expect(await f.store.journal()).not.toBeNull();
+      expect(f.host.createOwner).toHaveBeenCalledOnce();
+      f.host.start = start;
+      f.host.health = health;
+      f.host.finalize = vi.fn();
+      expect(await recoverInstallation(f.store, f.host)).toMatchObject({
+        committed: true,
+      });
+      expect(await f.store.journal()).toBeNull();
+      expect(f.host.createOwner).toHaveBeenCalledOnce();
+      for (const unit of f.host.units(model()))
+        expect(await f.host.active(unit)).toBe(true);
+    },
+  );
+  it("finalizes a durable commit at boot without recursively starting its dependent consumers", async () => {
+    const f = await fixture();
+    f.host.finalize = vi.fn(() => {
+      throw new Error("enable interrupted");
+    });
+    await expect(
+      applyInstallation(
+        f.store,
+        f.host,
+        await reviewInstallation(f.store, f.host, model()),
+        {},
+      ),
+    ).rejects.toThrow("RECOVERY_REQUIRED");
+    f.active.clear();
+    vi.mocked(f.host.start).mockClear();
+    vi.mocked(f.host.health).mockClear();
+    f.host.finalize = vi.fn();
+    expect(await recoverInstallation(f.store, f.host, true)).toMatchObject({
+      committed: true,
+    });
+    expect(f.host.start).not.toHaveBeenCalled();
+    expect(f.host.health).not.toHaveBeenCalled();
+    expect(f.host.finalize).toHaveBeenCalledOnce();
+    expect(f.host.createOwner).toHaveBeenCalledOnce();
   });
   it("recovers an owner commit before its file-journal phase was saved", async () => {
     const f = await fixture();

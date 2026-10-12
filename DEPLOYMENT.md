@@ -416,16 +416,36 @@ replaces a held lock inode. The standalone ingress runs as `latex-renderer` with
 only `CAP_NET_BIND_SERVICE`, retaining `NoNewPrivileges` and the filesystem
 sandbox. Its runtime directory and `nginx -t` use that same service identity.
 
-Published RC7 failed disposable Ubuntu 24.04 Stable acceptance. Its immutable
-tag/assets must not be replaced, and successful operation on an already
+Prepared-host checks also require `/usr/bin/systemd-run`. HTTPS configuration
+validation uses a fixed, bounded transient unit with the ingress identity,
+`CAP_NET_BIND_SERVICE` and the service's sandbox; neither a root Nginx check nor
+changes to the host's privileged-port threshold are needed. Foreground setup
+recovery starts and checks consumers before reporting success, even if its
+journal already records a durable commit. Failures retain the recovery journal.
+Boot dependency recovery remains non-recursive and hands startup to systemd.
+
+If initial setup exhausts space and leaves a zero-byte SQLite file, free space
+without removing the journal or database. Retry through the normal setup
+recovery path. Only the same pending initial transaction, expected UID/GID,
+mode `0640` or `0660`, one regular-file link and no WAL/SHM/rollback sidecar qualify.
+An unrelated, unsafe or nonempty database is not reset to make recovery proceed.
+Artifact cleanup protects recorded current and previous Runtime/Base image IDs,
+including prepared legacy runtimes; no historical fixed tag is required when
+the recorded current identity exists. Invalid image state stops cleanup safely.
+
+Published RC7 and RC8 failed disposable Ubuntu 24.04 Stable acceptance. Their
+immutable tags/assets must not be replaced, and successful operation on an already
 configured Cloudflare host is not fresh-install acceptance. Issue
 [#180](https://github.com/n624-dev/latex-renderer/issues/180) tracks the integrated
 fixes. Before Stable promotion, publish a new signed candidate and test the
 actual candidate's signed Web update/recovery paths on a disposable host.
 Local fixture success and the supplied local-patch VM report are separate
-evidence, not a formal candidate pass. Remaining boundaries include DB/storage
-write-back, each ENOSPC location, interrupted publication, disabled OIDC at the
-correct direct URL, and external OIDC/Cloudflare/ACME integrations.
+evidence, not a formal candidate pass. The RC8 local-patch report adds real
+DB/storage write-back, journal/database ENOSPC, interrupted/reboot recovery and
+disabled-OIDC direct-route checks; these do not certify a newly signed candidate.
+Repeat candidate acceptance and retain untested boundaries, including storage
+stream/mkdir ENOSPC, other interruption points, and external OIDC/Cloudflare/ACME
+integrations, rather than treating earlier local results as a formal pass.
 
 After verification, the controller builds in its private non-root tree. The
 root helper independently copies and verifies the bundle into a root-owned
