@@ -69,9 +69,7 @@ describe("Markdown public documentation", () => {
   it("publishes the versioned general-user self-hosting guide", () => {
     const selfHosting = publicDocs.find(({ slug }) => slug === "self-hosting");
     expect(selfHosting).toBeDefined();
-    expect(selfHosting?.html).toContain(
-      "latex-renderer-server-1.3.6.tar.gz",
-    );
+    expect(selfHosting?.html).toContain("latex-renderer-server-1.3.6.tar.gz");
     expect(selfHosting?.html).toContain("/opt/latex-renderer/update-staging");
     expect(selfHosting?.html).toContain("bootstrap-published-host.mjs");
     expect(selfHosting?.html).toContain("/opt/latex-renderer/updater");
@@ -119,6 +117,35 @@ describe("Markdown public documentation", () => {
     expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
     expect(html).not.toContain("<script>");
   });
+
+  it.each([
+    {
+      label: "balanced parentheses",
+      markdown: "[docs](/docs/(renderer))",
+      href: "/docs/(renderer)",
+    },
+    {
+      label: "unbalanced parentheses",
+      markdown: "[docs](/docs/(renderer)",
+      href: null,
+    },
+    {
+      label: "Unicode whitespace after the destination",
+      markdown: `[docs](/docs/${"\u2000".repeat(128)})`,
+      href: "/docs/",
+    },
+  ])(
+    "renders $label through the actual documentation renderer",
+    ({ markdown, href }) => {
+      const html = renderMarkdown(markdown);
+      if (href === null) {
+        expect(html).not.toContain("<a ");
+        expect(html).toContain(markdown);
+      } else {
+        expect(html).toContain(`<a href="${href}">docs</a>`);
+      }
+    },
+  );
 
   it("keeps detailed AI guidance outside the minimal Skill entry point", () => {
     const page = integrationsDocsPage();
