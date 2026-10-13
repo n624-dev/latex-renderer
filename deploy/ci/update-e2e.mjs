@@ -59,6 +59,7 @@ if (
 const root = await mkdtemp("/opt/latex-renderer/update-staging/ci-");
 const run = (cmd, args, options = {}) =>
   execFileSync(cmd, args, { stdio: "inherit", timeout: 5_400_000, ...options });
+let settingsRoot;
 try {
   const artifact = join(root, "candidate.tar.gz");
   const attestationBundle = join(root, "candidate-attestation.jsonl");
@@ -430,17 +431,41 @@ try {
     !Number.isSafeInteger(originalQueue + 1)
   )
     throw new Error("Unexpected settings cutover fixture profile");
+  // Match the wizard's root-controlled /etc input boundary, not the unrelated
+  // release-build staging tree. Do not repair parent permissions to pass review.
+  settingsRoot = await mkdtemp("/etc/latex-renderer/ci/settings-");
   for (const maxQueueLength of [originalQueue + 1, originalQueue]) {
     const contents = await readFile(environmentPath, "utf8");
     const review = importServerSetupReview(contents);
-    const { envelope } = serverSetupChangeReview(contents, {
+    const model = {
       ...review,
       runtime: {
         ...review.runtime,
         limits: { ...review.runtime.limits, maxQueueLength },
       },
-    });
-    const reviewedPath = join(root, "existing-settings-review.json");
+    };
+    const { envelope } = serverSetupChangeReview(contents, model);
+    const modelPath = join(settingsRoot, "existing-settings-model.json");
+    await writeFile(modelPath, JSON.stringify(model), { mode: 0o600 });
+    const reviewed = JSON.parse(
+      execFileSync(
+        "/usr/local/bin/node",
+        [
+          "/opt/latex-renderer/current/deploy/scripts/configure-authentication.mjs",
+          "--setup-review",
+          modelPath,
+        ],
+        { encoding: "utf8", timeout: 30_000, maxBuffer: 128 * 1024 },
+      ),
+    );
+    if (JSON.stringify(reviewed) !== JSON.stringify(envelope))
+      throw new Error(
+        "Installed settings review differs from the verified Core",
+      );
+    console.log(
+      JSON.stringify({ event: "settings.review.passed", maxQueueLength }),
+    );
+    const reviewedPath = join(settingsRoot, "existing-settings-review.json");
     await writeFile(reviewedPath, JSON.stringify(envelope), { mode: 0o600 });
     run("/usr/local/bin/node", [
       "/opt/latex-renderer/current/deploy/scripts/configure-authentication.mjs",
@@ -578,5 +603,6 @@ try {
     }),
   );
 } finally {
+  if (settingsRoot) await rm(settingsRoot, { recursive: true, force: true });
   await rm(root, { recursive: true, force: true });
 }

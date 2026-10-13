@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { ProductionAuthenticationPlan } from "../../packages/server-setup-core/src/index.mjs";
+export function authenticationFailureDiagnostic(phase: unknown): string;
 export function requireServerSetupRecoveryOrdering(
   before: unknown,
   apiRequires: unknown,

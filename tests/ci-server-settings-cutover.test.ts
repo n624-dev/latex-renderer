@@ -32,4 +32,11 @@ it("uses the installed settings CLI and checks the real Gateway before the post-
   expect(script).toContain("{ mode: 0o600 }");
   expect(script).toContain("settingsCutover: true");
   expect(script).toContain("gatewayReady: true");
+  expect(script).toContain('mkdtemp("/etc/latex-renderer/ci/settings-")');
+  expect(script).toContain('"--setup-review"');
+  expect(script.indexOf('"--setup-review"', cutover)).toBeLessThan(apply);
+  expect(script).toContain(
+    "Installed settings review differs from the verified Core",
+  );
+  expect(script).not.toContain('join(root, "existing-settings-review.json")');
 });

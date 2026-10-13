@@ -222,6 +222,14 @@ Old release recovery that understands only format 1 must not be used for a live
 format-2 journal. Verify real owner login and a representative render afterwards;
 local health does not prove external login or successful Docker rendering.
 
+CLI refusal keeps its fixed failure message and adds only an allowlisted
+`phase` code for the last operation entered (for example `review-read`,
+`recovery-order` or `readiness`). This is a diagnostic hint, not proof of the
+original cause if recovery also ran. Exception text, response bodies, paths and
+environment/credential values are never included; CUI/Web keep their existing
+fixed frontend failure message. No additional diagnostic files or accumulating
+management state are created.
+
 ## Test coverage and limits
 
 Normal tests use temporary private files, actual SQLite and bounded injected
