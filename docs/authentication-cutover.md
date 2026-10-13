@@ -192,21 +192,32 @@ not set disk quotas or change retention. Job timeouts must remain at most 840
 seconds to leave grace within the existing 15-minute worker stop budget; changing
 that service policy is a separate operation.
 
-All five limit consumers must already be active. Preflight verifies secrets,
+All selected limit consumers must already be active. Standalone selects the
+Gateway as well as the five common services; Cloudflare selects only the common
+services and never starts/stops an unrelated Standalone Gateway. Selection is
+fixed by the validated installed deployment profile, not by a caller's unit list.
+Preflight verifies secrets,
 the existing active owner's explicitly provisioned login method, TLS/interface
 requirements and enabled native OIDC Discovery. It then checks current health
 before journaling/stopping anything. The renderer API, Admin, Remote MCP and
-Internal API stop before the worker, whose active render drains normally. Only
-after all are stopped is one env published. All five restart and must be active;
+Internal API stop before the worker, whose active render drains normally. The
+Standalone Gateway stops before its required Internal API so systemd's propagated
+stop cannot leave it behind. Only after all are stopped is one env published.
+All selected services restart and must be active;
 both `/auth/config` policies and the renderer `3100`/Internal API `3103` health
-responses must match. No root shell, dynamic unit list, new sudo permission,
+responses must match, including Gateway `3105` health on Standalone. An active
+service without a reachable healthy Gateway does not certify successful apply.
+No root shell, caller-selected unit list, new sudo permission,
 automatic disk expansion, provider fallback, credential generation, DB restore
 or Image Manager operation is introduced. Nginx/Cloudflare/Web are not restarted.
 
 Failure uses the same durable recovery command and journal as auth-only changes.
-Format-2 recovery checks the five consumers are stopped at boot before restoring
+Format-2 recovery selects consumers from the durable journal's before profile
+and checks they are stopped at boot before restoring
 an uncommitted configuration. A committed record retains the new config; corrupt
 state or outside edits require operator review and block further apply/deployment.
+Foreground rollback restores and verifies the selected Gateway too; a failed
+Gateway start or readiness check retains the journal for explicit recovery.
 Old release recovery that understands only format 1 must not be used for a live
 format-2 journal. Verify real owner login and a representative render afterwards;
 local health does not prove external login or successful Docker rendering.

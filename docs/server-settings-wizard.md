@@ -23,6 +23,10 @@ node /opt/latex-renderer/current/deploy/scripts/server-setup.mjs --web --ingress
 Existing scope requires a configured database, enabled owner and healthy
 services. It never creates/reset owners or keys. Provision new login credentials
 before enabling a method. Use normal Updater flows for code/image updates.
+Standalone existing-settings apply and rollback include the Gateway that depends
+on the Internal API; success requires Gateway service activation and `3105`
+health, not only working authentication endpoints. Cloudflare leaves unrelated
+Standalone services untouched.
 
 Initial scope refuses existing configuration or an unattributable DB. It stages
 application-only directories, fixed units/helper policy, seccomp, tmpfiles and

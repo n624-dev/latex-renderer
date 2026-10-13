@@ -18,6 +18,14 @@ Existing artifacts keep their old locations and public URLs. See
 
 ## Build and validation
 
+Public RC9 failed disposable prepared-host acceptance: existing-settings apply
+could report success while the Standalone Gateway remained stopped. The next
+candidate includes deployment-specific consumer selection, Gateway readiness
+and recovery regressions together with the merged dependency updates. Keep
+Stable and production unchanged until the new immutable candidate itself passes
+[prepared-host acceptance](docs/server-setup-acceptance.md). Local patched-host
+results and ordinary CI do not supersede the public RC9 failure.
+
 ```bash
 corepack enable
 pnpm install --frozen-lockfile

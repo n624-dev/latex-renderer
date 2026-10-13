@@ -28,6 +28,7 @@ import {
   serverSetupChangeReview,
   applyServerSetupChange,
   serverSetupUnits,
+  serverSetupConsumerUnits,
 } from "./authentication-change.mjs";
 
 export function requireServerSetupRecoveryOrdering(
@@ -142,7 +143,11 @@ export async function checkAuthenticationHealth(
           throw new Error();
       }
       if (runtime)
-        for (const port of [3100, 3103]) {
+        for (const port of [
+          3100,
+          3103,
+          ...(values.get("DEPLOYMENT_MODE") === "standalone" ? [3105] : []),
+        ]) {
           const response = await fetchImpl(`http://127.0.0.1:${port}/health`, {
             redirect: "error",
             signal: globalThis.AbortSignal.timeout(2000),
@@ -254,6 +259,7 @@ async function main() {
               "--value",
               "latex-renderer-api.service",
             ),
+            serverSetupConsumerUnits(contents),
           );
         const values = parseEnvironmentFile(contents);
         const plan = productionAuthenticationPlan(values);

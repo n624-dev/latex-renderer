@@ -21,9 +21,22 @@ export const authenticationUnits = Object.freeze([
 export const serverSetupUnits = Object.freeze([
   "latex-renderer-api.service",
   ...authenticationUnits,
+  "latex-renderer-standalone-gateway.service",
   "latex-renderer-internal-api.service",
   "latex-renderer-worker.service",
 ]);
+const cloudflareServerSetupUnits = Object.freeze(
+  serverSetupUnits.filter(
+    (unit) => unit !== "latex-renderer-standalone-gateway.service",
+  ),
+);
+// Restart the downstream dependent only for the existing standalone profile.
+export function serverSetupConsumerUnits(contents) {
+  return productionAuthenticationPlan(parseEnvironmentFile(contents))
+    .deploymentMode === "standalone"
+    ? serverSetupUnits
+    : cloudflareServerSetupUnits;
+}
 const authKeys = new Set([
   "AUTH_MODE",
   "AUTH_BACKEND",
@@ -391,7 +404,10 @@ export async function recoverAuthenticationChange(
   await store.initialize();
   const journal = await store.journal();
   if (!journal) return false;
-  const units = journal.format === 2 ? serverSetupUnits : authenticationUnits;
+  const units =
+    journal.format === 2
+      ? serverSetupConsumerUnits(journal.before)
+      : authenticationUnits;
   const current = await store.environment();
   if (current !== journal.before && current !== journal.after)
     throw new Error(
@@ -437,7 +453,7 @@ export async function applyServerSetupChange(store, host, envelope) {
     envelope,
     2,
     serverSetupChangeReview,
-    serverSetupUnits,
+    serverSetupConsumerUnits,
   );
   return importServerSetupReview(await store.environment());
 }
@@ -465,6 +481,7 @@ async function applyReviewedEnvironment(
   )
     throw new Error("Invalid reviewed authentication change");
   const before = await store.environment();
+  units = typeof units === "function" ? units(before) : units;
   const prepared = prepare(before, envelope.review);
   if (
     envelope.baseSha256 !== prepared.envelope.baseSha256 ||
