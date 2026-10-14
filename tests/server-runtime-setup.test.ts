@@ -21,9 +21,13 @@ import {
   recoverAuthenticationChange,
   serverSetupChangeReview,
   serverSetupUnits,
+  serverSetupConsumerUnits,
   type AuthenticationChangeHost,
 } from "../deploy/scripts/authentication-change.mjs";
-import { checkAuthenticationHealth } from "../deploy/scripts/configure-authentication.mjs";
+import {
+  checkAuthenticationHealth,
+  requireServerSetupRecoveryOrdering,
+} from "../deploy/scripts/configure-authentication.mjs";
 
 const before = [
   "# operator annotation",
@@ -61,6 +65,11 @@ function candidate() {
       },
     },
   };
+}
+function portOf(url: Parameters<typeof fetch>[0]) {
+  return new URL(
+    typeof url === "string" ? url : url instanceof URL ? url.href : url.url,
+  ).port;
 }
 async function fixture() {
   const directory = await mkdtemp(join(tmpdir(), "server-runtime-setup-"));
@@ -107,6 +116,250 @@ async function fixture() {
 }
 
 describe("server setup runtime review", () => {
+  it("restores the gateway stopped by the internal API Requires dependency", async () => {
+    const f = await fixture();
+    const gateway = "latex-renderer-standalone-gateway.service";
+    f.active.add(gateway);
+    const run = f.host.run;
+    f.host.run = async (action, unit) => {
+      await run(action, unit);
+      if (action === "stop" && unit === "latex-renderer-internal-api.service")
+        f.active.delete(gateway);
+    };
+    await applyServerSetupChange(f.store, f.host, f.envelope);
+    expect(f.active.has(gateway)).toBe(true);
+    expect(f.events).toContain(`start:${gateway}`);
+    expect(f.events.indexOf(`stop:${gateway}`)).toBeLessThan(
+      f.events.indexOf("stop:latex-renderer-internal-api.service"),
+    );
+    expect(await f.store.journal()).toBeNull();
+  });
+  it.each([false, true])(
+    "leaves an unrelated Cloudflare gateway untouched (active=%s)",
+    async (active) => {
+      const f = await fixture();
+      const contents = before.replace(
+        "DEPLOYMENT_MODE=standalone",
+        "DEPLOYMENT_MODE=cloudflare",
+      );
+      const gateway = "latex-renderer-standalone-gateway.service";
+      if (!active) f.active.delete(gateway);
+      await f.store.replaceEnvironment(contents);
+      const model = importServerSetupReview(contents);
+      const prepared = serverSetupChangeReview(contents, {
+        ...model,
+        runtime: {
+          ...model.runtime,
+          limits: { ...model.runtime.limits, maxQueueLength: 42 },
+        },
+      });
+      const units = serverSetupConsumerUnits(contents);
+      expect(Object.isFrozen(units)).toBe(true);
+      expect(units).not.toContain(gateway);
+      expect(() =>
+        requireServerSetupRecoveryOrdering(
+          units.join(" "),
+          "latex-renderer-authentication-recovery.service",
+          units,
+        ),
+      ).not.toThrow();
+      expect(() =>
+        requireServerSetupRecoveryOrdering(
+          units.join(" "),
+          "latex-renderer-authentication-recovery.service",
+          serverSetupConsumerUnits(before),
+        ),
+      ).toThrow(/Compatible recovery ordering/);
+      await applyServerSetupChange(f.store, f.host, prepared.envelope);
+      expect(
+        f.events.some((event) => event.includes("standalone-gateway")),
+      ).toBe(false);
+      expect(f.active.has(gateway)).toBe(active);
+    },
+  );
+  it("rejects an invalid deployment profile rather than omitting the gateway", () => {
+    expect(() =>
+      serverSetupConsumerUnits(
+        before.replace("DEPLOYMENT_MODE=standalone", "DEPLOYMENT_MODE=unknown"),
+      ),
+    ).toThrow(/DEPLOYMENT_MODE/);
+  });
+  it("does not restart or report an unchanged review as healthy with a stopped gateway", async () => {
+    const f = await fixture();
+    f.active.delete("latex-renderer-standalone-gateway.service");
+    const identical = serverSetupChangeReview(
+      before,
+      importServerSetupReview(before),
+    );
+    await expect(
+      applyServerSetupChange(f.store, f.host, identical.envelope),
+    ).rejects.toThrow(/every selected existing consumer/);
+    expect(f.events).toEqual(["preflight"]);
+    expect(await f.store.journal()).toBeNull();
+  });
+  it.each([false, true])(
+    "recovers the original standalone profile after gateway start failure (persistent=%s)",
+    async (persistent) => {
+      const f = await fixture();
+      const gateway = "latex-renderer-standalone-gateway.service";
+      const run = f.host.run;
+      let fail = true;
+      f.host.run = async (action, unit) => {
+        if (action === "start" && unit === gateway && fail) {
+          if (!persistent) fail = false;
+          throw new Error("private start failure");
+        }
+        await run(action, unit);
+      };
+      await expect(
+        applyServerSetupChange(f.store, f.host, f.envelope),
+      ).rejects.toThrow(
+        persistent ? /recovery incomplete/ : /recovery completed/,
+      );
+      expect(await f.store.environment()).toBe(before);
+      if (persistent) {
+        expect((await f.store.journal())?.phase).toBe("pending");
+        expect(f.active.has(gateway)).toBe(false);
+        fail = false;
+        await recoverAuthenticationChange(f.store, f.host);
+      }
+      expect(f.active.has(gateway)).toBe(true);
+      expect(await f.store.journal()).toBeNull();
+    },
+  );
+  it.each(["standalone", "cloudflare"])(
+    "recovers only consumers selected by the durable %s before profile",
+    async (mode) => {
+      const f = await fixture();
+      const contents = before.replace(
+        "DEPLOYMENT_MODE=standalone",
+        `DEPLOYMENT_MODE=${mode}`,
+      );
+      const model = importServerSetupReview(contents);
+      const prepared = serverSetupChangeReview(contents, {
+        ...model,
+        runtime: {
+          ...model.runtime,
+          limits: { ...model.runtime.limits, maxQueueLength: 42 },
+        },
+      });
+      await f.store.initialize();
+      await f.store.saveJournal({
+        format: 2,
+        phase: "pending",
+        before: contents,
+        after: prepared.after,
+      });
+      await f.store.replaceEnvironment(prepared.after);
+      const reopened = new AuthenticationChangeStore(
+        f.environmentPath,
+        f.root,
+        f.store.uid,
+        f.store.gid,
+      );
+      await recoverAuthenticationChange(reopened, f.host);
+      expect(await reopened.environment()).toBe(contents);
+      expect(
+        f.events.includes("start:latex-renderer-standalone-gateway.service"),
+      ).toBe(mode === "standalone");
+      expect(await reopened.journal()).toBeNull();
+    },
+  );
+  it("retains the boot journal when only the standalone gateway is still active", async () => {
+    const f = await fixture();
+    await f.store.initialize();
+    await f.store.saveJournal({
+      format: 2,
+      phase: "pending",
+      before,
+      after: f.after,
+    });
+    f.active.clear();
+    f.active.add("latex-renderer-standalone-gateway.service");
+    await expect(
+      recoverAuthenticationChange(f.store, f.host, true),
+    ).rejects.toThrow(/stopped consumers/);
+    expect(await f.store.journal()).not.toBeNull();
+    expect(f.events).toEqual([]);
+  });
+  it("does not report readiness when only the standalone gateway is unreachable", async () => {
+    const fetchImpl = vi.fn<typeof fetch>((url) => {
+      const port = portOf(url);
+      if (port === "3105") throw new Error("private transport detail");
+      return Promise.resolve(
+        ["3100", "3103"].includes(port)
+          ? Response.json({ status: "ok" })
+          : Response.json({
+              backend: "native",
+              publicOrigin: "https://renderer.example.test",
+              methods: [{ id: "password" }],
+            }),
+      );
+    });
+    const wait = vi.fn(() => Promise.resolve());
+    await expect(
+      checkAuthenticationHealth(before, true, fetchImpl, wait),
+    ).rejects.toThrow("Authentication policy readiness failed");
+    expect(wait).toHaveBeenCalledTimes(9);
+  });
+  it.each(["unhealthy", "http-error", "oversize", "invalid-json"])(
+    "bounds gateway-only %s readiness failure without revealing response data",
+    async (kind) => {
+      const fetchImpl = vi.fn<typeof fetch>((url, options) => {
+        expect(options?.redirect).toBe("error");
+        expect(options?.signal).toBeInstanceOf(AbortSignal);
+        const port = portOf(url);
+        if (port === "3105") {
+          if (kind === "oversize")
+            return Promise.resolve(new Response("private-marker".repeat(1000)));
+          if (kind === "invalid-json")
+            return Promise.resolve(new Response("private-marker"));
+          return Promise.resolve(
+            Response.json(
+              { status: "unhealthy", secret: "private-marker" },
+              { status: kind === "http-error" ? 503 : 200 },
+            ),
+          );
+        }
+        return Promise.resolve(
+          ["3100", "3103"].includes(port)
+            ? Response.json({ status: "ok" })
+            : Response.json({
+                backend: "native",
+                publicOrigin: "https://renderer.example.test",
+                methods: [{ id: "password" }],
+              }),
+        );
+      });
+      const wait = vi.fn(() => Promise.resolve());
+      await expect(
+        checkAuthenticationHealth(before, true, fetchImpl, wait),
+      ).rejects.toThrow("Authentication policy readiness failed");
+      expect(wait).toHaveBeenCalledTimes(9);
+      expect(fetchImpl).toHaveBeenCalledTimes(50);
+    },
+  );
+  it("checks Cloudflare runtime health without probing a standalone gateway", async () => {
+    const contents = before.replace(
+      "DEPLOYMENT_MODE=standalone",
+      "DEPLOYMENT_MODE=cloudflare",
+    );
+    const fetchImpl = vi.fn<typeof fetch>((url) => {
+      const port = portOf(url);
+      expect(port).not.toBe("3105");
+      return Promise.resolve(
+        ["3100", "3103"].includes(port)
+          ? Response.json({ status: "ok" })
+          : Response.json({
+              backend: "native",
+              publicOrigin: "https://renderer.example.test",
+              methods: [{ id: "password" }],
+            }),
+      );
+    });
+    await checkAuthenticationHealth(contents, true, fetchImpl);
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
+  });
   it("imports actual runtime defaults, exports all reviewed limits and retains immutable identity", () => {
     const model = importServerSetupReview(before);
     expect(model.format).toBe(4);
@@ -399,7 +652,7 @@ describe("coordinated authentication and runtime settings transaction", () => {
       else {
         expect(
           f.events.filter((event) => event.startsWith("stop:")),
-        ).toHaveLength(5);
+        ).toHaveLength(serverSetupUnits.length);
         expect(await f.store.environment()).toBe(f.after);
       }
       await run(action, unit);
@@ -411,7 +664,7 @@ describe("coordinated authentication and runtime settings transaction", () => {
       "stop:latex-renderer-worker.service",
     );
     expect(await f.store.journal()).toBeNull();
-    expect(f.active.size).toBe(5);
+    expect(f.active.size).toBe(serverSetupUnits.length);
   });
   it.each(["base", "candidate", "env", "inactive", "preflight"])(
     "does not stop consumers for %s review/preflight failure",
@@ -487,7 +740,7 @@ describe("coordinated authentication and runtime settings transaction", () => {
       ).rejects.toThrow(/recovery completed/);
       expect(await f.store.environment()).toBe(before);
       expect(await f.store.journal()).toBeNull();
-      expect(f.active.size).toBe(5);
+      expect(f.active.size).toBe(serverSetupUnits.length);
     },
   );
   it.each(["before", "after"])(
@@ -660,7 +913,7 @@ describe("coordinated authentication and runtime settings transaction", () => {
       const endpoint = new URL(
         typeof url === "string" ? url : url instanceof URL ? url.href : url.url,
       );
-      if (["3100", "3103"].includes(endpoint.port))
+      if (["3100", "3103", "3105"].includes(endpoint.port))
         return Promise.resolve(Response.json({ status: "ok" }));
       return Promise.resolve(
         Response.json({
@@ -680,6 +933,7 @@ describe("coordinated authentication and runtime settings transaction", () => {
       "http://127.0.0.1:3104/auth/config",
       "http://127.0.0.1:3100/health",
       "http://127.0.0.1:3103/health",
+      "http://127.0.0.1:3105/health",
     ]);
     fetchImpl.mockClear();
     await checkAuthenticationHealth(before, false, fetchImpl);
@@ -700,7 +954,7 @@ describe("coordinated authentication and runtime settings transaction", () => {
           return Promise.resolve(new Response("private-marker".repeat(1000)));
         if (kind === "invalid-json")
           return Promise.resolve(new Response("private-marker"));
-        if (["3100", "3103"].includes(endpoint.port))
+        if (["3100", "3103", "3105"].includes(endpoint.port))
           return Promise.resolve(
             Response.json({ status: "unhealthy", secret: "private-marker" }),
           );

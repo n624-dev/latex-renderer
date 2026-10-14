@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.4.0-rc.10 - 2026-10-13
+
+- Include the Standalone Gateway in existing-settings consumer selection and
+  rollback, and verify its local health before reporting success. Account for
+  systemd stopping the Gateway when its required Internal API stops; leave
+  unrelated Standalone services untouched on Cloudflare installations.
+- Derive recovery consumers from the durable before profile, require matching
+  loaded recovery ordering, and retain the journal when Gateway restoration
+  fails. Add dependency-propagation, readiness and recovery regressions.
+- Exercise the installed settings CLI against real systemd in signed update
+  validation, check Gateway activation/health after changing and restoring a
+  queue limit, then run the existing post-update rendering smoke.
+- Include the merged production/development dependency and pinned Actions
+  updates, refreshed Worker runtime types and Marked rendering regressions.
+- Public RC9 failed disposable-host Stable acceptance with a new Gateway P1.
+  Its four RC8 regressions did not recur in that run; local patched-host results
+  and ordinary CI do not certify this new signed candidate or permit Stable.
+
 ## 1.4.0-rc.9 - 2026-10-11
 
 - Validate managed HTTPS through a bounded non-root transient systemd unit with

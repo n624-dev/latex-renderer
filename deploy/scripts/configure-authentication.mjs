@@ -28,7 +28,44 @@ import {
   serverSetupChangeReview,
   applyServerSetupChange,
   serverSetupUnits,
+  serverSetupConsumerUnits,
 } from "./authentication-change.mjs";
+
+const diagnosticPhases = Object.freeze([
+  "arguments",
+  "boot-journal",
+  "mutation-lock",
+  "service-group",
+  "transaction-state",
+  "environment-read",
+  "review-path",
+  "review-read",
+  "review-prepare",
+  "apply",
+  "recovery",
+  "service-active",
+  "service-stop",
+  "service-start",
+  "readiness",
+  "recovery-order",
+  "deployment-profile",
+  "ingress-tls",
+  "ingress-interface",
+  "auth-secrets",
+  "owner-readiness",
+  "oidc-discovery",
+]);
+let failurePhase = "arguments";
+
+// Only trusted operation stages may enter stderr. Never format an exception,
+// caller value, response body, path, EnvironmentFile or credentials here.
+export function authenticationFailureDiagnostic(phase) {
+  const code =
+    typeof phase === "string" && diagnosticPhases.includes(phase)
+      ? phase
+      : "unknown";
+  return `Authentication operation failed; configuration was not certified. Recover any pending transaction and review private host state. [phase=${code}]\n`;
+}
 
 export function requireServerSetupRecoveryOrdering(
   before,
@@ -142,7 +179,11 @@ export async function checkAuthenticationHealth(
           throw new Error();
       }
       if (runtime)
-        for (const port of [3100, 3103]) {
+        for (const port of [
+          3100,
+          3103,
+          ...(values.get("DEPLOYMENT_MODE") === "standalone" ? [3105] : []),
+        ]) {
           const response = await fetchImpl(`http://127.0.0.1:${port}/health`, {
             redirect: "error",
             signal: globalThis.AbortSignal.timeout(2000),
@@ -184,14 +225,17 @@ async function main() {
   // release deployment may already own the shared mutation lock while it
   // starts these services; do not recursively acquire that lock in this case.
   if (action === "--recover-before-start") {
+    failurePhase = "boot-journal";
     const probe = new AuthenticationChangeStore(
       "/etc/latex-renderer/renderer.env",
       "/etc/latex-renderer/authentication-transaction",
     );
     if (!(await probe.journal())) return;
   }
+  failurePhase = "mutation-lock";
   const lock = await acquireMutationLock();
   try {
+    failurePhase = "service-group";
     const gid = Number(
       execFileSync("/usr/bin/getent", ["group", "latex-renderer"], {
         encoding: "utf8",
@@ -206,11 +250,13 @@ async function main() {
       0,
       gid,
     );
+    failurePhase = "transaction-state";
     const setupOperation =
       action.startsWith("--setup-") || (await store.journal())?.format === 2;
     if (action === "--setup-export") {
       if (await store.journal())
         throw new Error("Recover the previous transaction first");
+      failurePhase = "environment-read";
       process.stdout.write(
         `${JSON.stringify(importServerSetupReview(await store.environment()), null, 2)}\n`,
       );
@@ -218,6 +264,7 @@ async function main() {
     }
     const host = {
       active: (unit) => {
+        failurePhase = "service-active";
         const state = systemctl(
           "show",
           "--property=ActiveState",
@@ -229,9 +276,13 @@ async function main() {
         return state === "active";
       },
       run: (action, unit) => {
+        failurePhase = action === "stop" ? "service-stop" : "service-start";
         systemctl(action, unit);
       },
-      health: (contents) => checkAuthenticationHealth(contents, setupOperation),
+      health: (contents) => {
+        failurePhase = "readiness";
+        return checkAuthenticationHealth(contents, setupOperation);
+      },
       preflight: async (contents) => {
         if (
           setupOperation &&
@@ -240,6 +291,7 @@ async function main() {
           throw new Error(
             "Install and start the compatible recovery unit before server setup cutover",
           );
+        failurePhase = "recovery-order";
         if (setupOperation)
           requireServerSetupRecoveryOrdering(
             systemctl(
@@ -254,7 +306,9 @@ async function main() {
               "--value",
               "latex-renderer-api.service",
             ),
+            serverSetupConsumerUnits(contents),
           );
+        failurePhase = "deployment-profile";
         const values = parseEnvironmentFile(contents);
         const plan = productionAuthenticationPlan(values);
         if (
@@ -266,9 +320,13 @@ async function main() {
             "Server setup requires the existing managed database path",
           );
         const ingress = serverIngressFromEnvironment(values);
+        failurePhase = "ingress-tls";
         verifyProductionIngressTls(ingress, gid);
+        failurePhase = "ingress-interface";
         verifyIngressInterface(ingress);
+        failurePhase = "auth-secrets";
         verifyProductionAuthSecrets(plan, gid);
+        failurePhase = "owner-readiness";
         const database = new DatabaseSync(
           "/var/lib/latex-renderer/renderer.sqlite3",
           { readOnly: true },
@@ -278,11 +336,13 @@ async function main() {
         } finally {
           database.close();
         }
+        failurePhase = "oidc-discovery";
         if (setupOperation)
           await checkServerSetupOidc(importServerSetupReview(contents));
       },
     };
     if (action.startsWith("--recover")) {
+      failurePhase = "recovery";
       await recoverAuthenticationChange(
         store,
         host,
@@ -291,6 +351,7 @@ async function main() {
       process.stdout.write("Authentication recovery complete\n");
       return;
     }
+    failurePhase = "review-path";
     if (!input.startsWith("/") || resolve(input) !== input)
       throw new Error(
         "Review must be an absolute canonical root-owned private file",
@@ -308,8 +369,10 @@ async function main() {
         );
       if (parent === "/") break;
     }
+    failurePhase = "review-read";
     const model = JSON.parse(await store.read(input, 0o600, 0, 128 * 1024));
     if (action === "--review" || action === "--setup-review") {
+      failurePhase = "review-prepare";
       await store.initialize();
       if (await store.journal())
         throw new Error(
@@ -321,6 +384,7 @@ async function main() {
       // Only non-secret profile metadata and hashes; never the complete env.
       process.stdout.write(`${JSON.stringify(review.envelope, null, 2)}\n`);
     } else {
+      failurePhase = "apply";
       await (
         setupOperation ? applyServerSetupChange : applyAuthenticationChange
       )(store, host, model);
@@ -338,9 +402,7 @@ if (isMainModule(import.meta.url)) {
   main().catch(() => {
     // Provider/DB/filesystem errors can contain secrets or raw EnvironmentFile
     // fragments. Use a fixed diagnostic; inspect only private host state.
-    process.stderr.write(
-      "Authentication operation failed; configuration was not certified. Recover any pending transaction and review private host state.\n",
-    );
+    process.stderr.write(authenticationFailureDiagnostic(failurePhase));
     process.exitCode = 1;
   });
 }

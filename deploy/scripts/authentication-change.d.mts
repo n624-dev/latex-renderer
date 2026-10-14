@@ -8,6 +8,7 @@ export const authenticationUnits: readonly [
   "latex-renderer-remote-mcp.service",
 ];
 export const serverSetupUnits: readonly string[];
+export function serverSetupConsumerUnits(contents: string): readonly string[];
 export interface ServerSetupChangeEnvelope {
   readonly format: 2;
   readonly baseSha256: string;

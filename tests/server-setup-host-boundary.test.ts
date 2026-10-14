@@ -52,7 +52,7 @@ describe("prepared settings child environment", () => {
       ),
     ).not.toThrow();
   });
-  it("requires the actually loaded five-consumer recovery ordering, not merely an active old unit", () => {
+  it("requires the actually loaded selected-consumer recovery ordering, not merely an active old unit", () => {
     expect(() =>
       requireServerSetupRecoveryOrdering(
         serverSetupUnits.join(" "),

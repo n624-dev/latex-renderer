@@ -155,10 +155,13 @@ hash-bound **existing-host** authentication+limits change. It uses the same
 exclusive mutation lock, secure full-EnvironmentFile store, private durable
 journal and boot recovery as authentication-only changes; see
 [the configuration cutover runbook](authentication-cutover.md#runtime-settings-on-an-existing-host).
-All five long-lived limit consumers stop before publishing one configuration;
+All selected long-lived limit consumers stop before publishing one configuration
+(five common services, plus the Gateway on Standalone only);
 the worker drains last using its existing graceful stop budget. Successful apply
 checks all consumers are active, both auth policies, and the actual renderer and
-internal API health endpoints. Enabled native OIDC gets a bounded Discovery
+internal API health endpoints, plus Gateway health on Standalone. Recovery uses
+the durable before deployment profile and does not activate a Gateway on
+Cloudflare. Enabled native OIDC gets a bounded Discovery
 preflight; runtime still validates independently. No password/login test is
 implied by local health.
 

@@ -59,6 +59,7 @@ if (
 const root = await mkdtemp("/opt/latex-renderer/update-staging/ci-");
 const run = (cmd, args, options = {}) =>
   execFileSync(cmd, args, { stdio: "inherit", timeout: 5_400_000, ...options });
+let settingsRoot;
 try {
   const artifact = join(root, "candidate.tar.gz");
   const attestationBundle = join(root, "candidate-attestation.jsonl");
@@ -406,6 +407,106 @@ try {
     { encoding: "utf8" },
   ).trim();
   if (owners !== "1") throw new Error("Owner did not survive migration");
+  // Real systemd regression: stopping Internal API propagates to its required
+  // Standalone Gateway. Exercise the installed settings CLI, not only mocks or
+  // auth endpoints, and restore the reviewed limits before the rendering smoke.
+  // This entry has already checked its disposable GitHub-hosted run/boot marker.
+  const { importServerSetupReview } = await import(
+    pathToFileURL(
+      "/opt/latex-renderer/current/packages/server-setup-core/src/index.mjs",
+    )
+  );
+  const { serverSetupChangeReview } = await import(
+    pathToFileURL(
+      "/opt/latex-renderer/current/deploy/scripts/authentication-change.mjs",
+    )
+  );
+  const environmentPath = "/etc/latex-renderer/renderer.env";
+  const originalReview = importServerSetupReview(
+    await readFile(environmentPath, "utf8"),
+  );
+  const originalQueue = originalReview.runtime.limits.maxQueueLength;
+  if (
+    originalReview.deployment.authentication.deployment.mode !== "standalone" ||
+    !Number.isSafeInteger(originalQueue + 1)
+  )
+    throw new Error("Unexpected settings cutover fixture profile");
+  // Match the wizard's root-controlled /etc input boundary, not the unrelated
+  // release-build staging tree. Do not repair parent permissions to pass review.
+  settingsRoot = await mkdtemp("/etc/latex-renderer/ci/settings-");
+  for (const maxQueueLength of [originalQueue + 1, originalQueue]) {
+    const contents = await readFile(environmentPath, "utf8");
+    const review = importServerSetupReview(contents);
+    const model = {
+      ...review,
+      runtime: {
+        ...review.runtime,
+        limits: { ...review.runtime.limits, maxQueueLength },
+      },
+    };
+    const { envelope } = serverSetupChangeReview(contents, model);
+    const modelPath = join(settingsRoot, "existing-settings-model.json");
+    await writeFile(modelPath, JSON.stringify(model), { mode: 0o600 });
+    const reviewed = JSON.parse(
+      execFileSync(
+        "/usr/local/bin/node",
+        [
+          "/opt/latex-renderer/current/deploy/scripts/configure-authentication.mjs",
+          "--setup-review",
+          modelPath,
+        ],
+        { encoding: "utf8", timeout: 30_000, maxBuffer: 128 * 1024 },
+      ),
+    );
+    if (JSON.stringify(reviewed) !== JSON.stringify(envelope))
+      throw new Error(
+        "Installed settings review differs from the verified Core",
+      );
+    console.log(
+      JSON.stringify({ event: "settings.review.passed", maxQueueLength }),
+    );
+    const reviewedPath = join(settingsRoot, "existing-settings-review.json");
+    await writeFile(reviewedPath, JSON.stringify(envelope), { mode: 0o600 });
+    run("/usr/local/bin/node", [
+      "/opt/latex-renderer/current/deploy/scripts/configure-authentication.mjs",
+      "--setup-apply",
+      reviewedPath,
+    ]);
+    const gateway = execFileSync(
+      "/usr/bin/systemctl",
+      [
+        "show",
+        "--property=ActiveState",
+        "--value",
+        "latex-renderer-standalone-gateway.service",
+      ],
+      { encoding: "utf8", timeout: 30_000, maxBuffer: 8192 },
+    ).trim();
+    const health = JSON.parse(
+      execFileSync(
+        "/usr/bin/curl",
+        [
+          "--fail",
+          "--silent",
+          "--show-error",
+          "--max-time",
+          "10",
+          "http://127.0.0.1:3105/health",
+        ],
+        { encoding: "utf8", timeout: 15_000, maxBuffer: 8192 },
+      ),
+    );
+    if (gateway !== "active" || health.status !== "ok")
+      throw new Error(
+        "Settings cutover left the Standalone Gateway unavailable",
+      );
+  }
+  if (
+    JSON.stringify(
+      importServerSetupReview(await readFile(environmentPath, "utf8")),
+    ) !== JSON.stringify(originalReview)
+  )
+    throw new Error("Settings cutover did not restore the original review");
   run("/bin/sh", [
     "/opt/latex-renderer/current/deploy/scripts/smoke-test-production.sh",
   ]);
@@ -497,8 +598,11 @@ try {
       updaterStartupFailureRecovery: true,
       tmpfilesMigration: true,
       fullRecoveryPoint: true,
+      settingsCutover: true,
+      gatewayReady: true,
     }),
   );
 } finally {
+  if (settingsRoot) await rm(settingsRoot, { recursive: true, force: true });
   await rm(root, { recursive: true, force: true });
 }
