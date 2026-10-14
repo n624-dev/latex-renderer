@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.4.0 - 2026-10-14
+
+- Promote immutable candidate `v1.4.0-rc.10` without executable changes other
+  than the exact release version. Include the prepared-host CUI/Web setup,
+  settings and HTTPS lifecycle, independent Updater and recovery improvements
+  and dependency updates documented below.
+- Public RC10 passed the exercised Ubuntu 26.04.1 Standalone/local HTTPS/OIDC
+  acceptance scope with no local product patch: six CUI/Web authentication
+  cases, existing-settings Gateway checks, login, Japanese PDF/PNG, reboot,
+  interruption, real ENOSPC, signed Web updates, independent Updater recovery
+  and database/storage writeback. The RC8 and RC9 failures did not recur.
+- This is not certification of untested configurations. External OIDC,
+  Cloudflare/Access, ACME, Ubuntu 24.04 fresh-host acceptance, production
+  migration/load and the remaining fault/device matrix were not exercised in
+  that acceptance run. Publishing does not apply the release to production.
+
 ## 1.4.0-rc.10 - 2026-10-13
 
 - Include the Standalone Gateway in existing-settings consumer selection and
