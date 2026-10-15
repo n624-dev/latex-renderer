@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.5.0-rc.1 - 2026-10-15
+
+- Classify production smoke credentials and exclusive Sources as internal
+  diagnostics. Hide their clients, API keys, jobs, input and audit entries from
+  ordinary Web/Admin/CLI/API/MCP views, search and pagination; reject direct-ID
+  management access. Preserve local audit export, worker cleanup and actual
+  storage/admission accounting. Migration 19 recognizes legacy local creation
+  records without hiding ordinary clients that happen to use a similar name.
+- Refresh the Web color system and responsive CSS for phones and tablets:
+  horizontally scrollable navigation, card tables, bounded dialogs, readable
+  forms, touch targets, keyboard focus and dark mode. Align prepared-host setup
+  styling with the application. Expand Chromium viewport coverage to 320–1440px.
+- Add native Ubuntu ARM64 application regression and client packaging CI, and
+  an ARM64 mode for non-publishing renderer validation. Generate native TeX Live
+  profiles and a common binary PATH; pin the matching ARM64 cloudflared checksum.
+  Real ARM TeX validation requires an ARM64-enabled, capacity-checked mirror
+  snapshot. Daily publication remains amd64: this candidate does not overwrite
+  existing immutable image tags or claim completed multi-platform acceptance.
+- This candidate requires signed release/update validation before publication.
+  Desktop/mobile hardware acceptance, ARM signed host updates and multi-platform
+  Base publication are not certified by local amd64 or browser viewport tests.
+
 ## 1.4.0 - 2026-10-14
 
 - Promote immutable candidate `v1.4.0-rc.10` without executable changes other

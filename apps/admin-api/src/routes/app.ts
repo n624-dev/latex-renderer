@@ -3,7 +3,11 @@ import { z } from "zod";
 import { RemoteRenderService } from "@latex-renderer/remote-mcp-core";
 import type { JobRow, OwnedJobListRow } from "@latex-renderer/database";
 import { renderOutputsSchema } from "@latex-renderer/contracts";
-import { AppError, DEFAULT_RESOURCE_LIMITS, pageSize } from "@latex-renderer/shared";
+import {
+  AppError,
+  DEFAULT_RESOURCE_LIMITS,
+  pageSize,
+} from "@latex-renderer/shared";
 import { validateEntrypointPath } from "@latex-renderer/zip-validation";
 import { requireAppActor } from "../auth/actor.js";
 import {
@@ -266,9 +270,7 @@ export function createAppV1Router(deps: AdminDependencies): Hono {
       selected = projects.revision(actor, id, revisionId),
       body = await c.req.text(),
       input = parse(
-        z
-          .object({ outputs: renderOutputsSchema.unwrap().optional() })
-          .strict(),
+        z.object({ outputs: renderOutputsSchema.unwrap().optional() }).strict(),
         body === "" ? {} : (JSON.parse(body) as unknown),
       ),
       principal = ensureWebPrincipal(deps, actor),
@@ -373,7 +375,7 @@ function ensureWebPrincipal(deps: AdminDependencies, actor: AppActor) {
 }
 
 function assertOwnedJob(deps: AdminDependencies, actor: AppActor, id: string) {
-  const row = deps.database.jobs.get(id);
+  const row = deps.database.jobs.getVisible(id);
   if (row === undefined || row.user_id !== actor.userId)
     throw new AppError("JOB_NOT_FOUND", "Job does not exist", 404);
   return row;
@@ -381,24 +383,30 @@ function assertOwnedJob(deps: AdminDependencies, actor: AppActor, id: string) {
 
 function jobSummary(deps: AdminDependencies, row: JobRow | OwnedJobListRow) {
   const joined = "project_name" in row,
-    revision = !joined && row.project_revision_id
-      ? deps.database.projects.revisionOwned(
-          row.project_revision_id,
-          row.user_id,
-        )
-      : undefined,
-    project = !joined && revision
-      ? deps.database.projects.getOwned(revision.project_id, row.user_id)
-      : undefined;
+    revision =
+      !joined && row.project_revision_id
+        ? deps.database.projects.revisionOwned(
+            row.project_revision_id,
+            row.user_id,
+          )
+        : undefined,
+    project =
+      !joined && revision
+        ? deps.database.projects.getOwned(revision.project_id, row.user_id)
+        : undefined;
   return {
     id: row.id,
     status: row.status,
     documentName: joined
-      ? row.revision_display_name ?? row.entrypoint
-      : revision?.display_name ?? row.entrypoint,
-    projectName: joined ? row.project_name ?? null : project?.display_name ?? null,
-    projectId: joined ? row.project_id ?? null : project?.id ?? null,
-    revisionId: joined ? row.project_revision_id ?? null : revision?.id ?? null,
+      ? (row.revision_display_name ?? row.entrypoint)
+      : (revision?.display_name ?? row.entrypoint),
+    projectName: joined
+      ? (row.project_name ?? null)
+      : (project?.display_name ?? null),
+    projectId: joined ? (row.project_id ?? null) : (project?.id ?? null),
+    revisionId: joined
+      ? (row.project_revision_id ?? null)
+      : (revision?.id ?? null),
     entrypoint: row.entrypoint,
     createdAt: row.created_at,
     updatedAt: row.updated_at,

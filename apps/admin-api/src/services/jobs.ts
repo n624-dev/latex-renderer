@@ -39,7 +39,7 @@ export class AdminJobsService {
     };
   }
   get(id: string) {
-    const row = this.deps.database.jobs.get(id);
+    const row = this.deps.database.jobs.getVisible(id);
     if (row === undefined)
       throw new AppError("JOB_NOT_FOUND", "Job does not exist", 404);
     const terminalAt = row.completed_at ?? row.updated_at,
@@ -833,6 +833,7 @@ export class AdminJobsService {
   ): { id: string; cancelRequestedAt: string } {
     const timestamp = nowIso();
     this.deps.database.transaction(() => {
+      this.get(id);
       if (this.deps.database.jobs.cancel(id, timestamp) !== 1)
         throw new AppError("JOB_NOT_CANCELABLE", "Job cannot be canceled", 409);
       this.deps.database.audit({
@@ -849,6 +850,7 @@ export class AdminJobsService {
 
   delete(actor: AppActor, id: string): void {
     this.deps.database.transaction(() => {
+      this.get(id);
       if (this.deps.database.jobs.markDeleting(id, nowIso()) !== 1)
         throw new AppError(
           "JOB_STATE_CONFLICT",
@@ -870,6 +872,7 @@ export class AdminJobsService {
     const accepted: string[] = [];
     this.deps.database.transaction(() => {
       for (const id of ids) {
+        if (this.deps.database.jobs.getVisible(id) === undefined) continue;
         if (this.deps.database.jobs.markDeleting(id, nowIso()) === 1) {
           accepted.push(id);
           this.deps.database.audit({
@@ -913,7 +916,9 @@ export class AdminJobsService {
           "Idempotency-Key was reused with another job",
           409,
         );
-      if (this.deps.database.jobs.get(existing.resource_id) === undefined)
+      if (
+        this.deps.database.jobs.getVisible(existing.resource_id) === undefined
+      )
         throw new AppError(
           "IDEMPOTENT_RESOURCE_GONE",
           "The idempotent Retry Job no longer exists",
@@ -925,6 +930,8 @@ export class AdminJobsService {
         reused: true,
       };
     }
+    if (this.deps.database.jobs.getVisible(sourceJobId) === undefined)
+      throw new AppError("JOB_NOT_FOUND", "Job does not exist", 404);
     const source = this.deps.database.jobs.findRetrySource(sourceJobId);
     if (source === undefined)
       throw new AppError(
@@ -1170,7 +1177,7 @@ export class AdminJobsService {
     };
   }
   private async issueExisting(jobId: string) {
-    const row = this.deps.database.jobs.get(jobId);
+    const row = this.deps.database.jobs.getVisible(jobId);
     if (row === undefined)
       throw new AppError(
         "JOB_NOT_FOUND",
@@ -1236,7 +1243,7 @@ export class AdminJobsService {
     };
   }
   private async issueExistingSourceJob(jobId: string) {
-    const row = this.deps.database.jobs.get(jobId);
+    const row = this.deps.database.jobs.getVisible(jobId);
     if (row === undefined)
       throw new AppError(
         "JOB_NOT_FOUND",
@@ -1279,7 +1286,7 @@ export class AdminJobsService {
     actor: AppActor,
     jobId: string,
   ): Promise<{ jobId: string; jobTicket: string; expiresAt: string }> {
-    const row = this.deps.database.jobs.get(jobId);
+    const row = this.deps.database.jobs.getVisible(jobId);
     if (row === undefined || row.user_id !== actor.userId)
       throw new AppError("JOB_NOT_FOUND", "Job does not exist", 404);
     return this.issueAccessTicketForRow(actor, row);

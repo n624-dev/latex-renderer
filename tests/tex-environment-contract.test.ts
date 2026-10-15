@@ -30,7 +30,7 @@ describe("managed TeX Live image pipeline", () => {
     const profile = read("deploy/scripts/generate-texlive-profile.sh");
     const baseSmoke = read("deploy/scripts/smoke-test-texlive-base.sh");
 
-    expect(workflow).toContain("runs-on: ubuntu-24.04");
+    expect(workflow).toContain("'ubuntu-24.04-arm' || 'ubuntu-24.04'");
     expect(workflow).not.toContain("self-hosted");
     expect(workflow).not.toContain("packages: write");
     expect(workflow).toContain("push: false");

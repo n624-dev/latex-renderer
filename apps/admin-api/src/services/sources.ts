@@ -62,7 +62,7 @@ export class AdminSourcesService {
   }
 
   delete(actor: AdminActor, id: string): void {
-    const source = this.deps.database.sources.get(id);
+    const source = this.deps.database.sources.getVisible(id);
     if (source === undefined || ["deleted", "deleting"].includes(source.status))
       throw new AppError("SOURCE_NOT_FOUND", "Source does not exist", 404);
     this.deps.database.transaction(() => {
@@ -120,7 +120,7 @@ export class AdminSourcesService {
     includePaths = false,
     options: { cursor?: string | undefined; limit?: number | undefined } = {},
   ) {
-    const source = this.deps.database.sources.get(id);
+    const source = this.deps.database.sources.getVisible(id);
     if (source === undefined || source.status === "deleted")
       throw new AppError("SOURCE_NOT_FOUND", "Source does not exist", 404);
     const related = this.deps.database.jobs.listBySourcePage(

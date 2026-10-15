@@ -114,7 +114,7 @@ describe("database migration 002", () => {
         .prepare("SELECT version FROM schema_migrations ORDER BY version")
         .all(),
     ).toEqual(
-      Array.from({ length: 18 }, (_, index) => ({ version: index + 1 })),
+      Array.from({ length: 19 }, (_, index) => ({ version: index + 1 })),
     );
 
     expect(() => migrated.migrate()).not.toThrow();
@@ -487,9 +487,7 @@ describe("database migration 002", () => {
       db
         .prepare("SELECT version FROM schema_migrations ORDER BY version")
         .all(),
-    ).toEqual(
-      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((version) => ({ version })),
-    );
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((version) => ({ version })));
     db.close();
   });
 
@@ -581,13 +579,13 @@ describe("database migration 002", () => {
     expect(sourceColumns.upload_lease_owner).toBeDefined();
     expect(sourceColumns.upload_lease_expires_at).toBeDefined();
     expect(
-      db
-        .prepare("SELECT kind FROM api_keys WHERE id='key_kind'")
-        .get(),
+      db.prepare("SELECT kind FROM api_keys WHERE id='key_kind'").get(),
     ).toEqual({ kind: "admin" });
     expect(
       db
-        .prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_sources_upload_lease'")
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_sources_upload_lease'",
+        )
         .get(),
     ).toEqual({ name: "idx_sources_upload_lease" });
     expect(
@@ -622,15 +620,13 @@ describe("database migration 002", () => {
     const db = new RendererDatabase(":memory:");
     db.migrate();
     expect(
-      db
-        .raw
+      db.raw
         .prepare("PRAGMA table_info(sources)")
         .all()
         .some((column) => column.name === "upload_received_bytes"),
     ).toBe(true);
     expect(
-      db
-        .raw
+      db.raw
         .prepare("PRAGMA table_info(api_keys)")
         .all()
         .some((column) => column.name === "kind"),

@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { userServiceAccountSql } from "../user-visible.js";
 import {
   decodePageCursor,
   encodePageCursor,
@@ -38,7 +39,7 @@ export class ApiKeysRepository {
     return this.db
       .prepare(
         `SELECT id,service_account_id,name,prefix,kind,scopes_json,expires_at,last_used_at,revoked_at,created_at,created_by
-      FROM api_keys ORDER BY created_at DESC LIMIT ?`,
+      FROM api_keys WHERE ${userServiceAccountSql("service_account_id")} ORDER BY created_at DESC LIMIT ?`,
       )
       .all(limit) as unknown as ApiKeyRow[];
   }
@@ -52,7 +53,7 @@ export class ApiKeysRepository {
   ): Page<ApiKeyRow> {
     const limit = options.limit ?? 50,
       cursor = decodePageCursor(options.cursor, ["createdAt", "id"]),
-      conditions: string[] = [],
+      conditions: string[] = [userServiceAccountSql("service_account_id")],
       params: Array<string | number> = [],
       query = options.query?.trim().toLowerCase();
     if (query !== undefined && query !== "") {
@@ -105,7 +106,7 @@ export class ApiKeysRepository {
     return this.db
       .prepare(
         `SELECT id,service_account_id,name,prefix,kind,scopes_json,expires_at,last_used_at,revoked_at,created_at,created_by
-      FROM api_keys WHERE id=?`,
+      FROM api_keys WHERE id=? AND ${userServiceAccountSql("service_account_id")}`,
       )
       .get(id) as unknown as ApiKeyRow | undefined;
   }
@@ -120,7 +121,7 @@ export class ApiKeysRepository {
       FROM api_keys k JOIN service_accounts s ON s.id=k.service_account_id
       JOIN users u ON u.id=s.owner_user_id
       WHERE k.kind='render' AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at>?)
-        AND s.status='active' AND u.status='active'
+        AND s.status='active' AND s.purpose='user' AND u.status='active'
       ORDER BY s.name,k.name,k.id`,
       )
       .all(now) as unknown as Array<
@@ -162,7 +163,7 @@ export class ApiKeysRepository {
         FROM api_keys k JOIN service_accounts s ON s.id=k.service_account_id
         JOIN users u ON u.id=s.owner_user_id
         WHERE k.id=? AND k.kind='render' AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at>?)
-          AND s.status='active' AND u.status='active' LIMIT 1`,
+          AND s.status='active' AND s.purpose='user' AND u.status='active' LIMIT 1`,
       )
       .get(id, now) as unknown as
       (RenderIdentityRow & { scopes_json: string }) | undefined;
@@ -193,7 +194,7 @@ export class ApiKeysRepository {
         FROM api_keys k JOIN service_accounts s ON s.id=k.service_account_id
         JOIN users u ON u.id=s.owner_user_id
         WHERE k.id=? AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at>?)
-          AND s.status='active' AND u.status='active'`,
+          AND s.status='active' AND s.purpose='user' AND u.status='active'`,
       )
       .get(id, now) as unknown as RenderIdentityRow | undefined;
   }

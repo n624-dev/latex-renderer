@@ -511,7 +511,7 @@ describe("App render in Chromium", () => {
     expect(errors).toEqual([]);
   });
 
-  it.each([375, 768])(
+  it.each([320, 375, 768, 1024, 1440])(
     "keeps render controls within a %ipx viewport",
     async (width) => {
       const { page, errors } = await fixture();

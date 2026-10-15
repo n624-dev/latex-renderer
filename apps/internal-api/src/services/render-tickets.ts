@@ -82,6 +82,7 @@ export class RenderTicketsService {
         this.deps.database.sources.insertReserved({
           id: sourceId,
           ownerUserId: actor.userId,
+          serviceAccountId: actor.serviceAccountId,
           size: input.size,
           sha256: input.sha256,
           storageKey: `sources/${sourceId}/source.zip`,
@@ -203,6 +204,7 @@ export class RenderTicketsService {
       input.sourceId,
       actor.userId,
       nowIso(),
+      actor.serviceAccountId,
     );
     if (source === undefined)
       throw new AppError(
@@ -226,6 +228,7 @@ export class RenderTicketsService {
           input.sourceId,
           actor.userId,
           timestamp,
+          actor.serviceAccountId,
         );
         if (currentSource === undefined)
           throw new AppError(

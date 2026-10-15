@@ -34,6 +34,11 @@ on:
       - ".github/workflows/renderer-image.yml"
   workflow_dispatch:
     inputs:
+      architecture:
+        description: "Native validation architecture (ARM64 requires an ARM64-enabled mirror snapshot)"
+        type: choice
+        options: [amd64, arm64]
+        default: amd64
       texlive_date:
         description: "Snapshot for comparison: latest or YYYY-MM-DD"
         type: string
@@ -65,7 +70,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.architecture == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     timeout-minutes: 360
     env:
       DOCKER_BUILD_RECORD_UPLOAD: "false"
@@ -73,6 +78,7 @@ jobs:
       CI_FORMAT_JOBS: ${{ inputs.format_jobs || '4' }}
       CI_DATABASE_SAVE_BATCH: ${{ inputs.database_save_batch || '64' }}
       REQUESTED_DATE: ${{ inputs.texlive_date || 'latest' }}
+      CI_ARCHITECTURE: ${{ inputs.architecture || 'amd64' }}
       # Register the private distribution hostname with the runner's log
       # masker before any step can emit a snapshot URL.
       TEXLIVE_CI_MIRROR_HOST: ${{ secrets.TEXLIVE_CI_MIRROR_HOST }}
@@ -81,6 +87,12 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: "24"
+      - name: Verify native architecture (no emulation)
+        run: |
+          case "$CI_ARCHITECTURE:$(uname -m)" in
+            amd64:x86_64|arm64:aarch64) ;;
+            *) echo 'Runner architecture does not match requested validation' >&2; exit 65 ;;
+          esac
       - name: Validate disposable database save settings
         run: sh deploy/scripts/ci-texlive-database-save-settings.sh
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
@@ -136,7 +148,7 @@ jobs:
           [ "$configured" -eq 6 ] || { echo 'Partial TeX Live CI mirror configuration' >&2; exit 64; }
           if [ "$configured" -eq 6 ]; then
             sh deploy/scripts/ci-texlive-mirror-lease.sh acquire \
-              '${{ steps.snapshot.outputs.date }}' '${{ steps.snapshot.outputs.installer_sha512 }}' amd64
+              '${{ steps.snapshot.outputs.date }}' '${{ steps.snapshot.outputs.installer_sha512 }}' "$CI_ARCHITECTURE"
           fi
       - name: Generate language-neutral Base profile
         env:
@@ -190,7 +202,7 @@ jobs:
           image: latex-renderer:ci
           format: cyclonedx-json
           output-file: latex-renderer-image.cdx.json
-          artifact-name: latex-renderer-image.cdx.json
+          artifact-name: latex-renderer-image-${{ env.CI_ARCHITECTURE }}.cdx.json
           upload-artifact: true
           dependency-snapshot: false
       - name: Release local Base state

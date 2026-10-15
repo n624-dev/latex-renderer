@@ -3,6 +3,12 @@ set -eu
 
 repository=${1:?usage: generate-texlive-profile.sh REPOSITORY OUTPUT}
 output=${2:?usage: generate-texlive-profile.sh REPOSITORY OUTPUT}
+architecture=${3:-$(uname -m)}
+case "$architecture" in
+  amd64|x86_64) texlive_arch=x86_64-linux ;;
+  arm64|aarch64) texlive_arch=aarch64-linux ;;
+  *) echo "Unsupported TeX Live architecture: $architecture" >&2; exit 64 ;;
+esac
 curl_connect_timeout=${TEXLIVE_CURL_CONNECT_TIMEOUT_SECONDS:-10}
 curl_max_time=${TEXLIVE_PROFILE_CURL_MAX_TIME_SECONDS:-180}
 case "$curl_connect_timeout:$curl_max_time" in
@@ -47,7 +53,6 @@ TEXMFLOCAL /opt/texlive/texmf-local
 TEXMFSYSCONFIG /opt/texlive/2026/texmf-config
 TEXMFSYSVAR /opt/texlive/2026/texmf-var
 TEXMFVAR /tmp/texlive/texmf-var
-binary_x86_64-linux 1
 instopt_adjustpath 0
 instopt_adjustrepo 1
 instopt_letter 0
@@ -65,6 +70,7 @@ tlpdbopt_sys_bin /usr/local/bin
 tlpdbopt_sys_info /usr/local/share/info
 tlpdbopt_sys_man /usr/local/share/man
 PROFILE
+printf 'binary_%s 1\n' "$texlive_arch" >> "$output"
 while IFS= read -r collection; do
   printf '%s 1\n' "$collection" >> "$output"
 done < "$tmp/collections"

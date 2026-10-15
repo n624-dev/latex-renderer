@@ -18,6 +18,127 @@ afterEach(async () => {
 });
 
 describe("administrator Job results and Sources", () => {
+  it("hides internal smoke resources before pagination and blocks direct user/Admin access", async () => {
+    const { database, app, headers } = await setup(),
+      timestamp = new Date().toISOString(),
+      sourceId = `source_${"d".repeat(32)}`,
+      jobId = `job_${"d".repeat(32)}`;
+    database.raw.exec(`INSERT INTO service_accounts
+      (id,owner_user_id,name,client_type,created_at,updated_at,purpose)
+      VALUES ('sa_smoke','user_owner','production-smoke-sa_smoke','ci','2026-10-01','2026-10-01','production-smoke');
+      INSERT INTO api_keys(id,service_account_id,name,prefix,secret_hash,pepper_id,scopes_json,created_at,created_by)
+      VALUES ('key_smoke','sa_smoke','production-smoke','smoke_prefix','hash','v1','["render:create"]','2026-10-01','local-smoke-test');`);
+    database.sources.insertReserved({
+      id: sourceId,
+      ownerUserId: "user_owner",
+      serviceAccountId: "sa_smoke",
+      size: 100,
+      sha256: "d".repeat(64),
+      storageKey: `sources/${sourceId}/source.zip`,
+      timestamp,
+      expiresAt: new Date(Date.now() + 3600000).toISOString(),
+    });
+    database.jobs.insertReserved({
+      id: jobId,
+      userId: "user_owner",
+      serviceAccountId: "sa_smoke",
+      apiKeyId: "key_smoke",
+      rendererVersion: "test",
+      sourceSize: 100,
+      sourceSha256: "d".repeat(64),
+      sourceId,
+      timestamp,
+      reservedOutputBytes: 50,
+    });
+    database.audit({
+      actorType: "local",
+      actorId: "0",
+      action: "api_key.created",
+      targetType: "api_key",
+      targetId: "key_smoke",
+      result: "success",
+      metadata: { smokeTest: true },
+    });
+    database.audit({
+      actorType: "service_account",
+      actorId: "sa_smoke",
+      action: "render.created",
+      targetType: "job",
+      targetId: jobId,
+      result: "success",
+    });
+
+    for (const [path, total] of [
+      ["service-accounts", 1],
+      ["api-keys", 1],
+      ["jobs", 0],
+      ["sources", 0],
+    ] as const) {
+      const response = await app.request(`/admin/api/v1/${path}?pageSize=1`, {
+        headers,
+      });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ total, hasMore: false });
+      const search = await app.request(
+        `/admin/api/v1/${path}?query=production-smoke`,
+        { headers },
+      );
+      expect(await search.json()).toMatchObject({ items: [], total: 0 });
+    }
+    for (const path of [
+      "/admin/api/v1/service-accounts/sa_smoke",
+      "/admin/api/v1/api-keys/key_smoke",
+      `/admin/api/v1/jobs/${jobId}`,
+      `/admin/api/v1/sources/${sourceId}`,
+      `/app/api/v1/jobs/${jobId}`,
+    ])
+      expect((await app.request(path, { headers })).status).toBe(404);
+    for (const action of ["cancel", "retry"]) {
+      expect(
+        (
+          await app.request(`/admin/api/v1/jobs/${jobId}/${action}`, {
+            method: "POST",
+            headers: {
+              ...headers,
+              "X-CSRF-Token": "1",
+              "Idempotency-Key": `internal-${action}-123456789`,
+            },
+          })
+        ).status,
+      ).toBe(404);
+    }
+    expect(
+      (
+        await app.request(`/admin/api/v1/jobs/${jobId}`, {
+          method: "DELETE",
+          headers: { ...headers, "X-CSRF-Token": "1" },
+        })
+      ).status,
+    ).toBe(404);
+    expect(
+      await (await app.request("/app/api/v1/jobs", { headers })).json(),
+    ).toMatchObject({ items: [] });
+    expect(
+      database.apiKeys
+        .listRenderIdentities(timestamp)
+        .map((row) => row.api_key_id),
+    ).toEqual(["key_web"]);
+    expect(database.auditLogs.list()).toEqual([]);
+    expect(database.auditLogs.search({ page: 1, pageSize: 10 }).total).toBe(0);
+    // Internal diagnostics still consume space and admission capacity, and remain
+    // available to worker cleanup and their own authenticated ticket operations.
+    expect(database.jobs.getOwned(jobId, "user_owner", "sa_smoke")?.id).toBe(
+      jobId,
+    );
+    expect(database.jobs.countActive()).toBe(1);
+    expect(database.jobs.countActiveForUser("user_owner")).toBe(1);
+    expect(database.jobs.storageUsageForUser("user_owner")).toBe(150);
+    expect(
+      database.raw.prepare("SELECT COUNT(*) AS count FROM audit_logs").get(),
+    ).toEqual({ count: 2 });
+    expect(database.jobs.get(jobId)?.status).toBe("reserved");
+  });
+
   it("retries a failed Job using retained input after its orphan deadline", async () => {
     const fixture = await setup(),
       sourceId = `source_${"f".repeat(32)}`,

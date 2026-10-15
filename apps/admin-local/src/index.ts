@@ -499,8 +499,8 @@ smokeKey
     database.transaction(() => {
       database.raw
         .prepare(
-          `INSERT INTO service_accounts(id,owner_user_id,name,client_type,status,security_version,created_at,updated_at)
-    VALUES (?,?,?,'ci','active',1,?,?)`,
+          `INSERT INTO service_accounts(id,owner_user_id,name,client_type,status,security_version,created_at,updated_at,purpose)
+    VALUES (?,?,?,'ci','active',1,?,?,'production-smoke')`,
         )
         .run(
           serviceAccountId,
@@ -551,7 +551,7 @@ smokeKey
       const row = database.raw
         .prepare(
           `SELECT k.id FROM api_keys k JOIN service_accounts s ON s.id=k.service_account_id
-      WHERE k.id=? AND s.id=? AND s.name LIKE 'production-smoke-%'`,
+      WHERE k.id=? AND s.id=? AND s.purpose='production-smoke'`,
         )
         .get(o.keyId, o.serviceAccount);
       if (row === undefined)
@@ -592,7 +592,7 @@ smokeKey
         .prepare(
           `UPDATE jobs SET render_status=status,status='deleting',deletion_status='pending',
       deletion_attempts=0,deletion_error=NULL,deletion_next_attempt_at=NULL,updated_at=?
-      WHERE service_account_id IN (SELECT id FROM service_accounts WHERE name LIKE 'production-smoke-%')
+      WHERE service_account_id IN (SELECT id FROM service_accounts WHERE purpose='production-smoke')
       AND status IN ('succeeded','failed','timeout','canceled','rejected','expired')`,
         )
         .run(timestamp);

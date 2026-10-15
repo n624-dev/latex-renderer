@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { userJobSql } from "../user-visible.js";
 import { readySourceSql } from "../source-lifecycle.js";
 import type { JobStatus, RenderOutput } from "@latex-renderer/contracts";
 import {
@@ -129,7 +130,7 @@ export class JobsRepository {
     return this.db
       .prepare(
         `SELECT id,user_id,service_account_id,status,source_size,created_at,updated_at,error_code,source_id,entrypoint,project_revision_id
-      FROM jobs ORDER BY created_at DESC LIMIT ?`,
+      FROM jobs WHERE ${userJobSql()} ORDER BY created_at DESC LIMIT ?`,
       )
       .all(limit) as unknown as ReturnType<JobsRepository["list"]>;
   }
@@ -146,7 +147,7 @@ export class JobsRepository {
   ): Page<AdminJobListRow> {
     const limit = options.limit ?? 50,
       cursor = decodePageCursor(options.cursor, ["createdAt", "id"]),
-      conditions: string[] = [],
+      conditions: string[] = [userJobSql()],
       params: Array<string | number> = [],
       query = options.query?.trim().toLowerCase();
     if (options.status !== undefined && options.status !== "") {
@@ -195,7 +196,7 @@ export class JobsRepository {
       query?: string | undefined;
     } = {},
   ): number {
-    const conditions: string[] = [],
+    const conditions: string[] = [userJobSql()],
       params: string[] = [],
       query = filters.query?.trim().toLowerCase();
     if (filters.status !== undefined && filters.status !== "") {
@@ -239,6 +240,12 @@ export class JobsRepository {
       cancel_requested_at,retry_of_job_id,lease_owner,lease_expires_at,heartbeat_at,lease_generation,deleted_at,source_id,entrypoint,project_revision_id,outputs_json,reserved_output_bytes,
       render_status,deletion_status,deletion_attempts,deletion_error,deletion_next_attempt_at FROM jobs WHERE id=?`,
       )
+      .get(id) as unknown as JobRow | undefined;
+  }
+
+  getVisible(id: string): JobRow | undefined {
+    return this.db
+      .prepare(`SELECT * FROM jobs WHERE id=? AND ${userJobSql()}`)
       .get(id) as unknown as JobRow | undefined;
   }
 
@@ -322,7 +329,9 @@ export class JobsRepository {
 
   statusCounts(): Array<{ status: JobStatus; count: number }> {
     return this.db
-      .prepare("SELECT status,COUNT(*) AS count FROM jobs GROUP BY status")
+      .prepare(
+        `SELECT status,COUNT(*) AS count FROM jobs WHERE ${userJobSql()} GROUP BY status`,
+      )
       .all() as unknown as Array<{ status: JobStatus; count: number }>;
   }
 
@@ -479,7 +488,7 @@ export class JobsRepository {
       created_at,updated_at,queued_at,started_at,completed_at,exit_code,error_code,error_message,output_size,
       cancel_requested_at,retry_of_job_id,lease_owner,lease_expires_at,heartbeat_at,lease_generation,deleted_at,source_id,entrypoint,project_revision_id,outputs_json,reserved_output_bytes,
       render_status,deletion_status,deletion_attempts,deletion_error,deletion_next_attempt_at FROM jobs
-      WHERE id=? AND status IN ('succeeded','failed','timeout','canceled','rejected')`,
+      WHERE id=? AND ${userJobSql()} AND status IN ('succeeded','failed','timeout','canceled','rejected')`,
       )
       .get(id) as unknown as JobRow | undefined;
   }
@@ -491,7 +500,7 @@ export class JobsRepository {
         created_at,updated_at,queued_at,started_at,completed_at,exit_code,error_code,error_message,output_size,
         cancel_requested_at,retry_of_job_id,lease_owner,lease_expires_at,heartbeat_at,lease_generation,deleted_at,source_id,entrypoint,project_revision_id,outputs_json,reserved_output_bytes,
         render_status,deletion_status,deletion_attempts,deletion_error,deletion_next_attempt_at
-        FROM jobs WHERE user_id=? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT ?`,
+        FROM jobs WHERE user_id=? AND ${userJobSql()} AND deleted_at IS NULL ORDER BY created_at DESC LIMIT ?`,
       )
       .all(userId, limit) as unknown as JobRow[];
   }
@@ -518,7 +527,7 @@ export class JobsRepository {
            FROM jobs j
            LEFT JOIN project_revisions r ON r.id=j.project_revision_id
            LEFT JOIN projects p ON p.id=r.project_id AND p.deleted_at IS NULL
-           WHERE j.user_id=? AND j.deleted_at IS NULL${condition}
+           WHERE j.user_id=? AND ${userJobSql("j")} AND j.deleted_at IS NULL${condition}
            ORDER BY j.created_at DESC,j.id DESC LIMIT ?`,
         )
         .all(...params) as unknown as OwnedJobListRow[];
@@ -552,7 +561,7 @@ export class JobsRepository {
                ORDER BY j.created_at DESC,j.id DESC
              ) AS row_number
            FROM jobs j
-           WHERE j.project_revision_id IN (${placeholders}) AND j.deleted_at IS NULL
+           WHERE j.project_revision_id IN (${placeholders}) AND ${userJobSql("j")} AND j.deleted_at IS NULL
          )
          SELECT id,project_revision_id,status,created_at,updated_at,retry_of_job_id,error_code,outputs_json
          FROM ranked WHERE row_number<=?
@@ -584,7 +593,7 @@ export class JobsRepository {
     const rows = this.db
       .prepare(
         `SELECT project_revision_id,COUNT(*) AS count FROM jobs
-         WHERE project_revision_id IN (${placeholders}) AND deleted_at IS NULL
+         WHERE project_revision_id IN (${placeholders}) AND ${userJobSql()} AND deleted_at IS NULL
          GROUP BY project_revision_id`,
       )
       .all(...revisionIds) as unknown as Array<{
@@ -610,7 +619,7 @@ export class JobsRepository {
       rows = this.db
         .prepare(
           `SELECT id,status,created_at,updated_at,retry_of_job_id,error_code,outputs_json
-           FROM jobs WHERE project_revision_id=? AND deleted_at IS NULL${condition}
+           FROM jobs WHERE project_revision_id=? AND ${userJobSql()} AND deleted_at IS NULL${condition}
            ORDER BY created_at DESC,id DESC LIMIT ?`,
         )
         .all(...params) as unknown as RevisionJobSummary[];
@@ -645,7 +654,7 @@ export class JobsRepository {
         created_at,updated_at,queued_at,started_at,completed_at,exit_code,error_code,error_message,output_size,
         cancel_requested_at,retry_of_job_id,lease_owner,lease_expires_at,heartbeat_at,lease_generation,deleted_at,source_id,entrypoint,project_revision_id,outputs_json,reserved_output_bytes,
         render_status,deletion_status,deletion_attempts,deletion_error,deletion_next_attempt_at
-        FROM jobs WHERE project_revision_id=? AND deleted_at IS NULL ORDER BY created_at DESC`,
+        FROM jobs WHERE project_revision_id=? AND ${userJobSql()} AND deleted_at IS NULL ORDER BY created_at DESC`,
       )
       .all(revisionId) as unknown as JobRow[];
   }
@@ -665,7 +674,7 @@ export class JobsRepository {
       rows = this.db
         .prepare(
           `SELECT id,status,entrypoint,created_at,updated_at,retry_of_job_id,error_code
-           FROM jobs WHERE source_id=? AND deleted_at IS NULL${condition}
+           FROM jobs WHERE source_id=? AND ${userJobSql()} AND deleted_at IS NULL${condition}
            ORDER BY created_at DESC,id DESC LIMIT ?`,
         )
         .all(...params) as unknown as SourceJobSummary[];

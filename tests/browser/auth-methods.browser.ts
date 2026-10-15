@@ -236,13 +236,17 @@ function waitFor(assertion: () => void | Promise<void>) {
 }
 
 describe("shipped login UI", () => {
-  it.each([390, 768])(
+  it.each([320, 390, 768, 1024, 1440])(
     "keeps login and admin controls usable at %ipx with shipped CSS",
     async (width) => {
       for (const admin of [false, true]) {
         const f = await fixture({ admin });
         await f.page.setViewportSize({ width, height: 900 });
         await ready(f.page, admin);
+        await f.page.emulateMedia({
+          colorScheme: "dark",
+          reducedMotion: "reduce",
+        });
         expect(
           await f.page.evaluate(
             () => document.documentElement.scrollWidth <= innerWidth,
@@ -256,6 +260,41 @@ describe("shipped login UI", () => {
         }
         expect(f.errors).toEqual([]);
       }
+    },
+  );
+
+  it.each([320, 768, 1024])(
+    "keeps a long administrative dialog scrollable and keyboard-dismissable at %ipx",
+    async (width) => {
+      const f = await fixture({ admin: true });
+      await f.page.setViewportSize({ width, height: 600 });
+      await ready(f.page, true);
+      const opener = f.page.locator("#user-create");
+      await opener.click();
+      const dialog = f.page.locator("dialog[open]");
+      await dialog.waitFor({ state: "visible" });
+      const bounds = await dialog.boundingBox();
+      if (bounds === null) throw new Error("Dialog has no visible bounds");
+      expect(bounds.width).toBeLessThanOrEqual(width);
+      expect(bounds.height).toBeLessThanOrEqual(600);
+      expect(
+        await dialog.evaluate(
+          (element) => element.scrollWidth <= element.clientWidth,
+        ),
+      ).toBe(true);
+      const submit = dialog.locator('button[type="submit"]');
+      await submit.scrollIntoViewIfNeeded();
+      const buttonBounds = await submit.boundingBox();
+      if (buttonBounds === null)
+        throw new Error("Submit button has no visible bounds");
+      expect(buttonBounds.height).toBeGreaterThanOrEqual(44);
+      expect(buttonBounds.y + buttonBounds.height).toBeLessThanOrEqual(600);
+      await f.page.keyboard.press("Escape");
+      await dialog.waitFor({ state: "detached" });
+      expect(
+        await opener.evaluate((element) => document.activeElement === element),
+      ).toBe(true);
+      expect(f.errors).toEqual([]);
     },
   );
   it.each(["http", "json"] as const)(

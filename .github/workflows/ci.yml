@@ -13,6 +13,34 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  native-arm64:
+    # Separate from renderer publication: exercise native Node/SQLite/CLI and
+    # host integration code without treating x86 emulation as ARM acceptance.
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: "24"
+      - name: Verify native ARM64 and install test prerequisites
+        run: |
+          test "$(uname -m)" = aarch64
+          node -e 'if (process.arch !== "arm64") throw Error("Native ARM64 Node required")'
+          corepack enable
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes age acl libarchive-tools nginx-light unzip
+      - name: Install without an Actions dependency cache
+        run: pnpm install --frozen-lockfile
+      - name: Build native services and client
+        run: pnpm --filter '!@latex-renderer/public-web' --filter '!@latex-renderer/gateway-worker' -r build && pnpm build:client
+      - name: Native API, SQLite, setup, update and recovery regression tests
+        run: pnpm test
+      - name: Verify native client package clean install
+        run: pnpm test:mcpb:clean -- linux
+
   validate:
     runs-on: ubuntu-24.04
     timeout-minutes: 25

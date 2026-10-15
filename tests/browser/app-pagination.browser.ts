@@ -14,6 +14,7 @@ import {
   appProjectPage,
   appProjectsPage,
 } from "../../apps/admin-web/src/templates-app.js";
+import { styles } from "../../apps/admin-web/src/assets/styles.js";
 
 // Use the built browser script: Vitest's SSR transform changes function.toString().
 const appScript = execFileSync(
@@ -141,7 +142,7 @@ async function fixture(kind: Kind) {
       return;
     }
     if (url.pathname === "/app/assets/styles.css") {
-      await route.fulfill({ contentType: "text/css", body: "" });
+      await route.fulfill({ contentType: "text/css", body: styles });
       return;
     }
     if (url.pathname === "/app/assets/site.js") {
@@ -184,6 +185,33 @@ async function fixture(kind: Kind) {
 }
 
 describe("App pagination retry in a real browser", () => {
+  it.each(["jobs", "projects", "revisions"] as const)(
+    "keeps %s history and pagination usable on phone and tablet",
+    async (kind) => {
+      const { page, errors, releaseSecond } = await fixture(kind);
+      try {
+        const next = page.locator(nextButtonFor(kind));
+        await next.waitFor();
+        for (const width of [320, 768, 1024, 1440]) {
+          await page.setViewportSize({ width, height: 800 });
+          expect(
+            await page.evaluate(
+              () => document.documentElement.scrollWidth <= innerWidth,
+            ),
+          ).toBe(true);
+          const box = await next.boundingBox();
+          if (box === null)
+            throw new Error("Pagination button has no visible bounds");
+          expect(box.height).toBeGreaterThanOrEqual(44);
+          expect(box.x + box.width).toBeLessThanOrEqual(width);
+        }
+        expect(errors).toEqual([]);
+      } finally {
+        releaseSecond();
+      }
+    },
+  );
+
   it.each(["jobs", "projects", "revisions"] as const)(
     "retries the same cursor after a transient %s failure without double submission",
     async (kind) => {
