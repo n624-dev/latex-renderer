@@ -61,7 +61,7 @@ describe("public supply-chain controls", () => {
     expect(mcpb).toContain("node client/select-mcpb-openssl.mjs");
     expect(mcpb).not.toContain("choco install openssl");
     const selection = read("client/select-mcpb-openssl.mjs");
-    expect(selection).toContain('WINDOWS_OPENSSL_MINIMUM_VERSION = "3.6.5"');
+    expect(selection).toContain('WINDOWS_OPENSSL_MINIMUM_VERSION = "3.6.4"');
     expect(selection).toContain(
       "Expected stable OpenSSL 3.6.x >= ${WINDOWS_OPENSSL_MINIMUM_VERSION}",
     );

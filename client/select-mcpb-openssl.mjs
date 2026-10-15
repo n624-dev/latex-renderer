@@ -6,7 +6,8 @@ import { fileURLToPath } from "node:url";
 
 // Supplied by the GitHub-hosted Windows 2025 image, not a mutable installer URL.
 // Accept stable patch updates in the tested series; reject older or new series.
-export const WINDOWS_OPENSSL_MINIMUM_VERSION = "3.6.5";
+// Runner image rollouts overlap, so retain the tested floor when a patch lands.
+export const WINDOWS_OPENSSL_MINIMUM_VERSION = "3.6.4";
 
 export function selectRunnerOpenSSL(programFiles, run = runOpenSSL) {
   if (

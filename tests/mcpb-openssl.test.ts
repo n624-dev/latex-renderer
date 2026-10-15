@@ -79,6 +79,7 @@ describe("Windows MCPB runner OpenSSL selection", () => {
   });
 
   it.each([
+    "OpenSSL 3.6.4 25 Aug 2026 (Library: OpenSSL 3.6.4 25 Aug 2026)",
     "OpenSSL 3.6.5 29 Sep 2026 (Library: OpenSSL 3.6.5 29 Sep 2026)",
     "OpenSSL 3.6.6 1 Oct 2026",
     "OpenSSL 3.6.40 1 Oct 2026",
@@ -92,7 +93,6 @@ describe("Windows MCPB runner OpenSSL selection", () => {
   it.each([
     "OpenSSL 3.6.0 1 Jul 2026",
     "OpenSSL 3.6.3 20 Jul 2026",
-    "OpenSSL 3.6.4 25 Aug 2026",
     "OpenSSL 3.7.0 1 Oct 2026",
     "OpenSSL 4.0.2 1 Sep 2026",
     "OpenSSL 3.6.5-beta1 1 Sep 2026",
