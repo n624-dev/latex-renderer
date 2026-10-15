@@ -235,3 +235,20 @@ it("bounds individual HTTP reads by the remaining absolute deadline", async () =
   );
   expect(f.read).toHaveBeenCalledTimes(2);
 });
+
+it("converts fractional monotonic-clock budgets into positive integer HTTP timeouts", async () => {
+  const f = fixture();
+  f.read.mockImplementation(() => {
+    if (f.now() === 0) {
+      f.advance(UPDATE_WAIT_MAX_MS - 1_999.75);
+      return Promise.resolve({ id, status: "running" });
+    }
+    return Promise.resolve(completed);
+  });
+  expect(await pollUpdateOperation({ id }, f)).toBe(completed);
+  expect(f.read.mock.calls.map(([, timeoutMs]) => timeoutMs)).toEqual([
+    30_000, 499,
+  ]);
+  for (const [, timeoutMs] of f.read.mock.calls)
+    expect(() => AbortSignal.timeout(timeoutMs)).not.toThrow();
+});

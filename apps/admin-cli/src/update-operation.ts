@@ -47,7 +47,12 @@ export async function pollUpdateOperation(
     try {
       current = await options.read(
         id,
-        Math.min(30_000, UPDATE_WAIT_MAX_MS - (options.now() - started)),
+        Math.max(
+          1,
+          Math.floor(
+            Math.min(30_000, UPDATE_WAIT_MAX_MS - (options.now() - started)),
+          ),
+        ),
       );
       lastContact = options.now();
     } catch {
