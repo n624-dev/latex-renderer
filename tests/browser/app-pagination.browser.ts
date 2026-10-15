@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { chromium, type Browser, type Page } from "playwright";
+import type { Browser, Page } from "playwright";
+import { launchTestBrowser, newTestPage } from "../helpers/browser-engine.js";
 import {
   afterAll,
   afterEach,
@@ -35,7 +36,7 @@ let browser: Browser | undefined;
 const pages: Page[] = [];
 
 beforeAll(async () => {
-  browser = await chromium.launch();
+  browser = await launchTestBrowser();
 });
 afterEach(async () => {
   await Promise.all(pages.splice(0).map((page) => page.close()));
@@ -109,7 +110,7 @@ function pageData(kind: Kind, second: boolean): unknown {
 
 async function fixture(kind: Kind) {
   if (!browser) throw new Error("Browser not started");
-  const page = await browser.newPage();
+  const page = await newTestPage(browser);
   pages.push(page);
   const errors: string[] = [];
   const cursors: Array<string | null> = [];

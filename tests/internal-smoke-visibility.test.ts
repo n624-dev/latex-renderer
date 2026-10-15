@@ -60,6 +60,50 @@ it("uses identical runtime and standalone migration SQL", () => {
   );
 });
 
+it("filters before cursor pagination and counts without hiding normal smoke-like names", () => {
+  const db = fixture();
+  db.raw.exec(
+    "UPDATE service_accounts SET purpose='production-smoke' WHERE id='sa_smoke'",
+  );
+  db.serviceAccounts.insert({
+    id: "sa_other_user",
+    ownerUserId: "user_owner",
+    name: "production-smoke-other-user",
+    clientType: "ci",
+    timestamp: "2026-10-02T00:00:00.000Z",
+  });
+  db.raw.exec(
+    "UPDATE service_accounts SET created_at='2026-10-03T00:00:00.000Z' WHERE id='sa_smoke'",
+  );
+  const first = db.serviceAccounts.listPage({
+    limit: 1,
+    query: "production-smoke",
+  });
+  expect(first.items.map((row) => row.id)).toEqual(["sa_other_user"]);
+  expect(first).toMatchObject({ total: 2, hasMore: true });
+  if (first.nextCursor === null) throw new Error("Missing next-page cursor");
+  const second = db.serviceAccounts.listPage({
+    limit: 1,
+    query: "production-smoke",
+    cursor: first.nextCursor,
+  });
+  expect(second.items.map((row) => row.id)).toEqual(["sa_user"]);
+  expect(second).toMatchObject({ total: 2, hasMore: false, nextCursor: null });
+  expect(db.serviceAccounts.countActiveForOwner("user_owner")).toBe(2);
+  expect(db.apiKeys.listPage({ query: "production-smoke" })).toMatchObject({
+    total: 1,
+    hasMore: false,
+  });
+  expect(db.apiKeys.get("key_sa_smoke")).toBeUndefined();
+  expect(db.apiKeys.get("key_sa_user")).toBeDefined();
+  expect(
+    db.raw.prepare("SELECT COUNT(*) AS count FROM service_accounts").get(),
+  ).toEqual({ count: 3 });
+  expect(
+    db.raw.prepare("SELECT COUNT(*) AS count FROM api_keys").get(),
+  ).toEqual({ count: 2 });
+});
+
 it.each(["runtime", "standalone"])(
   "migrates proven legacy smoke only and preserves shared input (%s)",
   (mode) => {

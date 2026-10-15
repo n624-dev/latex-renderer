@@ -1,7 +1,36 @@
 # Independent Updater and release upgrade E2E
 
-This candidate separates the application and Updater lifetimes. No production
-deployment has been performed as part of this implementation.
+The application and Updater have independent lifetimes and separate update and
+recovery paths.
+
+## Browser and architecture validation boundaries
+
+Run the shipped Web regression suite after building its workspace dependencies:
+
+```sh
+pnpm --filter @latex-renderer/web... build
+pnpm exec playwright install chromium webkit
+pnpm test:browser:built
+TEST_BROWSER=webkit TEST_BROWSER_TOUCH=1 pnpm test:browser:built
+```
+
+Browser system libraries must already be installed on a development host. The
+dedicated GitHub-hosted WebKit job installs its own prerequisites on its
+disposable runner; it does not reconfigure an application host. A matching
+[official Playwright container](https://playwright.dev/docs/docker) is another
+option when the development host lacks those libraries.
+
+Both engines exercise production HTML/CSS and built scripts. App uploads reach
+a loopback HTTP receiver so the tests compare actual received ZIP bytes, sizes
+and hashes even when browser interception cannot expose a Blob request body.
+The other App/Admin APIs remain fixtures: this suite is not a real IdP, TeX
+rendering or physical-device acceptance test. Layout zoom and viewport rotation
+exercise reflow, not physical Safari pinch zoom or an on-screen keyboard.
+
+Native ARM application CI and dual-architecture non-publishing renderer CI are
+separate from signed real-systemd host upgrade/recovery acceptance. Keep the
+existing amd64 release E2E gate and immutable Base publication policy until the
+native ARM host path and multi-platform image contracts are validated.
 
 ## Layout and authority
 
@@ -43,11 +72,21 @@ Standalone E2E is not proof that a real Cloudflare production deployment passed.
 The Admin CLI prints the operation ID immediately and polls only that original
 operation. A service restart may temporarily disconnect the Admin API while a
 Runtime is rebuilt: reconnects have a ten-minute continuous-outage budget and
-the whole wait has a ninety-minute monotonic deadline. Successful contacts reset
+the whole wait has a ninety-minute monotonic deadline. Each operation GET also
+has a thirty-second timeout, capped by the remaining overall deadline, so one
+stalled HTTP request cannot prevent reconnect/deadline handling. Successful contacts reset
 only the outage budget. Reaching either limit reports **unconfirmed**, not a
 failed deployment, and prints `update operation ID` to resume checking. It never
-reissues apply or changes the requested version. Only a terminal `failed` result
-from the server is treated as an update failure.
+reissues apply or changes the requested version. Application `succeeded` alone
+does not finish the CLI wait: it continues while the independent Updater is
+activating, and exits successfully only after the server confirms the complete
+outcome. Missing/legacy outcomes, historical results and `needs-attention` return
+an unconfirmed error with the original operation ID, not a claim that the
+application deployment failed. Only a terminal `failed` result from the server
+is treated as an application update failure.
+If the initial update response has no operation ID, the CLI reports an
+unconfirmed result and directs the operator to `update status`; it does not
+claim success or repeat the POST.
 
 The initial migration captures the installed old controller into a sealed slot
 before changing service paths. The new controller is staged separately. A

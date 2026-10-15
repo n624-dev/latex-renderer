@@ -445,6 +445,7 @@ async function request(
   path: string,
   body?: unknown,
   extraHeaders: Readonly<Record<string, string>> = {},
+  signal?: AbortSignal,
 ): Promise<unknown> {
   const base = adminApiBaseUrl(
     process.env.LATEX_RENDER_BASE_URL ?? process.env.LATEX_RENDER_ADMIN_API_URL,
@@ -462,6 +463,7 @@ async function request(
     },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     redirect: "error",
+    ...(signal === undefined ? {} : { signal }),
   });
   const value: unknown = await (response.json() as Promise<unknown>).catch(
     () => null,
@@ -542,8 +544,14 @@ async function runUpdateMutation(path: string, body: unknown): Promise<void> {
 async function waitUpdateOperation(initial: unknown): Promise<unknown> {
   try {
     return await pollUpdateOperation(initial, {
-      read: (id) =>
-        request("GET", `/updates/operations/${encodeURIComponent(id)}`),
+      read: (id, timeoutMs) =>
+        request(
+          "GET",
+          `/updates/operations/${encodeURIComponent(id)}`,
+          undefined,
+          {},
+          AbortSignal.timeout(timeoutMs),
+        ),
       sleep,
       now: () => performance.now(),
       onOperation: (id) =>

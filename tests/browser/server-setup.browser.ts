@@ -1,4 +1,5 @@
-import { chromium, type Browser, type Page } from "playwright";
+import type { Browser, Page } from "playwright";
+import { launchTestBrowser, newTestPage } from "../helpers/browser-engine.js";
 import {
   afterAll,
   afterEach,
@@ -22,7 +23,7 @@ const fixtures: {
   web: Awaited<ReturnType<typeof startServerSetupWeb>>;
 }[] = [];
 beforeAll(async () => {
-  browser = await chromium.launch();
+  browser = await launchTestBrowser();
 });
 afterEach(async () => {
   for (const f of fixtures.splice(0)) {
@@ -53,7 +54,7 @@ async function fixture(mobile = false, supplied?: ServerSetupSessionHost) {
   const web = await startServerSetupWeb(
     supplied ?? { current: model, preview, apply },
   );
-  const page = await browser.newPage({
+  const page = await newTestPage(browser, {
     viewport: mobile
       ? { width: 390, height: 844 }
       : { width: 1200, height: 800 },
@@ -69,6 +70,41 @@ async function fixture(mobile = false, supplied?: ServerSetupSessionHost) {
 }
 
 describe("real server-settings Web flow", () => {
+  it("preserves reviewed settings through layout zoom and viewport rotation", async () => {
+    const f = await fixture(true);
+    await f.page.setViewportSize({ width: 780, height: 900 });
+    await f.page.evaluate(() => {
+      document.documentElement.style.zoom = "2";
+    });
+    const limit = f.page.getByRole("spinbutton", {
+      name: "maxQueueLength",
+      exact: true,
+    });
+    await limit.fill("42");
+    expect(
+      await f.page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+    await f.page.evaluate(() => {
+      document.documentElement.style.zoom = "1";
+    });
+    await f.page.setViewportSize({ width: 844, height: 390 });
+    const review = f.page.getByRole("button", {
+      name: "変更内容を確認",
+      exact: true,
+    });
+    if (await f.page.evaluate(() => navigator.maxTouchPoints > 0))
+      await review.tap();
+    else await review.click();
+    await f.page.waitForFunction(
+      () => !document.getElementById("confirmation")?.hidden,
+    );
+    expect(f.preview.mock.calls[0]?.[0].runtime.limits.maxQueueLength).toBe(42);
+    expect(f.apply).not.toHaveBeenCalled();
+    expect(f.errors).toEqual([]);
+  });
+
   it("exchanges/removes the fragment and works without storage or terminal switching", async () => {
     const f = await fixture();
     expect(f.page.url()).toBe(`${f.web.origin}/`);

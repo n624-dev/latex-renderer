@@ -7,10 +7,15 @@ import {
 } from "./update-operation.js";
 
 const id = "updop_1791456776170_fixture";
+const completed = {
+  id,
+  status: "succeeded",
+  outcome: { application: "succeeded", updater: "succeeded", complete: true },
+};
 function fixture() {
   let now = 0;
   return {
-    read: vi.fn<(id: string) => Promise<unknown>>(),
+    read: vi.fn<(id: string, timeoutMs: number) => Promise<unknown>>(),
     sleep: vi.fn((ms: number) => {
       now += ms;
       return Promise.resolve();
@@ -30,12 +35,9 @@ it("preserves the ID and resumes after a four-minute service restart", async () 
     if (f.now() === 0) return Promise.resolve({ id, status: "running" });
     if (f.now() < 4 * 60_000)
       return Promise.reject(new Error("synthetic private transport error"));
-    return Promise.resolve({ id, status: "succeeded" });
+    return Promise.resolve(completed);
   });
-  expect(await pollUpdateOperation({ id }, f)).toEqual({
-    id,
-    status: "succeeded",
-  });
+  expect(await pollUpdateOperation({ id }, f)).toEqual(completed);
   expect(f.onOperation).toHaveBeenCalledExactlyOnceWith(id);
   expect(f.read.mock.calls.every(([requested]) => requested === id)).toBe(true);
   expect(f.onStatus.mock.calls).toEqual([
@@ -43,6 +45,103 @@ it("preserves the ID and resumes after a four-minute service restart", async () 
     ["reconnecting to Admin API..."],
     ["succeeded"],
   ]);
+});
+
+it("waits for the independent Updater, including a restart after application success", async () => {
+  const f = fixture();
+  f.read
+    .mockResolvedValueOnce({ id, status: "running" })
+    .mockResolvedValueOnce({
+      id,
+      status: "succeeded",
+      outcome: {
+        application: "succeeded",
+        updater: "activating",
+        complete: false,
+      },
+    })
+    .mockRejectedValueOnce(new Error("controller restarting"))
+    .mockResolvedValue(completed);
+  expect(await pollUpdateOperation({ id }, f)).toBe(completed);
+  expect(f.onStatus.mock.calls).toEqual([
+    ["running"],
+    ["application succeeded; Updater activating"],
+    ["reconnecting to Admin API..."],
+    ["succeeded"],
+  ]);
+  expect(f.read.mock.calls.every(([requested]) => requested === id)).toBe(true);
+});
+
+it.each([
+  "needs-attention",
+  "legacy-unconfirmed",
+  "historical",
+  "not-confirmed",
+])(
+  "does not report application-only success as update success (%s)",
+  async (updater) => {
+    const f = fixture();
+    f.read.mockResolvedValue({
+      id,
+      status: "succeeded",
+      outcome: { application: "succeeded", updater, complete: false },
+    });
+    await expect(pollUpdateOperation({ id }, f)).rejects.toMatchObject({
+      operationId: id,
+    });
+    expect(f.sleep).not.toHaveBeenCalled();
+  },
+);
+
+it.each([
+  undefined,
+  null,
+  {},
+  { complete: true },
+  { application: "succeeded", updater: "activating", complete: true },
+  { application: "failed", updater: "succeeded", complete: true },
+  { application: "succeeded", updater: ["succeeded"], complete: true },
+])("cannot confirm a missing or inconsistent outcome (%j)", async (outcome) => {
+  const f = fixture();
+  f.read.mockResolvedValue({ id, status: "succeeded", outcome });
+  await expect(pollUpdateOperation({ id }, f)).rejects.toBeInstanceOf(
+    UpdateOperationUnconfirmedError,
+  );
+});
+
+it("never accepts another operation's successful result", async () => {
+  const f = fixture();
+  f.read.mockResolvedValue({ ...completed, id: "updop_other" });
+  await expect(pollUpdateOperation({ id }, f)).rejects.toMatchObject({
+    operationId: id,
+  });
+});
+
+it("accepts the server's explicit complete outcome when activation is not required", async () => {
+  const f = fixture();
+  const reply = {
+    ...completed,
+    outcome: { ...completed.outcome, updater: "not-required" },
+  };
+  f.read.mockResolvedValue(reply);
+  expect(await pollUpdateOperation({ id }, f)).toBe(reply);
+});
+
+it("bounds a permanently activating Updater by the original deadline", async () => {
+  const f = fixture();
+  f.read.mockResolvedValue({
+    id,
+    status: "succeeded",
+    outcome: {
+      application: "succeeded",
+      updater: "activating",
+      complete: false,
+    },
+  });
+  await expect(pollUpdateOperation({ id }, f)).rejects.toBeInstanceOf(
+    UpdateOperationUnconfirmedError,
+  );
+  expect(f.now()).toBe(UPDATE_WAIT_MAX_MS);
 });
 
 it("only the server's terminal failed state is an actual failed operation", async () => {
@@ -100,12 +199,39 @@ it("does not expose private request errors or falsely report failed", async () =
   expect(f.onStatus).not.toHaveBeenCalledWith("failed");
 });
 
-it("returns non-operation replies and rejects unsafe operation IDs without requests", async () => {
-  const f = fixture(),
-    reply = { unchanged: true };
-  expect(await pollUpdateOperation(reply, f)).toBe(reply);
+it("does not report missing operation IDs as success or repeat the mutation", async () => {
+  const f = fixture();
+  await expect(
+    pollUpdateOperation({ unchanged: true }, f),
+  ).rejects.toMatchObject({ operationId: null });
+  await expect(pollUpdateOperation({}, f)).rejects.toThrow(
+    "Do not apply again. Check: update status",
+  );
+  expect(f.read).not.toHaveBeenCalled();
+});
+
+it("rejects unsafe operation IDs without requests", async () => {
+  const f = fixture();
   await expect(
     pollUpdateOperation({ id: "unsafe\napply again" }, f),
   ).rejects.toThrow("Invalid update operation ID");
   expect(f.read).not.toHaveBeenCalled();
+});
+
+it("bounds individual HTTP reads by the remaining absolute deadline", async () => {
+  const f = fixture();
+  f.read.mockImplementation((_id, timeoutMs) => {
+    if (f.now() === 0) {
+      expect(timeoutMs).toBe(30_000);
+      f.advance(UPDATE_WAIT_MAX_MS - 2_000);
+      return Promise.resolve({ id, status: "running" });
+    }
+    expect(timeoutMs).toBe(500);
+    f.advance(timeoutMs);
+    return Promise.reject(new Error("request timed out"));
+  });
+  await expect(pollUpdateOperation({ id }, f)).rejects.toBeInstanceOf(
+    UpdateOperationUnconfirmedError,
+  );
+  expect(f.read).toHaveBeenCalledTimes(2);
 });

@@ -87,7 +87,11 @@ it("keeps ARM validation native, non-publishing and separate from immutable date
     native = readFileSync(".github/workflows/ci.yml", "utf8"),
     daily = readFileSync(".github/workflows/renderer-image-daily.yml", "utf8"),
     base = readFileSync("renderer/Dockerfile.base", "utf8");
-  expect(ci).toContain("options: [amd64, arm64]");
+  expect(ci).toContain("options: [amd64, arm64, both]");
+  expect(ci).toContain("default: both");
+  expect(ci).toContain("CI_ARCHITECTURE: ${{ matrix.architecture }}");
+  expect(ci).toContain("fail-fast: false");
+  expect(ci).toContain('\'["amd64","arm64"]\'');
   expect(ci).toContain("ubuntu-24.04-arm");
   expect(ci).toContain('"$CI_ARCHITECTURE"');
   expect(ci).toContain("push: false");

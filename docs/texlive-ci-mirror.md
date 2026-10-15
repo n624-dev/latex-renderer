@@ -9,8 +9,10 @@ never stores images and its GC never calls a registry API.
 
 The implementation is `deploy/texlive-mirror/texlive_mirror.py`. It requires
 Python 3.11+, curl, xz, gpgv, util-linux and a dedicated service account. The
-initial architecture list is `amd64`. Native ARM64 non-publishing validation is
-available through `renderer-image`'s `architecture=arm64` input. Before using it,
+initial architecture list is `amd64`. The repository's non-publishing
+`renderer-image` validation runs on native amd64 and ARM64 runners by default;
+manual runs accept `architecture=amd64`, `arm64` or `both`. Before enabling
+dual-architecture validation with an authenticated mirror,
 enable `arm64`/`aarch64-linux` in the mirror selection and copied profile, perform
 the normal peak-capacity admission check and sync a new immutable snapshot.
 Do not change an existing snapshot, raise the 15 GiB budget, or silently fall
@@ -18,6 +20,13 @@ back to another download origin when an ARM lease cannot be acquired. Daily
 publication remains amd64 until both native renderer paths are validated and
 multi-platform publication/retention is enabled separately. Existing immutable
 date tags are never replaced to add an architecture.
+
+Both validation jobs independently acquire and release their architecture's
+lease. They use separate disposable runners and SBOM artifacts, and one failed
+job does not cancel the other's validation or release its lease. Architecture
+selection never substitutes for signature/checksum, snapshot identity or
+English/Japanese renderer validation. Native application tests alone do not
+certify a working ARM TeX renderer or signed ARM host updates.
 
 ## Storage and trust model
 

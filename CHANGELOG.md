@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.5.0-rc.2 - Unreleased
+
+- Wait for both application deployment and independent Updater activation in
+  the Admin CLI. Report legacy, historical or incomplete outcomes as unconfirmed
+  with the original operation ID instead of returning a premature success.
+  Preserve bounded reconnects and never repeat the update request.
+- Run the shipped App, Admin, login and setup browser regressions in WebKit
+  with touch enabled as well as Chromium. Add rotation/reflow-zoom and long-input
+  checks, and verify actual HTTP upload bytes rather than intercepted Blob data.
+- Validate renderer changes on native amd64 and ARM64 runners by default,
+  including the same English/Japanese PDF/PNG/SVG and Source pipeline tests.
+  Manual runs can select one architecture or both. Validation does not publish
+  images; signed ARM host updates and multi-platform Base publication remain
+  separate acceptance requirements.
+- Extend internal-diagnostic visibility regression coverage across cursor pages,
+  search and counts while retaining ordinary clients with similar names.
+
 ## 1.5.0-rc.1 - 2026-10-15
 
 - Classify production smoke credentials and exclusive Sources as internal

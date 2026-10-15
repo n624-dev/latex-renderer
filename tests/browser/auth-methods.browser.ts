@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { chromium, type Browser, type Page } from "playwright";
+import type { Browser, Page } from "playwright";
+import { launchTestBrowser, newTestPage } from "../helpers/browser-engine.js";
 import {
   afterAll,
   afterEach,
@@ -39,7 +40,7 @@ const cloudflare = { backend: "cloudflare-access", methods: [] };
 let browser: Browser | undefined;
 const pages: Page[] = [];
 beforeAll(async () => {
-  browser = await chromium.launch();
+  browser = await launchTestBrowser();
 });
 afterEach(async () => {
   await Promise.all(pages.splice(0).map((page) => page.close()));
@@ -71,7 +72,7 @@ interface FixtureOptions {
 
 async function fixture(options: FixtureOptions = {}) {
   if (!browser) throw new Error("Browser not started");
-  const page = await browser.newPage();
+  const page = await newTestPage(browser);
   pages.push(page);
   const state = { config: options.config ?? dual, invalidJson: false };
   const errors: string[] = [],
@@ -236,6 +237,36 @@ function waitFor(assertion: () => void | Promise<void>) {
 }
 
 describe("shipped login UI", () => {
+  it("keeps a long owner form usable after rotation and layout zoom", async () => {
+    const f = await fixture({ admin: true });
+    await ready(f.page, true);
+    await f.page.setViewportSize({ width: 780, height: 900 });
+    await f.page.evaluate(() => {
+      document.documentElement.style.zoom = "2";
+    });
+    await f.page.locator("#user-create").click();
+    const dialog = f.page.locator("dialog[open]");
+    await dialog.locator('[name="displayName"]').fill("長い表示名".repeat(35));
+    expect(
+      await dialog.evaluate(
+        (element) => element.scrollWidth <= element.clientWidth,
+      ),
+    ).toBe(true);
+    await f.page.evaluate(() => {
+      document.documentElement.style.zoom = "1";
+    });
+    await f.page.setViewportSize({ width: 844, height: 390 });
+    const submit = dialog.locator('button[type="submit"]');
+    await submit.scrollIntoViewIfNeeded();
+    const box = await submit.boundingBox();
+    if (box === null) throw new Error("Submit button has no visible bounds");
+    expect(box.y + box.height).toBeLessThanOrEqual(390);
+    await f.page.keyboard.press("Escape");
+    await dialog.waitFor({ state: "detached" });
+    expect(f.writes).toEqual([]);
+    expect(f.errors).toEqual([]);
+  });
+
   it.each([320, 390, 768, 1024, 1440])(
     "keeps login and admin controls usable at %ipx with shipped CSS",
     async (width) => {
