@@ -21,6 +21,10 @@
 - This candidate requires signed release/update validation before publication.
   Desktop/mobile hardware acceptance, ARM signed host updates and multi-platform
   Base publication are not certified by local amd64 or browser viewport tests.
+- Keep architecture-neutral binary lookup outside TeX Live's package inventory
+  so language installation retains strict file checks. Accept runner-provided
+  stable OpenSSL 3.6 patch updates from 3.6.5 for Windows MCPB tests, while
+  rejecting older versions, prereleases and untested version series.
 
 ## 1.4.0 - 2026-10-14
 

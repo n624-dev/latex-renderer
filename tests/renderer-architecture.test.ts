@@ -1,6 +1,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -100,8 +101,53 @@ it("keeps ARM validation native, non-publishing and separate from immutable date
   expect(daily).not.toContain("--platform linux/arm64");
   expect(base).toContain("arm64) texlive_arch=aarch64-linux");
   expect(base).toContain('test -x "/opt/texlive/2026/bin/$texlive_arch/tlmgr"');
-  expect(base).toContain('ENV PATH="/opt/texlive/2026/bin/native:${PATH}"');
+  expect(base).toContain(
+    '"/opt/texlive/2026/bin/$texlive_arch/tlmgr" option repository',
+  );
+  expect(base).not.toMatch(/^.*ln -s.*\/opt\/texlive\/2026\/bin\//m);
+  expect(base).toContain(
+    'ENV PATH="/opt/texlive/2026/bin/x86_64-linux:/opt/texlive/2026/bin/aarch64-linux:${PATH}"',
+  );
 });
+
+it.skipIf(process.platform === "win32").each(["x86_64-linux", "aarch64-linux"])(
+  "resolves the installed %s binaries without adding a TeX Live alias",
+  (binary) => {
+    const root = mkdtempSync(join(tmpdir(), "renderer-path-"));
+    try {
+      const base = readFileSync("renderer/Dockerfile.base", "utf8");
+      const path = /^ENV PATH="([^"\n]+)"$/m.exec(base)?.[1];
+      if (!path) throw new Error("Missing Base binary PATH");
+      const directory = join(root, "opt/texlive/2026/bin", binary);
+      mkdirSync(directory, { recursive: true });
+      writeFileSync(
+        join(directory, "tlmgr"),
+        `#!/bin/sh\nprintf '%s\\n' '${binary}'\n`,
+        { mode: 0o700 },
+      );
+      const result = spawnSync("sh", ["-c", "tlmgr"], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          PATH: path
+            .replaceAll("/opt/texlive/", `${root}/opt/texlive/`)
+            .replace("${PATH}", process.env.PATH ?? "/usr/bin:/bin"),
+        },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.trim()).toBe(binary);
+      expect(existsSync(join(root, "opt/texlive/2026/bin/native"))).toBe(false);
+      // Integrity validation must remain mandatory after both install attempts.
+      const install = readFileSync(
+        "renderer/install-language-packages.sh",
+        "utf8",
+      );
+      expect(install.match(/&& tlmgr check files/g)).toHaveLength(2);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  },
+);
 
 it.skipIf(process.platform === "win32").each([
   [

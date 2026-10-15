@@ -108,7 +108,7 @@ describe("managed TeX Live image pipeline", () => {
       "--mount=type=secret,id=texlive_download_repository,required=false",
     );
     expect(baseDockerfile).toContain(
-      'tlmgr option repository "${TEXLIVE_REPOSITORY}"',
+      '"/opt/texlive/2026/bin/$texlive_arch/tlmgr" option repository "${TEXLIVE_REPOSITORY}"',
     );
     expect(baseDockerfile).toContain("/opt/texlive/2026/install-tl.log");
     const validation = read("deploy/scripts/ci-validate-texlive-base.sh");

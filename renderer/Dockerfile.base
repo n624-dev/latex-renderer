@@ -59,8 +59,7 @@ RUN --mount=type=secret,id=texlive_download_repository,required=false \
  && install_finished=$(date +%s) \
  && printf 'TEXLIVE_INSTALL_SECONDS=%s\n' "$((install_finished - install_started))" \
  && test -x "/opt/texlive/2026/bin/$texlive_arch/tlmgr" \
- && ln -s "$texlive_arch" /opt/texlive/2026/bin/native \
- && /opt/texlive/2026/bin/native/tlmgr option repository "${TEXLIVE_REPOSITORY}" \
+ && "/opt/texlive/2026/bin/$texlive_arch/tlmgr" option repository "${TEXLIVE_REPOSITORY}" \
  && rm -rf \
       /tmp/install-tl \
       /tmp/install-tl-unx.tar.gz \
@@ -72,7 +71,9 @@ RUN --mount=type=secret,id=texlive_download_repository,required=false \
       /opt/texlive/2026/install-tl.log.* \
       /opt/texlive/2026/tlpkg/backups
 
-ENV PATH="/opt/texlive/2026/bin/native:${PATH}"
+# Only the profile-selected architecture exists. Keep aliases out of the
+# TeX Live tree: tlmgr check files rejects untracked bin/native symlinks.
+ENV PATH="/opt/texlive/2026/bin/x86_64-linux:/opt/texlive/2026/bin/aarch64-linux:${PATH}"
 RUN cache_started=$(date +%s) \
  && fc-cache -f \
  && TEXMFCACHE=/opt/texlive/2026/texmf-var luaotfload-tool --update --force --no-compress \
