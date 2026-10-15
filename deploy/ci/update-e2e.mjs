@@ -144,9 +144,19 @@ try {
   const baselines = {
     legacy: `v${[1, 3, 4].join(".")}-rc.5`,
     installed: `v${[1, 3, 5].join(".")}-rc.1`,
+    // Start ARM from a signed native-capable release, never the amd64-only
+    // historical baselines. It still uses the complete real host/render path.
+    "native-arm64": `v${[1, 5, 0].join(".")}-rc.1`,
   };
   const baselineTag = baselines[process.env.CI_UPDATE_BASELINE];
   if (!baselineTag) throw new Error("Unknown CI update baseline");
+  if (
+    (process.env.CI_UPDATE_BASELINE === "native-arm64" ? "arm64" : "x64") !==
+    process.arch
+  )
+    throw new Error(
+      "Update baseline does not match the native host architecture",
+    );
   const oldStage = join(root, "baseline");
   await mkdir(oldStage);
   if (!apiToken)
@@ -155,7 +165,7 @@ try {
     apiToken,
   });
   await deploy(baseline.source, { ...baseline, tag: baselineTag }, true);
-  if (process.env.CI_UPDATE_BASELINE === "installed") {
+  if (["installed", "native-arm64"].includes(process.env.CI_UPDATE_BASELINE)) {
     const { UpdaterSlots } = await import(
       pathToFileURL(join(candidate, "deploy/scripts/updater-slots.mjs"))
     );
@@ -587,6 +597,7 @@ try {
       validationOnly: Boolean(validationSourceRef),
       sourceRef: validationSourceRef ?? `refs/tags/${tag}`,
       baselineTag,
+      architecture: process.arch,
       tag,
       commit,
       digest,

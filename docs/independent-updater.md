@@ -27,10 +27,20 @@ The other App/Admin APIs remain fixtures: this suite is not a real IdP, TeX
 rendering or physical-device acceptance test. Layout zoom and viewport rotation
 exercise reflow, not physical Safari pinch zoom or an on-screen keyboard.
 
-Native ARM application CI and dual-architecture non-publishing renderer CI are
-separate from signed real-systemd host upgrade/recovery acceptance. Keep the
-existing amd64 release E2E gate and immutable Base publication policy until the
-native ARM host path and multi-platform image contracts are validated.
+Native ARM application CI and dual-architecture renderer CI are separate from
+signed real-systemd host upgrade/recovery acceptance. The release and signed
+branch workflows retain both historical amd64 baselines and add a native ARM64
+host starting from immutable `v1.5.0-rc.1`, the first native-capable baseline.
+The ARM host uses the same full deployment, owner/storage preservation,
+English/Japanese rendering, independent Updater activation, startup-failure and
+interruption recovery path; it is not an updater-only mock or a QEMU job.
+It requires a published two-platform Base. Publish and anonymously verify a new
+Base date via the [daily pipeline](texlive-ci-mirror.md#multi-platform-base-publication)
+before dispatching the three-host signed acceptance gate. Existing amd64-only
+dates and historical signed baselines are never rewritten to fake ARM support.
+Before provisioning, each host checks native availability and pins the public
+Base digest for its entire baseline-to-candidate test, so a concurrent daily
+promotion cannot silently change the tested renderer underneath it.
 
 ## Layout and authority
 
@@ -277,11 +287,11 @@ server-release runs on explicit RC/stable release dispatch, not ordinary PRs:
    Cloudflare credentials or mirror leases are provided. Provisioning refuses
    an existing installation and records a sealed run/boot marker; the CI
    deployment entry also checks this marker.
-   The Ubuntu 24.04 amd64 CI host registers the [official Docker APT repository](https://docs.docker.com/engine/install/ubuntu/)
+   Each Ubuntu 24.04 native amd64/ARM64 CI host registers the [official Docker APT repository](https://docs.docker.com/engine/install/ubuntu/)
    with a dedicated `Signed-By` keyring and refreshes package indexes before
    installing `docker-ce-rootless-extras`. Runner images need not retain that
-   repository even when Docker is preinstalled. This setup is CI-only; the
-   production installer and this VPS's APT configuration are not changed.
+   repository even when Docker is preinstalled. This provisioning is restricted
+   to disposable CI hosts; it is not a production installation command.
    The fixture uses `latex-renderer-ci.test` consistently in `/etc/hosts`, TLS
    certificate identity, proxy headers and application origins. It validates the
    generated environment with the normal production-profile validator before
@@ -297,7 +307,7 @@ server-release runs on explicit RC/stable release dispatch, not ordinary PRs:
    uses `XDG_CONFIG_HOME` ahead of `HOME`; changing `HOME` alone is insufficient.
    CI performs this setup before deploying the immutable RC.5 baseline, whose
    original driver then reuses the prepared Docker service. The signed baseline
-   source and this VPS's environment/services are not modified.
+   source and existing production environments/services are not modified.
 3. Install the frozen previous signed immutable RC, create an owner and persistent
    storage data, and render English/Japanese PDF/PNG. Apply the signed candidate
    through the same sealed-assembly deployment function used by production.

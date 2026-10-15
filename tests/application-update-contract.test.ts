@@ -64,7 +64,9 @@ describe("Base-only package and local Runtime delivery", () => {
     expect(validation).toContain(
       'smoke-test-renderer-svg.sh" "$validation_runtime"',
     );
-    expect(workflow).toContain('docker push "$dated_ref"');
+    expect(workflow).toContain(
+      'ghcr-base-publication.mjs publish "$RUNNER_TEMP/receipts"',
+    );
     expect(workflow).not.toContain('docker push "$runtime_ref"');
     expect(workflow).not.toContain("validated-runtime-tags");
     expect(workflow).not.toContain("runtime_digests");
@@ -89,9 +91,11 @@ describe("Base-only package and local Runtime delivery", () => {
     const validationCall = workflow.indexOf(
       "sh deploy/scripts/ci-validate-texlive-base.sh",
     );
-    const datedPush = workflow.indexOf('docker push "$dated_ref"');
+    const datedPush = workflow.indexOf(
+      'ghcr-base-publication.mjs publish "$RUNNER_TEMP/receipts"',
+    );
     const latestPromotion = workflow.indexOf(
-      '--tag "$IMAGE_REPOSITORY:latest"',
+      'ghcr-base-publication.mjs promote "$IMAGE_DIGEST"',
     );
     expect(languageSmoke).toBeGreaterThan(baseSmoke);
     expect(datedPush).toBeGreaterThan(validationCall);
@@ -104,10 +108,8 @@ describe("Base-only package and local Runtime delivery", () => {
     const workflow = read(".github/workflows/renderer-image-daily.yml");
     const accessWorkflow = read(".github/workflows/ghcr-publish-access.yml");
     const preflight = workflow.indexOf("Verify GHCR package write access");
-    const snapshot = workflow.indexOf("Resolve TeX Live snapshot");
     const build = workflow.indexOf("Build and validate");
     expect(preflight).toBeGreaterThan(0);
-    expect(preflight).toBeLessThan(snapshot);
     expect(preflight).toBeLessThan(build);
     expect(workflow).toContain(
       'node deploy/scripts/verify-ghcr-write-access.mjs "$IMAGE_REPOSITORY"',

@@ -90,7 +90,7 @@ describe.skipIf(process.platform === "win32")(
         "utf8",
       );
       const guard = workflow.match(
-        /if \[\[ "\$CI_DATABASE_SAVE_BATCH" == 16 && "\$tag_status" == present \]\]; then[\s\S]*?\n\s*fi/,
+        /if \[\[ "\$CI_DATABASE_SAVE_BATCH" == 16 && -n "\$EXISTING_MANIFEST_DIGEST" \]\]; then[\s\S]*?\n\s*fi/,
       );
       expect(guard).not.toBeNull();
       if (!guard) throw new Error("Daily database-save reuse guard is missing");
@@ -100,7 +100,8 @@ describe.skipIf(process.platform === "win32")(
         env: {
           ...process.env,
           CI_DATABASE_SAVE_BATCH: batch,
-          tag_status: tag,
+          EXISTING_MANIFEST_DIGEST:
+            tag === "present" ? `sha256:${"a".repeat(64)}` : "",
         },
       });
       expect(result.status, result.stderr).toBe(
@@ -134,7 +135,7 @@ describe.skipIf(process.platform === "win32")(
         "utf8",
       );
       expect(daily).toContain(
-        '"$CI_DATABASE_SAVE_BATCH" == 16 && "$tag_status" == present',
+        '"$CI_DATABASE_SAVE_BATCH" == 16 && -n "$EXISTING_MANIFEST_DIGEST"',
       );
     });
   },

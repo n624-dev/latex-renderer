@@ -12,8 +12,13 @@
 - Validate renderer changes on native amd64 and ARM64 runners by default,
   including the same English/Japanese PDF/PNG/SVG and Source pipeline tests.
   Manual runs can select one architecture or both. Validation does not publish
-  images; signed ARM host updates and multi-platform Base publication remain
-  separate acceptance requirements.
+  images. New daily Base dates are immutable two-platform OCI indexes, published
+  only after both native validations, with `latest` gated on both anonymous
+  native pulls. Keep old amd64-only dates unchanged and protect index children
+  during registry retention; never publish validation Runtimes or image caches.
+- Add native ARM64 signed real-host update/recovery acceptance from the immutable
+  ARM-capable RC1 baseline alongside both historical amd64 baselines. Preserve
+  the frozen bootstrap, attestations, data/rendering checks and recovery tests.
 - Extend internal-diagnostic visibility regression coverage across cursor pages,
   search and counts while retaining ordinary clients with similar names.
 

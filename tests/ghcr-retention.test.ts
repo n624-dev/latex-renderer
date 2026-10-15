@@ -309,6 +309,44 @@ describe("verified GHCR retention", () => {
       deletedVersions: 0,
     });
   });
+  it("retains both native Base children but collects expired uploads from an abandoned run", async () => {
+    const f = fixture({
+      list: [
+        version(1, ["latest", "2026-09-29"]),
+        version(4, []),
+        version(6, []),
+        version(8, []),
+      ],
+    });
+    f.readManifestImpl.mockImplementation((d) =>
+      Promise.resolve(
+        d === digest(1)
+          ? {
+              schemaVersion: 2,
+              mediaType: "application/vnd.oci.image.index.v1+json",
+              manifests: [
+                {
+                  digest: digest(4),
+                  platform: { os: "linux", architecture: "amd64" },
+                },
+                {
+                  digest: digest(6),
+                  platform: { os: "linux", architecture: "arm64" },
+                },
+              ],
+            }
+          : manifest,
+      ),
+    );
+    expect(await runGhcrRetention(f.config)).toMatchObject({
+      deletedVersions: 1,
+      deletedUntaggedVersions: 1,
+    });
+    expect(deleteCalls(f)).toHaveLength(1);
+    expect(deleteCalls(f)[0]?.[0]).toBe(
+      "https://api.github.com/users/n624-dev/packages/container/latex-renderer-texlive/versions/8",
+    );
+  });
   it("preserves untagged attestation subjects", async () => {
     const f = fixture({ list: [version(1, ["latest"]), version(4, [])] });
     f.readManifestImpl.mockImplementation((d) =>

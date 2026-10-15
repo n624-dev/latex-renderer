@@ -82,7 +82,7 @@ it.skipIf(process.platform === "win32")(
   },
 );
 
-it("keeps ARM validation native, non-publishing and separate from immutable dated publication", () => {
+it("keeps PR ARM validation native and non-publishing while daily uses a native platform matrix", () => {
   const ci = readFileSync(".github/workflows/renderer-image.yml", "utf8"),
     native = readFileSync(".github/workflows/ci.yml", "utf8"),
     daily = readFileSync(".github/workflows/renderer-image-daily.yml", "utf8"),
@@ -102,6 +102,10 @@ it("keeps ARM validation native, non-publishing and separate from immutable date
     "Native API, SQLite, setup, update and recovery regression tests",
   );
   expect(daily).toContain("runs-on: ubuntu-24.04");
+  expect(daily).toContain("ubuntu-24.04-arm");
+  expect(daily).toContain(
+    "fromJSON(needs.validate-source.outputs.architectures)",
+  );
   expect(daily).not.toContain("--platform linux/arm64");
   expect(base).toContain("arm64) texlive_arch=aarch64-linux");
   expect(base).toContain('test -x "/opt/texlive/2026/bin/$texlive_arch/tlmgr"');

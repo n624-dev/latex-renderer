@@ -28,9 +28,16 @@ The diagnostic `GHCR_PURGE_LEGACY_RUNTIMES=false` override is not a compatibilit
 support guarantee. Public versions over GitHub's download deletion limit must
 not be forcibly removed. Version counts do not measure shared-layer GiB savings.
 
-This is the workflow policy for issue #62. It targets native amd64 on the
-ephemeral GitHub-hosted Ubuntu runner. ARM64 and multi-platform indexes are
-deferred. The server setup features in #50–#53 are a separate change.
+The original issue #62 established the amd64 Base-only policy. New dates now
+extend it to native amd64 and ARM64 runners, without QEMU or changing historical
+amd64-only date tags. Both architectures must pass the complete validation
+before a new two-platform date index is created; both must then pass anonymous
+native pulls before `latest` advances. The per-platform Base uploads are
+digest-only, not public Runtime tags. See the [publication and retention
+contract](texlive-ci-mirror.md#multi-platform-base-publication) for bounded
+transfer, receipt verification, failed-run cleanup and migration boundaries.
+Signed ARM host update/recovery acceptance is a separate mandatory release gate;
+passing the app's native unit tests alone does not certify an ARM deployment.
 
 Both `renderer-image` and `renderer-image-daily` use
 `deploy/scripts/ci-validate-texlive-base.sh`:

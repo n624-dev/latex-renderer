@@ -53,6 +53,15 @@ jobs:
   validate-source:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    outputs:
+      date: ${{ steps.snapshot.outputs.date }}
+      repository: ${{ steps.snapshot.outputs.repository }}
+      installer: ${{ steps.snapshot.outputs.installer_sha512 }}
+      mode: ${{ steps.plan.outputs.mode }}
+      digest: ${{ steps.plan.outputs.digest }}
+      architectures: ${{ steps.plan.outputs.architectures }}
+      amd64-digest: ${{ steps.plan.outputs.amd64_digest }}
+      arm64-digest: ${{ steps.plan.outputs.arm64_digest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -70,17 +79,38 @@ jobs:
         run: |
           pnpm install --frozen-lockfile
           pnpm check
+      - name: Resolve one canonical snapshot for all native builds
+        if: inputs.maintenance_only != true
+        id: snapshot
+        env:
+          REQUESTED_DATE: ${{ inputs.texlive_date || 'latest' }}
+        run: sh deploy/scripts/resolve-texlive-snapshot.sh "$REQUESTED_DATE"
+      - name: Plan immutable Base publication without registry writes
+        if: inputs.maintenance_only != true
+        id: plan
+        env:
+          SNAPSHOT_DATE: ${{ steps.snapshot.outputs.date }}
+        run: node deploy/scripts/ghcr-base-publication.mjs plan "$SNAPSHOT_DATE"
 
   build-and-publish:
     if: github.event_name != 'workflow_dispatch' || inputs.maintenance_only != true
     needs: validate-source
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        architecture: ${{ fromJSON(needs.validate-source.outputs.architectures) }}
+    runs-on: ${{ matrix.architecture == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     timeout-minutes: 360
     permissions:
       contents: read
       packages: write
     env:
       IMAGE_REPOSITORY: ghcr.io/n624-dev/latex-renderer-texlive
+      CI_ARCHITECTURE: ${{ matrix.architecture }}
+      SNAPSHOT_DATE: ${{ needs.validate-source.outputs.date }}
+      TEXLIVE_REPOSITORY: ${{ needs.validate-source.outputs.repository }}
+      TEXLIVE_INSTALLER_SHA512: ${{ needs.validate-source.outputs.installer }}
+      EXISTING_MANIFEST_DIGEST: ${{ matrix.architecture == 'arm64' && needs.validate-source.outputs.arm64-digest || needs.validate-source.outputs.amd64-digest }}
       REQUESTED_DATE: ${{ github.event.inputs.texlive_date || 'latest' }}
       PUBLISH_REQUESTED: ${{ github.event_name == 'schedule' || inputs.publish == true }}
       DOCKER_BUILD_RECORD_UPLOAD: "false"
@@ -100,6 +130,14 @@ jobs:
 
       - name: Validate disposable database save settings
         run: sh deploy/scripts/ci-texlive-database-save-settings.sh
+
+      - name: Verify native execution and install digest-only transfer tooling
+        run: |
+          set -euo pipefail
+          case "$CI_ARCHITECTURE:$(uname -m)" in amd64:x86_64|arm64:aarch64) ;; *) exit 65 ;; esac
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes skopeo
+          CI_BASE_INDEX_PROBE=1 node deploy/ci/check-base-index.mjs
 
       - name: Validate legacy Runtime cleanup request
         if: github.event_name == 'workflow_dispatch' && inputs.purge_legacy_runtimes == true
@@ -127,10 +165,6 @@ jobs:
         env:
           CONTAINER_BUILDER: ${{ steps.buildx.outputs.name }}
         run: sh deploy/scripts/ci-select-renderer-builder.sh "$CI_RENDERER_DRIVER" "$CONTAINER_BUILDER"
-
-      - name: Resolve TeX Live snapshot
-        id: snapshot
-        run: sh deploy/scripts/resolve-texlive-snapshot.sh "$REQUESTED_DATE"
 
       - name: Install pinned cloudflared client when mirror credentials are available
         env:
@@ -160,7 +194,7 @@ jobs:
           TEXLIVE_CI_ACCESS_CLIENT_ID: ${{ secrets.TEXLIVE_CI_ACCESS_CLIENT_ID }}
           TEXLIVE_CI_ACCESS_CLIENT_SECRET: ${{ secrets.TEXLIVE_CI_ACCESS_CLIENT_SECRET }}
         run: |
-          echo 'repository=${{ steps.snapshot.outputs.repository }}' >> "$GITHUB_OUTPUT"
+          echo "repository=$TEXLIVE_REPOSITORY" >> "$GITHUB_OUTPUT"
           configured=0
           for value in "$TEXLIVE_CI_HOST" "$TEXLIVE_CI_SSH_KEY" "$TEXLIVE_CI_KNOWN_HOSTS" "$TEXLIVE_CI_ACCESS_CLIENT_ID" "$TEXLIVE_CI_ACCESS_CLIENT_SECRET" "$TEXLIVE_CI_MIRROR_HOST"; do
             [ -n "$value" ] && configured=$((configured + 1))
@@ -171,16 +205,13 @@ jobs:
           [ "$configured" -eq 6 ] || { echo 'Partial TeX Live CI mirror configuration' >&2; exit 64; }
           if [ "$configured" -eq 6 ]; then
             sh deploy/scripts/ci-texlive-mirror-lease.sh acquire \
-              '${{ steps.snapshot.outputs.date }}' '${{ steps.snapshot.outputs.installer_sha512 }}' amd64
+              "$SNAPSHOT_DATE" "$TEXLIVE_INSTALLER_SHA512" "$CI_ARCHITECTURE"
           fi
 
       - name: Build and validate
         id: validate
         env:
-          SNAPSHOT_DATE: ${{ steps.snapshot.outputs.date }}
-          TEXLIVE_REPOSITORY: ${{ steps.snapshot.outputs.repository }}
           TEXLIVE_DOWNLOAD_REPOSITORY: ${{ steps.mirror.outputs.repository }}
-          TEXLIVE_INSTALLER_SHA512: ${{ steps.snapshot.outputs.installer_sha512 }}
           BUILDX_BUILDER: ${{ steps.renderer-builder.outputs.name }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GHCR_OWNER: n624-dev
@@ -189,23 +220,18 @@ jobs:
           set -euo pipefail
           sh deploy/scripts/ci-renderer-disk.sh before-base-build 12
           base="latex-renderer:base-$SNAPSHOT_DATE"
-          dated_ref="$IMAGE_REPOSITORY:$SNAPSHOT_DATE"
-
           printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
-          tag_status=$(GITHUB_TOKEN= node deploy/scripts/ghcr-tag-status.mjs "$SNAPSHOT_DATE")
-          if [[ "$CI_DATABASE_SAVE_BATCH" == 16 && "$tag_status" == present ]]; then
+          if [[ "$CI_DATABASE_SAVE_BATCH" == 16 && -n "$EXISTING_MANIFEST_DIGEST" ]]; then
             echo 'Database save comparison requires a cold build; use non-publishing renderer-image.' >&2
             exit 64
           fi
-          if [[ "$tag_status" == present ]]; then
-            reused_digest=$(docker buildx imagetools inspect "$dated_ref" | awk '$1 == "Digest:" { print $2; exit }')
-            [[ "$reused_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-            base="$IMAGE_REPOSITORY@$reused_digest"
+          if [[ -n "$EXISTING_MANIFEST_DIGEST" ]]; then
+            [[ "$EXISTING_MANIFEST_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+            base="$IMAGE_REPOSITORY@$EXISTING_MANIFEST_DIGEST"
             docker pull "$base"
-            base_source=reused-existing
-          elif [[ "$tag_status" == absent ]]; then
+          else
             sh deploy/scripts/generate-texlive-profile.sh \
-              "$TEXLIVE_DOWNLOAD_REPOSITORY" renderer/texlive.profile
+              "$TEXLIVE_DOWNLOAD_REPOSITORY" renderer/texlive.profile "$CI_ARCHITECTURE"
             if grep -Eq '^collection-lang[^[:space:]]*[[:space:]]+1$' renderer/texlive.profile; then
               echo 'Generated base profile selects an optional language collection.' >&2
               exit 65
@@ -224,12 +250,9 @@ jobs:
               --secret id=texlive_download_repository,env=TEXLIVE_DOWNLOAD_REPOSITORY \
               --tag "$base" \
               renderer
-            base_source=cold-built
-          else
-            echo "Unexpected GHCR tag status: $tag_status" >&2
-            exit 65
           fi
 
+          [[ $(docker image inspect "$base" --format '{{.Architecture}}') == "$CI_ARCHITECTURE" ]]
           [[ $(docker image inspect "$base" --format '{{index .Config.Labels "org.opencontainers.image.title"}}') == latex-renderer-texlive ]]
           [[ $(docker image inspect "$base" --format '{{index .Config.Labels "jp.n624.latex-renderer.texlive.profile-kind"}}') == language-neutral-maximal ]]
           [[ $(docker image inspect "$base" --format '{{index .Config.Labels "jp.n624.latex-renderer.base-kind"}}') == texlive-only-v1 ]]
@@ -241,92 +264,38 @@ jobs:
           docker tag "$base" "latex-renderer:validated-base-$SNAPSHOT_DATE"
 
           printf '%s\n' "$base" > "$RUNNER_TEMP/validated-base-image"
-          printf '%s\n' "$base_source" > "$RUNNER_TEMP/validated-base-source"
 
       - name: Generate CycloneDX SBOM for the validated Base
         if: steps.validate.outcome == 'success'
         uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
-          image: latex-renderer:validated-base-${{ steps.snapshot.outputs.date }}
+          image: latex-renderer:validated-base-${{ needs.validate-source.outputs.date }}
           format: cyclonedx-json
           output-file: latex-renderer-texlive-base.cdx.json
-          artifact-name: latex-renderer-texlive-base.cdx.json
+          artifact-name: latex-renderer-texlive-base-${{ matrix.architecture }}.cdx.json
           upload-artifact: true
           dependency-snapshot: false
 
-      - name: Publish immutable dated image
-        id: publish
-        if: steps.validate.outcome == 'success' && env.PUBLISH_REQUESTED == 'true'
-        env:
-          SNAPSHOT_DATE: ${{ steps.snapshot.outputs.date }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GHCR_OWNER: n624-dev
-          GHCR_PACKAGE: latex-renderer-texlive
+      - name: Register only the validated Base by digest, without public tags
+        if: needs.validate-source.outputs.mode != 'legacy'
         run: |
           set -euo pipefail
           base=$(cat "$RUNNER_TEMP/validated-base-image")
-          base_source=$(cat "$RUNNER_TEMP/validated-base-source")
-          dated_ref="$IMAGE_REPOSITORY:$SNAPSHOT_DATE"
-          printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
+          sh deploy/scripts/ci-renderer-disk.sh before-base-transfer 6
+          node deploy/scripts/ghcr-base-publication.mjs stage "$base" "$RUNNER_TEMP/native-receipt"
 
-          if [[ "$base_source" == cold-built ]]; then
-            [[ $(GITHUB_TOKEN= node deploy/scripts/ghcr-tag-status.mjs "$SNAPSHOT_DATE") == absent ]]
-            local_id=$(docker image inspect "$base" --format '{{.Id}}')
-            docker tag "$base" "$dated_ref"
-            docker push "$dated_ref"
-            digest=$(docker buildx imagetools inspect "$dated_ref" | awk '$1 == "Digest:" { print $2; exit }')
-            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-            docker pull "$IMAGE_REPOSITORY@$digest" >/dev/null
-            [[ $(docker image inspect "$IMAGE_REPOSITORY@$digest" --format '{{.Id}}') == "$local_id" ]]
-          elif [[ "$base_source" == reused-existing ]]; then
-            digest=$(docker buildx imagetools inspect "$dated_ref" | awk '$1 == "Digest:" { print $2; exit }')
-            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-            [[ "$base" == "$IMAGE_REPOSITORY@$digest" ]]
-          else
-            echo "Unexpected validated base source: $base_source" >&2
-            exit 65
-          fi
-
-          echo "digest=$digest" >> "$GITHUB_OUTPUT"
-
-      - name: Verify anonymous pull
-        if: steps.publish.outcome == 'success'
-        env:
-          IMAGE_DIGEST: ${{ steps.publish.outputs.digest }}
-        run: |
-          set -euo pipefail
-          docker logout ghcr.io >/dev/null
-          docker image rm "$IMAGE_REPOSITORY@$IMAGE_DIGEST" >/dev/null 2>&1 || true
-          docker pull "$IMAGE_REPOSITORY@$IMAGE_DIGEST"
-          sh deploy/scripts/smoke-test-texlive-base.sh "$IMAGE_REPOSITORY@$IMAGE_DIGEST"
-
-      - name: Promote latest only after anonymous verification
-        if: steps.publish.outcome == 'success' && env.REQUESTED_DATE == 'latest'
-        env:
-          IMAGE_DIGEST: ${{ steps.publish.outputs.digest }}
-          GHCR_TOKEN: ${{ github.token }}
-          GHCR_ACTOR: ${{ github.actor }}
-        run: |
-          set -euo pipefail
-          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_ACTOR" --password-stdin
-          docker buildx imagetools create --prefer-index=false --tag "$IMAGE_REPOSITORY:latest" "$IMAGE_REPOSITORY@$IMAGE_DIGEST"
-          latest_digest=$(docker buildx imagetools inspect "$IMAGE_REPOSITORY:latest" | awk '$1 == "Digest:" { print $2; exit }')
-          [[ "$latest_digest" == "$IMAGE_DIGEST" ]]
-
-      - name: Registry maintenance
-        if: steps.publish.outcome == 'success' && env.REQUESTED_DATE == 'latest'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GHCR_OWNER: n624-dev
-          GHCR_PACKAGE: latex-renderer-texlive
-          GHCR_REPOSITORY: ghcr.io/n624-dev/latex-renderer-texlive
-          GHCR_PURGE_LEGACY_RUNTIMES: ${{ github.event_name == 'schedule' || inputs.purge_legacy_runtimes == true }}
-        run: node deploy/scripts/ghcr-retention.mjs
+      - name: Transfer bounded validation receipt, not image layers or a cache
+        if: needs.validate-source.outputs.mode != 'legacy'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-base-${{ matrix.architecture }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/native-receipt/
+          retention-days: 1
+          if-no-files-found: error
 
       - name: Clean local image state
         if: always()
         env:
-          SNAPSHOT_DATE: ${{ steps.snapshot.outputs.date }}
           BUILDX_BUILDER: ${{ steps.renderer-builder.outputs.name }}
         run: |
           set +e
@@ -356,9 +325,109 @@ jobs:
           TEXLIVE_CI_ACCESS_CLIENT_SECRET: ${{ secrets.TEXLIVE_CI_ACCESS_CLIENT_SECRET }}
         run: sh deploy/scripts/ci-texlive-mirror-lease.sh release '${{ steps.mirror.outputs.token }}' '${{ steps.mirror.outputs.owner }}'
 
-  registry-maintenance-only:
-    if: github.event_name == 'workflow_dispatch' && inputs.maintenance_only == true
-    needs: validate-source
+  publish-index:
+    if: needs.validate-source.outputs.mode != 'legacy' && (github.event_name == 'schedule' || inputs.publish == true)
+    needs: [validate-source, build-and-publish]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    outputs:
+      digest: ${{ steps.publish.outputs.digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: "24"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: native-base-*-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/receipts
+          merge-multiple: true
+          digest-mismatch: error
+      - name: Publish immutable dated image only after both native validations
+        id: publish
+        env:
+          SNAPSHOT_DATE: ${{ needs.validate-source.outputs.date }}
+          TEXLIVE_REPOSITORY: ${{ needs.validate-source.outputs.repository }}
+          TEXLIVE_INSTALLER_SHA512: ${{ needs.validate-source.outputs.installer }}
+          GHCR_TOKEN: ${{ github.token }}
+          GHCR_ACTOR: ${{ github.actor }}
+        run: node deploy/scripts/ghcr-base-publication.mjs publish "$RUNNER_TEMP/receipts"
+
+  verify-public:
+    needs: [validate-source, publish-index]
+    strategy:
+      fail-fast: false
+      matrix:
+        architecture: [amd64, arm64]
+    runs-on: ${{ matrix.architecture == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Verify anonymous pull on each native architecture
+        env:
+          IMAGE_DIGEST: ${{ needs.publish-index.outputs.digest }}
+          CI_ARCHITECTURE: ${{ matrix.architecture }}
+          TEXLIVE_REPOSITORY: ${{ needs.validate-source.outputs.repository }}
+          TEXLIVE_INSTALLER_SHA512: ${{ needs.validate-source.outputs.installer }}
+        run: |
+          set -euo pipefail
+          case "$CI_ARCHITECTURE:$(uname -m)" in amd64:x86_64|arm64:aarch64) ;; *) exit 65 ;; esac
+          [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          sh deploy/scripts/ci-renderer-disk.sh before-anonymous-pull 6
+          export DOCKER_CONFIG="$RUNNER_TEMP/anonymous-docker"
+          mkdir -m 0700 "$DOCKER_CONFIG"
+          base="ghcr.io/n624-dev/latex-renderer-texlive@$IMAGE_DIGEST"
+          docker pull "$base"
+          [[ $(docker image inspect "$base" --format '{{.Architecture}}') == "$CI_ARCHITECTURE" ]]
+          [[ $(docker image inspect "$base" --format '{{index .Config.Labels "jp.n624.latex-renderer.texlive.repository"}}') == "$TEXLIVE_REPOSITORY" ]]
+          [[ $(docker image inspect "$base" --format '{{index .Config.Labels "jp.n624.latex-renderer.texlive.installer-sha512"}}') == "$TEXLIVE_INSTALLER_SHA512" ]]
+          sh deploy/scripts/smoke-test-texlive-base.sh "$base"
+
+  promote-latest:
+    if: github.event.inputs.texlive_date == 'latest' || github.event_name == 'schedule'
+    needs: [validate-source, publish-index, verify-public]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: "24"
+      - name: Promote latest only after both native anonymous pulls
+        env:
+          IMAGE_DIGEST: ${{ needs.publish-index.outputs.digest }}
+          SNAPSHOT_DATE: ${{ needs.validate-source.outputs.date }}
+          GHCR_TOKEN: ${{ github.token }}
+          GHCR_ACTOR: ${{ github.actor }}
+        run: node deploy/scripts/ghcr-base-publication.mjs promote "$IMAGE_DIGEST"
+  registry-maintenance:
+    # Wait for every publisher, but do not leave orphan uploads unbounded when
+    # a native build, anonymous check or promotion fails. Non-publishing runs
+    # never mutate registry retention, and source validation remains mandatory.
+    if: always() && needs.validate-source.result == 'success' && (github.event_name == 'schedule' || inputs.publish == true) && (github.event_name == 'schedule' || inputs.texlive_date == 'latest')
+    needs:
+      [
+        validate-source,
+        build-and-publish,
+        publish-index,
+        verify-public,
+        promote-latest,
+      ]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -371,10 +440,10 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: "24"
-      - name: Validate maintenance-only request
+      - name: Validate maintenance request
         env:
-          PUBLISH_REQUESTED: ${{ inputs.publish }}
-          REQUESTED_DATE: ${{ inputs.texlive_date }}
+          PUBLISH_REQUESTED: ${{ github.event_name == 'schedule' || inputs.publish == true }}
+          REQUESTED_DATE: ${{ inputs.texlive_date || 'latest' }}
         run: |
           set -euo pipefail
           [[ "$PUBLISH_REQUESTED" == true ]]
@@ -388,7 +457,7 @@ jobs:
       - name: Verify and perform registry retention
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          GHCR_PURGE_LEGACY_RUNTIMES: ${{ inputs.purge_legacy_runtimes }}
+          GHCR_PURGE_LEGACY_RUNTIMES: ${{ github.event_name == 'schedule' || inputs.purge_legacy_runtimes == true }}
         run: node deploy/scripts/ghcr-retention.mjs
       - name: Clear registry login
         if: always()

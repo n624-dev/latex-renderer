@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { isMainModule } from "./is-main-module.mjs";
-
+import { basePlatforms } from "./ghcr-base-publication.mjs";
 
 const requestTimeoutMs = 30_000;
 
@@ -8,24 +8,42 @@ function deniedMessage(repositoryPath) {
   return `GHCR denied package write access for ${repositoryPath}. In the package settings, add the workflow repository under Manage Actions access with the Write role. Connecting the repository or granting Manage access is not sufficient.`;
 }
 
-export async function verifyGhcrWriteAccess({ repository, actor, token, fetchImpl = globalThis.fetch }) {
-  const match = /^ghcr\.io\/([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))\/([A-Za-z0-9._-]+)$/.exec(repository);
+export async function verifyGhcrWriteAccess({
+  repository,
+  actor,
+  token,
+  fetchImpl = globalThis.fetch,
+}) {
+  const match =
+    /^ghcr\.io\/([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))\/([A-Za-z0-9._-]+)$/.exec(
+      repository,
+    );
   if (!match) throw new Error("GHCR repository must be ghcr.io/OWNER/PACKAGE");
-  if (typeof actor !== "string" || !actor || typeof token !== "string" || !token) {
+  if (
+    typeof actor !== "string" ||
+    !actor ||
+    typeof token !== "string" ||
+    !token
+  ) {
     throw new Error("GHCR actor and token are required");
   }
   const repositoryPath = `${match[1]}/${match[2]}`;
   const response = await fetchImpl(
     `https://ghcr.io/token?service=ghcr.io&scope=${encodeURIComponent(`repository:${repositoryPath}:pull,push`)}`,
     {
-      headers: { Authorization: `Basic ${Buffer.from(`${actor}:${token}`).toString("base64")}` },
+      headers: {
+        Authorization: `Basic ${Buffer.from(`${actor}:${token}`).toString("base64")}`,
+      },
       signal: globalThis.AbortSignal.timeout(requestTimeoutMs),
     },
   );
   if (response.status === 401 || response.status === 403) {
     throw new Error(deniedMessage(repositoryPath));
   }
-  if (!response.ok) throw new Error(`GHCR write-access token request failed: ${response.status}`);
+  if (!response.ok)
+    throw new Error(
+      `GHCR write-access token request failed: ${response.status}`,
+    );
   const body = await response.json();
   const registryToken = body?.token ?? body?.access_token;
   if (typeof registryToken !== "string" || !registryToken) {
@@ -42,18 +60,48 @@ export async function verifyGhcrWriteAccess({ repository, actor, token, fetchImp
     {
       headers: {
         ...authorization,
-        Accept: "application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json",
+        Accept:
+          "application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json",
       },
       signal: globalThis.AbortSignal.timeout(requestTimeoutMs),
     },
   );
   if (!manifestResponse.ok) {
-    throw new Error(`GHCR write-access probe could not read the existing latest manifest: ${manifestResponse.status}`);
+    throw new Error(
+      `GHCR write-access probe could not read the existing latest manifest: ${manifestResponse.status}`,
+    );
   }
-  const manifest = await manifestResponse.json();
+  let manifest = await manifestResponse.json();
+  if (
+    [
+      "application/vnd.oci.image.index.v1+json",
+      "application/vnd.docker.distribution.manifest.list.v2+json",
+    ].includes(manifest?.mediaType)
+  ) {
+    const child = basePlatforms(manifest).amd64;
+    const childResponse = await fetchImpl(
+      `https://ghcr.io/v2/${repositoryPath}/manifests/${child.digest}`,
+      {
+        headers: {
+          ...authorization,
+          Accept:
+            "application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json",
+        },
+        signal: globalThis.AbortSignal.timeout(requestTimeoutMs),
+      },
+    );
+    if (!childResponse.ok)
+      throw new Error(
+        `GHCR native manifest preflight failed: ${childResponse.status}`,
+      );
+    manifest = await childResponse.json();
+  }
   const blobDigest = manifest?.config?.digest;
-  if (typeof blobDigest !== "string" || !/^sha256:[0-9a-f]{64}$/.test(blobDigest)) {
-    throw new Error("GHCR latest must be a single-platform image manifest with a valid config digest");
+  if (
+    typeof blobDigest !== "string" ||
+    !/^sha256:[0-9a-f]{64}$/.test(blobDigest)
+  ) {
+    throw new Error("GHCR Base manifest must have a valid config digest");
   }
   const blobResponse = await fetchImpl(
     `https://ghcr.io/v2/${repositoryPath}/blobs/${blobDigest}`,
@@ -64,7 +112,9 @@ export async function verifyGhcrWriteAccess({ repository, actor, token, fetchImp
     },
   );
   if (!blobResponse.ok) {
-    throw new Error(`GHCR write-access probe could not read its existing config blob: ${blobResponse.status}`);
+    throw new Error(
+      `GHCR write-access probe could not read its existing config blob: ${blobResponse.status}`,
+    );
   }
   const mountResponse = await fetchImpl(
     `https://ghcr.io/v2/${repositoryPath}/blobs/uploads/?mount=${encodeURIComponent(blobDigest)}&from=${encodeURIComponent(repositoryPath)}`,
@@ -79,9 +129,13 @@ export async function verifyGhcrWriteAccess({ repository, actor, token, fetchImp
     throw new Error(deniedMessage(repositoryPath));
   }
   if (mountResponse.status !== 201) {
-    throw new Error(`GHCR write-access blob mount returned an unexpected response: ${mountResponse.status}`);
+    throw new Error(
+      `GHCR write-access blob mount returned an unexpected response: ${mountResponse.status}`,
+    );
   }
-  process.stdout.write(`GHCR package write access is available for ${repositoryPath}.\n`);
+  process.stdout.write(
+    `GHCR package write access is available for ${repositoryPath}.\n`,
+  );
 }
 
 if (isMainModule(import.meta.url)) {

@@ -89,11 +89,13 @@ describe("managed TeX Live image pipeline", () => {
     expect(read("deploy/scripts/ci-validate-texlive-base.sh")).toContain(
       "collection-langenglish collection-langjapanese",
     );
-    expect(workflow).toContain('docker push "$dated_ref"');
+    expect(workflow).toContain(
+      'ghcr-base-publication.mjs publish "$RUNNER_TEMP/receipts"',
+    );
     expect(workflow).not.toContain('docker push "$runtime_ref"');
     expect(workflow).toContain("Verify anonymous pull");
     expect(workflow).toContain(
-      "TEXLIVE_REPOSITORY: ${{ steps.snapshot.outputs.repository }}",
+      "TEXLIVE_REPOSITORY: ${{ needs.validate-source.outputs.repository }}",
     );
     expect(workflow).toContain(
       "TEXLIVE_DOWNLOAD_REPOSITORY: ${{ steps.mirror.outputs.repository }}",

@@ -367,15 +367,13 @@ esac
     expect(pr).toContain("file: renderer/Dockerfile.base");
     expect(pr).toContain("no-cache: true");
     expect(pr).not.toContain("packages: write");
-    expect(daily).toContain('[[ "$base" == "$IMAGE_REPOSITORY@$digest" ]]');
     expect(daily).toContain(
-      "GITHUB_TOKEN= node deploy/scripts/ghcr-tag-status.mjs",
+      'base="$IMAGE_REPOSITORY@$EXISTING_MANIFEST_DIGEST"',
     );
+    expect(daily).toContain("ghcr-base-publication.mjs plan");
     expect(daily.indexOf("Verify anonymous pull")).toBeLessThan(
-      daily.indexOf('--tag "$IMAGE_REPOSITORY:latest"'),
+      daily.indexOf('ghcr-base-publication.mjs promote "$IMAGE_DIGEST"'),
     );
-    expect(daily).toContain(
-      "steps.validate.outcome == 'success' && env.PUBLISH_REQUESTED == 'true'",
-    );
+    expect(daily).toContain("needs: [validate-source, build-and-publish]");
   });
 });

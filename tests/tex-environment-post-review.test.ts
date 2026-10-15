@@ -17,8 +17,11 @@ describe("post-review TeX environment regressions", () => {
     expect(retention).toContain("if (!purgeLegacyRuntimes) continue");
     const daily = read(".github/workflows/renderer-image-daily.yml");
     expect(daily).not.toContain("continue-on-error:");
-    expect(daily).toContain("registry-maintenance-only:");
-    expect(daily).toContain("inputs.maintenance_only == true");
+    expect(daily).toContain("registry-maintenance:");
+    expect(daily).toContain(
+      "if: always() && needs.validate-source.result == 'success'",
+    );
+    expect(daily).toContain("inputs.maintenance_only != true");
     expect(read(".github/workflows/renderer-image-daily.yml")).toContain(
       '[[ "$REQUESTED_DATE" == latest ]]',
     );

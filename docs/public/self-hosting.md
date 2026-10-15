@@ -340,6 +340,8 @@ shred -u "$password_file"
 
 公開GHCR Packageに保存するのは言語collectionを含まないBaseだけです。初回は、そのBaseに選択した言語と現在のRendererコードを重ねたRuntimeをこのサーバーで構築します。同じBase、Renderer、言語構成の完全一致Runtimeがローカルに残っていれば再利用します。RuntimeをGHCRから取得したり公開したりはしません。
 
+新規日付のBaseは、amd64とARM64をそれぞれネイティブCIで検証してから同じ日付タグのmulti-platform indexにまとめます。両方の匿名pullに成功するまで`latest`は切り替えません。過去のamd64専用日付タグはARMを追加するために上書きせず、ARMで利用できるとは扱いません。ARMホストの対応確認には、実TeX検証だけでなく署名付き更新・復旧CIの成功も必要です。
+
 Daily workflowは、候補Base自体を検査し、そのBaseから英語／日本語入りRuntimeをCI内だけで構築してPDF、PNG、通常描画、SVGのsmoke testを通した後に、合格したBaseだけを公開します。検査用Runtimeはpushせず終了時に削除します。GHCRの公開Packageはdated Base tagの上書きを禁止するimmutable tags設定を有効にしてください。公開workflowは既存dated tagへのpushを拒否し、push後にmanifest digestと匿名pullを照合します。ホスト側は`latest`や日付tagを検出用に一度だけ使い、取得後は`@sha256:...`（ローカルではDocker image ID）へ固定してRuntimeをbuild・実行します。GHCRでtag immutabilityを設定できない場合は、dated tagを本番のauthorityにしないでください。
 
 旧`runtime-v1-*` Packageのサポートは終了しました。現在のサーバーは検証済みBaseからRuntimeをローカル構築し、公開Registryの旧Runtimeを使いません。旧Runtimeは通常のRegistry GCで整理します。旧版アプリへの復元に旧Runtimeが取得できることは保証しません。整理のみ実行する場合は`renderer-image-daily`を`texlive_date=latest`、`publish=true`、`maintenance_only=true`で手動実行します。この経路はイメージをビルド・公開せず、VPSのsnapshotやバックアップにも触れません。
