@@ -8,6 +8,11 @@ deployment_report_failure() {
   printf 'Deployment failed: step=%s exit=%s\n' "$deployment_step" "$1" >&2
 }
 
+deployment_json() {
+  /usr/local/bin/node "$source_root/deploy/scripts/deployment-json-check.mjs" \
+    "$deployment_step" "$@"
+}
+
 # No pipeline: a matching partial body must not hide a failed curl transfer.
 # A subshell keeps request-local variables out of the caller's cleanup state.
 deployment_fetch() (

@@ -406,16 +406,18 @@ chown "$sync_user:$sync_group" \
   "$client_smoke_root/client-install.mjs" \
   "$client_smoke_root/client-uninstall.mjs"
 deployment_checkpoint client-install
-runuser -u "$sync_user" -- /usr/local/bin/node "$client_smoke_root/client-install.mjs" \
+deployment_json "$temporary_root/client-setup.json" \
+  runuser -u "$sync_user" -- /usr/local/bin/node "$client_smoke_root/client-install.mjs" \
   --base-uri "$client_base/" \
   --install-directory "$client_smoke_root/client" \
   --bin-directory "$client_smoke_root/bin" \
   --skill-target none \
   --mcp-target none \
-  --json > "$client_smoke_root/setup.json"
+  --json
 deployment_checkpoint client-doctor
-runuser -u "$sync_user" -- env PATH="$client_smoke_root/bin:$PATH" \
-  "$client_smoke_root/bin/latex-render" doctor --json > "$client_smoke_root/doctor.json"
+deployment_json "$temporary_root/client-doctor.json" \
+  runuser -u "$sync_user" -- env PATH="$client_smoke_root/bin:$PATH" \
+  "$client_smoke_root/bin/latex-render" doctor --json
 deployment_checkpoint client-install-doctor-json
 /usr/local/bin/node -e '
   const fs=require("node:fs");
@@ -424,19 +426,20 @@ deployment_checkpoint client-install-doctor-json
     const serialized=JSON.stringify(value);
     if(value.success!==true||/apiKey|uploadTicket|jobTicket|lrk_/i.test(serialized))process.exit(1);
   }
-' "$client_smoke_root/setup.json" "$client_smoke_root/doctor.json"
+' "$temporary_root/client-setup.json" "$temporary_root/client-doctor.json"
 deployment_checkpoint client-uninstall
-runuser -u "$sync_user" -- /usr/local/bin/node "$client_smoke_root/client-uninstall.mjs" \
+deployment_json "$temporary_root/client-remove.json" \
+  runuser -u "$sync_user" -- /usr/local/bin/node "$client_smoke_root/client-uninstall.mjs" \
   --install-directory "$client_smoke_root/client" \
   --bin-directory "$client_smoke_root/bin" \
   --keep-credential \
   --keep-skills \
-  --json > "$client_smoke_root/remove.json"
+  --json
 deployment_checkpoint client-uninstall-json
 /usr/local/bin/node -e '
   const value=require(process.argv[1]);
   if(value.success!==true||value.command!=="setup.remove"||value.result?.removed!==true)process.exit(1);
-' "$client_smoke_root/remove.json"
+' "$temporary_root/client-remove.json"
 deployment_checkpoint client-uninstall-directory
 test ! -e "$client_smoke_root/client"
 deployment_checkpoint local-home

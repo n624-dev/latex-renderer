@@ -79,6 +79,35 @@ the real root production-plan CLI through `current`, requires nonempty parsed
 output, and checks both hosting-mode fields without reconfiguring Cloudflare.
 Standalone E2E is not proof that a real Cloudflare production deployment passed.
 
+Client installation, doctor and removal checks capture JSON-mode failures before
+temporary-file cleanup. Each command has a two-minute deadline and a combined
+64 KiB stdout/stderr budget, with JSON nesting limited to 32 levels.
+A failed child retains its nonzero exit status;
+timeouts and output overflow remain failures even if a TERM handler exits zero.
+The private process group is terminated before cleanup. Only successful,
+validated JSON is written to an exclusively created private temporary receipt.
+Invalid/missing JSON and sensitive credential/ticket fields fail the check.
+
+Failure logs contain a fixed step, exit status and allowlisted diagnostic hints:
+installer phase, known network/TLS/filesystem error code, exact HTTP failure
+status or checksum/body failure category when available. Arbitrary error text,
+stderr, URLs, paths, headers, arguments and provider codes are not logged. Older
+clients without structured hints still fail safely, but may provide only the
+step and exit status. No permanent client-output archive or retry is added;
+diagnostics follow the existing bounded Updater operation-log retention.
+Keep a failed operation and its protected recovery point for operator review;
+successful independent health checks do not rewrite that operation as succeeded.
+
+After building client distributions, run `pnpm test:client:deployment` for a real
+loopback manifest/ZIP download, isolated install, doctor and uninstall using the
+same deployment JSON runner. It also verifies a rejected HTTP request produces
+bounded diagnostics without a failure receipt. The test uses private temporary
+installation/configuration paths, no API key and no external hosting service;
+it removes its own files after completion. Native amd64/ARM64 application CI and
+both signed validation workflows require this check in addition to the
+existing real-systemd, signature/provenance and rendering gates. It is not a
+Cloudflare, certificate, IdP or production-network acceptance test.
+
 The Admin CLI prints the operation ID immediately and polls only that original
 operation. A service restart may temporarily disconnect the Admin API while a
 Runtime is rebuilt: reconnects have a ten-minute continuous-outage budget and

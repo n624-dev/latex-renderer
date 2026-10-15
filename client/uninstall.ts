@@ -1,5 +1,8 @@
 #!/usr/bin/env node
-import { removeSetup } from "@latex-renderer/setup-core";
+import {
+  clientSetupFailureDiagnostic,
+  removeSetup,
+} from "@latex-renderer/setup-core";
 import process from "node:process";
 import { Writable } from "node:stream";
 
@@ -51,6 +54,10 @@ void main().catch((error: unknown) => {
         error: {
           code: "SETUP_REMOVE_FAILED",
           message: error instanceof Error ? error.message : "Unknown error",
+          diagnostic: {
+            phase: "remove",
+            ...clientSetupFailureDiagnostic(error),
+          },
         },
       })}\n`,
     );
