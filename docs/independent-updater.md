@@ -1,7 +1,46 @@
 # Independent Updater and release upgrade E2E
 
-This candidate separates the application and Updater lifetimes. No production
-deployment has been performed as part of this implementation.
+The application and Updater have independent lifetimes and separate update and
+recovery paths.
+
+## Browser and architecture validation boundaries
+
+Run the shipped Web regression suite after building its workspace dependencies:
+
+```sh
+pnpm --filter @latex-renderer/web... build
+pnpm exec playwright install chromium webkit
+pnpm test:browser:built
+TEST_BROWSER=webkit TEST_BROWSER_TOUCH=1 pnpm test:browser:built
+```
+
+Browser system libraries must already be installed on a development host. The
+dedicated GitHub-hosted WebKit job installs its own prerequisites on its
+disposable runner; it does not reconfigure an application host. A matching
+[official Playwright container](https://playwright.dev/docs/docker) is another
+option when the development host lacks those libraries.
+
+Both engines exercise production HTML/CSS and built scripts. App uploads reach
+a loopback HTTP receiver so the tests compare actual received ZIP bytes, sizes
+and hashes even when browser interception cannot expose a Blob request body.
+The other App/Admin APIs remain fixtures: this suite is not a real IdP, TeX
+rendering or physical-device acceptance test. Layout zoom and viewport rotation
+exercise reflow, not physical Safari pinch zoom or an on-screen keyboard.
+
+Native ARM application CI and dual-architecture renderer CI are separate from
+signed real-systemd host upgrade/recovery acceptance. The release and signed
+branch workflows retain both historical amd64 baselines and add a native ARM64
+host starting from immutable `v1.5.0-rc.1`, the first native-capable baseline.
+The ARM host uses the same full deployment, owner/storage preservation,
+English/Japanese rendering, independent Updater activation, startup-failure and
+interruption recovery path; it is not an updater-only mock or a QEMU job.
+It requires a published two-platform Base. Publish and anonymously verify a new
+Base date via the [daily pipeline](texlive-ci-mirror.md#multi-platform-base-publication)
+before dispatching the three-host signed acceptance gate. Existing amd64-only
+dates and historical signed baselines are never rewritten to fake ARM support.
+Before provisioning, each host checks native availability and pins the public
+Base digest for its entire baseline-to-candidate test, so a concurrent daily
+promotion cannot silently change the tested renderer underneath it.
 
 ## Layout and authority
 
@@ -43,11 +82,21 @@ Standalone E2E is not proof that a real Cloudflare production deployment passed.
 The Admin CLI prints the operation ID immediately and polls only that original
 operation. A service restart may temporarily disconnect the Admin API while a
 Runtime is rebuilt: reconnects have a ten-minute continuous-outage budget and
-the whole wait has a ninety-minute monotonic deadline. Successful contacts reset
+the whole wait has a ninety-minute monotonic deadline. Each operation GET also
+has a thirty-second timeout, capped by the remaining overall deadline, so one
+stalled HTTP request cannot prevent reconnect/deadline handling. Successful contacts reset
 only the outage budget. Reaching either limit reports **unconfirmed**, not a
 failed deployment, and prints `update operation ID` to resume checking. It never
-reissues apply or changes the requested version. Only a terminal `failed` result
-from the server is treated as an update failure.
+reissues apply or changes the requested version. Application `succeeded` alone
+does not finish the CLI wait: it continues while the independent Updater is
+activating, and exits successfully only after the server confirms the complete
+outcome. Missing/legacy outcomes, historical results and `needs-attention` return
+an unconfirmed error with the original operation ID, not a claim that the
+application deployment failed. Only a terminal `failed` result from the server
+is treated as an application update failure.
+If the initial update response has no operation ID, the CLI reports an
+unconfirmed result and directs the operator to `update status`; it does not
+claim success or repeat the POST.
 
 The initial migration captures the installed old controller into a sealed slot
 before changing service paths. The new controller is staged separately. A
@@ -238,11 +287,11 @@ server-release runs on explicit RC/stable release dispatch, not ordinary PRs:
    Cloudflare credentials or mirror leases are provided. Provisioning refuses
    an existing installation and records a sealed run/boot marker; the CI
    deployment entry also checks this marker.
-   The Ubuntu 24.04 amd64 CI host registers the [official Docker APT repository](https://docs.docker.com/engine/install/ubuntu/)
+   Each Ubuntu 24.04 native amd64/ARM64 CI host registers the [official Docker APT repository](https://docs.docker.com/engine/install/ubuntu/)
    with a dedicated `Signed-By` keyring and refreshes package indexes before
    installing `docker-ce-rootless-extras`. Runner images need not retain that
-   repository even when Docker is preinstalled. This setup is CI-only; the
-   production installer and this VPS's APT configuration are not changed.
+   repository even when Docker is preinstalled. This provisioning is restricted
+   to disposable CI hosts; it is not a production installation command.
    The fixture uses `latex-renderer-ci.test` consistently in `/etc/hosts`, TLS
    certificate identity, proxy headers and application origins. It validates the
    generated environment with the normal production-profile validator before
@@ -258,7 +307,7 @@ server-release runs on explicit RC/stable release dispatch, not ordinary PRs:
    uses `XDG_CONFIG_HOME` ahead of `HOME`; changing `HOME` alone is insufficient.
    CI performs this setup before deploying the immutable RC.5 baseline, whose
    original driver then reuses the prepared Docker service. The signed baseline
-   source and this VPS's environment/services are not modified.
+   source and existing production environments/services are not modified.
 3. Install the frozen previous signed immutable RC, create an owner and persistent
    storage data, and render English/Japanese PDF/PNG. Apply the signed candidate
    through the same sealed-assembly deployment function used by production.
@@ -327,9 +376,24 @@ tag; branch-validation proofs are not a release publication authority.
 
 Both E2E workflows require separate disposable runners for the legacy
 `v1.3.4-rc.5` transition and the already-installed bootstrap in `v1.3.5-rc.1`.
-The latter verifies the baseline slot and frozen bootstrap before applying the
-candidate; the release upload waits for both cases. A new baseline is an explicit
+They also run native ARM64 from `v1.5.0-rc.1`. The installed and ARM64 cases
+verify the baseline slot and frozen bootstrap before applying the candidate;
+the release upload waits for all three cases. A new baseline is an explicit
 test-policy change, not a moving latest release.
+
+During first installation, a signed driver that includes and invokes
+`application-database-file.mjs` owns database creation after its read-only
+preflight. The bootstrap leaves the database absent until then; creating a
+zero-byte file earlier would incorrectly trigger the existing-database
+maintenance check. Historical signed drivers without that helper retain
+exclusive file creation with shared SQLite permissions. Both paths refuse any
+existing database or SQLite sidecar, and mismatched preparation modules/calls
+fail closed. A separate initial-install lock under the root-owned staging
+directory serializes this preparation and deployment without blocking the Image
+Manager's first-start mutation lock. It releases on completion, failure or
+process termination. Existing-host maintenance checks and signed baseline bytes are
+unchanged. An interrupted first installation with a remaining database is not
+silently retried as a clean installation.
 
 Both E2E workflows fetch each baseline's release metadata, tag and
 attestation using their short-lived, read-only Actions token. Only the named
@@ -355,7 +419,7 @@ or credentials; a 403 alone does not prove rate limiting. Check these headers
 and job permissions before retrying, without bypassing integrity verification.
 
 The artifact is transferred by immutable Actions artifact ID, not build cache,
-and retained for one day. Both runners are disposable; E2E staging and temporary
+and retained for one day. All three runners are disposable; E2E staging and temporary
 DB probes are removed in `finally` blocks. Interrupted runner execution is
 reclaimed with the runner. There is no release-upload job or contents-write
 permission. Passing this workflow does not replace the release-only E2E: the

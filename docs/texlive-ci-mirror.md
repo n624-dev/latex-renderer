@@ -9,15 +9,88 @@ never stores images and its GC never calls a registry API.
 
 The implementation is `deploy/texlive-mirror/texlive_mirror.py`. It requires
 Python 3.11+, curl, xz, gpgv, util-linux and a dedicated service account. The
-initial architecture list is `amd64`. Native ARM64 non-publishing validation is
-available through `renderer-image`'s `architecture=arm64` input. Before using it,
+initial architecture list is `amd64`. The repository's non-publishing
+`renderer-image` validation runs on native amd64 and ARM64 runners by default;
+manual runs accept `architecture=amd64`, `arm64` or `both`. Before enabling
+dual-architecture validation with an authenticated mirror,
 enable `arm64`/`aarch64-linux` in the mirror selection and copied profile, perform
 the normal peak-capacity admission check and sync a new immutable snapshot.
 Do not change an existing snapshot, raise the 15 GiB budget, or silently fall
-back to another download origin when an ARM lease cannot be acquired. Daily
-publication remains amd64 until both native renderer paths are validated and
-multi-platform publication/retention is enabled separately. Existing immutable
-date tags are never replaced to add an architecture.
+back to another download origin when an ARM lease cannot be acquired.
+New daily Base dates use the same canonical snapshot and installer identity on
+native amd64 and ARM64 runners. Existing immutable date tags are never replaced
+to add an architecture; an old amd64-only date is retested only on amd64 and
+cannot downgrade `latest` after the multi-platform transition.
+
+Both validation jobs independently acquire and release their architecture's
+lease. They use separate disposable runners and SBOM artifacts, and one failed
+job does not cancel the other's validation or release its lease. Architecture
+selection never substitutes for signature/checksum, snapshot identity or
+English/Japanese renderer validation. Native application tests alone do not
+certify a working ARM TeX renderer or signed ARM host updates.
+
+## Multi-platform Base publication
+
+The daily workflow resolves the canonical date once before launching native
+builds. Each runner performs the full Base, English/Japanese PDF/PNG/SVG,
+compatibility and Source pipeline validation without an Actions build cache.
+Only its validated, renderer-free Base is copied to a temporary compressed
+image layout, checked against the validated Docker image/config ID, and uploaded by
+digest without a discovery tag. The temporary layout is removed on success or
+failure; its peak-space admission requires twice the image's apparent size plus
+2 GiB of free headroom. No image layers are transferred through Actions artifacts
+or retained on the mirror VPS. Each validation receipt is bounded to 16 KiB and
+retained for one day, separately from its architecture-specific SBOM.
+
+After both native jobs succeed, the coordinator rechecks the run/attempt,
+commit, date, installer, config IDs and uploaded manifest digests before creating
+the immutable two-platform date index. It rereads the date immediately before
+the write and never overwrites an existing date. Registry errors, partial
+credentials and digest/provenance differences fail closed. Publication uses the
+single serialized daily workflow; external publishers must not write the same
+date tags concurrently because the registry has no tag compare-and-swap.
+
+Separate fresh native runners then pull the index anonymously and run the Base
+smoke test. Only success on **both** allows `latest` to advance to the exact date
+index digest. Failure preserves the previous `latest`. Per-platform uploads
+from an interrupted run remain untagged and are subject to the existing 14-day
+untagged retention; retained date/weekly/latest indexes protect their children
+transitively. A failed run must not forcibly delete a digest that another index
+may reference. Registry maintenance waits for all publishers but still runs if
+a build, anonymous check or promotion fails, provided source validation passed
+and this is a publishing `latest` run. Non-publishing runs do not mutate
+retention. The independent maintenance-only dispatch remains available.
+After an interrupted multi-platform run, use **Re-run all jobs**, not only failed
+jobs: publication requires both validation receipts from the same run attempt.
+
+Transfer preserves the Docker v2 image/config format (`skopeo --format v2s2`)
+inside the compressed directory layout. Converting the payload to OCI can
+rewrite config bytes and change the validated image ID; that is rejected rather
+than treated as a new validation. The public multi-platform index itself is OCI.
+The [Skopeo transport contract](https://github.com/containers/image/blob/main/docs/containers-transports.5.md)
+permits digest destinations only when the uploaded manifest matches that digest;
+the [copy command](https://github.com/containers/skopeo/blob/main/docs/skopeo-copy.1.md)
+also uses `--preserve-digests` for the registry transfer.
+
+Before expensive native builds, CI also runs a tiny, isolated registry protocol
+probe using the exact index constructor and synthetic amd64/ARM64 image configs.
+It checks OCI-index/Docker-v2-component interoperability with Docker pulls for
+both platform selections, not ARM execution or real TeX. To reproduce on a
+Linux development host with Node 24 and Docker, explicitly opt in:
+
+```sh
+CI_BASE_INDEX_PROBE=1 node deploy/ci/check-base-index.mjs
+```
+
+The probe binds its temporary registry only to loopback, uses a digest-pinned
+stable official registry image, supplies no credentials, and removes its own
+container, synthetic images and newly pulled registry image. It does not change
+host Docker configuration, deploy services, or write anything to GHCR.
+
+These are Base-only images: the temporary validation Runtime is never pushed.
+The mirror's 15 GiB management limit, leases and GC are unchanged. User-side
+images retain canonical archive URLs, GHCR-first resolution and dated-archive
+fallback; no private mirror hostname or CI credential is embedded.
 
 ## Storage and trust model
 

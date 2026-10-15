@@ -44,9 +44,12 @@ import {
 } from "./release-extraction.mjs";
 import { releaseAttestationArgs } from "./release-attestation.mjs";
 import { validatedReleaseRendererFingerprint } from "./runtime-image-identity.mjs";
-import { acquireMutationLock } from "./mutation-lock.mjs";
 import {
-  prepareApplicationDatabase,
+  acquireMutationLock,
+  acquireMutationLockForPath,
+} from "./mutation-lock.mjs";
+import {
+  prepareInitialDeploymentDatabase,
   applicationDatabaseIdentity,
 } from "./application-database-file.mjs";
 import {
@@ -808,30 +811,35 @@ export async function deploySealedAssembly(
   initialInstall = false,
 ) {
   await assertSealedControlTree(assembly);
-  const deployment = await prepareDeploymentTrees(rootStage, assembly);
-  const releaseId = `v${release.version}-${manifest.commit.slice(0, 12)}`;
-  if (initialInstall) {
-    try {
-      await lstat("/var/lib/latex-renderer/renderer.sqlite3");
-      throw new Error("Initial install cannot overwrite an existing database");
-    } catch (error) {
-      if (error.code !== "ENOENT") throw error;
-    }
-    // Exclusive creation preserves the initial-install refusal and supplies
-    // correct shared permissions even to an unchanged older signed driver.
-    await prepareApplicationDatabase(
-      "/var/lib/latex-renderer/renderer.sqlite3",
-      {
-        ...applicationDatabaseIdentity(),
-        createOnly: true,
-      },
-    );
-  } else
-    await runLogged("systemctl", ["restart", "latex-renderer-backup.service"]);
-  await deployFromAssembly(assembly, deployment, releaseId, {
-    ownsParentMutationLock: !initialInstall,
-  });
-  return releaseId;
+  // install-host seals this parent root:root 0711. Initial installations need
+  // their own serialization until the driver has created the DB. The normal
+  // mutation lock must remain available to first-start Image Manager work.
+  const initialLock = initialInstall
+    ? await acquireMutationLockForPath(
+        join(privilegedStagingRoot, "initial-install.lock"),
+      )
+    : null;
+  try {
+    const deployment = await prepareDeploymentTrees(rootStage, assembly);
+    const releaseId = `v${release.version}-${manifest.commit.slice(0, 12)}`;
+    if (initialInstall) {
+      await prepareInitialDeploymentDatabase(
+        "/var/lib/latex-renderer/renderer.sqlite3",
+        applicationDatabaseIdentity(),
+        assembly,
+      );
+    } else
+      await runLogged("systemctl", [
+        "restart",
+        "latex-renderer-backup.service",
+      ]);
+    await deployFromAssembly(assembly, deployment, releaseId, {
+      ownsParentMutationLock: !initialInstall,
+    });
+    return releaseId;
+  } finally {
+    await initialLock?.release();
+  }
 }
 
 async function installedRelease() {

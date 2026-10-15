@@ -1,15 +1,17 @@
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { chromium, type Browser, type Page } from "playwright";
+import { createServer, type Server } from "node:http";
+import type { Browser, Page } from "playwright";
+import { launchTestBrowser, newTestPage } from "../helpers/browser-engine.js";
+import { readFixtureBody } from "../helpers/fixture-http.js";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import yazl from "yazl";
 import { zipSingleTex } from "../../apps/admin-web/src/assets/render-script.js";
 import { styles } from "../../apps/admin-web/src/assets/styles.js";
 import { appRenderPage } from "../../apps/admin-web/src/templates-app.js";
 
-// Real Chromium, real File/crypto/fetch/DOM, shipped HTML/CSS/script. The API
+// Real browser, real File/crypto/fetch/DOM, shipped HTML/CSS/script. The API
 // boundary is simulated; this does not claim to run TeX or production auth.
-const origin = "http://127.0.0.1:43127";
 const expiresAt = "2099-01-01T00:00:00.000Z";
 // Serialize the actual tsc-built module in native Node. Vitest's SSR import
 // rewriting changes function.toString(), which is how App emits its script.
@@ -26,11 +28,20 @@ const appScript = execFileSync(
 );
 let browser: Browser | undefined;
 const pages: Page[] = [];
+const uploadServers: Server[] = [];
 beforeAll(async () => {
-  browser = await chromium.launch();
+  browser = await launchTestBrowser();
 });
 afterEach(async () => {
   await Promise.all(pages.splice(0).map((page) => page.close()));
+  await Promise.all(
+    uploadServers.splice(0).map(
+      (server) =>
+        new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        }),
+    ),
+  );
 });
 afterAll(async () => {
   await browser?.close();
@@ -38,7 +49,7 @@ afterAll(async () => {
 
 async function fixture() {
   if (!browser) throw new Error("Browser not started");
-  const page = await browser.newPage();
+  const page = await newTestPage(browser);
   pages.push(page);
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
@@ -61,6 +72,41 @@ async function fixture() {
     statusError: false,
     sourceGate: Promise.resolve(),
   };
+  // WebKit's interception protocol does not expose Blob request bytes through
+  // postDataBuffer(). Receive real network bytes instead, in both engines;
+  // never replace a missing body with an empty successful synthetic upload.
+  const server = createServer((request, response) => {
+    void (async () => {
+      try {
+        if (
+          request.method !== "PUT" ||
+          !/^\/api\/v1\/sources\/source_[a-f0-9]{32}\/content$/.test(
+            request.url ?? "",
+          )
+        ) {
+          response.writeHead(404).end();
+          return;
+        }
+        expect(request.headers.authorization).toBe(
+          "Bearer test-upload-ticket-1234567890",
+        );
+        state.uploads.push(await readFixtureBody(request));
+        response.writeHead(204).end();
+      } catch {
+        errors.push("Fixture upload failed");
+        response.writeHead(500).end();
+      }
+    })();
+  });
+  uploadServers.push(server);
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string")
+    throw new Error("Missing upload listener");
+  const origin = `http://127.0.0.1:${address.port}`;
   await page.addInitScript(() => {
     // Delayed reads reproduce selection races without relying on file size.
     const reads = new Map<
@@ -157,8 +203,7 @@ async function fixture() {
       expect(request.headers().authorization).toBe(
         "Bearer test-upload-ticket-1234567890",
       );
-      state.uploads.push(request.postDataBuffer() ?? Buffer.alloc(0));
-      await route.fulfill({ status: 204 });
+      await route.continue();
       return;
     }
     if (path === "/app/api/v1/render-tickets") {
@@ -280,7 +325,36 @@ async function releaseRead(page: Page, name: string, fail = false) {
   );
 }
 
-describe("App render in Chromium", () => {
+describe("App render in the selected browser", () => {
+  it("preserves file selection through reflow zoom and rotation, with touch submission when enabled", async () => {
+    const { page, state, errors } = await fixture();
+    const name = `${"日本語の長いファイル名".repeat(8)}.tex`;
+    await page.setViewportSize({ width: 780, height: 900 });
+    await page.locator("#app-files").setInputFiles(tex(name));
+    await ready(page);
+    // CSS layout zoom tests reflow; this is not physical Safari/pinch acceptance.
+    await page.evaluate(() => {
+      document.documentElement.style.zoom = "2";
+    });
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+    await page.evaluate(() => {
+      document.documentElement.style.zoom = "1";
+    });
+    await page.setViewportSize({ width: 844, height: 390 });
+    await start(page).scrollIntoViewIfNeeded();
+    const touch = await page.evaluate(() => navigator.maxTouchPoints > 0);
+    if (touch) await start(page).tap();
+    else await start(page).click();
+    await finish(page);
+    expect(state.requests).toHaveLength(1);
+    expect(state.requests[0]?.body.originalFilename).toBe(name);
+    expect(errors).toEqual([]);
+  });
+
   it.each([false, true])(
     "ignores stale read completion (failure=%s) and submits the visible file",
     async (fail) => {

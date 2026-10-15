@@ -37,8 +37,8 @@ on:
       architecture:
         description: "Native validation architecture (ARM64 requires an ARM64-enabled mirror snapshot)"
         type: choice
-        options: [amd64, arm64]
-        default: amd64
+        options: [amd64, arm64, both]
+        default: both
       texlive_date:
         description: "Snapshot for comparison: latest or YYYY-MM-DD"
         type: string
@@ -70,7 +70,11 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ${{ inputs.architecture == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        architecture: ${{ fromJSON(inputs.architecture == 'amd64' && '["amd64"]' || inputs.architecture == 'arm64' && '["arm64"]' || '["amd64","arm64"]') }}
+    runs-on: ${{ matrix.architecture == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     timeout-minutes: 360
     env:
       DOCKER_BUILD_RECORD_UPLOAD: "false"
@@ -78,7 +82,7 @@ jobs:
       CI_FORMAT_JOBS: ${{ inputs.format_jobs || '4' }}
       CI_DATABASE_SAVE_BATCH: ${{ inputs.database_save_batch || '64' }}
       REQUESTED_DATE: ${{ inputs.texlive_date || 'latest' }}
-      CI_ARCHITECTURE: ${{ inputs.architecture || 'amd64' }}
+      CI_ARCHITECTURE: ${{ matrix.architecture }}
       # Register the private distribution hostname with the runner's log
       # masker before any step can emit a snapshot URL.
       TEXLIVE_CI_MIRROR_HOST: ${{ secrets.TEXLIVE_CI_MIRROR_HOST }}

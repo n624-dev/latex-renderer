@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { configureDockerRepository } from "./docker-repository.mjs";
+import { nativeBaseDigest } from "../scripts/ghcr-base-publication.mjs";
 import {
   userEnvironmentKeys,
   withoutUserEnvironmentDefaults,
@@ -41,6 +42,11 @@ const source = resolve(process.argv[1], "../../..");
 // Validate the generated fixture before installing packages or building releases.
 const environment = standaloneEnvironment(
   await readFile(resolve(source, ".env.example"), "utf8"),
+);
+// Fail before provisioning, not after installing an unsupported ARM host.
+// Pin one public index/image for the entire baseline -> candidate sequence.
+const baseDigest = await nativeBaseDigest(
+  process.arch === "arm64" ? "arm64" : "amd64",
 );
 const run = (program, args) =>
   execFileSync(program, args, { stdio: "inherit", timeout: 600_000 });
@@ -124,7 +130,7 @@ await writeFile(
   JSON.stringify({
     version: 1,
     desired: {
-      selector: { mode: "latest", value: null },
+      selector: { mode: "digest", value: baseDigest },
       languages: ["collection-langenglish", "collection-langjapanese"],
       autoUpdate: false,
     },

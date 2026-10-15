@@ -8,6 +8,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 
 describe("deployment prerequisite failure boundary", () => {
@@ -166,6 +167,87 @@ describe("deployment prerequisite failure boundary", () => {
         expect(run("").status).toBe(78);
         rmSync(database);
         expect(run("").status).toBe(0); // No DB on a first install.
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.skipIf(process.platform !== "linux")(
+    "runs real SQLite preflight against absent, empty, normal and invalid databases",
+    () => {
+      const root = mkdtempSync(join(tmpdir(), "renderer-sqlite-preflight-"));
+      try {
+        const source = readFileSync(
+          "deploy/scripts/deploy-production-release.sh",
+          "utf8",
+        );
+        const start = source.indexOf(
+          "require_normal_maintenance_for_smoke() {",
+        );
+        const end = source.indexOf("\n}\n", start) + 2;
+        expect(start).toBeGreaterThan(0);
+        const path = join(root, "renderer.sqlite3");
+        // Use the actual SQLite engine without requiring a host sqlite3 CLI
+        // in ordinary unit CI. This adapter executes the unchanged query with
+        // a real read-only connection; it does not mock the query result.
+        writeFileSync(
+          join(root, "sqlite3"),
+          `#!${process.execPath}
+const {DatabaseSync}=require('node:sqlite');
+try {
+  const db=new DatabaseSync(process.argv[3],{readOnly:true});
+  try {
+    for(const row of db.prepare(process.argv[4]).all())
+      console.log(Object.values(row).join('|'));
+  } finally {db.close();}
+} catch(error) {console.error(error.message);process.exitCode=1;}
+`,
+          { mode: 0o700 },
+        );
+        const body = source
+          .slice(start, end)
+          .replace("/var/lib/latex-renderer/renderer.sqlite3", path);
+        const run = () =>
+          spawnSync(
+            "/bin/sh",
+            ["-c", `${body}\nrequire_normal_maintenance_for_smoke`],
+            {
+              encoding: "utf8",
+              env: { ...process.env, PATH: `${root}:${process.env.PATH}` },
+            },
+          );
+        expect(run().status).toBe(0);
+        writeFileSync(path, "");
+        const empty = run();
+        expect(empty.status).toBe(78);
+        expect(empty.stderr).toContain("no such table: system_settings");
+        expect(readFileSync(path).length).toBe(0);
+        const db = new DatabaseSync(path);
+        try {
+          db.exec(
+            "CREATE TABLE system_settings(key TEXT PRIMARY KEY, value_json TEXT)",
+          );
+          db.prepare(
+            "INSERT INTO system_settings VALUES ('maintenance_mode', ?)",
+          ).run('"normal"');
+          expect(run().status).toBe(0);
+          for (const mode of [
+            '"read-only"',
+            '"reject-new-jobs"',
+            '"invalid"',
+          ]) {
+            db.prepare("UPDATE system_settings SET value_json=?").run(mode);
+            expect(run().status).toBe(78);
+          }
+          db.exec("DELETE FROM system_settings");
+          expect(run().status).toBe(78);
+        } finally {
+          db.close();
+        }
+        writeFileSync(path, "corrupted");
+        expect(run().status).toBe(78);
+        expect(readFileSync(path, "utf8")).toBe("corrupted");
       } finally {
         rmSync(root, { recursive: true, force: true });
       }

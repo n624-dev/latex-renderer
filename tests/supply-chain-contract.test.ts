@@ -83,7 +83,12 @@ describe("public supply-chain controls", () => {
     const manager = read("deploy/scripts/image-manager.mjs");
     expect(manager).toContain("ref: matchingDigest ?? info.Id");
     const workflow = read(".github/workflows/renderer-image-daily.yml");
-    expect(workflow).toContain('docker pull "$IMAGE_REPOSITORY@$digest"');
+    expect(workflow).toContain(
+      'base="$IMAGE_REPOSITORY@$EXISTING_MANIFEST_DIGEST"',
+    );
+    expect(workflow).toContain(
+      '[[ "$EXISTING_MANIFEST_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]',
+    );
     expect(workflow).toContain("ci-validate-texlive-base.sh");
     expect(workflow).not.toContain('docker push "$runtime_ref"');
     expect(manager).toContain('source: "local-build"');
