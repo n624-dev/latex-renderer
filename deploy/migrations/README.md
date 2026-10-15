@@ -15,7 +15,7 @@ Before migrations on production:
    node deploy/scripts/preflight-users-migration.mjs /var/lib/latex-renderer/renderer.sqlite3
    ```
 
-4. Confirm the preflight reports target version 18. Deploy the application; the
+4. Confirm the preflight reports target version 19. Deploy the application; the
    first process holding `BEGIN IMMEDIATE` performs the migration and later
    processes observe it as already applied.
 5. Verify `PRAGMA integrity_check`, `PRAGMA foreign_key_check`, migration version,
@@ -43,3 +43,12 @@ The external checkpoint must be reconciled separately after DB restoration.
 Keep `rollbackCompatible: false`; see
 [migration 18 recovery](018_audit_export_sequence.rollback.md) and
 [audit operations](../../OPERATIONS.md#audit-export-sequence-and-recovery).
+
+Migration 19 marks locally issued production smoke principals and their exclusive
+Sources as internal diagnostics. Ordinary resource APIs exclude their keys, jobs,
+Sources and audit entries, including direct-ID access. Local diagnostic export,
+worker cleanup, storage and admission accounting still include them. Existing
+clients are never classified by name alone, and previously shared Project inputs
+remain visible. Keep `rollbackCompatible: false`: older code does not enforce this
+visibility boundary. Restore a verified full recovery point to downgrade; see
+[migration 19 recovery](019_internal_smoke_visibility.rollback.md).

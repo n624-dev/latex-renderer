@@ -30,7 +30,7 @@ describe("managed TeX Live image pipeline", () => {
     const profile = read("deploy/scripts/generate-texlive-profile.sh");
     const baseSmoke = read("deploy/scripts/smoke-test-texlive-base.sh");
 
-    expect(workflow).toContain("runs-on: ubuntu-24.04");
+    expect(workflow).toContain("'ubuntu-24.04-arm' || 'ubuntu-24.04'");
     expect(workflow).not.toContain("self-hosted");
     expect(workflow).not.toContain("packages: write");
     expect(workflow).toContain("push: false");
@@ -108,7 +108,7 @@ describe("managed TeX Live image pipeline", () => {
       "--mount=type=secret,id=texlive_download_repository,required=false",
     );
     expect(baseDockerfile).toContain(
-      'tlmgr option repository "${TEXLIVE_REPOSITORY}"',
+      '"/opt/texlive/2026/bin/$texlive_arch/tlmgr" option repository "${TEXLIVE_REPOSITORY}"',
     );
     expect(baseDockerfile).toContain("/opt/texlive/2026/install-tl.log");
     const validation = read("deploy/scripts/ci-validate-texlive-base.sh");

@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { userJobSql } from "../user-visible.js";
 import {
   readySourceSql,
   sourceReferenceCountSql,
@@ -54,31 +55,44 @@ export class SourcesRepository {
       .get(id) as unknown as SourceRow | undefined;
   }
 
-  getOwned(id: string, ownerUserId: string): SourceRow | undefined {
+  getVisible(id: string): SourceRow | undefined {
+    return this.db
+      .prepare("SELECT * FROM sources WHERE id=? AND purpose='user'")
+      .get(id) as unknown as SourceRow | undefined;
+  }
+
+  getOwned(
+    id: string,
+    ownerUserId: string,
+    serviceAccountId = "",
+  ): SourceRow | undefined {
     return this.db
       .prepare(
-        "SELECT * FROM sources WHERE id=? AND owner_user_id=? AND status NOT IN ('deleted','expired')",
+        "SELECT * FROM sources WHERE id=? AND owner_user_id=? AND purpose=COALESCE((SELECT purpose FROM service_accounts WHERE id=?),'user') AND status NOT IN ('deleted','expired')",
       )
-      .get(id, ownerUserId) as unknown as SourceRow | undefined;
+      .get(id, ownerUserId, serviceAccountId) as unknown as
+      SourceRow | undefined;
   }
 
   getOwnedReady(
     id: string,
     ownerUserId: string,
     timestamp: string,
+    serviceAccountId = "",
   ): SourceRow | undefined {
     // expires_at is only the orphan deadline, not the lifetime of retained input.
     return this.db
       .prepare(
-        `SELECT * FROM sources WHERE id=? AND owner_user_id=? AND ${readySourceSql("sources")}`,
+        `SELECT * FROM sources WHERE id=? AND owner_user_id=? AND purpose=COALESCE((SELECT purpose FROM service_accounts WHERE id=?),'user') AND ${readySourceSql("sources")}`,
       )
-      .get(id, ownerUserId, timestamp) as unknown as SourceRow | undefined;
+      .get(id, ownerUserId, serviceAccountId, timestamp) as unknown as
+      SourceRow | undefined;
   }
 
   getReady(id: string, timestamp: string): SourceRow | undefined {
     return this.db
       .prepare(
-        `SELECT * FROM sources WHERE id=? AND ${readySourceSql("sources")}`,
+        `SELECT * FROM sources WHERE id=? AND purpose='user' AND ${readySourceSql("sources")}`,
       )
       .get(id, timestamp) as unknown as SourceRow | undefined;
   }
@@ -126,7 +140,7 @@ export class SourcesRepository {
     const limit = options.limit ?? 50,
       cursor = decodePageCursor(options.cursor, ["createdAt", "id"]),
       query = options.query?.trim().toLowerCase(),
-      conditions = ["s.status!='deleted'"],
+      conditions = ["s.status!='deleted'", "s.purpose='user'"],
       params: Array<string | number> = [];
     if (options.status !== undefined && options.status !== "") {
       conditions.push("s.status=?");
@@ -151,14 +165,14 @@ export class SourcesRepository {
            s.upload_received_bytes,s.upload_lease_owner,s.upload_lease_expires_at,
            COUNT(j.id) AS job_count,
            ${sourceReferenceCountSql("s")} AS blocking_reference_count,
-           (SELECT j2.id FROM jobs j2 WHERE j2.source_id=s.id AND j2.deleted_at IS NULL
+           (SELECT j2.id FROM jobs j2 WHERE j2.source_id=s.id AND ${userJobSql("j2")} AND j2.deleted_at IS NULL
              ORDER BY j2.created_at DESC,j2.id DESC LIMIT 1) AS latest_job_id,
-           (SELECT j2.status FROM jobs j2 WHERE j2.source_id=s.id AND j2.deleted_at IS NULL
+           (SELECT j2.status FROM jobs j2 WHERE j2.source_id=s.id AND ${userJobSql("j2")} AND j2.deleted_at IS NULL
              ORDER BY j2.created_at DESC,j2.id DESC LIMIT 1) AS latest_job_status,
-           (SELECT j2.created_at FROM jobs j2 WHERE j2.source_id=s.id AND j2.deleted_at IS NULL
+           (SELECT j2.created_at FROM jobs j2 WHERE j2.source_id=s.id AND ${userJobSql("j2")} AND j2.deleted_at IS NULL
              ORDER BY j2.created_at DESC,j2.id DESC LIMIT 1) AS latest_job_created_at
          FROM sources s
-         LEFT JOIN jobs j ON j.source_id=s.id AND j.deleted_at IS NULL
+         LEFT JOIN jobs j ON j.source_id=s.id AND ${userJobSql("j")} AND j.deleted_at IS NULL
          WHERE ${conditions.join(" AND ")}
          GROUP BY s.id
          ORDER BY s.created_at DESC,s.id DESC LIMIT ?`,
@@ -210,13 +224,16 @@ export class SourcesRepository {
     sha256: string,
     size: number,
     now: string,
+    serviceAccountId = "",
   ): SourceRow | undefined {
     return this.db
       .prepare(
         `SELECT * FROM sources WHERE owner_user_id=? AND sha256=? AND size=?
+      AND purpose=COALESCE((SELECT purpose FROM service_accounts WHERE id=?),'user')
       AND ${readySourceSql("sources")} ORDER BY created_at DESC LIMIT 1`,
       )
-      .get(ownerUserId, sha256, size, now) as unknown as SourceRow | undefined;
+      .get(ownerUserId, sha256, size, serviceAccountId, now) as unknown as
+      SourceRow | undefined;
   }
 
   insertReserved(input: {
@@ -228,11 +245,12 @@ export class SourcesRepository {
     timestamp: string;
     expiresAt: string;
     dedupeEligible?: boolean;
+    serviceAccountId?: string;
   }): void {
     this.db
       .prepare(
-        `INSERT INTO sources(id,owner_user_id,size,sha256,storage_key,status,created_at,updated_at,expires_at,dedupe_eligible)
-      VALUES (?,?,?,?,?,'reserved',?,?,?,?)`,
+        `INSERT INTO sources(id,owner_user_id,size,sha256,storage_key,status,created_at,updated_at,expires_at,dedupe_eligible,purpose)
+      VALUES (?,?,?,?,?,'reserved',?,?,?,?,COALESCE((SELECT purpose FROM service_accounts WHERE id=?),'user'))`,
       )
       .run(
         input.id,
@@ -244,6 +262,7 @@ export class SourcesRepository {
         input.timestamp,
         input.expiresAt,
         input.dedupeEligible === false ? 0 : 1,
+        input.serviceAccountId ?? "",
       );
   }
 

@@ -56,13 +56,15 @@ describe("public supply-chain controls", () => {
     expect(security).toContain("anchore/sbom-action@");
   });
 
-  it("pins the Windows toolchain and records a reproducible Debian inventory", () => {
+  it("bounds the Windows toolchain to tested stable patches and records a reproducible Debian inventory", () => {
     const mcpb = read(".github/workflows/mcpb.yml");
     expect(mcpb).toContain("node client/select-mcpb-openssl.mjs");
     expect(mcpb).not.toContain("choco install openssl");
     const selection = read("client/select-mcpb-openssl.mjs");
-    expect(selection).toContain('WINDOWS_OPENSSL_VERSION = "3.6.4"');
-    expect(selection).toContain("Expected OpenSSL ${WINDOWS_OPENSSL_VERSION}");
+    expect(selection).toContain('WINDOWS_OPENSSL_MINIMUM_VERSION = "3.6.4"');
+    expect(selection).toContain(
+      "Expected stable OpenSSL 3.6.x >= ${WINDOWS_OPENSSL_MINIMUM_VERSION}",
+    );
     expect(selection).toContain('["cms", "req", "x509"]');
     expect(mcpb).toContain("pnpm build:mcpb && pnpm verify:mcpb");
     for (const path of ["renderer/Dockerfile", "renderer/Dockerfile.base"]) {

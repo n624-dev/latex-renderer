@@ -129,6 +129,23 @@ See [migration 018 recovery](deploy/migrations/018_audit_export_sequence.rollbac
 and [audit operations](OPERATIONS.md#audit-export-sequence-and-recovery) for the
 explicit retained-row replay procedure after DB restoration.
 
+## Migration 019: Internal production smoke resources
+
+Migration 019 adds a server-owned purpose classification to service accounts
+and Sources. Locally issued diagnostic clients and their exclusive Sources are
+excluded from ordinary client/key/job/input/audit views, search, pagination and
+direct-ID management. Legacy local creation markers are required: a matching
+client name alone never hides user data. Previously shared and Project-retained
+input stays visible. Workers, admission/storage accounting and local bounded
+audit export still process internal diagnostics normally.
+
+Apply all new consumers together after the encrypted backup, restore test and
+WAL-consistent migration-copy preflight. The target database version is 19.
+No rows are deleted, but old application code ignores the visibility boundary;
+`rollbackCompatible` therefore remains false. Downgrades require the verified
+full recovery point, not an application-only rollback or live column removal.
+See [the migration and recovery guide](deploy/migrations/019_internal_smoke_visibility.rollback.md).
+
 ## Administrative API migration for 0.3
 
 This release changes administrative HTTP routes but does not require an additional database migration beyond the schema migrations documented above.

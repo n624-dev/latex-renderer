@@ -163,6 +163,20 @@ describe("local authentication-mode recovery", () => {
         revoked_at: null,
       });
       expect(JSON.stringify(row)).not.toContain(key.token);
+      expect(
+        database.raw
+          .prepare("SELECT purpose FROM service_accounts WHERE id=?")
+          .get(key.serviceAccountId),
+      ).toEqual({ purpose: "production-smoke" });
+      expect(
+        database.serviceAccounts.get(key.serviceAccountId),
+      ).toBeUndefined();
+      expect(database.apiKeys.get(key.keyId)).toBeUndefined();
+      expect(
+        database.auditLogs
+          .list()
+          .some((entry) => entry.target_id === key.keyId),
+      ).toBe(false);
       const revoked = runAdminLocal(
         [
           "smoke-key",

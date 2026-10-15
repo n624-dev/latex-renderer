@@ -1,12 +1,22 @@
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { selectRunnerOpenSSL } from "../client/select-mcpb-openssl.mjs";
 
 let root: string;
-beforeEach(() => { root = mkdtempSync(join(tmpdir(), "mcpb-openssl-")); });
-afterEach(() => { rmSync(root, { recursive: true, force: true }); });
+beforeEach(() => {
+  root = mkdtempSync(join(tmpdir(), "mcpb-openssl-"));
+});
+afterEach(() => {
+  rmSync(root, { recursive: true, force: true });
+});
 
 function installation(name = "OpenSSL-Win64") {
   const directory = join(root, name, "bin");
@@ -16,30 +26,39 @@ function installation(name = "OpenSSL-Win64") {
   return { directory, executable };
 }
 
-function commandRunner(version = "OpenSSL 3.6.4 25 Aug 2026", commands = "cms req x509") {
+function commandRunner(
+  version = "OpenSSL 3.6.5 29 Sep 2026",
+  commands = "cms req x509",
+) {
   return vi.fn((_executable: string, args: string[]) =>
     args[0] === "version" ? version : commands,
   );
 }
 
 describe("Windows MCPB runner OpenSSL selection", () => {
-  it.each(["OpenSSL", "OpenSSL-Win64"])("selects the exact verified %s executable", (name) => {
-    const expected = installation(name);
-    const run = commandRunner();
-    expect(selectRunnerOpenSSL(root, run)).toEqual({
-      ...expected,
-      version: "OpenSSL 3.6.4 25 Aug 2026",
-    });
-    expect(run.mock.calls).toEqual([
-      [expected.executable, ["version"]],
-      [expected.executable, ["list", "-commands"]],
-    ]);
-  });
+  it.each(["OpenSSL", "OpenSSL-Win64"])(
+    "selects the exact verified %s executable",
+    (name) => {
+      const expected = installation(name);
+      const run = commandRunner();
+      expect(selectRunnerOpenSSL(root, run)).toEqual({
+        ...expected,
+        version: "OpenSSL 3.6.5 29 Sep 2026",
+      });
+      expect(run.mock.calls).toEqual([
+        [expected.executable, ["version"]],
+        [expected.executable, ["list", "-commands"]],
+      ]);
+    },
+  );
 
   it.each([undefined, "relative-path", "/bad\npath", "/bad\rpath"])(
-    "rejects an invalid ProgramFiles path (%s)", (value) => {
+    "rejects an invalid ProgramFiles path (%s)",
+    (value) => {
       const run = commandRunner();
-      expect(() => selectRunnerOpenSSL(value, run)).toThrow("absolute ProgramFiles");
+      expect(() => selectRunnerOpenSSL(value, run)).toThrow(
+        "absolute ProgramFiles",
+      );
       expect(run).not.toHaveBeenCalled();
     },
   );
@@ -54,33 +73,60 @@ describe("Windows MCPB runner OpenSSL selection", () => {
   it("rejects ambiguous installations instead of choosing filesystem enumeration order", () => {
     installation("OpenSSL");
     installation("OpenSSL-Win64");
-    expect(() => selectRunnerOpenSSL(root, commandRunner())).toThrow("exactly one");
+    expect(() => selectRunnerOpenSSL(root, commandRunner())).toThrow(
+      "exactly one",
+    );
   });
 
   it.each([
+    "OpenSSL 3.6.4 25 Aug 2026 (Library: OpenSSL 3.6.4 25 Aug 2026)",
+    "OpenSSL 3.6.5 29 Sep 2026 (Library: OpenSSL 3.6.5 29 Sep 2026)",
+    "OpenSSL 3.6.6 1 Oct 2026",
+    "OpenSSL 3.6.40 1 Oct 2026",
+  ])("accepts stable patches within the tested series: %s", (version) => {
+    installation();
+    expect(selectRunnerOpenSSL(root, commandRunner(version)).version).toBe(
+      version,
+    );
+  });
+
+  it.each([
+    "OpenSSL 3.6.0 1 Jul 2026",
     "OpenSSL 3.6.3 20 Jul 2026",
+    "OpenSSL 3.7.0 1 Oct 2026",
     "OpenSSL 4.0.2 1 Sep 2026",
-    "OpenSSL 3.6.40 1 Sep 2026",
-    "OpenSSL 3.6.4-beta1 1 Sep 2026",
+    "OpenSSL 3.6.5-beta1 1 Sep 2026",
+    "OpenSSL 3.6.5-dev 1 Sep 2026",
+    "OpenSSL 3.6.05 1 Sep 2026",
+    "OpenSSL 3.6.99999999999999999 1 Sep 2026",
+    "OpenSSL 3.6.5",
     "LibreSSL 3.6.4",
   ])("rejects an unexpected version: %s", (version) => {
     installation();
     const run = commandRunner(version);
-    expect(() => selectRunnerOpenSSL(root, run)).toThrow("Expected OpenSSL 3.6.4");
+    expect(() => selectRunnerOpenSSL(root, run)).toThrow(
+      "Expected stable OpenSSL 3.6.x",
+    );
     expect(run).toHaveBeenCalledTimes(1);
   });
 
   it.each(["cms", "req", "x509"])("requires the %s command", (missing) => {
     installation();
-    const commands = ["cms", "req", "x509"].filter((value) => value !== missing).join(" ");
-    expect(() => selectRunnerOpenSSL(root, commandRunner(undefined, commands)))
-      .toThrow(`does not provide ${missing}`);
+    const commands = ["cms", "req", "x509"]
+      .filter((value) => value !== missing)
+      .join(" ");
+    expect(() =>
+      selectRunnerOpenSSL(root, commandRunner(undefined, commands)),
+    ).toThrow(`does not provide ${missing}`);
   });
 
   it("propagates a failed OpenSSL invocation", () => {
     installation();
-    expect(() => selectRunnerOpenSSL(root, () => { throw new Error("exit 1"); }))
-      .toThrow("exit 1");
+    expect(() =>
+      selectRunnerOpenSSL(root, () => {
+        throw new Error("exit 1");
+      }),
+    ).toThrow("exit 1");
   });
 
   it("rejects a missing executable", () => {
@@ -91,12 +137,17 @@ describe("Windows MCPB runner OpenSSL selection", () => {
     expect(run).not.toHaveBeenCalled();
   });
 
-  it.skipIf(process.platform === "win32")("does not follow an external executable symlink", () => {
-    const { executable } = installation();
-    const outside = join(root, "outside.exe");
-    writeFileSync(outside, "external fixture");
-    rmSync(executable);
-    symlinkSync(outside, executable);
-    expect(() => selectRunnerOpenSSL(root, commandRunner())).toThrow("regular executable");
-  });
+  it.skipIf(process.platform === "win32")(
+    "does not follow an external executable symlink",
+    () => {
+      const { executable } = installation();
+      const outside = join(root, "outside.exe");
+      writeFileSync(outside, "external fixture");
+      rmSync(executable);
+      symlinkSync(outside, executable);
+      expect(() => selectRunnerOpenSSL(root, commandRunner())).toThrow(
+        "regular executable",
+      );
+    },
+  );
 });

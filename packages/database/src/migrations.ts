@@ -1,5 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
-import { auditExportSequenceSql } from "./schema.js";
+import {
+  auditExportSequenceSql,
+  internalSmokeVisibilitySql,
+} from "./schema.js";
 
 const usersAccessSubjectV2Sql = `
 DROP INDEX IF EXISTS idx_users_access_subject_unique;
@@ -56,6 +59,19 @@ export function applyDatabaseMigrations(db: DatabaseSync): void {
   applyApiKeyKindV16(db);
   applyArtifactGenerationV17(db);
   applyAuditExportSequenceV18(db);
+  applyInternalSmokeVisibilityV19(db);
+}
+
+function applyInternalSmokeVisibilityV19(db: DatabaseSync): void {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    if (!db.prepare("SELECT 1 FROM schema_migrations WHERE version=19").get())
+      db.exec(internalSmokeVisibilitySql);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
 }
 
 function applyAuditExportSequenceV18(db: DatabaseSync): void {

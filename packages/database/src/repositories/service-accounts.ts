@@ -23,7 +23,7 @@ export class ServiceAccountsRepository {
     return this.db
       .prepare(
         `SELECT id,owner_user_id,name,client_type,status,security_version,created_at,updated_at
-      FROM service_accounts ORDER BY created_at DESC LIMIT ?`,
+      FROM service_accounts WHERE purpose='user' ORDER BY created_at DESC LIMIT ?`,
       )
       .all(limit) as unknown as ServiceAccountRow[];
   }
@@ -37,7 +37,7 @@ export class ServiceAccountsRepository {
   ): Page<ServiceAccountRow> {
     const limit = options.limit ?? 50,
       cursor = decodePageCursor(options.cursor, ["createdAt", "id"]),
-      conditions: string[] = [],
+      conditions: string[] = ["purpose='user'"],
       params: Array<string | number> = [],
       query = options.query?.trim().toLowerCase();
     if (query !== undefined && query !== "") {
@@ -90,7 +90,7 @@ export class ServiceAccountsRepository {
     return this.db
       .prepare(
         `SELECT id,owner_user_id,name,client_type,status,security_version,created_at,updated_at
-      FROM service_accounts WHERE id=?`,
+      FROM service_accounts WHERE id=? AND purpose='user'`,
       )
       .get(id) as unknown as ServiceAccountRow | undefined;
   }
@@ -99,7 +99,7 @@ export class ServiceAccountsRepository {
     return (
       this.db
         .prepare(
-          "SELECT 1 FROM service_accounts WHERE id=? AND status='active'",
+          "SELECT 1 FROM service_accounts WHERE id=? AND status='active' AND purpose='user'",
         )
         .get(id) !== undefined
     );
@@ -109,7 +109,7 @@ export class ServiceAccountsRepository {
     return (
       this.db
         .prepare(
-          "SELECT COUNT(*) AS count FROM service_accounts WHERE owner_user_id=? AND status='active'",
+          "SELECT COUNT(*) AS count FROM service_accounts WHERE owner_user_id=? AND status='active' AND purpose='user'",
         )
         .get(ownerUserId) as { count: number }
     ).count;
@@ -145,7 +145,7 @@ export class ServiceAccountsRepository {
     return Number(
       this.db
         .prepare(
-          "UPDATE service_accounts SET status=?,security_version=security_version+1,updated_at=? WHERE id=?",
+          "UPDATE service_accounts SET status=?,security_version=security_version+1,updated_at=? WHERE id=? AND purpose='user'",
         )
         .run(status, timestamp, id).changes,
     );
@@ -162,7 +162,7 @@ export class ServiceAccountsRepository {
     return Number(
       this.db
         .prepare(
-          "UPDATE service_accounts SET name=COALESCE(?,name),client_type=COALESCE(?,client_type),security_version=security_version+1,updated_at=? WHERE id=?",
+          "UPDATE service_accounts SET name=COALESCE(?,name),client_type=COALESCE(?,client_type),security_version=security_version+1,updated_at=? WHERE id=? AND purpose='user'",
         )
         .run(input.name ?? null, input.clientType ?? null, timestamp, id)
         .changes,

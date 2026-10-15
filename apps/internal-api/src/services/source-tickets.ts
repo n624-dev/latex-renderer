@@ -47,6 +47,7 @@ export class SourceTicketsService {
       input.sha256,
       input.size,
       now,
+      actor.serviceAccountId,
     );
     if (ready !== undefined) {
       try {
@@ -57,6 +58,7 @@ export class SourceTicketsService {
               ready.id,
               actor.userId,
               timestamp,
+              actor.serviceAccountId,
             ) === undefined
           )
             throw new AppError(
@@ -116,6 +118,7 @@ export class SourceTicketsService {
         this.deps.database.sources.insertReserved({
           id: sourceId,
           ownerUserId: actor.userId,
+          serviceAccountId: actor.serviceAccountId,
           size: input.size,
           sha256: input.sha256,
           storageKey: `sources/${sourceId}/source.zip`,
@@ -192,7 +195,11 @@ export class SourceTicketsService {
     actor: AuthenticatedServiceAccount,
     sourceId: string,
   ) {
-    const source = this.deps.database.sources.getOwned(sourceId, actor.userId);
+    const source = this.deps.database.sources.getOwned(
+      sourceId,
+      actor.userId,
+      actor.serviceAccountId,
+    );
     if (source === undefined)
       throw new AppError("SOURCE_NOT_FOUND", "Source does not exist", 404);
     if (
@@ -201,6 +208,7 @@ export class SourceTicketsService {
         sourceId,
         actor.userId,
         nowIso(),
+        actor.serviceAccountId,
       ) === undefined
     )
       throw new AppError(

@@ -23,7 +23,7 @@ export function adminArtifactsArchiveResponse(
   if (!/^job_[a-f0-9]{32}$/.test(jobId))
     throw new AppError("JOB_NOT_FOUND", "Job does not exist", 404);
   const leased = deps.database.transaction(() => {
-    const job = deps.database.jobs.get(jobId);
+    const job = deps.database.jobs.getVisible(jobId);
     if (
       job === undefined ||
       ["deleting", "deleted", "expired"].includes(job.status) ||
@@ -133,7 +133,7 @@ export function adminArtifactResponse(
     throw new AppError("ARTIFACT_NOT_FOUND", "Artifact does not exist", 404);
   const relativePath = preview ? `previews/${name}` : name;
   const leased = deps.database.transaction(() => {
-    const job = deps.database.jobs.get(jobId);
+    const job = deps.database.jobs.getVisible(jobId);
     if (
       job === undefined ||
       ["deleting", "deleted", "expired"].includes(job.status) ||

@@ -90,13 +90,29 @@ function assertSchema(db) {
     undefined
   )
     throw new Error("Migration version 4 is absent");
-  for (const version of [5, 6, 17, 18]) {
+  for (const version of [5, 6, 17, 18, 19]) {
     if (
       db
         .prepare("SELECT 1 FROM schema_migrations WHERE version=?")
         .get(version) === undefined
     )
       throw new Error(`Migration version ${version} is absent`);
+  }
+  for (const table of ["service_accounts", "sources"]) {
+    const purpose = db
+      .prepare(`PRAGMA table_info(${table})`)
+      .all()
+      .find(({ name }) => name === "purpose");
+    if (purpose?.notnull !== 1)
+      throw new Error(`${table}.purpose is absent or nullable`);
+    if (
+      db
+        .prepare(
+          `SELECT 1 FROM ${table} WHERE purpose NOT IN ('user','production-smoke') LIMIT 1`,
+        )
+        .get()
+    )
+      throw new Error(`${table}.purpose contains an unknown classification`);
   }
   const outputs = db
     .prepare("PRAGMA table_info(jobs)")

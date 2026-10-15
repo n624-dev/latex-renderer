@@ -1,5 +1,11 @@
 # Deployment
 
+Migration 019 classifies production smoke resources as internal diagnostics.
+Before upgrading, follow [the migration-copy, backup and full-recovery guide](deploy/migrations/019_internal_smoke_visibility.rollback.md).
+Update all database consumers together and verify schema 19, ordinary resource
+visibility and a complete smoke run. Old application code does not enforce this
+visibility boundary, so application-only downgrade remains disabled.
+
 Migration 018 introduces durable audit export sequences and format-3 checkpoints.
 Upgrade application, exporter and cleanup together after maintenance, verified
 backup and the private-copy migration preflight. Stop audit export and cleanup

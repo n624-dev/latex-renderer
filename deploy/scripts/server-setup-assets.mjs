@@ -29,7 +29,29 @@ export const setupHtml = `<!doctype html>
 <button id="recover" type="button" hidden>中断した設定を復旧する</button>
 </main><script src="/script.js" defer></script></html>`;
 
-export const setupStyle = `:root{font-family:system-ui,sans-serif;color-scheme:light dark}body{margin:0}main{max-width:56rem;margin:auto;padding:1rem}label{display:block;margin:.75rem 0}input,textarea,button{font:inherit;box-sizing:border-box;max-width:100%}input,textarea{width:100%;padding:.65rem}button{min-height:44px;padding:.6rem 1rem;margin:.4rem 0;cursor:pointer}textarea,pre{font-family:monospace;font-size:.9rem}pre{white-space:pre-wrap;overflow-wrap:anywhere}fieldset{min-width:0}#limits{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 1rem}@media(max-width:600px){#limits{grid-template-columns:1fr}}`;
+export const setupStyle = `
+:root { font-family:system-ui,sans-serif; color-scheme:light dark; line-height:1.6;
+  --page:#f4f7fb; --surface:#fff; --text:#17263b; --border:#c7d3e2; --accent:#1956ad; --on-accent:#fff; }
+@media(prefers-color-scheme:dark) { :root { --page:#0c1422; --surface:#131f31; --text:#eef4fc; --border:#3a506e; --accent:#a8caff; --on-accent:#10294d; } }
+* { box-sizing:border-box; }
+body { margin:0; background:var(--page); color:var(--text); overflow-wrap:anywhere; }
+main { max-width:56rem; margin:auto; padding:clamp(.75rem,3vw,2rem); }
+h1,h2 { line-height:1.25; text-wrap:balance; }
+fieldset,section { min-width:0; margin:1rem 0; border:1px solid var(--border); border-radius:.8rem; background:var(--surface); padding:clamp(.65rem,2vw,1.25rem); }
+legend { padding:0 .4rem; font-weight:700; }
+label { display:grid; gap:.4rem; margin:.85rem 0; min-width:0; }
+input,textarea,button { font:inherit; font-size:max(1rem,16px); min-width:0; max-width:100%; }
+input,textarea { width:100%; min-height:44px; padding:.65rem; color:var(--text); background:var(--page); border:1px solid var(--border); border-radius:.45rem; }
+input[type=checkbox] { width:1.25rem; height:1.25rem; min-height:0; accent-color:var(--accent); }
+label:has(>input[type=checkbox]) { display:flex; align-items:center; min-height:44px; }
+button { min-height:44px; min-width:44px; padding:.65rem 1rem; margin:.4rem 0; cursor:pointer; border:1px solid var(--accent); border-radius:.5rem; background:var(--accent); color:var(--on-accent); font-weight:650; }
+button:disabled { cursor:wait; opacity:.55; }
+:focus-visible { outline:3px solid var(--accent); outline-offset:3px; }
+textarea,pre { font-family:ui-monospace,monospace; }
+pre { white-space:pre-wrap; overflow-wrap:anywhere; max-height:50dvh; overflow:auto; }
+#limits { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:0 1rem; }
+@media(max-width:600px) { #limits { grid-template-columns:1fr; } button { width:100%; } }
+`;
 
 export const setupScript = `"use strict";
 (() => {

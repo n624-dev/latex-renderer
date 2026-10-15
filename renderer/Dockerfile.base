@@ -12,6 +12,7 @@ ARG DEBIAN_ACQUIRE_RETRIES=3
 ARG TEXLIVE_PREFETCH_WORKERS=4
 ARG TEXLIVE_DATABASE_SAVE_BATCH=1
 ARG TEXLIVE_DISPOSABLE_CI=0
+ARG TARGETARCH
 
 LABEL org.opencontainers.image.title="latex-renderer-texlive" \
       org.opencontainers.image.version="2026" \
@@ -33,7 +34,9 @@ COPY texlive.profile /tmp/texlive.profile
 RUN --mount=type=secret,id=texlive_download_repository,required=false \
     --mount=type=bind,source=TeXLivePrefetch.pm,target=/tmp/TeXLivePrefetch.pm \
     --mount=type=bind,source=TeXLiveDatabaseBatch.pm,target=/tmp/TeXLiveDatabaseBatch.pm \
-    download_repository="$(cat /run/secrets/texlive_download_repository 2>/dev/null || printf '%s' "${TEXLIVE_REPOSITORY}")" \
+    case "${TARGETARCH}" in amd64) texlive_arch=x86_64-linux ;; arm64) texlive_arch=aarch64-linux ;; *) exit 64 ;; esac \
+ && test "$(sed -n 's/^binary_\([^ ]*\) 1$/\1/p' /tmp/texlive.profile)" = "$texlive_arch" \
+ && download_repository="$(cat /run/secrets/texlive_download_repository 2>/dev/null || printf '%s' "${TEXLIVE_REPOSITORY}")" \
  && test -n "${download_repository}" \
  && mkdir -p /tmp/install-tl \
  && curl --fail --location --retry 5 --retry-delay 1 --connect-timeout 15 --max-time 600 --output /tmp/install-tl-unx.tar.gz "${download_repository}/install-tl-unx.tar.gz" \
@@ -55,7 +58,8 @@ RUN --mount=type=secret,id=texlive_download_repository,required=false \
       /tmp/install-tl/install-tl --no-continue --persistent-downloads --profile=/tmp/texlive.profile --repository="${download_repository}" \
  && install_finished=$(date +%s) \
  && printf 'TEXLIVE_INSTALL_SECONDS=%s\n' "$((install_finished - install_started))" \
- && /opt/texlive/2026/bin/x86_64-linux/tlmgr option repository "${TEXLIVE_REPOSITORY}" \
+ && test -x "/opt/texlive/2026/bin/$texlive_arch/tlmgr" \
+ && "/opt/texlive/2026/bin/$texlive_arch/tlmgr" option repository "${TEXLIVE_REPOSITORY}" \
  && rm -rf \
       /tmp/install-tl \
       /tmp/install-tl-unx.tar.gz \
@@ -67,7 +71,9 @@ RUN --mount=type=secret,id=texlive_download_repository,required=false \
       /opt/texlive/2026/install-tl.log.* \
       /opt/texlive/2026/tlpkg/backups
 
-ENV PATH="/opt/texlive/2026/bin/x86_64-linux:${PATH}"
+# Only the profile-selected architecture exists. Keep aliases out of the
+# TeX Live tree: tlmgr check files rejects untracked bin/native symlinks.
+ENV PATH="/opt/texlive/2026/bin/x86_64-linux:/opt/texlive/2026/bin/aarch64-linux:${PATH}"
 RUN cache_started=$(date +%s) \
  && fc-cache -f \
  && TEXMFCACHE=/opt/texlive/2026/texmf-var luaotfload-tool --update --force --no-compress \

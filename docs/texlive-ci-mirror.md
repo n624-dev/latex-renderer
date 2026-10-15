@@ -9,9 +9,15 @@ never stores images and its GC never calls a registry API.
 
 The implementation is `deploy/texlive-mirror/texlive_mirror.py`. It requires
 Python 3.11+, curl, xz, gpgv, util-linux and a dedicated service account. The
-initial architecture list is `amd64`, matching issue #62 and current CI. The
-parser understands `arm64`/`aarch64-linux`, but enabling it is part of the
-separate ARM CI work and also requires updating the copied profile.
+initial architecture list is `amd64`. Native ARM64 non-publishing validation is
+available through `renderer-image`'s `architecture=arm64` input. Before using it,
+enable `arm64`/`aarch64-linux` in the mirror selection and copied profile, perform
+the normal peak-capacity admission check and sync a new immutable snapshot.
+Do not change an existing snapshot, raise the 15 GiB budget, or silently fall
+back to another download origin when an ARM lease cannot be acquired. Daily
+publication remains amd64 until both native renderer paths are validated and
+multi-platform publication/retention is enabled separately. Existing immutable
+date tags are never replaced to add an architecture.
 
 ## Storage and trust model
 

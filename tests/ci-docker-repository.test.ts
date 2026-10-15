@@ -20,7 +20,7 @@ describe("disposable release runner Docker repository", () => {
 
   it("registers the official scoped signing key before refreshing APT", async () => {
     const run = vi.fn();
-    await configureDockerRepository(run);
+    await configureDockerRepository(run, "x64");
     expect(run.mock.calls[0]).toEqual([
       "/usr/bin/curl",
       expect.arrayContaining([
@@ -47,6 +47,25 @@ describe("disposable release runner Docker repository", () => {
     expect(vi.mocked(writeFile).mock.invocationCallOrder[0]).toBeLessThan(
       run.mock.invocationCallOrder[1] ?? 0,
     );
+  });
+
+  it("uses the native ARM64 signed repository without emulation", async () => {
+    const run = vi.fn();
+    await configureDockerRepository(run, "arm64");
+    expect(writeFile).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.stringContaining("Architectures: arm64\n"),
+      { mode: 0o644, flag: "wx" },
+    );
+  });
+
+  it("rejects an unsupported CPU before any mutation", async () => {
+    const run = vi.fn();
+    await expect(configureDockerRepository(run, "riscv64")).rejects.toThrow(
+      "amd64 or arm64",
+    );
+    expect(run).not.toHaveBeenCalled();
+    expect(mkdir).not.toHaveBeenCalled();
   });
 
   it.each([
