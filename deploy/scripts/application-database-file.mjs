@@ -1,7 +1,7 @@
 import { isMainModule } from "./is-main-module.mjs";
 import { constants } from "node:fs";
-import { lstat, open, realpath } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { lstat, open, readFile, realpath } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 
 export async function prepareApplicationDatabase(
@@ -85,6 +85,58 @@ export function applicationDatabaseIdentity() {
       }).trim(),
     );
   return { uid: id("-u"), gid: id("-g") };
+}
+
+// Called only after the release assembly has been independently verified and
+// sealed. Modern drivers prepare the DB themselves, after read-only preflight.
+// Creating an empty file here makes those drivers mistake it for an existing
+// installation. Older signed drivers still need explicit shared permissions.
+export async function prepareInitialDeploymentDatabase(
+  path,
+  identity,
+  assembly,
+) {
+  const parent = dirname(resolve(path));
+  if ((await realpath(parent)) !== parent)
+    throw new Error("Database parent must be a real directory");
+  for (const suffix of ["", "-wal", "-shm", "-journal"]) {
+    try {
+      await lstat(path + suffix);
+    } catch (error) {
+      if (error.code === "ENOENT") continue;
+      throw error;
+    }
+    throw new Error(
+      "Initial install cannot overwrite an existing database or SQLite sidecar",
+    );
+  }
+  const preparation = join(
+    assembly,
+    "deploy/scripts/application-database-file.mjs",
+  );
+  let ownsPreparation = false;
+  try {
+    const info = await lstat(preparation);
+    if (!info.isFile() || info.nlink !== 1)
+      throw new Error("Invalid signed database preparation module");
+    ownsPreparation = true;
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  const driver = await readFile(
+    join(assembly, "deploy/scripts/deploy-production-release.sh"),
+    "utf8",
+  );
+  if (
+    driver.includes(
+      '"$source_root/deploy/scripts/application-database-file.mjs"',
+    ) !== ownsPreparation
+  )
+    throw new Error(
+      "Signed deployment database preparation contract is inconsistent",
+    );
+  if (!ownsPreparation)
+    await prepareApplicationDatabase(path, { ...identity, createOnly: true });
 }
 
 if (isMainModule(import.meta.url)) {

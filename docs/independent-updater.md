@@ -376,9 +376,24 @@ tag; branch-validation proofs are not a release publication authority.
 
 Both E2E workflows require separate disposable runners for the legacy
 `v1.3.4-rc.5` transition and the already-installed bootstrap in `v1.3.5-rc.1`.
-The latter verifies the baseline slot and frozen bootstrap before applying the
-candidate; the release upload waits for both cases. A new baseline is an explicit
+They also run native ARM64 from `v1.5.0-rc.1`. The installed and ARM64 cases
+verify the baseline slot and frozen bootstrap before applying the candidate;
+the release upload waits for all three cases. A new baseline is an explicit
 test-policy change, not a moving latest release.
+
+During first installation, a signed driver that includes and invokes
+`application-database-file.mjs` owns database creation after its read-only
+preflight. The bootstrap leaves the database absent until then; creating a
+zero-byte file earlier would incorrectly trigger the existing-database
+maintenance check. Historical signed drivers without that helper retain
+exclusive file creation with shared SQLite permissions. Both paths refuse any
+existing database or SQLite sidecar, and mismatched preparation modules/calls
+fail closed. A separate initial-install lock under the root-owned staging
+directory serializes this preparation and deployment without blocking the Image
+Manager's first-start mutation lock. It releases on completion, failure or
+process termination. Existing-host maintenance checks and signed baseline bytes are
+unchanged. An interrupted first installation with a remaining database is not
+silently retried as a clean installation.
 
 Both E2E workflows fetch each baseline's release metadata, tag and
 attestation using their short-lived, read-only Actions token. Only the named
@@ -404,7 +419,7 @@ or credentials; a 403 alone does not prove rate limiting. Check these headers
 and job permissions before retrying, without bypassing integrity verification.
 
 The artifact is transferred by immutable Actions artifact ID, not build cache,
-and retained for one day. Both runners are disposable; E2E staging and temporary
+and retained for one day. All three runners are disposable; E2E staging and temporary
 DB probes are removed in `finally` blocks. Interrupted runner execution is
 reclaimed with the runner. There is no release-upload job or contents-write
 permission. Passing this workflow does not replace the release-only E2E: the

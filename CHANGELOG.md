@@ -2,6 +2,11 @@
 
 ## 1.5.0-rc.2 - Unreleased
 
+- Defer initial database creation to signed deployment drivers that prepare
+  shared SQLite permissions themselves, so their read-only preflight does not
+  mistake a newly created empty file for an existing installation. Retain
+  exclusive permission preparation for older signed drivers, and reject
+  pre-existing databases, orphaned sidecars and inconsistent driver contracts.
 - Wait for both application deployment and independent Updater activation in
   the Admin CLI. Report legacy, historical or incomplete outcomes as unconfirmed
   with the original operation ID instead of returning a premature success.
