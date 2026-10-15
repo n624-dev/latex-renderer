@@ -113,6 +113,7 @@ jobs:
           # The fresh recursive build inside check already created the assets.
           # Verify those exact files; do not regenerate a second signature.
           pnpm verify:mcpb
+          pnpm test:client:deployment
       - name: Build versioned server source bundle
         env:
           CANDIDATE_TAG: ${{ inputs.candidate_tag }}

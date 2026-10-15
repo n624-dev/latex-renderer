@@ -23,6 +23,8 @@ import { crc32, inflateRawSync } from "node:zlib";
 import { AppError } from "@latex-renderer/shared";
 import { hasExternalWindowsBin, manageWindowsLaunchers, windowsLauncherContents } from "./windows-launchers.js";
 
+export { clientSetupFailureDiagnostic } from "./failure-diagnostic.js";
+
 export const DEFAULT_DISTRIBUTION_URI =
   "https://latex-render.n624.jp/downloads/client/";
 const PAYLOAD_NAME = "latex-renderer-client";

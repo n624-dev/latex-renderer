@@ -1,6 +1,23 @@
 # Changelog
 
-## 1.5.0-rc.2 - Unreleased
+## 1.5.0-rc.3 - Unreleased
+
+- Preserve bounded, structured diagnostics for deployment client installation,
+  doctor and removal checks before temporary-file cleanup. Keep the original
+  child exit status, distinguish invalid JSON, output limits and timeouts, and
+  never log raw error messages, stderr, URLs, credentials or command arguments.
+- Add allowlisted installer phase and nested network/filesystem error hints.
+  Keep signature/checksum, client health, rendering and independent Updater
+  checks mandatory; terminate the smoke process group on interruption or limit
+  failure and retain ordinary cleanup/recovery behavior.
+- Verify actual packaged client installation, doctor, removal and HTTP failure
+  diagnostics over isolated loopback HTTP in native amd64/ARM64 application CI
+  and both signed candidate validation workflows, without external credentials.
+- Require signed candidate validation before publication. Diagnostic coverage
+  does not establish the cause of a previous intermittent installation failure
+  or certify untested external hosting and authentication configurations.
+
+## 1.5.0-rc.2 - 2026-10-15
 
 - Defer initial database creation to signed deployment drivers that prepare
   shared SQLite permissions themselves, so their read-only preflight does not

@@ -50,6 +50,7 @@ jobs:
           pnpm check
           # Same job/commit fresh outputs, not a cache or another job's assets.
           pnpm verify:mcpb
+          pnpm test:client:deployment
           # Version label only: no local or remote Git tag is created.
           sh deploy/scripts/build-server-release-assets.sh \
             "v$version" "$RUNNER_TEMP/validation-assets" "" --validation-only

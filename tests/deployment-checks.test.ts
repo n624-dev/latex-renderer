@@ -170,18 +170,12 @@ it("labels each previously silent post-MCPB check before executing it", () => {
       "public-downloads-content",
       'deployment_expect_body "$public_origin/downloads/',
     ],
-    [
-      "client-install",
-      'runuser -u "$sync_user" -- /usr/local/bin/node "$client_smoke_root/client-install.mjs"',
-    ],
-    [
-      "client-doctor",
-      'runuser -u "$sync_user" -- env PATH="$client_smoke_root/bin:$PATH"',
-    ],
+    ["client-install", 'deployment_json "$temporary_root/client-setup.json"'],
+    ["client-doctor", 'deployment_json "$temporary_root/client-doctor.json"'],
     ["client-install-doctor-json", "/usr/local/bin/node -e '"],
     [
       "client-uninstall",
-      'runuser -u "$sync_user" -- /usr/local/bin/node "$client_smoke_root/client-uninstall.mjs"',
+      'deployment_json "$temporary_root/client-remove.json"',
     ],
     ["client-uninstall-json", "/usr/local/bin/node -e '"],
     ["client-uninstall-directory", 'test ! -e "$client_smoke_root/client"'],

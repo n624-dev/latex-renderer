@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import {
   DEFAULT_DISTRIBUTION_URI,
+  clientSetupFailureDiagnostic,
   fetchDistribution,
   installDistribution,
   saveCredential,
@@ -9,6 +10,9 @@ import {
 } from "@latex-renderer/setup-core";
 import process from "node:process";
 import { Writable } from "node:stream";
+
+let phase: "arguments" | "distribution" | "install" | "credential" =
+  "arguments";
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
@@ -19,21 +23,25 @@ async function main(): Promise<void> {
     return;
   }
   const json = args.includes("--json");
-  const distribution = await fetchDistribution({
-    baseUri: option(args, "--base-uri") ?? DEFAULT_DISTRIBUTION_URI,
-  });
+  const baseUri = option(args, "--base-uri") ?? DEFAULT_DISTRIBUTION_URI;
   const installDirectory = option(args, "--install-directory");
   const binDirectory = option(args, "--bin-directory");
+  const skillTarget = target(option(args, "--skill-target") ?? "both");
+  const mcpTarget = target(option(args, "--mcp-target") ?? "both");
+  phase = "distribution";
+  const distribution = await fetchDistribution({ baseUri });
+  phase = "install";
   const result = await installDistribution({
     ...distribution,
     ...(installDirectory ? { installDirectory } : {}),
     ...(binDirectory ? { binDirectory } : {}),
-    skillTarget: target(option(args, "--skill-target") ?? "both"),
-    mcpTarget: target(option(args, "--mcp-target") ?? "both"),
+    skillTarget,
+    mcpTarget,
     ...(json ? { output: quietWriter, warning: quietWriter } : {}),
   });
   let credentialStored = false;
   if (args.includes("--api-key-stdin")) {
+    phase = "credential";
     await saveCredential((await readStdin()).trim());
     credentialStored = true;
   }
@@ -89,6 +97,7 @@ void main().catch((error: unknown) => {
         error: {
           code: "SETUP_FAILED",
           message: error instanceof Error ? error.message : "Unknown error",
+          diagnostic: { phase, ...clientSetupFailureDiagnostic(error) },
         },
       })}\n`,
     );

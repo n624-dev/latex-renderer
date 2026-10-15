@@ -61,8 +61,10 @@ jobs:
         run: pnpm --filter '!@latex-renderer/public-web' --filter '!@latex-renderer/gateway-worker' -r build && pnpm build:client
       - name: Native API, SQLite, setup, update and recovery regression tests
         run: pnpm test
-      - name: Verify native client package clean install
-        run: pnpm test:mcpb:clean -- linux
+      - name: Verify native client deployment and package clean install
+        run: |
+          pnpm test:client:deployment
+          pnpm test:mcpb:clean -- linux
 
   validate:
     runs-on: ubuntu-24.04
@@ -107,3 +109,5 @@ jobs:
         run: node deploy/ci/measure-phase.mjs browser -- pnpm test:browser:built
       - name: Verify signed MCPB distribution
         run: node deploy/ci/measure-phase.mjs mcpb -- pnpm verify:mcpb
+      - name: Verify packaged client deployment and bounded failure diagnostics
+        run: node deploy/ci/measure-phase.mjs client-deployment -- pnpm test:client:deployment

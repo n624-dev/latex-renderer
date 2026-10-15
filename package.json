@@ -1,6 +1,6 @@
 {
   "name": "latex-renderer",
-  "version": "1.5.0-rc.2",
+  "version": "1.5.0-rc.3",
   "private": true,
   "license": "Apache-2.0",
   "type": "module",
@@ -16,6 +16,7 @@
     "build:mcpb": "node client/build-mcpb.mjs",
     "verify:mcpb": "node client/verify-mcpb.mjs",
     "test:mcpb:clean": "node client/test-mcpb-clean-install.mjs",
+    "test:client:deployment": "node client/test-deployment-smoke.mjs",
     "typecheck": "pnpm --filter @latex-renderer/gateway-worker typecheck && tsc -p tsconfig.json",
     "test": "vitest run",
     "test:browser": "pnpm --filter @latex-renderer/web build && vitest run --config vitest.browser.config.ts",
