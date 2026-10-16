@@ -129,6 +129,39 @@ not a permanent backup archive. A pending failed deployment is the exception and
 requires review rather than forced deletion. All temporary plaintext is below
 the managed root, normally removed immediately, and covered by admission.
 
+## リリースコピーの中断と再試行
+
+新しい導入処理は、最終リリース名へ直接コピーしません。非公開の作業ディレクトリで
+ファイル・リンク・実行権限を元の配布内容と照合し、所有者・権限を設定して永続化した後、
+同じファイルシステム内のrenameで公開します。完成前に`current`を切り替えることはありません。
+コピーには同じNodeプロセスのファイル操作を使い、コピー元の署名・digest検証は従来どおり
+Updaterが先に実施します。コピー内容の照合はその検証の代わりにはなりません。
+
+コピー途中のI/Oエラーや容量不足では、最終名を公開せず、root専用の記録と作業ディレクトリを
+残します。復旧レビューが必要な場合は先に既存のレビュー手順を完了してください。
+原因を取り除いて同じ不変リリースへ通常の更新を再試行すると、版・内容・所有者・パスが
+記録と一致する途中コピーだけを回収してやり直します。コピー完了後やrename直後の中断も
+同じ記録から復旧します。完成済み配置は記録された全ファイルのhashで検査して再利用し、
+上書きや権限の再設定はしません。署名検証済みリリースのmetadataと非生成ソースが同一なら、
+再ビルド時のクライアント署名などの生成物の違いだけで拒否しません。rollback時に検証済みの
+稼働Updaterが実行用driverを差し替える既存経路も、旧配置を書き換えずに維持します。
+
+作業記録は`/opt/latex-renderer/update-staging/release-publications`、途中コピーは
+`/opt/latex-renderer/releases/.pending-*`です。通常のリリース整理では途中コピーを完成版の
+保持数に数えません。同じ版の再試行が成功すると記録と途中コピーは取り除かれます。
+再試行しない版の残骸の収集は、完成版・復旧点の保持判定と合わせて扱う必要があります。
+
+古い方式で残った、完了マーカーも信頼できる作業記録もないディレクトリは自動削除しません。
+記録の破損、異なる配布内容、想定外の所有者、外部symlink、特殊ファイル、配下のmountも
+安全側で拒否します。マーカーだけを手作業で作ったり、署名・復旧レビューを省略したりせず、
+必要なデータと復旧点を保護した上で原因を調べてください。
+
+通常テストでは小さな一時ディレクトリでI/Oエラー・容量不足相当の失敗、公開前後の中断、
+実SIGKILL、同時実行、改変・不正パスを検証します。使い捨てホストでの実ENOSPC・再起動・
+systemd経由の更新は別の統合試験であり、これらのfixtureの成功だけでは合格としません。
+署名付き更新検証CIは、使い捨てホストのrun/bootマーカーを検査してから、専用の小さいtmpfsで
+実ENOSPCと同じ内容への再試行も試験します。本番ホストや通常のローカルテストでは実行しません。
+
 ## Validation
 
 Local tests use tiny SQLite/storage fixtures and ephemeral age keys, exercise

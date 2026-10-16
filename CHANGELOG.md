@@ -1,6 +1,13 @@
 # Changelog
 
-## 1.5.0-rc.3 - Unreleased
+## Unreleased
+
+- リリースのコピーを、内容照合・権限設定・永続化後の原子的な公開へ変更。
+  中断時の作業記録を使って同じ不変リリースへ安全に再試行し、完成済みの内容が
+  異なる版や、所有者・パス・記録が不明な残骸は上書きしない。
+  署名検証と復旧レビューは維持し、途中コピーを完成版の保持数から除外する。
+
+## 1.5.0-rc.3 - 2026-10-15
 
 - Preserve bounded, structured diagnostics for deployment client installation,
   doctor and removal checks before temporary-file cleanup. Keep the original

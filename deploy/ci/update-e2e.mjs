@@ -93,6 +93,11 @@ try {
     root,
   ]);
   const candidate = join(root, `latex-renderer-server-${tag.slice(1)}`);
+  // Use the signed candidate's actual publication code on a tiny private
+  // tmpfs. This never fills the runner filesystem or changes a live release.
+  run("/usr/local/bin/node", [
+    join(candidate, "deploy/ci/release-publication-e2e.mjs"),
+  ]);
   // Exercise the candidate's actual extraction module under the controller's
   // seccomp/mount/user restrictions, not only the root E2E deployment helper.
   run("/usr/local/bin/node", [
@@ -594,6 +599,7 @@ try {
   console.log(
     JSON.stringify({
       event: "release.update_e2e.passed",
+      releasePublicationEnospc: true,
       validationOnly: Boolean(validationSourceRef),
       sourceRef: validationSourceRef ?? `refs/tags/${tag}`,
       baselineTag,

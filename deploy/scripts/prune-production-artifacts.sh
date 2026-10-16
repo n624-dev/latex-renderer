@@ -122,12 +122,12 @@ ranked_file=$(mktemp /tmp/latex-renderer-release-ranked.XXXXXX)
 cleanup() { rm -f -- "$keep_file" "$all_file" "$ranked_file"; }
 trap cleanup EXIT INT TERM HUP
 
-find "$releases_root" -mindepth 1 -maxdepth 1 -type d -printf '%T@\t%p\n' > "$ranked_file"
+find "$releases_root" -mindepth 1 -maxdepth 1 -type d ! -name '.pending-*' -printf '%T@\t%p\n' > "$ranked_file"
 LC_ALL=C sort -nr -o "$ranked_file" "$ranked_file"
 awk -F '\t' -v keep="$release_retention_count" 'NR <= keep { print $2 }' \
   "$ranked_file" > "$keep_file"
 grep -Fxq "$active_release" "$keep_file" || printf '%s\n' "$active_release" >> "$keep_file"
-find "$releases_root" -mindepth 1 -maxdepth 1 -type d -print > "$all_file"
+find "$releases_root" -mindepth 1 -maxdepth 1 -type d ! -name '.pending-*' -print > "$all_file"
 LC_ALL=C sort -o "$all_file" "$all_file"
 
 removed_releases=0
