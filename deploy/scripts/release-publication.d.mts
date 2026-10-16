@@ -10,3 +10,9 @@ export function publishRelease(options: {
     phase: "journal-durable" | "copy-durable" | "published",
   ) => Promise<void>;
 }): Promise<{ releaseId: string; reused: boolean }>;
+export function collectReleasePublications(options: {
+  releasesRoot: string;
+  journalRoot: string;
+  uid?: number;
+  now?: number;
+}): Promise<number>;

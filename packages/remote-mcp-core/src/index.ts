@@ -71,7 +71,10 @@ const SOURCE_UPLOAD_MS = 10 * 60_000;
 const SOURCE_UPLOAD_LEASE_MS = 60_000;
 const SOURCE_RETENTION_MS = 60 * 60_000;
 const OAUTH_CLIENT_LIMIT = 10_000;
-const UNUSED_OAUTH_CLIENT_MS = 24 * 60 * 60_000;
+// A connection may retain its DCR ID before completing browser consent. Keep
+// registrations for 30 days of inactivity, bounded by OAUTH_CLIENT_LIMIT, and
+// renew activity only after the complete authorization request is validated.
+const UNUSED_OAUTH_CLIENT_MS = 30 * 24 * 60 * 60_000;
 const ENVIRONMENT_INDEX_TTL_MS = 30_000;
 /**
  * MCP Resource responses are encoded as a single blob/text value.  Keep this
@@ -116,11 +119,10 @@ export class RemoteOAuthService {
     private readonly clock: () => number = Date.now,
   ) {}
 
-  registerClient(input: {
+  registrationMetadata(input: {
     clientName: string;
     redirectUris: readonly string[];
   }): {
-    clientId: string;
     clientName: string;
     redirectUris: readonly string[];
   } {
@@ -141,6 +143,18 @@ export class RemoteOAuthService {
         "Between one and ten redirect URIs are required",
         400,
       );
+    return { clientName: input.clientName, redirectUris };
+  }
+
+  registerClient(input: {
+    clientName: string;
+    redirectUris: readonly string[];
+  }): {
+    clientId: string;
+    clientName: string;
+    redirectUris: readonly string[];
+  } {
+    const { redirectUris } = this.registrationMetadata(input);
     const clientId = newId("mcp_client"),
       timestamp = this.now();
     this.database.transaction(() => {
@@ -204,12 +218,14 @@ export class RemoteOAuthService {
       throw new AppError("INVALID_TARGET", "OAuth resource is invalid", 400);
     if (!/^[A-Za-z0-9_-]{43,128}$/.test(codeChallenge))
       throw new AppError("INVALID_REQUEST", "PKCE challenge is invalid", 400);
+    const scopes = normalizeScopes(params.get("scope"));
+    this.database.remoteMcp.touchClient(clientId, this.now());
     return {
       clientId,
       clientName: client.client_name,
       redirectUri,
       ...(state === undefined ? {} : { state }),
-      scopes: normalizeScopes(params.get("scope")),
+      scopes,
       resource,
       codeChallenge,
     };

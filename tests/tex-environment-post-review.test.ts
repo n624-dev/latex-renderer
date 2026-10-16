@@ -229,7 +229,11 @@ describe("post-review TeX environment regressions", () => {
   });
 
   it("lets active jobs drain and periodically recovers leases missed at worker startup", () => {
-    const worker = read("apps/renderer-worker/src/index.ts");
+    const root = read("apps/renderer-worker/src/index.ts");
+    const worker = read("apps/renderer-worker/src/worker.ts");
+    expect(root).toContain(
+      "await runWorker(database, config, shutdown.signal)",
+    );
     const periodicRecovery = read(
       "apps/renderer-worker/src/periodic-recovery.ts",
     );

@@ -25,6 +25,11 @@ case "$parent_mutation_lock" in
   *) echo "LATEX_RENDERER_PARENT_MUTATION_LOCK is invalid" >&2; exit 64 ;;
 esac
 source_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
+tools_root=${LATEX_RENDERER_DEPLOY_TOOLS_ROOT:-$source_root}
+if [ "$tools_root" != "$source_root" ]; then
+  [ "$parent_mutation_lock" = application-update ] || { echo "Separate deployment tools require a locked root helper" >&2; exit 78; }
+  /usr/local/bin/node "$source_root/deploy/scripts/release-assembly.mjs" --assert-sealed-control-tree "$tools_root"
+fi
 if ! command -v setfacl >/dev/null 2>&1; then
   echo "setfacl is required; install the acl package before starting deployment" >&2
   exit 69
@@ -275,7 +280,8 @@ deployment_checkpoint quiesce-and-prepare-host
 sh "$source_root/deploy/scripts/quiesce-image-manager.sh"
 deployment_quiesced=true
 require_normal_maintenance_for_smoke
-"$source_root/deploy/scripts/prepare-host.sh" "$release_id"
+LATEX_RENDERER_PREPARE_SOURCE="$source_root" \
+  sh "$tools_root/deploy/scripts/prepare-host.sh" "$release_id"
 if [ "$deployment_mode" = cloudflare ]; then
   /opt/latex-renderer/current/deploy/scripts/configure-host-access.sh
 fi
@@ -477,7 +483,7 @@ if [ "$deployment_mode" = cloudflare ]; then
 fi
 
 deployment_checkpoint artifact-pruning
-/opt/latex-renderer/current/deploy/scripts/prune-production-artifacts.sh "$release_id"
+sh "$tools_root/deploy/scripts/prune-production-artifacts.sh" "$release_id"
 
 deployment_finished=true
 # The old controller must finish persisting its operation before it is stopped.

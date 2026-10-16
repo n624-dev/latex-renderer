@@ -16,6 +16,11 @@ import {
 import { AppError, parseBearer, safeError } from "@latex-renderer/shared";
 import type { McpHttpHandler } from "@modelcontextprotocol/server";
 import { z } from "zod";
+import {
+  diagnosticRequestId,
+  withMcpDiagnostics,
+  type McpStage,
+} from "./diagnostics.js";
 
 export interface RemoteMcpAppDependencies {
   database: RendererDatabase;
@@ -32,7 +37,8 @@ const registerSchema = z
       .trim()
       .min(1)
       .max(200)
-      .refine((value) => !hasControlCharacters(value)),
+      .refine((value) => !hasControlCharacters(value))
+      .optional(),
     redirect_uris: z.array(z.url().max(2048)).min(1).max(10),
     token_endpoint_auth_method: z.literal("none").optional(),
     grant_types: z
@@ -51,10 +57,43 @@ export function createRemoteMcpApp(deps: RemoteMcpAppDependencies) {
   const app = new Hono<{
       Variables: {
         mcpAccess: ReturnType<RemoteOAuthService["verifyAccessToken"]>;
+        mcpStage: McpStage | undefined;
       };
     }>(),
     registrationLimiter = new AnonymousRegistrationLimiter();
   app.use("*", requestId());
+  app.use("*", async (c, next) => {
+    await next();
+    const route = c.req.path;
+    const stage =
+      route === "/mcp"
+        ? (c.get("mcpStage") ?? "token_verification")
+        : route === "/oauth/register"
+          ? "register"
+          : route === "/oauth/authorize"
+            ? c.req.method === "GET"
+              ? "authorize_get"
+              : "authorize_post"
+            : route === "/oauth/token"
+              ? "token"
+              : route.startsWith("/.well-known/oauth-")
+                ? "discovery"
+                : null;
+    if (stage)
+      console.info(
+        JSON.stringify({
+          event: "remote_mcp.http_result",
+          stage,
+          status: c.res.status,
+          json:
+            c.res.headers
+              .get("Content-Type")
+              ?.toLowerCase()
+              .startsWith("application/json") ?? false,
+          requestId: diagnosticRequestId(c.get("requestId")),
+        }),
+      );
+  });
   // Run after secureHeaders on the response: no-referrer makes native form
   // POSTs send Origin: null. Only the consent document needs same-origin;
   // external callbacks still receive no Referer, and Origin/CSRF stay strict.
@@ -90,13 +129,24 @@ export function createRemoteMcpApp(deps: RemoteMcpAppDependencies) {
           parseBearer(c.req.header("Authorization")),
         ),
       );
-    } catch {
+    } catch (error) {
+      if (!(error instanceof AppError) || error.status !== 401) throw error;
+      console.error(
+        JSON.stringify({
+          event: "remote_mcp.authentication_rejected",
+          code: error.code,
+          requestId: diagnosticRequestId(c.get("requestId")),
+        }),
+      );
       return mcpAuthenticationChallenge(deps.publicOrigin);
     }
     await next();
   });
   app.use("/mcp", async (c, next) => {
-    c.req.raw = await boundedRequest(c.req.raw, 8 * 1024 * 1024);
+    c.set("mcpStage", "mcp_request");
+    c.req.raw = await boundedRequest(c.req.raw, 8 * 1024 * 1024, (stage) =>
+      c.set("mcpStage", stage),
+    );
     await next();
   });
 
@@ -138,13 +188,12 @@ export function createRemoteMcpApp(deps: RemoteMcpAppDependencies) {
   );
 
   app.post("/oauth/register", async (c) => {
-    if (c.req.header("Content-Type")?.split(";", 1)[0] !== "application/json")
+    if (mediaType(c.req.raw) !== "application/json")
       throw new AppError(
         "INVALID_REQUEST",
         "Registration request must be JSON",
         400,
       );
-    registrationLimiter.consume(trustedClientAddress(c.req.raw));
     const parsed = registerSchema.safeParse(await readJson(c.req.raw, 16_384));
     if (!parsed.success)
       throw new AppError(
@@ -152,10 +201,21 @@ export function createRemoteMcpApp(deps: RemoteMcpAppDependencies) {
         "OAuth client metadata is invalid",
         400,
       );
-    const client = deps.oauth.registerClient({
-      clientName: parsed.data.client_name,
+    const metadata = deps.oauth.registrationMetadata({
+      clientName: parsed.data.client_name ?? "Unnamed MCP client",
       redirectUris: parsed.data.redirect_uris,
     });
+    const address = trustedClientAddress(c.req.raw);
+    if (address === undefined)
+      throw new RegistrationError(
+        "OAUTH_CLIENT_ADDRESS_UNAVAILABLE",
+        "Registration requires a trusted proxy client address",
+        503,
+        60,
+      );
+    registrationLimiter.consume(address);
+    const client = deps.oauth.registerClient(metadata);
+    oauthStage("registered", c.get("requestId"));
     return c.json(
       {
         client_id: client.clientId,
@@ -175,7 +235,11 @@ export function createRemoteMcpApp(deps: RemoteMcpAppDependencies) {
       ),
       session = await establishOrRedirect(deps, c.req.raw),
       csrf = randomBytes(24).toString("base64url");
-    if (session instanceof Response) return session;
+    if (session instanceof Response) {
+      oauthStage("login_required", c.get("requestId"));
+      return session;
+    }
+    oauthStage("consent_shown", c.get("requestId"));
     appendSetCookies(c.res.headers, session.cookies);
     c.header(
       "Set-Cookie",
@@ -238,17 +302,20 @@ export function createRemoteMcpApp(deps: RemoteMcpAppDependencies) {
       { append: true },
     );
     if (body.get("decision") !== "approve") {
+      oauthStage("consent_denied", c.get("requestId"));
       const redirect = new URL(request.redirectUri);
       redirect.searchParams.set("error", "access_denied");
       if (request.state !== undefined)
         redirect.searchParams.set("state", request.state);
       return c.redirect(redirect.toString(), 303);
     }
-    return c.redirect(deps.oauth.authorize(userId, request).toString(), 303);
+    const redirect = deps.oauth.authorize(userId, request);
+    oauthStage("consent_approved", c.get("requestId"));
+    return c.redirect(redirect.toString(), 303);
   });
 
   app.post("/oauth/token", async (c) => {
-    const type = c.req.header("Content-Type")?.split(";", 1)[0];
+    const type = mediaType(c.req.raw);
     if (type !== "application/x-www-form-urlencoded")
       throw new AppError(
         "INVALID_REQUEST",
@@ -281,33 +348,52 @@ export function createRemoteMcpApp(deps: RemoteMcpAppDependencies) {
                   400,
                 );
               })();
+    oauthStage("token_issued", c.get("requestId"));
     return c.json(tokens);
   });
 
   app.all("/mcp", async (c) => {
     const access = c.get("mcpAccess");
-    return deps.mcp.fetch(c.req.raw, {
-      authInfo: {
-        token: access.token,
-        clientId: access.clientId,
-        scopes: access.scopes,
-        expiresAt: Math.floor(Date.parse(access.expiresAt) / 1000),
-        resource: new URL(access.resource),
-        extra: { userId: access.userId },
-      },
-    });
+    return withMcpDiagnostics(
+      c.get("requestId"),
+      c.get("mcpStage") ?? "mcp_request",
+      () =>
+        deps.mcp.fetch(c.req.raw, {
+          authInfo: {
+            token: access.token,
+            clientId: access.clientId,
+            scopes: access.scopes,
+            expiresAt: Math.floor(Date.parse(access.expiresAt) / 1000),
+            resource: new URL(access.resource),
+            extra: { userId: access.userId },
+          },
+        }),
+    );
   });
 
   app.get("/health", (c) => c.json({ status: "ok" }));
   app.onError((error, c) => {
     const safe = safeError(error),
       oauth = c.req.path.startsWith("/oauth/");
+    if (error instanceof RegistrationError)
+      c.header("Retry-After", String(error.retryAfter));
+    else if (safe.status === 503) c.header("Retry-After", "60");
     console.error(
       JSON.stringify({
         event: "remote_mcp.error",
         code: safe.code,
-        path: c.req.path,
-        requestId: c.get("requestId"),
+        path: [
+          "/mcp",
+          "/oauth/register",
+          "/oauth/authorize",
+          "/oauth/token",
+        ].includes(c.req.path)
+          ? c.req.path
+          : "other",
+        status: safe.status,
+        fault: error instanceof AppError ? "request" : "internal",
+        subsystem: faultSubsystem(error),
+        requestId: diagnosticRequestId(c.get("requestId")),
       }),
     );
     return c.json(
@@ -321,6 +407,17 @@ export function createRemoteMcpApp(deps: RemoteMcpAppDependencies) {
     c.json({ error: { code: "NOT_FOUND", message: "Route not found" } }, 404),
   );
   return app;
+}
+
+class RegistrationError extends AppError {
+  constructor(
+    code: string,
+    message: string,
+    status: number,
+    readonly retryAfter: number,
+  ) {
+    super(code, message, status);
+  }
 }
 
 class AnonymousRegistrationLimiter {
@@ -339,30 +436,78 @@ class AnonymousRegistrationLimiter {
     const previous = this.entries.get(key);
     if (previous === undefined) {
       if (this.entries.size >= 10_000)
-        throw new AppError(
+        throw new RegistrationError(
           "OAUTH_REGISTRATION_BUSY",
           "OAuth client registration is temporarily unavailable",
           503,
+          60,
         );
       this.entries.set(key, { count: 1, windowStartedAt: timestamp });
       return;
     }
     if (previous.count >= 10)
-      throw new AppError(
+      throw new RegistrationError(
         "OAUTH_REGISTRATION_RATE_LIMIT",
         "Too many OAuth client registrations",
         429,
+        Math.max(
+          1,
+          Math.ceil((previous.windowStartedAt + windowMs - timestamp) / 1000),
+        ),
       );
     previous.count += 1;
   }
 }
 
-function trustedClientAddress(request: Request): string {
+function trustedClientAddress(request: Request): string | undefined {
   for (const name of ["CF-Connecting-IP", "X-Latex-Renderer-Client-IP"]) {
     const value = request.headers.get(name)?.trim();
     if (value !== undefined && isIP(value) !== 0) return value;
   }
-  return "unavailable";
+  // Never trust arbitrary X-Forwarded-For or collapse every caller into one
+  // anonymous bucket. The loopback-only backend requires the proxy to replace
+  // these dedicated headers; a missing address is a configuration error.
+  return undefined;
+}
+
+function mediaType(request: Request): string | undefined {
+  return request.headers
+    .get("Content-Type")
+    ?.split(";", 1)[0]
+    ?.trim()
+    .toLowerCase();
+}
+function oauthStage(stage: string, requestId: unknown): void {
+  console.info(
+    JSON.stringify({
+      event: "remote_mcp.oauth_stage",
+      stage,
+      requestId:
+        typeof requestId === "string" && /^[a-f0-9-]{36}$/i.test(requestId)
+          ? requestId
+          : "unavailable",
+    }),
+  );
+}
+function faultSubsystem(error: Error): string {
+  const code = "code" in error ? error.code : undefined;
+  if (
+    [
+      "ERR_SQLITE_ERROR",
+      "SQLITE_BUSY",
+      "SQLITE_READONLY",
+      "SQLITE_FULL",
+      "SQLITE_CORRUPT",
+    ].includes(String(code))
+  )
+    return "database";
+  if (
+    ["ENOSPC", "EDQUOT", "EACCES", "EPERM", "EIO", "ENOENT"].includes(
+      String(code),
+    )
+  )
+    return "filesystem";
+  return error instanceof AppError ? "oauth_request" : "unexpected";
 }
 
 function mcpAuthenticationChallenge(publicOrigin: string): Response {
@@ -506,10 +651,7 @@ async function readForm(
   request: Request,
   maximum: number,
 ): Promise<URLSearchParams> {
-  if (
-    request.headers.get("Content-Type")?.split(";", 1)[0] !==
-    "application/x-www-form-urlencoded"
-  )
+  if (mediaType(request) !== "application/x-www-form-urlencoded")
     throw new AppError("INVALID_REQUEST", "Request must be form encoded", 400);
   return new URLSearchParams(await readLimitedBody(request, maximum));
 }
@@ -559,6 +701,7 @@ async function readLimitedBody(
 async function boundedRequest(
   request: Request,
   maximum: number,
+  stage: (stage: McpStage) => void,
 ): Promise<Request> {
   if (request.body === null) return request;
   const declared = request.headers.get("Content-Length");
@@ -591,6 +734,21 @@ async function boundedRequest(
       "Content-Length does not match the request body",
       400,
     );
+  // Inspect only small handshake envelopes, never copy large Source/tool
+  // payloads for logging. The SDK still receives the exact original bytes.
+  if (length <= 16_384)
+    try {
+      const value: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      if (
+        value &&
+        typeof value === "object" &&
+        "method" in value &&
+        (value.method === "initialize" || value.method === "tools/list")
+      )
+        stage(value.method);
+    } catch {
+      /* Invalid JSON is classified by the SDK, not changed here. */
+    }
   return new Request(request, {
     body: new ReadableStream<Uint8Array>({
       start(controller) {
@@ -613,6 +771,10 @@ function oauthErrorCode(code: string): string {
     INVALID_REDIRECT_URI: "invalid_redirect_uri",
     UNSUPPORTED_GRANT_TYPE: "unsupported_grant_type",
     UNSUPPORTED_RESPONSE_TYPE: "unsupported_response_type",
+    OAUTH_REGISTRATION_RATE_LIMIT: "temporarily_unavailable",
+    OAUTH_REGISTRATION_BUSY: "temporarily_unavailable",
+    OAUTH_CLIENT_ADDRESS_UNAVAILABLE: "temporarily_unavailable",
+    OAUTH_REGISTRATION_CAPACITY: "temporarily_unavailable",
   };
   return known[code] ?? "server_error";
 }

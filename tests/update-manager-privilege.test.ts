@@ -1,9 +1,94 @@
 import { readFileSync } from "node:fs";
+import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 
 const read = (path: string) => readFileSync(path, "utf8");
 
 describe("application updater privilege boundary", () => {
+  it.each(["legacy", "old-protocol", "stale", "valid"] as const)(
+    "executes the real helper dispatch without an unlocked mutation: %s",
+    async (scenario) => {
+      const script = read("deploy/scripts/update-manager-helper.mjs");
+      const dispatch = script
+        .slice(script.lastIndexOf("if (isMainModule(import.meta.url)) {"))
+        .replace("if (isMainModule(import.meta.url)) {", "{");
+      const events: string[] = [];
+      const current = "v1.0.0-aaaaaaaaaaaa";
+      const request = {
+        verb: scenario === "legacy" ? "apply" : "apply-locked",
+        lockProtocol: scenario === "old-protocol" ? 1 : 2,
+        expectedReleaseId:
+          scenario === "stale" ? "v1.0.0-bbbbbbbbbbbb" : current,
+        version: "1.1.0",
+        stage: "fixture",
+      };
+      const run = runInNewContext(`(async()=>{${dispatch}})()`, {
+        readRequest: () => Promise.resolve(request),
+        helperMutationLock: null,
+        acquireInheritedMutationLock: () => {
+          events.push("locked");
+          return Promise.resolve({
+            fd: 3,
+            release: () => {
+              events.push("released");
+              return Promise.resolve();
+            },
+          });
+        },
+        installedRelease: () => Promise.resolve({ releaseId: current }),
+        validReleaseId: (v: string) => v,
+        validReleaseVersion: (v: string) => v,
+        apply: () => {
+          events.push("apply");
+          return Promise.resolve();
+        },
+      }) as Promise<void>;
+      if (scenario === "valid") {
+        await run;
+        expect(events).toEqual(["locked", "apply", "released"]);
+      } else {
+        await expect(run).rejects.toThrow();
+        expect(events).toEqual(
+          scenario === "stale" ? ["locked", "released"] : [],
+        );
+      }
+    },
+  );
+  it("hands off mutation ownership using legacy-rejected verbs and inherited root descriptors", () => {
+    const controller = read("deploy/scripts/update-manager.mjs"),
+      helper = read("deploy/scripts/update-manager-helper.mjs"),
+      launcher = read("deploy/scripts/update-manager-helper-launcher.sh");
+    expect(controller).toContain("verb: `${request.verb}-locked`");
+    expect(
+      controller.indexOf("await operation.mutationLock.release()"),
+    ).toBeLessThan(controller.indexOf('const child = spawn("/usr/bin/sudo"'));
+    expect(controller).toContain("waitPrivilegedProcess");
+    expect(controller).toContain("recoveringOperationId = operation.id");
+    expect(
+      helper.indexOf(
+        "helperMutationLock = await acquireInheritedMutationLock()",
+      ),
+    ).toBeLessThan(helper.indexOf('case "apply-locked":'));
+    expect(helper).toContain("validReleaseId(request.expectedReleaseId)");
+    expect(helper).toContain("helperMutationLock.fd");
+    expect(launcher).toContain("--property=KillMode=control-group");
+    expect(launcher).toContain("--property=RuntimeMaxSec=2h");
+    const files = JSON.parse(read("deploy/updater-files.json")) as string[];
+    for (const name of [
+      "inherited-mutation-lock.mjs",
+      "privileged-process-output.mjs",
+      "release-publication.mjs",
+      "release-retention.mjs",
+      "prepare-host.sh",
+      "prune-production-artifacts.sh",
+    ])
+      expect(files).toContain(`deploy/scripts/${name}`);
+    const driver = read("deploy/scripts/deploy-production-release.sh");
+    expect(driver).toContain('sh "$tools_root/deploy/scripts/prepare-host.sh"');
+    expect(driver).toContain(
+      'sh "$tools_root/deploy/scripts/prune-production-artifacts.sh"',
+    );
+  });
   it("seals a fresh root bundle copy before rehashing and independently verifying it", () => {
     const helper = read("deploy/scripts/update-manager-helper.mjs");
     const section = helper.slice(
@@ -129,8 +214,8 @@ describe("application updater privilege boundary", () => {
       'const releaseRoot = "/opt/latex-renderer/releases"',
     );
     expect(helper).toContain("function directChild(root, name)");
-    expect(helper).toContain('case "apply":');
-    expect(helper).toContain('case "rollback":');
+    expect(helper).toContain('case "apply-locked":');
+    expect(helper).toContain('case "rollback-locked":');
     expect(helper).toContain('case "bootstrap":');
     expect(helper).toContain('case "schedule-manager-restart":');
     expect(helper).toContain("Update helper verb is not allowed");

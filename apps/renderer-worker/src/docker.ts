@@ -104,14 +104,21 @@ export function rendererContainerName(
   return `latex-render-${jobId}-g${leaseGeneration}`;
 }
 export async function dockerStop(name: string): Promise<void> {
-  await runDocker(["stop", "--time", "2", name]).catch(() => undefined);
-  await runDocker(["kill", name]).catch(() => undefined);
+  await dockerStopVerified(name);
 }
 export async function dockerStopVerified(identifier: string): Promise<void> {
+  if (
+    !/^[a-f0-9]{12,64}$/.test(identifier) &&
+    !/^latex-render-[A-Za-z0-9_-]+-g[0-9]+$/.test(identifier)
+  )
+    throw new Error("Invalid renderer container identifier");
   await runDocker(["stop", "--time", "2", identifier]).catch(() => undefined);
   await runDocker(["kill", identifier]).catch(() => undefined);
+  const selector = /^[a-f0-9]{12,64}$/.test(identifier)
+    ? `id=${identifier}`
+    : `name=^${identifier}$`;
   const remaining = (
-    await runDocker(["ps", "-aq", "--filter", `id=${identifier}`])
+    await runDocker(["ps", "-aq", "--filter", selector])
   ).trim();
   if (remaining !== "")
     throw new Error(`Renderer container could not be stopped: ${identifier}`);
@@ -151,7 +158,12 @@ export function validateDockerIsolation(
   )
     throw new Error("The configured Docker daemon does not support AppArmor");
 }
-export function runDocker(args: readonly string[]): Promise<string> {
+export function runDocker(
+  args: readonly string[],
+  timeoutMs = 15_000,
+): Promise<string> {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 60_000)
+    throw new Error("Invalid Docker command timeout");
   return new Promise((resolve, reject) => {
     const child = spawn("docker", [...args], {
       stdio: ["ignore", "pipe", "pipe"],
@@ -159,21 +171,37 @@ export function runDocker(args: readonly string[]): Promise<string> {
     });
     let stdout = "",
       stderr = "";
+    let failure: Error | undefined;
+    const timer = setTimeout(() => {
+      failure = new Error("Docker command timed out");
+      child.kill("SIGKILL");
+    }, timeoutMs);
+    timer.unref();
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
-      stdout += chunk;
+      if (stdout.length + chunk.length > 1024 * 1024) {
+        failure = new Error("Docker response exceeds limit");
+        child.kill("SIGKILL");
+      } else stdout += chunk;
     });
     child.stderr.on("data", (chunk: string) => {
-      stderr += chunk;
+      stderr = (stderr + chunk).slice(-8192);
     });
-    child.once("error", reject);
+    child.once("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
     child.once("close", (code) => {
-      if (code === 0) resolve(stdout);
+      clearTimeout(timer);
+      if (failure) reject(failure);
+      else if (code === 0) resolve(stdout);
       else reject(new Error(stderr));
     });
   });
 }
+
+export class RendererCleanupDeferred extends Error {}
 function dockerEnvironment(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { PATH: process.env.PATH ?? "/usr/bin:/bin" };
   for (const name of [

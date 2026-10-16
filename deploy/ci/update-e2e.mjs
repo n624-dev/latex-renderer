@@ -17,7 +17,6 @@ import {
   verifyCiValidationArtifact,
 } from "../scripts/ci-release-artifact.mjs";
 import { downloadPublishedRelease } from "./published-release.mjs";
-import { acquireMutationLock } from "../scripts/mutation-lock.mjs";
 import {
   brokenUpdaterSource,
   assertStartupRecovery,
@@ -123,7 +122,6 @@ try {
     const stage = await mkdtemp(
       "/opt/latex-renderer/update-staging/ci-deploy-",
     );
-    let lock;
     try {
       const assembly = await helper.buildBootstrapRelease(
         stage,
@@ -131,7 +129,6 @@ try {
         manifest.packageManager,
         identity,
       );
-      if (!initialInstall) lock = await acquireMutationLock();
       await helper.deploySealedAssembly(
         assembly,
         stage,
@@ -140,7 +137,6 @@ try {
         initialInstall,
       );
     } finally {
-      if (lock) await lock.release();
       await rm(stage, { recursive: true, force: true });
     }
   };
@@ -422,6 +418,9 @@ try {
     { encoding: "utf8" },
   ).trim();
   if (owners !== "1") throw new Error("Owner did not survive migration");
+  run("/usr/local/bin/node", [
+    join(candidate, "deploy/ci/mutation-worker-lifecycle-e2e.mjs"),
+  ]);
   // Real systemd regression: stopping Internal API propagates to its required
   // Standalone Gateway. Exercise the installed settings CLI, not only mocks or
   // auth endpoints, and restore the reviewed limits before the rendering smoke.
@@ -600,6 +599,7 @@ try {
     JSON.stringify({
       event: "release.update_e2e.passed",
       releasePublicationEnospc: true,
+      mutationWorkerLifecycle: true,
       validationOnly: Boolean(validationSourceRef),
       sourceRef: validationSourceRef ?? `refs/tags/${tag}`,
       baselineTag,

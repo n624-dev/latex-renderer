@@ -417,7 +417,10 @@ describe("production hardening", () => {
       smoke = "smoke-test-public-worker-boundary.sh",
       cleanup = "prune-production-artifacts.sh";
     expect(deploy.indexOf(smoke)).toBeLessThan(deploy.indexOf(cleanup));
-    expect(prune).toContain("release_retention_count=3");
+    expect(prune).toContain("release-retention.mjs");
+    expect(read("deploy/scripts/release-retention.mjs")).toMatch(
+      /\.slice\(0,\s*3\)/,
+    );
     expect(prune).toContain('active_release" != "$expected_release');
     expect(prune).toContain('tagged_image" != "$configured_image');
     expect(prune).toContain('docker "$@"');

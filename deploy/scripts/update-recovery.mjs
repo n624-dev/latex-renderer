@@ -19,6 +19,7 @@ import { join, resolve } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { Transform } from "node:stream";
 import { DatabaseSync } from "node:sqlite";
+import { inheritedMutationStdio } from "./inherited-mutation-lock.mjs";
 import { setTimeout, clearTimeout } from "node:timers";
 
 const GiB = 1024 ** 3,
@@ -235,7 +236,9 @@ async function commandPipe(first, second, maximum) {
   const children = [],
     done = [];
   const start = ([command, ...args]) => {
-    const child = spawn(command, args, { stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(command, args, {
+      stdio: inheritedMutationStdio(["pipe", "pipe", "pipe"]),
+    });
     children.push(child);
     let stderr = "";
     child.stderr.on("data", (data) => {

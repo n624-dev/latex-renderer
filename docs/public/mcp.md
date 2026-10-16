@@ -4,7 +4,7 @@ category: AI・MCP
 title: Remote MCP・Local MCP
 description: OAuthで接続するRemote MCPと、ローカルファイルを扱うLocal MCPの使い分けです。
 navOrder: 45
-updated: "2026-09-23"
+updated: "2026-10-16"
 since: "v1.0.0"
 ---
 
@@ -28,6 +28,44 @@ https://latex-render.n624.jp/mcp
 ```
 
 Team・EnterpriseではOwnerがOrganization settingsのConnectorsからCustom Web connectorを追加し、各利用者がConnectして認可します。認可画面ではサーバーに設定されたCloudflare Access、OIDC、またはpasswordでログインし、要求された操作を確認してください。OAuth access tokenは10分、refresh tokenはローテーションされ、長期レンダリングAPIキーへ変換されません。
+
+## ChatGPTなどの接続を確認する
+
+ChatGPTのRemote MCP接続も、公開HTTPSのMCP URLとOAuth認可コード＋PKCEで設定します。
+利用可否・接続画面・callback URIは利用中のプランやworkspace、クライアントによって異なるため、
+[OpenAIの公式認証仕様](https://developers.openai.com/plugins/build/auth)と実際の管理画面を確認してください。
+このサーバーはDCRを広告しており、CIMDやSSEへの切替を接続失敗の推測だけで必須にしません。
+AIサービスのドメインをWebの許可Originへ追加したり、認証を無効化したりしないでください。
+
+未完了の接続登録は、作成または正しく検証された認可要求から30日間の非活動期間を目安に整理します。
+有効な認可コードやtoken familyが参照する登録は先に消しません。全登録は最大10,000件です。
+整理済みの登録が `invalid_client` となった場合は、クライアント側で接続登録を作り直してください。
+名前を送らない標準的なDCR要求も受け付けますが、指定された名前・redirect URIの検証は維持します。
+
+登録は信頼する送信元IPごとに15分間10回までです。同じプロキシ出口IPの利用者はこの枠を共有します。
+11回目以降はHTTP 429、`temporarily_unavailable` と `Retry-After` を返すので、その秒数後に再試行します。
+不正な登録metadataは枠を消費しません。送信元が欠落・不正な場合は共通の利用者枠へ混ぜず、
+HTTP 503として管理者へプロキシ設定の確認を促します。
+バックエンドはloopbackのままとし、プロキシが `X-Latex-Renderer-Client-IP` を実際の送信元から
+上書きする構成を使います。任意の `X-Forwarded-For` は採用しません。
+Cloudflare経路では信頼境界内で設定された `CF-Connecting-IP` も扱います。
+
+管理者はソース内の次のコマンドで、資格情報を送らず公開discoveryと401 challengeを確認できます。
+接続の追加・設定変更・redirectの追跡は行わず、返却本文・Cookie・秘密情報は出力しません。
+
+```sh
+node deploy/scripts/check-remote-mcp.mjs https://your-renderer.example
+```
+
+200のJSON metadataと401のBearer challengeは、実際のブラウザーログインやChatGPTのツール一覧成功を
+証明しません。接続が失敗する場合は、画面で止まった段階と時刻、`X-Request-ID`、サーバーの
+`remote_mcp.http_result` / `remote_mcp.oauth_stage` / `remote_mcp.protocol_error` を対応させます。
+診断はdiscovery・register・authorize GET/POST・token・initialize・tools/listの段階、HTTP status、
+許可されたエラー分類だけを記録します。401の資格情報拒否と、検証処理自体の5xxを区別します。
+OAuth code、token、Cookie、PKCE verifier、Source、利用者IDをIssueやログへ貼らないでください。
+
+リポジトリのHTTP試験は、ローカルsocket経由で登録・同意・PKCE交換・SDK初期化・ツール一覧を
+確認します。外部OIDC、Cloudflareの実ポリシー、ChatGPT Webの実アカウントでの接続成功とは区別します。
 
 Remote MCPは次のツールを提供します。
 

@@ -29,7 +29,6 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { createReadStream } from "node:fs";
-import { once } from "node:events";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -44,10 +43,11 @@ import {
 } from "./release-extraction.mjs";
 import { releaseAttestationArgs } from "./release-attestation.mjs";
 import { validatedReleaseRendererFingerprint } from "./runtime-image-identity.mjs";
+import { acquireMutationLockForPath } from "./mutation-lock.mjs";
 import {
-  acquireMutationLock,
-  acquireMutationLockForPath,
-} from "./mutation-lock.mjs";
+  acquireInheritedMutationLock,
+  withInheritedMutationLock,
+} from "./inherited-mutation-lock.mjs";
 import {
   prepareInitialDeploymentDatabase,
   applicationDatabaseIdentity,
@@ -115,6 +115,9 @@ const bootstrapControlFiles = [
   "deploy/scripts/release-attestation.mjs",
   "deploy/scripts/runtime-image-identity.mjs",
   "deploy/scripts/mutation-lock.mjs",
+  "deploy/scripts/inherited-mutation-lock.mjs",
+  "deploy/scripts/release-publication.mjs",
+  "deploy/scripts/release-retention.mjs",
   "deploy/scripts/release-version.mjs",
 ];
 
@@ -164,8 +167,14 @@ function redact(value) {
 
 let outputBytes = 0;
 let outputLimitReached = false;
+let helperMutationLock = null;
+let outputDisconnected = false;
+process.stdout.on("error", () => {
+  outputDisconnected = true;
+});
 async function writeOutput(value) {
-  if (outputLimitReached) return;
+  if (outputLimitReached || outputDisconnected || process.stdout.destroyed)
+    return;
   const bytes = Buffer.from(redact(value));
   const remaining = maxOutputBytes - outputBytes;
   if (remaining <= 0) {
@@ -175,11 +184,21 @@ async function writeOutput(value) {
   const chunk =
     bytes.length <= remaining ? bytes : bytes.subarray(0, remaining);
   outputBytes += chunk.length;
-  if (!process.stdout.write(chunk)) await once(process.stdout, "drain");
+  await new Promise((resolve) =>
+    process.stdout.write(chunk, (error) => {
+      if (error) outputDisconnected = true;
+      resolve();
+    }),
+  );
   if (chunk.length < bytes.length) {
     outputLimitReached = true;
-    if (!process.stdout.write("\n[LOG_LIMIT_REACHED]\n"))
-      await once(process.stdout, "drain");
+    if (!outputDisconnected)
+      await new Promise((resolve) =>
+        process.stdout.write("\n[LOG_LIMIT_REACHED]\n", (error) => {
+          if (error) outputDisconnected = true;
+          resolve();
+        }),
+      );
   }
 }
 
@@ -188,7 +207,12 @@ function runCapture(command, args, options = {}) {
   return new Promise((resolvePromise, reject) => {
     const child = spawn(command, args, {
       ...spawnOptions,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: [
+        "ignore",
+        "pipe",
+        "pipe",
+        ...(helperMutationLock ? [helperMutationLock.fd] : []),
+      ],
     });
     let stdout = "";
     let stderr = "";
@@ -255,7 +279,12 @@ async function runLogged(command, args, options = {}) {
   await writeOutput(`$ ${command} ${args.join(" ")}\n`);
   const child = spawn(command, args, {
     ...options,
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: [
+      "ignore",
+      "pipe",
+      "pipe",
+      ...(helperMutationLock ? [helperMutationLock.fd] : []),
+    ],
   });
   const consume = async (stream) => {
     for await (const chunk of stream) await writeOutput(String(chunk));
@@ -743,6 +772,7 @@ async function deployFromAssembly(
     ...process.env,
     SUDO_USER: deployment.deployUser,
     LATEX_RENDERER_BUILD_ROOT: deployment.deploymentBuild,
+    LATEX_RENDERER_DEPLOY_TOOLS_ROOT: helperRoot,
   };
   delete environment.LATEX_RENDERER_PARENT_MUTATION_LOCK;
   delete environment.LATEX_RENDERER_LEGACY_BOOTSTRAP;
@@ -753,19 +783,47 @@ async function deployFromAssembly(
     // acquire/quiesce the Image Manager normally.
     delete environment.UPDATE_MANAGER_STATE_ROOT;
     delete environment.UPDATE_MANAGER_SOCKET;
+    delete environment.LATEX_RENDERER_DEPLOY_TOOLS_ROOT;
   }
-  await withHostRecovery(
-    () =>
-      runLogged(
-        "sh",
-        [
-          join(assembly, "deploy/scripts/deploy-production-release.sh"),
-          releaseId,
-        ],
-        { env: environment },
-      ),
-    { requireNormalMaintenance: true },
+  await withInheritedMutationLock(helperMutationLock, () =>
+    withHostRecovery(
+      () =>
+        runLogged(
+          "sh",
+          [
+            join(assembly, "deploy/scripts/deploy-production-release.sh"),
+            releaseId,
+          ],
+          { env: environment },
+        ),
+      { requireNormalMaintenance: true },
+    ),
   );
+}
+
+async function createRootStage(prefix) {
+  const path = await mkdtemp(join(privilegedStagingRoot, prefix));
+  try {
+    const marker = await open(join(path, ".helper-stage-v2"), "wx", 0o600);
+    try {
+      await marker.writeFile('{"format":2}\n');
+      await marker.sync();
+    } finally {
+      await marker.close();
+    }
+    for (const directory of [path, privilegedStagingRoot]) {
+      const file = await open(directory, "r");
+      try {
+        await file.sync();
+      } finally {
+        await file.close();
+      }
+    }
+    return path;
+  } catch (error) {
+    await rm(path, { recursive: true, force: true });
+    throw error;
+  }
 }
 
 async function apply(request) {
@@ -773,7 +831,7 @@ async function apply(request) {
     throw new Error(
       "Application downgrade requires the explicit compatible rollback path",
     );
-  const rootStage = await mkdtemp(join(privilegedStagingRoot, "privileged-"));
+  const rootStage = await createRootStage("privileged-");
   try {
     const prepared = await prepareTrustedSource(request, rootStage);
     const buildSource = await ensureBuildSource(
@@ -819,6 +877,11 @@ export async function deploySealedAssembly(
         join(privilegedStagingRoot, "initial-install.lock"),
       )
     : null;
+  const importedLock =
+    !initialInstall && !helperMutationLock
+      ? await acquireInheritedMutationLock()
+      : null;
+  if (importedLock) helperMutationLock = importedLock;
   try {
     const deployment = await prepareDeploymentTrees(rootStage, assembly);
     const releaseId = `v${release.version}-${manifest.commit.slice(0, 12)}`;
@@ -839,6 +902,10 @@ export async function deploySealedAssembly(
     return releaseId;
   } finally {
     await initialLock?.release();
+    if (importedLock) {
+      helperMutationLock = null;
+      await importedLock.release();
+    }
   }
 }
 
@@ -888,7 +955,7 @@ async function bootstrapPrivilegeSeparatedUpdater(request) {
       "Bootstrap target must be newer than the installed release",
     );
 
-  const rootStage = await mkdtemp(join(privilegedStagingRoot, "bootstrap-"));
+  const rootStage = await createRootStage("bootstrap-");
   let managerStopped = false;
   let deploymentSucceeded = false;
   let mutationLock;
@@ -928,7 +995,8 @@ async function bootstrapPrivilegeSeparatedUpdater(request) {
     const deployment = await prepareDeploymentTrees(rootStage, assembly);
     const releaseId = `v${release.version}-${prepared.manifest.commit.slice(0, 12)}`;
 
-    mutationLock = await acquireMutationLock();
+    mutationLock = await acquireInheritedMutationLock();
+    helperMutationLock = mutationLock;
     const current = await installedRelease();
     if (current.releaseId !== before.releaseId)
       throw new Error(
@@ -973,8 +1041,9 @@ async function bootstrapPrivilegeSeparatedUpdater(request) {
         );
       }
     }
-    await mutationLock?.release();
     await rm(rootStage, { recursive: true, force: true });
+    await mutationLock?.release();
+    helperMutationLock = null;
   }
 }
 
@@ -996,9 +1065,7 @@ async function rollback(request) {
   );
   if (targetUpdater.schemaVersion !== 1)
     throw new Error("Legacy Updater rollback requires explicit host recovery");
-  const rootStage = await mkdtemp(
-    join(privilegedStagingRoot, "privileged-rollback-"),
-  );
+  const rootStage = await createRootStage("privileged-rollback-");
   try {
     const verified = join(rootStage, "verified");
     await mkdir(verified, { mode: 0o700 });
@@ -1054,29 +1121,53 @@ async function scheduleManagerRestart() {
 
 if (isMainModule(import.meta.url)) {
   const request = await readRequest();
-  switch (request.verb) {
-    case "bootstrap":
-      if (typeof request.version !== "string")
-        throw new Error("Bootstrap version is required");
-      await bootstrapPrivilegeSeparatedUpdater({
-        version: validReleaseVersion(request.version.replace(/^v/, "")),
-      });
-      break;
-    case "apply":
-      if (typeof request.version !== "string")
-        throw new Error("Apply version is required");
-      await apply({
-        version: validReleaseVersion(request.version.replace(/^v/, "")),
-        stage: request.stage,
-      });
-      break;
-    case "rollback":
-      await rollback(request);
-      break;
-    case "schedule-manager-restart":
-      await scheduleManagerRestart();
-      break;
-    default:
-      throw new Error("Update helper verb is not allowed");
+  if (["apply", "rollback"].includes(request.verb))
+    throw new Error(
+      "Legacy unlocked helper request refused; restart the matching controller before retrying",
+    );
+  if (["apply-locked", "rollback-locked"].includes(request.verb)) {
+    if (request.lockProtocol !== 2)
+      throw new Error(
+        "Update helper requires lock protocol 2; restart the matching controller before retrying",
+      );
+    helperMutationLock = await acquireInheritedMutationLock();
+    if (
+      (await installedRelease()).releaseId !==
+      validReleaseId(request.expectedReleaseId)
+    ) {
+      await helperMutationLock.release();
+      throw new Error(
+        "Installed release changed before helper acquired the mutation lock; retry from current state",
+      );
+    }
+  }
+  try {
+    switch (request.verb) {
+      case "bootstrap":
+        if (typeof request.version !== "string")
+          throw new Error("Bootstrap version is required");
+        await bootstrapPrivilegeSeparatedUpdater({
+          version: validReleaseVersion(request.version.replace(/^v/, "")),
+        });
+        break;
+      case "apply-locked":
+        if (typeof request.version !== "string")
+          throw new Error("Apply version is required");
+        await apply({
+          version: validReleaseVersion(request.version.replace(/^v/, "")),
+          stage: request.stage,
+        });
+        break;
+      case "rollback-locked":
+        await rollback(request);
+        break;
+      case "schedule-manager-restart":
+        await scheduleManagerRestart();
+        break;
+      default:
+        throw new Error("Update helper verb is not allowed");
+    }
+  } finally {
+    await helperMutationLock?.release();
   }
 }

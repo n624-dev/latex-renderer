@@ -16,9 +16,76 @@ import {
 import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
-import { publishRelease } from "../deploy/scripts/release-publication.mjs";
+import {
+  publishRelease,
+  collectReleasePublications,
+} from "../deploy/scripts/release-publication.mjs";
 
 const roots: string[] = [];
+it.skipIf(process.platform !== "linux")(
+  "bounds interrupted publications by count and age under the same publication lock",
+  async () => {
+    const f = await fixture();
+    for (let n = 0; n < 4; n++)
+      await expect(
+        publishRelease({
+          ...f,
+          releaseId: `fixture-${n}`,
+          copy: () => Promise.reject(new Error("interrupted")),
+        }),
+      ).rejects.toThrow("interrupted");
+    const options = {
+      releasesRoot: f.releasesRoot,
+      journalRoot: f.journalRoot,
+    };
+    await collectReleasePublications(options);
+    expect(
+      (await readdir(f.releasesRoot)).filter((n) => n.startsWith(".pending-")),
+    ).toHaveLength(2);
+    expect(
+      await collectReleasePublications({
+        ...options,
+        now: Date.now() + 25 * 3600_000,
+      }),
+    ).toBe(2);
+    expect(await readdir(f.releasesRoot)).toEqual([]);
+  },
+);
+it.skipIf(process.platform !== "linux")(
+  "does not collect a publication while its copy is running",
+  async () => {
+    const f = await fixture();
+    let ready!: () => void, finish!: () => void;
+    const started = new Promise<void>((resolve) => {
+        ready = resolve;
+      }),
+      gate = new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+    const publication = publishRelease({
+      ...f,
+      copy: async () => {
+        ready();
+        await gate;
+        throw new Error("fixture end");
+      },
+    });
+    const expected = expect(publication).rejects.toThrow("fixture end");
+    await started;
+    try {
+      await expect(
+        collectReleasePublications({
+          releasesRoot: f.releasesRoot,
+          journalRoot: f.journalRoot,
+          now: Date.now() + 25 * 3600_000,
+        }),
+      ).rejects.toMatchObject({ code: "MUTATION_LOCK_BUSY" });
+    } finally {
+      finish();
+      await expected;
+    }
+  },
+);
 afterEach(async () => {
   for (const root of roots.splice(0))
     await rm(root, { recursive: true, force: true });
@@ -195,6 +262,26 @@ describe.skipIf(process.platform !== "linux")(
       expect((await publishRelease(f)).reused).toBe(true);
       expect(
         await readFile(join(f.releasesRoot, f.releaseId, driver), "utf8"),
+      ).toContain("original signed driver");
+    });
+    it("reuses a legacy complete release for locked rollback without overwriting its original driver", async () => {
+      const f = await verifiedFixture();
+      await publishRelease(f);
+      const target = join(f.releasesRoot, f.releaseId),
+        marker = join(target, ".host-prepare-source-complete");
+      await writeFile(marker, "");
+      const before = await lstat(target);
+      await writeFile(
+        join(f.source, "deploy/scripts/deploy-production-release.sh"),
+        "# trusted running updater driver\n",
+      );
+      expect((await publishRelease(f)).reused).toBe(true);
+      expect((await lstat(target)).ino).toBe(before.ino);
+      expect(
+        await readFile(
+          join(target, "deploy/scripts/deploy-production-release.sh"),
+          "utf8",
+        ),
       ).toContain("original signed driver");
     });
     it("uses the native copy and publishes a fully checked, normalized payload, reusing it without writes", async () => {
@@ -404,7 +491,7 @@ describe.skipIf(process.platform !== "linux")(
         JSON.stringify({ ...j, stage: "../source" }),
       );
       await expect(publishRelease({ ...f, copy })).rejects.toThrow(
-        "does not match",
+        "Corrupt pending publication journal",
       );
       await writeFile(journalPath, original);
       await symlink(f.source, join(f.releasesRoot, j.stage, "outside"));

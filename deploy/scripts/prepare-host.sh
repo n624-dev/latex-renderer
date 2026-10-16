@@ -17,6 +17,13 @@ case "$release_id" in
 esac
 
 source_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
+tools_root=$source_root
+if [ -n "${LATEX_RENDERER_PREPARE_SOURCE:-}" ]; then
+  source_root=$(readlink -f -- "$LATEX_RENDERER_PREPARE_SOURCE")
+  if [ "$source_root" != "$tools_root" ]; then
+    /usr/local/bin/node "$tools_root/deploy/scripts/release-assembly.mjs" --assert-sealed-control-tree "$source_root"
+  fi
+fi
 if ! command -v setfacl >/dev/null 2>&1; then
   echo "setfacl is required; install the acl package before preparing the host" >&2
   exit 69
@@ -51,7 +58,9 @@ grep -q "^$worker_user:" /etc/subgid || usermod --add-subgids 165536-231071 "$wo
 
 install -d -o root -g root -m 0755 /opt/latex-renderer/releases
 install -d -o root -g root -m 0711 /opt/latex-renderer/update-staging
-/usr/local/bin/node "$source_root/deploy/scripts/release-publication.mjs" "$release_id"
+/usr/local/bin/node "$tools_root/deploy/scripts/release-retention.mjs" capture
+LATEX_RENDERER_PREPARE_SOURCE="$source_root" \
+  /usr/local/bin/node "$tools_root/deploy/scripts/release-publication.mjs" "$release_id"
 if [ -n "$previous_release" ] && [ "$previous_release" != "$release_root" ]; then
   chmod o-rwx "$previous_release"
 fi

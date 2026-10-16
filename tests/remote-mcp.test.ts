@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { createServer, type Server } from "node:http";
 import {
   mkdir,
   mkdtemp,
@@ -31,8 +32,15 @@ const ORIGIN = "https://latex.example.com";
 const RESOURCE = `${ORIGIN}/mcp`;
 const databases: RendererDatabase[] = [];
 const temporary: string[] = [];
+const servers: Server[] = [];
 
 afterEach(async () => {
+  for (const server of servers.splice(0)) {
+    server.closeAllConnections();
+    await new Promise<void>((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
+  }
   vi.useRealTimers();
   vi.restoreAllMocks();
   for (const database of databases.splice(0)) database.close();
@@ -44,6 +52,193 @@ afterEach(async () => {
 });
 
 describe("Remote MCP HTTP server", () => {
+  it("accepts optional client_name and isolates missing/forged addresses from real registration buckets", async () => {
+    const f = await createFixture();
+    const register = (
+      headers: Record<string, string>,
+      body: unknown = { redirect_uris: ["https://client.example/callback"] },
+    ) =>
+      f.app.request("/oauth/register", {
+        method: "POST",
+        headers: {
+          Host: "latex.example.com",
+          "Content-Type": "application/json",
+          ...headers,
+        },
+        body: JSON.stringify(body),
+      });
+    for (let i = 0; i < 12; i++) {
+      const missing = await register({ "X-Forwarded-For": `192.0.2.${i + 1}` });
+      expect(missing.status).toBe(503);
+      expect(missing.headers.get("Retry-After")).toBe("60");
+      expect(await missing.json()).toMatchObject({
+        error: "temporarily_unavailable",
+      });
+      expect(
+        (
+          await register(
+            { "X-Latex-Renderer-Client-IP": "192.0.2.1" },
+            { redirect_uris: "invalid" },
+          )
+        ).status,
+      ).toBe(400);
+    }
+    const results = await Promise.all(
+      Array.from(
+        { length: 11 },
+        async () =>
+          await register({ "X-Latex-Renderer-Client-IP": "192.0.2.1" }),
+      ),
+    );
+    expect(results.filter((r) => r.status === 201)).toHaveLength(10);
+    expect(results.filter((r) => r.status === 429)).toHaveLength(1);
+    for (const bad of [null, "", "\u001b"]) {
+      expect(
+        (
+          await register(
+            { "X-Latex-Renderer-Client-IP": "192.0.2.30" },
+            {
+              client_name: bad,
+              redirect_uris: ["https://client.example/callback"],
+            },
+          )
+        ).status,
+      ).toBe(400);
+    }
+    expect(
+      (
+        await register(
+          { "X-Latex-Renderer-Client-IP": "192.0.2.30" },
+          {
+            redirect_uris: ["https://client.example/callback"],
+            token_endpoint_auth_method: "client_secret_basic",
+          },
+        )
+      ).status,
+    ).toBe(400);
+    expect(await results[0]?.json()).toMatchObject({
+      client_name: "Unnamed MCP client",
+    });
+    expect(
+      (await register({ "X-Latex-Renderer-Client-IP": "192.0.2.2" })).status,
+    ).toBe(201);
+  });
+  it("recovers exactly at the 15-minute registration boundary without extending the first window", async () => {
+    const clock = vi
+      .spyOn(Date, "now")
+      .mockReturnValue(Date.parse("2026-10-16T00:00:00Z"));
+    const f = await createFixture();
+    const register = () =>
+      f.app.request("/oauth/register", {
+        method: "POST",
+        headers: {
+          Host: "latex.example.com",
+          "Content-Type": "application/json",
+          "CF-Connecting-IP": "192.0.2.3",
+        },
+        body: JSON.stringify({
+          redirect_uris: ["https://client.example/callback"],
+        }),
+      });
+    for (let i = 0; i < 10; i++) expect((await register()).status).toBe(201);
+    clock.mockReturnValue(Date.parse("2026-10-16T00:14:59Z"));
+    const limited = await register();
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get("Retry-After")).toBe("1");
+    clock.mockReturnValue(Date.parse("2026-10-16T00:15:00Z"));
+    expect((await register()).status).toBe(201);
+  });
+  it("keeps interrupted onboarding beyond 24h, renews validated authorization activity and expires inactive registrations after 30 days", async () => {
+    const start = Date.parse("2026-10-01T00:00:00Z"),
+      day = 86_400_000;
+    const clock = vi.spyOn(Date, "now").mockReturnValue(start),
+      f = await createFixture();
+    const client = f.oauth.registerClient({
+      clientName: "interrupted",
+      redirectUris: ["https://client.example/callback"],
+    });
+    const params = new URLSearchParams({
+      response_type: "code",
+      client_id: client.clientId,
+      redirect_uri: "https://client.example/callback",
+      resource: RESOURCE,
+      code_challenge: "v".repeat(43),
+      code_challenge_method: "S256",
+      scope: "mcp:read",
+    });
+    f.oauth.authorize(
+      "user_test",
+      f.oauth.validateAuthorizationRequest(params),
+    ); // code deliberately not exchanged
+    clock.mockReturnValue(start + 2 * day);
+    f.oauth.registerClient({
+      clientName: "triggers-cleanup",
+      redirectUris: ["https://client.example/callback"],
+    });
+    expect(f.oauth.validateAuthorizationRequest(params).clientId).toBe(
+      client.clientId,
+    );
+    clock.mockReturnValue(start + 31 * day);
+    f.oauth.registerClient({
+      clientName: "cleanup",
+      redirectUris: ["https://client.example/callback"],
+    });
+    expect(f.database.remoteMcp.client(client.clientId)).toBeDefined(); // renewed at day 2
+    clock.mockReturnValue(start + 33 * day);
+    f.oauth.registerClient({
+      clientName: "cleanup",
+      redirectUris: ["https://client.example/callback"],
+    });
+    expect(f.database.remoteMcp.client(client.clientId)).toBeUndefined();
+    expect(() => f.oauth.validateAuthorizationRequest(params)).toThrow(
+      "unknown",
+    );
+  });
+  it("bounds retained registrations at 10000 without evicting a connection just to admit another", async () => {
+    const f = await createFixture();
+    f.database.transaction(() => {
+      for (let i = 0; i < 10000; i++)
+        f.database.remoteMcp.insertClient({
+          id: `mcp_client_${i.toString(16).padStart(32, "0")}`,
+          name: "fixture",
+          redirectUris: ["https://client.example/callback"],
+          timestamp: new Date().toISOString(),
+        });
+    });
+    expect(() =>
+      f.oauth.registerClient({
+        clientName: "over-capacity",
+        redirectUris: ["https://client.example/callback"],
+      }),
+    ).toThrow("temporarily unavailable");
+    expect(f.database.remoteMcp.countClients()).toBe(10000);
+  });
+  it("distinguishes internal token verification faults from a 401 without logging request secrets", async () => {
+    const f = await createFixture(),
+      log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const request = () =>
+      f.app.request("/mcp?secret=DO_NOT_LOG", {
+        method: "POST",
+        headers: {
+          Host: "latex.example.com",
+          Authorization: "Bearer DO_NOT_LOG",
+          "Content-Type": "application/json",
+        },
+        body: "{}",
+      });
+    expect((await request()).status).toBe(401);
+    vi.spyOn(f.oauth, "verifyAccessToken").mockImplementation(() => {
+      throw new Error("storage failed DO_NOT_LOG");
+    });
+    const failure = await request();
+    expect(failure.status).toBe(500);
+    expect(failure.headers.has("WWW-Authenticate")).toBe(false);
+    const text = JSON.stringify(log.mock.calls);
+    expect(text).toContain("authentication_rejected");
+    expect(text).toContain("internal");
+    expect(text).not.toContain("DO_NOT_LOG");
+    expect(await failure.text()).not.toContain("DO_NOT_LOG");
+  });
   it("applies the same retention deadline to summary, diagnostics and inline resources", async () => {
     const f = await createFixture(),
       jobId = await seedCompletedRemoteJob(f, "failed"),
@@ -209,7 +404,7 @@ describe("Remote MCP HTTP server", () => {
     ])(
     "completes registration, same-origin consent, PKCE and exchange for %s",
     async (clientOrigin) => {
-      const fixture = await createFixture(),
+      const fixture = await createFixture(undefined, true),
         registrationBody = JSON.stringify({
           client_name: "Generic MCP compatibility",
           redirect_uris: ["http://127.0.0.1:49152/callback"],
@@ -220,6 +415,7 @@ describe("Remote MCP HTTP server", () => {
           headers: {
             Host: "latex.example.com",
             Origin: clientOrigin,
+            "X-Latex-Renderer-Client-IP": "192.0.2.11",
             "Content-Type": "application/json",
           },
           body: registrationBody,
@@ -359,11 +555,32 @@ describe("Remote MCP HTTP server", () => {
           body: tokenForm,
         });
       expect(tokenResponse.status).toBe(200);
-      await expect(tokenResponse.json()).resolves.toMatchObject({
+      const tokens = (await tokenResponse.json()) as { access_token: string };
+      expect(tokens).toMatchObject({
         token_type: "Bearer",
         expires_in: 600,
         scope: "mcp:render mcp:read",
       });
+      const initialized = await mcpRequest(fixture.app, tokens.access_token, {
+        jsonrpc: "2.0",
+        id: 100,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-06-18",
+          capabilities: {},
+          clientInfo: { name: "wire-oauth-compatibility", version: "1" },
+        },
+      });
+      expect(initialized.result.protocolVersion).toBeDefined();
+      const listed = await mcpRequest(fixture.app, tokens.access_token, {
+        jsonrpc: "2.0",
+        id: 101,
+        method: "tools/list",
+        params: {},
+      });
+      expect(listed.result.tools?.map((tool) => tool.name)).toContain(
+        "create_render",
+      );
     },
   );
 
@@ -378,6 +595,7 @@ describe("Remote MCP HTTP server", () => {
         headers: {
           Host: "latex.example.com",
           Origin: "https://ai-client.example",
+          "X-Latex-Renderer-Client-IP": "192.0.2.11",
           "Content-Type": "application/json",
         },
         body: registrationBody,
@@ -455,8 +673,9 @@ describe("Remote MCP HTTP server", () => {
       }),
     });
     expect(limited.status).toBe(429);
+    expect(Number(limited.headers.get("Retry-After"))).toBeGreaterThan(0);
     await expect(limited.json()).resolves.toMatchObject({
-      error: "server_error",
+      error: "temporarily_unavailable",
       error_description: "Too many OAuth client registrations",
     });
   });
@@ -2286,7 +2505,10 @@ describe("Remote MCP HTTP server", () => {
   });
 });
 
-async function createFixture(resourceLimits?: Readonly<ResourceLimits>) {
+async function createFixture(
+  resourceLimits?: Readonly<ResourceLimits>,
+  actualHttp = false,
+) {
   const database = new RendererDatabase(":memory:");
   databases.push(database);
   database.migrate();
@@ -2343,6 +2565,69 @@ async function createFixture(resourceLimits?: Readonly<ResourceLimits>) {
       mcp: createRemoteMcpHandler(renders, "0.2.0"),
       publicOrigin: ORIGIN,
     });
+  if (actualHttp) {
+    const server = createServer((req, res) => {
+      void (async () => {
+        try {
+          const chunks: Buffer[] = [];
+          let size = 0;
+          for await (const chunk of req) {
+            if (!Buffer.isBuffer(chunk))
+              throw new Error("Invalid fixture body");
+            size += chunk.length;
+            if (size > 16 * 1024 * 1024) throw new Error("Fixture body limit");
+            chunks.push(chunk);
+          }
+          const headers = new Headers();
+          for (const [key, value] of Object.entries(req.headers)) {
+            if (value !== undefined)
+              headers.set(key, Array.isArray(value) ? value.join(",") : value);
+          }
+          // Model the shipped reverse proxy's fixed upstream Host. Native
+          // fetch uses the loopback transport authority on the wire.
+          headers.set("Host", new URL(ORIGIN).host);
+          const response = await app.fetch(
+            new Request(new URL(req.url ?? "/", ORIGIN), {
+              method: req.method ?? "GET",
+              headers,
+              ...(chunks.length
+                ? { body: Buffer.concat(chunks).toString("utf8") }
+                : {}),
+            }),
+          );
+          res.statusCode = response.status;
+          response.headers.forEach((value, key) => {
+            if (key !== "set-cookie") res.setHeader(key, value);
+          });
+          const cookies = response.headers.getSetCookie();
+          if (cookies.length) res.setHeader("set-cookie", cookies);
+          res.end(Buffer.from(await response.arrayBuffer()));
+        } catch {
+          res.statusCode = 500;
+          res.end();
+        }
+      })().catch(() => res.destroy());
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (!address || typeof address === "string")
+      throw new Error("Fixture HTTP address unavailable");
+    app.request = (input, init) => {
+      const target = new URL(
+        input instanceof Request ? input.url : input,
+        `http://127.0.0.1:${address.port}`,
+      );
+      target.host = `127.0.0.1:${address.port}`;
+      target.protocol = "http:";
+      return fetch(target, {
+        ...init,
+        redirect: "manual",
+      });
+    };
+  }
   return { app, database, oauth, renders, storage };
 }
 

@@ -23,6 +23,7 @@ import {
 } from "@latex-renderer/contracts";
 import { AppError, safeError } from "@latex-renderer/shared";
 import { z } from "zod";
+import { logMcpProtocolError } from "./diagnostics.js";
 
 const jobId = z.string().regex(/^job_[a-f0-9]{32}$/);
 const sourceId = z.string().regex(/^source_[a-f0-9]{32}$/);
@@ -674,8 +675,7 @@ export function createRemoteMcpHandler(
       responseMode: "json",
       legacy: "stateless",
       maxRequestBodySize: MAX_MCP_REQUEST_BODY_BYTES,
-      onerror: () =>
-        console.error(JSON.stringify({ event: "remote_mcp.protocol_error" })),
+      onerror: logMcpProtocolError,
     },
   );
 }

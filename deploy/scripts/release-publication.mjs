@@ -20,6 +20,7 @@ import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { acquireMutationLockForPath } from "./mutation-lock.mjs";
 import { isMainModule } from "./is-main-module.mjs";
+import { assertSealedControlTree } from "./release-assembly.mjs";
 
 const marker = ".host-prepare-source-complete";
 const idPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,159}$/;
@@ -158,7 +159,7 @@ async function tree(
         // Bind source identity to the requested release's original descriptor;
         // the complete installed-tree hash still verifies the actual file.
         const canonical =
-          controlOnly && relative === deploymentDriver ? canonicalDriver : null;
+          relative === deploymentDriver ? canonicalDriver : null;
         digest.update(
           JSON.stringify([
             relative,
@@ -254,6 +255,7 @@ async function sourceIdentity(source, releaseId, fullHash) {
   // assembly reaches the root CLI. Include metadata and all non-derived files,
   // not just a claimed version/commit. Rebuilt ZIP/CMS bytes need not match.
   return {
+    canonicalDriver: driver,
     sourceHash: await tree(source, {
       sourceExclusions: true,
       controlOnly: true,
@@ -285,6 +287,30 @@ export async function publishRelease({
     if (resolve(path) !== path)
       throw new Error("Release publication paths must be absolute");
   await directory(releasesRoot, uid);
+  const lock = await publicationLock(journalRoot, uid);
+  try {
+    await collectPending({
+      releasesRoot,
+      journalRoot,
+      uid,
+      protectedRelease: releaseId,
+    });
+    return await publishLocked({
+      source,
+      releaseId,
+      releasesRoot,
+      journalRoot,
+      uid,
+      gid,
+      copy,
+      checkpoint,
+    });
+  } finally {
+    await lock.release();
+  }
+}
+
+async function publicationLock(journalRoot, uid) {
   await directory(dirname(journalRoot), uid);
   await mkdir(journalRoot, { mode: 0o700 }).catch((error) => {
     if (error.code !== "EEXIST") throw error;
@@ -307,149 +333,271 @@ export async function publishRelease({
     (await realpath(lockPath)) !== lockPath
   )
     throw new Error("Unsafe release publication lock");
-  const lock = await acquireMutationLockForPath(lockPath);
-  try {
-    const target = join(releasesRoot, releaseId);
-    const journalPath = join(journalRoot, `${releaseId}.json`);
-    const next = `${journalPath}.next`;
-    const expectedHash = await tree(source, { sourceExclusions: true });
-    const { sourceHash } = await sourceIdentity(
-      source,
+  return acquireMutationLockForPath(lockPath);
+}
+
+async function publishLocked({
+  source,
+  releaseId,
+  releasesRoot,
+  journalRoot,
+  uid,
+  gid,
+  copy,
+  checkpoint,
+}) {
+  const target = join(releasesRoot, releaseId);
+  const journalPath = join(journalRoot, `${releaseId}.json`);
+  const next = `${journalPath}.next`;
+  const expectedHash = await tree(source, { sourceExclusions: true });
+  const { sourceHash, canonicalDriver } = await sourceIdentity(
+    source,
+    releaseId,
+    expectedHash,
+  );
+  let journal;
+  if (await exists(journalPath)) {
+    journal = await privateJson(journalPath, uid);
+    if (
+      journal?.format !== 1 ||
+      journal.releaseId !== releaseId ||
+      journal.sourceHash !== sourceHash ||
+      !hashPattern.test(journal.treeHash) ||
+      typeof journal.stage !== "string" ||
+      !new RegExp(
+        `^\\.pending-${releaseId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}-[a-f0-9-]{36}$`,
+      ).test(journal.stage)
+    )
+      throw new Error(
+        "Release publication journal does not match the verified source",
+      );
+  }
+  const discardStage = async () => {
+    const stage = join(releasesRoot, journal.stage);
+    if (await exists(stage)) {
+      await directory(stage, uid);
+      await tree(stage, { includeExcluded: true }); // Validate even excluded leftovers before deletion.
+      await rm(stage, { recursive: true });
+      await syncDirectory(releasesRoot);
+    }
+  };
+  const current = await exists(target);
+  if (current) {
+    await directory(target, uid);
+    const complete = await exists(join(target, marker));
+    if (
+      !complete?.isFile() ||
+      complete.uid !== uid ||
+      complete.nlink !== 1 ||
+      complete.size > 4096 ||
+      complete.mode & 0o022
+    )
+      throw new Error(
+        "Existing release is incomplete or unrecognized; refusing overwrite",
+      );
+    // Legacy empty markers are accepted only with a complete byte comparison.
+    let installedHash = expectedHash;
+    if (!complete.size && canonicalDriver) {
+      // Legacy markers have no recorded full hash. Compare every installed
+      // byte to the sealed assembly, canonicalizing only the execution driver
+      // copied by the trusted rollback path. The target driver itself must
+      // still match the original signed descriptor: no unverified exception.
+      const driverBytes = await readFile(join(target, deploymentDriver));
+      if (
+        driverBytes.length !== canonicalDriver.bytes ||
+        createHash("sha256").update(driverBytes).digest("hex") !==
+          canonicalDriver.sha256
+      )
+        throw new Error(
+          "Legacy deployment driver differs from signed identity",
+        );
+      installedHash = await tree(source, {
+        sourceExclusions: true,
+        canonicalDriver,
+      });
+    }
+    if (complete.size) {
+      const m = JSON.parse(await readFile(join(target, marker), "utf8"));
+      if (
+        m.format !== 1 ||
+        m.releaseId !== releaseId ||
+        m.sourceHash !== sourceHash ||
+        !hashPattern.test(m.treeHash ?? "")
+      )
+        throw new Error("Existing immutable release identity differs");
+      installedHash = m.treeHash;
+    }
+    if (
+      (await tree(target, { verifyOwnership: true, uid, gid })) !==
+      installedHash
+    )
+      throw new Error("Existing immutable release contents differ");
+    if (journal) {
+      await discardStage();
+      await unlink(journalPath);
+      await syncDirectory(journalRoot);
+    }
+    return { releaseId, reused: true };
+  }
+  if (journal) await discardStage();
+  {
+    // A crash while writing .next cannot have created a stage: the journal
+    // rename and directory fsync always precede mkdir/copy.
+    if (await exists(next)) {
+      await privateJson(next, uid).catch(async () => {
+        const s = await lstat(next);
+        if (!s.isFile() || s.uid !== uid || s.nlink !== 1 || s.mode & 0o077)
+          throw new Error("Unsafe interrupted release journal");
+      });
+      await unlink(next);
+    }
+    journal ??= {
+      format: 1,
       releaseId,
-      expectedHash,
-    );
-    let journal;
-    if (await exists(journalPath)) {
-      journal = await privateJson(journalPath, uid);
-      if (
-        journal?.format !== 1 ||
-        journal.releaseId !== releaseId ||
-        journal.sourceHash !== sourceHash ||
-        !hashPattern.test(journal.treeHash) ||
-        typeof journal.stage !== "string" ||
-        !new RegExp(
-          `^\\.pending-${releaseId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}-[a-f0-9-]{36}$`,
-        ).test(journal.stage)
-      )
-        throw new Error(
-          "Release publication journal does not match the verified source",
-        );
-    }
-    const discardStage = async () => {
-      const stage = join(releasesRoot, journal.stage);
-      if (await exists(stage)) {
-        await directory(stage, uid);
-        await tree(stage, { includeExcluded: true }); // Validate even excluded leftovers before deletion.
-        await rm(stage, { recursive: true });
-        await syncDirectory(releasesRoot);
-      }
+      treeHash: expectedHash,
+      sourceHash,
+      stage: `.pending-${releaseId}-${randomUUID()}`,
+      createdAt: Date.now(),
     };
-    const current = await exists(target);
-    if (current) {
-      await directory(target, uid);
-      const complete = await exists(join(target, marker));
-      if (
-        !complete?.isFile() ||
-        complete.uid !== uid ||
-        complete.nlink !== 1 ||
-        complete.size > 4096 ||
-        complete.mode & 0o022
-      )
-        throw new Error(
-          "Existing release is incomplete or unrecognized; refusing overwrite",
-        );
-      // Legacy empty markers are accepted only with a complete byte comparison.
-      let installedHash = expectedHash;
-      if (complete.size) {
-        const m = JSON.parse(await readFile(join(target, marker), "utf8"));
-        if (
-          m.format !== 1 ||
-          m.releaseId !== releaseId ||
-          m.sourceHash !== sourceHash ||
-          !hashPattern.test(m.treeHash ?? "")
-        )
-          throw new Error("Existing immutable release identity differs");
-        installedHash = m.treeHash;
-      }
-      if (
-        (await tree(target, { verifyOwnership: true, uid, gid })) !==
-        installedHash
-      )
-        throw new Error("Existing immutable release contents differ");
-      if (journal) {
-        await discardStage();
-        await unlink(journalPath);
-        await syncDirectory(journalRoot);
-      }
-      return { releaseId, reused: true };
+    journal.treeHash = expectedHash;
+    const fd = await open(next, "wx", 0o600);
+    try {
+      await fd.writeFile(JSON.stringify(journal) + "\n");
+      await fd.sync();
+    } finally {
+      await fd.close();
     }
-    if (journal) await discardStage();
-    {
-      // A crash while writing .next cannot have created a stage: the journal
-      // rename and directory fsync always precede mkdir/copy.
-      if (await exists(next)) {
-        await privateJson(next, uid).catch(async () => {
-          const s = await lstat(next);
-          if (!s.isFile() || s.uid !== uid || s.nlink !== 1 || s.mode & 0o077)
-            throw new Error("Unsafe interrupted release journal");
-        });
-        await unlink(next);
-      }
-      journal ??= {
+    await rename(next, journalPath);
+    await syncDirectory(journalRoot);
+  }
+  const stage = join(releasesRoot, journal.stage);
+  await mkdir(stage, { mode: 0o700 });
+  await syncDirectory(releasesRoot);
+  await checkpoint("journal-durable");
+  // Failure deliberately leaves the identified private stage and journal.
+  // A later attempt removes only this exact owned stage, never a final tree.
+  await copy(source, stage);
+  if (
+    (await tree(stage, { normalize: true, uid, gid, sync: true })) !==
+    expectedHash
+  )
+    throw new Error("Copied release differs from the verified source");
+  const receipt = await open(join(stage, marker), "wx", 0o640);
+  try {
+    await receipt.chown(uid, gid);
+    await receipt.writeFile(
+      JSON.stringify({
         format: 1,
         releaseId,
         treeHash: expectedHash,
         sourceHash,
-        stage: `.pending-${releaseId}-${randomUUID()}`,
-      };
-      journal.treeHash = expectedHash;
-      const fd = await open(next, "wx", 0o600);
-      try {
-        await fd.writeFile(JSON.stringify(journal) + "\n");
-        await fd.sync();
-      } finally {
-        await fd.close();
-      }
-      await rename(next, journalPath);
-      await syncDirectory(journalRoot);
+      }) + "\n",
+    );
+    await receipt.sync();
+  } finally {
+    await receipt.close();
+  }
+  await syncDirectory(stage);
+  await checkpoint("copy-durable");
+  if (await exists(target))
+    throw new Error("Release target appeared during publication");
+  await rename(stage, target);
+  await syncDirectory(releasesRoot);
+  await checkpoint("published");
+  await unlink(journalPath);
+  await syncDirectory(journalRoot);
+  return { releaseId, reused: false };
+}
+
+// The publication lock, not directory age or PID guessing, proves no copy is
+// live. Keep at most two recent retry candidates, for at most 24 hours. A
+// requested same-ID retry is protected until its source identity is checked.
+async function collectPending({
+  releasesRoot,
+  journalRoot,
+  uid,
+  protectedRelease = null,
+  now = Date.now(),
+}) {
+  const journals = [];
+  for (const name of await readdir(journalRoot)) {
+    if (name === "publication.lock") continue;
+    if (name.endsWith(".json.next")) {
+      const path = join(journalRoot, name),
+        s = await lstat(path);
+      if (!s.isFile() || s.uid !== uid || s.nlink !== 1 || s.mode & 0o077)
+        throw new Error("Unsafe pending publication journal");
+      continue; // An atomic-write residue cannot own a stage; handled below.
     }
-    const stage = join(releasesRoot, journal.stage);
-    await mkdir(stage, { mode: 0o700 });
-    await syncDirectory(releasesRoot);
-    await checkpoint("journal-durable");
-    // Failure deliberately leaves the identified private stage and journal.
-    // A later attempt removes only this exact owned stage, never a final tree.
-    await copy(source, stage);
+    if (!name.endsWith(".json"))
+      throw new Error("Unknown publication journal entry");
+    const value = await privateJson(join(journalRoot, name), uid);
     if (
-      (await tree(stage, { normalize: true, uid, gid, sync: true })) !==
-      expectedHash
+      value?.format !== 1 ||
+      !idPattern.test(value.releaseId ?? "") ||
+      value.releaseId.includes("..") ||
+      name !== `${value.releaseId}.json` ||
+      !hashPattern.test(value.treeHash ?? "") ||
+      !hashPattern.test(value.sourceHash ?? "") ||
+      typeof value.stage !== "string" ||
+      !value.stage.startsWith(`.pending-${value.releaseId}-`) ||
+      !/^[a-f0-9-]{36}$/.test(
+        value.stage.slice(`.pending-${value.releaseId}-`.length),
+      )
     )
-      throw new Error("Copied release differs from the verified source");
-    const receipt = await open(join(stage, marker), "wx", 0o640);
-    try {
-      await receipt.chown(uid, gid);
-      await receipt.writeFile(
-        JSON.stringify({
-          format: 1,
-          releaseId,
-          treeHash: expectedHash,
-          sourceHash,
-        }) + "\n",
-      );
-      await receipt.sync();
-    } finally {
-      await receipt.close();
+      throw new Error("Corrupt pending publication journal");
+    const createdAt =
+      value.createdAt ?? (await lstat(join(journalRoot, name))).mtimeMs;
+    if (
+      !Number.isFinite(createdAt) ||
+      createdAt < 0 ||
+      createdAt > now + 60_000
+    )
+      throw new Error("Invalid publication age");
+    const stage = join(releasesRoot, value.stage);
+    if (await exists(stage)) {
+      await directory(stage, uid);
+      await tree(stage, { includeExcluded: true });
     }
-    await syncDirectory(stage);
-    await checkpoint("copy-durable");
-    if (await exists(target))
-      throw new Error("Release target appeared during publication");
-    await rename(stage, target);
+    journals.push({ name, ...value, createdAt, stagePath: stage });
+  }
+  const owned = new Set(journals.map((j) => j.stage));
+  for (const name of await readdir(releasesRoot))
+    if (name.startsWith(".pending-") && !owned.has(name))
+      throw new Error(
+        "Unrecognized release publication stage; cleanup stopped",
+      );
+  journals.sort(
+    (a, b) => b.createdAt - a.createdAt || a.name.localeCompare(b.name),
+  );
+  let removed = 0;
+  for (const [index, j] of journals.entries()) {
+    if (
+      j.releaseId === protectedRelease ||
+      (index < 2 && now - j.createdAt < 24 * 3600_000)
+    )
+      continue;
+    await rm(j.stagePath, { recursive: true, force: true });
     await syncDirectory(releasesRoot);
-    await checkpoint("published");
-    await unlink(journalPath);
-    await syncDirectory(journalRoot);
-    return { releaseId, reused: false };
+    await unlink(join(journalRoot, j.name));
+    removed++;
+  }
+  for (const name of await readdir(journalRoot))
+    if (name.endsWith(".json.next")) await unlink(join(journalRoot, name));
+  await syncDirectory(journalRoot);
+  return removed;
+}
+
+export async function collectReleasePublications({
+  releasesRoot,
+  journalRoot,
+  uid = process.getuid(),
+  now = Date.now(),
+}) {
+  await directory(releasesRoot, uid);
+  const lock = await publicationLock(journalRoot, uid);
+  try {
+    return await collectPending({ releasesRoot, journalRoot, uid, now });
   } finally {
     await lock.release();
   }
@@ -458,7 +606,11 @@ export async function publishRelease({
 if (isMainModule(import.meta.url)) {
   if (process.getuid() !== 0 || process.argv.length !== 3)
     throw new Error("usage (root): release-publication.mjs RELEASE_ID");
-  const source = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+  const source =
+    process.env.LATEX_RENDERER_PREPARE_SOURCE ??
+    resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+  if (source !== resolve(dirname(fileURLToPath(import.meta.url)), "../.."))
+    await assertSealedControlTree(source);
   const group = await readFile("/etc/group", "utf8");
   const gid = Number(/^latex-renderer:[^:]*:([0-9]+):/m.exec(group)?.[1]);
   if (!Number.isSafeInteger(gid)) throw new Error("Missing application group");

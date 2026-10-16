@@ -1,5 +1,5 @@
 [Unit]
-Description=Collect update recovery points every 15 minutes
+Description=Collect update recovery points and inactive artifacts every 15 minutes
 
 [Timer]
 OnBootSec=5min
