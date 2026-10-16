@@ -4,15 +4,16 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import {
+  chmod,
   chown,
+  copyFile,
   lstat,
   mkdtemp,
   readFile,
   rm,
-  writeFile,
 } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { acquireMutationLockForPath } from "../scripts/mutation-lock.mjs";
 
@@ -56,9 +57,6 @@ const workerUid = Number(run("id", ["-u", "latex-render-worker"]).trim()),
 const suffix = randomUUID().replaceAll("-", ""),
   units = [],
   containers = [];
-const dockerModule = pathToFileURL(
-  join(current, "apps/renderer-worker/dist/docker.js"),
-).href;
 const workerEnv = {
   PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
   HOME: "/var/lib/latex-render-worker",
@@ -93,12 +91,7 @@ try {
   units.push(unit);
   const lockPath = join(work, "mutation.lock"),
     ready = join(work, "lock-ready");
-  const program = join(work, "lock.mjs");
-  await writeFile(
-    program,
-    `import {writeFile} from 'node:fs/promises';import {spawn} from 'node:child_process';import {acquireInheritedMutationLockForPath} from ${JSON.stringify(pathToFileURL(join(candidate, "deploy/scripts/inherited-mutation-lock.mjs")).href)};const lock=await acquireInheritedMutationLockForPath(${JSON.stringify(lockPath)});spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:['ignore','ignore','ignore',lock.fd]});await writeFile(${JSON.stringify(ready)},'ready');setInterval(()=>{},1000);`,
-    { mode: 0o600 },
-  );
+  const program = join(candidate, "deploy/ci/lifecycle-lock-fixture.mjs");
   run("/usr/bin/systemd-run", [
     "--quiet",
     `--unit=${unit}`,
@@ -106,6 +99,9 @@ try {
     "--property=KillMode=control-group",
     "/usr/local/bin/node",
     program,
+    "hold",
+    lockPath,
+    ready,
   ]);
   await until(() => exists(ready));
   await assert.rejects(acquireMutationLockForPath(lockPath), {
@@ -156,11 +152,11 @@ try {
       "-c",
       `sleep ${forced ? 30 : 3};exit 0`,
     ];
-    await writeFile(
+    await copyFile(
+      join(candidate, "deploy/ci/lifecycle-docker-fixture.mjs"),
       driver,
-      `import {writeFile} from 'node:fs/promises';import {runDocker} from ${JSON.stringify(dockerModule)};let draining=false;process.on('SIGTERM',()=>{draining=true});await runDocker(${JSON.stringify(args)},60000);await writeFile(${JSON.stringify(receipt)},JSON.stringify({draining,completed:true}));`,
-      { mode: 0o644 },
     );
+    await chmod(driver, 0o644);
     run("/usr/bin/systemd-run", [
       "--quiet",
       "--collect",
@@ -175,6 +171,9 @@ try {
       `--setenv=DOCKER_HOST=${workerEnv.DOCKER_HOST}`,
       "/usr/local/bin/node",
       driver,
+      "render",
+      receipt,
+      ...args,
     ]);
     await until(() =>
       Promise.resolve(
@@ -198,9 +197,9 @@ try {
           "latex-render-worker",
           "--",
           "/usr/local/bin/node",
-          "--input-type=module",
-          "-e",
-          `import {dockerStopVerified} from ${JSON.stringify(dockerModule)};await dockerStopVerified(${JSON.stringify(name)});`,
+          driver,
+          "cleanup",
+          name,
         ],
         { env: workerEnv },
       );
