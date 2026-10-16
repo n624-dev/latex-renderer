@@ -32,7 +32,7 @@ async function selection(
   // real Docker, root paths or the privileged shell entry point.
   const fragment = source.slice(
     source.indexOf("managed_current=\n"),
-    source.indexOf("keep_file=$(mktemp"),
+    source.indexOf("# Caller still owns"),
   );
   expect(fragment).toContain("image manager state is unreadable");
   const result = spawnSync(

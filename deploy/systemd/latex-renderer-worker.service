@@ -18,6 +18,9 @@ RestartSec=5
 # the default 420-second render timeout so routine image activation does not
 # turn a healthy long-running job into a forced worker kill.
 TimeoutStopSec=15min
+# Only Node receives the initial TERM; Docker CLI must not proxy that signal
+# into a healthy render. At the deadline systemd still kills the whole cgroup.
+KillMode=mixed
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only

@@ -1,6 +1,7 @@
 [
   "package.json",
   "deploy/scripts/update-manager.mjs",
+  "deploy/scripts/privileged-process-output.mjs",
   "deploy/scripts/update-manager-helper.mjs",
   "deploy/scripts/is-main-module.mjs",
   "deploy/scripts/github-json.mjs",
@@ -18,6 +19,11 @@
   "deploy/scripts/release-version.mjs",
   "deploy/scripts/runtime-image-identity.mjs",
   "deploy/scripts/mutation-lock.mjs",
+  "deploy/scripts/inherited-mutation-lock.mjs",
+  "deploy/scripts/release-publication.mjs",
+  "deploy/scripts/release-retention.mjs",
+  "deploy/scripts/prepare-host.sh",
+  "deploy/scripts/prune-production-artifacts.sh",
   "deploy/scripts/deploy-production-release.sh",
   "deploy/scripts/deployment-checks.sh",
   "deploy/scripts/deployment-json-check.mjs"

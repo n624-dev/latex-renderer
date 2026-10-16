@@ -17,7 +17,6 @@ import {
   verifyCiValidationArtifact,
 } from "../scripts/ci-release-artifact.mjs";
 import { downloadPublishedRelease } from "./published-release.mjs";
-import { acquireMutationLock } from "../scripts/mutation-lock.mjs";
 import {
   brokenUpdaterSource,
   assertStartupRecovery,
@@ -93,6 +92,11 @@ try {
     root,
   ]);
   const candidate = join(root, `latex-renderer-server-${tag.slice(1)}`);
+  // Use the signed candidate's actual publication code on a tiny private
+  // tmpfs. This never fills the runner filesystem or changes a live release.
+  run("/usr/local/bin/node", [
+    join(candidate, "deploy/ci/release-publication-e2e.mjs"),
+  ]);
   // Exercise the candidate's actual extraction module under the controller's
   // seccomp/mount/user restrictions, not only the root E2E deployment helper.
   run("/usr/local/bin/node", [
@@ -118,7 +122,6 @@ try {
     const stage = await mkdtemp(
       "/opt/latex-renderer/update-staging/ci-deploy-",
     );
-    let lock;
     try {
       const assembly = await helper.buildBootstrapRelease(
         stage,
@@ -126,7 +129,6 @@ try {
         manifest.packageManager,
         identity,
       );
-      if (!initialInstall) lock = await acquireMutationLock();
       await helper.deploySealedAssembly(
         assembly,
         stage,
@@ -135,7 +137,6 @@ try {
         initialInstall,
       );
     } finally {
-      if (lock) await lock.release();
       await rm(stage, { recursive: true, force: true });
     }
   };
@@ -417,6 +418,9 @@ try {
     { encoding: "utf8" },
   ).trim();
   if (owners !== "1") throw new Error("Owner did not survive migration");
+  run("/usr/local/bin/node", [
+    join(candidate, "deploy/ci/mutation-worker-lifecycle-e2e.mjs"),
+  ]);
   // Real systemd regression: stopping Internal API propagates to its required
   // Standalone Gateway. Exercise the installed settings CLI, not only mocks or
   // auth endpoints, and restore the reviewed limits before the rendering smoke.
@@ -594,6 +598,8 @@ try {
   console.log(
     JSON.stringify({
       event: "release.update_e2e.passed",
+      releasePublicationEnospc: true,
+      mutationWorkerLifecycle: true,
       validationOnly: Boolean(validationSourceRef),
       sourceRef: validationSourceRef ?? `refs/tags/${tag}`,
       baselineTag,

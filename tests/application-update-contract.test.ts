@@ -227,8 +227,9 @@ describe("release-based application updates", () => {
     expect(manager).toContain('"/usr/bin/sudo"');
     expect(manager).not.toContain('"systemd-run"');
     expect(helper).toContain("Update helper must run as root");
-    expect(helper).toContain('case "apply":');
-    expect(helper).toContain('case "rollback":');
+    expect(helper).toContain('case "apply-locked":');
+    expect(helper).toContain('case "rollback-locked":');
+    expect(helper).toContain("Legacy unlocked helper request refused");
     expect(helper).toContain('case "schedule-manager-restart":');
     expect(helper).toContain('case "bootstrap":');
     expect(manager).not.toContain('verb: "bootstrap"');

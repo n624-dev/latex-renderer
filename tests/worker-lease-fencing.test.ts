@@ -8,6 +8,21 @@ afterEach(() => {
 });
 
 describe("Worker lease fencing", () => {
+  it("tracks unfinished jobs across worker restart without treating SQL wildcard characters as another owner", () => {
+    const f = setup();
+    f.database.worker.claimNext(
+      "worker_a",
+      "2026-08-31T00:00:00.000Z",
+      "2026-08-31T00:00:30.000Z",
+    );
+    expect(f.database.worker.ownedActiveJobIds("worker_a")).toEqual([f.jobId]);
+    expect(f.database.worker.ownedActiveJobIds("worker%a")).toEqual([]);
+    f.database.raw
+      .prepare("UPDATE jobs SET lease_owner=? WHERE id=?")
+      .run("worker_a:recovery:2", f.jobId);
+    expect(f.database.worker.ownedActiveJobIds("worker_a")).toEqual([f.jobId]);
+    expect(f.database.worker.ownedActiveJobIds("worker")).toEqual([]);
+  });
   it("does not claim or stop a lease that heartbeat renewed after stale selection", () => {
     const fixture = setup(),
       claimed = fixture.database.worker.claimNext(

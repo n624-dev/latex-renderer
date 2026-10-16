@@ -3,8 +3,17 @@ import { execFileSync } from "node:child_process";
 import { lstat, readFile, realpath, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { acquireMutationLock } from "./mutation-lock.mjs";
 import { RecoveryStore, recoveryPolicy } from "./update-recovery.mjs";
+import {
+  inheritedMutationStdio,
+  acquireInheritedMutationLock,
+  acquireInheritedMutationLockForPath,
+  withInheritedMutationLock,
+} from "./inherited-mutation-lock.mjs";
+import {
+  collectHostReleaseArtifacts,
+  collectHelperStages,
+} from "./release-retention.mjs";
 
 const root = "/var/lib/latex-renderer-update-recovery";
 const timers = [
@@ -56,6 +65,7 @@ const systemctl = (...args) =>
   execFileSync("/usr/bin/systemctl", args, {
     encoding: "utf8",
     timeout: 15 * 60_000,
+    stdio: inheritedMutationStdio(["pipe", "pipe", "pipe"]),
   });
 const active = (unit) => {
   const state = systemctl(
@@ -327,9 +337,15 @@ if (isMainModule(import.meta.url)) {
       "usage (root): update-recovery-host.mjs create|gc|status|acknowledge POINT_ID",
     );
   let lock;
+  let helperLock;
   try {
-    lock = await acquireMutationLock();
+    // Same order as the launcher: helper serialization, then host mutation.
+    helperLock = await acquireInheritedMutationLockForPath(
+      "/opt/latex-renderer/update-staging/update-helper.lock",
+    );
+    lock = await acquireInheritedMutationLock();
   } catch (error) {
+    await helperLock?.release();
     if (verb === "gc" && error.code === "MUTATION_LOCK_BUSY") {
       console.log("Recovery GC deferred: update in progress");
       process.exit(0);
@@ -337,54 +353,68 @@ if (isMainModule(import.meta.url)) {
     throw error;
   }
   try {
-    if (verb === "create") await withHostRecovery(() => {});
-    else {
-      const store = await storeForHost();
-      await store.initialize();
-      // A live or interrupted deployment journal protects its recovery point.
-      // GC never resumes services or guesses that a journal is stale.
-      let pending = null;
-      try {
-        pending = validateJournal(
-          await privateJson(join(root, "operation.json")),
-        );
-      } catch (error) {
-        if (error.code !== "ENOENT") throw error;
-      }
-      if (verb === "acknowledge") {
-        if (
-          pending?.format !== 1 ||
-          pending.pointId !== process.argv[3] ||
-          !Array.isArray(pending.units) ||
-          pending.units.some((unit) => !units.includes(unit))
-        )
-          throw new Error(
-            "Recovery acknowledgement must name the pending point exactly",
-          );
-        let alive;
+    await withInheritedMutationLock(lock, async () => {
+      if (verb === "create") await withHostRecovery(() => {});
+      else {
+        const store = await storeForHost();
+        await store.initialize();
+        // A live or interrupted deployment journal protects its recovery point.
+        // GC never resumes services or guesses that a journal is stale.
+        let pending = null;
         try {
-          alive = await ownerIdentity(pending.owner.pid);
+          pending = validateJournal(
+            await privateJson(join(root, "operation.json")),
+          );
         } catch (error) {
-          if (error.code !== "ENOENT" && error.code !== "ESRCH") throw error;
+          if (error.code !== "ENOENT") throw error;
         }
-        if (alive && JSON.stringify(alive) === JSON.stringify(pending.owner))
-          throw new Error("Recovery owner is still running");
-        await restoreUnits(pending.units);
-        await rm(join(root, "operation.json"));
-        await store.sync();
-        pending = null;
+        if (verb === "acknowledge") {
+          if (
+            pending?.format !== 1 ||
+            pending.pointId !== process.argv[3] ||
+            !Array.isArray(pending.units) ||
+            pending.units.some((unit) => !units.includes(unit))
+          )
+            throw new Error(
+              "Recovery acknowledgement must name the pending point exactly",
+            );
+          let alive;
+          try {
+            alive = await ownerIdentity(pending.owner.pid);
+          } catch (error) {
+            if (error.code !== "ENOENT" && error.code !== "ESRCH") throw error;
+          }
+          if (alive && JSON.stringify(alive) === JSON.stringify(pending.owner))
+            throw new Error("Recovery owner is still running");
+          await restoreUnits(pending.units);
+          await rm(join(root, "operation.json"));
+          await store.sync();
+          pending = null;
+        }
+        if (verb === "gc" && !pending) {
+          await store.collect();
+          console.log(
+            JSON.stringify({
+              event: "release.retention_completed",
+              ...(await collectHostReleaseArtifacts()),
+              helperStagesRemoved: await collectHelperStages({
+                root: "/opt/latex-renderer/update-staging",
+              }),
+            }),
+          );
+        }
+        const points = await store.points();
+        console.log(
+          JSON.stringify({
+            pending: Boolean(pending),
+            points: verb === "status" ? points : points.length,
+            bytes: await store.usage(),
+          }),
+        );
       }
-      if (verb === "gc" && !pending) await store.collect();
-      const points = await store.points();
-      console.log(
-        JSON.stringify({
-          pending: Boolean(pending),
-          points: verb === "status" ? points : points.length,
-          bytes: await store.usage(),
-        }),
-      );
-    }
+    });
   } finally {
     await lock.release();
+    await helperLock.release();
   }
 }

@@ -9,5 +9,6 @@ fi
 # namespace. The controller can write only its state directory; systemd starts
 # this short-lived root process with no caller-selected executable or args.
 exec /usr/bin/systemd-run --pipe --wait --collect --quiet --service-type=exec \
+  --property=KillMode=control-group --property=RuntimeMaxSec=2h --property=TimeoutStopSec=1min \
   /usr/bin/flock --nonblock --exclusive /opt/latex-renderer/update-staging/update-helper.lock \
   /usr/local/bin/node /opt/latex-renderer/updater/bootstrap-v1/updater-entry.mjs helper

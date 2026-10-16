@@ -16,7 +16,6 @@ case "$release_id" in
   *[!A-Za-z0-9._-]*|'') echo "release id must use A-Z, a-z, 0-9, dot, underscore, or hyphen" >&2; exit 64 ;;
 esac
 
-release_retention_count=3
 releases_root=/opt/latex-renderer/releases
 current_link=/opt/latex-renderer/current
 worker_user=latex-render-worker
@@ -116,36 +115,11 @@ for protected in "$managed_current" "$managed_previous" "$managed_current_base" 
   fi
 done
 
-keep_file=$(mktemp /tmp/latex-renderer-release-keep.XXXXXX)
-all_file=$(mktemp /tmp/latex-renderer-release-all.XXXXXX)
-ranked_file=$(mktemp /tmp/latex-renderer-release-ranked.XXXXXX)
-cleanup() { rm -f -- "$keep_file" "$all_file" "$ranked_file"; }
-trap cleanup EXIT INT TERM HUP
-
-find "$releases_root" -mindepth 1 -maxdepth 1 -type d -printf '%T@\t%p\n' > "$ranked_file"
-LC_ALL=C sort -nr -o "$ranked_file" "$ranked_file"
-awk -F '\t' -v keep="$release_retention_count" 'NR <= keep { print $2 }' \
-  "$ranked_file" > "$keep_file"
-grep -Fxq "$active_release" "$keep_file" || printf '%s\n' "$active_release" >> "$keep_file"
-find "$releases_root" -mindepth 1 -maxdepth 1 -type d -print > "$all_file"
-LC_ALL=C sort -o "$all_file" "$all_file"
-
-removed_releases=0
-while IFS= read -r release; do
-  grep -Fxq "$release" "$keep_file" && continue
-  release_name=${release##*/}
-  case "$release_name" in
-    *[!A-Za-z0-9._-]*|'') echo "refusing to remove unexpected release path: $release" >&2; exit 78 ;;
-  esac
-  if mountpoint -q "$release"; then
-    echo "refusing to remove mounted release path: $release" >&2
-    exit 78
-  fi
-  rm -rf -- "$release"
-  removed_releases=$((removed_releases + 1))
-done < "$all_file"
-
-echo "Removed old production releases: $removed_releases"
+# Caller still owns the deployment mutation/quiescence boundary. This reads
+# root-owned successful history, the pre-switch release and recovery references
+# before selecting any deletion; failed candidate mtimes cannot displace them.
+tools_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
+/usr/local/bin/node "$tools_root/deploy/scripts/release-retention.mjs" collect "$release_id"
 if [ "$managed_active" = true ] || [ "$managed_protected" = true ]; then
   # Managed-image cleanup is intentionally delegated to the Image Manager,
   # which protects both current and previous runtime/base IDs. This remains

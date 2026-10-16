@@ -1,5 +1,5 @@
 [Unit]
-Description=Collect bounded application update recovery points
+Description=Collect bounded update recovery points and inactive artifacts
 After=latex-renderer-update-manager.service
 
 [Service]

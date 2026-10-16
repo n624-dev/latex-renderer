@@ -360,6 +360,7 @@ describe("managed TeX Live image pipeline", () => {
       );
     }
     expect(workerUnit).toContain("TimeoutStopSec=15min");
+    expect(workerUnit).toContain("KillMode=mixed");
     expect(cleanupUnit).toContain("-mtime +30 -delete");
     expect(cleanupUnit).toContain("-mtime +1 -delete");
     expect(cleanupTimer).toContain("OnCalendar=daily");

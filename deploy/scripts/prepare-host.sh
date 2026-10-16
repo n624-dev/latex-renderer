@@ -17,6 +17,13 @@ case "$release_id" in
 esac
 
 source_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
+tools_root=$source_root
+if [ -n "${LATEX_RENDERER_PREPARE_SOURCE:-}" ]; then
+  source_root=$(readlink -f -- "$LATEX_RENDERER_PREPARE_SOURCE")
+  if [ "$source_root" != "$tools_root" ]; then
+    /usr/local/bin/node "$tools_root/deploy/scripts/release-assembly.mjs" --assert-sealed-control-tree "$source_root"
+  fi
+fi
 if ! command -v setfacl >/dev/null 2>&1; then
   echo "setfacl is required; install the acl package before preparing the host" >&2
   exit 69
@@ -29,7 +36,6 @@ sh "$source_root/deploy/scripts/install-github-cli.sh"
 # Stage the independent controller before copying files or moving current.
 /usr/local/bin/node "$source_root/deploy/scripts/install-updater.mjs"
 release_root="/opt/latex-renderer/releases/$release_id"
-release_marker="$release_root/.host-prepare-source-complete"
 previous_release=
 if [ -L /opt/latex-renderer/current ]; then
   current_target=$(readlink -f /opt/latex-renderer/current)
@@ -50,17 +56,11 @@ id latex-renderer-update >/dev/null 2>&1 || useradd --system --gid latex-rendere
 grep -q "^$worker_user:" /etc/subuid || usermod --add-subuids 165536-231071 "$worker_user"
 grep -q "^$worker_user:" /etc/subgid || usermod --add-subgids 165536-231071 "$worker_user"
 
-if [ -e "$release_root" ] && [ "$(find "$release_root" -mindepth 1 -maxdepth 1 -print -quit)" ] && [ ! -f "$release_marker" ]; then
-  echo "$release_root already exists and is not empty; choose a new immutable release id" >&2
-  exit 73
-fi
-install -d -o root -g root -m 0755 "$release_root"
-if [ ! -f "$release_marker" ]; then
-  rsync -a --exclude=.git --exclude=/.deployment-tooling/ "$source_root/" "$release_root/"
-  : > "$release_marker"
-fi
-chown -hR root:latex-renderer "$release_root"
-chmod -R u=rwX,g=rX,o= "$release_root"
+install -d -o root -g root -m 0755 /opt/latex-renderer/releases
+install -d -o root -g root -m 0711 /opt/latex-renderer/update-staging
+/usr/local/bin/node "$tools_root/deploy/scripts/release-retention.mjs" capture
+LATEX_RENDERER_PREPARE_SOURCE="$source_root" \
+  /usr/local/bin/node "$tools_root/deploy/scripts/release-publication.mjs" "$release_id"
 if [ -n "$previous_release" ] && [ "$previous_release" != "$release_root" ]; then
   chmod o-rwx "$previous_release"
 fi

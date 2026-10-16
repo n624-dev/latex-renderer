@@ -337,7 +337,7 @@ export class RemoteMcpRepository {
     this.db
       .prepare(
         `DELETE FROM remote_mcp_clients
-         WHERE last_used_at IS NULL AND created_at<?
+         WHERE COALESCE(last_used_at,created_at)<?
            AND NOT EXISTS (
              SELECT 1 FROM remote_mcp_authorization_codes
              WHERE client_id=remote_mcp_clients.client_id

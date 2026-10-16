@@ -32,6 +32,44 @@ afterEach(async () => {
 });
 
 describe("renderer transient workspace cleanup", () => {
+  it("preserves the lease and attempt when an orphaned daemon container cannot be verified stopped", async () => {
+    const { database, config, root, jobId } = await fixture("validating");
+    const input = join(root, "jobs", jobId, "input");
+    await mkdir(input, { recursive: true });
+    const archive = new yazl.ZipFile(),
+      writing = pipeline(
+        archive.outputStream,
+        createWriteStream(join(input, "source.zip")),
+      );
+    archive.addBuffer(Buffer.from("test"), "main.tex");
+    archive.end();
+    await writing;
+    vi.spyOn(docker, "spawnRenderer").mockImplementation(() => ({
+      containerName: docker.rendererContainerName(jobId, 1),
+      process: spawn(
+        process.execPath,
+        ["-e", "process.kill(process.pid,'SIGKILL')"],
+        { stdio: ["ignore", "pipe", "pipe"] },
+      ),
+    }));
+    const stopped = vi
+      .spyOn(docker, "dockerStopVerified")
+      .mockRejectedValue(new Error("daemon unavailable"));
+    await expect(
+      processJob(database, config, workerJob(jobId)),
+    ).rejects.toBeInstanceOf(docker.RendererCleanupDeferred);
+    expect(stopped).toHaveBeenCalledOnce();
+    expect(database.jobs.get(jobId)).toMatchObject({
+      status: "running",
+      lease_owner: "worker_test",
+      lease_generation: 1,
+    });
+    expect(
+      (
+        await stat(join(root, "jobs", jobId, "attempts", "1", "staging"))
+      ).isDirectory(),
+    ).toBe(true);
+  });
   it("accounts for output published just before cancellation and fences stale writers", async () => {
     const { database, config, root, jobId } = await fixture("validating");
     const input = join(root, "jobs", jobId, "input");
@@ -291,6 +329,7 @@ async function fixture(status: "validating" | "canceled"): Promise<{
   root: string;
   jobId: string;
 }> {
+  vi.spyOn(docker, "dockerStopVerified").mockResolvedValue();
   const root = await mkdtemp(join(tmpdir(), "latex-worker-cleanup-"));
   temporaryRoots.push(root);
   const database = new RendererDatabase(":memory:");

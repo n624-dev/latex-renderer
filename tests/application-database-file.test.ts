@@ -245,6 +245,11 @@ it.each([
     const events: string[] = [];
     const initial = scenario !== "existing-update";
     const invoke = runInNewContext(`${entry}; deploySealedAssembly`, {
+      helperMutationLock: null,
+      acquireInheritedMutationLock: () => {
+        events.push("common-lock");
+        return { fd: 3, release: () => events.push("common-release") };
+      },
       assertSealedControlTree: () => events.push("sealed"),
       acquireMutationLockForPath: (path: string) => {
         expect(path).toBe("/sealed-staging/initial-install.lock");
@@ -293,7 +298,14 @@ it.each([
     else expect(await result).toBe("v9.8.7-aaaaaaaaaaaa");
     expect(events).toEqual(
       scenario === "existing-update"
-        ? ["sealed", "trees", "backup", "deploy"]
+        ? [
+            "sealed",
+            "common-lock",
+            "trees",
+            "backup",
+            "deploy",
+            "common-release",
+          ]
         : scenario === "preparation-failure"
           ? ["sealed", "lock", "trees", "database", "release"]
           : ["sealed", "lock", "trees", "database", "deploy", "release"],

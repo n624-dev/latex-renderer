@@ -49,6 +49,19 @@ const WORKER_UPDATE_COLUMNS = new Set([
 export class WorkerRepository {
   constructor(private readonly db: DatabaseSync) {}
 
+  ownedActiveJobIds(workerId: string): string[] {
+    const recoveryPrefix = `${workerId}:recovery:`;
+    return (
+      this.db
+        .prepare(
+          `SELECT id FROM jobs WHERE status IN ('validating','running') AND (lease_owner=? OR substr(lease_owner,1,?)=?)`,
+        )
+        .all(workerId, recoveryPrefix.length, recoveryPrefix) as {
+        id: string;
+      }[]
+    ).map((row) => row.id);
+  }
+
   claimNext(
     workerId: string,
     now: string,

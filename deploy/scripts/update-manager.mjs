@@ -22,6 +22,7 @@ import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { setInterval } from "node:timers";
 import { acquireMutationLock } from "./mutation-lock.mjs";
+import { waitPrivilegedProcess } from "./privileged-process-output.mjs";
 import { githubJson as readGitHubJson } from "./github-json.mjs";
 import { collectUpdateLogs, updateLogPolicy } from "./update-log-retention.mjs";
 import {
@@ -35,7 +36,10 @@ import {
 } from "./environment.mjs";
 import { assembleBuildArtifacts } from "./release-assembly.mjs";
 import { validateReleaseArchive } from "./release-archive.mjs";
-import { assertReleaseExtractor, prepareReleaseExtraction } from "./release-extraction.mjs";
+import {
+  assertReleaseExtractor,
+  prepareReleaseExtraction,
+} from "./release-extraction.mjs";
 import { releaseAttestationArgs } from "./release-attestation.mjs";
 import { validatedReleaseRendererFingerprint } from "./runtime-image-identity.mjs";
 import {
@@ -159,6 +163,7 @@ const emptyState = () => ({
 });
 let state = await loadState();
 let activeOperation = null;
+let recoveringOperationId = null;
 let logCollection = Promise.resolve();
 let logCollectionFailed = false;
 await recoverInterruptedOperation();
@@ -170,7 +175,7 @@ function cleanupOperationLogs() {
     collectUpdateLogs({
       root: operationsRoot,
       policy: logPolicy,
-      activeId: () => activeOperation?.id ?? null,
+      activeId: () => activeOperation?.id ?? recoveringOperationId,
     }),
   );
   logCollection = collection.then(
@@ -190,20 +195,31 @@ function cleanupOperationLogs() {
 }
 
 async function cleanupStagingRoot() {
-  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
-  for (const entry of await readdir(stagingRoot, { withFileTypes: true })) {
-    if (
-      !entry.isDirectory() ||
-      !/^(?:v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-rc\.[1-9][0-9]*)?|rollback-[A-Za-z0-9._-]+)-[A-Za-z0-9]{6}$/.test(
-        entry.name,
+  let lock;
+  try {
+    lock = await acquireMutationLock();
+  } catch (error) {
+    if (error.code === "MUTATION_LOCK_BUSY") return;
+    throw error;
+  }
+  try {
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    for (const entry of await readdir(stagingRoot, { withFileTypes: true })) {
+      if (
+        !entry.isDirectory() ||
+        !/^(?:v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-rc\.[1-9][0-9]*)?|rollback-[A-Za-z0-9._-]+)-[A-Za-z0-9]{6}$/.test(
+          entry.name,
+        )
       )
-    )
-      continue;
-    const candidate = join(stagingRoot, entry.name);
-    const info = await lstat(candidate);
-    if (info.isDirectory() && info.mtimeMs < cutoff) {
-      await rm(candidate, { recursive: true, force: true });
+        continue;
+      const candidate = join(stagingRoot, entry.name);
+      const info = await lstat(candidate);
+      if (info.isDirectory() && info.mtimeMs < cutoff) {
+        await rm(candidate, { recursive: true, force: true });
+      }
     }
+  } finally {
+    await lock.release();
   }
 }
 
@@ -353,38 +369,31 @@ async function runPrivileged(operation, request) {
     operation,
     "$ sudo -n -- /usr/local/libexec/latex-renderer-update-helper\n",
   );
+  if (["apply", "rollback"].includes(request.verb)) {
+    // Preparation is controller-owned; host mutation is helper-owned. Never
+    // hold an incompatible lock while asking the independent helper to take
+    // it. The helper rechecks this immutable identity under its own lock.
+    // A new verb is essential: legacy helpers must reject the request rather
+    // than silently ignore an unfamiliar protocol field and mutate unlocked.
+    request = { ...request, verb: `${request.verb}-locked`, lockProtocol: 2 };
+    await operation.mutationLock.release();
+  }
   const child = spawn("/usr/bin/sudo", ["-n", "--", privilegedHelper], {
     stdio: ["pipe", "pipe", "pipe"],
   });
+  child.stdin.on("error", () => {}); // A refused sudo/helper request is reported by close.
   child.stdin.end(`${JSON.stringify(request)}\n`);
-  let stderr = "";
-  const consume = async (stream, isError) => {
-    for await (const chunk of stream) {
-      const value = String(chunk);
-      if (isError) stderr = `${stderr}${value}`.slice(-8192);
-      await appendLog(operation, value);
-    }
-  };
-  const closed = new Promise((resolvePromise, reject) => {
-    child.once("error", reject);
-    child.once("close", resolvePromise);
-  });
-  try {
-    const [code] = await Promise.all([
-      closed,
-      consume(child.stdout, false),
-      consume(child.stderr, true),
-    ]);
-    if (code !== 0) {
-      const detail = redact(stderr.trim());
-      throw new Error(
-        `Privileged Update Manager helper exited with code ${code}${detail ? `: ${detail}` : ""}`,
-      );
-    }
-  } catch (error) {
-    child.kill("SIGKILL");
-    throw error;
+  const { code, stderr, logError } = await waitPrivilegedProcess(
+    child,
+    (value) => appendLog(operation, value),
+  );
+  if (code !== 0) {
+    const detail = redact(stderr.trim());
+    throw new Error(
+      `Privileged Update Manager helper exited with code ${code}${detail ? `: ${detail}` : ""}`,
+    );
   }
+  if (logError) throw logError;
 }
 
 function operationView(operation) {
@@ -413,13 +422,26 @@ async function recoverInterruptedOperation() {
   try {
     const operation = JSON.parse(await readFile(path, "utf8"));
     if (operation.status !== "running") return;
-    operation.status = "failed";
-    operation.error =
-      "Update Manager restarted while this operation was running; inspect the active release before retrying";
-    operation.finishedAt = new Date().toISOString();
-    state.lastError = operation.error;
-    await writeAtomic(path, `${JSON.stringify(operation, null, 2)}\n`);
-    await persistState();
+    let lock;
+    try {
+      lock = await acquireMutationLock();
+    } catch (error) {
+      if (error.code !== "MUTATION_LOCK_BUSY") throw error;
+      recoveringOperationId = operation.id;
+      return; // An independent helper/descendant may still be mutating.
+    }
+    try {
+      operation.status = "failed";
+      operation.error =
+        "Update Manager restarted while this operation was running; inspect the active release before retrying";
+      operation.finishedAt = new Date().toISOString();
+      state.lastError = operation.error;
+      await writeAtomic(path, `${JSON.stringify(operation, null, 2)}\n`);
+      await persistState();
+      recoveringOperationId = null;
+    } finally {
+      await lock.release();
+    }
   } catch (error) {
     if (error?.code !== "ENOENT") throw error;
   }
@@ -902,6 +924,7 @@ async function deployPrepared(operation, release, prepared) {
       verb: "apply",
       version: release.version,
       stage,
+      expectedReleaseId: before?.releaseId,
     });
   } catch (deploymentError) {
     if (String(deploymentError).includes("RECOVERY_REVIEW_REQUIRED"))
@@ -924,6 +947,7 @@ async function deployPrepared(operation, release, prepared) {
       await runPrivileged(operation, {
         verb: "rollback",
         releaseId: before.releaseId,
+        expectedReleaseId: (await installedRelease())?.releaseId,
       });
     } catch (rollbackError) {
       throw new Error(
@@ -1004,7 +1028,11 @@ async function rollbackRelease(operation) {
   const current = await installedRelease();
   operation.expectedUpdater = await readExpectedUpdater(target);
   await saveOperation(operation);
-  await runPrivileged(operation, { verb: "rollback", releaseId });
+  await runPrivileged(operation, {
+    verb: "rollback",
+    releaseId,
+    expectedReleaseId: current?.releaseId,
+  });
   const after = await installedRelease();
   if (after?.releaseId !== releaseId)
     throw new Error("Rollback did not activate the requested release");
@@ -1064,7 +1092,7 @@ async function refreshPolicy() {
 }
 
 async function startOperation(type, requestedVersion, task) {
-  if (activeOperation)
+  if (activeOperation || recoveringOperationId)
     throw httpError(
       409,
       "UPDATE_OPERATION_ACTIVE",
@@ -1088,6 +1116,7 @@ async function startOperation(type, requestedVersion, task) {
     requestedVersion,
     startedAt: new Date().toISOString(),
     logPath: "",
+    mutationLock,
   };
   operation.logPath = join(operationsRoot, `${operation.id}.log`);
   activeOperation = operation;
@@ -1204,7 +1233,7 @@ const server = createServer(async (request, response) => {
         ...state,
         installed: await installedRelease(),
         updater: await updaterStatus(),
-        activeOperationId: activeOperation?.id ?? null,
+        activeOperationId: activeOperation?.id ?? recoveringOperationId,
       });
     }
     const operationMatch = /^\/v1\/operations\/(updop_[A-Za-z0-9_-]+)$/.exec(
@@ -1286,6 +1315,10 @@ await chmod(socketPath, 0o660);
 // A long-lived idle controller still expires diagnostics; no Actions callback
 // or subsequent update is required. Startup also collects after interruption.
 setInterval(() => {
+  if (!activeOperation && recoveringOperationId)
+    void recoverInterruptedOperation().catch(() => {});
+  if (!activeOperation && !recoveringOperationId)
+    void cleanupStagingRoot().catch(() => {});
   void cleanupOperationLogs().catch(() => {});
 }, logPolicy.intervalMs).unref();
 console.log(

@@ -132,7 +132,7 @@ describe("deployment prerequisite failure boundary", () => {
         expect(
           source.indexOf("require_normal_maintenance_for_smoke\n", end),
         ).toBeLessThan(
-          source.indexOf('"$source_root/deploy/scripts/prepare-host.sh"'),
+          source.indexOf('sh "$tools_root/deploy/scripts/prepare-host.sh"'),
         );
         expect(
           readFileSync("deploy/scripts/update-manager-helper.mjs", "utf8"),
