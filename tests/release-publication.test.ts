@@ -22,6 +22,9 @@ import {
 } from "../deploy/scripts/release-publication.mjs";
 
 const roots: string[] = [];
+// Fixture identities must not become the application's active RC on a bump.
+const fixtureVersion = "7.8.9";
+const fixturePackage = JSON.stringify({ version: fixtureVersion }) + "\n";
 it.skipIf(process.platform !== "linux")(
   "bounds interrupted publications by count and age under the same publication lock",
   async () => {
@@ -99,7 +102,7 @@ async function fixture() {
   await mkdir(source, { mode: 0o755 });
   await mkdir(releasesRoot, { mode: 0o755 });
   await mkdir(join(source, "bin"));
-  await writeFile(join(source, "package.json"), '{"version":"1.5.0-rc.4"}\n');
+  await writeFile(join(source, "package.json"), fixturePackage);
   await writeFile(join(source, "bin", "run"), "#!/bin/sh\nexit 0\n", {
     mode: 0o755,
   });
@@ -108,7 +111,7 @@ async function fixture() {
     source,
     releasesRoot,
     journalRoot,
-    releaseId: "v1.5.0-rc.4-aaaaaaaaaaaa",
+    releaseId: `v${fixtureVersion}-aaaaaaaaaaaa`,
   };
 }
 const copy = async (source: string, destination: string) => {
@@ -128,7 +131,7 @@ async function verifiedFixture() {
   await mkdir(join(f.source, "deploy", "scripts"), { recursive: true });
   const bytes = Buffer.from("#!/bin/sh\n# original signed driver\n");
   await writeFile(join(f.source, driver), bytes);
-  const identity = { schemaVersion: 1, version: "1.5.0-rc.4", commit };
+  const identity = { schemaVersion: 1, version: fixtureVersion, commit };
   await writeFile(
     join(f.source, ".latex-renderer-release.json"),
     JSON.stringify({ ...identity, repository: "n624-dev/latex-renderer" }),
@@ -169,7 +172,7 @@ describe.skipIf(process.platform !== "linux")(
         }),
       ).rejects.toThrow("Shared release copy inode");
       expect((await lstat(file)).mode).toBe(before.mode);
-      expect(await readFile(file, "utf8")).toContain("1.5.0-rc.4");
+      expect(await readFile(file, "utf8")).toContain(fixtureVersion);
     });
     it("refuses an external lock symlink without touching the other file", async () => {
       const f = await fixture();
@@ -179,7 +182,7 @@ describe.skipIf(process.platform !== "linux")(
       await expect(publishRelease(f)).rejects.toThrow(
         "Unsafe release publication lock",
       );
-      expect(await readFile(outside, "utf8")).toContain("1.5.0-rc.4");
+      expect(await readFile(outside, "utf8")).toContain(fixtureVersion);
     });
     it("refuses source symlinks outside the payload and validates excluded stage leftovers before recovery", async () => {
       const f = await fixture();
@@ -218,10 +221,7 @@ describe.skipIf(process.platform !== "linux")(
         "modified control source",
       );
       await expect(publishRelease(f)).rejects.toThrow("identity differs");
-      await writeFile(
-        join(f.source, "package.json"),
-        '{"version":"1.5.0-rc.4"}\n',
-      );
+      await writeFile(join(f.source, "package.json"), fixturePackage);
       await writeFile(
         join(f.releasesRoot, f.releaseId, "client-dist", "signed.mcpb"),
         "tampered installed build",
@@ -431,12 +431,9 @@ describe.skipIf(process.platform !== "linux")(
         "identity differs",
       );
       expect(await readFile(join(target, "package.json"), "utf8")).toContain(
-        "1.5.0-rc.4",
+        fixtureVersion,
       );
-      await writeFile(
-        join(f.source, "package.json"),
-        '{"version":"1.5.0-rc.4"}\n',
-      );
+      await writeFile(join(f.source, "package.json"), fixturePackage);
       await writeFile(join(target, "package.json"), "tampered");
       await expect(publishRelease({ ...f, copy })).rejects.toThrow(
         "contents differ",
@@ -497,7 +494,7 @@ describe.skipIf(process.platform !== "linux")(
       await symlink(f.source, join(f.releasesRoot, j.stage, "outside"));
       await expect(publishRelease({ ...f, copy })).rejects.toThrow("External");
       expect(await readFile(join(f.source, "package.json"), "utf8")).toContain(
-        "1.5.0-rc.4",
+        fixtureVersion,
       );
     });
     it("detects a bad copy before the final name becomes visible", async () => {
