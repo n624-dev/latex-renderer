@@ -2,6 +2,7 @@
 import { rm } from "node:fs/promises";
 import { dirname, isAbsolute, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { pruneServiceDiagnostics } from "./service-diagnostics.mjs";
 import { sourceReferenceCountSql } from "../../packages/database/dist/source-lifecycle.js";
 import {
   readAuditCheckpoint,
@@ -14,6 +15,8 @@ import {
 
 const databasePath = required("DATABASE_PATH");
 const storageRoot = required("STORAGE_ROOT");
+try { await pruneServiceDiagnostics(storageRoot); }
+catch { console.error(JSON.stringify({ event: "service_diagnostics.cleanup_failed" })); }
 const artifactHours = positive("ARTIFACT_RETENTION_HOURS", 24);
 const historyDays = positive("JOB_HISTORY_RETENTION_DAYS", 30);
 const auditRetentionDays = positive("AUDIT_LOG_RETENTION_DAYS", 365);

@@ -66,23 +66,48 @@ export class WorkerRepository {
     workerId: string,
     now: string,
     leaseExpiresAt: string,
+    queuedBefore?: string,
   ): WorkerJobRow | undefined {
     const job = this.db
       .prepare(
         `SELECT j.id,j.source_size,j.source_sha256,j.status,j.source_id,j.entrypoint,j.outputs_json,j.lease_generation,s.storage_key AS source_storage_key
-      FROM jobs j LEFT JOIN sources s ON s.id=j.source_id WHERE j.status='queued' ORDER BY j.queued_at,j.id LIMIT 1`,
+      FROM jobs j LEFT JOIN sources s ON s.id=j.source_id WHERE j.status='queued' AND (? IS NULL OR j.queued_at<=?) ORDER BY j.queued_at,j.id LIMIT 1`,
       )
-      .get() as WorkerJobRow | undefined;
+      .get(queuedBefore ?? null, queuedBefore ?? null) as
+      WorkerJobRow | undefined;
     if (job === undefined) return undefined;
     const changed = this.db
       .prepare(
-        `UPDATE jobs SET status='validating',lease_owner=?,lease_expires_at=?,heartbeat_at=?,updated_at=?,lease_generation=lease_generation+1
+        `UPDATE jobs SET status='validating',lease_owner=?,lease_expires_at=?,heartbeat_at=?,updated_at=?,lease_generation=lease_generation+1,error_code=NULL,error_message=NULL
       WHERE id=? AND status='queued'`,
       )
       .run(workerId, leaseExpiresAt, now, now, job.id);
     return changed.changes === 1
       ? { ...job, lease_generation: job.lease_generation + 1 }
       : undefined;
+  }
+
+  nextQueued(): { id: string; queued_at: string } | undefined {
+    return this.db
+      .prepare(
+        "SELECT id,queued_at FROM jobs WHERE status='queued' ORDER BY queued_at,id LIMIT 1",
+      )
+      .get() as { id: string; queued_at: string } | undefined;
+  }
+
+  setAdmissionReason(blocked: boolean, timestamp: string): void {
+    if (blocked)
+      this.db
+        .prepare(
+          "UPDATE jobs SET error_code='HOST_RESOURCE_WAIT',error_message='Waiting for host memory or I/O pressure to recover',updated_at=? WHERE status='queued' AND error_code IS NULL",
+        )
+        .run(timestamp);
+    else
+      this.db
+        .prepare(
+          "UPDATE jobs SET error_code=NULL,error_message=NULL,updated_at=? WHERE status='queued' AND error_code='HOST_RESOURCE_WAIT'",
+        )
+        .run(timestamp);
   }
 
   subjectState(jobId: string): WorkerSubjectState | undefined {

@@ -379,7 +379,7 @@ function renderJobResult(
     state = document.createElement("p"),
     actions = document.createElement("div");
   heading.textContent = title;
-  state.textContent = `${statusLabel(job.status)}${connection === "connected" ? "" : " — 接続が切れました。再接続しています…"}`;
+  state.textContent = `${statusLabel(job.status)}${job.status === "queued" && job.errorCode === "HOST_RESOURCE_WAIT" ? " — サーバー資源の空きを待っています" : ""}${connection === "connected" ? "" : " — 接続が切れました。再接続しています…"}`;
   actions.className = "actions";
   const firstPreview = job.previews
     .filter((artifact) =>

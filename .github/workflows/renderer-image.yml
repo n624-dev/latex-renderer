@@ -11,6 +11,7 @@ on:
       - "deploy/scripts/build-language-runtime.sh"
       - "deploy/scripts/smoke-test-renderer-*.sh"
       - "tests/fixtures/svg/**"
+      - "tests/fixtures/font-cache/**"
       - "tests/fixtures/source-pipeline-renderer.mjs"
       - "tests/helpers/source-pipeline.ts"
       - "tests/source-pipeline-e2e.test.ts"
@@ -27,6 +28,7 @@ on:
       - "deploy/scripts/build-language-runtime.sh"
       - "deploy/scripts/smoke-test-renderer-*.sh"
       - "tests/fixtures/svg/**"
+      - "tests/fixtures/font-cache/**"
       - "tests/fixtures/source-pipeline-renderer.mjs"
       - "tests/helpers/source-pipeline.ts"
       - "tests/source-pipeline-e2e.test.ts"
@@ -83,6 +85,7 @@ jobs:
       CI_DATABASE_SAVE_BATCH: ${{ inputs.database_save_batch || '64' }}
       REQUESTED_DATE: ${{ inputs.texlive_date || 'latest' }}
       CI_ARCHITECTURE: ${{ matrix.architecture }}
+      CI_FONT_CACHE_COMPARE: "1"
       # Register the private distribution hostname with the runner's log
       # masker before any step can emit a snapshot URL.
       TEXLIVE_CI_MIRROR_HOST: ${{ secrets.TEXLIVE_CI_MIRROR_HOST }}

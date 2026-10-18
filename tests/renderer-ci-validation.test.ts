@@ -86,6 +86,7 @@ describe("Base-only CI validation failure boundaries", () => {
           "smoke-test-renderer-en-jp.sh",
           "smoke-test-renderer-svg.sh",
           "smoke-test-renderer-compat.sh",
+          "ci-font-cache-benchmark.sh",
           "ci-source-pipeline-e2e.sh",
         ].map((failedStage) => ({ builder, failedStage })),
       ),
@@ -106,6 +107,7 @@ describe("Base-only CI validation failure boundaries", () => {
           "smoke-test-renderer-en-jp.sh",
           "smoke-test-renderer-svg.sh",
           "smoke-test-renderer-compat.sh",
+          "ci-font-cache-benchmark.sh",
           "ci-source-pipeline-e2e.sh",
         ];
         for (const name of names)
@@ -151,6 +153,7 @@ describe("Base-only CI validation failure boundaries", () => {
           "smoke-test-renderer-en-jp.sh": "en-jp",
           "smoke-test-renderer-svg.sh": "svg",
           "smoke-test-renderer-compat.sh": "compat",
+          "ci-font-cache-benchmark.sh": "font-cache",
           "ci-source-pipeline-e2e.sh": "source-pipeline",
         };
         if (failedStage) {
@@ -209,6 +212,7 @@ describe("Base-only CI validation failure boundaries", () => {
         "ci-renderer-disk.sh",
         "ci-validate-texlive-base.sh",
         "ci-source-pipeline-e2e.sh",
+        "ci-font-cache-benchmark.sh",
       ]) {
         const result = spawnSync(
           "sh",
@@ -248,6 +252,7 @@ describe("Base-only CI validation failure boundaries", () => {
           "smoke-test-renderer-svg.sh",
           "smoke-test-renderer-compat.sh",
           "ci-source-pipeline-e2e.sh",
+          "ci-font-cache-benchmark.sh",
         ]) {
           writeFileSync(
             join(root, name),

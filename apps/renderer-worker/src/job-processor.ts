@@ -239,13 +239,22 @@ export async function processJob(
         return;
       }
       const result = classifyRenderResult(exitCode, timedOut, stderr);
+      config.diagnostic?.({
+        event: "renderer_worker.render_result",
+        jobId: job.id,
+        exitCode,
+        result: result.status,
+        code: result.errorCode,
+        elapsedMs: Math.max(0, Date.now() - Date.parse(startedAt)),
+      });
       await inspectOutputTree(config, staging);
       await generateMetadata(
         staging,
         result.status === "timeout" && exitCode === 0 ? 124 : exitCode,
         config.maxLogBytes,
         job.entrypoint,
-        result.status === "timeout"
+        result.status === "timeout" ||
+          result.errorCode === "RENDERER_MEMORY_LIMIT"
           ? (result.errorMessage ?? undefined)
           : undefined,
       );

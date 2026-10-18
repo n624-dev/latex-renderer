@@ -62,10 +62,10 @@ export type RemoteMcpScope = (typeof REMOTE_MCP_SCOPES)[number];
 
 const ACCESS_TOKEN_MS = 10 * 60_000;
 const REFRESH_TOKEN_MS = 30 * 86_400_000;
-// A second request that was already in flight when rotation committed may
-// arrive just after the first response. Keep that short retry window from
-// revoking the family; a later replay still triggers strict reuse detection.
-const REFRESH_REPLAY_GRACE_MS = 5_000;
+// Rotation replies can be lost or retried concurrently. A short overlap is
+// bounded by the ORIGINAL consumption time, never extended by another replay.
+const REFRESH_REPLAY_GRACE_MS = 30_000;
+const REFRESH_REPLY_LIMIT = 128;
 const AUTHORIZATION_CODE_MS = 5 * 60_000;
 const SOURCE_REF_MS = 15 * 60_000;
 const INLINE_SOURCE_MAX_BYTES = 64 * 1024;
@@ -117,12 +117,38 @@ export interface AuthorizationRequest {
   codeChallenge: string;
 }
 
+export interface OAuthDiagnostic {
+  outcome:
+    | "authorized"
+    | "issued"
+    | "replayed"
+    | "retry_unavailable"
+    | "invalid"
+    | "binding"
+    | "expired"
+    | "reuse_revoked"
+    | "subject_changed";
+  familyId?: string;
+  sequence?: number;
+}
+
+interface RefreshReply {
+  response: OAuthTokenResponse;
+  expiresAt: number;
+  accessExpiresAt: number;
+}
+
 export class RemoteOAuthService {
+  // Only short-lived replies, never an indefinite token store. The durable DB
+  // still contains hashes only. A restart/eviction fails retryably, not open.
+  private readonly refreshReplies = new Map<string, RefreshReply>();
+  private refreshReplyTimer: ReturnType<typeof setTimeout> | undefined;
   constructor(
     private readonly database: RendererDatabase,
     readonly issuer: string,
     readonly resource: string,
     private readonly clock: () => number = Date.now,
+    private readonly diagnostic: (event: OAuthDiagnostic) => void = () => {},
   ) {
     this.issuer = exactHttpsOrigin(issuer);
   }
@@ -328,6 +354,7 @@ export class RemoteOAuthService {
       this.database.remoteMcp.touchClient(code.client_id, timestamp);
       return tokens;
     });
+    this.reportOAuth({ outcome: "authorized", familyId, sequence: 0 });
     return response;
   }
 
@@ -337,15 +364,20 @@ export class RemoteOAuthService {
     resource: string;
   }): OAuthTokenResponse {
     const timestamp = this.now();
+    for (const [family, reply] of this.refreshReplies)
+      if (reply.expiresAt <= this.clock()) this.refreshReplies.delete(family);
     this.cleanupOAuth(timestamp);
     const tokenHash = sha256Hex(input.refreshToken);
+    const observed: { token?: RemoteMcpTokenRow } = {};
     const result = this.database.transaction(() => {
       // Re-read while holding BEGIN IMMEDIATE. A caller that fetched the old
       // row before another rotation must observe the committed CAS result.
       const token = this.database.remoteMcp.token(tokenHash);
+      if (token !== undefined) observed.token = token;
       if (token === undefined || token.token_type !== "refresh")
         return {
           kind: "invalid",
+          outcome: "invalid",
           message: "Refresh token is invalid",
         } as const;
       // Check binding before reuse handling so an unrelated caller cannot
@@ -356,23 +388,13 @@ export class RemoteOAuthService {
       )
         return {
           kind: "invalid",
+          outcome: "binding",
           message: "Refresh token binding is invalid",
         } as const;
-      if (token.used_at !== null) {
-        if (withinRefreshReplayGrace(token.used_at, timestamp))
-          return {
-            kind: "invalid",
-            message: "Refresh token is already being retried",
-          } as const;
-        this.database.remoteMcp.revokeFamily(token.family_id, timestamp);
-        return {
-          kind: "invalid",
-          message: "Refresh token reuse revoked the grant",
-        } as const;
-      }
       if (!this.isActiveToken(token, timestamp))
         return {
           kind: "invalid",
+          outcome: "expired",
           message: "Refresh token is expired or revoked",
         } as const;
       const user = this.database.users.get(token.user_id);
@@ -384,16 +406,67 @@ export class RemoteOAuthService {
         this.database.remoteMcp.revokeFamily(token.family_id, timestamp);
         return {
           kind: "invalid",
+          outcome: "subject_changed",
           message: "User authorization changed",
+        } as const;
+      }
+      if (token.used_at !== null) {
+        if (withinRefreshReplayGrace(token.used_at, timestamp)) {
+          const reply = this.refreshReplies.get(token.family_id);
+          const successor =
+            reply === undefined
+              ? undefined
+              : this.database.remoteMcp.token(
+                  sha256Hex(reply.response.refresh_token),
+                );
+          if (
+            reply !== undefined &&
+            reply.expiresAt > this.clock() &&
+            reply.accessExpiresAt > this.clock() &&
+            successor !== undefined &&
+            successor.family_id === token.family_id &&
+            successor.used_at === null &&
+            this.isActiveToken(successor, timestamp)
+          )
+            return {
+              kind: "replayed",
+              response: {
+                ...reply.response,
+                expires_in: Math.max(
+                  1,
+                  Math.floor((reply.accessExpiresAt - this.clock()) / 1000),
+                ),
+              },
+              familyId: token.family_id,
+              sequence: token.sequence,
+            } as const;
+          return {
+            kind: "retry",
+            message:
+              "Refresh result is temporarily unavailable; retry with the latest saved token",
+            familyId: token.family_id,
+            sequence: token.sequence,
+          } as const;
+        }
+        this.database.remoteMcp.revokeFamily(token.family_id, timestamp);
+        this.refreshReplies.delete(token.family_id);
+        return {
+          kind: "invalid",
+          outcome: "reuse_revoked",
+          message: "Refresh token reuse revoked the grant",
         } as const;
       }
       if (this.database.remoteMcp.consumeRefresh(tokenHash, timestamp) !== 1)
         return {
-          kind: "invalid",
+          kind: "retry",
+          familyId: token.family_id,
+          sequence: token.sequence,
           message: "Refresh token is already being retried",
         } as const;
       return {
         kind: "issued",
+        familyId: token.family_id,
+        sequence: token.sequence + 1,
         response: this.issueTokens(
           token.family_id,
           normalizeStoredScopes(token.scopes_json),
@@ -402,9 +475,75 @@ export class RemoteOAuthService {
         ),
       } as const;
     });
-    if (result.kind !== "issued")
+    if (result.kind === "invalid") {
+      this.reportOAuth({
+        outcome: result.outcome,
+        ...(observed.token === undefined
+          ? {}
+          : {
+              familyId: observed.token.family_id,
+              sequence: observed.token.sequence,
+            }),
+      });
       throw new AppError("INVALID_GRANT", result.message, 400);
+    }
+    if (result.kind === "retry") {
+      this.reportOAuth({
+        outcome: "retry_unavailable",
+        familyId: result.familyId,
+        sequence: result.sequence,
+      });
+      throw new AppError("OAUTH_REFRESH_RETRY", result.message, 503, {
+        retryAfterSeconds: 1,
+      });
+    }
+    if (result.kind === "issued") {
+      this.refreshReplies.delete(result.familyId);
+      while (this.refreshReplies.size >= REFRESH_REPLY_LIMIT)
+        this.refreshReplies.delete(
+          this.refreshReplies.keys().next().value as string,
+        );
+      const reply = {
+        response: { ...result.response },
+        expiresAt: this.clock() + REFRESH_REPLAY_GRACE_MS,
+        accessExpiresAt: Date.parse(timestamp) + ACCESS_TOKEN_MS,
+      };
+      this.refreshReplies.set(result.familyId, reply);
+      this.scheduleReplyExpiry();
+    }
+    this.reportOAuth({
+      outcome: result.kind,
+      familyId: result.familyId,
+      sequence: result.sequence,
+    });
     return result.response;
+  }
+
+  private reportOAuth(event: OAuthDiagnostic): void {
+    try {
+      this.diagnostic(event);
+    } catch {
+      /* Diagnostics cannot change a grant. */
+    }
+  }
+
+  private scheduleReplyExpiry(): void {
+    if (this.refreshReplyTimer !== undefined || this.refreshReplies.size === 0)
+      return;
+    const next = Math.min(
+      ...[...this.refreshReplies.values()].map((reply) => reply.expiresAt),
+    );
+    this.refreshReplyTimer = setTimeout(
+      () => {
+        this.refreshReplyTimer = undefined;
+        for (const [family, reply] of this.refreshReplies)
+          if (reply.expiresAt <= this.clock())
+            this.refreshReplies.delete(family);
+        this.scheduleReplyExpiry();
+      },
+      Math.max(1, next - this.clock()),
+    );
+    this.refreshReplyTimer.unref();
   }
 
   verifyAccessToken(value: string): RemoteAccess {
@@ -537,6 +676,7 @@ export interface OAuthTokenResponse {
 export interface RemoteMcpIdentity {
   userId: string;
   scopes: readonly RemoteMcpScope[];
+  resource?: string;
 }
 
 export interface RemoteJobSummary {
@@ -2644,7 +2784,8 @@ function withinRefreshReplayGrace(usedAt: string, timestamp: string): boolean {
   return (
     Number.isFinite(used) &&
     Number.isFinite(now) &&
-    Math.abs(now - used) <= REFRESH_REPLAY_GRACE_MS
+    now >= used &&
+    now - used < REFRESH_REPLAY_GRACE_MS
   );
 }
 

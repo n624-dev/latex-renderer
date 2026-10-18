@@ -8,6 +8,7 @@ import * as heartbeat from "../apps/renderer-worker/src/heartbeat.js";
 import * as processor from "../apps/renderer-worker/src/job-processor.js";
 import * as failure from "../apps/renderer-worker/src/failure.js";
 import * as queue from "../apps/renderer-worker/src/queue.js";
+import * as admission from "../apps/renderer-worker/src/admission.js";
 import { runWorker } from "../apps/renderer-worker/src/worker.js";
 
 const databases: RendererDatabase[] = [];
@@ -71,6 +72,59 @@ function fixture() {
   };
 }
 describe("worker stop and orphan-recovery lifecycle", () => {
+  it("keeps low-memory jobs queued without launching a renderer", async () => {
+    const f = fixture();
+    f.config.minimumAvailableMemoryBytes = 1024;
+    vi.spyOn(admission, "readHostResources").mockReturnValue({
+      availableBytes: 512,
+      memoryStallPercent: 0,
+      ioStallPercent: 0,
+    });
+    vi.spyOn(f.database.worker, "nextQueued").mockReturnValue({
+      id: job.id,
+      queued_at: new Date().toISOString(),
+    });
+    await runWorker(f.database, f.config, f.abort.signal, {
+      idleDelay: () => {
+        f.abort.abort();
+        return Promise.resolve();
+      },
+    });
+    expect(f.claimed).not.toHaveBeenCalled();
+    expect(f.processed).not.toHaveBeenCalled();
+    expect(f.database.settings.value("worker_admission", null)).toMatchObject({
+      state: "memory_low",
+    });
+  });
+  it("finishes a resource-blocked job at its queue deadline without rendering it", async () => {
+    const f = fixture();
+    f.config.minimumAvailableMemoryBytes = 1024;
+    f.config.admissionWaitTimeoutMs = 1000;
+    vi.spyOn(admission, "readHostResources").mockReturnValue({
+      availableBytes: 512,
+      memoryStallPercent: 0,
+      ioStallPercent: 0,
+    });
+    vi.spyOn(f.database.worker, "nextQueued").mockReturnValue({
+      id: job.id,
+      queued_at: new Date(Date.now() - 2000).toISOString(),
+    });
+    await runWorker(f.database, f.config, f.abort.signal, {
+      idleDelay: () => {
+        f.abort.abort();
+        return Promise.resolve();
+      },
+    });
+    expect(f.processed).not.toHaveBeenCalled();
+    expect(f.failed).toHaveBeenCalledWith(
+      f.database,
+      f.config,
+      job,
+      expect.any(String),
+      "HOST_RESOURCE_BUSY",
+      "failed",
+    );
+  });
   it("does not claim another job or finish shutdown before the active render completes", async () => {
     const f = fixture();
     let ready!: () => void, finish!: () => void;

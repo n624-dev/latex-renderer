@@ -1,14 +1,143 @@
 import { randomUUID } from "node:crypto";
-import { boundedIntegerEnvironment, loadResourceLimits, positiveBytesEnvironment, positiveDurationEnvironment, positiveIntegerEnvironment, type ResourceLimits } from "@latex-renderer/shared";
+import {
+  boundedIntegerEnvironment,
+  loadResourceLimits,
+  positiveBytesEnvironment,
+  positiveDurationEnvironment,
+  positiveIntegerEnvironment,
+  type ResourceLimits,
+} from "@latex-renderer/shared";
 
-export interface WorkerConfig extends ResourceLimits { databasePath:string;storageRoot:string;image:string;workerId:string;seccompProfile:string;apparmorProfile:string|undefined;maxOutputBytes:number;maxOutputFileCount:number;maxOutputDirectoryCount:number;maxLogBytes:number;maxSvgObjects:number;maxSvgBytes:number;maxSvgTotalBytes:number;svgConversionTimeoutSeconds:number;containerUid:number;containerGid:number;jobTimeoutMs:number }
+export interface WorkerConfig extends ResourceLimits {
+  databasePath: string;
+  storageRoot: string;
+  image: string;
+  workerId: string;
+  seccompProfile: string;
+  apparmorProfile: string | undefined;
+  maxOutputBytes: number;
+  maxOutputFileCount: number;
+  maxOutputDirectoryCount: number;
+  maxLogBytes: number;
+  maxSvgObjects: number;
+  maxSvgBytes: number;
+  maxSvgTotalBytes: number;
+  svgConversionTimeoutSeconds: number;
+  containerUid: number;
+  containerGid: number;
+  jobTimeoutMs: number;
+  minimumAvailableMemoryBytes?: number;
+  admissionWaitTimeoutMs?: number;
+  diagnostic?: (record: Readonly<Record<string, unknown>>) => void;
+}
 
-export function loadWorkerConfig():WorkerConfig{
-  const config:WorkerConfig={...loadResourceLimits(process.env),databasePath:required("DATABASE_PATH"),storageRoot:required("STORAGE_ROOT"),image:required("RENDERER_IMAGE"),workerId:process.env.WORKER_ID??`worker_${randomUUID()}`,seccompProfile:required("RENDERER_SECCOMP_PROFILE"),apparmorProfile:optional("RENDERER_APPARMOR_PROFILE"),maxOutputBytes:positiveBytesEnvironment(process.env,"MAX_OUTPUT_BYTES",200*1024*1024),maxOutputFileCount:positiveIntegerEnvironment(process.env,"MAX_OUTPUT_FILE_COUNT",2000),maxOutputDirectoryCount:positiveIntegerEnvironment(process.env,"MAX_OUTPUT_DIRECTORY_COUNT",200),maxLogBytes:positiveBytesEnvironment(process.env,"MAX_LOG_BYTES",10*1024*1024),maxSvgObjects:positiveIntegerEnvironment(process.env,"MAX_SVG_OBJECTS",200),maxSvgBytes:positiveBytesEnvironment(process.env,"MAX_SVG_BYTES",10*1024*1024),maxSvgTotalBytes:positiveBytesEnvironment(process.env,"MAX_SVG_TOTAL_BYTES",100*1024*1024),svgConversionTimeoutSeconds:positiveDurationEnvironment(process.env,"SVG_CONVERSION_TIMEOUT_SECONDS",120,86400),containerUid:boundedIntegerEnvironment(process.env,"RENDERER_CONTAINER_UID",10000,0,2147483647),containerGid:boundedIntegerEnvironment(process.env,"RENDERER_CONTAINER_GID",10000,0,2147483647),jobTimeoutMs:positiveDurationEnvironment(process.env,"RENDERER_JOB_TIMEOUT_SECONDS",420,86400)*1000};
-  if(config.containerUid===0||config.containerGid===0)throw new Error("Renderer container UID and GID must both be non-zero");
-  if(!isImmutableImageReference(config.image)&&process.env.ALLOW_MUTABLE_RENDERER_IMAGE!=="true")throw new Error("RENDERER_IMAGE must be an image ID or registry digest; mutable tags are forbidden");
+export function loadWorkerConfig(): WorkerConfig {
+  const config: WorkerConfig = {
+    ...loadResourceLimits(process.env),
+    databasePath: required("DATABASE_PATH"),
+    storageRoot: required("STORAGE_ROOT"),
+    image: required("RENDERER_IMAGE"),
+    workerId: process.env.WORKER_ID ?? `worker_${randomUUID()}`,
+    seccompProfile: required("RENDERER_SECCOMP_PROFILE"),
+    apparmorProfile: optional("RENDERER_APPARMOR_PROFILE"),
+    maxOutputBytes: positiveBytesEnvironment(
+      process.env,
+      "MAX_OUTPUT_BYTES",
+      200 * 1024 * 1024,
+    ),
+    maxOutputFileCount: positiveIntegerEnvironment(
+      process.env,
+      "MAX_OUTPUT_FILE_COUNT",
+      2000,
+    ),
+    maxOutputDirectoryCount: positiveIntegerEnvironment(
+      process.env,
+      "MAX_OUTPUT_DIRECTORY_COUNT",
+      200,
+    ),
+    maxLogBytes: positiveBytesEnvironment(
+      process.env,
+      "MAX_LOG_BYTES",
+      10 * 1024 * 1024,
+    ),
+    maxSvgObjects: positiveIntegerEnvironment(
+      process.env,
+      "MAX_SVG_OBJECTS",
+      200,
+    ),
+    maxSvgBytes: positiveBytesEnvironment(
+      process.env,
+      "MAX_SVG_BYTES",
+      10 * 1024 * 1024,
+    ),
+    maxSvgTotalBytes: positiveBytesEnvironment(
+      process.env,
+      "MAX_SVG_TOTAL_BYTES",
+      100 * 1024 * 1024,
+    ),
+    svgConversionTimeoutSeconds: positiveDurationEnvironment(
+      process.env,
+      "SVG_CONVERSION_TIMEOUT_SECONDS",
+      120,
+      86400,
+    ),
+    containerUid: boundedIntegerEnvironment(
+      process.env,
+      "RENDERER_CONTAINER_UID",
+      10000,
+      0,
+      2147483647,
+    ),
+    containerGid: boundedIntegerEnvironment(
+      process.env,
+      "RENDERER_CONTAINER_GID",
+      10000,
+      0,
+      2147483647,
+    ),
+    jobTimeoutMs:
+      positiveDurationEnvironment(
+        process.env,
+        "RENDERER_JOB_TIMEOUT_SECONDS",
+        420,
+        86400,
+      ) * 1000,
+    minimumAvailableMemoryBytes: positiveBytesEnvironment(
+      process.env,
+      "RENDERER_MIN_AVAILABLE_MEMORY_BYTES",
+      1152 * 1024 * 1024,
+    ),
+    admissionWaitTimeoutMs:
+      positiveDurationEnvironment(
+        process.env,
+        "RENDERER_ADMISSION_WAIT_SECONDS",
+        900,
+        86400,
+      ) * 1000,
+  };
+  if (config.containerUid === 0 || config.containerGid === 0)
+    throw new Error("Renderer container UID and GID must both be non-zero");
+  if (
+    !isImmutableImageReference(config.image) &&
+    process.env.ALLOW_MUTABLE_RENDERER_IMAGE !== "true"
+  )
+    throw new Error(
+      "RENDERER_IMAGE must be an image ID or registry digest; mutable tags are forbidden",
+    );
   return config;
 }
-function required(name:string):string{const value=process.env[name];if(value===undefined||value.length===0)throw new Error(`${name} is required`);return value;}
-function optional(name:string):string|undefined{const value=process.env[name];return value===undefined||value.length===0?undefined:value;}
-function isImmutableImageReference(value:string):boolean{return /^sha256:[a-f0-9]{64}$/.test(value)||/@sha256:[a-f0-9]{64}$/.test(value);}
+function required(name: string): string {
+  const value = process.env[name];
+  if (value === undefined || value.length === 0)
+    throw new Error(`${name} is required`);
+  return value;
+}
+function optional(name: string): string | undefined {
+  const value = process.env[name];
+  return value === undefined || value.length === 0 ? undefined : value;
+}
+function isImmutableImageReference(value: string): boolean {
+  return (
+    /^sha256:[a-f0-9]{64}$/.test(value) || /@sha256:[a-f0-9]{64}$/.test(value)
+  );
+}

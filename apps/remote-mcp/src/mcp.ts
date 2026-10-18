@@ -170,8 +170,33 @@ export function createRemoteMcpHandler(
       registerJobResources(server, renders, identity);
       registerProjectTools(server, renders, identity);
       server.registerTool(
+        "get_profile",
+        {
+          title: "Get connected profile",
+          description:
+            "Return the stable opaque identity of the authenticated account.",
+          inputSchema: z.object({}).strict(),
+          outputSchema: z.object({ id: z.string().min(1) }).strict(),
+          annotations: {
+            readOnlyHint: true,
+            destructiveHint: false,
+            idempotentHint: true,
+            openWorldHint: false,
+          },
+          _meta: { ...oauthToolMeta(), "openai/profile": true },
+        },
+        () => {
+          const profile = { id: identity.userId };
+          return {
+            structuredContent: profile,
+            content: [{ type: "text" as const, text: JSON.stringify(profile) }],
+          };
+        },
+      );
+      server.registerTool(
         "create_source",
         {
+          _meta: oauthToolMeta("mcp:render"),
           title: "Create a multi-file LaTeX Source",
           description:
             "Create an immutable Source from small text or base64 files. Use chunk upload for archives larger than 4 MiB.",
@@ -197,6 +222,7 @@ export function createRemoteMcpHandler(
       server.registerTool(
         "begin_source_upload",
         {
+          _meta: oauthToolMeta("mcp:render"),
           title: "Begin a chunked Source ZIP upload",
           description: `Reserve an owner-scoped upload for a validated ZIP up to ${renders.maxSourceUploadBytes} bytes. Uploads expire after 10 minutes.`,
           inputSchema: z
@@ -232,6 +258,7 @@ export function createRemoteMcpHandler(
       server.registerTool(
         "upload_source_chunk",
         {
+          _meta: oauthToolMeta("mcp:render"),
           title: "Append a Source ZIP chunk",
           description:
             "Append one sequential base64 chunk of at most 512 KiB to an active owner-scoped upload.",
@@ -266,6 +293,7 @@ export function createRemoteMcpHandler(
       server.registerTool(
         "finalize_source_upload",
         {
+          _meta: oauthToolMeta("mcp:render"),
           title: "Validate and finalize a Source ZIP upload",
           description:
             "Verify size and SHA-256, apply existing ZIP security validation, and publish an immutable Source.",
@@ -295,6 +323,7 @@ export function createRemoteMcpHandler(
       server.registerTool(
         "update_source_file",
         {
+          _meta: oauthToolMeta("mcp:render"),
           title: "Create a Source revision with one updated file",
           description:
             "Copy an owned immutable Source into a new revision and replace or add one text/base64 file.",
@@ -318,6 +347,7 @@ export function createRemoteMcpHandler(
       server.registerTool(
         "delete_source_file",
         {
+          _meta: oauthToolMeta("mcp:render"),
           title: "Create a Source revision without one file",
           description:
             "Copy an owned immutable Source into a new revision and remove one file.",
@@ -343,6 +373,7 @@ export function createRemoteMcpHandler(
       server.registerTool(
         "create_source_ref",
         {
+          _meta: oauthToolMeta("mcp:render"),
           title: "Create a short-lived Source handoff reference",
           description:
             "Create an owner-scoped 15-minute handoff reference for an owned ready Source.",
@@ -366,6 +397,7 @@ export function createRemoteMcpHandler(
       server.registerTool(
         "create_render",
         {
+          _meta: oauthToolMeta("mcp:render"),
           title: "Create remote LaTeX render",
           description:
             "Create one render from small inline LaTeX, an owned sourceId, or an owner-scoped sourceRef. Local filesystem paths are not accepted.",
@@ -430,6 +462,7 @@ export function createRemoteMcpHandler(
       server.registerTool(
         "retry_render",
         {
+          _meta: oauthToolMeta("mcp:render"),
           title: "Retry a render with the same Source",
           description:
             "Create a new queued Job using an owned terminal Job's Source and entrypoint without uploading again.",
@@ -453,6 +486,7 @@ export function createRemoteMcpHandler(
       server.registerTool(
         "get_render_status",
         {
+          _meta: oauthToolMeta("mcp:read"),
           title: "Get remote render status",
           description:
             "Read the status and safe metadata for an owned Remote MCP Job.",
@@ -476,6 +510,7 @@ export function createRemoteMcpHandler(
       server.registerTool(
         "get_render_diagnostics",
         {
+          _meta: oauthToolMeta("mcp:read"),
           title: "Get structured render diagnostics",
           description:
             "Return owned Job errors, warnings, and a bounded compile-log excerpt without opening the Web UI.",
@@ -530,6 +565,7 @@ export function createRemoteMcpHandler(
       server.registerTool(
         "get_render_preview",
         {
+          _meta: oauthToolMeta("mcp:read"),
           title: "Get a rendered PDF page preview",
           description:
             "Return one owned PDF page as PNG image content for direct visual inspection.",
@@ -555,6 +591,7 @@ export function createRemoteMcpHandler(
       server.registerTool(
         "get_render_artifacts",
         {
+          _meta: oauthToolMeta("mcp:read"),
           title: "Get remote render artifacts",
           description:
             "Return artifact metadata and owner-scoped MCP resource links. A protected Web result link is included only as a human fallback.",
@@ -578,6 +615,7 @@ export function createRemoteMcpHandler(
       server.registerTool(
         "get_renderer_capabilities",
         {
+          _meta: oauthToolMeta("mcp:read"),
           title: "Get renderer capabilities and limits",
           description:
             "Return supported engine, TeX Live version, sandbox constraints, and Source limits.",
@@ -628,6 +666,7 @@ export function createRemoteMcpHandler(
       server.registerTool(
         "cancel_render",
         {
+          _meta: oauthToolMeta("mcp:cancel"),
           title: "Cancel remote render",
           description: "Cancel an owned active Remote MCP Job.",
           inputSchema: z.object({ jobId: jobId }).strict(),
@@ -650,6 +689,7 @@ export function createRemoteMcpHandler(
       server.registerTool(
         "delete_render",
         {
+          _meta: oauthToolMeta("mcp:delete"),
           title: "Delete remote render",
           description: "Schedule deletion of an owned terminal Remote MCP Job.",
           inputSchema: z.object({ jobId: jobId }).strict(),
@@ -678,6 +718,14 @@ export function createRemoteMcpHandler(
       onerror: logMcpProtocolError,
     },
   );
+}
+
+function oauthToolMeta(scope?: RemoteMcpScope) {
+  return {
+    securitySchemes: [
+      { type: "oauth2", scopes: scope === undefined ? [] : [scope] },
+    ],
+  };
 }
 
 function registerEnvironmentTools(
@@ -713,6 +761,7 @@ function registerEnvironmentTools(
   server.registerTool(
     "check_packages",
     {
+      _meta: oauthToolMeta("mcp:read"),
       title: "Check LaTeX package availability",
       description: "Check up to 50 exact package or import names.",
       inputSchema: namesInput,
@@ -730,6 +779,7 @@ function registerEnvironmentTools(
   server.registerTool(
     "search_packages",
     {
+      _meta: oauthToolMeta("mcp:read"),
       title: "Search available LaTeX packages",
       description: "Search package and import names in pages of at most 50.",
       inputSchema: searchInput,
@@ -751,6 +801,7 @@ function registerEnvironmentTools(
   server.registerTool(
     "check_fonts",
     {
+      _meta: oauthToolMeta("mcp:read"),
       title: "Check font availability",
       description: "Check up to 50 exact installed font family names.",
       inputSchema: namesInput,
@@ -768,6 +819,7 @@ function registerEnvironmentTools(
   server.registerTool(
     "search_fonts",
     {
+      _meta: oauthToolMeta("mcp:read"),
       title: "Search installed fonts",
       description: "Search installed font family names in pages of at most 50.",
       inputSchema: searchInput,
@@ -829,6 +881,7 @@ function registerProjectTools(
   server.registerTool(
     "list_projects",
     {
+      _meta: oauthToolMeta("mcp:read"),
       title: "List saved Projects",
       description:
         "List owner-scoped saved Projects shared with the Web application.",
@@ -849,6 +902,7 @@ function registerProjectTools(
   server.registerTool(
     "get_project",
     {
+      _meta: oauthToolMeta("mcp:read"),
       title: "Get saved Project",
       description:
         "Read saved Project revisions, immutable Source IDs and Job history.",
@@ -872,6 +926,7 @@ function registerProjectTools(
   server.registerTool(
     "get_project_revision_jobs",
     {
+      _meta: oauthToolMeta("mcp:read"),
       title: "List Project revision Jobs",
       description:
         "Page through the complete Job history of one saved revision.",
@@ -895,6 +950,7 @@ function registerProjectTools(
   server.registerTool(
     "create_project",
     {
+      _meta: oauthToolMeta("mcp:render"),
       title: "Create saved Project",
       description:
         "Create a user-owned saved Project; temporary renders remain available without one.",
@@ -913,6 +969,7 @@ function registerProjectTools(
   server.registerTool(
     "rename_project",
     {
+      _meta: oauthToolMeta("mcp:render"),
       title: "Rename saved Project",
       description:
         "Change the display name without rewriting revision history.",
@@ -935,6 +992,7 @@ function registerProjectTools(
   server.registerTool(
     "delete_project",
     {
+      _meta: oauthToolMeta("mcp:delete"),
       title: "Delete saved Project",
       description:
         "Hide a saved Project after explicit user approval; Source and Job retention remains unchanged.",
@@ -959,6 +1017,7 @@ function registerProjectTools(
   server.registerTool(
     "attach_project_revision",
     {
+      _meta: oauthToolMeta("mcp:render"),
       title: "Save Source as Project revision",
       description:
         "Attach an owned ready immutable Source to a saved Project without queuing a Job.",
@@ -988,6 +1047,7 @@ function registerProjectTools(
   server.registerTool(
     "update_project_file",
     {
+      _meta: oauthToolMeta("mcp:render"),
       title: "Edit saved Project file",
       description:
         "Copy an exact saved revision, replace one file and atomically attach the new immutable Source and Project revision.",
@@ -1013,6 +1073,7 @@ function registerProjectTools(
   server.registerTool(
     "delete_project_file",
     {
+      _meta: oauthToolMeta("mcp:render"),
       title: "Remove saved Project file",
       description:
         "Copy an exact saved revision, remove one file and atomically attach the new immutable Source and Project revision.",
@@ -1038,6 +1099,7 @@ function registerProjectTools(
   server.registerTool(
     "render_project_revision",
     {
+      _meta: oauthToolMeta("mcp:render"),
       title: "Render saved Project revision",
       description:
         "Queue a Job bound to the exact saved revision and its Source.",
@@ -1115,6 +1177,7 @@ async function execute(
     });
     return {
       isError: true,
+      ...authenticationFailure(identity, safe),
       structuredContent: output,
       content: modelReadableFailure(operation, structuredError),
     };
@@ -1195,6 +1258,7 @@ function toolFailure(
   });
   return {
     isError: true,
+    ...authenticationFailure(identity, safe),
     structuredContent: output,
     content: modelReadableFailure(operation, structuredError),
   };
@@ -1888,6 +1952,29 @@ function recordArray(value: unknown): Record<string, unknown>[] {
   return Array.isArray(value) ? value.map(asRecord) : [];
 }
 
+function authenticationFailure(
+  identity: RemoteMcpIdentity,
+  error: { code: string; message: string },
+) {
+  if (error.code !== "INSUFFICIENT_SCOPE" || identity.resource === undefined)
+    return {};
+  const scope = /^Scope (mcp:(?:read|render|cancel|delete)) is required$/.exec(
+    error.message,
+  )?.[1];
+  if (scope === undefined) return {};
+  const metadata = new URL(
+    "/.well-known/oauth-protected-resource/mcp",
+    identity.resource,
+  ).toString();
+  return {
+    _meta: {
+      "mcp/www_authenticate": [
+        `Bearer resource_metadata="${metadata}", error="insufficient_scope", scope="${scope}", error_description="Additional permission is required"`,
+      ],
+    },
+  };
+}
+
 function identityFromAuth(auth: AuthInfo | undefined): RemoteMcpIdentity {
   const userId = auth?.extra?.userId;
   if (typeof userId !== "string")
@@ -1895,5 +1982,8 @@ function identityFromAuth(auth: AuthInfo | undefined): RemoteMcpIdentity {
   return {
     userId,
     scopes: (auth?.scopes ?? []) as RemoteMcpScope[],
+    ...(auth?.resource === undefined
+      ? {}
+      : { resource: auth.resource.toString() }),
   };
 }

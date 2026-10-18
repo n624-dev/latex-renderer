@@ -65,6 +65,7 @@ async function fixture() {
     maxActive: 0,
     polls: 0,
     complete: true,
+    resourceWait: false,
     rejectCapacity: 0,
     capacityAlways: false,
     ticketError: "",
@@ -243,9 +244,13 @@ async function fixture() {
       if (state.complete) state.active.delete(id);
       await json({
         id,
-        status: state.complete ? "succeeded" : "running",
-        errorCode: null,
-        errorMessage: null,
+        status: state.resourceWait
+          ? "queued"
+          : state.complete
+            ? "succeeded"
+            : "running",
+        errorCode: state.resourceWait ? "HOST_RESOURCE_WAIT" : null,
+        errorMessage: state.resourceWait ? "Waiting for host resources" : null,
         retentionExpiresAt: null,
         artifacts: [],
         previews: [],
@@ -453,6 +458,31 @@ describe("App render in the selected browser", () => {
     expect(await start(page).isDisabled()).toBe(true);
     expect(state.requests).toHaveLength(1);
     expect(state.projects).toEqual([{ displayName: "Submitted name" }]);
+    expect(errors).toEqual([]);
+  });
+
+  it("explains resource admission waits without treating a queued job as failed", async () => {
+    const { page, state, errors } = await fixture();
+    state.complete = false;
+    state.resourceWait = true;
+    await fastTimers(page);
+    await page.locator("#app-files").setInputFiles(tex("waiting.tex"));
+    await ready(page);
+    await start(page).click();
+    await expect
+      .poll(async () =>
+        (await page.locator("#app-render-items").textContent())?.includes(
+          "サーバー資源の空きを待っています",
+        ),
+      )
+      .toBe(true);
+    expect(state.requests).toHaveLength(1);
+    state.resourceWait = false;
+    state.complete = true;
+    await finish(page);
+    expect(await page.locator("#app-render-items").textContent()).not.toContain(
+      "サーバー資源の空きを待っています",
+    );
     expect(errors).toEqual([]);
   });
 

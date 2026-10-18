@@ -1,5 +1,5 @@
 import type { RendererDatabase } from "@latex-renderer/database";
-import { AppError } from "@latex-renderer/shared";
+import { AppError, nowIso } from "@latex-renderer/shared";
 import type { WorkerConfig } from "./config.js";
 import { assertDockerIsolation, RendererCleanupDeferred } from "./docker.js";
 import { recordFailure } from "./failure.js";
@@ -7,6 +7,8 @@ import { startWorkerHeartbeat } from "./heartbeat.js";
 import { processJob } from "./job-processor.js";
 import { createPeriodicLeaseRecovery } from "./periodic-recovery.js";
 import { claimNextJob } from "./queue.js";
+import { assessHostResources, readHostResources } from "./admission.js";
+import { diagnosticWriter } from "../../../deploy/scripts/service-diagnostics.mjs";
 import { recoverStaleLeases } from "./recovery.js";
 
 export async function runWorker(
@@ -43,6 +45,11 @@ export async function runWorker(
   const stopHeartbeat = startWorkerHeartbeat(database, config.workerId),
     recoverExpiredLeases = createPeriodicLeaseRecovery(database, config);
   const isShuttingDown = () => signal.aborted;
+  const diagnostic = diagnosticWriter(config.storageRoot, "renderer-worker");
+  config.diagnostic = diagnostic;
+  let nextResourceCheck = 0,
+    admission: ReturnType<typeof assessHostResources> = "ready",
+    previousAdmission = "";
   try {
     while (!isShuttingDown()) {
       await recoverExpiredLeases();
@@ -58,6 +65,51 @@ export async function runWorker(
       }
       const mode = database.settings.value<string>("worker_mode", "running");
       if (mode === "draining" || mode === "paused") {
+        await idleDelay();
+        continue;
+      }
+      if (
+        config.minimumAvailableMemoryBytes !== undefined &&
+        Date.now() >= nextResourceCheck
+      ) {
+        admission = assessHostResources(
+          readHostResources(),
+          config.minimumAvailableMemoryBytes,
+        );
+        database.worker.setAdmissionReason(admission !== "ready", nowIso());
+        nextResourceCheck = Date.now() + 5000;
+      }
+      if (admission !== previousAdmission) {
+        diagnostic({ event: "renderer_worker.admission", state: admission });
+        database.settings.upsert(
+          "worker_admission",
+          { state: admission, checkedAt: nowIso() },
+          "system",
+          nowIso(),
+        );
+        previousAdmission = admission;
+      }
+      if (admission !== "ready") {
+        const pending = database.worker.nextQueued();
+        if (
+          pending &&
+          Date.now() - Date.parse(pending.queued_at) >=
+            (config.admissionWaitTimeoutMs ?? 900000)
+        ) {
+          const cutoff = new Date(
+            Date.now() - (config.admissionWaitTimeoutMs ?? 900000),
+          ).toISOString();
+          const blocked = claimNextJob(database, config.workerId, cutoff);
+          if (blocked)
+            await recordFailure(
+              database,
+              config,
+              blocked,
+              "Rendering could not start within the queue deadline because host resources were insufficient",
+              "HOST_RESOURCE_BUSY",
+              "failed",
+            );
+        }
         await idleDelay();
         continue;
       }

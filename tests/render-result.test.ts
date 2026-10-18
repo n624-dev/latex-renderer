@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { classifyRenderResult } from "../apps/renderer-worker/src/render-result.js";
+it("reports a confirmed cgroup OOM separately from a timeout", () => {
+  expect(classifyRenderResult(84, false, "")).toMatchObject({
+    status: "failed",
+    errorCode: "RENDERER_MEMORY_LIMIT",
+  });
+});
 
 describe("renderer stage timeout classification", () => {
   it.each([

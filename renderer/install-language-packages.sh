@@ -1,6 +1,32 @@
 #!/bin/sh
 set -eu
 [ "$#" -gt 0 ] || exit 64
+# Build immutable font data, not only the name index. Load one face per process
+# so CJK preparation does not hold all faces in memory simultaneously.
+if [ "$1" = --warm-font-cache ]; then
+  [ "$#" -eq 1 ] || exit 64
+  warm_root=$(mktemp -d)
+  trap 'rm -rf -- "$warm_root"' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' HUP TERM
+  export TEXMFVAR=/opt/texlive/2026/texmf-var
+  export TEXMFCACHE="$TEXMFVAR"
+  for warm_font in lmroman10-regular.otf HaranoAjiMincho-Regular.otf HaranoAjiMincho-Bold.otf HaranoAjiGothic-Regular.otf HaranoAjiGothic-Medium.otf HaranoAjiGothic-Bold.otf; do
+    if ! kpsewhich "$warm_font" >/dev/null 2>&1; then
+      [ "$warm_font" != lmroman10-regular.otf ] || exit 65
+      continue
+    fi
+    printf '\\documentclass{article}\n\\usepackage{fontspec}\n\\newfontface\\warm{%s}\n\\begin{document}\\warm A\\end{document}\n' "$warm_font" > "$warm_root/warm.tex"
+    if ! (cd "$warm_root" && timeout -s TERM -k 2 180 lualatex -no-shell-escape -interaction=batchmode -halt-on-error warm.tex > warm.stdout 2>&1); then
+      printf 'Font cache preparation failed: %s\n' "$warm_font" >&2
+      exit 65
+    fi
+  done
+  test -d "$TEXMFVAR/luatex-cache/generic/fonts"
+  find "$TEXMFVAR/luatex-cache/generic/fonts" -type d -exec chmod 0755 {} +
+  find "$TEXMFVAR/luatex-cache/generic/fonts" -type f -exec chmod 0644 {} +
+  exit 0
+fi
 # Runtime's post-install phase only: never run concurrent tlmgr installations.
 # The helper is part of the existing Runtime source fingerprint, so changing
 # this algorithm also changes Runtime identity without changing release schema.
