@@ -14,7 +14,7 @@ import type {
   UserRow,
   WebSessionRow,
 } from "@latex-renderer/database";
-import { AppError, newId } from "@latex-renderer/shared";
+import { AppError, exactHttpsOrigin, newId } from "@latex-renderer/shared";
 import {
   browserAuthenticationFromMode,
   isBrowserAuthenticationMethodEnabled,
@@ -946,20 +946,6 @@ export function oidcStateCookieName(state: string): string {
       401,
     );
   return `${OIDC_STATE_COOKIE}_${state}`;
-}
-
-function exactHttpsOrigin(value: string): string {
-  const url = new URL(value);
-  if (
-    url.protocol !== "https:" ||
-    url.username !== "" ||
-    url.password !== "" ||
-    url.pathname !== "/" ||
-    url.search !== "" ||
-    url.hash !== ""
-  )
-    throw new Error("PUBLIC_ORIGIN must be an exact HTTPS origin");
-  return url.origin;
 }
 
 function uniqueCookie(header: string | null, name: string): string | undefined {

@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
-export type McpStage = "initialize" | "tools/list" | "mcp_request";
+export type McpStage =
+  "initialize" | "notifications/initialized" | "tools/list" | "mcp_request";
 const context = new AsyncLocalStorage<{ requestId: string; stage: McpStage }>();
 export function diagnosticRequestId(value: unknown): string {
   return typeof value === "string" && /^[a-f0-9-]{36}$/i.test(value)

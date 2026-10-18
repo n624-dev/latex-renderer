@@ -15,7 +15,7 @@ Before migrations on production:
    node deploy/scripts/preflight-users-migration.mjs /var/lib/latex-renderer/renderer.sqlite3
    ```
 
-4. Confirm the preflight reports target version 19. Deploy the application; the
+4. Confirm the preflight reports target version 20. Deploy the application; the
    first process holding `BEGIN IMMEDIATE` performs the migration and later
    processes observe it as already applied.
 5. Verify `PRAGMA integrity_check`, `PRAGMA foreign_key_check`, migration version,
@@ -52,3 +52,13 @@ clients are never classified by name alone, and previously shared Project inputs
 remain visible. Keep `rollbackCompatible: false`: older code does not enforce this
 visibility boundary. Restore a verified full recovery point to downgrade; see
 [migration 19 recovery](019_internal_smoke_visibility.rollback.md).
+
+Migration 20 adds bounded, browser-bound pending OAuth logins. It does not change
+existing users, grants, Projects or Sources. Pending records expire after ten
+minutes and are removed by ordinary cleanup; expiration or a restored, expired
+record requires restarting login, not reconstructing authorization parameters.
+Deploy the application and cleanup script together. The additive table does not
+relax the migration 18/19 recovery restrictions: `rollbackCompatible` remains
+`false`, and application-only downgrade is still unsupported. Use a verified full
+recovery point when restoring an earlier release; do not drop the table or edit
+live authorization records manually.
