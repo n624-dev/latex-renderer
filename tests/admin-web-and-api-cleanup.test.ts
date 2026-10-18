@@ -283,18 +283,25 @@ describe("public and administrative Web", () => {
     expect(status).toContain("最終更新");
   });
 
-  it("provides real light/dark themes without the previous blue palette", async () => {
+  it("provides light/dark themes using only neutral grayscale colors", async () => {
     expect(styles).toContain(':root[data-theme="dark"]');
     expect(styles).toContain("prefers-color-scheme: dark");
     expect(siteScript).toContain("latex-renderer-theme");
-    for (const color of ["#60a5fa", "#93c5fd", "#1d4ed8"])
-      expect(styles.toLowerCase()).not.toContain(color);
+    const colors = [...styles.matchAll(/#([\da-f]{6}|[\da-f]{3})\b/gi)];
+    expect(colors.length).toBeGreaterThan(30);
+    for (const match of colors) {
+      const hex = match[1];
+      if (hex === undefined) throw new Error("Missing CSS color");
+      const full = hex.length === 3 ? hex.replace(/./g, "$&$&") : hex;
+      expect(full.slice(0, 2), `neutral color #${hex}`).toBe(full.slice(2, 4));
+      expect(full.slice(2, 4), `neutral color #${hex}`).toBe(full.slice(4, 6));
+    }
 
     const app = createWebApp(distribution);
     const admin = await (await app.request("/admin/users/")).text();
     expect(admin).toContain("data-theme-toggle");
     expect(admin).toContain('id="logout"');
-    expect(admin).not.toContain('/cdn-cgi/access/logout');
+    expect(admin).not.toContain("/cdn-cgi/access/logout");
     expect(admin).not.toContain("owner / admin 専用");
 
     const adminDocs = await (await app.request("/admin/docs/")).text();
