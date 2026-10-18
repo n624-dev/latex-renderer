@@ -50,6 +50,28 @@ export async function pollUntilTerminal(
     jobTicket = renewed.jobTicket;
     expiresAt = Date.parse(renewed.expiresAt);
   };
+  const wait = async (milliseconds: number) => {
+    if (customSleep !== undefined)
+      await abortable(controller.signal, () => customSleep(milliseconds));
+    else await sleep(milliseconds, controller.signal);
+  };
+  const readStatus = async (): Promise<JobResponse> => {
+    // Only repeat the read-only status request, never job creation, upload,
+    // ticket renewal or artifact verification. Bound retries even when the
+    // caller supplies no overall polling deadline.
+    for (let retries = 0; ; retries++) {
+      assertDeadline();
+      try {
+        return await abortable(controller.signal, () =>
+          client.job(ticket.jobId, jobTicket, { signal: controller.signal }),
+        );
+      } catch (error) {
+        assertDeadline();
+        if (retries >= 5 || !isTransientStatusError(error)) throw error;
+        await wait(Math.min(1000 * 2 ** retries, 8000));
+      }
+    }
+  };
   scheduleDeadline();
   try {
     for (;;) {
@@ -58,31 +80,29 @@ export async function pollUntilTerminal(
       assertDeadline();
       let job: JobResponse;
       try {
-        job = await abortable(controller.signal, () =>
-          client.job(ticket.jobId, jobTicket, { signal: controller.signal }),
-        );
+        job = await readStatus();
       } catch (error) {
         // Do not turn revocation or a security-version change into a silent
         // authorization retry. Only an invalid/expired ticket is refreshed.
         if (!(error instanceof AppError) || error.code !== "INVALID_TICKET") throw error;
         assertDeadline();
         await renew();
-        job = await abortable(controller.signal, () =>
-          client.job(ticket.jobId, jobTicket, { signal: controller.signal }),
-        );
+        job = await readStatus();
       }
       assertDeadline();
       options.onEvent?.({ type: "job.status", jobId: ticket.jobId, status: job.status });
       if (terminalStatuses.has(job.status)) return { job, jobTicket };
-      if (customSleep !== undefined) {
-        await abortable(controller.signal, () => customSleep(interval));
-      } else {
-        await sleep(interval, controller.signal);
-      }
+      await wait(interval);
     }
   } finally {
     if (timer !== undefined) clearTimeout(timer);
   }
+}
+
+function isTransientStatusError(error: unknown): boolean {
+  return error instanceof AppError &&
+    (error.code === "HTTP_ERROR" || error.code === "INVALID_RESPONSE") &&
+    [502, 503, 504].includes(error.status);
 }
 
 function abortReason(signal: AbortSignal): Error {
