@@ -169,7 +169,7 @@ describe("bounded server-side OAuth login continuations", () => {
         f.target,
         "2026-10-18T00:10:00.000Z",
       );
-    expect(() => f.store.create(f.target, f.clientId, null)).toThrowError(
+    expect(() => f.store.create(f.target, f.clientId, null)).toThrow(
       expect.objectContaining({ code: "OAUTH_LOGIN_CAPACITY", status: 503 }),
     );
     expect(f.db.remoteMcp.loginContinuationCount()).toBe(
