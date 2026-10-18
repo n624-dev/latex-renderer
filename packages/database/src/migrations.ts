@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import {
   auditExportSequenceSql,
   internalSmokeVisibilitySql,
+  remoteMcpLoginContinuationsSql,
 } from "./schema.js";
 
 const usersAccessSubjectV2Sql = `
@@ -60,6 +61,19 @@ export function applyDatabaseMigrations(db: DatabaseSync): void {
   applyArtifactGenerationV17(db);
   applyAuditExportSequenceV18(db);
   applyInternalSmokeVisibilityV19(db);
+  applyRemoteMcpLoginContinuationsV20(db);
+}
+
+function applyRemoteMcpLoginContinuationsV20(db: DatabaseSync): void {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    if (!db.prepare("SELECT 1 FROM schema_migrations WHERE version=20").get())
+      db.exec(remoteMcpLoginContinuationsSql);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
 }
 
 function applyInternalSmokeVisibilityV19(db: DatabaseSync): void {

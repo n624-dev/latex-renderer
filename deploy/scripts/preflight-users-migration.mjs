@@ -90,7 +90,7 @@ function assertSchema(db) {
     undefined
   )
     throw new Error("Migration version 4 is absent");
-  for (const version of [5, 6, 17, 18, 19]) {
+  for (const version of [5, 6, 17, 18, 19, 20]) {
     if (
       db
         .prepare("SELECT 1 FROM schema_migrations WHERE version=?")
@@ -143,6 +143,7 @@ function assertSchema(db) {
   }
   for (const table of [
     "remote_mcp_clients",
+    "remote_mcp_login_continuations",
     "remote_mcp_authorization_codes",
     "remote_mcp_token_families",
     "remote_mcp_tokens",

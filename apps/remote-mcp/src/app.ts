@@ -11,16 +11,28 @@ import type { RendererDatabase } from "@latex-renderer/database";
 import {
   REMOTE_MCP_SCOPES,
   RemoteOAuthService,
+  RemoteMcpLoginContinuations,
+  oauthLoginCookie,
+  oauthLoginCookieName,
   type AuthorizationRequest,
 } from "@latex-renderer/remote-mcp-core";
-import { AppError, parseBearer, safeError } from "@latex-renderer/shared";
-import type { McpHttpHandler } from "@modelcontextprotocol/server";
+import {
+  AppError,
+  exactHttpsOrigin,
+  parseBearer,
+  safeError,
+} from "@latex-renderer/shared";
+import {
+  SUPPORTED_PROTOCOL_VERSIONS,
+  type McpHttpHandler,
+} from "@modelcontextprotocol/server";
 import { z } from "zod";
 import {
   diagnosticRequestId,
   withMcpDiagnostics,
   type McpStage,
 } from "./diagnostics.js";
+import { observeMcpResponse } from "./response-diagnostics.js";
 
 export interface RemoteMcpAppDependencies {
   database: RendererDatabase;
@@ -53,14 +65,21 @@ const registerSchema = z
 const OAUTH_CSRF_COOKIE = "oauth_csrf";
 const OAUTH_CSRF_TOKEN_PATTERN = /^[A-Za-z0-9_-]{32}$/;
 
-export function createRemoteMcpApp(deps: RemoteMcpAppDependencies) {
+export function createRemoteMcpApp(dependencies: RemoteMcpAppDependencies) {
+  const deps = {
+    ...dependencies,
+    publicOrigin: exactHttpsOrigin(dependencies.publicOrigin),
+  };
+  if (deps.oauth.issuer !== deps.publicOrigin)
+    throw new Error("Remote MCP issuer must match its canonical public origin");
   const app = new Hono<{
       Variables: {
         mcpAccess: ReturnType<RemoteOAuthService["verifyAccessToken"]>;
         mcpStage: McpStage | undefined;
       };
     }>(),
-    registrationLimiter = new AnonymousRegistrationLimiter();
+    registrationLimiter = new AnonymousRegistrationLimiter(),
+    loginContinuations = new RemoteMcpLoginContinuations(deps.database);
   app.use("*", requestId());
   app.use("*", async (c, next) => {
     await next();
@@ -74,11 +93,13 @@ export function createRemoteMcpApp(deps: RemoteMcpAppDependencies) {
             ? c.req.method === "GET"
               ? "authorize_get"
               : "authorize_post"
-            : route === "/oauth/token"
-              ? "token"
-              : route.startsWith("/.well-known/oauth-")
-                ? "discovery"
-                : null;
+            : route.startsWith("/oauth/continue/")
+              ? "login_continue"
+              : route === "/oauth/token"
+                ? "token"
+                : route.startsWith("/.well-known/oauth-")
+                  ? "discovery"
+                  : null;
     if (stage)
       console.info(
         JSON.stringify({
@@ -91,6 +112,29 @@ export function createRemoteMcpApp(deps: RemoteMcpAppDependencies) {
               ?.toLowerCase()
               .startsWith("application/json") ?? false,
           requestId: diagnosticRequestId(c.get("requestId")),
+          ...(route === "/mcp"
+            ? {
+                method: ["GET", "POST", "OPTIONS", "DELETE", "HEAD"].includes(
+                  c.req.method,
+                )
+                  ? c.req.method
+                  : "OTHER",
+                requestJson:
+                  c.req
+                    .header("Content-Type")
+                    ?.split(";")[0]
+                    ?.trim()
+                    .toLowerCase() === "application/json",
+                acceptsJson:
+                  /(?:^|,)\s*application\/json(?:\s*(?:;|,|$))/i.test(
+                    c.req.header("Accept") ?? "",
+                  ),
+                acceptsEventStream:
+                  /(?:^|,)\s*text\/event-stream(?:\s*(?:;|,|$))/i.test(
+                    c.req.header("Accept") ?? "",
+                  ),
+              }
+            : {}),
         }),
       );
   });
@@ -135,6 +179,7 @@ export function createRemoteMcpApp(deps: RemoteMcpAppDependencies) {
         JSON.stringify({
           event: "remote_mcp.authentication_rejected",
           code: error.code,
+          credentialPresent: c.req.header("Authorization") !== undefined,
           requestId: diagnosticRequestId(c.get("requestId")),
         }),
       );
@@ -233,7 +278,12 @@ export function createRemoteMcpApp(deps: RemoteMcpAppDependencies) {
     const request = deps.oauth.validateAuthorizationRequest(
         new URL(c.req.url).searchParams,
       ),
-      session = await establishOrRedirect(deps, c.req.raw),
+      session = await establishOrRedirect(
+        deps,
+        c.req.raw,
+        loginContinuations,
+        request.clientId,
+      ),
       csrf = randomBytes(24).toString("base64url");
     if (session instanceof Response) {
       oauthStage("login_required", c.get("requestId"));
@@ -256,6 +306,22 @@ export function createRemoteMcpApp(deps: RemoteMcpAppDependencies) {
     return c.html(
       consentPage(request, request.clientName, session.principal.user.id, csrf),
     );
+  });
+
+  app.get("/oauth/continue/:handle", async (c) => {
+    const handle = c.req.param("handle");
+    const binding = oauthLoginCookie(c.req.header("Cookie") ?? null, handle);
+    // A stolen handle alone cannot redirect another browser or consume a flow.
+    // Authentication happens before consumption so a lost session cannot burn it.
+    const session = await deps.browserAuth.establishSession(c.req.raw);
+    const target = loginContinuations.consume(handle, binding);
+    appendSetCookies(c.res.headers, session.cookies);
+    c.header(
+      "Set-Cookie",
+      `${oauthLoginCookieName(handle)}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`,
+      { append: true },
+    );
+    return c.redirect(new URL(target, deps.publicOrigin), 303);
   });
 
   app.post("/oauth/authorize", async (c) => {
@@ -357,17 +423,25 @@ export function createRemoteMcpApp(deps: RemoteMcpAppDependencies) {
     return withMcpDiagnostics(
       c.get("requestId"),
       c.get("mcpStage") ?? "mcp_request",
-      () =>
-        deps.mcp.fetch(c.req.raw, {
-          authInfo: {
-            token: access.token,
-            clientId: access.clientId,
-            scopes: access.scopes,
-            expiresAt: Math.floor(Date.parse(access.expiresAt) / 1000),
-            resource: new URL(access.resource),
-            extra: { userId: access.userId },
+      async () =>
+        observeMcpResponse(
+          await deps.mcp.fetch(c.req.raw, {
+            authInfo: {
+              token: access.token,
+              clientId: access.clientId,
+              scopes: access.scopes,
+              expiresAt: Math.floor(Date.parse(access.expiresAt) / 1000),
+              resource: new URL(access.resource),
+              extra: { userId: access.userId },
+            },
+          }),
+          {
+            requestId: c.get("requestId"),
+            stage: c.get("mcpStage") ?? "mcp_request",
+            requestProtocol: c.req.header("MCP-Protocol-Version") ?? null,
+            supportedProtocols: SUPPORTED_PROTOCOL_VERSIONS,
           },
-        }),
+        ),
     );
   });
 
@@ -530,17 +604,30 @@ function mcpAuthenticationChallenge(publicOrigin: string): Response {
 async function establishOrRedirect(
   deps: RemoteMcpAppDependencies,
   request: Request,
+  continuations: RemoteMcpLoginContinuations,
+  clientId: string,
 ) {
   try {
     return await deps.browserAuth.establishSession(request);
   } catch (error) {
     if (!(error instanceof AppError) || error.status !== 401) throw error;
-    const target = `${new URL(request.url).pathname}${new URL(request.url).search}`;
+    const pending = continuations.create(
+      `${new URL(request.url).pathname}${new URL(request.url).search}`,
+      clientId,
+      request.headers.get("Cookie"),
+    );
+    const target = pending.returnTo;
     const login =
       deps.browserAuth.mode === "oidc"
         ? `/auth/oidc/start?return_to=${encodeURIComponent(target)}`
         : `/login/?return_to=${encodeURIComponent(target)}`;
-    return Response.redirect(new URL(login, deps.publicOrigin), 302);
+    return new Response(null, {
+      status: 302,
+      headers: {
+        Location: new URL(login, deps.publicOrigin).toString(),
+        "Set-Cookie": pending.cookie,
+      },
+    });
   }
 }
 
@@ -743,7 +830,9 @@ async function boundedRequest(
         value &&
         typeof value === "object" &&
         "method" in value &&
-        (value.method === "initialize" || value.method === "tools/list")
+        (value.method === "initialize" ||
+          value.method === "tools/list" ||
+          value.method === "notifications/initialized")
       )
         stage(value.method);
     } catch {
@@ -775,6 +864,8 @@ function oauthErrorCode(code: string): string {
     OAUTH_REGISTRATION_BUSY: "temporarily_unavailable",
     OAUTH_CLIENT_ADDRESS_UNAVAILABLE: "temporarily_unavailable",
     OAUTH_REGISTRATION_CAPACITY: "temporarily_unavailable",
+    OAUTH_LOGIN_CAPACITY: "temporarily_unavailable",
+    INVALID_OAUTH_LOGIN_CONTINUATION: "invalid_request",
   };
   return known[code] ?? "server_error";
 }

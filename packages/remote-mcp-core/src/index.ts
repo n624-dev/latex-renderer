@@ -32,6 +32,7 @@ import {
 import {
   AppError,
   DEFAULT_RESOURCE_LIMITS,
+  exactHttpsOrigin,
   newId,
   nowIso,
   randomSecret,
@@ -44,6 +45,11 @@ import {
   validateSourceFilePath,
 } from "@latex-renderer/zip-validation";
 import yazl from "yazl";
+export {
+  RemoteMcpLoginContinuations,
+  oauthLoginCookie,
+  oauthLoginCookieName,
+} from "./login-continuations.js";
 
 export const REMOTE_MCP_SCOPES = [
   "mcp",
@@ -117,7 +123,9 @@ export class RemoteOAuthService {
     readonly issuer: string,
     readonly resource: string,
     private readonly clock: () => number = Date.now,
-  ) {}
+  ) {
+    this.issuer = exactHttpsOrigin(issuer);
+  }
 
   registrationMetadata(input: {
     clientName: string;

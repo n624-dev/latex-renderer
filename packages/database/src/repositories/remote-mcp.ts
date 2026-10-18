@@ -59,6 +59,57 @@ export interface SourceRefRow {
 export class RemoteMcpRepository {
   constructor(private readonly db: DatabaseSync) {}
 
+  cleanupLoginContinuations(now: string): number {
+    return Number(
+      this.db
+        .prepare(
+          "DELETE FROM remote_mcp_login_continuations WHERE expires_at<=?",
+        )
+        .run(now).changes,
+    );
+  }
+
+  loginContinuationCount(): number {
+    return (
+      this.db
+        .prepare("SELECT COUNT(*) AS count FROM remote_mcp_login_continuations")
+        .get() as { count: number }
+    ).count;
+  }
+
+  insertLoginContinuation(input: {
+    handleHash: string;
+    browserHash: string;
+    clientId: string;
+    target: string;
+    expiresAt: string;
+  }): void {
+    this.db
+      .prepare(
+        "INSERT INTO remote_mcp_login_continuations(handle_hash,browser_hash,client_id,target,expires_at) VALUES (?,?,?,?,?)",
+      )
+      .run(
+        input.handleHash,
+        input.browserHash,
+        input.clientId,
+        input.target,
+        input.expiresAt,
+      );
+  }
+
+  consumeLoginContinuation(
+    handleHash: string,
+    browserHash: string,
+    now: string,
+  ): string | undefined {
+    const row = this.db
+      .prepare(
+        "DELETE FROM remote_mcp_login_continuations WHERE handle_hash=? AND browser_hash=? AND expires_at>? RETURNING target",
+      )
+      .get(handleHash, browserHash, now) as { target: string } | undefined;
+    return row?.target;
+  }
+
   client(id: string): RemoteMcpClientRow | undefined {
     return this.db
       .prepare("SELECT * FROM remote_mcp_clients WHERE client_id=?")
@@ -314,6 +365,7 @@ export class RemoteMcpRepository {
     rateLimitBefore: string;
     unusedClientBefore: string;
   }): void {
+    this.cleanupLoginContinuations(input.now);
     this.db
       .prepare("DELETE FROM remote_mcp_authorization_codes WHERE expires_at<=?")
       .run(input.now);
@@ -344,6 +396,10 @@ export class RemoteMcpRepository {
            )
            AND NOT EXISTS (
              SELECT 1 FROM remote_mcp_token_families
+             WHERE client_id=remote_mcp_clients.client_id
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM remote_mcp_login_continuations
              WHERE client_id=remote_mcp_clients.client_id
            )`,
       )

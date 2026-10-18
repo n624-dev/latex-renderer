@@ -27,6 +27,10 @@ import { createRemoteMcpApp } from "../apps/remote-mcp/src/app.js";
 import { createRemoteMcpHandler } from "../apps/remote-mcp/src/mcp.js";
 import yazl from "yazl";
 import { legacyTestBrowserAuth } from "./helpers/browser-auth.js";
+import {
+  assertCompleteWireCatalog,
+  SUPPORTED_PROTOCOL_VERSIONS,
+} from "../apps/remote-mcp/testing/catalog.js";
 
 const ORIGIN = "https://latex.example.com";
 const RESOURCE = `${ORIGIN}/mcp`;
@@ -52,6 +56,107 @@ afterEach(async () => {
 });
 
 describe("Remote MCP HTTP server", () => {
+  it("resumes a maximum-length OAuth state through a short browser-bound login handle", async () => {
+    const f = await createFixture();
+    const client = f.oauth.registerClient({
+      clientName: "long-login",
+      redirectUris: ["https://client.example/callback"],
+    });
+    const query = new URLSearchParams({
+      response_type: "code",
+      client_id: client.clientId,
+      redirect_uri: "https://client.example/callback",
+      scope: "mcp:read",
+      resource: RESOURCE,
+      code_challenge_method: "S256",
+      code_challenge: "a".repeat(43),
+      state: "x".repeat(2048),
+    });
+    const target = "/oauth/authorize?" + query.toString();
+    expect(target.length).toBeGreaterThan(2048);
+    const started = await f.app.request(target, {
+      headers: { Host: "latex.example.com" },
+    });
+    expect(started.status).toBe(302);
+    const login = new URL(started.headers.get("Location") ?? "");
+    const returnTo = login.searchParams.get("return_to");
+    expect(returnTo).toMatch(/^\/oauth\/continue\/[A-Za-z0-9_-]{43}$/);
+    expect(login.toString()).not.toContain("state=");
+    if (returnTo === null) throw new Error("Login continuation is missing");
+    const binding = started.headers
+      .getSetCookie()
+      .find((value) => value.startsWith("__Host-latex_renderer_oauth_login_"))
+      ?.split(";")[0];
+    if (binding === undefined) throw new Error("Login binding is missing");
+    expect(
+      (
+        await f.app.request(returnTo, {
+          headers: {
+            Host: "latex.example.com",
+            "Cf-Access-Jwt-Assertion": "access-jwt",
+          },
+        })
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await f.app.request(returnTo, {
+          headers: { Host: "latex.example.com", Cookie: binding },
+        })
+      ).status,
+    ).toBe(401);
+    const resumed = await f.app.request(returnTo, {
+      headers: {
+        Host: "latex.example.com",
+        Cookie: binding,
+        "Cf-Access-Jwt-Assertion": "access-jwt",
+      },
+    });
+    expect(resumed.status).toBe(303);
+    expect(resumed.headers.get("Location")).toBe(ORIGIN + target);
+    expect(
+      resumed.headers
+        .getSetCookie()
+        .some((value) => value.includes("Max-Age=0")),
+    ).toBe(true);
+    expect(
+      (
+        await f.app.request(returnTo, {
+          headers: {
+            Host: "latex.example.com",
+            Cookie: binding,
+            "Cf-Access-Jwt-Assertion": "access-jwt",
+          },
+        })
+      ).status,
+    ).toBe(400);
+    const consent = await f.app.request(target, {
+      headers: {
+        Host: "latex.example.com",
+        "Cf-Access-Jwt-Assertion": "access-jwt",
+      },
+    });
+    expect(consent.status).toBe(200);
+    expect(consent.headers.get("Referrer-Policy")).toBe("same-origin");
+    expect(await consent.text()).toContain('name="csrf"');
+  });
+
+  it("uses one canonical origin for issuer, resource and every OAuth endpoint", async () => {
+    const f = await createFixture(undefined, false, ORIGIN + "/");
+    const metadata = (await (
+      await f.app.request("/.well-known/oauth-authorization-server", {
+        headers: { Host: "latex.example.com" },
+      })
+    ).json()) as Record<string, unknown>;
+    expect(metadata).toMatchObject({
+      issuer: ORIGIN,
+      authorization_endpoint: ORIGIN + "/oauth/authorize",
+      token_endpoint: ORIGIN + "/oauth/token",
+      registration_endpoint: ORIGIN + "/oauth/register",
+    });
+    expect(f.oauth.resource).toBe(RESOURCE);
+    expect(f.oauth.issuer).toBe(ORIGIN);
+  });
   it("accepts optional client_name and isolates missing/forged addresses from real registration buckets", async () => {
     const f = await createFixture();
     const register = (
@@ -561,26 +666,54 @@ describe("Remote MCP HTTP server", () => {
         expires_in: 600,
         scope: "mcp:render mcp:read",
       });
-      const initialized = await mcpRequest(fixture.app, tokens.access_token, {
-        jsonrpc: "2.0",
-        id: 100,
-        method: "initialize",
-        params: {
-          protocolVersion: "2025-06-18",
-          capabilities: {},
-          clientInfo: { name: "wire-oauth-compatibility", version: "1" },
-        },
-      });
-      expect(initialized.result.protocolVersion).toBeDefined();
-      const listed = await mcpRequest(fixture.app, tokens.access_token, {
-        jsonrpc: "2.0",
-        id: 101,
-        method: "tools/list",
-        params: {},
-      });
-      expect(listed.result.tools?.map((tool) => tool.name)).toContain(
-        "create_render",
-      );
+      for (const protocolVersion of SUPPORTED_PROTOCOL_VERSIONS) {
+        const initialized = await mcpRequest(fixture.app, tokens.access_token, {
+          jsonrpc: "2.0",
+          id: 100,
+          method: "initialize",
+          params: {
+            protocolVersion,
+            capabilities: {},
+            clientInfo: { name: "wire-oauth-compatibility", version: "1" },
+          },
+        });
+        expect(initialized.result.protocolVersion).toBe(protocolVersion);
+        const notification = await fixture.app.request("/mcp", {
+          method: "POST",
+          headers: {
+            Host: "latex.example.com",
+            Authorization: `Bearer ${tokens.access_token}`,
+            "Content-Type": "application/json",
+            Accept: "application/json, text/event-stream",
+            "MCP-Protocol-Version": protocolVersion,
+          },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            method: "notifications/initialized",
+          }),
+        });
+        expect(notification.status).toBe(202);
+        expect(await notification.text()).toBe("");
+        const listed = await mcpRequest(
+          fixture.app,
+          tokens.access_token,
+          {
+            jsonrpc: "2.0",
+            id: 101,
+            method: "tools/list",
+            params: {},
+          },
+          protocolVersion,
+          "bEaReR  ",
+        );
+        const catalog = assertCompleteWireCatalog(listed.result);
+        expect(catalog.toolCount).toBeGreaterThan(20);
+        expect(catalog.schemaCount).toBeGreaterThanOrEqual(catalog.toolCount);
+        expect(catalog.bytes).toBeLessThan(256 * 1024);
+        expect(listed.result.tools?.map((tool) => tool.name)).toContain(
+          "create_render",
+        );
+      }
     },
   );
 
@@ -2508,6 +2641,7 @@ describe("Remote MCP HTTP server", () => {
 async function createFixture(
   resourceLimits?: Readonly<ResourceLimits>,
   actualHttp = false,
+  publicOrigin = ORIGIN,
 ) {
   const database = new RendererDatabase(":memory:");
   databases.push(database);
@@ -2538,7 +2672,7 @@ async function createFixture(
     join(environment, "fonts.txt"),
     "Latin Modern Roman\nNoto Sans CJK JP\n",
   );
-  const oauth = new RemoteOAuthService(database, ORIGIN, RESOURCE),
+  const oauth = new RemoteOAuthService(database, publicOrigin, RESOURCE),
     renders = new RemoteRenderService(
       database,
       storage,
@@ -2563,7 +2697,7 @@ async function createFixture(
       }),
       oauth,
       mcp: createRemoteMcpHandler(renders, "0.2.0"),
-      publicOrigin: ORIGIN,
+      publicOrigin,
     });
   if (actualHttp) {
     const server = createServer((req, res) => {
@@ -2881,12 +3015,13 @@ async function mcpRequest(
   token: string,
   body: Record<string, unknown>,
   protocolVersion?: string,
+  scheme = "Bearer",
 ): Promise<JsonRpcResponse> {
   const response = await app.request("/mcp", {
     method: "POST",
     headers: {
       Host: "latex.example.com",
-      Authorization: `Bearer ${token}`,
+      Authorization: `${scheme} ${token}`,
       Accept: "application/json, text/event-stream",
       "Content-Type": "application/json",
       ...(protocolVersion === undefined

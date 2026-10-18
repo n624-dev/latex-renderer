@@ -1,8 +1,17 @@
 # Deployment
 
+Migration 020 adds bounded, ten-minute OAuth login continuations. Deploy the
+application and scheduled cleanup together after the verified backup, restore
+test and private-copy migration preflight, then verify schema 20. Pending login
+handles remain browser-bound and single-use across restart; expired flows must
+be restarted. Existing users, grants and saved documents are unchanged. Earlier
+audit and internal-resource recovery restrictions still apply; application-only
+downgrade remains disabled. See [Migration 020](MIGRATIONS.md#migration-020-bounded-oauth-login-continuations)
+and the [migration procedure](deploy/migrations/README.md).
+
 Migration 019 classifies production smoke resources as internal diagnostics.
 Before upgrading, follow [the migration-copy, backup and full-recovery guide](deploy/migrations/019_internal_smoke_visibility.rollback.md).
-Update all database consumers together and verify schema 19, ordinary resource
+Update all database consumers together and verify the migrated schema, ordinary resource
 visibility and a complete smoke run. Old application code does not enforce this
 visibility boundary, so application-only downgrade remains disabled.
 

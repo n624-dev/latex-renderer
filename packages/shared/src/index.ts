@@ -155,14 +155,32 @@ export function nowIso(): string {
 }
 
 export function parseBearer(header: string | undefined): string {
-  if (header === undefined || !header.startsWith("Bearer ")) {
+  if (header === undefined) {
     throw new AppError("UNAUTHORIZED", "Bearer credential is required", 401);
   }
-  const token = header.slice(7);
-  if (token.length === 0 || token.includes(" ")) {
+  // HTTP authentication schemes are case-insensitive; RFC 6750 requires
+  // one or more SP separators, not arbitrary Unicode/embedded whitespace.
+  const parsed = /^[ \t]*Bearer +([A-Za-z0-9._~+/-]+=*)[ \t]*$/i.exec(header);
+  const token = parsed?.[1];
+  // JavaScript's $ can match immediately before a final newline.
+  if (parsed === null || parsed[0] !== header || token === undefined) {
     throw new AppError("UNAUTHORIZED", "Bearer credential is malformed", 401);
   }
   return token;
+}
+
+export function exactHttpsOrigin(value: string): string {
+  const url = new URL(value);
+  if (
+    url.protocol !== "https:" ||
+    url.username !== "" ||
+    url.password !== "" ||
+    url.pathname !== "/" ||
+    url.search !== "" ||
+    url.hash !== ""
+  )
+    throw new Error("PUBLIC_ORIGIN must be an exact HTTPS origin");
+  return url.origin;
 }
 
 export function credentialUrl(value: string | URL): URL {

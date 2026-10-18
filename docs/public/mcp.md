@@ -42,6 +42,14 @@ AIサービスのドメインをWebの許可Originへ追加したり、認証を
 整理済みの登録が `invalid_client` となった場合は、クライアント側で接続登録を作り直してください。
 名前を送らない標準的なDCR要求も受け付けますが、指定された名前・redirect URIの検証は維持します。
 
+ブラウザーログインを挟む認可要求は、短いランダムIDで一時保存します。長いOAuth `state` を
+ログインの戻り先URLへ埋め直さず、元の要求をそのまま復元します。記録は10分で失効し、
+認証済みブラウザーと専用Cookieが一致する場合に一度だけ使用できます。並行するタブは別のIDを使います。
+全体で1,000件、ブラウザーの継続用Cookieは8件までとし、上限では既存の要求を消さず503を返します。
+DBにはIDとCookie値のハッシュを保存し、期限切れ記録はアクセス時と定期cleanupで回収します。
+再起動・バックアップ復旧で有効期限は延長しません。失効した場合は接続操作を最初からやり直してください。
+スキーマ20はこの一時記録だけを追加し、既存の利用者・資格情報・Project・Sourceは変更しません。
+
 登録は信頼する送信元IPごとに15分間10回までです。同じプロキシ出口IPの利用者はこの枠を共有します。
 11回目以降はHTTP 429、`temporarily_unavailable` と `Retry-After` を返すので、その秒数後に再試行します。
 不正な登録metadataは枠を消費しません。送信元が欠落・不正な場合は共通の利用者枠へ混ぜず、
@@ -59,10 +67,22 @@ node deploy/scripts/check-remote-mcp.mjs https://your-renderer.example
 
 200のJSON metadataと401のBearer challengeは、実際のブラウザーログインやChatGPTのツール一覧成功を
 証明しません。接続が失敗する場合は、画面で止まった段階と時刻、`X-Request-ID`、サーバーの
-`remote_mcp.http_result` / `remote_mcp.oauth_stage` / `remote_mcp.protocol_error` を対応させます。
+`remote_mcp.http_result` / `remote_mcp.oauth_stage` / `remote_mcp.protocol_error` / `remote_mcp.rpc_result` を対応させます。
 診断はdiscovery・register・authorize GET/POST・token・initialize・tools/listの段階、HTTP status、
 許可されたエラー分類だけを記録します。401の資格情報拒否と、検証処理自体の5xxを区別します。
 OAuth code、token、Cookie、PKCE verifier、Source、利用者IDをIssueやログへ貼らないでください。
+
+「認証成功、アクション検出失敗」やツール更新失敗では、token発行後の `initialize`、初期化通知、
+`tools/list` を分けて確認します。HTTP 200でもJSON-RPCの `error` は成功ではありません。
+`remote_mcp.rpc_result` は、HTTP status、固定の成功／失敗分類、対応するprotocol version、
+ツール件数、応答バイト数と一覧の基本形を記録します。全スキーマのコンパイル検査はHTTP試験で行い、
+実行時には大きなスキーマキャッシュを追加しません。本文の確認用領域は最大256KiBで、超過時は
+`inspection_limited` と記録するだけです。応答は省略・書換えせず、そのまま送信します。
+通常のツール実行結果や文書本文はこの確認の対象外です。
+
+記録がない場合も、ログ範囲の不足と、クライアント・プロキシから要求が到達しない場合を区別してください。
+SSE応答やGETの405だけで障害と判断せず、HTTPのAccept・Content-Type・protocolの交渉を確認します。
+一覧の基本形やCIのスキーマ検査が成功しても、実際のChatGPTでの登録・同意・ツール一覧取得と更新の確認は別途必要です。
 
 リポジトリのHTTP試験は、ローカルsocket経由で登録・同意・PKCE交換・SDK初期化・ツール一覧を
 確認します。外部OIDC、Cloudflareの実ポリシー、ChatGPT Webの実アカウントでの接続成功とは区別します。

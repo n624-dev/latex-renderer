@@ -70,6 +70,10 @@ db.prepare(
 ).run(now);
 db.prepare("DELETE FROM revoked_tickets WHERE expires_at<?").run(now);
 db.prepare("DELETE FROM idempotency_records WHERE expires_at<?").run(now);
+const remoteLoginContinuationsDeleted = Number(
+  db.prepare("DELETE FROM remote_mcp_login_continuations WHERE expires_at<=?")
+    .run(now).changes,
+);
 const remoteCodesDeleted = Number(
     db
       .prepare("DELETE FROM remote_mcp_authorization_codes WHERE expires_at<=?")
@@ -368,6 +372,7 @@ console.log(
     itemFailureCount,
     itemFailures,
     remoteCodesDeleted,
+    remoteLoginContinuationsDeleted,
     remoteTokensDeleted,
     remoteFamiliesDeleted,
     sourceRefsDeleted,
