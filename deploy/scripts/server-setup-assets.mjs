@@ -30,10 +30,11 @@ export const setupHtml = `<!doctype html>
 </main><script src="/script.js" defer></script></html>`;
 
 export const setupStyle = `
-:root { font-family:system-ui,sans-serif; color-scheme:light dark; line-height:1.6;
-  --page:#f4f7fb; --surface:#fff; --text:#17263b; --border:#c7d3e2; --accent:#1956ad; --on-accent:#fff; }
-@media(prefers-color-scheme:dark) { :root { --page:#0c1422; --surface:#131f31; --text:#eef4fc; --border:#3a506e; --accent:#a8caff; --on-accent:#10294d; } }
+:root { font-family:system-ui,sans-serif; color-scheme:light dark; line-height:1.6; accent-color:var(--accent);
+  --page:#f5f5f5; --surface:#ffffff; --text:#1a1a1a; --border:#808080; --accent:#262626; --on-accent:#ffffff; }
+@media(prefers-color-scheme:dark) { :root { --page:#111111; --surface:#1b1b1b; --text:#f5f5f5; --border:#737373; --accent:#ededed; --on-accent:#171717; } }
 * { box-sizing:border-box; }
+::selection { background:var(--accent); color:var(--on-accent); }
 body { margin:0; background:var(--page); color:var(--text); overflow-wrap:anywhere; }
 main { max-width:56rem; margin:auto; padding:clamp(.75rem,3vw,2rem); }
 h1,h2 { line-height:1.25; text-wrap:balance; }
