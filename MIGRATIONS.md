@@ -146,6 +146,31 @@ No rows are deleted, but old application code ignores the visibility boundary;
 full recovery point, not an application-only rollback or live column removal.
 See [the migration and recovery guide](deploy/migrations/019_internal_smoke_visibility.rollback.md).
 
+## Migration 020: Bounded OAuth login continuations
+
+Migration 020 adds `remote_mcp_login_continuations` and its expiry index. Long
+authorization requests are retained behind a short random handle instead of
+being embedded in the browser login URL. The handle and browser-binding cookie
+are independent server-generated 32-byte secrets. Only their SHA-256 lookup
+hashes are stored; these are not user-selected passwords. Actual password
+authentication continues to use salted scrypt.
+
+Continuations expire after ten minutes, are consumed atomically once, and
+require both the browser-binding cookie and a valid authenticated session.
+The original authorization request is then validated again, including redirect
+URI, PKCE and consent/CSRF checks. At most 1,000 pending records are retained
+globally; a request already carrying eight continuation cookies cannot start
+another flow. Expired records are removed during access and scheduled cleanup.
+Restarting or restoring a database does not extend their original expiry.
+
+Apply the application migrator after the verified backup, restore test and
+private-copy preflight; the target database version is 20. Deploy the updated
+cleanup script with the application. Existing users, grants, Projects and Sources
+are unchanged. Keep `rollbackCompatible: false` because the earlier audit and
+internal-resource migrations still require a full recovery point for downgrade.
+Do not drop live tables or rewrite pending credentials to work around a failed
+login: restart the login flow instead. See the [migration procedure](deploy/migrations/README.md).
+
 ## Administrative API migration for 0.3
 
 This release changes administrative HTTP routes but does not require an additional database migration beyond the schema migrations documented above.

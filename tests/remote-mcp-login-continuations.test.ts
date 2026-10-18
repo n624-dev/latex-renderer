@@ -1,5 +1,6 @@
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -63,6 +64,31 @@ function credentials(pending: { returnTo: string; cookie: string }) {
 }
 
 describe("bounded server-side OAuth login continuations", () => {
+  it("stores exact lookup hashes for independent server-generated 32-byte secrets", () => {
+    const f = fixture(),
+      c = credentials(f.store.create(f.target, f.clientId, null));
+    expect(c.handle).not.toBe(c.binding);
+    for (const value of [c.handle, c.binding]) {
+      const bytes = Buffer.from(value, "base64url");
+      expect(bytes.byteLength).toBe(32);
+      expect(bytes.toString("base64url")).toBe(value);
+    }
+    const row = f.db.raw
+      .prepare(
+        "SELECT handle_hash,browser_hash FROM remote_mcp_login_continuations",
+      )
+      .get();
+    expect(row).toMatchObject({
+      handle_hash: createHash("sha256").update(c.handle, "utf8").digest("hex"),
+      browser_hash: createHash("sha256")
+        .update(c.binding, "utf8")
+        .digest("hex"),
+    });
+    // Knowing a handle, or substituting it for the independent browser secret,
+    // must not consume the legitimate flow.
+    expect(() => f.store.consume(c.handle, c.handle)).toThrow();
+    expect(f.store.consume(c.handle, c.binding)).toBe(f.target);
+  });
   it("keeps long state and redirect bytes off the login URL and resumes exactly once", () => {
     const f = fixture();
     expect(f.target.length).toBeGreaterThan(2048);

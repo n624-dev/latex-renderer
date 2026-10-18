@@ -51,6 +51,9 @@ export class RemoteMcpLoginContinuations {
         "Too many pending OAuth logins; finish or retry later",
         503,
       );
+    // These independent 256-bit server-generated secrets are not passwords.
+    // SHA-256 is an exact lookup identifier here, not a password KDF. Preserve
+    // hashing of the encoded text so live persisted flows remain compatible.
     const handle = randomBytes(32).toString("base64url"),
       binding = randomBytes(32).toString("base64url");
     const now = this.clock();
