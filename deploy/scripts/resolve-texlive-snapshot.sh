@@ -25,6 +25,11 @@ if [ "$curl_connect_timeout" -lt 1 ] || [ "$curl_connect_timeout" -gt 120 ] || [
   exit 64
 fi
 
+if [ -n "${TEXLIVE_CI_MIRROR_HOST:-}" ]; then
+  resolver_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+  exec node "$resolver_dir/resolve-texlive-ci-snapshot.mjs" "$requested"
+fi
+
 curl_bounded() {
   curl --fail --location --retry 3 --retry-delay 1 \
     --connect-timeout "$curl_connect_timeout" --max-time "$curl_max_time" \

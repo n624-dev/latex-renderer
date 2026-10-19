@@ -16,5 +16,10 @@ case "$operation" in
     case "$2:$3" in *[!0-9a-fA-Za-z_.:@/-]*) exit 64;; esac
     exec "$cli" --config "$config" release --token "$2" --owner "$3"
     ;;
+  reserve-snapshot)
+    [ "$#" -eq 5 ] || exit 64
+    case "$2:$3:$4:$5" in *[!0-9A-Za-z_.:@/-]*) exit 64;; esac
+    exec "$cli" --config "$config" reserve --snapshot "$2" --canonical-date "$3" --owner "$4" --architecture "$5"
+    ;;
   *) exit 64 ;;
 esac

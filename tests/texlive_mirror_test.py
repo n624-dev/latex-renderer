@@ -980,6 +980,38 @@ class MirrorTest(unittest.TestCase):
         mirror.gc(self.config, dt.datetime(2026, 9, 7, tzinfo=dt.timezone.utc))
         self.assertFalse(latest_file.exists())
 
+    def test_refresh_metadata_adds_identity_without_gc_or_modifying_payload(self):
+        sid, payload = self.publish(1)
+        state = mirror.load_state(self.config)
+        state["snapshots"][sid]["canonicalDates"].append("2026-09-02")
+        mirror.save_state(self.config, state)
+        before = payload.stat()
+        manifest_before = (payload.parents[2] / ".snapshot.json").read_bytes()
+        with mock.patch.object(mirror, "gc", side_effect=AssertionError("no GC")):
+            self.assertEqual(mirror.main(["--config", str(self.config_path), "refresh-metadata"]), 0)
+        pointer = json.loads((self.root / "latest.json").read_text())
+        self.assertEqual(pointer["schemaVersion"], 1)
+        self.assertEqual(pointer["canonicalDate"], "2026-09-02")
+        self.assertEqual(pointer["installerSha512"], "d" * 128)
+        self.assertEqual(pointer["databaseSha512"], "c" * 128)
+        self.assertEqual(pointer["publishedAt"], state["snapshots"][sid]["publishedAt"])
+        self.assertEqual(payload.stat().st_ino, before.st_ino)
+        self.assertEqual(payload.stat().st_mtime_ns, before.st_mtime_ns)
+        self.assertEqual((payload.parents[2] / ".snapshot.json").read_bytes(), manifest_before)
+
+    def test_exact_snapshot_and_date_reservation_does_not_follow_changed_latest(self):
+        selected, _ = self.publish(1)
+        replacement, _ = self.publish(2)
+        state = mirror.load_state(self.config)
+        state["snapshots"][replacement]["canonicalDate"] = "2026-09-01"
+        state["snapshots"][replacement]["canonicalDates"] = ["2026-09-01"]
+        mirror.save_state(self.config, state)
+        now = dt.datetime(2026, 9, 7, tzinfo=dt.timezone.utc)
+        lease = mirror.reserve(self.config, selected, "2026-09-01", "501:1:build:amd64", "amd64", now)
+        self.assertEqual(lease["snapshotId"], selected)
+        with self.assertRaises(mirror.MirrorError):
+            mirror.reserve(self.config, selected, "2026-09-02", "502:1:build:amd64", "amd64", now)
+
     def test_external_symlink_and_path_traversal_are_never_deleted(self):
         outside = Path(self.temp.name) / "outside"
         outside.mkdir()

@@ -57,6 +57,8 @@ jobs:
       date: ${{ steps.snapshot.outputs.date }}
       repository: ${{ steps.snapshot.outputs.repository }}
       installer: ${{ steps.snapshot.outputs.installer_sha512 }}
+      database: ${{ steps.snapshot.outputs.database_sha512 }}
+      snapshot-id: ${{ steps.snapshot.outputs.snapshot_id }}
       mode: ${{ steps.plan.outputs.mode }}
       digest: ${{ steps.plan.outputs.digest }}
       architectures: ${{ steps.plan.outputs.architectures }}
@@ -84,6 +86,7 @@ jobs:
         id: snapshot
         env:
           REQUESTED_DATE: ${{ inputs.texlive_date || 'latest' }}
+          TEXLIVE_CI_MIRROR_HOST: ${{ secrets.TEXLIVE_CI_MIRROR_HOST }}
         run: sh deploy/scripts/resolve-texlive-snapshot.sh "$REQUESTED_DATE"
       - name: Plan immutable Base publication without registry writes
         if: inputs.maintenance_only != true
@@ -110,6 +113,8 @@ jobs:
       SNAPSHOT_DATE: ${{ needs.validate-source.outputs.date }}
       TEXLIVE_REPOSITORY: ${{ needs.validate-source.outputs.repository }}
       TEXLIVE_INSTALLER_SHA512: ${{ needs.validate-source.outputs.installer }}
+      TEXLIVE_DATABASE_SHA512: ${{ needs.validate-source.outputs.database }}
+      MIRROR_SNAPSHOT_ID: ${{ needs.validate-source.outputs.snapshot-id }}
       EXISTING_MANIFEST_DIGEST: ${{ matrix.architecture == 'arm64' && needs.validate-source.outputs.arm64-digest || needs.validate-source.outputs.amd64-digest }}
       REQUESTED_DATE: ${{ github.event.inputs.texlive_date || 'latest' }}
       PUBLISH_REQUESTED: ${{ github.event_name == 'schedule' || inputs.publish == true }}
@@ -205,7 +210,8 @@ jobs:
           [ "$configured" -eq 6 ] || { echo 'Partial TeX Live CI mirror configuration' >&2; exit 64; }
           if [ "$configured" -eq 6 ]; then
             sh deploy/scripts/ci-texlive-mirror-lease.sh acquire \
-              "$SNAPSHOT_DATE" "$TEXLIVE_INSTALLER_SHA512" "$CI_ARCHITECTURE"
+              "$SNAPSHOT_DATE" "$TEXLIVE_INSTALLER_SHA512" "$CI_ARCHITECTURE" \
+              "$MIRROR_SNAPSHOT_ID" "$TEXLIVE_DATABASE_SHA512"
           fi
 
       - name: Build and validate

@@ -33,11 +33,11 @@ if [ "$attempt" -le "${SSH_FAILURES:-2}" ]; then
   printf '%s' "${SSH_FAILED_OUTPUT:-partial-json}"
   exit 255
 fi
+python3 -c 'import json,os,sys; json.dump({"argv":sys.argv[1:],"id":os.environ.get("TUNNEL_SERVICE_TOKEN_ID"),"secret":os.environ.get("TUNNEL_SERVICE_TOKEN_SECRET")},open(os.environ["SSH_CAPTURE"],"w"))' "$@"
 if [ -n "${SSH_RESPONSE_OVERRIDE:-}" ]; then
   printf '%s' "$SSH_RESPONSE_OVERRIDE"
   exit 0
 fi
-python3 -c 'import json,os,sys; json.dump({"argv":sys.argv[1:],"id":os.environ.get("TUNNEL_SERVICE_TOKEN_ID"),"secret":os.environ.get("TUNNEL_SERVICE_TOKEN_SECRET")},open(os.environ["SSH_CAPTURE"],"w"))' "$@"
 printf '%s\n' '{"canonicalDate":"2026-09-08","installerSha512":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","url":"https://texlive-ci.example.invalid/snapshots/tl2026-aaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-cccccccccccccccc-v2/tlnet","token":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","snapshotId":"tl2026-aaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-cccccccccccccccc-v2"}'
 """,
                 encoding="utf-8",
@@ -103,6 +103,39 @@ printf '%s\n' '{"canonicalDate":"2026-09-08","installerSha512":"aaaaaaaaaaaaaaaa
                 "snapshot_id=tl2026-aaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-cccccccccccccccc-v2",
                 github_output,
             )
+
+            snapshot_id = "tl2026-aaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-cccccccccccccccc-v2"
+            exact_response = {
+                "canonicalDate": "2026-09-08",
+                "installerSha512": "a" * 128,
+                "databaseSha512": "d" * 128,
+                "snapshotId": snapshot_id,
+                "url": f"https://texlive-ci.example.invalid/snapshots/{snapshot_id}/tlnet",
+                "token": "b" * 64,
+            }
+            for mismatch in (None, "snapshotId", "databaseSha512"):
+                with self.subTest(exact_snapshot_mismatch=mismatch):
+                    case_output = root / f"exact-output-{mismatch}"
+                    response = dict(exact_response)
+                    if mismatch == "snapshotId":
+                        response[mismatch] = snapshot_id.replace("-v2", "-v3")
+                    elif mismatch == "databaseSha512":
+                        response[mismatch] = "e" * 128
+                    result = subprocess.run(
+                        ["sh", str(HELPER), "acquire", "2026-09-08", "a" * 128,
+                         "arm64", snapshot_id, "d" * 128],
+                        env={**environment, "SSH_FAILURES": "0",
+                             "SSH_RESPONSE_OVERRIDE": json.dumps(response),
+                             "GITHUB_OUTPUT": str(case_output)},
+                        text=True, capture_output=True, timeout=10,
+                    )
+                    self.assertEqual(result.returncode == 0, mismatch is None, result.stderr)
+                    self.assertEqual(
+                        json.loads(capture.read_text())["argv"][-5:],
+                        ["reserve-snapshot", snapshot_id, "2026-09-08", "123:2:build:arm64", "arm64"],
+                    )
+                    self.assertEqual(case_output.exists(), mismatch is None)
+                    self.assertEqual(list(root.glob("texlive-ci-*")), [])
 
             mismatched_environment = {
                 **environment,

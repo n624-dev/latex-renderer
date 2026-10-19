@@ -6,6 +6,7 @@ on:
       - "renderer/**"
       - "deploy/security/seccomp.json"
       - "deploy/scripts/*texlive*.sh"
+      - "deploy/scripts/resolve-texlive-ci-snapshot.mjs"
       - "deploy/scripts/ci-*.sh"
       - "deploy/texlive-mirror/**"
       - "deploy/scripts/build-language-runtime.sh"
@@ -24,6 +25,7 @@ on:
       - "renderer/**"
       - "deploy/security/seccomp.json"
       - "deploy/scripts/*texlive*.sh"
+      - "deploy/scripts/resolve-texlive-ci-snapshot.mjs"
       - "deploy/scripts/ci-*.sh"
       - "deploy/texlive-mirror/**"
       - "deploy/scripts/build-language-runtime.sh"
@@ -157,7 +159,8 @@ jobs:
           [ "$configured" -eq 6 ] || { echo 'Partial TeX Live CI mirror configuration' >&2; exit 64; }
           if [ "$configured" -eq 6 ]; then
             sh deploy/scripts/ci-texlive-mirror-lease.sh acquire \
-              '${{ steps.snapshot.outputs.date }}' '${{ steps.snapshot.outputs.installer_sha512 }}' "$CI_ARCHITECTURE"
+              '${{ steps.snapshot.outputs.date }}' '${{ steps.snapshot.outputs.installer_sha512 }}' "$CI_ARCHITECTURE" \
+              '${{ steps.snapshot.outputs.snapshot_id }}' '${{ steps.snapshot.outputs.database_sha512 }}'
           fi
       - name: Generate language-neutral Base profile
         env:

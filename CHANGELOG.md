@@ -4,6 +4,8 @@
 
 ## 1.5.0-rc.7 - Unreleased
 
+- CI用ミラーの公開済み最新版から日付を選び、canonical archiveのDB・installer識別情報を
+  照合して同じsnapshot IDを予約する。通信失敗による別日付への暗黙の切替を防ぐ。
 - スキーマ21でPDFとSVGの確定・状態・診断を分離。検証済みPDFはSVG処理中も取得でき、
   SVG失敗時は同じPDFを保持してSVGだけ再試行できる。既存Job状態は維持し、個別状態を追加する。
 - Remote MCPのトークン更新で、短時間の再送を有効な更新結果へ合流させる。
