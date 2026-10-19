@@ -9,7 +9,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@hono/node-server": "^2.1.4",
+    "@hono/node-server": "^2.1.5",
     "@latex-renderer/auth": "workspace:*",
     "@latex-renderer/contracts": "workspace:*",
     "@latex-renderer/database": "workspace:*",
@@ -17,6 +17,6 @@
     "@latex-renderer/shared": "workspace:*",
     "@modelcontextprotocol/server": "^2.3.1",
     "hono": "^4.13.13",
-    "zod": "^4.6.5"
+    "zod": "^4.6.7"
   }
 }

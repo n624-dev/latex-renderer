@@ -18,11 +18,11 @@
     "build": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@hono/node-server": "^2.1.4",
+    "@hono/node-server": "^2.1.5",
     "@latex-renderer/contracts": "workspace:*",
     "@latex-renderer/shared": "workspace:*",
     "gray-matter": "4.0.3",
     "hono": "^4.13.13",
-    "marked": "18.1.0"
+    "marked": "18.1.1"
   }
 }
