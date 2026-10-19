@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { runInNewContext } from "node:vm";
+import { part6 } from "../apps/admin-web/src/assets/admin-script-parts/part-6.js";
+import { escapeHtml } from "../apps/admin-web/src/templates-shared.js";
 import {
   homePage,
   downloadsPage,
@@ -7,6 +10,34 @@ import {
 import { setupStyle } from "../deploy/scripts/server-setup-assets.mjs";
 
 describe("concise public UI", () => {
+  it("retains Runtime fingerprints and dependent languages inside optional details", () => {
+    const html: unknown = runInNewContext(
+      `${part6}\ntexRuntimeCard(runtime, '現在の環境')`,
+      {
+        runtime: {
+          languages: ["collection-langjapanese"],
+          effectiveLanguageCollections: [
+            "collection-langjapanese",
+            "collection-langcjk",
+          ],
+          snapshotDate: "2026-10-17",
+          baseDigest: "sha256:example",
+        },
+        esc: escapeHtml,
+      },
+    );
+    expect(typeof html).toBe("string");
+    if (typeof html !== "string") throw new Error("Expected Runtime card");
+    expect(html).toContain("2026-10-17");
+    expect(html).toContain("collection-langjapanese");
+    expect(html.indexOf("sha256:example")).toBeGreaterThan(
+      html.indexOf("<details>"),
+    );
+    expect(html.indexOf("collection-langcjk")).toBeGreaterThan(
+      html.indexOf("<details>"),
+    );
+  });
+
   it("keeps the account requirement and entry points without decorative headings", () => {
     const html = homePage();
     expect(html).not.toContain('class="eyebrow"');
