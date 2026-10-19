@@ -11,6 +11,63 @@ import {
 import { setupStyle } from "../deploy/scripts/server-setup-assets.mjs";
 
 describe("concise public UI", () => {
+  it("keeps TeX controls and one construction warning while folding maintenance details", async () => {
+    const out = { innerHTML: "" };
+    await new Promise<void>((resolve, reject) => {
+      runInNewContext(`${part6}\ntexEnvironment().then(done, fail)`, {
+        request: (path: string) =>
+          Promise.resolve(
+            path.endsWith("/state")
+              ? { desired: {}, current: null, previous: null }
+              : path.endsWith("/images")
+                ? {
+                    repository: "registry.example/texlive",
+                    daily: ["2026-10-17"],
+                    weekly: [],
+                  }
+                : {
+                    items: [
+                      {
+                        id: "collection-langjapanese",
+                        description: "日本語",
+                        recommended: true,
+                      },
+                    ],
+                    effectiveCountry: "JP",
+                  },
+          ),
+        out,
+        esc: escapeHtml,
+        section: (title: string, body: string) =>
+          `<section><h2>${title}</h2>${body}</section>`,
+        document: {
+          querySelector: () => ({
+            value: "latest",
+            disabled: false,
+            checked: false,
+          }),
+        },
+        done: resolve,
+        fail: reject,
+      });
+    });
+    expect(out.innerHTML).not.toContain('class="eyebrow"');
+    expect(out.innerHTML).not.toContain("Image Manager");
+    expect(out.innerHTML).toContain('<option value="weekly">週次版</option>');
+    expect(out.innerHTML).toContain("<details><summary>保守操作</summary>");
+    expect(out.innerHTML).toContain(
+      "<details><summary>言語の表示設定</summary>",
+    );
+    expect(out.innerHTML).toContain("<summary>言語の識別子</summary>");
+    expect(out.innerHTML).toContain(
+      'name="tex-language" value="collection-langjapanese"',
+    );
+    expect(out.innerHTML).toContain(
+      'id="tex-rebuild-missing" type="checkbox" checked',
+    );
+    expect(out.innerHTML.match(/CPU・ディスク容量/g)).toHaveLength(1);
+  });
+
   it("does not enable non-functional selection controls in the current job list", async () => {
     const selectionFlags: boolean[] = [];
     await new Promise<void>((resolve, reject) => {
