@@ -1,7 +1,8 @@
 import { randomUUID, createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import * as docker from "../apps/renderer-worker/src/docker.js";
 import {
   downloadJobArtifacts,
   renderSource,
@@ -69,6 +70,51 @@ describe(`independent stages with ${realPipelineImage === undefined ? "determini
 describe.skipIf(realPipelineImage !== undefined)(
   "independent PDF/SVG HTTP and Worker pipeline (deterministic, not TeX)",
   () => {
+    it("never starts the PDF compiler again across repeated failed SVG retries", async () => {
+      const f = await sourcePipelineFixture();
+      try {
+        const job = await f.renders.createRender(identity, {
+          inlineSource: pipelineDocument(),
+          outputs: ["pdf", "svg"],
+        });
+        f.failNextSvg(79);
+        await f.runNext();
+        const first = f.database.outputStages.checkpoint(job.id),
+          pdf = await f.renders.artifact(identity, job.id, "result.pdf");
+        f.renders.retrySvgRender(identity, job.id, randomUUID());
+        f.failNextSvg(84);
+        await f.runNext();
+        expect(f.renders.job(identity, job.id)).toMatchObject({
+          status: "failed",
+          stages: {
+            pdf: { status: "succeeded" },
+            svg: {
+              status: "failed",
+              attempt: 2,
+              errorCode: "SVG_MEMORY_LIMIT",
+            },
+          },
+        });
+        f.renders.retrySvgRender(identity, job.id, randomUUID());
+        await f.runNext();
+        expect(f.renders.job(identity, job.id).status).toBe("succeeded");
+        expect(
+          vi
+            .mocked(docker.spawnRenderer)
+            .mock.calls.map((call) => call[7]?.mode),
+        ).toEqual(["pdf", "svg", "svg", "svg"]);
+        expect(f.database.outputStages.checkpoint(job.id)).toMatchObject({
+          pdf_generation: first?.pdf_generation,
+          pdf_completed_at: first?.pdf_completed_at,
+          pdf_sha256: digest(pdf.bytes),
+        });
+        expect(
+          (await f.renders.artifact(identity, job.id, "result.pdf")).bytes,
+        ).toEqual(pdf.bytes);
+      } finally {
+        await f.close();
+      }
+    });
     it("preserves PDF when SVG is canceled and fences a superseded Worker", async () => {
       for (const loseLease of [false, true]) {
         const f = await sourcePipelineFixture();
