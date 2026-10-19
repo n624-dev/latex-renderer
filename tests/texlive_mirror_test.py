@@ -892,6 +892,71 @@ class MirrorTest(unittest.TestCase):
         self.assertEqual(first["expiresAt"], second["expiresAt"])
         self.assertEqual(path.read_bytes(), before)
 
+    def interrupt_completed_publication(self, now):
+        actual_replace = os.replace
+
+        def replace_then_interrupt(source, destination):
+            actual_replace(source, destination)
+            if Path(destination).parent == self.root / "snapshots":
+                raise OSError("simulated interruption after completed rename")
+
+        def download(_url, target, expected_size=None):
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(b"payload")
+
+        with (
+            mock.patch.object(mirror, "verified_metadata", side_effect=self.fake_metadata),
+            mock.patch.object(mirror, "curl_download", side_effect=download),
+            mock.patch.object(mirror.os, "replace", side_effect=replace_then_interrupt),
+        ):
+            with self.assertRaisesRegex(OSError, "simulated interruption"):
+                mirror.sync(self.config, "2026-09-07", now)
+        return next(
+            path.name for path in (self.root / "snapshots").iterdir()
+            if path.name not in mirror.load_state(self.config)["snapshots"]
+        )
+
+    def test_first_publication_rename_interruption_recovers_latest_and_sync(self):
+        now = dt.datetime(2026, 9, 7, tzinfo=dt.timezone.utc)
+        orphan = self.interrupt_completed_publication(now)
+        self.assertIsNone(mirror.load_state(self.config)["latest"])
+        result = mirror.gc(self.config, now)
+        self.assertEqual(result["deletedSnapshots"], [])
+        self.assertEqual(mirror.load_state(self.config)["latest"], orphan)
+        self.assertEqual(mirror.status(self.config)["latest"], orphan)
+        self.assertEqual(
+            json.loads((self.root / "latest.json").read_text())["snapshotId"], orphan
+        )
+        with mock.patch.object(mirror, "verified_metadata", side_effect=self.fake_metadata):
+            retry = mirror.sync(self.config, "2026-09-07", now)
+        self.assertEqual(retry["status"], "unchanged")
+        self.assertEqual(retry["snapshotId"], orphan)
+        self.assertEqual(len(mirror.load_state(self.config)["snapshots"]), 1)
+
+    def test_later_orphan_recovery_preserves_existing_latest(self):
+        now = dt.datetime(2026, 9, 7, tzinfo=dt.timezone.utc)
+        latest, _ = self.publish(1, hours_ago=1)
+        orphan = self.interrupt_completed_publication(now)
+        mirror.gc(self.config, now)
+        state = mirror.load_state(self.config)
+        self.assertEqual(state["latest"], latest)
+        self.assertIn(orphan, state["snapshots"])
+        self.assertEqual(
+            json.loads((self.root / "latest.json").read_text())["snapshotId"], latest
+        )
+
+    def test_interrupted_publication_with_damaged_payload_stops_recovery(self):
+        now = dt.datetime(2026, 9, 7, tzinfo=dt.timezone.utc)
+        orphan = self.interrupt_completed_publication(now)
+        payload = self.root / "snapshots" / orphan / "tlnet/archive/payload.r1.tar.xz"
+        payload.chmod(0o600)
+        payload.write_bytes(b"damaged")
+        with self.assertRaisesRegex(mirror.StateError, "orphan snapshot verification failed"):
+            mirror.gc(self.config, now)
+        self.assertEqual(mirror.load_state(self.config)["snapshots"], {})
+        self.assertIsNone(mirror.load_state(self.config)["latest"])
+        self.assertTrue((self.root / "snapshots" / orphan).exists())
+
     def test_delete_crash_state_is_reconciled(self):
         old, _ = self.publish(1, hours_ago=100)
         latest, _ = self.publish(2)

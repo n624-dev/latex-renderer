@@ -1420,6 +1420,22 @@ def reconcile_state(config: Config, state: dict[str, Any]) -> None:
             record["status"] = "published"
         elif record.get("status") == "published" and snapshot_id not in disk_ids:
             raise StateError(f"published snapshot is missing: {snapshot_id}")
+    # First publication can stop after its completed-directory rename but
+    # before state is committed. Only verified, adopted payloads may restore
+    # the missing active-year pointer; never replace an existing valid latest.
+    active_published = [
+        snapshot_id
+        for snapshot_id, record in state["snapshots"].items()
+        if record["year"] == config.active_year and record["status"] == "published"
+    ]
+    if active_published and state.get("latest") not in active_published:
+        state["latest"] = max(
+            active_published,
+            key=lambda snapshot_id: (
+                parse_time(state["snapshots"][snapshot_id]["publishedAt"]),
+                snapshot_id,
+            ),
+        )
     publish_latest_metadata(config, state)
 
 
