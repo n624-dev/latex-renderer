@@ -466,12 +466,12 @@ async function scanOutputTree(
   >,
 ): Promise<
   OutputTreeStats & {
-    files: Array<{ file: string; info: Awaited<ReturnType<typeof lstat>> }>;
+    files: Array<{ file: string; info: Stats }>;
   }
 > {
   const files: Array<{
       file: string;
-      info: Awaited<ReturnType<typeof lstat>>;
+      info: Stats;
     }> = [],
     pending = [root];
   let totalBytes = 0,
