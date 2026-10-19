@@ -14,3 +14,4 @@ export * from "./remote-mcp.js";
 export * from "./browser-auth.js";
 export * from "./output-stages.js";
 export * from "./previews.js";
+export * from "./source-trees.js";

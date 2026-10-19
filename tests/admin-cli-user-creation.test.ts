@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { describe, expect, it } from "vitest";
-import { createUserSchema } from "@latex-renderer/contracts";
+import { createUserSchema } from "../packages/contracts/src/index.js";
 import { readFixtureBody } from "./helpers/fixture-http.js";
 
 async function run(

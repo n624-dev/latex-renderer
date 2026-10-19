@@ -26,7 +26,33 @@ async function accounts(){
   const params=new URLSearchParams(location.search),accountApi=new URLSearchParams();if(params.get('cursor'))accountApi.set('cursor',params.get('cursor'));const[a,u,k]=await Promise.all([request('/service-accounts'+(accountApi.size?'?'+accountApi:'')),request('/users'),request('/api-keys')]);
   const ownerOptions=u.items.filter(x=>x.status==='active').map(x=>'<option value="'+esc(x.id)+'">'+esc(x.display_name+' ('+x.email+')')+'</option>').join(''),typeOptions=(selected='')=>[['codex','Codex'],['claude-code','Claude Code'],['mcp','MCP'],['ci','CI'],['generic','汎用CLI']].map(([value,label])=>'<option value="'+value+'"'+(selected===value?' selected':'')+'>'+label+'</option>').join('');
   out.innerHTML=section('サービスアカウント','<div class="actions"><button id="account-create">サービスアカウントを作成</button></div>'+table(a.items,[['名前','name'],['種類',x=>displayLabel(x.client_type)],['所有者',x=>u.items.find(user=>user.id===x.owner_user_id)?.display_name||'詳細で確認'],['状態',x=>displayLabel(x.status)]],x=>'<button class="secondary" data-a-detail="'+esc(x.id)+'">詳細</button><details class="row-options"><summary>その他の操作</summary><div class="actions"><button class="secondary" data-a-edit="'+esc(x.id)+'">編集</button><a class="button secondary" href="/admin/api-keys/?account='+encodeURIComponent(x.id)+'">APIキーを追加</a><button class="secondary" data-a-status="'+esc(x.id)+'" data-active="'+(x.status==='active')+'">'+(x.status==='active'?'無効化':'有効化')+'</button>'+(x.status==='active'?'<button class="danger" data-a-delete="'+esc(x.id)+'">無効化＋全キー失効</button>':'')+'</div></details>')+nextPage(a.nextCursor));
-  document.querySelector('#account-create').onclick=()=>formDialog({title:'サービスアカウントを作成',fields:'<label>所有者<select name="ownerUserId" autofocus>'+ownerOptions+'</select></label><label>名前<input name="name" required maxlength="100"></label><label>種類<select name="clientType">'+typeOptions()+'</select></label>',submitLabel:'作成',successMessage:'サービスアカウントを作成しました。',onSubmit:f=>request('/service-accounts',{method:'POST',...jsonBody(Object.fromEntries(f))})});
+  document.querySelector('#account-create').onclick=()=>{
+    let loading=false;
+    const dialog=formDialog({title:'サービスアカウントを作成',fields:'<div class="wide"><label>所有者を検索<input data-owner-query maxlength="200" autocomplete="off"></label><div class="actions"><button type="button" class="secondary" data-owner-search>検索</button><button type="button" class="secondary" data-owner-next>次のユーザー</button></div><p data-owner-error role="status"></p></div><label>所有者<select name="ownerUserId" required autofocus><option value="">選択してください</option>'+ownerOptions+'</select></label><label>名前<input name="name" required maxlength="100"></label><label>種類<select name="clientType">'+typeOptions()+'</select></label>',submitLabel:'作成',successMessage:'サービスアカウントを作成しました。',onSubmit:async f=>{
+      if(loading)throw new Error('所有者の一覧を確認しています。');
+      const owner=await request('/users/'+encodeURIComponent(String(f.get('ownerUserId'))));
+      if(owner.status!=='active')throw new Error('有効な所有者を選択してください。');
+      return request('/service-accounts',{method:'POST',...jsonBody({ownerUserId:owner.id,name:String(f.get('name')),clientType:String(f.get('clientType'))})});
+    }}),select=dialog.querySelector('[name="ownerUserId"]'),search=dialog.querySelector('[data-owner-search]'),next=dialog.querySelector('[data-owner-next]'),query=dialog.querySelector('[data-owner-query]'),status=dialog.querySelector('[data-owner-error]');
+    let cursor=u.nextCursor||null,currentQuery='';next.disabled=!cursor;
+    const loadOwners=async(reset)=>{
+      if(loading||dialog.dataset.busy==='true')return;
+      loading=true;search.disabled=true;next.disabled=true;status.textContent='';
+      const selected=select.selectedOptions[0],value=select.value,params=new URLSearchParams({pageSize:'50'}),requestedQuery=reset?query.value.trim():currentQuery;
+      if(requestedQuery)params.set('query',requestedQuery);if(!reset&&cursor)params.set('cursor',cursor);
+      try{
+        const page=await request('/users?'+params);if(!dialog.isConnected)return;
+        const users=page.items.filter(x=>x.status==='active');
+        select.innerHTML='<option value="">選択してください</option>'+users.map(x=>'<option value="'+esc(x.id)+'">'+esc(x.display_name+(x.email?' ('+x.email+')':''))+'</option>').join('');
+        if(value&&!users.some(x=>x.id===value)&&selected)select.append(selected.cloneNode(true));
+        select.value=value;cursor=page.nextCursor||null;currentQuery=requestedQuery;
+        if(!users.length)status.textContent='このページに有効なユーザーはいません。';
+      }catch(error){if(dialog.isConnected)status.textContent=error instanceof Error?error.message:String(error);}
+      finally{loading=false;if(dialog.isConnected){search.disabled=false;next.disabled=!cursor;}}
+    };
+    search.onclick=()=>{void loadOwners(true)};next.onclick=()=>{void loadOwners(false)};
+    query.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();void loadOwners(true)}};
+  };
   bindAction('[data-a-detail]',b=>{const x=a.items.find(v=>v.id===b.dataset.aDetail);details({...x,apiKeys:k.items.filter(v=>v.service_account_id===x.id)},'サービスアカウント詳細')});
   bindAction('[data-a-edit]',b=>{const x=a.items.find(v=>v.id===b.dataset.aEdit);formDialog({title:'サービスアカウントを編集',description:x.id,fields:'<label>名前<input name="name" required maxlength="100" value="'+esc(x.name)+'" autofocus></label><label>種類<select name="clientType">'+typeOptions(x.client_type)+'</select></label>',submitLabel:'変更を保存',successMessage:'サービスアカウントを更新しました。',onSubmit:f=>request('/service-accounts/'+x.id,{method:'PATCH',...jsonBody({name:f.get('name'),clientType:f.get('clientType')})})})});
   bindAction('[data-a-status]',b=>{const x=a.items.find(v=>v.id===b.dataset.aStatus),action=b.dataset.active==='true'?'disable':'enable',verb=action==='disable'?'無効化':'有効化';confirmDialog({title:'サービスアカウントを'+verb,description:x.name+' / '+x.id,summary:'<p>関連APIキーは失効しません。</p>',submitLabel:verb,danger:action==='disable',successMessage:'サービスアカウント状態を変更しました。',onSubmit:()=>request('/service-accounts/'+x.id+'/'+action,{method:'POST',...jsonBody({})})})});

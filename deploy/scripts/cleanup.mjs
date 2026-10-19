@@ -4,6 +4,7 @@ import { dirname, isAbsolute, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pruneServiceDiagnostics } from "./service-diagnostics.mjs";
 import { sourceReferenceCountSql } from "../../packages/database/dist/source-lifecycle.js";
+import { collectSourceTrees } from "./source-tree-gc.mjs";
 import {
   readAuditCheckpoint,
   validateAuditCheckpoint,
@@ -43,6 +44,15 @@ db.exec("PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON");
 const itemFailures = [];
 let itemFailureCount = 0;
 const now = new Date().toISOString();
+try {
+  await collectSourceTrees(db, storageRoot);
+} catch {
+  recordFailure(
+    "source-tree-gc",
+    "bounded-cache",
+    new Error("Source tree collection failed"),
+  );
+}
 const staleJobUploadsRecovered = recoverStaleJobUploads(now),
   staleSourceUploadsRecovered = recoverStaleSourceUploads(now);
 const reservationCutoff = new Date(

@@ -6,6 +6,20 @@ import {
 } from "../apps/renderer-worker/src/docker.js";
 afterEach(() => vi.unstubAllEnvs());
 describe("renderer worker config", () => {
+  it("bounds Source tree storage and allows disabling it without changing ZIP limits", () => {
+    stubRequiredEnvironment();
+    expect(loadWorkerConfig()).toMatchObject({
+      sourceTreeMaxBytes: 64 * 1024 ** 2,
+      sourceTreeUserMaxBytes: 32 * 1024 ** 2,
+      sourceTreeTtlMs: 21600000,
+    });
+    vi.stubEnv("SOURCE_TREE_MAX_BYTES", "1");
+    expect(() => loadWorkerConfig()).toThrow("SOURCE_TREE_USER_MAX_BYTES");
+    vi.stubEnv("SOURCE_TREE_MAX_BYTES", "0");
+    expect(loadWorkerConfig().sourceTreeMaxBytes).toBe(0);
+    vi.stubEnv("SOURCE_TREE_TTL_SECONDS", "0");
+    expect(() => loadWorkerConfig()).toThrow("SOURCE_TREE_TTL_SECONDS");
+  });
   it("validates host admission headroom and queue deadline", () => {
     stubRequiredEnvironment();
     vi.stubEnv("RENDERER_MIN_AVAILABLE_MEMORY_BYTES", "0");

@@ -67,7 +67,7 @@ afterAll(async () => {
   await browser?.close();
 });
 
-async function fixture(kind: string, query = "") {
+async function fixture(kind: string, query = "", pagedOwners = false) {
   if (!browser) throw new Error("Browser not started");
   const page = await newTestPage(browser, {
     viewport: { width: 390, height: 844 },
@@ -79,6 +79,7 @@ async function fixture(kind: string, query = "") {
       csrf: string | undefined;
       body: string | null;
     }> = [];
+  const ownerState = { disabled: false };
   page.on("pageerror", (error) => errors.push(error.message));
   await page.route("**/*", async (route) => {
     const request = route.request(),
@@ -132,6 +133,37 @@ async function fixture(kind: string, query = "") {
       return;
     }
     const path = url.pathname.slice("/admin/api/v1".length);
+    if (pagedOwners && path === "/users") {
+      const items = url.searchParams.has("query")
+        ? []
+        : url.searchParams.has("cursor")
+          ? [{ ...user, id: "user_last", display_name: "最後の所有者" }]
+          : Array.from({ length: 50 }, (_, n) => ({
+              ...user,
+              id: `user_${n}`,
+              display_name: `所有者 ${n}`,
+            }));
+      await route.fulfill({
+        json: {
+          items,
+          nextCursor:
+            url.searchParams.has("cursor") || url.searchParams.has("query")
+              ? null
+              : "next-owner",
+        },
+      });
+      return;
+    }
+    if (pagedOwners && path === "/users/user_last") {
+      await route.fulfill({
+        json: {
+          ...user,
+          id: "user_last",
+          status: ownerState.disabled ? "disabled" : "active",
+        },
+      });
+      return;
+    }
     const values: Record<string, unknown> = {
       "/me": { userId, displayName: "検証ユーザー", role: "owner" },
       "/users": { items: [user], nextCursor: null },
@@ -210,8 +242,49 @@ async function fixture(kind: string, query = "") {
   await page.goto(`${origin}/admin/${path}/${query}`);
   if (kind !== "docs")
     await page.locator("#updated").waitFor({ state: "attached" });
-  return { page, errors, mutations };
+  return { page, errors, mutations, ownerState };
 }
+
+it.each([false, true])(
+  "selects an owner beyond the first page without silently changing it after search: disabled=%s",
+  async (disabled) => {
+    const { page, errors, mutations, ownerState } = await fixture(
+      "accounts",
+      "",
+      true,
+    );
+    await page.locator("#account-create").click();
+    const select = page.locator('[name="ownerUserId"]');
+    expect(await select.inputValue()).toBe("");
+    expect(await select.locator("option").count()).toBe(51);
+    await page.locator("[data-owner-next]").click();
+    await expect.poll(() => select.locator("option").count()).toBe(2);
+    await select.selectOption("user_last");
+    await page.locator("[data-owner-query]").fill("no matching user");
+    await page.locator("[data-owner-search]").click();
+    await expect
+      .poll(() => page.locator("[data-owner-error]").textContent())
+      .toContain("有効なユーザーはいません");
+    expect(await select.inputValue()).toBe("user_last");
+    await page.locator('dialog [name="name"]').fill("ページ外の所有者用");
+    ownerState.disabled = disabled;
+    await page.locator('dialog button[type="submit"]').click();
+    if (disabled) {
+      await expect
+        .poll(() => page.locator(".dialog-error").textContent())
+        .toContain("有効な所有者");
+      expect(mutations).toEqual([]);
+    } else {
+      await page.waitForFunction(() => !document.querySelector("dialog form"));
+      expect(mutations[0]?.path).toBe("/admin/api/v1/service-accounts");
+      expect(mutations[0]?.csrf).toBe("fixture-csrf");
+      expect(JSON.parse(mutations[0]?.body ?? "{}")).toMatchObject({
+        ownerUserId: "user_last",
+      });
+    }
+    expect(errors).toEqual([]);
+  },
+);
 
 it.each([
   "users",

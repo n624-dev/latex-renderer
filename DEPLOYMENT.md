@@ -1,5 +1,13 @@
 # Deployment
 
+Validated Source input reuse is bounded to 64MiB globally and 32MiB per user by
+default, with a six-hour lifetime and existing user-quota accounting. It does not
+add an unbounded download cache or change the separate CI mirror's 15GiB limit.
+Install the shared collector with the Worker and existing cleanup timer. Use
+`SOURCE_TREE_MAX_BYTES=0` to disable reuse while retaining normal ZIP validation.
+See [Source reuse and recovery](docs/source-input-reuse.md) and the optional
+[environment additions](deploy/renderer-io.env.example).
+
 Migration 022 adds PDF-bound page metadata and a deduplicated preview request
 queue. Upgrade database consumers and cleanup together after the encrypted
 backup, restore test and private-copy migration preflight, then verify schema 22. Updated Runtimes generate page 1 first; the Worker generates other pages on

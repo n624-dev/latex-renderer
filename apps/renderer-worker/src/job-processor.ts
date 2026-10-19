@@ -2,7 +2,7 @@ import { chmod, mkdir, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { RendererDatabase, WorkerJobRow } from "@latex-renderer/database";
 import { newId, nowIso } from "@latex-renderer/shared";
-import { validateAndExtract } from "@latex-renderer/zip-validation";
+import { prepareSourceInput } from "./source-tree-cache.js";
 import {
   inspectOutputTree,
   publishArtifacts,
@@ -97,6 +97,8 @@ export async function processJob(
     output = join(root, "outputs", String(job.lease_generation));
   let published = false,
     committed = false;
+  let rendererInput = extracted,
+    releaseInput = () => {};
   const needsOutputCleanup = (): boolean => published && !committed;
   const rendererState: {
     spawned?: ReturnType<typeof spawnRenderer>;
@@ -118,19 +120,15 @@ export async function processJob(
       // write through the bind mount.
       await mkdir(staging, { recursive: true, mode: 0o770 });
       await chmod(staging, 0o770);
-      await validateAndExtract(
+      const prepared = await prepareSourceInput(
+        database,
+        config,
+        job,
         source,
         extracted,
-        {
-          maxExtractedBytes: config.maxExtractedBytes,
-          maxFileBytes: config.maxUploadBytes,
-          maxEntries: config.maxZipEntries,
-          maxFiles: config.maxFileCount,
-          maxDepth: 10,
-          maxNameLength: 200,
-        },
-        job.entrypoint,
       );
+      rendererInput = prepared.input;
+      releaseInput = prepared.release;
       const startedAt = nowIso();
       if (
         leaseIsLost() ||
@@ -149,7 +147,7 @@ export async function processJob(
         config,
         job.id,
         job.lease_generation,
-        extracted,
+        rendererInput,
         staging,
         job.entrypoint,
         outputs,
@@ -386,6 +384,7 @@ export async function processJob(
   }
   if (needsOutputCleanup()) await rm(output, { recursive: true, force: true });
   await rm(attempt, { recursive: true, force: true });
+  releaseInput();
   const finalState = database.worker.runtimeState(job.id);
   if (finalState?.cancel_requested_at != null)
     database.worker.markCanceled(

@@ -2,6 +2,9 @@
 
 This migration adds a PDF-bound preview document and a bounded, fenced request
 queue. It does not rewrite historical PDFs, previews, Sources or Job states.
+It also records bounded validated Source trees and their active-reader pins.
+Include the complete storage root in the recovery point. Before restoration,
+verify that no old renderer container still holds any shared Source input.
 Deploy the Worker and all preview consumers together, after the encrypted backup,
 restore trial and private-copy migration preflight have succeeded.
 

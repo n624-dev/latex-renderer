@@ -54,6 +54,7 @@ export async function sourcePipelineFixture(
   const database = await createFixtureDatabase(root);
   const servers: Server[] = [],
     children: ChildProcess[] = [];
+  const sourceInputs: string[] = [];
   const containers = new Map<ChildProcess, string>();
   let run: Promise<void> | undefined;
   let restoreSpawn = () => {};
@@ -288,6 +289,7 @@ export async function sourcePipelineFixture(
       .mockImplementation(
         (cfg, id, generation, input, staging, entrypoint, outputs, stage) => {
           const held = holdNext && (!holdSvg || stage?.mode === "svg");
+          if (stage?.mode !== "preview") sourceInputs.push(input);
           const result =
             realPipelineImage !== undefined
               ? originalSpawn(
@@ -407,6 +409,7 @@ export async function sourcePipelineFixture(
       renders,
       tickets,
       requests,
+      sourceInputs,
       runNext,
       async withPreviewWorker<T>(work: () => Promise<T>): Promise<T> {
         let pending: Promise<void> | undefined, failure: unknown;

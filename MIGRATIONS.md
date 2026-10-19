@@ -148,6 +148,15 @@ See [the migration and recovery guide](deploy/migrations/019_internal_smoke_visi
 
 ## Migration 022: PDF-bound preview requests
 
+The same migration adds bounded `source_trees` and `source_tree_readers` for
+owner-bound, read-only validated input reuse. Reservations include filesystem
+blocks and metadata and remain charged until deletion completes. Reader pins
+survive process restarts and require exact daemon-stop confirmation before
+recovery. Deploy the application, Worker and common timer collector together;
+see [Source input reuse](docs/source-input-reuse.md). The numbered SQL is tested
+against the canonical application SQL, including byte reservations and the
+internal audit tombstones below.
+
 Migration 022 adds `job_preview_documents` and `job_preview_requests` for
 page counts bound to an immutable PDF artifact and deduplicated, bounded page
 requests. Queuing a request must not extend the PDF retention deadline or

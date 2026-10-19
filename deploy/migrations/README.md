@@ -70,6 +70,11 @@ backfilled. Application-only downgrade remains unsupported; see
 [migration 21 recovery](021_independent_output_stages.rollback.md).
 
 Migration 22 adds PDF-bound preview page counts and a deduplicated request queue.
+It also records bounded, owner-bound validated Source input trees and persistent
+reader pins. Deploy the Source collector with the application and Worker; both
+storage accounting and cleanup include its reservations. Numbered and application
+SQL are tested for parity, including preview byte reservations and internal audit
+tombstones. See [Source reuse](../../docs/source-input-reuse.md).
 Preview conversion must remain in the sandboxed Worker; queuing or retrying a
 page must not extend PDF retention or change the Job result. Historical eager
 previews remain usable without backfilling. Keep `rollbackCompatible: false`;

@@ -11,6 +11,10 @@ import { assessHostResources, readHostResources } from "./admission.js";
 import { diagnosticWriter } from "../../../deploy/scripts/service-diagnostics.mjs";
 import { recoverStaleLeases } from "./recovery.js";
 import { processPreview, recoverPreviewRequests } from "./preview-processor.js";
+import {
+  collectSourceTrees,
+  recoverSourceTreeReaders,
+} from "./source-tree-cache.js";
 
 export async function runWorker(
   database: RendererDatabase,
@@ -54,9 +58,25 @@ export async function runWorker(
     previousAdmission = "";
   let preferPreview = false,
     nextPreviewRecovery = 0;
+  let nextSourceTreeCollection = 0;
   try {
     while (!isShuttingDown()) {
       await recoverExpiredLeases();
+      if (Date.now() >= nextSourceTreeCollection) {
+        try {
+          await recoverSourceTreeReaders(database);
+          await collectSourceTrees(
+            database.raw,
+            config.storageRoot,
+            false,
+            32,
+            config.sourceTreeMaxBytes ?? 64 * 1024 ** 2,
+          );
+        } catch {
+          diagnostic({ event: "renderer_worker.source_tree_gc_failed" });
+        }
+        nextSourceTreeCollection = Date.now() + 15 * 60_000;
+      }
       if (Date.now() >= nextPreviewRecovery) {
         await recoverPreviewRequests(database, config);
         nextPreviewRecovery = Date.now() + 10_000;

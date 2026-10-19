@@ -14,9 +14,62 @@ import {
 } from "./helpers/source-pipeline.js";
 
 describe(`Source pipeline HTTP/DB/Worker E2E (${realPipelineImage === undefined ? "deterministic renderer, NOT TeX" : "real TeX container"})`, () => {
+  it("keeps PDF/PNG/SVG validation and output bytes equivalent with cache disabled, on first fill and on a read-only hit", async () => {
+    const f = await sourcePipelineFixture();
+    try {
+      const source = await f.renders.createSource(
+        { userId: "pipeline_user", scopes: ["mcp:render", "mcp:read"] },
+        [
+          {
+            path: "main.tex",
+            text: pipelineDocument(1, "Equation $x^2+y^2=z^2$."),
+          },
+        ],
+      );
+      const results: Buffer[][] = [];
+      for (let attempt = 0; attempt < 3; attempt++) {
+        if (attempt > 0) {
+          f.config.sourceTreeMaxBytes = 64 * 1024 ** 2;
+          f.config.sourceTreeUserMaxBytes = 32 * 1024 ** 2;
+        }
+        const result = await renderSource(f.sibling, source.id, {
+          outputs: ["pdf", "svg"],
+          outputDirectory: join(f.root, `cache-svg-${attempt}`),
+          pollTimeoutMs: 120000,
+          sleep: f.runNext,
+        });
+        expect(result.job.status).toBe("succeeded");
+        expect(result.job.stages?.pdf.status).toBe("succeeded");
+        expect(result.job.stages?.svg.status).toBe("succeeded");
+        const bytes = await Promise.all(
+          [...result.job.artifacts, ...result.job.previews]
+            .filter(
+              (a) =>
+                a.type === "preview" ||
+                a.relativePath.startsWith("svg/objects/"),
+            )
+            .map((a) =>
+              readFile(join(f.root, `cache-svg-${attempt}`, a.relativePath)),
+            ),
+        );
+        expect(bytes.length).toBeGreaterThan(0);
+        results.push(bytes);
+      }
+      expect(results[1]).toEqual(results[0]);
+      expect(results[2]).toEqual(results[0]);
+      expect(f.sourceInputs).toHaveLength(6);
+      expect(f.sourceInputs[0]).not.toBe(f.sourceInputs[2]);
+      expect(f.sourceInputs[2]).toBe(f.sourceInputs[4]);
+      expect(f.database.sourceTrees.readers()).toEqual([]);
+    } finally {
+      await f.close();
+    }
+  });
   it("rerenders a project-local custom output, reuses unchanged Source, and removes obsolete pages", async () => {
     const f = await sourcePipelineFixture();
     try {
+      f.config.sourceTreeMaxBytes = 64 * 1024 ** 2;
+      f.config.sourceTreeUserMaxBytes = 32 * 1024 ** 2;
       const project = join(f.root, "project"),
         output = join(project, "build", "preview");
       await mkdir(project);
@@ -41,10 +94,21 @@ describe(`Source pipeline HTTP/DB/Worker E2E (${realPipelineImage === undefined 
         expect(expanded.artifacts.previews).toHaveLength(3);
       }
       expect(first.source.uploadRequired).toBe(true);
+      const cached = f.database.raw
+        .prepare("SELECT id,expires_at FROM source_trees")
+        .all();
+      expect(cached).toHaveLength(1);
+      expect(f.database.sourceTrees.readers()).toEqual([]);
       const second = await renderProject(f.client, project, options);
       expect(second.job.status).toBe("succeeded");
       expect(second.source.sourceId).toBe(first.source.sourceId);
       expect(second.source.uploadRequired).toBe(false);
+      expect(f.sourceInputs).toHaveLength(2);
+      expect(f.sourceInputs[0]).toBe(f.sourceInputs[1]);
+      expect(f.sourceInputs[0]).toContain("source-trees");
+      expect(
+        f.database.raw.prepare("SELECT id,expires_at FROM source_trees").all(),
+      ).toEqual(cached);
       expect(f.database.sources.get(first.source.sourceId)?.paths_json).toBe(
         '["main.tex"]',
       );

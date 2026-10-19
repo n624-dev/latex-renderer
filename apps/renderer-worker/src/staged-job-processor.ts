@@ -12,7 +12,7 @@ import {
 import { join } from "node:path";
 import type { RendererDatabase, WorkerJobRow } from "@latex-renderer/database";
 import { AppError, newId, nowIso } from "@latex-renderer/shared";
-import { validateAndExtract } from "@latex-renderer/zip-validation";
+import { prepareSourceInput } from "./source-tree-cache.js";
 import type { WorkerConfig } from "./config.js";
 import {
   inspectOutputTree,
@@ -41,6 +41,8 @@ export async function processStagedJob(
       ? join(root, "input/source.zip")
       : join(config.storageRoot, job.source_storage_key);
   let preserveAttempt = false;
+  let rendererInput = input,
+    releaseInput = () => {};
   const owns = () => {
     const row = db.worker.runtimeState(job.id);
     return (
@@ -103,28 +105,11 @@ export async function processStagedJob(
     await rm(attempt, { recursive: true, force: true });
     await mkdir(attempt, { recursive: true, mode: 0o770 });
     await chmod(attempt, 0o770);
-    const sourceDigest = await digestRegularFile(source, config.maxUploadBytes);
-    if (
-      sourceDigest.sha256 !== job.source_sha256 ||
-      sourceDigest.bytes !== job.source_size
-    )
-      throw new AppError(
-        "SOURCE_CHECKSUM_INVALID",
-        "The verified Source has changed",
-      );
-    await validateAndExtract(
-      source,
-      input,
-      {
-        maxExtractedBytes: config.maxExtractedBytes,
-        maxFileBytes: config.maxUploadBytes,
-        maxEntries: config.maxZipEntries,
-        maxFiles: config.maxFileCount,
-        maxDepth: 10,
-        maxNameLength: 200,
-      },
-      job.entrypoint,
-    );
+    // prepareSourceInput verifies archive size/SHA on misses and every cached
+    // file on hits; do not hash the same archive again here.
+    const prepared = await prepareSourceInput(db, config, job, source, input);
+    rendererInput = prepared.input;
+    releaseInput = prepared.release;
     if (
       db.worker.transitionOwned(
         job.id,
@@ -158,7 +143,7 @@ export async function processStagedJob(
         db,
         config,
         job,
-        input,
+        rendererInput,
         staging,
         { mode: "pdf" },
         deadline - Date.now(),
@@ -390,7 +375,7 @@ export async function processStagedJob(
         db,
         config,
         job,
-        input,
+        rendererInput,
         staging,
         { mode: "svg", pdfDirectory },
         deadline - Date.now(),
@@ -610,6 +595,7 @@ export async function processStagedJob(
       for (const path of published)
         await rm(path, { recursive: true, force: true });
       await rm(attempt, { recursive: true, force: true });
+      releaseInput();
       // Cancellation can win during ZIP validation, before a container exists.
       // Release only our fenced lease, after all daemon work/cleanup is proven.
       canceled();

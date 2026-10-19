@@ -30,6 +30,25 @@ END;
 
 export const lazyPreviewsV22Sql = `
 ${internalAuditTombstonesSql}
+CREATE TABLE source_trees (
+  id TEXT PRIMARY KEY,
+  identity TEXT NOT NULL UNIQUE,
+  source_id TEXT NOT NULL,
+  owner_user_id TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('building','ready','invalid','deleting')),
+  reserved_bytes INTEGER NOT NULL CHECK(reserved_bytes>0),
+  manifest_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  last_used_at TEXT NOT NULL
+);
+CREATE INDEX idx_source_trees_expiry ON source_trees(status,expires_at);
+CREATE TABLE source_tree_readers (
+  tree_id TEXT NOT NULL REFERENCES source_trees(id) ON DELETE CASCADE,
+  job_id TEXT NOT NULL,
+  generation INTEGER NOT NULL,
+  PRIMARY KEY(tree_id,job_id,generation)
+);
 CREATE TABLE job_preview_documents (
   job_id TEXT PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,
   pdf_artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
