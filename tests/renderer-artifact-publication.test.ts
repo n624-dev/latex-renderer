@@ -1,4 +1,11 @@
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -28,8 +35,20 @@ describe("renderer artifact publication", () => {
     await writeFile(join(staging, "main.aux"), "must not persist\n");
     await writeFile(join(staging, "renderer-secret.tmp"), "unknown\n");
 
-    const artifacts = await validateArtifacts(config(root), staging, false);
-    await publishArtifacts(staging, output, artifacts);
+    const timings = { scanMs: 0, formatMs: 0, hashMs: 0, copyMs: 0 };
+    const artifacts = await validateArtifacts(
+      config(root),
+      staging,
+      false,
+      false,
+      "",
+      timings,
+    );
+    await publishArtifacts(staging, output, artifacts, timings);
+    for (const duration of Object.values(timings)) {
+      expect(Number.isFinite(duration)).toBe(true);
+      expect(duration).toBeGreaterThanOrEqual(0);
+    }
 
     expect(await readdir(output)).toEqual([
       "compile.log",

@@ -9,6 +9,7 @@ import {
   readdir,
 } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
+import { performance } from "node:perf_hooks";
 import { AppError } from "@latex-renderer/shared";
 import { SaxesParser } from "saxes";
 import type { WorkerConfig } from "./config.js";
@@ -26,16 +27,27 @@ export interface OutputTreeStats {
   directoryCount: number;
 }
 
+/** Opt-in benchmark counters; durations do not change validation decisions. */
+export interface ArtifactIoTimings {
+  scanMs: number;
+  formatMs: number;
+  hashMs: number;
+  copyMs: number;
+}
+
 export async function validateArtifacts(
   config: WorkerConfig,
   directory: string,
   requirePdf: boolean,
   requireSvg = false,
   diagnosticPrefix: "" | "svg/" = "",
+  timings?: ArtifactIoTimings,
 ): Promise<ValidatedArtifact[]> {
+  const scanStarted = performance.now();
   const tree = await scanOutputTree(directory, config),
     files = tree.files,
     result: ValidatedArtifact[] = [];
+  if (timings) timings.scanMs += performance.now() - scanStarted;
   let total = 0,
     previewTotal = 0,
     svgTotal = 0;
@@ -56,6 +68,7 @@ export async function validateArtifacts(
       svgTotal > config.maxSvgTotalBytes
     )
       throw new AppError("OUTPUT_LIMIT", "Renderer output exceeds limit");
+    const formatStarted = performance.now();
     const prefix = await readPrefix(file, 8);
     if (type === "pdf" && prefix.subarray(0, 5).toString("ascii") !== "%PDF-")
       throw new AppError("PDF_MAGIC_INVALID", "result.pdf is not a PDF");
@@ -69,9 +82,12 @@ export async function validateArtifacts(
     if (type === "errors" || type === "dependencies")
       JSON.parse(await readFile(file, "utf8"));
     if (type === "svg") validateSvg(await readFile(file, "utf8"));
+    if (timings) timings.formatMs += performance.now() - formatStarted;
+    const hashStarted = performance.now();
     const hash = createHash("sha256");
     for await (const chunk of createReadStream(file))
       hash.update(chunk as Buffer);
+    if (timings) timings.hashMs += performance.now() - hashStarted;
     result.push({
       path,
       type,
@@ -81,7 +97,11 @@ export async function validateArtifacts(
   }
   if (requirePdf && !result.some((item) => item.type === "pdf"))
     throw new AppError("PDF_MISSING", "Renderer did not emit result.pdf");
-  if (requireSvg) await validateSvgSet(config, directory, result);
+  if (requireSvg) {
+    const formatStarted = performance.now();
+    await validateSvgSet(config, directory, result);
+    if (timings) timings.formatMs += performance.now() - formatStarted;
+  }
   if (
     !result.some((item) => item.path === `${diagnosticPrefix}compile.log`) ||
     !result.some((item) => item.path === `${diagnosticPrefix}errors.json`)
@@ -109,13 +129,16 @@ export async function publishArtifacts(
   source: string,
   destination: string,
   artifacts: readonly ValidatedArtifact[],
+  timings?: ArtifactIoTimings,
 ): Promise<void> {
+  const started = performance.now();
   await mkdir(destination, { recursive: true, mode: 0o770 });
   for (const artifact of artifacts) {
     const target = join(destination, artifact.path);
     await mkdir(dirname(target), { recursive: true, mode: 0o770 });
     await copyFile(join(source, artifact.path), target);
   }
+  if (timings) timings.copyMs += performance.now() - started;
 }
 
 export async function directorySize(directory: string): Promise<number> {
