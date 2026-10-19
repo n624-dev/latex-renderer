@@ -10,7 +10,8 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
 import { type UpdaterEnvelope } from "../deploy/scripts/updater-slots.mjs";
 import { RENDERER_RUNTIME_FILES } from "../deploy/scripts/runtime-image-identity.mjs";
@@ -117,6 +118,50 @@ it("builds a deterministic fixture release containing a complete hashed Updater 
         file.sha256,
       );
     }
+    // The application source bundle can hide missing Updater dependencies.
+    // Extract ONLY the sealed envelope, then execute the actual cleanup CLI.
+    const slot = join(root, "sealed-updater");
+    for (const path of Object.keys(envelope.files)) {
+      await mkdir(dirname(join(slot, path)), { recursive: true });
+      await writeFile(join(slot, path), content(path));
+    }
+    const databasePath = join(root, "retained-preview.sqlite3"),
+      runtimeImage = `sha256:${"b".repeat(64)}`,
+      database = new DatabaseSync(databasePath);
+    try {
+      database.exec(`
+        CREATE TABLE job_preview_documents(job_id TEXT, runtime_image TEXT,
+          pdf_artifact_id TEXT, pdf_sha256 TEXT);
+        CREATE TABLE artifacts(id TEXT, job_id TEXT, relative_path TEXT,
+          type TEXT, sha256 TEXT);
+        CREATE TABLE job_preview_requests(job_id TEXT, status TEXT);
+      `);
+      database
+        .prepare("INSERT INTO job_preview_documents VALUES (?, ?, ?, ?)")
+        .run("fixture-job", runtimeImage, "fixture-pdf", "a".repeat(64));
+      database
+        .prepare("INSERT INTO artifacts VALUES (?, ?, ?, ?, ?)")
+        .run("fixture-pdf", "fixture-job", "result.pdf", "pdf", "a".repeat(64));
+    } finally {
+      database.close();
+    }
+    expect(
+      execFileSync(
+        process.execPath,
+        [
+          join(slot, "deploy/scripts/image-cleanup-policy.mjs"),
+          "--retained-preview-runtimes",
+          databasePath,
+        ],
+        {
+          cwd: slot,
+          encoding: "utf8",
+          timeout: 10_000,
+          env: { ...process.env, NODE_OPTIONS: "--max-old-space-size=64" },
+          stdio: ["ignore", "pipe", "pipe"],
+        },
+      ).trim(),
+    ).toBe(runtimeImage);
     // A new branch commit is testable without moving/creating any release tag.
     await writeFile(join(source, "branch-only.txt"), "new branch content");
     git("add", "branch-only.txt");

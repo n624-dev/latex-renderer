@@ -11,6 +11,7 @@
   "deploy/scripts/update-recovery-host.mjs",
   "deploy/scripts/application-database-file.mjs",
   "deploy/scripts/environment.mjs",
+  "deploy/scripts/image-cleanup-policy.mjs",
   "deploy/scripts/update-log-retention.mjs",
   "deploy/scripts/release-assembly.mjs",
   "deploy/scripts/release-archive.mjs",
