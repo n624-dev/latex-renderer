@@ -96,12 +96,11 @@ describe.skipIf(realPipelineImage !== undefined)(
             inspect.mockRejectedValue(new Error("Daemon unavailable"));
           else inspect.mockResolvedValue("");
           await recoverStaleLeases(f.database, f.config);
-          expect(f.database.worker.runtimeState(job.id)).toMatchObject({
-            status: "canceled",
-            lease_owner: inspectionFails
-              ? expect.stringContaining(":recovery:")
-              : null,
-          });
+          const recovered = f.database.worker.runtimeState(job.id);
+          expect(recovered?.status).toBe("canceled");
+          if (inspectionFails)
+            expect(recovered?.lease_owner).toContain(":recovery:");
+          else expect(recovered?.lease_owner).toBeNull();
           expect(f.renders.job(identity, job.id).stages?.pdf.status).toBe(
             "succeeded",
           );

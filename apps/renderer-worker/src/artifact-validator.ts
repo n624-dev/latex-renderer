@@ -43,6 +43,7 @@ export async function validateArtifacts(
   requireSvg = false,
   diagnosticPrefix: "" | "svg/" = "",
   timings?: ArtifactIoTimings,
+  candidateReader?: typeof readArtifactSinglePass,
 ): Promise<ValidatedArtifact[]> {
   const scanStarted = performance.now();
   const tree = await scanOutputTree(directory, config),
@@ -69,6 +70,11 @@ export async function validateArtifacts(
       svgTotal > config.maxSvgTotalBytes
     )
       throw new AppError("OUTPUT_LIMIT", "Renderer output exceeds limit");
+    if (candidateReader) {
+      const validated = await candidateReader(file, type, info, timings);
+      result.push({ path, type, size, sha256: validated.sha256 });
+      continue;
+    }
     const formatStarted = performance.now();
     const prefix = await readPrefix(file, 8);
     if (type === "pdf" && prefix.subarray(0, 5).toString("ascii") !== "%PDF-")
@@ -131,13 +137,14 @@ export async function publishArtifacts(
   destination: string,
   artifacts: readonly ValidatedArtifact[],
   timings?: ArtifactIoTimings,
+  copyMode = 0,
 ): Promise<void> {
   const started = performance.now();
   await mkdir(destination, { recursive: true, mode: 0o770 });
   for (const artifact of artifacts) {
     const target = join(destination, artifact.path);
     await mkdir(dirname(target), { recursive: true, mode: 0o770 });
-    await copyFile(join(source, artifact.path), target);
+    await copyFile(join(source, artifact.path), target, copyMode);
   }
   if (timings) timings.copyMs += performance.now() - started;
 }

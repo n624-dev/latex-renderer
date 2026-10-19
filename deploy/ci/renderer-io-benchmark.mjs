@@ -1,7 +1,7 @@
 // Opt-in measurements on a disposable runner; never read a production Source.
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
-import { createWriteStream } from "node:fs";
+import { constants, createWriteStream } from "node:fs";
 import {
   copyFile,
   mkdir,
@@ -19,6 +19,7 @@ import { ZipFile } from "yazl";
 import { validateAndExtract } from "../../packages/zip-validation/dist/index.js";
 import {
   publishArtifacts,
+  readArtifactSinglePass,
   validateArtifacts,
 } from "../../apps/renderer-worker/dist/artifact-validator.js";
 
@@ -210,6 +211,57 @@ try {
         );
         return { bytes: (await stat(join(destination, "result.pdf"))).size };
       });
+      await measure(`candidate-artifacts-${pages}`, async () => {
+        const stages = timings();
+        const artifacts = await validateArtifacts(
+          config,
+          source,
+          true,
+          true,
+          "",
+          stages,
+          readArtifactSinglePass,
+        );
+        const destination = join(root, `candidate-${pages}`);
+        await publishArtifacts(
+          source,
+          destination,
+          artifacts,
+          stages,
+          constants.COPYFILE_FICLONE | constants.COPYFILE_EXCL,
+        );
+        for (const artifact of artifacts)
+          assert.equal(
+            createHash("sha256")
+              .update(await readFile(join(destination, artifact.path)))
+              .digest("hex"),
+            artifact.sha256,
+          );
+        // FORCE is used only to identify benchmark filesystem support. The
+        // production candidate uses FICLONE's documented ordinary-copy fallback.
+        let reflinkSupported = false;
+        try {
+          await copyFile(
+            join(source, "result.pdf"),
+            join(root, `clone-probe-${pages}`),
+            constants.COPYFILE_FICLONE_FORCE | constants.COPYFILE_EXCL,
+          );
+          reflinkSupported = true;
+        } catch (error) {
+          if (
+            !["ENOTSUP", "EOPNOTSUPP", "ENOSYS", "EXDEV", "EINVAL"].includes(
+              error.code,
+            )
+          )
+            throw error;
+        }
+        return {
+          stages,
+          reflinkSupported,
+          files: artifacts.length,
+          bytes: artifacts.reduce((n, f) => n + f.size, 0),
+        };
+      });
       await rm(source, { recursive: true, force: true });
       await rm(join(root, `published-${pages}`), {
         recursive: true,
@@ -219,6 +271,11 @@ try {
         recursive: true,
         force: true,
       });
+      await rm(join(root, `candidate-${pages}`), {
+        recursive: true,
+        force: true,
+      });
+      await rm(join(root, `clone-probe-${pages}`), { force: true });
     }
   }
 } finally {

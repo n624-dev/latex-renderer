@@ -97,6 +97,8 @@ jobs:
         run: node deploy/ci/measure-phase.mjs typecheck -- pnpm typecheck
       - name: Build all workspaces and client distributions once
         run: node deploy/ci/measure-phase.mjs build -- pnpm build:workspaces
+      - name: Compare bounded Source and artifact I/O candidates
+        run: node deploy/ci/renderer-io-benchmark.mjs
       - name: Check documentation
         run: node deploy/ci/measure-phase.mjs docs -- pnpm check:docs
       - name: Run regression and integration tests
