@@ -33,6 +33,10 @@ export const siteScript = `
     });
 
     document.querySelectorAll('.docs-content pre').forEach((pre) => {
+      const block = document.createElement('div');
+      block.className = 'code-block';
+      const toolbar = document.createElement('div');
+      toolbar.className = 'code-toolbar';
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'code-copy';
@@ -42,7 +46,9 @@ export const siteScript = `
         button.textContent = 'コピー済み';
         window.setTimeout(() => { button.textContent = 'コピー'; }, 1500);
       });
-      pre.append(button);
+      pre.before(block);
+      toolbar.append(button);
+      block.append(toolbar, pre);
     });
 
     const search = document.querySelector('#docs-search');

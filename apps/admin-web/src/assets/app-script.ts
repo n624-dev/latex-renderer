@@ -391,6 +391,12 @@ function renderJobResult(
   title: string,
   connection = "connected",
 ) {
+  const technicalOpen =
+    container.querySelector<HTMLDetailsElement>(".job-technical")?.open ??
+    false;
+  const svgOpen =
+    container.querySelector<HTMLDetailsElement>(".svg-artifacts")?.open ??
+    false;
   container.replaceChildren();
   const section = document.createElement("section"),
     heading = document.createElement("h2"),
@@ -466,6 +472,8 @@ function renderJobResult(
       summary = document.createElement("summary"),
       list = document.createElement("div");
     summary.textContent = `SVG成果物 (${svgArtifacts.length})`;
+    details.className = "svg-artifacts";
+    details.open = svgOpen;
     list.className = "actions";
     for (const artifact of svgArtifacts) {
       const button = artifactButton(
@@ -486,6 +494,8 @@ function renderJobResult(
     summary = document.createElement("summary"),
     code = document.createElement("code");
   summary.textContent = "技術情報を表示";
+  detail.className = "job-technical";
+  detail.open = technicalOpen;
   code.textContent = `Job ID: ${job.id}${job.errorCode ? `\n${job.errorCode}: ${job.errorMessage ?? ""}` : ""}`;
   detail.append(summary, code);
   section.append(heading, state, actions, detail);
@@ -552,10 +562,10 @@ async function loadJobs(fetcher: Fetcher, container: HTMLElement, limit = 50) {
       container.textContent = "変換履歴はありません。";
       return;
     }
-    container.innerHTML = `<div class="table-wrap"><table><thead><tr><th>文書</th><th>プロジェクト</th><th>状態</th><th>日時</th><th></th></tr></thead><tbody>${items
+    container.innerHTML = `<div class="table-wrap"><table class="responsive-table"><thead><tr><th>文書</th><th>プロジェクト</th><th>状態</th><th>日時</th><th>操作</th></tr></thead><tbody>${items
       .map(
         (item) =>
-          `<tr><td>${escape(item.documentName)}</td><td>${escape(item.projectName ?? "—")}</td><td>${escape(jobStatusLabel(String(item.status), item.stages))}</td><td>${escape(new Date(String(item.createdAt)).toLocaleString("ja-JP"))}</td><td><a class="button secondary" href="/app/jobs/${encodeURIComponent(String(item.id))}/">結果</a></td></tr>`,
+          `<tr><td data-label="文書">${escape(item.documentName)}</td><td data-label="プロジェクト">${escape(item.projectName ?? "—")}</td><td data-label="状態">${escape(jobStatusLabel(String(item.status), item.stages))}</td><td data-label="日時">${escape(new Date(String(item.createdAt)).toLocaleString("ja-JP"))}</td><td data-label="操作"><a class="button secondary" href="/app/jobs/${encodeURIComponent(String(item.id))}/">結果</a></td></tr>`,
       )
       .join(
         "",
