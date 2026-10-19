@@ -100,22 +100,20 @@ describe("independent output checkpoints", () => {
         serviceAccountId: "sa",
       },
       key = "retry-key-123456789";
-    expect(() => op.retry({ ...actor, userId: "other" }, id, key)).toThrowError(
+    expect(() => op.retry({ ...actor, userId: "other" }, id, key)).toThrow(
       /Job does not exist/,
     );
     expect(() =>
       op.retry({ ...actor, serviceAccountId: "other" }, id, key),
-    ).toThrowError(/Job does not exist/);
+    ).toThrow(/Job does not exist/);
     db.settings.upsert("maintenance_mode", "reject-new-jobs", "test", now);
-    expect(() => op.retry(actor, id, key)).toThrowError(
-      /temporarily unavailable/,
-    );
+    expect(() => op.retry(actor, id, key)).toThrow(/temporarily unavailable/);
     db.settings.upsert("maintenance_mode", "normal", "test", now);
     db.settings.upsert("max_user_storage_bytes", 1, "test", now);
-    expect(() => op.retry(actor, id, key)).toThrowError(/quota/);
+    expect(() => op.retry(actor, id, key)).toThrow(/quota/);
     db.settings.upsert("max_user_storage_bytes", 10000, "test", now);
     db.raw.prepare("UPDATE jobs SET entrypoint='other.tex' WHERE id=?").run(id);
-    expect(() => op.retry(actor, id, key)).toThrowError(/requires/);
+    expect(() => op.retry(actor, id, key)).toThrow(/requires/);
     db.raw.prepare("UPDATE jobs SET entrypoint='main.tex' WHERE id=?").run(id);
     expect(op.retry(actor, id, key)).toEqual({ id, reused: false });
     expect(op.retry(actor, id, key)).toEqual({ id, reused: true });

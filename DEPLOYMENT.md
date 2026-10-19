@@ -8,9 +8,9 @@ retries retain that PDF and its original retention deadline. Application-only
 downgrade remains disabled. See [Migration 021](MIGRATIONS.md#migration-021-independent-output-stages)
 and [the output-stage contract](docs/independent-output-stages.md).
 
-Migration 020 adds bounded, ten-minute OAuth login continuations. Deploy the
-application and scheduled cleanup together after the verified backup, restore
-test and private-copy migration preflight, then verify schema 20. Pending login
+Migration 020 introduced bounded, ten-minute OAuth login continuations, retained
+by the current schema. Application and scheduled cleanup must be upgraded together.
+Pending login
 handles remain browser-bound and single-use across restart; expired flows must
 be restarted. Existing users, grants and saved documents are unchanged. Earlier
 audit and internal-resource recovery restrictions still apply; application-only

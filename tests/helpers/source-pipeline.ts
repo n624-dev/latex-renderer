@@ -333,18 +333,17 @@ export async function sourcePipelineFixture(
       );
     const stopSpy =
       realPipelineImage === undefined
-        ? vi
-            .spyOn(docker, "dockerStopVerified")
-            .mockImplementation(async (name) => {
-              assert.equal(
-                name,
-                "pipeline-fixture",
-                "Only the deterministic child boundary may be stopped",
-              );
-              for (const child of children)
-                if (child.exitCode === null && child.signalCode === null)
-                  child.kill("SIGKILL");
-            })
+        ? vi.spyOn(docker, "dockerStopVerified").mockImplementation((name) => {
+            assert.equal(
+              name,
+              "pipeline-fixture",
+              "Only the deterministic child boundary may be stopped",
+            );
+            for (const child of children)
+              if (child.exitCode === null && child.signalCode === null)
+                child.kill("SIGKILL");
+            return Promise.resolve();
+          })
         : undefined;
     restoreSpawn = () => {
       spawnSpy.mockRestore();

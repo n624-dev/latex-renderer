@@ -74,7 +74,10 @@ export class SvgRetryOperations {
           );
         return { id: jobId, reused: true };
       }
-      if (this.db.settings.value("maintenance_mode", "normal") !== "normal")
+      if (
+        this.db.settings.value<string>("maintenance_mode", "normal") !==
+        "normal"
+      )
         throw new AppError(
           "MAINTENANCE",
           "New rendering is temporarily unavailable",

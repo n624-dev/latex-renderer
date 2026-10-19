@@ -1,5 +1,5 @@
 import { randomUUID, createHash } from "node:crypto";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import * as docker from "../apps/renderer-worker/src/docker.js";
@@ -70,6 +70,40 @@ describe(`independent stages with ${realPipelineImage === undefined ? "determini
 describe.skipIf(realPipelineImage !== undefined)(
   "independent PDF/SVG HTTP and Worker pipeline (deterministic, not TeX)",
   () => {
+    it("defers uncertain SVG container cleanup without hiding PDF or deleting the live attempt", async () => {
+      const f = await sourcePipelineFixture();
+      const stop = vi.mocked(docker.dockerStopVerified),
+        original = stop.getMockImplementation();
+      if (original === undefined)
+        throw new Error("Missing deterministic stop boundary");
+      try {
+        const job = await f.renders.createRender(identity, {
+          inlineSource: pipelineDocument(),
+          outputs: ["pdf", "svg"],
+        });
+        f.failNextSvg(79);
+        stop.mockRejectedValue(new Error("Daemon state unavailable"));
+        await expect(f.runNext()).rejects.toBeInstanceOf(
+          docker.RendererCleanupDeferred,
+        );
+        expect(f.renders.job(identity, job.id)).toMatchObject({
+          status: "running",
+          stages: { pdf: { status: "succeeded" }, svg: { status: "running" } },
+        });
+        expect(
+          (await f.renders.artifact(identity, job.id, "result.pdf")).bytes
+            .byteLength,
+        ).toBeGreaterThan(0);
+        expect(
+          (
+            await stat(join(f.storage, "jobs", job.id, "attempts", "1"))
+          ).isDirectory(),
+        ).toBe(true);
+      } finally {
+        stop.mockImplementation(original);
+        await f.close();
+      }
+    });
     it("never starts the PDF compiler again across repeated failed SVG retries", async () => {
       const f = await sourcePipelineFixture();
       try {

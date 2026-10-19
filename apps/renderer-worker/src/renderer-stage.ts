@@ -29,17 +29,21 @@ export async function runRendererStage(
     ["pdf", "svg"],
     options,
   );
-  let closed = false,
-    uncertain = false,
-    timedOut = false,
+  const state: {
+    closed: boolean;
+    uncertain: boolean;
+    stopping?: Promise<void>;
+  } = { closed: false, uncertain: false };
+  let timedOut = false,
     stderr = "",
-    monitorFailure: unknown;
-  let monitoring: Promise<void> | undefined,
-    stopping: Promise<void> | undefined;
+    monitorFailure: Error | undefined;
+  let monitoring: Promise<void> | undefined;
   const requestStop = () =>
-    (stopping ??= dockerStopVerified(renderer.containerName).finally(() => {
-      if (!closed) renderer.process.kill("SIGKILL");
-    }));
+    (state.stopping ??= dockerStopVerified(renderer.containerName).finally(
+      () => {
+        if (!state.closed) renderer.process.kill("SIGKILL");
+      },
+    ));
   renderer.process.stdout.resume();
   renderer.process.stderr.setEncoding("utf8");
   renderer.process.stderr.on("data", (chunk: string) => {
@@ -48,8 +52,8 @@ export async function runRendererStage(
   const exited = new Promise<number>((resolve, reject) => {
     renderer.process.once("error", reject);
     renderer.process.once("close", (code, signal) => {
-      closed = true;
-      uncertain = signal !== null || code !== 0;
+      state.closed = true;
+      state.uncertain = signal !== null || code !== 0;
       resolve(code ?? 125);
     });
   });
@@ -70,7 +74,10 @@ export async function runRendererStage(
       await inspectOutputTree(config, staging);
     })()
       .catch(async (error: unknown) => {
-        monitorFailure ??= error;
+        monitorFailure ??=
+          error instanceof Error
+            ? error
+            : new Error("Renderer stage monitor failed", { cause: error });
         await requestStop().catch(() => {});
       })
       .finally(() => {
@@ -80,31 +87,41 @@ export async function runRendererStage(
   const timer = setTimeout(
     () => {
       timedOut = true;
-      uncertain = true;
+      state.uncertain = true;
       void requestStop().catch(() => {});
     },
     Math.max(1, timeoutMs),
   );
   timer.unref();
+  let exitCode = 125,
+    failure: Error | undefined;
   try {
-    const exitCode = await exited;
+    exitCode = await exited;
     clearInterval(monitor);
     await monitoring;
     if (monitorFailure !== undefined) throw monitorFailure;
-    return { exitCode, timedOut, stderr };
+  } catch (error) {
+    failure =
+      error instanceof Error
+        ? error
+        : new Error("Renderer stage failed", { cause: error });
   } finally {
     clearInterval(monitor);
     clearTimeout(timer);
     await monitoring;
-    try {
-      if (!closed || uncertain || stopping) await requestStop();
-    } catch (error) {
-      throw new RendererCleanupDeferred(
-        "Renderer stage cleanup could not be verified",
-        { cause: error },
-      );
-    } finally {
-      if (!closed) renderer.process.kill("SIGKILL");
-    }
   }
+  let cleanupFailure: RendererCleanupDeferred | undefined;
+  try {
+    if (!state.closed || state.uncertain || state.stopping) await requestStop();
+  } catch (error) {
+    cleanupFailure = new RendererCleanupDeferred(
+      "Renderer stage cleanup could not be verified",
+      { cause: error },
+    );
+  } finally {
+    if (!state.closed) renderer.process.kill("SIGKILL");
+  }
+  if (cleanupFailure !== undefined) throw cleanupFailure;
+  if (failure !== undefined) throw failure;
+  return { exitCode, timedOut, stderr };
 }

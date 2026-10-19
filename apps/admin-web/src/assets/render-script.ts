@@ -425,16 +425,19 @@ export function parseJobStatus(
   const previews = record.previews.map((artifact) =>
     parseJobArtifact(artifact, expectedJobId, true),
   );
-  const stages = record.stages as BrowserJobStatus["stages"];
-  if (stages !== undefined) {
-    if (typeof stages !== "object" || stages === null || Array.isArray(stages))
+  let stages: BrowserJobStatus["stages"];
+  if (record.stages !== undefined) {
+    const value = record.stages;
+    if (typeof value !== "object" || value === null || Array.isArray(value))
       throw new Error("出力ステージの形式が不正です。");
+    const raw = value as Record<string, unknown>;
     for (const key of ["pdf", "svg"] as const) {
-      const s = stages[key];
+      const entry = raw[key];
+      if (typeof entry !== "object" || entry === null || Array.isArray(entry))
+        throw new Error("出力ステージの形式が不正です。");
+      const s = entry as Record<string, unknown>;
       if (
-        typeof s !== "object" ||
-        s === null ||
-        Array.isArray(s) ||
+        typeof s.status !== "string" ||
         ![
           "not_requested",
           "queued",
@@ -455,17 +458,20 @@ export function parseJobStatus(
       )
         throw new Error("出力ステージの形式が不正です。");
     }
+    const pdf = raw.pdf as Record<string, unknown>,
+      svg = raw.svg as Record<string, unknown>;
     if (
       !(
-        stages.pdf.sha256 === null ||
-        (typeof stages.pdf.sha256 === "string" &&
-          /^[a-f0-9]{64}$/.test(stages.pdf.sha256))
+        pdf.sha256 === null ||
+        (typeof pdf.sha256 === "string" && /^[a-f0-9]{64}$/.test(pdf.sha256))
       ) ||
-      !Number.isInteger(stages.svg.attempt) ||
-      stages.svg.attempt < 1 ||
-      stages.svg.attempt > 8
+      typeof svg.attempt !== "number" ||
+      !Number.isInteger(svg.attempt) ||
+      svg.attempt < 1 ||
+      svg.attempt > 8
     )
       throw new Error("出力ステージの形式が不正です。");
+    stages = value as NonNullable<BrowserJobStatus["stages"]>;
   }
   return {
     id: expectedJobId,
