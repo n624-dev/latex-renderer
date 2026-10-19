@@ -1,7 +1,11 @@
 import type { Browser } from "playwright";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { launchTestBrowser, newTestPage } from "../helpers/browser-engine.js";
-import { createSetupWebServer } from "../../packages/setup-web/src/index.js";
+import {
+  setupHtml,
+  setupCss,
+  setupJavaScript,
+} from "../../packages/setup-web/src/assets.js";
 
 let browser: Browser | undefined;
 beforeAll(async () => {
@@ -18,34 +22,56 @@ it.each([390, 768, 1200])(
     const page = await newTestPage(browser, {
       viewport: { width, height: 844 },
     });
-    const web = await createSetupWebServer({
-      actions: {
-        status: () => Promise.resolve({ status: "healthy" }),
-        doctor: () =>
-          Promise.resolve({
-            status: "degraded",
-            checks: [
-              {
-                id: "credential.store",
-                status: "warn",
-                message: "Fixture credential warning",
-              },
-            ],
-          }),
-        saveApiKey: () => Promise.resolve({ configured: true }),
-        removeApiKey: () => Promise.resolve({ configured: false }),
-        repair: () => Promise.resolve({ status: "healthy" }),
-        update: () => Promise.resolve({ status: "healthy" }),
-        sampleRender: () =>
-          Promise.resolve({
-            job: { status: "failed", errorMessage: "<b>Fixture failure</b>" },
-          }),
-      },
+    // Exercise the shipped UI without building unrelated client workspaces or
+    // contacting a renderer. HTTP authentication boundaries have separate tests.
+    const origin = "https://renderer.invalid";
+    await page.route("**/*", async (route) => {
+      const path = new URL(route.request().url()).pathname;
+      if (path === "/assets/setup.css") {
+        await route.fulfill({ contentType: "text/css", body: setupCss });
+        return;
+      }
+      if (path === "/assets/setup.js") {
+        await route.fulfill({
+          contentType: "text/javascript",
+          body: setupJavaScript,
+        });
+        return;
+      }
+      if (path === "/") {
+        await route.fulfill({ contentType: "text/html", body: setupHtml });
+        return;
+      }
+      const results: Record<string, unknown> = {
+        "/api/session": {
+          sessionToken: "fixture-session",
+          csrfToken: "fixture-csrf",
+        },
+        "/api/status": { status: "healthy" },
+        "/api/doctor": {
+          status: "degraded",
+          checks: [
+            {
+              id: "credential.store",
+              status: "warn",
+              message: "Fixture credential warning",
+            },
+          ],
+        },
+        "/api/sample-render": {
+          job: { status: "failed", errorMessage: "<b>Fixture failure</b>" },
+        },
+      };
+      if (!(path in results)) {
+        await route.abort();
+        return;
+      }
+      await route.fulfill({ json: { success: true, result: results[path] } });
     });
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));
     try {
-      await page.goto(web.bootstrapUrl);
+      await page.goto(`${origin}/#fixture-bootstrap`);
       await page.waitForFunction(() =>
         document
           .querySelector("#status-summary")
@@ -80,7 +106,6 @@ it.each([390, 768, 1200])(
       expect(errors).toEqual([]);
     } finally {
       await page.close();
-      await web.close();
     }
   },
 );

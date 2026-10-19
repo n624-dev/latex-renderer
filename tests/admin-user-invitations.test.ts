@@ -140,9 +140,9 @@ describe("administrator user provisioning", () => {
   });
 
   it("uses explicit provider-neutral authentication input in the Web UI", () => {
-    expect(adminScript).toContain("外部identityのsubject");
+    expect(adminScript).toContain("外部認証の利用者識別子（subject）");
     expect(adminScript).toContain("ログイン名");
-    expect(adminScript).toContain("認証情報を明示的に登録します");
+    expect(adminScript).toContain("ログインに使う認証情報を登録します");
     expect(adminScript).not.toContain('name="accessSubject"');
     const cli = readFileSync("apps/admin-cli/src/index.ts", "utf8");
     expect(cli).not.toContain("--access-subject");

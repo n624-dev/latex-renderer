@@ -407,6 +407,8 @@ describe("App render in the selected browser", () => {
     await fastTimers(page);
     state.staged = true;
     state.complete = false;
+    expect(await page.locator("#app-render-svg").isVisible()).toBe(false);
+    await page.locator("#app-render-options > summary").click();
     await page.locator("#app-files").setInputFiles(tex("staged.tex"));
     await ready(page);
     await page.locator("#app-render-svg").check();
@@ -509,6 +511,7 @@ describe("App render in the selected browser", () => {
 
   it("snapshots Project/output options, rejects duplicate submit, and preserves a new selection", async () => {
     const { page, state, errors } = await fixture();
+    await page.locator("#app-render-options > summary").click();
     let release!: () => void;
     state.sourceGate = new Promise<void>((resolve) => {
       release = resolve;
@@ -545,6 +548,7 @@ describe("App render in the selected browser", () => {
 
   it("keeps a cleared selection disabled after the submitted batch finishes", async () => {
     const { page, state, errors } = await fixture();
+    await page.locator("#app-render-options > summary").click();
     let release!: () => void;
     state.sourceGate = new Promise<void>((resolve) => {
       release = resolve;

@@ -576,7 +576,7 @@ describe("shipped admin authentication controls", () => {
         Number(canReset),
       );
       expect(await page.locator('td[data-label="認証"]').textContent()).toBe(
-        "password, oidc",
+        "パスワード, OpenID Connect",
       );
       await page.locator("#user-create").click();
       expect(await page.locator('dialog [name="password"]').count()).toBe(
