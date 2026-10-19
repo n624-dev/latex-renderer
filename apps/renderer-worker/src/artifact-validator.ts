@@ -43,7 +43,9 @@ export async function validateArtifacts(
   requireSvg = false,
   diagnosticPrefix: "" | "svg/" = "",
   timings?: ArtifactIoTimings,
-  candidateReader?: typeof readArtifactSinglePass,
+  // null selects the historical reader only for the disposable comparison.
+  candidateReader:
+    typeof readArtifactSinglePass | null = readArtifactSinglePass,
 ): Promise<ValidatedArtifact[]> {
   const scanStarted = performance.now();
   const tree = await scanOutputTree(directory, config),
@@ -55,7 +57,7 @@ export async function validateArtifacts(
     svgTotal = 0;
   for (const { file, info } of files) {
     const path = relative(directory, file),
-      size = Number(info.size);
+      size = info.size;
     const type = artifactType(path);
     if (type === undefined) continue;
     total += size;
@@ -137,7 +139,7 @@ export async function publishArtifacts(
   destination: string,
   artifacts: readonly ValidatedArtifact[],
   timings?: ArtifactIoTimings,
-  copyMode = 0,
+  copyMode = constants.COPYFILE_FICLONE | constants.COPYFILE_EXCL,
 ): Promise<void> {
   const started = performance.now();
   await mkdir(destination, { recursive: true, mode: 0o770 });
@@ -161,10 +163,7 @@ export async function inspectOutputTree(
     compileLog = tree.files.find(
       ({ file }) => relative(directory, file) === "compile.log",
     );
-  if (
-    compileLog !== undefined &&
-    Number(compileLog.info.size) > config.maxLogBytes
-  )
+  if (compileLog !== undefined && compileLog.info.size > config.maxLogBytes)
     throw new AppError("OUTPUT_LIMIT", "Renderer log exceeds limit");
   return {
     totalBytes: tree.totalBytes,
@@ -248,7 +247,7 @@ function createSvgParser(): SaxesParser<{ xmlns: true }> {
   return parser;
 }
 
-/** Benchmark candidate: parse and hash the same bytes through one descriptor.
+/** Parse and hash the same bytes through one descriptor.
  * SVG parsing is streaming; no new whole-PDF/PNG/SVG buffers are retained. */
 export async function readArtifactSinglePass(
   file: string,

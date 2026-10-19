@@ -45,6 +45,15 @@ describe.each(["light", "dark"] as const)("control layout: %s", (theme) => {
         );
         await page.goto("https://renderer.invalid/");
         const result = await page.evaluate(() => {
+          const required = <T extends Element = HTMLElement>(
+            selector: string,
+            root: ParentNode = document,
+          ): T => {
+            const element = root.querySelector<T>(selector);
+            if (!element)
+              throw new Error(`Missing layout fixture: ${selector}`);
+            return element;
+          };
           const rect = (element: Element) => element.getBoundingClientRect();
           const gaps = [
             ...document.querySelectorAll(
@@ -53,34 +62,33 @@ describe.each(["light", "dark"] as const)("control layout: %s", (theme) => {
           ].flatMap((form) => {
             const children = [...form.children];
             return children.slice(1).map((child, index) => {
-              const before = rect(children[index]!),
+              const previous = children[index];
+              if (!previous) throw new Error("Missing preceding control");
+              const before = rect(previous),
                 after = rect(child);
               return after.top >= before.bottom
                 ? after.top - before.bottom
                 : after.left - before.right;
             });
           });
-          const pdf = document.querySelector<HTMLButtonElement>("#pdf")!,
-            svg = document.querySelector<HTMLDetailsElement>("#svg")!,
+          const pdf = required<HTMLButtonElement>("#pdf"),
+            svg = required<HTMLDetailsElement>("#svg"),
             before = rect(pdf).height;
           svg.open = true;
           const heightDifference = rect(pdf).height - before;
-          const button =
-              document.querySelector<HTMLButtonElement>(".code-copy")!,
-            pre = document.querySelector("pre")!,
-            code = pre.querySelector("code")!;
+          const button = required<HTMLButtonElement>(".code-copy"),
+            pre = required<HTMLPreElement>("pre"),
+            code = required("code", pre);
           pre.scrollLeft = 200;
           const copyOutside = !pre.contains(button),
             copyBeforeCode = rect(button).bottom <= rect(code).top;
-          const dialog = document.querySelector("dialog")!;
+          const dialog = required<HTMLDialogElement>("dialog");
           dialog.showModal();
           const bounds = rect(dialog),
-            close = rect(dialog.querySelector(".dialog-close")!);
-          const hidden = getComputedStyle(
-            dialog.querySelector("[hidden]")!,
-          ).display;
+            close = rect(required(".dialog-close", dialog));
+          const hidden = getComputedStyle(required("[hidden]", dialog)).display;
           dialog.close();
-          const cell = document.querySelector("td.actions-cell")!;
+          const cell = required("td.actions-cell");
           return {
             gaps,
             heightDifference,
@@ -91,14 +99,12 @@ describe.each(["light", "dark"] as const)("control layout: %s", (theme) => {
             hidden,
             overflow: document.documentElement.scrollWidth > innerWidth,
             cellDisplay: getComputedStyle(cell).display,
-            lastRowDivider: getComputedStyle(
-              document.querySelector("tbody tr:last-child td")!,
-            ).borderBottomWidth,
+            lastRowDivider: getComputedStyle(required("tbody tr:last-child td"))
+              .borderBottomWidth,
             technicalWhitespace: getComputedStyle(
-              document.querySelector(".job-technical code")!,
+              required(".job-technical code"),
             ).whiteSpace,
-            emptyMargin: getComputedStyle(document.querySelector("#app-error")!)
-              .marginTop,
+            emptyMargin: getComputedStyle(required("#app-error")).marginTop,
           };
         });
         for (const gap of result.gaps) expect(gap).toBeGreaterThanOrEqual(8);

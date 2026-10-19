@@ -186,9 +186,10 @@ try {
             true,
             "",
             stages,
+            null,
           );
         const destination = join(root, `published-${pages}`);
-        await publishArtifacts(source, destination, artifacts, stages);
+        await publishArtifacts(source, destination, artifacts, stages, 0);
         for (const artifact of artifacts)
           assert.equal(
             createHash("sha256")

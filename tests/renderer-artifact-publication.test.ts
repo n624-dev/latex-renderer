@@ -1,9 +1,11 @@
 import {
   mkdir,
+  lstat,
   mkdtemp,
   readFile,
   readdir,
   rm,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -61,7 +63,43 @@ describe("renderer artifact publication", () => {
     expect(await directorySize(output)).toBe(
       artifacts.reduce((total, artifact) => total + artifact.size, 0),
     );
+    const original = await lstat(join(staging, "compile.log")),
+      published = await lstat(join(output, "compile.log"));
+    expect(original.nlink).toBe(1);
+    expect(published.nlink).toBe(1);
+    expect(original.ino).not.toBe(published.ino);
+    await writeFile(join(staging, "compile.log"), "changed\n");
+    expect(await readFile(join(output, "compile.log"), "utf8")).toBe(
+      "compiled\n",
+    );
+    await expect(
+      publishArtifacts(staging, output, artifacts),
+    ).rejects.toMatchObject({ code: "EEXIST" });
+    expect(await readFile(join(output, "compile.log"), "utf8")).toBe(
+      "compiled\n",
+    );
   });
+  it.skipIf(process.platform === "win32")(
+    "does not replace a symlink at the copy destination",
+    async () => {
+      const root = await mkdtemp(join(tmpdir(), "artifact-copy-link-"));
+      roots.push(root);
+      const staging = join(root, "staging"),
+        output = join(root, "output"),
+        outside = join(root, "outside");
+      await mkdir(staging);
+      await mkdir(output);
+      await writeFile(join(staging, "compile.log"), "new");
+      await writeFile(outside, "keep");
+      await symlink(outside, join(output, "compile.log"));
+      await expect(
+        publishArtifacts(staging, output, [
+          { path: "compile.log", type: "log", size: 3, sha256: "0".repeat(64) },
+        ]),
+      ).rejects.toMatchObject({ code: "EEXIST" });
+      expect(await readFile(outside, "utf8")).toBe("keep");
+    },
+  );
 });
 
 function config(storageRoot: string): WorkerConfig {
