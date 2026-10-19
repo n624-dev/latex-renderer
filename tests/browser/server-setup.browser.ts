@@ -70,6 +70,43 @@ async function fixture(mobile = false, supplied?: ServerSetupSessionHost) {
 }
 
 describe("real server-settings Web flow", () => {
+  it.each(["oidc", "cloudflare-access"] as const)(
+    "shows only applicable initial credentials for %s",
+    async (auth) => {
+      const cloudflare = auth === "cloudflare-access";
+      const review = importServerSetupReview(
+        [
+          `DEPLOYMENT_MODE=${cloudflare ? "cloudflare" : "standalone"}`,
+          `AUTH_MODE=${auth}`,
+          "PUBLIC_ORIGIN=https://renderer.example.test",
+          "RENDERER_PUBLIC_URL=https://renderer.example.test",
+          "OIDC_ISSUER=https://identity.example.test/tenant",
+          "OIDC_CLIENT_ID=fixture-renderer",
+          "CLOUDFLARE_ACCESS_ISSUER=https://fixture.cloudflareaccess.com",
+          `CLOUDFLARE_ADMIN_AUDIENCE=${"a".repeat(64)}`,
+          `CLOUDFLARE_REMOTE_MCP_AUDIENCE=${"b".repeat(64)}`,
+          "DATABASE_PATH=/var/lib/latex-renderer/renderer.sqlite3",
+          "STORAGE_ROOT=/var/lib/latex-renderer/storage",
+          `RENDERER_IMAGE=sha256:${"a".repeat(64)}`,
+          "",
+        ].join("\n"),
+      );
+      const f = await fixture(false, {
+        scope: "initial-prepared-host",
+        current: () => review,
+        preview: (candidate) => ({ candidate }),
+        apply: () => {},
+      });
+      expect(await f.page.locator("#owner-subject").isVisible()).toBe(true);
+      expect(await f.page.locator("#owner-password").isVisible()).toBe(false);
+      expect(await f.page.locator("#oidc-secret").isVisible()).toBe(
+        !cloudflare,
+      );
+      expect(await f.page.locator("#tls-key").isVisible()).toBe(!cloudflare);
+      expect(f.errors).toEqual([]);
+    },
+  );
+
   it.each(["initial-prepared-host", "ingress-prepared-host"] as const)(
     "does not expose irrelevant authentication inputs in %s",
     async (scope) => {
