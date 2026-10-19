@@ -937,6 +937,7 @@ function installProjects(fetcher: Fetcher) {
             status: string;
             createdAt: string;
             outputs?: string[];
+            stages?: Job["stages"];
           }>;
           jobCount: number;
           jobsHasMore: boolean;

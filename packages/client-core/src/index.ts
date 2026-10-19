@@ -125,6 +125,7 @@ export interface DownloadArtifactsResult {
 export interface ClientCoreOptions {
   onEvent?: (event: ClientCoreEvent) => void;
   outputs?: readonly RenderOutput[];
+  pdfOnly?: boolean;
 }
 
 export interface UploadedSource {
@@ -142,7 +143,6 @@ export interface RenderOptions extends ClientCoreOptions {
   pollTimeoutMs?: number;
   now?: () => number;
   sleep?: (milliseconds: number) => Promise<void>;
-  pdfOnly?: boolean;
 }
 
 export async function renderProject(

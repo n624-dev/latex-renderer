@@ -372,7 +372,8 @@ function outputStageLabel(
   job:
     | {
         status: string;
-        stages?: { pdf: { status: string }; svg: { status: string } };
+        stages?:
+          { pdf: { status: string }; svg: { status: string } } | undefined;
       }
     | undefined,
   fallback: string,

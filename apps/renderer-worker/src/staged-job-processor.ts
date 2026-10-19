@@ -5,7 +5,6 @@ import {
   copyFile,
   mkdir,
   open,
-  readFile,
   rename,
   rm,
   writeFile,

@@ -22,15 +22,20 @@ afterEach(async () => {
 describe("optional SVG artifacts", () => {
   it("defaults to PDF and accepts an explicit PDF plus SVG request", () => {
     const schema = createRenderTicketRequestSchema();
-    expect(
-      schema.parse({ sourceId: `source_${"a".repeat(32)}` }).outputs,
-    ).toEqual(["pdf"]);
-    expect(
-      schema.parse({
-        sourceId: `source_${"a".repeat(32)}`,
-        outputs: ["pdf", "svg"],
-      }).outputs,
-    ).toEqual(["pdf", "svg"]);
+    const defaultRequest = schema.parse({
+      sourceId: `source_${"a".repeat(32)}`,
+    });
+    expect("outputs" in defaultRequest && defaultRequest.outputs).toEqual([
+      "pdf",
+    ]);
+    const svgRequest = schema.parse({
+      sourceId: `source_${"a".repeat(32)}`,
+      outputs: ["pdf", "svg"],
+    });
+    expect("outputs" in svgRequest && svgRequest.outputs).toEqual([
+      "pdf",
+      "svg",
+    ]);
     expect(
       schema.safeParse({
         sourceId: `source_${"a".repeat(32)}`,
