@@ -11,6 +11,7 @@ import {
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { spawn } from "node:child_process";
+import { Script } from "node:vm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ServerInstallStore } from "../deploy/scripts/server-install-store.mjs";
 import {
@@ -30,6 +31,7 @@ import {
   type ServerSetupReview,
 } from "../packages/server-setup-core/src/index.mjs";
 import { createSetupOwner } from "../deploy/scripts/server-setup-owner.mjs";
+import { inspectInitialSetupDatabase } from "../deploy/scripts/server-setup-initial-host.mjs";
 import { runServerInitialCui } from "../deploy/scripts/server-setup-initial-cui.mjs";
 import { ingressTlsFixture } from "./fixtures/server-ingress.js";
 
@@ -53,6 +55,34 @@ function model(): ServerSetupReview {
       "",
     ].join("\n"),
   );
+}
+async function initialOwnerState(
+  store: ServerInstallStore,
+  databasePath: string,
+) {
+  // Exercise the actual long-lived host closure without root preparation or
+  // real service operations. Raw source avoids Vitest's rewritten import names.
+  const source = await readFile(
+      new URL(
+        "../deploy/scripts/server-setup-initial-host.mjs",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+    start = source.indexOf("  async function pendingOwner(id) {"),
+    end = source.indexOf("  const adapter = {", start);
+  if (start < 0 || end < start)
+    throw new Error("Missing initial owner closure");
+  return new Script(
+    `(function () { ${source.slice(start, end)}; return pendingOwner; })()`,
+  ).runInNewContext({
+    store,
+    databasePath,
+    rendererUid: process.getuid?.() ?? 0,
+    gid: process.getgid?.() ?? 0,
+    existingJournal: await store.journal(),
+    inspectInitialSetupDatabase,
+  }) as (id: string) => Promise<"none" | "ours" | "foreign">;
 }
 async function fixture(kind: "initial" | "ingress" = "initial") {
   const root = await mkdtemp(join(process.cwd(), ".server-install-fixture-"));
@@ -121,6 +151,115 @@ async function fixture(kind: "initial" | "ingress" = "initial") {
 }
 
 describe("durable prepared-host installation", () => {
+  it("recovers and resubmits an empty owner DB in the same frontend after ENOSPC", async () => {
+    const f = await fixture(),
+      databasePath = join(f.root, "empty-owner.sqlite3"),
+      owner = await initialOwnerState(f.store, databasePath);
+    f.host.ownerState = owner;
+    f.host.createOwner = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        await writeFile(databasePath, "");
+        await chmod(databasePath, 0o640);
+        throw Object.assign(new Error("full before owner marker"), {
+          code: "ENOSPC",
+        });
+      })
+      .mockImplementation((id: string) => {
+        // Only durable owner proof is needed here; no live credentials or
+        // services. Real owner provisioning has separate integration coverage.
+        const db = new DatabaseSync(databasePath);
+        try {
+          db.exec(
+            "CREATE TABLE server_setup_bootstrap(id TEXT); CREATE TABLE users(id TEXT, role TEXT); CREATE TABLE audit_logs(actor_id TEXT, action TEXT, result TEXT, target_id TEXT);",
+          );
+          db.prepare("INSERT INTO server_setup_bootstrap VALUES (?)").run(id);
+          db.exec("INSERT INTO users VALUES ('owner', 'owner');");
+          db.prepare(
+            "INSERT INTO audit_logs VALUES (?, 'user.created', 'success', 'owner')",
+          ).run(`server-setup:${id}`);
+        } finally {
+          db.close();
+        }
+      });
+    await expect(
+      applyInstallation(
+        f.store,
+        f.host,
+        await reviewInstallation(f.store, f.host, model()),
+        {},
+      ),
+    ).rejects.toThrow("RECOVERY_REQUIRED");
+    const journal = await f.store.journal(),
+      before = await lstat(databasePath);
+    expect(journal?.phase).toBe("pending");
+    expect(await recoverInstallation(f.store, f.host)).toEqual({
+      recovered: true,
+      rolledBack: true,
+      awaitingCredentials: true,
+    });
+    expect(await f.store.journal()).toEqual(journal);
+    expect(await lstat(databasePath)).toMatchObject({
+      ino: before.ino,
+      size: 0,
+      mode: before.mode,
+      mtimeMs: before.mtimeMs,
+    });
+    await expect(
+      applyInstallation(
+        f.store,
+        f.host,
+        await reviewInstallation(f.store, f.host, model()),
+        {},
+      ),
+    ).resolves.toEqual({ installed: true });
+    expect(f.host.createOwner).toHaveBeenCalledTimes(2);
+    expect(await f.store.journal()).toBeNull();
+    expect(f.active.size).toBe(2);
+  });
+  it("does not reuse a former pending journal after it is removed or replaced", async () => {
+    const f = await fixture(),
+      databasePath = join(f.root, "empty-owner.sqlite3"),
+      id = "a".repeat(48),
+      pending = validateInstallationJournal({
+        format: 1,
+        kind: "initial",
+        phase: "pending",
+        id,
+        before: {},
+        after: {},
+        units: [],
+      });
+    await writeFile(databasePath, "");
+    await chmod(databasePath, 0o640);
+    await f.store.saveJournal(pending);
+    const owner = await initialOwnerState(f.store, databasePath);
+    expect(await owner(id)).toBe("none");
+    for (const journal of [
+      null,
+      { ...pending, id: "b".repeat(48) },
+      { ...pending, phase: "owner-ready" as const },
+      { ...pending, kind: "ingress" as const },
+    ]) {
+      if (journal) await f.store.saveJournal(journal);
+      else await f.store.clear();
+      await expect(owner(id)).rejects.toThrow("matching pending transaction");
+      expect((await lstat(databasePath)).size).toBe(0);
+    }
+    await f.store.saveJournal(pending);
+    expect(await owner(id)).toBe("none");
+    await f.store.write(
+      {
+        path: join(f.root, "journal.json"),
+        mode: 0o600,
+        gid: process.getuid?.() ?? 0,
+        maximum: 3 * 1024 ** 2,
+      },
+      "{",
+    );
+    await expect(owner(id)).rejects.toThrow();
+    expect((await lstat(databasePath)).size).toBe(0);
+  });
   it("fails closed on unknown/missing unit state and treats transitions as active", () => {
     for (const state of ["active", "activating", "deactivating", "reloading"])
       expect(installationUnitActive("loaded", state)).toBe(true);
