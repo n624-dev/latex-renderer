@@ -1302,6 +1302,15 @@ function installRenderWorkflow(csrfToken: string): void {
       actions.className = "actions-cell";
       name.textContent = task.label;
       state.textContent = task.message ?? jobStatusLabel(task.state);
+      if (task.job?.stages) {
+        const { pdf, svg } = task.job.stages,
+          partial =
+            pdf.status === "succeeded" &&
+            ["failed", "timeout", "canceled"].includes(svg.status);
+        state.textContent =
+          (partial ? "部分成功 — " : "") +
+          `PDF: ${jobStatusLabel(pdf.status)} / SVG: ${jobStatusLabel(svg.status)}`;
+      }
       job.textContent = task.jobId ?? "—";
       if (
         !TERMINAL_JOB_STATUSES.has(task.state) &&
@@ -1320,6 +1329,8 @@ function installRenderWorkflow(csrfToken: string): void {
           ["result.pdf", "PDF"],
           ["compile.log", "ログ"],
           ["errors.json", "エラー"],
+          ["svg/compile.log", "SVGログ"],
+          ["svg/errors.json", "SVGエラー"],
         ] as const) {
           const artifact = task.job.artifacts.find(
             (item) => item.relativePath === path,

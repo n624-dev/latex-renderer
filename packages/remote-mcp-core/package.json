@@ -17,6 +17,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@latex-renderer/contracts": "workspace:*",
     "@latex-renderer/database": "workspace:*",
     "@latex-renderer/shared": "workspace:*",
     "@latex-renderer/zip-validation": "workspace:*",

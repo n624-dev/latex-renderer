@@ -2272,6 +2272,9 @@ describe("Remote MCP HTTP server", () => {
       ["errors", "errors.json", Buffer.from('{"errors":[]}')],
       ["dependencies", "dependencies.json", Buffer.from('{"files":[]}')],
       ["svg_manifest", "svg/manifest.json", Buffer.from('{"objects":[]}')],
+      ["log", "svg/compile.log", Buffer.from("SVG-only diagnostics\n")],
+      ["errors", "svg/errors.json", Buffer.from('{"errors":[]}')],
+      ["dependencies", "svg/dependencies.json", Buffer.from('{"inputs":[]}')],
       ["svg", "svg/objects/math-000001.svg", Buffer.from('<svg id="math"/>')],
       ["svg", "svg/objects/tikz-000002.svg", Buffer.from('<svg id="tikz"/>')],
     ] as const;
@@ -2296,7 +2299,7 @@ describe("Remote MCP HTTP server", () => {
         resourceUri: string;
         mimeType: string;
       }>;
-    expect(artifacts).toHaveLength(7);
+    expect(artifacts).toHaveLength(10);
     for (const [index, artifact] of artifacts.entries()) {
       const response = await mcpRequest(fixture.app, token, {
           jsonrpc: "2.0",

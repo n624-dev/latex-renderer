@@ -442,6 +442,9 @@ importers:
 
   packages/remote-mcp-core:
     dependencies:
+      '@latex-renderer/contracts':
+        specifier: workspace:*
+        version: link:../contracts
       '@latex-renderer/database':
         specifier: workspace:*
         version: link:../database

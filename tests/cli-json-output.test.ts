@@ -67,6 +67,14 @@ describe("CLI structured output", () => {
       error: { code: "CLI_USAGE_ERROR", status: 400 },
     });
   });
+  it("advertises early PDF download and independent SVG retry", () => {
+    const help = run(["jobs", "download", "--help"]),
+      retry = run(["jobs", "retry-svg", "--help"]);
+    expect(help.status).toBe(0);
+    expect(help.stdout).toContain("--pdf-only");
+    expect(retry.status).toBe(0);
+    expect(retry.stdout).toContain("--output <directory>");
+  });
 
   it("returns a secret-free doctor report with a diagnostic exit code", async () => {
     const root = await mkdtemp(join(tmpdir(), "latex-cli-doctor-test-"));

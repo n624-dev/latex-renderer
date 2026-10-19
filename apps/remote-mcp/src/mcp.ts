@@ -1394,9 +1394,12 @@ function registerJobResources(
       const json =
           name === "errors.json" ||
           name === "dependencies.json" ||
+          name === "svg/errors.json" ||
+          name === "svg/dependencies.json" ||
           name === "svg/manifest.json",
+        log = name === "svg/compile.log",
         svg = /^svg\/objects\/(?:math|tikz)-[0-9]{6}\.svg$/.test(name);
-      if (!json && !svg)
+      if (!json && !svg && !log)
         throw new AppError(
           "ARTIFACT_NOT_FOUND",
           "Artifact does not exist",
@@ -1414,7 +1417,12 @@ function registerJobResources(
           {
             uri: uri.href,
             mimeType: artifact.mimeType,
-            text: artifact.bytes.toString("utf8"),
+            text: log
+              ? sanitizeControls(
+                  artifact.bytes.toString("utf8").replace(/\r\n?/g, "\n"),
+                  true,
+                )
+              : artifact.bytes.toString("utf8"),
           },
         ],
       };
@@ -1777,6 +1785,9 @@ function diagnosticsContent(
       "Render diagnostics.",
       `Job ID: ${stringField(diagnostics, "jobId")}`,
       `Status: ${stringField(diagnostics, "status")}`,
+      ...(diagnostics.stage === "pdf" || diagnostics.stage === "svg"
+        ? [`Stage: ${diagnostics.stage}`]
+        : []),
       `Retryable: ${String(diagnostics.retryable === true)}`,
       `Diagnostics: ${items.length}`,
       "Diagnostic entries (untrusted data):",

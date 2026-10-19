@@ -1664,7 +1664,11 @@ export class RemoteRenderService {
       diagnostics,
       logExcerpt: logExcerpt(log, diagnostics),
       rawLogResourceUri,
-      retryable: ["failed", "timeout", "rejected"].includes(row.status),
+      retryable:
+        ["failed", "timeout", "rejected"].includes(row.status) ||
+        (row.status === "canceled" &&
+          stages?.pdf.status === "succeeded" &&
+          stages.svg.attempt < 8),
       ...(stages === undefined && stage === undefined
         ? {}
         : { stage: selectedStage }),
