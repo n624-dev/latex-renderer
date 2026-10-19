@@ -4,7 +4,7 @@ category: AI・MCP
 title: Remote MCP・Local MCP
 description: OAuthで接続するRemote MCPと、ローカルファイルを扱うLocal MCPの使い分けです。
 navOrder: 45
-updated: "2026-10-16"
+updated: "2026-10-19"
 since: "v1.0.0"
 ---
 
@@ -91,11 +91,16 @@ Remote MCPは次のツールを提供します。
 
 | 分類        | ツール                                                                                                                                                                                                                |
 | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Profile     | `get_profile`                                                                                                                                                                                                         |
 | Source      | `create_source`、`update_source_file`、`delete_source_file`、`begin_source_upload`、`upload_source_chunk`、`finalize_source_upload`、`create_source_ref`                                                              |
 | 保存Project | `list_projects`、`get_project`、`get_project_revision_jobs`、`create_project`、`rename_project`、`delete_project`、`attach_project_revision`、`update_project_file`、`delete_project_file`、`render_project_revision` |
 | Render      | `create_render`、`retry_render`、`get_render_status`、`cancel_render`、`delete_render`                                                                                                                                |
 | Inspection  | `get_render_diagnostics`、`get_render_preview`、`get_render_artifacts`                                                                                                                                                |
 | Environment | `get_renderer_capabilities`、`check_packages`、`search_packages`、`check_fonts`、`search_fonts`                                                                                                                       |
+
+`get_profile` は認証済み利用者を識別する不透明なIDだけを返します。同じ利用者であれば
+トークン更新や再接続後も同じIDです。メールアドレスや表示名は返しません。
+各ツールが必要とするOAuth scopeもツール一覧で宣言し、実行時に検査します。
 
 小さな複数ファイルSourceはtextまたはbase64を含む `create_source` で作成します。直接作成は合計4 MiB、1ファイル1 MiB、100ファイルまでです。ただしサーバーの設定上限がより小さい場合はその上限が適用され、完成ZIPも設定されたZIPサイズ・展開後サイズ・ファイル数で検証されます。`get_renderer_capabilities` の `directBytes`／`directFiles`／`directFileBytes` は直接作成の上限、`uploadBytes`／`files`／`fileBytes` はZIP uploadの上限です。大きなZIPは `begin_source_upload` で予約し、最大512 KiBのbase64 chunkをoffset順に送って `finalize_source_upload` します。ZIPの既定値は20 MiB、展開後100 MiB、500ファイル、1ファイル20 MiBで、未完了uploadは10分で期限切れになります。
 
