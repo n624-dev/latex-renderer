@@ -75,7 +75,7 @@ it.each([390, 768, 1200])(
       await page.waitForFunction(() =>
         document
           .querySelector("#status-summary")
-          ?.textContent?.includes("要確認"),
+          ?.textContent.includes("要確認"),
       );
       expect(await page.locator("#status").isVisible()).toBe(false);
       expect(await page.locator("#status-summary").textContent()).toContain(
@@ -86,7 +86,7 @@ it.each([390, 768, 1200])(
       await page.waitForFunction(() =>
         document
           .querySelector("#result-summary")
-          ?.textContent?.includes("Fixture failure"),
+          ?.textContent.includes("Fixture failure"),
       );
       expect(await page.locator("#result-summary").textContent()).toContain(
         "失敗",

@@ -230,11 +230,13 @@ class DocsRenderer extends Renderer {
     // A deliberately small Markdown-only disclosure syntax. Raw HTML remains
     // escaped; titles and nested content use the existing safe renderers.
     const first = tokens[0];
+    const firstText: unknown =
+      first?.type === "paragraph" ? first.text : undefined;
     if (
-      first?.type === "paragraph" &&
-      /^\[!DETAILS\] [^\n]+$/.test(first.text)
+      typeof firstText === "string" &&
+      /^\[!DETAILS\] [^\n]+$/.test(firstText)
     ) {
-      return `<details class="docs-details"><summary>${escapeHtml(first.text.slice(11))}</summary>${this.parser.parse(tokens.slice(1))}</details>\n`;
+      return `<details class="docs-details"><summary>${escapeHtml(firstText.slice(11))}</summary>${this.parser.parse(tokens.slice(1))}</details>\n`;
     }
     const rendered = this.parser.parse(tokens);
     const match = rendered.match(/^<p>\[!(NOTE|WARNING)\]\s*/);
