@@ -109,6 +109,10 @@ export function planRenderMemory(
         Math.ceil((record.peak + RESOURCE_RESERVE) / QUANTUM) * QUANTUM,
       )
     : RENDER_MEMORY_MAX;
+  const reserve = Math.max(
+    RESOURCE_RESERVE,
+    (configuredMinimum ?? 0) - RENDER_MEMORY_MAX,
+  );
   return {
     key,
     limit,
@@ -117,7 +121,7 @@ export function planRenderMemory(
     minimum:
       configuredMinimum === undefined
         ? undefined
-        : Math.min(configuredMinimum, limit + RESOURCE_RESERVE),
+        : Math.min(configuredMinimum, limit + reserve),
     estimatedPeak: record ? record.peak : null,
   };
 }

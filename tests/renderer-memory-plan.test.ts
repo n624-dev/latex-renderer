@@ -36,6 +36,17 @@ describe("bounded, owner/input/Runtime-specific memory planning", () => {
       minimum: 832 * MIB,
       estimatedPeak: null,
     });
+    expect(planRenderMemory(db, candidate, image, 2048 * MIB).minimum).toBe(
+      2048 * MIB,
+    );
+  });
+  it("preserves an operator's larger reserve when selecting a smaller sandbox", () => {
+    const { db, key } = fixture();
+    rememberRenderMemory(db, key, 191 * MIB, true);
+    expect(planRenderMemory(db, candidate, image, 2048 * MIB)).toMatchObject({
+      limit: 320 * MIB,
+      minimum: 1344 * MIB,
+    });
   });
   it.each([
     [191, 320, 448],
