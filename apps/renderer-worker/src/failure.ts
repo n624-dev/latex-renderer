@@ -14,6 +14,54 @@ export async function recordFailure(
   status: "rejected" | "failed",
 ): Promise<void> {
   const jobId = job.id;
+  /* eslint-disable no-control-regex -- strip terminal controls from hostile parser errors. */
+  const controlCharacters =
+    /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\u009b]/g;
+  /* eslint-enable no-control-regex */
+  const safeMessage = message.replace(controlCharacters, "");
+  // A later stage must never publish a generic failure over an immutable PDF
+  // generation (a retry's lease number may equal the PDF storage generation).
+  if (
+    database.outputStages.checkpoint(jobId)?.pdf_status === "succeeded" ||
+    database.artifacts.hasPublishedPdf(jobId)
+  ) {
+    database.transaction(() => {
+      const current = database.jobs.get(jobId);
+      if (current === undefined) return;
+      if (current.cancel_requested_at !== null) {
+        database.worker.markCanceled(
+          jobId,
+          config.workerId,
+          job.lease_generation,
+          nowIso(),
+        );
+        return;
+      }
+      if (
+        database.worker.finishFailure(
+          jobId,
+          status,
+          errorCode,
+          safeMessage.slice(0, 16384),
+          nowIso(),
+          current.output_size ?? 0,
+          config.workerId,
+          job.lease_generation,
+        ) !== 1
+      )
+        return;
+      database.audit({
+        actorType: "system",
+        actorId: config.workerId,
+        action: "render.svg.failed",
+        targetType: "job",
+        targetId: jobId,
+        result: status,
+        metadata: { code: errorCode },
+      });
+    });
+    return;
+  }
   const root = join(config.storageRoot, "jobs", jobId),
     failureRoot = join(root, "attempts", `${job.lease_generation}-failure`),
     staging = join(failureRoot, "staging"),
@@ -36,11 +84,6 @@ export async function recordFailure(
     // do not fall back to a world-writable staging directory on failure paths.
     await mkdir(staging, { recursive: true, mode: 0o770 });
     await chmod(staging, 0o770);
-    /* eslint-disable no-control-regex -- strip terminal controls from hostile parser errors. */
-    const controlCharacters =
-      /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\u009b]/g;
-    /* eslint-enable no-control-regex */
-    const safeMessage = message.replace(controlCharacters, "");
     await writeFile(join(staging, "compile.log"), `${safeMessage}\n`, {
       mode: 0o660,
     });

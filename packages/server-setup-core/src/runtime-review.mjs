@@ -34,6 +34,15 @@ export const SERVER_RUNTIME_LIMITS = Object.freeze({
     420,
     86400,
   ]),
+  minimumAvailableMemoryBytes: Object.freeze([
+    "RENDERER_MIN_AVAILABLE_MEMORY_BYTES",
+    1152 * 1024 ** 2,
+  ]),
+  admissionWaitSeconds: Object.freeze([
+    "RENDERER_ADMISSION_WAIT_SECONDS",
+    900,
+    86400,
+  ]),
 });
 
 function path(value, label) {
@@ -78,12 +87,16 @@ export function validateServerRuntimeReview(input) {
     Object.keys(SERVER_RUNTIME_LIMITS),
   );
   const limits = {};
-  for (const [name, [, , maximum = Number.MAX_SAFE_INTEGER]] of Object.entries(
-    SERVER_RUNTIME_LIMITS,
-  )) {
-    const value = source[name];
+  for (const [
+    name,
+    [, fallback, maximum = Number.MAX_SAFE_INTEGER],
+  ] of Object.entries(SERVER_RUNTIME_LIMITS)) {
+    const compatibleDefault =
+      ["minimumAvailableMemoryBytes", "admissionWaitSeconds"].includes(name) &&
+      !Object.hasOwn(source, name);
+    const value = compatibleDefault ? fallback : source[name];
     if (
-      !Object.hasOwn(source, name) ||
+      (!Object.hasOwn(source, name) && !compatibleDefault) ||
       !Number.isSafeInteger(value) ||
       value < 1 ||
       value > maximum

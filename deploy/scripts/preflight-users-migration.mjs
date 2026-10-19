@@ -90,7 +90,7 @@ function assertSchema(db) {
     undefined
   )
     throw new Error("Migration version 4 is absent");
-  for (const version of [5, 6, 17, 18, 19, 20]) {
+  for (const version of [5, 6, 17, 18, 19, 20, 21]) {
     if (
       db
         .prepare("SELECT 1 FROM schema_migrations WHERE version=?")
@@ -160,6 +160,18 @@ function assertSchema(db) {
   }
   if (db.prepare("PRAGMA integrity_check").get()?.integrity_check !== "ok")
     throw new Error("SQLite integrity_check failed");
+  for (const [type, name] of [
+    ["table", "job_output_stages"],
+    ["trigger", "output_stages_terminal"],
+    ["trigger", "output_stages_recover"],
+  ]) {
+    if (
+      !db
+        .prepare("SELECT 1 FROM sqlite_schema WHERE type=? AND name=?")
+        .get(type, name)
+    )
+      throw new Error(`Output stage ${type} ${name} is absent`);
+  }
   if (db.prepare("PRAGMA foreign_key_check").all().length !== 0)
     throw new Error("SQLite foreign_key_check failed");
 }

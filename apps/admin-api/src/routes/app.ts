@@ -60,9 +60,12 @@ export function createAppV1Router(deps: AdminDependencies): Hono {
         cursor: c.req.query("cursor"),
         limit,
       });
+    const stages = deps.database.outputStages.publicStates(
+      page.items.map((job) => job.id),
+    );
     return c.json({
       ...page,
-      items: page.items.map((row) => jobSummary(deps, row)),
+      items: page.items.map((row) => jobSummary(deps, row, stages)),
     });
   });
   router.get("/jobs/:id", async (c) => {
@@ -112,6 +115,15 @@ export function createAppV1Router(deps: AdminDependencies): Hono {
       id = parse(jobId, c.req.param("id"));
     assertOwnedJob(deps, actor, id);
     return c.json(jobs.cancel(actor, id), 202);
+  });
+  router.post("/jobs/:id/retry-svg", async (c) => {
+    const actor = await requireAppActor(deps, c),
+      id = parse(jobId, c.req.param("id")),
+      key = idempotencyKey(c.req.header("Idempotency-Key"));
+    assertOwnedJob(deps, actor, id);
+    const retried = await jobs.retrySvg(actor, id, key),
+      access = await jobs.issueAccessTicket(actor, retried.id);
+    return c.json(access, retried.reused ? 200 : 202);
   });
   router.post("/jobs/:id/retry", async (c) => {
     const actor = await requireAppActor(deps, c),
@@ -381,7 +393,15 @@ function assertOwnedJob(deps: AdminDependencies, actor: AppActor, id: string) {
   return row;
 }
 
-function jobSummary(deps: AdminDependencies, row: JobRow | OwnedJobListRow) {
+function jobSummary(
+  deps: AdminDependencies,
+  row: JobRow | OwnedJobListRow,
+  states?: ReadonlyMap<string, import("@latex-renderer/contracts").JobStages>,
+) {
+  const stages =
+    states === undefined
+      ? deps.database.outputStages.publicState(row.id)
+      : states.get(row.id);
   const joined = "project_name" in row,
     revision =
       !joined && row.project_revision_id
@@ -411,6 +431,7 @@ function jobSummary(deps: AdminDependencies, row: JobRow | OwnedJobListRow) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     errorCode: row.error_code,
+    ...(stages === undefined ? {} : { stages }),
   };
 }
 

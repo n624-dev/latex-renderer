@@ -126,6 +126,22 @@ function escape(value: unknown): string {
     .replaceAll("'", "&#39;");
 }
 
+function jobStatusLabel(status: string, stages: unknown): string {
+  if (typeof stages === "object" && stages !== null) {
+    const s = stages as {
+      pdf?: { status?: unknown };
+      svg?: { status?: unknown };
+    };
+    if (
+      s.pdf?.status === "succeeded" &&
+      typeof s.svg?.status === "string" &&
+      ["failed", "timeout", "canceled"].includes(s.svg.status)
+    )
+      return `部分成功（PDF成功・SVG${statusLabel(s.svg.status)}）`;
+  }
+  return statusLabel(status);
+}
+
 function statusLabel(value: string): string {
   return (
     {
@@ -138,6 +154,8 @@ function statusLabel(value: string): string {
       failed: "変換失敗",
       timeout: "時間切れ",
       canceled: "中止",
+      not_requested: "未指定",
+      skipped: "未実行",
       rejected: "受付不可",
       deleting: "削除中",
       deleted: "削除済み",
@@ -380,6 +398,14 @@ function renderJobResult(
     actions = document.createElement("div");
   heading.textContent = title;
   state.textContent = `${statusLabel(job.status)}${job.status === "queued" && job.errorCode === "HOST_RESOURCE_WAIT" ? " — サーバー資源の空きを待っています" : ""}${connection === "connected" ? "" : " — 接続が切れました。再接続しています…"}`;
+  if (job.stages) {
+    const partial =
+      job.stages.pdf.status === "succeeded" &&
+      ["failed", "timeout", "canceled", "skipped"].includes(
+        job.stages.svg.status,
+      );
+    state.textContent = `${partial ? "部分成功 — " : ""}PDF: ${statusLabel(job.stages.pdf.status)} / SVG: ${statusLabel(job.stages.svg.status)}${job.status === "queued" && job.errorCode === "HOST_RESOURCE_WAIT" ? " — サーバー資源の空きを待っています" : ""}${connection === "connected" ? "" : " — 再接続中"}`;
+  }
   actions.className = "actions";
   const firstPreview = job.previews
     .filter((artifact) =>
@@ -395,10 +421,42 @@ function renderJobResult(
     ...(firstPreview ? [[firstPreview, "プレビュー"] as const] : []),
     ["compile.log", "ログ"],
     ["errors.json", "エラー詳細"],
+    ["svg/compile.log", "SVGログ"],
+    ["svg/errors.json", "SVGエラー詳細"],
   ];
   for (const [path, label] of links) {
     const button = artifactButton(fetcher, tracker, job, path, label);
     if (button) actions.append(button);
+  }
+  if (
+    job.stages?.pdf.status === "succeeded" &&
+    ["failed", "timeout", "canceled"].includes(job.stages.svg.status) &&
+    ["failed", "timeout", "canceled"].includes(job.status) &&
+    job.stages.svg.attempt < 8 &&
+    job.retentionExpiresAt !== null &&
+    Date.parse(job.retentionExpiresAt) > Date.now()
+  ) {
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.textContent = "SVGだけ再試行";
+    retry.className = "secondary";
+    const key = crypto.randomUUID();
+    retry.onclick = () => {
+      retry.disabled = true;
+      void json(
+        fetcher,
+        `/app/api/v1/jobs/${encodeURIComponent(job.id)}/retry-svg`,
+        { method: "POST", headers: { "Idempotency-Key": key }, body: "{}" },
+      )
+        .then((value) =>
+          followJob(fetcher, job.id, container, title, parseRender(value)),
+        )
+        .catch((error: unknown) => {
+          retry.disabled = false;
+          showError(error);
+        });
+    };
+    actions.append(retry);
   }
   const svgArtifacts = job.artifacts.filter(
     (artifact) => artifact.type === "svg" || artifact.type === "svg_manifest",
@@ -497,7 +555,7 @@ async function loadJobs(fetcher: Fetcher, container: HTMLElement, limit = 50) {
     container.innerHTML = `<div class="table-wrap"><table><thead><tr><th>文書</th><th>プロジェクト</th><th>状態</th><th>日時</th><th></th></tr></thead><tbody>${items
       .map(
         (item) =>
-          `<tr><td>${escape(item.documentName)}</td><td>${escape(item.projectName ?? "—")}</td><td>${escape(statusLabel(String(item.status)))}</td><td>${escape(new Date(String(item.createdAt)).toLocaleString("ja-JP"))}</td><td><a class="button secondary" href="/app/jobs/${encodeURIComponent(String(item.id))}/">結果</a></td></tr>`,
+          `<tr><td>${escape(item.documentName)}</td><td>${escape(item.projectName ?? "—")}</td><td>${escape(jobStatusLabel(String(item.status), item.stages))}</td><td>${escape(new Date(String(item.createdAt)).toLocaleString("ja-JP"))}</td><td><a class="button secondary" href="/app/jobs/${encodeURIComponent(String(item.id))}/">結果</a></td></tr>`,
       )
       .join(
         "",
@@ -909,7 +967,7 @@ function installProjects(fetcher: Fetcher) {
         project.revisions
           .map(
             (revision) =>
-              `<section><div class="page-heading"><div><h2>Revision ${revision.revisionNumber}: ${escape(revision.displayName)}</h2><p>${escape(revision.originalFilename)}・${escape(new Date(revision.createdAt).toLocaleString("ja-JP"))}</p></div><label>出力形式<select id="outputs-${escape(revision.id)}"><option value="">初回の設定</option><option value="pdf">PDF</option><option value="svg">PDF＋SVG</option></select></label><button type="button" class="secondary" data-rerender="${escape(revision.id)}">もう一度変換</button></div><ul>${revision.jobs.map((job) => `<li>${escape(statusLabel(job.status))}・${escape((job.outputs ?? []).join("＋").toUpperCase())} <a href="/app/jobs/${encodeURIComponent(job.id)}/">${escape(new Date(job.createdAt).toLocaleString("ja-JP"))}</a></li>`).join("") || "<li>変換履歴はありません。</li>"}</ul>${revision.jobCount > revision.jobs.length ? `<p class="muted">Job ${revision.jobs.length} / ${revision.jobCount}件を表示中（詳細APIのcursorで続きへ進めます）。</p>` : ""}</section>`,
+              `<section><div class="page-heading"><div><h2>Revision ${revision.revisionNumber}: ${escape(revision.displayName)}</h2><p>${escape(revision.originalFilename)}・${escape(new Date(revision.createdAt).toLocaleString("ja-JP"))}</p></div><label>出力形式<select id="outputs-${escape(revision.id)}"><option value="">初回の設定</option><option value="pdf">PDF</option><option value="svg">PDF＋SVG</option></select></label><button type="button" class="secondary" data-rerender="${escape(revision.id)}">もう一度変換</button></div><ul>${revision.jobs.map((job) => `<li>${escape(jobStatusLabel(job.status, job.stages))}・${escape((job.outputs ?? []).join("＋").toUpperCase())} <a href="/app/jobs/${encodeURIComponent(job.id)}/">${escape(new Date(job.createdAt).toLocaleString("ja-JP"))}</a></li>`).join("") || "<li>変換履歴はありません。</li>"}</ul>${revision.jobCount > revision.jobs.length ? `<p class="muted">Job ${revision.jobs.length} / ${revision.jobCount}件を表示中（詳細APIのcursorで続きへ進めます）。</p>` : ""}</section>`,
           )
           .join("") || "<section>改訂はありません。</section>"
       }${project.revisionsHasMore ? '<div class="actions"><button type="button" class="secondary" id="app-revisions-next">次の改訂ページ</button></div>' : ""}`;
@@ -1094,6 +1152,7 @@ export const appScript = `
   const showError = ${showError.toString()};
   const escape = ${escape.toString()};
   const statusLabel = ${statusLabel.toString()};
+  const jobStatusLabel = ${jobStatusLabel.toString()};
   const establishSession = ${establishSession.toString()};
   const createSource = ${createSource.toString()};
   const parseRender = ${parseRender.toString()};

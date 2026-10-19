@@ -25,6 +25,7 @@ import type {
 } from "@latex-renderer/database";
 import {
   ProjectOperations,
+  SvgRetryOperations,
   artifactStoragePath,
   protectArtifactDownloadLeases,
   ARTIFACT_DOWNLOAD_LEASE_MS,
@@ -710,6 +711,7 @@ export interface RemoteJobSummary {
     resourceUri: string;
   }>;
   webResultUrl: string;
+  stages?: import("@latex-renderer/contracts").JobStages;
 }
 
 export interface RemoteRenderDiagnostic {
@@ -729,6 +731,7 @@ export interface RemoteRenderDiagnostics {
   logExcerpt: string;
   rawLogResourceUri: string | null;
   retryable: boolean;
+  stage?: "pdf" | "svg";
 }
 
 export interface RemoteArtifactContent {
@@ -1550,6 +1553,33 @@ export class RemoteRenderService {
     return this.summarize(retry);
   }
 
+  retrySvgRender(
+    identity: RemoteMcpIdentity,
+    jobId: string,
+    idempotencyKey: string,
+  ): RemoteJobSummary {
+    requireScope(identity.scopes, "mcp:render");
+    const previous = this.assertOwned(identity.userId, jobId);
+    new SvgRetryOperations(this.database, {
+      maxQueueLength: this.maxQueueLength,
+      maxUserStorageBytes: this.maxUserStorageBytes,
+      maxOutputBytes: this.maxOutputBytes,
+      artifactRetentionHours: this.artifactRetentionHours,
+    }).retry(
+      {
+        userId: identity.userId,
+        type: "oauth",
+        id: identity.userId,
+        serviceAccountId: previous.service_account_id,
+      },
+      jobId,
+      idempotencyKey,
+    );
+    const row = this.database.jobs.get(jobId);
+    if (!row) throw new AppError("JOB_NOT_FOUND", "Job does not exist", 404);
+    return this.summarize(row);
+  }
+
   job(identity: RemoteMcpIdentity, jobId: string): RemoteJobSummary {
     requireScope(identity.scopes, "mcp:read");
     const principal = this.ensurePrincipal(identity.userId),
@@ -1566,17 +1596,26 @@ export class RemoteRenderService {
   async diagnostics(
     identity: RemoteMcpIdentity,
     jobId: string,
+    stage?: "pdf" | "svg",
   ): Promise<RemoteRenderDiagnostics> {
     requireScope(identity.scopes, "mcp:read");
     const row = this.assertOwned(identity.userId, jobId),
+      stages = this.database.outputStages.publicState(jobId),
+      selectedStage =
+        stage ??
+        (stages?.pdf.status === "succeeded" &&
+        ["failed", "timeout", "canceled"].includes(stages.svg.status)
+          ? "svg"
+          : "pdf"),
+      prefix = selectedStage === "svg" ? "svg/" : "",
       available = this.database.artifacts.listDownloadable(jobId, {
         retentionHours: this.artifactRetentionHours,
       }),
       errorsArtifact = available.find(
-        (artifact) => artifact.relative_path === "errors.json",
+        (artifact) => artifact.relative_path === `${prefix}errors.json`,
       ),
       logArtifact = available.find(
-        (artifact) => artifact.relative_path === "compile.log",
+        (artifact) => artifact.relative_path === `${prefix}compile.log`,
       ),
       parsed =
         errorsArtifact === undefined
@@ -1626,6 +1665,9 @@ export class RemoteRenderService {
       logExcerpt: logExcerpt(log, diagnostics),
       rawLogResourceUri,
       retryable: ["failed", "timeout", "rejected"].includes(row.status),
+      ...(stages === undefined && stage === undefined
+        ? {}
+        : { stage: selectedStage }),
     };
   }
 
@@ -2682,6 +2724,7 @@ export class RemoteRenderService {
   }
 
   private summarize(row: JobRow): RemoteJobSummary {
+    const stages = this.database.outputStages.publicState(row.id);
     const artifacts = this.database.artifacts.listDownloadable(row.id, {
         retentionHours: this.artifactRetentionHours,
       }),
@@ -2724,6 +2767,7 @@ export class RemoteRenderService {
         `/app/jobs/${encodeURIComponent(row.id)}/`,
         this.publicOrigin,
       ).toString(),
+      ...(stages === undefined ? {} : { stages }),
     };
   }
 

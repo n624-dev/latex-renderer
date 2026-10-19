@@ -12,7 +12,15 @@ import {
   stat,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import {
+  dirname,
+  extname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+  sep,
+} from "node:path";
 import { pipeline } from "node:stream/promises";
 import type {
   JobResponse,
@@ -31,12 +39,19 @@ import { shouldExcludeProjectPath } from "./project-files.js";
 import { pollUntilTerminal } from "./polling.js";
 import { pruneGeneratedArtifacts } from "./artifact-cleanup.js";
 import { publishArtifactSet } from "./artifact-transaction.js";
-import { ensureSecureDirectory, assertSafeOutputFile } from "./output-safety.js";
+import {
+  ensureSecureDirectory,
+  assertSafeOutputFile,
+} from "./output-safety.js";
 
 export { shouldExcludeProjectPath } from "./project-files.js";
 export { openLocalTarget } from "./open-local-target.js";
 
 export interface ClientTransport {
+  retrySvgJob?(
+    jobId: string,
+    idempotencyKey: string,
+  ): Promise<SourceRenderResponse>;
   createSource(
     size: number,
     sha256: string,
@@ -53,7 +68,11 @@ export interface ClientTransport {
     idempotencyKey: string,
     outputs?: readonly RenderOutput[],
   ): Promise<SourceRenderResponse>;
-  job(jobId: string, jobTicket: string, options?: { signal?: AbortSignal | undefined }): Promise<JobResponse>;
+  job(
+    jobId: string,
+    jobTicket: string,
+    options?: { signal?: AbortSignal | undefined },
+  ): Promise<JobResponse>;
   renewJobTicket(
     jobId: string,
     options?: { signal?: AbortSignal | undefined },
@@ -65,7 +84,12 @@ export interface ClientTransport {
   ): Promise<void>;
   artifactUrl(jobId: string, name: string): string;
   previewUrl(jobId: string, page: string): string;
-  download(url: string, ticket: string, destination: string, expected: { size: number; sha256: string }): Promise<void>;
+  download(
+    url: string,
+    ticket: string,
+    destination: string,
+    expected: { size: number; sha256: string },
+  ): Promise<void>;
 }
 
 export type ClientCoreEvent =
@@ -82,6 +106,7 @@ export interface ArtifactPaths {
   job: string;
   previews: string[];
   svg: string[];
+  svgDiagnostics?: string[];
 }
 
 export interface RenderProjectResult {
@@ -117,6 +142,7 @@ export interface RenderOptions extends ClientCoreOptions {
   pollTimeoutMs?: number;
   now?: () => number;
   sleep?: (milliseconds: number) => Promise<void>;
+  pdfOnly?: boolean;
 }
 
 export async function renderProject(
@@ -126,11 +152,19 @@ export async function renderProject(
 ): Promise<RenderProjectResult> {
   const input = resolve(projectPath),
     entrypoint = validateEntrypointPath(options.entrypoint ?? "main.tex"),
-    requestedOutput = options.outputDirectory === undefined ? undefined : resolve(options.outputDirectory);
+    requestedOutput =
+      options.outputDirectory === undefined
+        ? undefined
+        : resolve(options.outputDirectory);
   const temporary = await mkdtemp(join(tmpdir(), "latex-render-"));
   try {
     const zipPath = join(temporary, "source.zip");
-    const prepared = await prepareInputArchive(input, zipPath, entrypoint, requestedOutput);
+    const prepared = await prepareInputArchive(
+      input,
+      zipPath,
+      entrypoint,
+      requestedOutput,
+    );
     options.onEvent?.({ type: "archive.created", ...prepared.source });
     const source = await reserveAndUploadSource(
       client,
@@ -146,7 +180,8 @@ export async function renderProject(
     );
     options.onEvent?.({ type: "job.queued", jobId: ticket.jobId });
     const { job, jobTicket } = await pollUntilTerminal(client, ticket, options);
-    const outputDirectory = requestedOutput ?? resolve(join(prepared.outputRoot, ".render"));
+    const outputDirectory =
+      requestedOutput ?? resolve(join(prepared.outputRoot, ".render"));
     const artifacts = await downloadArtifacts(
       client,
       job,
@@ -258,11 +293,18 @@ export async function downloadJobArtifacts(
   options: RenderOptions = {},
 ): Promise<DownloadArtifactsResult> {
   const renewed = await client.renewJobTicket(jobId);
-  const { job, jobTicket } = await pollUntilTerminal(client, {
-    jobId,
-    jobTicket: renewed.jobTicket,
-    expiresAt: renewed.expiresAt,
-  }, options);
+  const { job, jobTicket } = await pollUntilTerminal(
+    client,
+    {
+      jobId,
+      jobTicket: renewed.jobTicket,
+      expiresAt: renewed.expiresAt,
+    },
+    options,
+    options.pdfOnly === true
+      ? (job) => job.stages?.pdf.status === "succeeded"
+      : undefined,
+  );
   const output = resolve(outputDirectory);
   const artifacts = await downloadArtifacts(
     client,
@@ -272,6 +314,28 @@ export async function downloadJobArtifacts(
     options,
   );
   return { job, outputDirectory: output, artifacts };
+}
+
+export async function retrySvgJob(
+  client: ClientTransport,
+  jobId: string,
+  outputDirectory: string,
+  options: RenderOptions = {},
+): Promise<DownloadArtifactsResult> {
+  if (!client.retrySvgJob)
+    throw new AppError(
+      "SVG_RETRY_UNSUPPORTED",
+      "This transport does not support SVG-only retries",
+      501,
+    );
+  const ticket = await client.retrySvgJob(jobId, randomUUID());
+  const { job, jobTicket } = await pollUntilTerminal(client, ticket, options),
+    output = resolve(outputDirectory);
+  return {
+    job,
+    outputDirectory: output,
+    artifacts: await downloadArtifacts(client, job, jobTicket, output, options),
+  };
 }
 
 async function prepareInputArchive(
@@ -286,7 +350,12 @@ async function prepareInputArchive(
   const info = await stat(input).catch(() => undefined);
   if (info?.isDirectory())
     return {
-      source: await createProjectArchive(input, destination, entrypoint, excludedOutputDirectory),
+      source: await createProjectArchive(
+        input,
+        destination,
+        entrypoint,
+        excludedOutputDirectory,
+      ),
       outputRoot: input,
     };
   if (info?.isFile() && extname(input).toLowerCase() === ".zip") {
@@ -356,13 +425,23 @@ export async function createProjectArchive(
 ): Promise<{ size: number; sha256: string; files: number }> {
   const requiredEntrypoint =
     entrypoint === undefined ? undefined : validateEntrypointPath(entrypoint);
-  const excludedRelative = excludedOutputDirectory === undefined
-    ? undefined : relative(resolve(root), resolve(excludedOutputDirectory));
+  const excludedRelative =
+    excludedOutputDirectory === undefined
+      ? undefined
+      : relative(resolve(root), resolve(excludedOutputDirectory));
   if (excludedRelative === "")
-    throw new AppError("INVALID_OUTPUT_DIRECTORY", "Artifact output directory cannot be the project root", 400);
-  const excludedName = excludedRelative === undefined || excludedRelative === ".." ||
-    excludedRelative.startsWith(`..${sep}`) || isAbsolute(excludedRelative)
-    ? undefined : excludedRelative.replaceAll("\\", "/");
+    throw new AppError(
+      "INVALID_OUTPUT_DIRECTORY",
+      "Artifact output directory cannot be the project root",
+      400,
+    );
+  const excludedName =
+    excludedRelative === undefined ||
+    excludedRelative === ".." ||
+    excludedRelative.startsWith(`..${sep}`) ||
+    isAbsolute(excludedRelative)
+      ? undefined
+      : excludedRelative.replaceAll("\\", "/");
   const zip = new yazl.ZipFile();
   // Await exclusive creation before entering cleanup: an EEXIST failure must
   // never cause us to remove a destination belonging to the caller.
@@ -379,7 +458,11 @@ export async function createProjectArchive(
   let ended = false;
   try {
     const exclusions = await projectIgnore(root);
-    for await (const { path, name, size } of walkProject(root, exclusions, excludedName)) {
+    for await (const { path, name, size } of walkProject(
+      root,
+      exclusions,
+      excludedName,
+    )) {
       try {
         validateSourceFilePath(name);
       } catch (error) {
@@ -455,22 +538,49 @@ async function downloadArtifacts(
   options: ClientCoreOptions,
 ): Promise<ArtifactPaths> {
   const advertised = [...job.artifacts, ...job.previews];
-  if (advertised.length > 10_000 || advertised.some(item => !Number.isSafeInteger(item.size) || item.size < 0 || !/^[a-f0-9]{64}$/.test(item.sha256)) ||
-      advertised.reduce((total, item) => total + item.size, 0) > 1024 ** 3)
-    throw new AppError("INVALID_ARTIFACT_METADATA", "Artifact metadata is invalid or exceeds the 1 GiB/10000 entry transaction limit", 502);
+  if (
+    advertised.length > 10_000 ||
+    advertised.some(
+      (item) =>
+        !Number.isSafeInteger(item.size) ||
+        item.size < 0 ||
+        !/^[a-f0-9]{64}$/.test(item.sha256),
+    ) ||
+    advertised.reduce((total, item) => total + item.size, 0) > 1024 ** 3
+  )
+    throw new AppError(
+      "INVALID_ARTIFACT_METADATA",
+      "Artifact metadata is invalid or exceeds the 1 GiB/10000 entry transaction limit",
+      502,
+    );
   const events: ClientCoreEvent[] = [];
   const result = await publishArtifactSet(outputDirectory, async (stage) => {
     const paths = await stageArtifacts(client, job, jobTicket, stage, {
       ...options,
-      onEvent: event => events.push(event.type === "artifact.downloaded"
-        ? { ...event, path: join(outputDirectory, relative(stage, event.path)) } : event),
+      onEvent: (event) =>
+        events.push(
+          event.type === "artifact.downloaded"
+            ? {
+                ...event,
+                path: join(outputDirectory, relative(stage, event.path)),
+              }
+            : event,
+        ),
     });
-    const finalPath = (path: string) => join(outputDirectory, relative(stage, path));
+    const finalPath = (path: string) =>
+      join(outputDirectory, relative(stage, path));
     return {
       ...(paths.pdf === undefined ? {} : { pdf: finalPath(paths.pdf) }),
-      ...(paths.errors === undefined ? {} : { errors: finalPath(paths.errors) }),
+      ...(paths.errors === undefined
+        ? {}
+        : { errors: finalPath(paths.errors) }),
       ...(paths.log === undefined ? {} : { log: finalPath(paths.log) }),
-      job: finalPath(paths.job), previews: paths.previews.map(finalPath), svg: paths.svg.map(finalPath),
+      job: finalPath(paths.job),
+      previews: paths.previews.map(finalPath),
+      svg: paths.svg.map(finalPath),
+      ...(paths.svgDiagnostics === undefined
+        ? {}
+        : { svgDiagnostics: paths.svgDiagnostics.map(finalPath) }),
     };
   });
   // No observer sees a successfully downloaded file before the whole set commits.
@@ -527,7 +637,7 @@ async function stageArtifacts(
     options,
   );
   const svg: string[] = [];
-  for (const artifact of job.artifacts.filter(
+  for (const artifact of (options.pdfOnly === true ? [] : job.artifacts).filter(
     (item) => item.type === "svg" || item.type === "svg_manifest",
   )) {
     if (
@@ -546,7 +656,8 @@ async function stageArtifacts(
     const destination = join(outputDirectory, artifact.relativePath);
     await ensureSecureDirectory(dirname(destination));
     await assertSafeOutputFile(destination);
-    await downloadVerified(client,
+    await downloadVerified(
+      client,
       client.artifactUrl(job.id, artifact.relativePath),
       jobTicket,
       destination,
@@ -559,10 +670,30 @@ async function stageArtifacts(
       path: destination,
     });
   }
+  const svgDiagnostics: string[] = [];
+  if (options.pdfOnly !== true)
+    for (const name of [
+      "svg/compile.log",
+      "svg/errors.json",
+      "svg/dependencies.json",
+    ]) {
+      const artifact = paths.get(name);
+      if (!artifact) continue;
+      await ensureSecureDirectory(join(outputDirectory, "svg"));
+      const path = await downloadNamedArtifact(
+        client,
+        job.id,
+        jobTicket,
+        outputDirectory,
+        artifact,
+        options,
+      );
+      if (path !== undefined) svgDiagnostics.push(path);
+    }
   // Commit the new job metadata only once its advertised artifacts have been
   // downloaded and leftovers from the previous render have been removed.
   const keep = new Set(
-    [pdf, errors, log, ...previews, ...svg]
+    [pdf, errors, log, ...previews, ...svg, ...svgDiagnostics]
       .filter((path): path is string => path !== undefined)
       .map((path) => relative(outputDirectory, path).replaceAll("\\", "/")),
   );
@@ -581,6 +712,7 @@ async function stageArtifacts(
     job: jobPath,
     previews,
     svg,
+    ...(svgDiagnostics.length === 0 ? {} : { svgDiagnostics }),
   };
 }
 
@@ -606,10 +738,17 @@ async function downloadPreviews(
     const match = /^previews\/(page-(0*[1-9][0-9]*)\.png)$/.exec(
       artifact.relativePath,
     );
-    const name = match?.[1], page = Number(match?.[2]),
+    const name = match?.[1],
+      page = Number(match?.[2]),
       canonicalName = `page-${page}.png`;
-    if (artifact.type !== "preview" || name === undefined ||
-        !Number.isSafeInteger(page) || page < 1 || page > 100 || names.has(canonicalName))
+    if (
+      artifact.type !== "preview" ||
+      name === undefined ||
+      !Number.isSafeInteger(page) ||
+      page < 1 ||
+      page > 100 ||
+      names.has(canonicalName)
+    )
       throw new AppError(
         "INVALID_ARTIFACT_PATH",
         "Server returned an unsafe preview path",
@@ -618,7 +757,13 @@ async function downloadPreviews(
     names.add(canonicalName);
     const destination = join(directory, canonicalName);
     await assertSafeOutputFile(destination);
-    await downloadVerified(client, client.previewUrl(job.id, name), ticket, destination, artifact);
+    await downloadVerified(
+      client,
+      client.previewUrl(job.id, name),
+      ticket,
+      destination,
+      artifact,
+    );
     previews.push(destination);
     options.onEvent?.({
       type: "artifact.downloaded",
@@ -641,20 +786,47 @@ async function downloadNamedArtifact(
   const name = artifact.relativePath;
   const destination = join(output, name);
   await assertSafeOutputFile(destination);
-  await downloadVerified(client, client.artifactUrl(jobId, name), ticket, destination, artifact);
+  await downloadVerified(
+    client,
+    client.artifactUrl(jobId, name),
+    ticket,
+    destination,
+    artifact,
+  );
   options.onEvent?.({ type: "artifact.downloaded", name, path: destination });
   return destination;
 }
 
-async function downloadVerified(client: ClientTransport, url: string, ticket: string, destination: string, expected: { size: number; sha256: string }): Promise<void> {
-  if (!Number.isSafeInteger(expected.size) || expected.size < 0 || !/^[a-f0-9]{64}$/.test(expected.sha256))
-    throw new AppError("INVALID_ARTIFACT_METADATA", "Artifact size or SHA256 is invalid", 502);
+async function downloadVerified(
+  client: ClientTransport,
+  url: string,
+  ticket: string,
+  destination: string,
+  expected: { size: number; sha256: string },
+): Promise<void> {
+  if (
+    !Number.isSafeInteger(expected.size) ||
+    expected.size < 0 ||
+    !/^[a-f0-9]{64}$/.test(expected.sha256)
+  )
+    throw new AppError(
+      "INVALID_ARTIFACT_METADATA",
+      "Artifact size or SHA256 is invalid",
+      502,
+    );
   await client.download(url, ticket, destination, expected);
   // Also verify custom transports: the core's publication invariant does not
   // depend on a particular HTTP adapter behaving correctly.
   await assertSafeOutputFile(destination);
-  if ((await lstat(destination)).size !== expected.size || await hashFile(destination) !== expected.sha256)
-    throw new AppError("ARTIFACT_INTEGRITY_ERROR", "Downloaded artifact does not match its advertised size and SHA256", 502);
+  if (
+    (await lstat(destination)).size !== expected.size ||
+    (await hashFile(destination)) !== expected.sha256
+  )
+    throw new AppError(
+      "ARTIFACT_INTEGRITY_ERROR",
+      "Downloaded artifact does not match its advertised size and SHA256",
+      502,
+    );
 }
 
 async function projectIgnore(root: string): Promise<Ignore> {
@@ -712,8 +884,13 @@ async function* walkProject(
   for (const entry of entries) {
     const path = join(directory, entry.name);
     const name = relative(root, path).replaceAll("\\", "/");
-    if (excludedName !== undefined && (process.platform === "win32"
-      ? name.toLowerCase() === excludedName.toLowerCase() : name === excludedName)) continue;
+    if (
+      excludedName !== undefined &&
+      (process.platform === "win32"
+        ? name.toLowerCase() === excludedName.toLowerCase()
+        : name === excludedName)
+    )
+      continue;
     const ignored =
       shouldExcludeProjectPath(name) ||
       exclusions.ignores(entry.isDirectory() ? `${name}/` : name);

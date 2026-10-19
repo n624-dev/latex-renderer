@@ -25,7 +25,7 @@ function validate(hours: number, time: number): void {
     throw new Error("Invalid artifact retention policy");
 }
 
-// Only completed generations are downloadable. An active transfer admitted
-// before the deadline is protected independently by its renewable lease.
+// A staged Job may expose only its committed PDF generation while SVG runs.
+// Retention starts at PDF publication and is never renewed by an SVG retry.
 export const ARTIFACT_AVAILABLE_SQL =
-  "j.status IN ('succeeded','failed','timeout','canceled','rejected') AND COALESCE(j.completed_at,j.updated_at)>?";
+  "(j.status IN ('succeeded','failed','timeout','canceled','rejected') OR (j.status IN ('queued','validating','running') AND EXISTS(SELECT 1 FROM job_output_stages p WHERE p.job_id=j.id AND p.pdf_status='succeeded'))) AND COALESCE((SELECT p.pdf_completed_at FROM job_output_stages p WHERE p.job_id=j.id AND p.pdf_status='succeeded'),j.completed_at,j.updated_at)>? AND (a.relative_path NOT LIKE 'svg/%' OR NOT EXISTS(SELECT 1 FROM job_output_stages p WHERE p.job_id=j.id) OR a.storage_generation=(SELECT p.svg_generation FROM job_output_stages p WHERE p.job_id=j.id))";

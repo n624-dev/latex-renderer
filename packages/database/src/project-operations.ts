@@ -1,4 +1,4 @@
-import type { RenderOutput } from "@latex-renderer/contracts";
+import type { RenderOutput, JobStages } from "@latex-renderer/contracts";
 import {
   AppError,
   encodePageCursor,
@@ -51,7 +51,12 @@ export class ProjectOperations {
       ],
       jobsByRevision =
         this.database.jobs.listSummariesForRevisions(revisionIds),
-      jobCounts = this.database.jobs.countForRevisions(revisionIds);
+      jobCounts = this.database.jobs.countForRevisions(revisionIds),
+      stages = this.database.outputStages.publicStates(
+        [...jobsByRevision.values()].flatMap((jobs) =>
+          jobs.map((job) => job.id),
+        ),
+      );
     return {
       id: project.id,
       displayName: project.display_name,
@@ -63,6 +68,7 @@ export class ProjectOperations {
             latestRevision,
             jobsByRevision.get(latestRevision.id) ?? [],
             jobCounts.get(latestRevision.id) ?? 0,
+            stages,
           )
         : null,
       revisionsNextCursor: revisions.nextCursor,
@@ -72,6 +78,7 @@ export class ProjectOperations {
           revision,
           jobsByRevision.get(revision.id) ?? [],
           jobCounts.get(revision.id) ?? 0,
+          stages,
         ),
       ),
     };
@@ -92,6 +99,9 @@ export class ProjectOperations {
         404,
       );
     const page = this.database.jobs.listForRevisionPage(revisionId, options);
+    const stages = this.database.outputStages.publicStates(
+      page.items.map((job) => job.id),
+    );
     return {
       ...page,
       items: page.items.map((job) => ({
@@ -102,6 +112,7 @@ export class ProjectOperations {
         retryOfJobId: job.retry_of_job_id,
         errorCode: job.error_code,
         outputs: this.database.jobs.outputs(job),
+        ...(stages.has(job.id) ? { stages: stages.get(job.id) } : {}),
       })),
     };
   }
@@ -325,6 +336,7 @@ export class ProjectOperations {
     revision: ProjectRevisionRow,
     jobs: RevisionJobSummary[],
     jobCount: number,
+    stages: ReadonlyMap<string, JobStages>,
   ) {
     const lastJob = jobs.at(-1);
     return {
@@ -344,6 +356,7 @@ export class ProjectOperations {
         retryOfJobId: job.retry_of_job_id,
         errorCode: job.error_code,
         outputs: this.database.jobs.outputs(job),
+        ...(stages.has(job.id) ? { stages: stages.get(job.id) } : {}),
       })),
       jobCount,
       jobsHasMore: jobCount > jobs.length,

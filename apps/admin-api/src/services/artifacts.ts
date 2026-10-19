@@ -12,7 +12,7 @@ import yazl from "yazl";
 import type { AdminDependencies, AppActor } from "../types.js";
 
 const ARTIFACT_NAME =
-  /^(?:result\.pdf|compile\.log|errors\.json|dependencies\.json|svg\/manifest\.json|svg\/objects\/(?:math|tikz)-[0-9]{6}\.svg)$/;
+  /^(?:result\.pdf|compile\.log|errors\.json|dependencies\.json|svg\/(?:compile\.log|errors\.json|dependencies\.json|manifest\.json)|svg\/objects\/(?:math|tikz)-[0-9]{6}\.svg)$/;
 const PREVIEW_NAME = /^page-[1-9][0-9]{0,2}\.png$/;
 
 export function adminArtifactsArchiveResponse(
@@ -27,7 +27,13 @@ export function adminArtifactsArchiveResponse(
     if (
       job === undefined ||
       ["deleting", "deleted", "expired"].includes(job.status) ||
-      isPastRetention(deps, job.completed_at ?? job.updated_at)
+      isPastRetention(
+        deps,
+        deps.database.outputStages.retentionStart(
+          jobId,
+          job.completed_at ?? job.updated_at,
+        ),
+      )
     )
       throw new AppError(
         "ARTIFACT_NOT_AVAILABLE",
@@ -137,7 +143,13 @@ export function adminArtifactResponse(
     if (
       job === undefined ||
       ["deleting", "deleted", "expired"].includes(job.status) ||
-      isPastRetention(deps, job.completed_at ?? job.updated_at)
+      isPastRetention(
+        deps,
+        deps.database.outputStages.retentionStart(
+          jobId,
+          job.completed_at ?? job.updated_at,
+        ),
+      )
     )
       throw new AppError(
         "ARTIFACT_NOT_AVAILABLE",

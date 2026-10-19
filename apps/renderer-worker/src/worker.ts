@@ -142,7 +142,12 @@ export async function runWorker(
           config,
           job,
           message,
-          rejected ? error.code : "RENDERER_FAILED",
+          error instanceof AppError &&
+            (rejected ||
+              database.outputStages.checkpoint(job.id) !== undefined ||
+              database.artifacts.hasPublishedPdf(job.id))
+            ? error.code
+            : "RENDERER_FAILED",
           rejected ? "rejected" : "failed",
         );
         console.error(

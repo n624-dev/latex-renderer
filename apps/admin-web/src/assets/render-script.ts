@@ -90,6 +90,7 @@ export interface BrowserJobStatus {
   previews: BrowserJobArtifact[];
   sourceId?: string | null;
   entrypoint?: string;
+  stages?: import("@latex-renderer/contracts").JobStages;
 }
 
 export type RenderFetch = (
@@ -424,6 +425,48 @@ export function parseJobStatus(
   const previews = record.previews.map((artifact) =>
     parseJobArtifact(artifact, expectedJobId, true),
   );
+  const stages = record.stages as BrowserJobStatus["stages"];
+  if (stages !== undefined) {
+    if (typeof stages !== "object" || stages === null || Array.isArray(stages))
+      throw new Error("出力ステージの形式が不正です。");
+    for (const key of ["pdf", "svg"] as const) {
+      const s = stages[key];
+      if (
+        typeof s !== "object" ||
+        s === null ||
+        Array.isArray(s) ||
+        ![
+          "not_requested",
+          "queued",
+          "running",
+          "succeeded",
+          "failed",
+          "timeout",
+          "canceled",
+          "skipped",
+        ].includes(s.status) ||
+        !(
+          s.completedAt === null ||
+          (typeof s.completedAt === "string" &&
+            Number.isFinite(Date.parse(s.completedAt)))
+        ) ||
+        !(s.errorCode === null || typeof s.errorCode === "string") ||
+        !(s.errorMessage === null || typeof s.errorMessage === "string")
+      )
+        throw new Error("出力ステージの形式が不正です。");
+    }
+    if (
+      !(
+        stages.pdf.sha256 === null ||
+        (typeof stages.pdf.sha256 === "string" &&
+          /^[a-f0-9]{64}$/.test(stages.pdf.sha256))
+      ) ||
+      !Number.isInteger(stages.svg.attempt) ||
+      stages.svg.attempt < 1 ||
+      stages.svg.attempt > 8
+    )
+      throw new Error("出力ステージの形式が不正です。");
+  }
   return {
     id: expectedJobId,
     status: record.status as BrowserJobStatus["status"],
@@ -432,6 +475,7 @@ export function parseJobStatus(
     retentionExpiresAt,
     artifacts,
     previews,
+    ...(stages === undefined ? {} : { stages }),
   };
 }
 
@@ -480,8 +524,12 @@ export function parseJobArtifact(
         type === "svg_manifest" && relativePath === "svg/manifest.json",
       svgObject =
         type === "svg" &&
-        /^svg\/objects\/(?:math|tikz)-[0-9]{6}\.svg$/.test(relativePath);
-    if (!flat && !svgManifest && !svgObject)
+        /^svg\/objects\/(?:math|tikz)-[0-9]{6}\.svg$/.test(relativePath),
+      svgDiagnostic =
+        (type === "log" && relativePath === "svg/compile.log") ||
+        (type === "errors" && relativePath === "svg/errors.json") ||
+        (type === "dependencies" && relativePath === "svg/dependencies.json");
+    if (!flat && !svgManifest && !svgObject && !svgDiagnostic)
       throw new Error("成果物情報の形式が不正です。");
     expectedUrl = `/api/v1/jobs/${encodeURIComponent(jobId)}/artifacts/${relativePath.split("/").map(encodeURIComponent).join("/")}`;
   }

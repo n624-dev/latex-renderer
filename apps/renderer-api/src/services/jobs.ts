@@ -1,5 +1,8 @@
 import { AppError, nowIso } from "@latex-renderer/shared";
-import { artifactRetentionExpiresAt, type ArtifactRow } from "@latex-renderer/database";
+import {
+  artifactRetentionExpiresAt,
+  type ArtifactRow,
+} from "@latex-renderer/database";
 import type {
   JobArtifact,
   JobResponse,
@@ -14,7 +17,10 @@ export class RendererJobsService {
     const row = this.deps.database.jobs.get(id);
     if (row === undefined || row.status === "deleted")
       throw new AppError("JOB_NOT_FOUND", "Job does not exist", 404);
-    const listed = this.deps.database.artifacts.listDownloadable(id, { retentionHours: this.deps.artifactRetentionHours }),
+    const stages = this.deps.database.outputStages.publicState(id);
+    const listed = this.deps.database.artifacts.listDownloadable(id, {
+        retentionHours: this.deps.artifactRetentionHours,
+      }),
       artifacts: JobArtifact[] = [],
       previews: JobArtifact[] = [];
     for (const artifact of listed) {
@@ -34,12 +40,19 @@ export class RendererJobsService {
       errorCode: row.error_code,
       errorMessage: row.error_message,
       retentionExpiresAt: retentionExpiresAt(
-        row.status,
-        row.completed_at ?? row.updated_at,
+        stages?.pdf.status === "succeeded" &&
+          !["deleting", "deleted"].includes(row.status)
+          ? "succeeded"
+          : row.status,
+        this.deps.database.outputStages.retentionStart(
+          id,
+          row.completed_at ?? row.updated_at,
+        ),
         this.deps.artifactRetentionHours,
       ),
       artifacts,
       previews,
+      ...(stages === undefined ? {} : { stages }),
     };
   }
   cancel(

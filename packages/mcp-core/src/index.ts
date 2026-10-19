@@ -20,6 +20,7 @@ import {
   projectRevisionIdSchema,
   attachProjectRevisionResponseSchema,
   renderOutputsSchema,
+  jobStagesSchema,
   type JobArtifact,
   type JobResponse,
 } from "@latex-renderer/contracts";
@@ -123,6 +124,7 @@ const jobSchema = z
     previews: z.array(artifactSchema),
     sourceId: z.string().nullable().optional(),
     entrypoint: z.string().optional(),
+    stages: jobStagesSchema.optional(),
   })
   .strict();
 const localArtifactsSchema = z
@@ -132,6 +134,8 @@ const localArtifactsSchema = z
     log: z.string().optional(),
     job: z.string(),
     previews: z.array(z.string()),
+    svg: z.array(z.string()).optional(),
+    svgDiagnostics: z.array(z.string()).optional(),
   })
   .strict();
 const sourceSchema = z
@@ -577,6 +581,26 @@ function summarizeJob(job: JobResponse): z.infer<typeof jobSchema> {
     previews: job.previews.map(summarizeArtifact),
     ...(job.sourceId === undefined ? {} : { sourceId: job.sourceId }),
     ...(job.entrypoint === undefined ? {} : { entrypoint: job.entrypoint }),
+    ...(job.stages === undefined
+      ? {}
+      : {
+          stages: {
+            pdf: {
+              ...job.stages.pdf,
+              errorMessage:
+                job.stages.pdf.errorMessage === null
+                  ? null
+                  : redactSecrets(job.stages.pdf.errorMessage),
+            },
+            svg: {
+              ...job.stages.svg,
+              errorMessage:
+                job.stages.svg.errorMessage === null
+                  ? null
+                  : redactSecrets(job.stages.svg.errorMessage),
+            },
+          },
+        }),
   };
 }
 
@@ -601,6 +625,10 @@ function summarizeLocalArtifacts(
     ...(artifacts.log === undefined ? {} : { log: artifacts.log }),
     job: artifacts.job,
     previews: artifacts.previews,
+    ...(artifacts.svg.length === 0 ? {} : { svg: artifacts.svg }),
+    ...(artifacts.svgDiagnostics === undefined
+      ? {}
+      : { svgDiagnostics: artifacts.svgDiagnostics }),
   };
 }
 

@@ -3,6 +3,7 @@ import {
   auditExportSequenceSql,
   internalSmokeVisibilitySql,
   remoteMcpLoginContinuationsSql,
+  outputStagesV21Sql,
 } from "./schema.js";
 
 const usersAccessSubjectV2Sql = `
@@ -62,6 +63,19 @@ export function applyDatabaseMigrations(db: DatabaseSync): void {
   applyAuditExportSequenceV18(db);
   applyInternalSmokeVisibilityV19(db);
   applyRemoteMcpLoginContinuationsV20(db);
+  applyOutputStagesV21(db);
+}
+
+function applyOutputStagesV21(db: DatabaseSync): void {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    if (!db.prepare("SELECT 1 FROM schema_migrations WHERE version=21").get())
+      db.exec(outputStagesV21Sql);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
 }
 
 function applyRemoteMcpLoginContinuationsV20(db: DatabaseSync): void {

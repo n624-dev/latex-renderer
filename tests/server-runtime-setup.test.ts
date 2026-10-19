@@ -368,6 +368,8 @@ describe("server setup runtime review", () => {
       maxQueueLength: 100,
       minFreeStorageBytes: 5368709120,
       jobTimeoutSeconds: 420,
+      minimumAvailableMemoryBytes: 1152 * 1024 ** 2,
+      admissionWaitSeconds: 900,
     });
     expect(model.deployment.ingress).toBeNull();
     expect(Object.isFrozen(model.runtime.limits)).toBe(true);
@@ -413,6 +415,12 @@ describe("server setup runtime review", () => {
       expect(worker.jobTimeoutMs).toBe(
         model.runtime.limits.jobTimeoutSeconds * 1000,
       );
+      expect(worker.minimumAvailableMemoryBytes).toBe(
+        model.runtime.limits.minimumAvailableMemoryBytes,
+      );
+      expect(worker.admissionWaitTimeoutMs).toBe(
+        model.runtime.limits.admissionWaitSeconds * 1000,
+      );
       expect(worker.image).toBe(model.runtime.rendererImage);
       expect(worker.storageRoot).toBe(model.runtime.storageRoot);
     },
@@ -443,6 +451,10 @@ describe("server setup runtime review", () => {
   it("checks all fields, cross-limit ordering and runtime timeout caps", () => {
     const model = candidate();
     for (const name of Object.keys(SERVER_RUNTIME_LIMITS)) {
+      if (
+        ["minimumAvailableMemoryBytes", "admissionWaitSeconds"].includes(name)
+      )
+        continue;
       const limits = Object.fromEntries(
         Object.entries(model.runtime.limits).filter(([key]) => key !== name),
       );
@@ -458,6 +470,7 @@ describe("server setup runtime review", () => {
       { maxZipEntries: 1 },
       { jobTimeoutSeconds: 86401 },
       { svgConversionTimeoutSeconds: 86401 },
+      { admissionWaitSeconds: 86401 },
     ])
       expect(() =>
         validateServerSetupReview({
@@ -473,6 +486,47 @@ describe("server setup runtime review", () => {
         before + "MAX_UPLOAD_BYTES=1\nMAX_UPLOAD_BYTES=2\n",
       ),
     ).toThrow(/duplicate/);
+  });
+  it("imports older format-4 reviews with bounded admission defaults and preserves explicit host overrides", () => {
+    const model = candidate();
+    const limits = Object.fromEntries(
+      Object.entries(model.runtime.limits).filter(
+        ([name]) =>
+          !["minimumAvailableMemoryBytes", "admissionWaitSeconds"].includes(
+            name,
+          ),
+      ),
+    );
+    const compatible = validateServerSetupReview({
+      ...model,
+      runtime: { ...model.runtime, limits },
+    });
+    expect(compatible.runtime.limits.minimumAvailableMemoryBytes).toBe(
+      1152 * 1024 ** 2,
+    );
+    expect(compatible.runtime.limits.admissionWaitSeconds).toBe(900);
+    const configured = importServerSetupReview(
+      before +
+        "RENDERER_MIN_AVAILABLE_MEMORY_BYTES=939524096\nRENDERER_ADMISSION_WAIT_SECONDS=600\n",
+    );
+    const env = serverSetupReviewEnvironment(configured);
+    expect(env.get("RENDERER_MIN_AVAILABLE_MEMORY_BYTES")).toBe("939524096");
+    expect(env.get("RENDERER_ADMISSION_WAIT_SECONDS")).toBe("600");
+    expect(
+      importServerSetupReview(
+        [...env].map(([key, value]) => `${key}=${value}`).join("\n"),
+      ),
+    ).toEqual(configured);
+    expect(() =>
+      importServerSetupReview(
+        before + "RENDERER_ADMISSION_WAIT_SECONDS=86401\n",
+      ),
+    ).toThrow();
+    expect(() =>
+      importServerSetupReview(
+        before + "RENDERER_MIN_AVAILABLE_MEMORY_BYTES=0\n",
+      ),
+    ).toThrow();
   });
   it.each([
     "/",

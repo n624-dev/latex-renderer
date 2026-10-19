@@ -1,6 +1,11 @@
 import { spawn } from "node:child_process";
 import type { WorkerConfig } from "./config.js";
 
+export interface RendererStageOptions {
+  mode: "pdf" | "svg";
+  pdfDirectory?: string;
+}
+
 export function spawnRenderer(
   config: WorkerConfig,
   jobId: string,
@@ -9,6 +14,7 @@ export function spawnRenderer(
   staging: string,
   entrypoint = "main.tex",
   outputs: readonly string[] = ["pdf"],
+  stage?: RendererStageOptions,
 ) {
   const containerName = rendererContainerName(jobId, leaseGeneration);
   const args = rendererRunArguments(
@@ -19,6 +25,7 @@ export function spawnRenderer(
     entrypoint,
     outputs,
     leaseGeneration,
+    stage,
   );
   return {
     process: spawn("docker", args, {
@@ -36,7 +43,10 @@ export function rendererRunArguments(
   entrypoint = "main.tex",
   outputs: readonly string[] = ["pdf"],
   leaseGeneration = 0,
+  stage?: RendererStageOptions,
 ): string[] {
+  if (stage?.mode === "svg" && stage.pdfDirectory === undefined)
+    throw new Error("SVG stage requires an immutable PDF checkpoint");
   const securityOptions = [
     "--security-opt",
     "no-new-privileges",
@@ -92,6 +102,15 @@ export function rendererRunArguments(
     `type=bind,src=${extracted},dst=/work/input,readonly`,
     "--mount",
     `type=bind,src=${staging},dst=/work/output`,
+    ...(stage === undefined
+      ? []
+      : ["--env", `LATEX_RENDER_STAGE=${stage.mode}`]),
+    ...(stage?.pdfDirectory === undefined
+      ? []
+      : [
+          "--mount",
+          `type=bind,src=${stage.pdfDirectory},dst=/work/pdf,readonly`,
+        ]),
     config.image,
   ];
 }

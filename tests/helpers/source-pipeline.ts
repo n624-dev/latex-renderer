@@ -13,6 +13,7 @@ import { RendererDatabase } from "@latex-renderer/database";
 import { TicketService } from "@latex-renderer/ticket";
 import {
   DEFAULT_RESOURCE_LIMITS,
+  AppError,
   type ResourceLimits,
 } from "@latex-renderer/shared";
 import { RendererClient } from "../../packages/api-client/src/index.js";
@@ -24,6 +25,7 @@ import {
 import { createInternalApp } from "../../apps/internal-api/src/app.js";
 import { createRendererApp } from "../../apps/renderer-api/src/app.js";
 import { processJob } from "../../apps/renderer-worker/src/job-processor.js";
+import { recordFailure } from "../../apps/renderer-worker/src/failure.js";
 import type { WorkerConfig } from "../../apps/renderer-worker/src/config.js";
 import * as docker from "../../apps/renderer-worker/src/docker.js";
 
@@ -273,13 +275,16 @@ export async function sourcePipelineFixture(
       containerGid: process.getgid?.() || 10_000,
       jobTimeoutMs: 90_000,
     };
-    let holdNext = false;
+    let holdNext = false,
+      holdSvg = false,
+      nextSvgExit = 0;
     let resolveSpawn: (() => void) | undefined;
     const originalSpawn = docker.spawnRenderer;
     const spawnSpy = vi
       .spyOn(docker, "spawnRenderer")
       .mockImplementation(
-        (cfg, id, generation, input, staging, entrypoint, outputs) => {
+        (cfg, id, generation, input, staging, entrypoint, outputs, stage) => {
+          const held = holdNext && (!holdSvg || stage?.mode === "svg");
           const result =
             realPipelineImage !== undefined
               ? originalSpawn(
@@ -290,6 +295,7 @@ export async function sourcePipelineFixture(
                   staging,
                   entrypoint,
                   outputs,
+                  stage,
                 )
               : {
                   containerName: "pipeline-fixture",
@@ -305,21 +311,45 @@ export async function sourcePipelineFixture(
                       input,
                       staging,
                       entrypoint ?? "main.tex",
-                      holdNext ? gatePath : "",
+                      held ? gatePath : "",
+                      stage?.mode ?? "all",
+                      stage?.pdfDirectory ?? "",
+                      String(stage?.mode === "svg" ? nextSvgExit : 0),
                     ],
                     { stdio: ["ignore", "pipe", "pipe"] },
                   ),
                 };
-          holdNext = false;
+          if (held) holdNext = false;
+          if (stage?.mode === "svg") nextSvgExit = 0;
           children.push(result.process);
           if (realPipelineImage !== undefined)
             containers.set(result.process, result.containerName);
-          resolveSpawn?.();
-          resolveSpawn = undefined;
+          if (held) {
+            resolveSpawn?.();
+            resolveSpawn = undefined;
+          }
           return result;
         },
       );
-    restoreSpawn = () => spawnSpy.mockRestore();
+    const stopSpy =
+      realPipelineImage === undefined
+        ? vi
+            .spyOn(docker, "dockerStopVerified")
+            .mockImplementation(async (name) => {
+              assert.equal(
+                name,
+                "pipeline-fixture",
+                "Only the deterministic child boundary may be stopped",
+              );
+              for (const child of children)
+                if (child.exitCode === null && child.signalCode === null)
+                  child.kill("SIGKILL");
+            })
+        : undefined;
+    restoreSpawn = () => {
+      spawnSpy.mockRestore();
+      stopSpy?.mockRestore();
+    };
     const runNext = async () => {
       assert.equal(run, undefined, "Do not overlap fixture Worker claims");
       const job = database.worker.claimNext(
@@ -331,6 +361,22 @@ export async function sourcePipelineFixture(
       run = processJob(database, config, job);
       try {
         await run;
+      } catch (error) {
+        if (error instanceof docker.RendererCleanupDeferred) throw error;
+        const rejected = error instanceof AppError && error.status === 422;
+        await recordFailure(
+          database,
+          config,
+          job,
+          error instanceof Error
+            ? error.message.slice(0, 1000)
+            : "Unknown renderer error",
+          error instanceof AppError &&
+            (rejected || database.outputStages.checkpoint(job.id) !== undefined)
+            ? error.code
+            : "RENDERER_FAILED",
+          rejected ? "rejected" : "failed",
+        );
       } finally {
         run = undefined;
       }
@@ -348,6 +394,7 @@ export async function sourcePipelineFixture(
     );
     return {
       root,
+      config,
       database,
       storage,
       client,
@@ -357,6 +404,19 @@ export async function sourcePipelineFixture(
       requests,
       runNext,
       close,
+      failNextSvg(exitCode: number) {
+        assert.equal(realPipelineImage, undefined);
+        assert([79, 83, 84].includes(exitCode));
+        nextSvgExit = exitCode;
+      },
+      holdSvgRenderer() {
+        assert.equal(realPipelineImage, undefined);
+        holdNext = true;
+        holdSvg = true;
+        return new Promise<void>((done) => {
+          resolveSpawn = done;
+        });
+      },
       holdNextRenderer() {
         assert.equal(
           realPipelineImage,
@@ -364,6 +424,7 @@ export async function sourcePipelineFixture(
           "Gated child applies only to deterministic fixtures",
         );
         holdNext = true;
+        holdSvg = false;
         return new Promise<void>((done) => {
           resolveSpawn = done;
         });

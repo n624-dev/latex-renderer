@@ -56,6 +56,11 @@ export const sourceRenderTicketRequestSchema = z
     outputs: renderOutputsSchema,
   })
   .strict();
+export const svgRetryTicketRequestSchema = z
+  .object({
+    retrySvgJobId: z.string().regex(/^job_[a-f0-9]{32}$/),
+  })
+  .strict();
 export function createRenderTicketRequestSchema(
   maxUploadBytes = 20 * 1024 * 1024,
 ) {
@@ -64,6 +69,7 @@ export function createRenderTicketRequestSchema(
       outputs: renderOutputsSchema,
     }),
     sourceRenderTicketRequestSchema,
+    svgRetryTicketRequestSchema,
   ]);
 }
 export const renderTicketRequestSchema = createRenderTicketRequestSchema();
@@ -190,6 +196,33 @@ export const jobArtifactSchema = z.object({
 });
 export type JobArtifact = z.infer<typeof jobArtifactSchema>;
 
+export const renderStageStatusSchema = z.enum([
+  "not_requested",
+  "queued",
+  "running",
+  "succeeded",
+  "failed",
+  "timeout",
+  "canceled",
+  "skipped",
+]);
+export const renderStageSchema = z.object({
+  status: renderStageStatusSchema,
+  completedAt: z.iso.datetime().nullable(),
+  errorCode: z.string().nullable(),
+  errorMessage: z.string().nullable(),
+});
+export const jobStagesSchema = z.object({
+  pdf: renderStageSchema.extend({
+    sha256: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/)
+      .nullable(),
+  }),
+  svg: renderStageSchema.extend({ attempt: z.number().int().min(1).max(8) }),
+});
+export type JobStages = z.infer<typeof jobStagesSchema>;
+
 export const jobResponseSchema = z.object({
   id: z.string(),
   status: JobStatusSchema,
@@ -205,6 +238,7 @@ export const jobResponseSchema = z.object({
   retentionExpiresAt: z.iso.datetime().nullable().default(null),
   artifacts: z.array(jobArtifactSchema).default([]),
   previews: z.array(jobArtifactSchema).default([]),
+  stages: jobStagesSchema.optional(),
 });
 export type JobResponse = z.infer<typeof jobResponseSchema>;
 

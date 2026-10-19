@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import type { AuthenticatedServiceAccount } from "@latex-renderer/auth";
 import type { RenderOutput } from "@latex-renderer/contracts";
 import { AppError, nowIso } from "@latex-renderer/shared";
+import { SvgRetryOperations } from "@latex-renderer/database";
 import { validateEntrypointPath } from "@latex-renderer/zip-validation";
 import type { InternalApiDependencies } from "../types.js";
 
@@ -10,6 +11,7 @@ export class RenderTicketsService {
   async create(
     actor: AuthenticatedServiceAccount,
     input:
+      | { retrySvgJobId: string }
       | { size: number; sha256: string; outputs?: RenderOutput[] }
       | {
           sourceId: string;
@@ -19,6 +21,25 @@ export class RenderTicketsService {
         },
     idempotencyKey: string,
   ) {
+    if ("retrySvgJobId" in input) {
+      const result = new SvgRetryOperations(
+        this.deps.database,
+        this.deps,
+      ).retry(
+        {
+          userId: actor.userId,
+          type: "service_account",
+          id: actor.serviceAccountId,
+          serviceAccountId: actor.serviceAccountId,
+        },
+        input.retrySvgJobId,
+        idempotencyKey,
+      );
+      return {
+        status: result.reused ? (200 as const) : (202 as const),
+        value: await this.renew(actor, result.id),
+      };
+    }
     if ("sourceId" in input)
       return this.createFromSource(actor, input, idempotencyKey);
     return this.createLegacy(actor, input, idempotencyKey);

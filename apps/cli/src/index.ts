@@ -10,6 +10,7 @@ import {
   renderProject,
   renderSource,
   requestJobAction,
+  retrySvgJob,
   uploadProjectSource,
   type ClientCoreEvent,
   type RenderProjectResult,
@@ -471,18 +472,45 @@ jobs
   .command("download")
   .argument("<id>")
   .option("--output <directory>", "output directory", ".render")
+  .option("--pdf-only", "download the committed PDF without waiting for SVG")
+  .action(
+    async (id: string, options: { output: string; pdfOnly?: boolean }) => {
+      const result = await downloadJobArtifacts(
+        await configuredClient(),
+        id,
+        options.output,
+        {
+          ...(isJsonMode() ? {} : { onEvent: humanRenderEvent }),
+          ...(options.pdfOnly === true ? { pdfOnly: true } : {}),
+        },
+      );
+      emitSuccess("jobs.download", result, () => {
+        process.stdout.write(
+          `Artifacts downloaded to ${result.outputDirectory}.\n`,
+        );
+      });
+    },
+  );
+
+jobs
+  .command("retry-svg")
+  .argument("<id>")
+  .option("--output <directory>", "output directory", ".render")
   .action(async (id: string, options: { output: string }) => {
-    const result = await downloadJobArtifacts(
+    const result = await retrySvgJob(
       await configuredClient(),
       id,
       options.output,
       isJsonMode() ? {} : { onEvent: humanRenderEvent },
     );
-    emitSuccess("jobs.download", result, () => {
+    emitSuccess("jobs.retry-svg", result, () => {
       process.stdout.write(
-        `Artifacts downloaded to ${result.outputDirectory}.\n`,
+        result.job.status === "succeeded"
+          ? "SVG retry succeeded; original PDF retained.\n"
+          : "Partial success: original PDF retained; SVG retry failed.\n",
       );
     });
+    if (result.job.status !== "succeeded") process.exitCode = 2;
   });
 
 void program.parseAsync().catch((error: unknown) => {
@@ -546,6 +574,10 @@ function emitRenderFailure(result: RenderProjectResult): void {
   };
   if (isJsonMode())
     writeJson({ success: false, command: "render", result, error });
+  else if (result.job.stages?.pdf.status === "succeeded")
+    process.stderr.write(
+      "Partial success: PDF and previews were saved. SVG failed; use jobs retry-svg to retry SVG without recompiling the PDF.\n",
+    );
 }
 
 function normalizeError(error: unknown): {

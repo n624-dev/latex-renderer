@@ -1,6 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
-import { ARTIFACT_AVAILABLE_SQL, artifactAvailabilityCutoff, type ArtifactAvailability } from "../artifact-availability.js";
+import {
+  ARTIFACT_AVAILABLE_SQL,
+  artifactAvailabilityCutoff,
+  type ArtifactAvailability,
+} from "../artifact-availability.js";
 
 export interface ArtifactRow {
   id: string;
@@ -46,13 +50,49 @@ export function artifactStoragePath(
 export class ArtifactsRepository {
   constructor(private readonly db: DatabaseSync) {}
 
-  listDownloadable(jobId: string, policy: ArtifactAvailability = {}): ArtifactRow[] {
+  referencedGenerations(jobId: string): number[] {
+    return (
+      this.db
+        .prepare(
+          "SELECT DISTINCT storage_generation FROM artifacts WHERE job_id=? AND storage_generation IS NOT NULL",
+        )
+        .all(jobId) as { storage_generation: number }[]
+    ).map((row) => row.storage_generation);
+  }
+
+  hasActiveTransfers(jobId: string, timestamp: string): boolean {
+    return (
+      this.db
+        .prepare(
+          "SELECT 1 FROM artifact_download_leases WHERE job_id=? AND expires_at>? LIMIT 1",
+        )
+        .get(jobId, timestamp) !== undefined
+    );
+  }
+
+  hasPublishedPdf(jobId: string): boolean {
+    return (
+      this.db
+        .prepare(
+          "SELECT 1 FROM artifacts WHERE job_id=? AND type='pdf' AND relative_path='result.pdf' LIMIT 1",
+        )
+        .get(jobId) !== undefined
+    );
+  }
+
+  listDownloadable(
+    jobId: string,
+    policy: ArtifactAvailability = {},
+  ): ArtifactRow[] {
     return this.db
       .prepare(
         `SELECT a.id,a.job_id,a.type,a.relative_path,a.size,a.sha256,a.created_at,a.storage_generation FROM artifacts a
       JOIN jobs j ON j.id=a.job_id WHERE a.job_id=? AND ${ARTIFACT_AVAILABLE_SQL} ORDER BY a.relative_path`,
       )
-      .all(jobId, artifactAvailabilityCutoff(policy)) as unknown as ArtifactRow[];
+      .all(
+        jobId,
+        artifactAvailabilityCutoff(policy),
+      ) as unknown as ArtifactRow[];
   }
 
   getDownloadable(
@@ -65,7 +105,11 @@ export class ArtifactsRepository {
         `SELECT a.id,a.job_id,a.type,a.relative_path,a.size,a.sha256,a.created_at,a.storage_generation FROM artifacts a
       JOIN jobs j ON j.id=a.job_id WHERE a.job_id=? AND a.relative_path=? AND ${ARTIFACT_AVAILABLE_SQL}`,
       )
-      .get(jobId, relativePath, artifactAvailabilityCutoff(policy)) as unknown as ArtifactRow | undefined;
+      .get(
+        jobId,
+        relativePath,
+        artifactAvailabilityCutoff(policy),
+      ) as unknown as ArtifactRow | undefined;
   }
 
   createLease(input: {
@@ -93,14 +137,44 @@ export class ArtifactsRepository {
   }
 
   renewLease(id: string, timestamp: string, expiresAt: string): boolean {
-    return this.db.prepare("UPDATE artifact_download_leases SET expires_at=? WHERE id=? AND expires_at>?")
-      .run(expiresAt, id, timestamp).changes === 1;
+    return (
+      this.db
+        .prepare(
+          "UPDATE artifact_download_leases SET expires_at=? WHERE id=? AND expires_at>?",
+        )
+        .run(expiresAt, id, timestamp).changes === 1
+    );
   }
 
   insert(input: ArtifactRow): void {
     this.db
       .prepare(
         `INSERT INTO artifacts(id,job_id,type,relative_path,size,sha256,created_at,storage_generation) VALUES (?,?,?,?,?,?,?,?)`,
+      )
+      .run(
+        input.id,
+        input.job_id,
+        input.type,
+        input.relative_path,
+        input.size,
+        input.sha256,
+        input.created_at,
+        input.storage_generation ?? null,
+      );
+  }
+
+  /** Replace only the immutable storage pointer. Existing transfer leases keep
+   * their artifact ID; old generations are not removed while they may be read. */
+  publishStage(input: ArtifactRow): void {
+    if (!input.relative_path.startsWith("svg/")) {
+      this.insert(input);
+      return;
+    }
+    this.db
+      .prepare(
+        `INSERT INTO artifacts(id,job_id,type,relative_path,size,sha256,created_at,storage_generation)
+      VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(job_id,relative_path) DO UPDATE SET
+      type=excluded.type,size=excluded.size,sha256=excluded.sha256,created_at=excluded.created_at,storage_generation=excluded.storage_generation`,
       )
       .run(
         input.id,

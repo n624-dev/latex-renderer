@@ -4,6 +4,11 @@ import { AppError, newId, nowIso } from "@latex-renderer/shared";
 import { schemaSql } from "./schema.js";
 import { applyDatabaseMigrations } from "./migrations.js";
 export { ProjectOperations, type ProjectActor } from "./project-operations.js";
+export {
+  SvgRetryOperations,
+  type SvgRetryActor,
+  type SvgRetryLimits,
+} from "./svg-retry-operations.js";
 export { sourceRequestExpiresAt } from "./source-lifecycle.js";
 export { artifactRetentionExpiresAt } from "./artifact-availability.js";
 export {
@@ -26,6 +31,7 @@ import {
   WebPrincipalsRepository,
   ProjectsRepository,
   BrowserAuthRepository,
+  OutputStagesRepository,
 } from "./repositories/index.js";
 
 export interface DatabaseOptions {
@@ -49,6 +55,7 @@ export class RendererDatabase {
   public readonly webPrincipals: WebPrincipalsRepository;
   public readonly projects: ProjectsRepository;
   public readonly browserAuth: BrowserAuthRepository;
+  public readonly outputStages: OutputStagesRepository;
 
   constructor(path: string, options: DatabaseOptions = {}) {
     this.raw = new DatabaseSync(path, {
@@ -70,6 +77,7 @@ export class RendererDatabase {
     this.webPrincipals = new WebPrincipalsRepository(this.raw);
     this.projects = new ProjectsRepository(this.raw);
     this.browserAuth = new BrowserAuthRepository(this.raw);
+    this.outputStages = new OutputStagesRepository(this.raw);
   }
 
   migrate(): void {

@@ -1,5 +1,13 @@
 # Deployment
 
+Migration 021 adds durable, independently published PDF/SVG stages. Deploy all
+database consumers and cleanup together after the encrypted backup, restore test
+and private-copy migration preflight, then verify schema 21. Existing Jobs are not
+reprocessed. New PDF+SVG Jobs may expose a verified PDF before SVG finishes; SVG
+retries retain that PDF and its original retention deadline. Application-only
+downgrade remains disabled. See [Migration 021](MIGRATIONS.md#migration-021-independent-output-stages)
+and [the output-stage contract](docs/independent-output-stages.md).
+
 Migration 020 adds bounded, ten-minute OAuth login continuations. Deploy the
 application and scheduled cleanup together after the verified backup, restore
 test and private-copy migration preflight, then verify schema 20. Pending login

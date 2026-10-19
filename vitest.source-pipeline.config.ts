@@ -5,7 +5,10 @@ if (process.env.SOURCE_PIPELINE_RENDERER_IMAGE === undefined)
   );
 export default defineConfig({
   test: {
-    include: ["tests/source-pipeline-e2e.test.ts"],
+    include: [
+      "tests/source-pipeline-e2e.test.ts",
+      "tests/independent-svg-pipeline.test.ts",
+    ],
     testTimeout: 180_000,
     hookTimeout: 30_000,
     fileParallelism: false,

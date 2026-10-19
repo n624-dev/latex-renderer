@@ -987,6 +987,7 @@ describe("Remote MCP HTTP server", () => {
         "create_source_ref",
         "create_render",
         "retry_render",
+        "retry_svg_render",
         "get_render_status",
         "get_render_diagnostics",
         "get_render_preview",

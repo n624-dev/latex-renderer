@@ -15,8 +15,13 @@ import {
 
 const databasePath = required("DATABASE_PATH");
 const storageRoot = required("STORAGE_ROOT");
-try { await pruneServiceDiagnostics(storageRoot); }
-catch { console.error(JSON.stringify({ event: "service_diagnostics.cleanup_failed" })); }
+try {
+  await pruneServiceDiagnostics(storageRoot);
+} catch {
+  console.error(
+    JSON.stringify({ event: "service_diagnostics.cleanup_failed" }),
+  );
+}
 const artifactHours = positive("ARTIFACT_RETENTION_HOURS", 24);
 const historyDays = positive("JOB_HISTORY_RETENTION_DAYS", 30);
 const auditRetentionDays = positive("AUDIT_LOG_RETENTION_DAYS", 365);
@@ -74,7 +79,8 @@ db.prepare(
 db.prepare("DELETE FROM revoked_tickets WHERE expires_at<?").run(now);
 db.prepare("DELETE FROM idempotency_records WHERE expires_at<?").run(now);
 const remoteLoginContinuationsDeleted = Number(
-  db.prepare("DELETE FROM remote_mcp_login_continuations WHERE expires_at<=?")
+  db
+    .prepare("DELETE FROM remote_mcp_login_continuations WHERE expires_at<=?")
     .run(now).changes,
 );
 const remoteCodesDeleted = Number(
@@ -119,7 +125,7 @@ const jobs = db
   .prepare(
     `SELECT j.id FROM jobs j WHERE (
       (j.deletion_status='retained' AND j.status IN (${terminalStatuses})
-       AND COALESCE(j.completed_at,j.updated_at)<=?)
+       AND COALESCE((SELECT p.pdf_completed_at FROM job_output_stages p WHERE p.job_id=j.id AND p.pdf_status='succeeded'),j.completed_at,j.updated_at)<=?)
       OR (j.status='deleting' AND j.deletion_status IN ('retained','pending','deleting'))
       OR (j.deletion_status IN ('pending','deleting','retry')
           AND (j.deletion_next_attempt_at IS NULL OR j.deletion_next_attempt_at<=?))
@@ -141,7 +147,7 @@ for (const record of jobs) {
           deletion_error=NULL,deletion_next_attempt_at=NULL,updated_at=?
         WHERE id=? AND (
           (deletion_status='retained' AND status IN (${terminalStatuses})
-           AND COALESCE(completed_at,updated_at)<=?)
+           AND COALESCE((SELECT p.pdf_completed_at FROM job_output_stages p WHERE p.job_id=jobs.id AND p.pdf_status='succeeded'),completed_at,updated_at)<=?)
           OR (status='deleting' AND deletion_status IN ('retained','pending','deleting'))
           OR (deletion_status IN ('pending','deleting','retry')
               AND (deletion_next_attempt_at IS NULL OR deletion_next_attempt_at<=?))

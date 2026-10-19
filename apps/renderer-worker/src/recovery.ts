@@ -2,6 +2,7 @@ import type { RendererDatabase } from "@latex-renderer/database";
 import { nowIso } from "@latex-renderer/shared";
 import type { WorkerConfig } from "./config.js";
 import { dockerStopVerified, runDocker } from "./docker.js";
+import { pruneRecoveredStageAttempt } from "./stage-recovery.js";
 
 export async function recoverStaleLeases(
   database: RendererDatabase,
@@ -36,6 +37,13 @@ export async function recoverStaleLeases(
       if (!containerIds.every((id) => /^[a-f0-9]{12,64}$/.test(id)))
         throw new Error("Docker returned an invalid renderer container ID");
       for (const id of containerIds) await dockerStopVerified(id);
+      await pruneRecoveredStageAttempt(
+        database,
+        config,
+        job,
+        recoveryOwner,
+        recoveryGeneration,
+      );
     } catch {
       database.transaction(() => {
         if (

@@ -20,6 +20,7 @@ import {
   projectRevisionIdSchema,
   projectRevisionJobsPageSchema,
   renderOutputsSchema,
+  jobStagesSchema,
 } from "@latex-renderer/contracts";
 import { AppError, safeError } from "@latex-renderer/shared";
 import { z } from "zod";
@@ -117,6 +118,7 @@ const jobSchema = z
     previewPages: z.array(z.number().int().positive()),
     artifacts: z.array(artifactSchema),
     webResultUrl: z.url(),
+    stages: jobStagesSchema.optional(),
   })
   .strict();
 const errorSchema = z
@@ -162,7 +164,7 @@ export function createRemoteMcpHandler(
               {
                 uri: uri.href,
                 mimeType: "text/plain",
-                text: "Use create_source for small multi-file projects or chunked Source upload for larger ZIP archives, then create_render with sourceId and one explicit entrypoint. Inspect failures with get_render_diagnostics, pages with get_render_preview, and complete output through owner-scoped MCP resources. Create immutable Source revisions for edits and retry without the Web UI. Never expose tickets or credentials.",
+                text: "Use create_source for small multi-file projects or chunked Source upload for larger ZIP archives, then create_render with sourceId and one explicit entrypoint. Inspect failures with get_render_diagnostics, pages with get_render_preview, and complete output through owner-scoped MCP resources. For staged PDF+SVG Jobs, inspect stages: a succeeded PDF is available even while SVG runs or fails. Use retry_svg_render with the same Job ID and an idempotency key to retry failed SVG without recompiling PDF or extending retention. Create immutable Source revisions for edits. Never expose tickets or credentials.",
               },
             ],
           }),
@@ -484,6 +486,34 @@ export function createRemoteMcpHandler(
           ),
       );
       server.registerTool(
+        "retry_svg_render",
+        {
+          _meta: oauthToolMeta("mcp:render"),
+          title: "Retry SVG without recompiling the PDF",
+          description:
+            "Retry a failed SVG stage on the same owned Job, keeping its immutable verified PDF. Reuse the same idempotencyKey only when retrying this request after a lost response; use a new key for another SVG attempt. At most 8 SVG attempts including the initial run, within the original PDF retention window.",
+          inputSchema: z
+            .object({ jobId, idempotencyKey: z.string().min(16).max(200) })
+            .strict(),
+          outputSchema: operationOutput(
+            "retry_svg_render",
+            z.object({ job: jobSchema }).strict(),
+          ),
+          annotations: {
+            readOnlyHint: false,
+            destructiveHint: false,
+            idempotentHint: true,
+            openWorldHint: false,
+          },
+        },
+        ({ jobId: id, idempotencyKey }) =>
+          execute("retry_svg_render", identity, renders, 10, () =>
+            Promise.resolve({
+              job: renders.retrySvgRender(identity, id, idempotencyKey),
+            }),
+          ),
+      );
+      server.registerTool(
         "get_render_status",
         {
           _meta: oauthToolMeta("mcp:read"),
@@ -514,7 +544,9 @@ export function createRemoteMcpHandler(
           title: "Get structured render diagnostics",
           description:
             "Return owned Job errors, warnings, and a bounded compile-log excerpt without opening the Web UI.",
-          inputSchema: z.object({ jobId }).strict(),
+          inputSchema: z
+            .object({ jobId, stage: z.enum(["pdf", "svg"]).optional() })
+            .strict(),
           outputSchema: operationOutput(
             "get_render_diagnostics",
             z
@@ -539,6 +571,7 @@ export function createRemoteMcpHandler(
                     logExcerpt: z.string(),
                     rawLogResourceUri: z.string().nullable(),
                     retryable: z.boolean(),
+                    stage: z.enum(["pdf", "svg"]).optional(),
                   })
                   .strict(),
               })
@@ -551,14 +584,14 @@ export function createRemoteMcpHandler(
             openWorldHint: false,
           },
         },
-        ({ jobId: id }) =>
+        ({ jobId: id, stage }) =>
           execute(
             "get_render_diagnostics",
             identity,
             renders,
             60,
             async () => ({
-              diagnostics: await renders.diagnostics(identity, id),
+              diagnostics: await renders.diagnostics(identity, id, stage),
             }),
           ),
       );
@@ -1497,6 +1530,7 @@ type RemoteToolOperation =
   | "create_source_ref"
   | "create_render"
   | "retry_render"
+  | "retry_svg_render"
   | "get_render_status"
   | "get_render_diagnostics"
   | "get_render_preview"
@@ -1591,6 +1625,7 @@ function modelReadableContent(
       ]);
     case "create_render":
     case "retry_render":
+    case "retry_svg_render":
     case "get_render_status":
     case "get_render_artifacts":
     case "cancel_render":
@@ -1670,6 +1705,7 @@ function jobContent(
   const labels: Partial<Record<RemoteToolOperation, string>> = {
       create_render: "Render created.",
       retry_render: "Render retry created.",
+      retry_svg_render: "SVG retry queued; existing PDF retained.",
       get_render_status: "Render status.",
       get_render_artifacts: "Render artifacts.",
       cancel_render: "Render cancellation result.",
@@ -1686,6 +1722,12 @@ function jobContent(
       labels[operation] ?? "Render result.",
       `Job ID: ${stringField(job, "id")}`,
       `Status: ${stringField(job, "status")}`,
+      ...(typeof job.stages === "object" && job.stages !== null
+        ? [
+            `PDF status: ${stringField(recordField(job.stages as Record<string, unknown>, "pdf"), "status")}`,
+            `SVG status: ${stringField(recordField(job.stages as Record<string, unknown>, "svg"), "status")}`,
+          ]
+        : []),
       ...(source === null ? [] : [`Source ID: ${source}`]),
       ...(projectRevision === null
         ? []

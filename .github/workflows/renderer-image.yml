@@ -15,6 +15,7 @@ on:
       - "tests/fixtures/source-pipeline-renderer.mjs"
       - "tests/helpers/source-pipeline.ts"
       - "tests/source-pipeline-e2e.test.ts"
+      - "tests/independent-svg-pipeline.test.ts"
       - "vitest.source-pipeline.config.ts"
       - ".github/workflows/renderer-image.yml"
   push:
@@ -32,6 +33,7 @@ on:
       - "tests/fixtures/source-pipeline-renderer.mjs"
       - "tests/helpers/source-pipeline.ts"
       - "tests/source-pipeline-e2e.test.ts"
+      - "tests/independent-svg-pipeline.test.ts"
       - "vitest.source-pipeline.config.ts"
       - ".github/workflows/renderer-image.yml"
   workflow_dispatch:

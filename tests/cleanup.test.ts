@@ -85,7 +85,21 @@ describe("scheduled cleanup", () => {
         .prepare(
           "UPDATE jobs SET status='succeeded',completed_at=?,updated_at=? WHERE id=?",
         )
-        .run(old, old, jobId);
+        .run(new Date().toISOString(), new Date().toISOString(), jobId);
+      // A late SVG completion must not extend the original PDF's retention.
+      db.raw
+        .prepare(
+          `INSERT INTO job_output_stages(job_id,source_sha256,source_id,entrypoint,project_revision_id,renderer_image,
+        pdf_status,pdf_generation,pdf_sha256,synctex_sha256,pdf_completed_at,svg_status,svg_generation)
+        SELECT id,source_sha256,source_id,entrypoint,project_revision_id,?,'succeeded',1,?,?,?,'succeeded',2 FROM jobs WHERE id=?`,
+        )
+        .run(
+          `sha256:${"a".repeat(64)}`,
+          "a".repeat(64),
+          "b".repeat(64),
+          old,
+          jobId,
+        );
       const sourcePath = join(
         storageRoot,
         "jobs",

@@ -90,11 +90,20 @@ case "$entrypoint" in *.[tT][eE][xX]) ;; *) printf '%s\n' 'renderer: invalid ent
 output_name=${entrypoint##*/}
 output_name=${output_name%.*}.pdf
 outputs=${LATEX_OUTPUTS:-pdf}
+render_stage=${LATEX_RENDER_STAGE:-all}
+case "$render_stage" in all|pdf|svg) ;; *) exit 78 ;; esac
 case "$outputs" in
   pdf) svg_requested=false ;;
   pdf,svg|svg,pdf) svg_requested=true ;;
   *) printf '%s\n' 'renderer: outputs must be pdf or pdf,svg' >> "$renderer_log"; exit 78 ;;
 esac
+
+canonical_pdf=/work/output/result.pdf
+if [ "$render_stage" = svg ]; then
+  [ "$svg_requested" = true ] || exit 78
+  canonical_pdf=/work/pdf/result.pdf
+  [ -f "$canonical_pdf" ] && [ -f /work/pdf/result.synctex.gz ] || exit 79
+else
 
 # Parse hostile image/PDF metadata inside this sandbox before TeX sees it.
 if ! timeout -s TERM -k 2 30 sh -c "find /work/input -type f \( -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg' \) -print0 | xargs -0 -r identify -format '%w %h\\n' --" > /tmp/image-dimensions; then
@@ -211,6 +220,9 @@ for preview in /work/output/previews/page-*.png; do
   fi
 done
 
+fi
+[ "$render_stage" != pdf ] || exit 0
+
 if [ "$svg_requested" = true ]; then
   capture=/tmp/svg-capture
   record_stage
@@ -241,7 +253,7 @@ if [ "$svg_requested" = true ]; then
   set +e
   timeout -s TERM -k 2 "${SVG_CONVERSION_TIMEOUT_SECONDS:-120}" \
     /opt/renderer/export-svg.pl "$capture/objects.pdf" "$capture/objects.meta" \
-      /work/output/result.pdf /work/output/svg \
+      "$canonical_pdf" /work/output/svg \
     >> "$renderer_log" 2>&1
   export_status=$?
   set -e

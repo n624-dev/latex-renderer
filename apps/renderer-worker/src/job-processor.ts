@@ -17,6 +17,7 @@ import {
 } from "./docker.js";
 import { generateMetadata } from "./metadata.js";
 import { classifyRenderResult } from "./render-result.js";
+import { processStagedJob } from "./staged-job-processor.js";
 
 export async function processJob(
   database: RendererDatabase,
@@ -64,6 +65,8 @@ export async function processJob(
     });
     return;
   }
+  if (renderOutputs(job.outputs_json).includes("svg"))
+    return processStagedJob(database, config, job);
   const lease = { lost: false };
   const leaseIsLost = (): boolean => lease.lost;
   const renewLease = () => {

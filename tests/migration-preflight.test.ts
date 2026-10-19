@@ -56,7 +56,7 @@ function run(path: string, temporaryRoot: string) {
 }
 
 describe("real migration preflight", () => {
-  it("validates a private copy through migration 20 without modifying the version 17 database", () => {
+  it("validates a private copy through migration 21 without modifying the version 17 database", () => {
     const f = fixture();
     const before = createHash("sha256")
       .update(readFileSync(f.path))
@@ -67,7 +67,7 @@ describe("real migration preflight", () => {
     expect(JSON.parse(result.stdout)).toMatchObject({
       event: "migration.preflight_completed",
       users: 1,
-      targetVersion: 20,
+      targetVersion: 21,
     });
     expect(
       createHash("sha256").update(readFileSync(f.path)).digest("hex"),
