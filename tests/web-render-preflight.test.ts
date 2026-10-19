@@ -10,6 +10,7 @@ import {
   inspectZip,
   inspectZipCandidates,
   parseJobArtifact,
+  parseJobStatus,
   parseRenderTicket,
   renderScript,
   runBoundedBatch,
@@ -22,6 +23,67 @@ import {
 import { adminRenderPage } from "../apps/admin-web/src/templates-admin.js";
 
 describe("Web render ZIP preflight", () => {
+  it("validates per-output state and accepts only the three canonical SVG diagnostic paths", () => {
+    const jobId = `job_${"a".repeat(32)}`,
+      value = {
+        id: jobId,
+        status: "failed",
+        errorCode: "SVG_GENERATION_FAILED",
+        errorMessage: null,
+        retentionExpiresAt: null,
+        artifacts: [],
+        previews: [],
+        stages: {
+          pdf: {
+            status: "succeeded",
+            sha256: "b".repeat(64),
+            completedAt: "2026-10-19T00:00:00.000Z",
+            errorCode: null,
+            errorMessage: null,
+          },
+          svg: {
+            status: "failed",
+            attempt: 1,
+            completedAt: "2026-10-19T00:00:01.000Z",
+            errorCode: "SVG_GENERATION_FAILED",
+            errorMessage: null,
+          },
+        },
+      };
+    expect(parseJobStatus(value, jobId).stages).toEqual(value.stages);
+    for (const [type, path] of [
+      ["log", "svg/compile.log"],
+      ["errors", "svg/errors.json"],
+      ["dependencies", "svg/dependencies.json"],
+    ]) {
+      const a = {
+        type,
+        relativePath: path,
+        size: 1,
+        sha256: "c".repeat(64),
+        createdAt: "2026-10-19T00:00:01.000Z",
+        downloadUrl: `/api/v1/jobs/${jobId}/artifacts/${path}`,
+      };
+      expect(parseJobArtifact(a, jobId, false)).toEqual(a);
+      expect(() =>
+        parseJobArtifact(
+          { ...a, relativePath: "svg/../compile.log" },
+          jobId,
+          false,
+        ),
+      ).toThrow();
+      expect(() =>
+        parseJobArtifact({ ...a, type: "pdf" }, jobId, false),
+      ).toThrow();
+    }
+    for (const stages of [
+      null,
+      [],
+      { ...value.stages, svg: { ...value.stages.svg, attempt: 9 } },
+      { ...value.stages, pdf: { ...value.stages.pdf, sha256: "invalid" } },
+    ])
+      expect(() => parseJobStatus({ ...value, stages }, jobId)).toThrow();
+  });
   it("accepts only canonical nested SVG artifact paths", () => {
     const jobId = `job_${"a".repeat(32)}`,
       value = {

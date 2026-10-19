@@ -5,6 +5,8 @@ on:
     paths:
       - "deploy/texlive-mirror/**"
       - "deploy/scripts/ci-texlive-mirror-lease.sh"
+      - "deploy/scripts/resolve-texlive-snapshot.sh"
+      - "deploy/scripts/resolve-texlive-ci-snapshot.mjs"
       - "deploy/scripts/install-cloudflared-client.sh"
       - "deploy/scripts/cloudflared-update.sh"
       - "deploy/apt/cloudflared.list"
@@ -23,6 +25,8 @@ on:
     paths:
       - "deploy/texlive-mirror/**"
       - "deploy/scripts/ci-texlive-mirror-lease.sh"
+      - "deploy/scripts/resolve-texlive-snapshot.sh"
+      - "deploy/scripts/resolve-texlive-ci-snapshot.mjs"
       - "deploy/scripts/install-cloudflared-client.sh"
       - "deploy/scripts/cloudflared-update.sh"
       - "deploy/apt/cloudflared.list"
@@ -61,6 +65,7 @@ jobs:
           sh -n \
             deploy/texlive-mirror/texlive-ci-storage-check \
             deploy/texlive-mirror/texlive-ci-ssh \
+            deploy/scripts/resolve-texlive-snapshot.sh \
             deploy/scripts/ci-texlive-mirror-lease.sh \
             deploy/scripts/install-cloudflared-client.sh \
             deploy/scripts/cloudflared-update.sh

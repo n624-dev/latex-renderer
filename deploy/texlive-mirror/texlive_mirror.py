@@ -766,8 +766,8 @@ def reserve(
     architecture: str,
     now: dt.datetime,
 ) -> dict[str, Any]:
-    if (snapshot_id is None) == (canonical_date is None):
-        raise ConfigError("exactly one of snapshot or canonical date is required")
+    if snapshot_id is None and canonical_date is None:
+        raise ConfigError("snapshot or canonical date is required")
     if snapshot_id is not None:
         validate_id(snapshot_id)
     if architecture not in config.architectures:
@@ -776,7 +776,7 @@ def reserve(
         raise ConfigError("owner contains unsupported characters")
     with locked(config.root / "state" / "locks" / "management.lock"):
         state = load_state(config)
-        if canonical_date is not None:
+        if canonical_date is not None and snapshot_id is None:
             matches = [
                 key
                 for key, value in state["snapshots"].items()
@@ -802,6 +802,10 @@ def reserve(
         path = safe_child(config.root / "snapshots", snapshot_id)
         if not entry or entry.get("status") != "published" or not path.is_dir():
             raise MirrorError("requested snapshot is not reservable")
+        if canonical_date is not None and canonical_date not in entry.get(
+            "canonicalDates", [entry["canonicalDate"]]
+        ):
+            raise MirrorError("requested snapshot does not match the canonical date")
         manifest = read_json(path / ".snapshot.json")
         selection = manifest.get("selection")
         architectures = (
@@ -1338,6 +1342,39 @@ def protected_ids(config: Config, state: dict[str, Any], now: dt.datetime) -> se
     return protected
 
 
+def publish_latest_metadata(config: Config, state: dict[str, Any]) -> None:
+    """Rewrite only the small pointer, never payloads, reservations or GC state.
+
+    A verified alias date can be newer than immutable publishedAt. It selects
+    the canonical archive identity, not a fabricated snapshot generation.
+    Caller must hold the management lock.
+    """
+    latest = state.get("latest")
+    if latest is None:
+        (config.root / "latest.json").unlink(missing_ok=True)
+        return
+    record = state["snapshots"].get(latest)
+    if not record or record.get("status") != "published":
+        raise StateError("latest snapshot is not healthy")
+    validate_snapshot_record(latest, record)
+    path = safe_child(config.root / "snapshots", latest)
+    if path.is_symlink() or not path.is_dir():
+        raise StateError("latest snapshot directory is unavailable")
+    atomic_json(
+        config.root / "latest.json",
+        {
+            "schemaVersion": 1,
+            "snapshotId": latest,
+            "url": f"{config.public_base_url}/snapshots/{latest}/tlnet",
+            "publishedAt": record["publishedAt"],
+            "canonicalDate": max(record.get("canonicalDates", [record["canonicalDate"]])),
+            "installerSha512": record["installerSha512"],
+            "databaseSha512": record["databaseSha512"],
+        },
+        0o644,
+    )
+
+
 def reconcile_state(config: Config, state: dict[str, Any]) -> None:
     snapshot_root = config.root / "snapshots"
     disk_ids: set[str] = set()
@@ -1383,22 +1420,7 @@ def reconcile_state(config: Config, state: dict[str, Any]) -> None:
             record["status"] = "published"
         elif record.get("status") == "published" and snapshot_id not in disk_ids:
             raise StateError(f"published snapshot is missing: {snapshot_id}")
-    latest = state.get("latest")
-    if latest:
-        record = state["snapshots"].get(latest)
-        if not record or record.get("status") != "published":
-            raise StateError("latest snapshot is not healthy")
-        atomic_json(
-            config.root / "latest.json",
-            {
-                "snapshotId": latest,
-                "url": f"{config.public_base_url}/snapshots/{latest}/tlnet",
-                "publishedAt": record["publishedAt"],
-            },
-            0o644,
-        )
-    else:
-        (config.root / "latest.json").unlink(missing_ok=True)
+    publish_latest_metadata(config, state)
 
 
 def delete_candidates(
@@ -1870,15 +1892,7 @@ def _sync_attempt(
                     state["latest"] = snapshot_id
                     state["internalProtections"].pop(run_id, None)
                     save_state(config, state)
-                    atomic_json(
-                        config.root / "latest.json",
-                        {
-                            "snapshotId": snapshot_id,
-                            "url": f"{config.public_base_url}/snapshots/{snapshot_id}/tlnet",
-                            "publishedAt": existing["publishedAt"],
-                        },
-                        0o644,
-                    )
+                    publish_latest_metadata(config, state)
                     safe_rmtree(staging, config.root.stat().st_dev)
                     return {
                         "status": "unchanged",
@@ -2019,15 +2033,7 @@ def _sync_attempt(
                     now,
                 )
                 save_state(config, state)
-                atomic_json(
-                    config.root / "latest.json",
-                    {
-                        "snapshotId": snapshot_id,
-                        "url": f"{config.public_base_url}/snapshots/{snapshot_id}/tlnet",
-                        "publishedAt": iso(now),
-                    },
-                    0o644,
-                )
+                publish_latest_metadata(config, state)
             gc(config, now)
             return {
                 "status": "published",
@@ -2079,10 +2085,10 @@ def main(argv: list[str] | None = None) -> int:
     sync_parser = sub.add_parser("sync")
     sync_parser.add_argument("--date", required=True)
     sub.add_parser("gc")
+    sub.add_parser("refresh-metadata")
     reserve_parser = sub.add_parser("reserve")
-    reserve_selection = reserve_parser.add_mutually_exclusive_group(required=True)
-    reserve_selection.add_argument("--snapshot")
-    reserve_selection.add_argument("--canonical-date")
+    reserve_parser.add_argument("--snapshot")
+    reserve_parser.add_argument("--canonical-date")
     reserve_parser.add_argument("--owner", required=True)
     reserve_parser.add_argument("--architecture", required=True, choices=sorted(ARCHES))
     release_parser = sub.add_parser("release")
@@ -2101,6 +2107,11 @@ def main(argv: list[str] | None = None) -> int:
                 result = sync(config, args.date)
         elif args.command == "gc":
             result = gc(config)
+        elif args.command == "refresh-metadata":
+            with locked(config.root / "state" / "locks" / "management.lock"):
+                state = load_state(config)
+                publish_latest_metadata(config, state)
+                result = {"refreshed": True, "snapshotId": state["latest"]}
         elif args.command == "reserve":
             result = reserve(
                 config,

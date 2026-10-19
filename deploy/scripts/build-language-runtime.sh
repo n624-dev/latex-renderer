@@ -136,6 +136,7 @@ RUN set -eu; \
 ARG RENDERER_RUNTIME_FINGERPRINT
 COPY runtime/ /opt/renderer/
 COPY languages.txt /opt/renderer/language-collections.txt
+RUN sh /opt/renderer/install-language-packages.sh --warm-font-cache
 RUN chmod 0555 /opt/renderer/compile.sh /opt/renderer/export-svg.pl \
  && chmod 0444 /opt/renderer/texmf.cnf /opt/renderer/latexmkrc /opt/renderer/svg-wrapper.tex /opt/renderer/language-collections.txt
 USER 10000:10000

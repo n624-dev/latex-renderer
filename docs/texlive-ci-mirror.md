@@ -31,6 +31,28 @@ certify a working ARM TeX renderer or signed ARM host updates.
 
 ## Multi-platform Base publication
 
+### Selecting the CI snapshot
+
+When the CI mirror is configured, `latest` starts from its bounded public
+`latest.json` metadata, not a backwards search for an archive date that happens
+to answer a network probe. Metadata schema version 1 contains `snapshotId`,
+`url`, immutable `publishedAt`, the newest verified `canonicalDate` alias, and
+full `installerSha512` / `databaseSha512` identities. CI validates the ID/hash
+binding and age window, compares both identities with that exact canonical
+archive date, and reserves the exact ID **and** date together. A changed latest
+pointer cannot substitute another snapshot between selection and reservation.
+Timeouts, identity differences and unavailable snapshots fail the job; they do
+not silently choose an older date or another download origin. Explicit dates
+remain explicit. Payload signature/checksum verification is unchanged.
+
+For an existing deployment, install the updated manager and restricted SSH
+wrapper before enabling the updated CI selector. Then run, as the mirror's
+dedicated user, `texlive-mirror --config /etc/texlive-ci/config.json refresh-metadata`.
+This takes the management lock and atomically updates only the small pointer;
+it does not run GC, sync payloads, alter leases, change publication timestamps,
+or create a snapshot generation. Normal sync and GC also maintain this schema.
+Do not manually invent an alias date or rewrite a published snapshot.
+
 The daily workflow resolves the canonical date once before launching native
 builds. Each runner performs the full Base, English/Japanese PDF/PNG/SVG,
 compatibility and Source pipeline validation without an Actions build cache.
@@ -253,7 +275,8 @@ configuration with `sshd -t`, and reload rather than restart SSH. The per-user
 `ForceCommand` is intentionally duplicated by the key restriction as defense in
 depth.
 
-The forced command accepts only `reserve DATE OWNER ARCH` and
+The forced command accepts `reserve DATE OWNER ARCH`,
+`reserve-snapshot ID DATE OWNER ARCH`, and
 `release TOKEN OWNER`. Existence checking and creation use the same management
 lock as deletion. Owners should be
 `run-id:run-attempt:job:architecture`; retries therefore cannot steal or extend

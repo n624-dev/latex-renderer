@@ -10,6 +10,8 @@ const databases: RendererDatabase[] = [];
 const temporary: string[] = [];
 
 afterEach(async () => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
   for (const database of databases.splice(0)) database.close();
   await Promise.all(
     temporary
@@ -19,6 +21,162 @@ afterEach(async () => {
 });
 
 describe("Remote MCP core", () => {
+  it("bounds reply retention to 128 families without revoking an evicted family", () => {
+    const f = refreshFixture(),
+      first = f.refresh(f.tokens.refresh_token);
+    for (let i = 0; i < 128; i++) {
+      const redirect = f.oauth.authorize("user_test", {
+        clientId: f.exchangeInput.clientId,
+        redirectUri: f.exchangeInput.redirectUri,
+        scopes: ["mcp:read"],
+        resource: f.exchangeInput.resource,
+        codeChallenge: createHash("sha256")
+          .update(f.exchangeInput.codeVerifier)
+          .digest("base64url"),
+      });
+      const token = f.oauth.exchangeAuthorizationCode({
+        ...f.exchangeInput,
+        code: redirect.searchParams.get("code") as string,
+      });
+      f.refresh(token.refresh_token);
+    }
+    expect(() => f.refresh(f.tokens.refresh_token)).toThrow(
+      expect.objectContaining({ code: "OAUTH_REFRESH_RETRY" }),
+    );
+    expect(f.oauth.verifyAccessToken(first.access_token)).toBeDefined();
+  });
+  it("discards retained replies at the deadline even without another request", () => {
+    vi.useFakeTimers();
+    const f = refreshFixture();
+    f.refresh(f.tokens.refresh_token);
+    expect(vi.getTimerCount()).toBe(1);
+    f.now.value += 30_000;
+    vi.advanceTimersByTime(30_000);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+  it("does not replay an explicitly revoked family", () => {
+    const f = refreshFixture(),
+      first = f.refresh(f.tokens.refresh_token);
+    const row = f.database.remoteMcp.token(
+      createHash("sha256").update(first.refresh_token).digest("hex"),
+    );
+    if (!row) throw new Error("Missing fixture token");
+    f.database.remoteMcp.revokeFamily(
+      row.family_id,
+      new Date(f.now.value).toISOString(),
+    );
+    expect(() => f.refresh(f.tokens.refresh_token)).toThrow(
+      "expired or revoked",
+    );
+    expect(() => f.oauth.verifyAccessToken(first.access_token)).toThrow();
+  });
+  it("recovers a lost rotation response after 17 seconds without issuing or extending tokens", () => {
+    const f = refreshFixture(),
+      first = f.refresh(f.tokens.refresh_token);
+    const count = f.database.raw
+      .prepare("SELECT COUNT(*) AS n FROM remote_mcp_tokens")
+      .get();
+    f.now.value += 17_000;
+    const retried = f.refresh(f.tokens.refresh_token);
+    expect(retried).toMatchObject({
+      access_token: first.access_token,
+      refresh_token: first.refresh_token,
+      expires_in: 583,
+    });
+    expect(
+      f.database.raw
+        .prepare("SELECT COUNT(*) AS n FROM remote_mcp_tokens")
+        .get(),
+    ).toEqual(count);
+    expect(f.events.map((e) => e.outcome)).toEqual([
+      "authorized",
+      "issued",
+      "replayed",
+    ]);
+    expect(JSON.stringify(f.events)).not.toContain(first.refresh_token);
+  });
+  it("merges interleaved retries into the latest still-usable successor", () => {
+    const f = refreshFixture(),
+      first = f.refresh(f.tokens.refresh_token);
+    f.now.value += 2000;
+    const second = f.refresh(first.refresh_token);
+    expect(f.refresh(f.tokens.refresh_token)).toMatchObject({
+      access_token: second.access_token,
+      refresh_token: second.refresh_token,
+    });
+    expect(f.oauth.verifyAccessToken(second.access_token)).toBeDefined();
+  });
+  it("does not slide the original replay deadline after successful retries", () => {
+    const f = refreshFixture(),
+      first = f.refresh(f.tokens.refresh_token);
+    f.now.value += 29_000;
+    expect(f.refresh(f.tokens.refresh_token).refresh_token).toBe(
+      first.refresh_token,
+    );
+    f.now.value += 1000;
+    expect(() => f.refresh(f.tokens.refresh_token)).toThrow("reuse revoked");
+    expect(() => f.oauth.verifyAccessToken(first.access_token)).toThrow(
+      "invalid",
+    );
+  });
+  it("checks client/resource binding before replay and does not revoke another grant", () => {
+    const f = refreshFixture(),
+      first = f.refresh(f.tokens.refresh_token);
+    expect(() =>
+      f.oauth.refresh({
+        refreshToken: f.tokens.refresh_token,
+        clientId: "wrong",
+        resource: f.exchangeInput.resource,
+      }),
+    ).toThrow("binding");
+    expect(() =>
+      f.oauth.refresh({
+        refreshToken: f.tokens.refresh_token,
+        clientId: f.exchangeInput.clientId,
+        resource: "https://other.example/mcp",
+      }),
+    ).toThrow("binding");
+    expect(f.oauth.verifyAccessToken(first.access_token)).toBeDefined();
+  });
+  it("never replays a reply after subject security changes or explicit revocation", () => {
+    const f = refreshFixture(),
+      first = f.refresh(f.tokens.refresh_token);
+    f.database.users.incrementSecurityVersion(
+      "user_test",
+      new Date(f.now.value).toISOString(),
+    );
+    expect(() => f.refresh(f.tokens.refresh_token)).toThrow(
+      "User authorization changed",
+    );
+    expect(() => f.oauth.verifyAccessToken(first.access_token)).toThrow();
+  });
+  it("returns a retryable failure after a process-local reply is lost, preserving the durable grant", () => {
+    const f = refreshFixture(),
+      first = f.refresh(f.tokens.refresh_token);
+    const restarted = new RemoteOAuthService(
+      f.database,
+      "https://latex.example.com",
+      f.exchangeInput.resource,
+      () => f.now.value,
+    );
+    expect(() =>
+      restarted.refresh({
+        refreshToken: f.tokens.refresh_token,
+        clientId: f.exchangeInput.clientId,
+        resource: f.exchangeInput.resource,
+      }),
+    ).toThrow(
+      expect.objectContaining({ code: "OAUTH_REFRESH_RETRY", status: 503 }),
+    );
+    expect(restarted.verifyAccessToken(first.access_token)).toBeDefined();
+    expect(
+      restarted.refresh({
+        refreshToken: first.refresh_token,
+        clientId: f.exchangeInput.clientId,
+        resource: f.exchangeInput.resource,
+      }).refresh_token,
+    ).not.toBe(first.refresh_token);
+  });
   it("uses Authorization Code + PKCE and revokes a reused refresh family", () => {
     const database = seededDatabase(),
       now = { value: Date.parse("2026-08-12T00:00:00.000Z") },
@@ -65,17 +223,20 @@ describe("Remote MCP core", () => {
       resource: "https://latex.example.com/mcp",
     });
     expect(rotated.refresh_token).not.toBe(tokens.refresh_token);
-    expect(() =>
+    expect(
       oauth.refresh({
         refreshToken: tokens.refresh_token,
         clientId: client.clientId,
         resource: "https://latex.example.com/mcp",
       }),
-    ).toThrow("Refresh token is already being retried");
+    ).toMatchObject({
+      access_token: rotated.access_token,
+      refresh_token: rotated.refresh_token,
+    });
     // A concurrent retry must not revoke the family that already produced a
     // valid replacement. A later replay still exercises strict reuse detection.
     expect(oauth.verifyAccessToken(rotated.access_token)).toBeDefined();
-    now.value += 6_000;
+    now.value += 31_000;
     expect(() =>
       oauth.refresh({
         refreshToken: tokens.refresh_token,
@@ -100,9 +261,7 @@ describe("Remote MCP core", () => {
     ).toThrow("User authorization changed");
     expect(
       fixture.database.remoteMcp.authorizationCode(
-        createHash("sha256")
-          .update(fixture.exchangeInput.code)
-          .digest("hex"),
+        createHash("sha256").update(fixture.exchangeInput.code).digest("hex"),
       )?.used_at,
     ).toBeNull();
     expect(
@@ -127,9 +286,7 @@ describe("Remote MCP core", () => {
     ).toThrow("touch client failed");
     expect(
       fixture.database.remoteMcp.authorizationCode(
-        createHash("sha256")
-          .update(fixture.exchangeInput.code)
-          .digest("hex"),
+        createHash("sha256").update(fixture.exchangeInput.code).digest("hex"),
       )?.used_at,
     ).toBeNull();
     expect(
@@ -228,7 +385,10 @@ describe("Remote MCP core", () => {
   });
 });
 
-function authorizationFixture(): {
+function authorizationFixture(
+  clock = () => Date.parse("2026-08-12T00:00:00.000Z"),
+  diagnostic: ConstructorParameters<typeof RemoteOAuthService>[4] = () => {},
+): {
   database: RendererDatabase;
   oauth: RemoteOAuthService;
   exchangeInput: {
@@ -244,7 +404,8 @@ function authorizationFixture(): {
       database,
       "https://latex.example.com",
       "https://latex.example.com/mcp",
-      () => Date.parse("2026-08-12T00:00:00.000Z"),
+      clock,
+      diagnostic,
     ),
     client = oauth.registerClient({
       clientName: "Test MCP client",
@@ -278,6 +439,32 @@ function authorizationFixture(): {
       codeVerifier,
       resource: "https://latex.example.com/mcp",
     },
+  };
+}
+
+function refreshFixture() {
+  const now = { value: Date.parse("2026-08-12T00:00:00.000Z") };
+  const events: Array<
+    Parameters<
+      NonNullable<ConstructorParameters<typeof RemoteOAuthService>[4]>
+    >[0]
+  > = [];
+  const f = authorizationFixture(
+    () => now.value,
+    (e) => events.push(e),
+  );
+  const tokens = f.oauth.exchangeAuthorizationCode(f.exchangeInput);
+  return {
+    ...f,
+    now,
+    events,
+    tokens,
+    refresh: (refreshToken: string) =>
+      f.oauth.refresh({
+        refreshToken,
+        clientId: f.exchangeInput.clientId,
+        resource: f.exchangeInput.resource,
+      }),
   };
 }
 

@@ -90,6 +90,7 @@ export interface BrowserJobStatus {
   previews: BrowserJobArtifact[];
   sourceId?: string | null;
   entrypoint?: string;
+  stages?: import("@latex-renderer/contracts").JobStages;
 }
 
 export type RenderFetch = (
@@ -424,6 +425,54 @@ export function parseJobStatus(
   const previews = record.previews.map((artifact) =>
     parseJobArtifact(artifact, expectedJobId, true),
   );
+  let stages: BrowserJobStatus["stages"];
+  if (record.stages !== undefined) {
+    const value = record.stages;
+    if (typeof value !== "object" || value === null || Array.isArray(value))
+      throw new Error("出力ステージの形式が不正です。");
+    const raw = value as Record<string, unknown>;
+    for (const key of ["pdf", "svg"] as const) {
+      const entry = raw[key];
+      if (typeof entry !== "object" || entry === null || Array.isArray(entry))
+        throw new Error("出力ステージの形式が不正です。");
+      const s = entry as Record<string, unknown>;
+      if (
+        typeof s.status !== "string" ||
+        ![
+          "not_requested",
+          "queued",
+          "running",
+          "succeeded",
+          "failed",
+          "timeout",
+          "canceled",
+          "skipped",
+        ].includes(s.status) ||
+        !(
+          s.completedAt === null ||
+          (typeof s.completedAt === "string" &&
+            Number.isFinite(Date.parse(s.completedAt)))
+        ) ||
+        !(s.errorCode === null || typeof s.errorCode === "string") ||
+        !(s.errorMessage === null || typeof s.errorMessage === "string")
+      )
+        throw new Error("出力ステージの形式が不正です。");
+    }
+    const pdf = raw.pdf as Record<string, unknown>,
+      svg = raw.svg as Record<string, unknown>;
+    if (
+      !(
+        pdf.sha256 === null ||
+        (typeof pdf.sha256 === "string" && /^[a-f0-9]{64}$/.test(pdf.sha256))
+      ) ||
+      typeof svg.attempt !== "number" ||
+      !Number.isInteger(svg.attempt) ||
+      svg.attempt < 1 ||
+      svg.attempt > 8
+    )
+      throw new Error("出力ステージの形式が不正です。");
+    stages = value as NonNullable<BrowserJobStatus["stages"]>;
+  }
   return {
     id: expectedJobId,
     status: record.status as BrowserJobStatus["status"],
@@ -432,6 +481,7 @@ export function parseJobStatus(
     retentionExpiresAt,
     artifacts,
     previews,
+    ...(stages === undefined ? {} : { stages }),
   };
 }
 
@@ -480,8 +530,12 @@ export function parseJobArtifact(
         type === "svg_manifest" && relativePath === "svg/manifest.json",
       svgObject =
         type === "svg" &&
-        /^svg\/objects\/(?:math|tikz)-[0-9]{6}\.svg$/.test(relativePath);
-    if (!flat && !svgManifest && !svgObject)
+        /^svg\/objects\/(?:math|tikz)-[0-9]{6}\.svg$/.test(relativePath),
+      svgDiagnostic =
+        (type === "log" && relativePath === "svg/compile.log") ||
+        (type === "errors" && relativePath === "svg/errors.json") ||
+        (type === "dependencies" && relativePath === "svg/dependencies.json");
+    if (!flat && !svgManifest && !svgObject && !svgDiagnostic)
       throw new Error("成果物情報の形式が不正です。");
     expectedUrl = `/api/v1/jobs/${encodeURIComponent(jobId)}/artifacts/${relativePath.split("/").map(encodeURIComponent).join("/")}`;
   }
@@ -1254,6 +1308,15 @@ function installRenderWorkflow(csrfToken: string): void {
       actions.className = "actions-cell";
       name.textContent = task.label;
       state.textContent = task.message ?? jobStatusLabel(task.state);
+      if (task.job?.stages) {
+        const { pdf, svg } = task.job.stages,
+          partial =
+            pdf.status === "succeeded" &&
+            ["failed", "timeout", "canceled"].includes(svg.status);
+        state.textContent =
+          (partial ? "部分成功 — " : "") +
+          `PDF: ${jobStatusLabel(pdf.status)} / SVG: ${jobStatusLabel(svg.status)}`;
+      }
       job.textContent = task.jobId ?? "—";
       if (
         !TERMINAL_JOB_STATUSES.has(task.state) &&
@@ -1272,6 +1335,8 @@ function installRenderWorkflow(csrfToken: string): void {
           ["result.pdf", "PDF"],
           ["compile.log", "ログ"],
           ["errors.json", "エラー"],
+          ["svg/compile.log", "SVGログ"],
+          ["svg/errors.json", "SVGエラー"],
         ] as const) {
           const artifact = task.job.artifacts.find(
             (item) => item.relativePath === path,

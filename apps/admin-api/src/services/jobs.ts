@@ -3,6 +3,7 @@ import { statfs } from "node:fs/promises";
 import { AppError, newId, nowIso } from "@latex-renderer/shared";
 import {
   ProjectOperations,
+  SvgRetryOperations,
   sourceRequestExpiresAt,
   type JobRow,
 } from "@latex-renderer/database";
@@ -33,8 +34,15 @@ export class AdminJobsService {
     } = {},
   ) {
     const page = this.deps.database.jobs.listAdminPage(filters);
+    const stages = this.deps.database.outputStages.publicStates(
+      page.items.map((job) => job.id),
+    );
     return {
       ...page,
+      items: page.items.map((job) => ({
+        ...job,
+        ...(stages.has(job.id) ? { stages: stages.get(job.id) } : {}),
+      })),
       total: this.deps.database.jobs.countAdmin(filters),
     };
   }
@@ -42,10 +50,15 @@ export class AdminJobsService {
     const row = this.deps.database.jobs.getVisible(id);
     if (row === undefined)
       throw new AppError("JOB_NOT_FOUND", "Job does not exist", 404);
-    const terminalAt = row.completed_at ?? row.updated_at,
-      retention = RETAINED.has(row.status)
-        ? retentionExpiresAt(this.deps, terminalAt)
-        : null,
+    const stages = this.deps.database.outputStages.publicState(id);
+    const terminalAt = this.deps.database.outputStages.retentionStart(
+        id,
+        row.completed_at ?? row.updated_at,
+      ),
+      retention =
+        RETAINED.has(row.status) || stages?.pdf.status === "succeeded"
+          ? retentionExpiresAt(this.deps, terminalAt)
+          : null,
       available =
         retention !== null &&
         Date.parse(retention) > Date.now() &&
@@ -107,6 +120,7 @@ export class AdminJobsService {
       output_size: row.output_size,
       retry_of_job_id: row.retry_of_job_id,
       retries: this.deps.database.jobs.retries(id),
+      ...(stages === undefined ? {} : { stages }),
       artifacts: artifacts
         .filter((artifact) => artifact.type !== "preview")
         .map(item),
@@ -887,6 +901,23 @@ export class AdminJobsService {
       }
     });
     return accepted;
+  }
+
+  async retrySvg(
+    actor: AppActor,
+    id: string,
+    key: string,
+  ): Promise<{ id: string; reused: boolean }> {
+    const row = this.deps.database.jobs.getVisible(id);
+    if (!row) throw new AppError("JOB_NOT_FOUND", "Job does not exist", 404);
+    const fs = await statfs(this.deps.storageRoot);
+    if (fs.bavail * fs.bsize < this.deps.minFreeStorageBytes)
+      throw new AppError("STORAGE_PRESSURE", "Insufficient free storage", 503);
+    return new SvgRetryOperations(this.deps.database, this.deps).retry(
+      { userId: row.user_id, type: actor.type, id: actor.id },
+      id,
+      key,
+    );
   }
 
   async retry(

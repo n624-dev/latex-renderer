@@ -32,6 +32,13 @@ export function classifyRenderResult(
       errorMessage: null,
       auditAction: "render.completed",
     };
+  if (exitCode === 84)
+    return {
+      status: "failed",
+      errorCode: "RENDERER_MEMORY_LIMIT",
+      errorMessage: "The renderer exceeded its container memory limit",
+      auditAction: "render.failed",
+    };
   const stage = stageTimeouts.get(exitCode);
   if (stage !== undefined)
     return {

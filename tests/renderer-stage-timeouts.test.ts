@@ -19,6 +19,7 @@ describe("renderer stage timeout exit codes", () => {
     ["preview", "pdf", 82, "PDF preview timed out"],
     ["svg", "pdf,svg", 83, "SVG capture timed out"],
     ["svg-export", "pdf,svg", 83, "SVG conversion timed out"],
+    ["memory", "pdf", 84, "memory limit exceeded"],
   ])(
     "maps %s/%s timeout to stage exit %i",
     async (stage, outputs, code, message) => {
@@ -28,6 +29,10 @@ describe("renderer stage timeout exit codes", () => {
         const opt = join(root, "opt");
         const scratch = join(root, "tmp");
         const bin = join(root, "bin");
+        const cgroup = join(root, "cgroup");
+        await mkdir(cgroup);
+        await writeFile(join(cgroup, "memory.events"), "oom_kill 0\n");
+        await writeFile(join(cgroup, "memory.peak"), "1048576\n");
         await mkdir(join(work, "input"), { recursive: true });
         await mkdir(scratch);
         await mkdir(
@@ -49,6 +54,10 @@ while (i<args.length && args[i].startsWith('-')) {
 i++;
 const command=args[i], commandArgs=args.slice(i+1);
 const stage=process.env.TEST_TIMEOUT_STAGE;
+if(stage==='memory' && command==='latexmk') {
+  require('node:fs').writeFileSync(require('node:path').join(process.env.TEST_CGROUP_ROOT,'memory.events'),'oom_kill 1\\n');
+  process.exit(12);
+}
 if ((stage==='compile' && command==='latexmk' && !commandArgs.includes('-jobname=objects')) ||
     (stage==='pdfinfo' && command==='pdfinfo') ||
     (stage==='preview' && command==='pdftoppm') ||
@@ -85,9 +94,10 @@ if(name==='objects') fs.writeFileSync(path.join(out,'objects.meta'),'capture met
           "/work": work,
           "/opt": opt,
           "/tmp": scratch,
+          "/sys/fs/cgroup": cgroup,
         };
         const script = original.replace(
-          /\/(?:work|opt|tmp)\b/g,
+          /\/(?:work|opt|tmp)\b|\/sys\/fs\/cgroup/g,
           (prefix) => prefixes[prefix] as string,
         );
         const scriptPath = join(root, "compile.sh");
@@ -101,6 +111,7 @@ if(name==='objects') fs.writeFileSync(path.join(out,'objects.meta'),'capture met
               LATEX_ENTRYPOINT: "main.tex",
               LATEX_OUTPUTS: outputs,
               TEST_TIMEOUT_STAGE: stage,
+              TEST_CGROUP_ROOT: cgroup,
             },
           }),
         ).rejects.toMatchObject({ code });

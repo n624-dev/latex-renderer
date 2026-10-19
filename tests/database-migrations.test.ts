@@ -114,7 +114,7 @@ describe("database migration 002", () => {
         .prepare("SELECT version FROM schema_migrations ORDER BY version")
         .all(),
     ).toEqual(
-      Array.from({ length: 20 }, (_, index) => ({ version: index + 1 })),
+      Array.from({ length: 21 }, (_, index) => ({ version: index + 1 })),
     );
 
     expect(() => migrated.migrate()).not.toThrow();

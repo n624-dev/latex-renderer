@@ -15,6 +15,7 @@ import {
 } from "@latex-renderer/shared";
 import { createRemoteMcpApp } from "./app.js";
 import { createRemoteMcpHandler } from "./mcp.js";
+import { oauthDiagnostics } from "./diagnostics.js";
 
 function required(name: string): string {
   const value = process.env[name];
@@ -34,6 +35,8 @@ const oauth = new RemoteOAuthService(
     database,
     publicOrigin,
     new URL("/mcp", publicOrigin).toString(),
+    Date.now,
+    oauthDiagnostics(required("STORAGE_ROOT")),
   ),
   renders = new RemoteRenderService(
     database,

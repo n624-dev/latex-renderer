@@ -41,7 +41,8 @@ RUN mkdir -p /tmp/install-tl \
 ENV PATH="/opt/texlive/2026/bin/x86_64-linux:${PATH}"
 RUN fc-cache -f \
  && TEXMFCACHE=/opt/texlive/2026/texmf-var luaotfload-tool --update --force --no-compress
-COPY texmf.cnf latexmkrc compile.sh svg-wrapper.tex export-svg.pl /opt/renderer/
+COPY texmf.cnf latexmkrc compile.sh svg-wrapper.tex export-svg.pl install-language-packages.sh /opt/renderer/
+RUN sh /opt/renderer/install-language-packages.sh --warm-font-cache
 RUN chmod 0555 /opt/renderer/compile.sh /opt/renderer/export-svg.pl \
  && chmod 0444 /opt/renderer/texmf.cnf /opt/renderer/latexmkrc /opt/renderer/svg-wrapper.tex \
  && chmod 0444 /opt/renderer/debian-packages.txt \

@@ -354,16 +354,34 @@ function shortSummary(output: McpToolOutput): string {
     case "upload_source":
       return `Source ${output.result?.source.sourceId ?? "prepared"}.`;
     case "create_render_job":
-      return `Render ${output.result?.job.id ?? "created"}: ${output.result?.job.status ?? "queued"}.`;
+      return `Render ${output.result?.job.id ?? "created"}: ${outputStageLabel(output.result?.job, "queued")}.`;
     case "render_project":
-      return `Render ${output.result?.job.id ?? "completed"}: ${output.result?.job.status ?? "completed"}.`;
+      return `Render ${output.result?.job.id ?? "completed"}: ${outputStageLabel(output.result?.job, "completed")}.`;
     case "get_render_status":
-      return `Render ${output.result?.job.id ?? "status"}: ${output.result?.job.status ?? "available"}.`;
+      return `Render ${output.result?.job.id ?? "status"}: ${outputStageLabel(output.result?.job, "available")}.`;
     case "download_render_artifacts":
-      return `Artifacts downloaded for ${output.result?.job.id ?? "render job"}.`;
+      return `Artifacts downloaded for ${output.result?.job.id ?? "render job"}.${output.result?.job.stages ? ` PDF: ${output.result.job.stages.pdf.status}; SVG: ${output.result.job.stages.svg.status}.` : ""}`;
     case "cancel_render":
       return `Cancellation requested for ${output.result?.jobId ?? "render job"}.`;
     case "delete_render":
       return `Deletion requested for ${output.result?.jobId ?? "render job"}.`;
   }
+}
+
+function outputStageLabel(
+  job:
+    | {
+        status: string;
+        stages?:
+          { pdf: { status: string }; svg: { status: string } } | undefined;
+      }
+    | undefined,
+  fallback: string,
+): string {
+  if (
+    job?.stages?.pdf.status === "succeeded" &&
+    job.stages.svg.status !== "succeeded"
+  )
+    return `PDF succeeded; SVG ${job.stages.svg.status}`;
+  return job?.status ?? fallback;
 }

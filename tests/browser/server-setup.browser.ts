@@ -114,7 +114,9 @@ describe("real server-settings Web flow", () => {
         session: sessionStorage.length,
       })),
     ).toEqual({ local: 0, session: 0 });
-    expect(await f.page.locator("#limits input").count()).toBe(16);
+    expect(await f.page.locator("#limits input").count()).toBe(
+      Object.keys(model().runtime.limits).length,
+    );
     expect(f.apply).not.toHaveBeenCalled();
     expect(f.errors).toEqual([]);
   });

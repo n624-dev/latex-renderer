@@ -24,13 +24,15 @@ export function createJobsRouter(deps: AdminDependencies): Hono {
     const status = c.req.query("status"),
       query = c.req.query("query"),
       sourceId = c.req.query("sourceId");
-    return c.json(service.list({
+    return c.json(
+      service.list({
         ...(status === undefined ? {} : { status }),
         ...(query === undefined ? {} : { query }),
         ...(sourceId === undefined ? {} : { sourceId }),
         cursor: c.req.query("cursor"),
         limit: pageSize(c.req.query("pageSize")),
-      }));
+      }),
+    );
   });
   r.get("/render-targets", async (c) => {
     await requireActor(deps, c, "admin:jobs:write");
@@ -94,12 +96,14 @@ export function createJobsRouter(deps: AdminDependencies): Hono {
   r.post("/bulk-delete", async (c) => {
     const actor = await requireActor(deps, c, "admin:jobs:write"),
       input = parse(
-        z.object({
-          ids: z
-            .array(z.string().regex(/^job_[a-f0-9]{32}$/))
-            .min(1)
-            .max(100),
-        }).strict(),
+        z
+          .object({
+            ids: z
+              .array(z.string().regex(/^job_[a-f0-9]{32}$/))
+              .min(1)
+              .max(100),
+          })
+          .strict(),
         await c.req.json<unknown>(),
       );
     return c.json({ accepted: service.bulkDelete(actor, input.ids) }, 202);
@@ -152,6 +156,18 @@ export function createJobsRouter(deps: AdminDependencies): Hono {
       { id: result.id, retryOfJobId: result.retryOfJobId },
       result.reused ? 200 : 202,
     );
+  });
+  r.post("/:id/retry-svg", async (c) => {
+    const actor = await requireActor(deps, c, "admin:jobs:write"),
+      key = c.req.header("Idempotency-Key");
+    if (key === undefined)
+      throw new AppError(
+        "IDEMPOTENCY_KEY_REQUIRED",
+        "A valid Idempotency-Key is required",
+        400,
+      );
+    const result = await service.retrySvg(actor, c.req.param("id"), key);
+    return c.json(result, result.reused ? 200 : 202);
   });
   r.delete("/:id", async (c) => {
     const actor = await requireActor(deps, c, "admin:jobs:write");

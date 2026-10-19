@@ -65,6 +65,10 @@ async function fixture() {
     maxActive: 0,
     polls: 0,
     complete: true,
+    staged: false,
+    svgFailed: false,
+    svgRetries: [] as string[],
+    resourceWait: false,
     rejectCapacity: 0,
     capacityAlways: false,
     ticketError: "",
@@ -233,6 +237,23 @@ async function fixture() {
       });
       return;
     }
+    if (/^\/app\/api\/v1\/jobs\/job_[a-f0-9]{32}\/retry-svg$/.test(path)) {
+      expect(request.method()).toBe("POST");
+      const key = request.headers()["idempotency-key"];
+      expect(key).toMatch(/^[a-f0-9-]{36}$/);
+      state.svgRetries.push(key ?? "");
+      state.svgFailed = false;
+      state.complete = true;
+      await json(
+        {
+          jobId: path.split("/").at(-2),
+          jobTicket: "test-job-ticket-1234567890",
+          expiresAt,
+        },
+        202,
+      );
+      return;
+    }
     if (/^\/api\/v1\/jobs\/job_[a-f0-9]{32}$/.test(path)) {
       state.polls++;
       if (state.statusError) {
@@ -243,12 +264,67 @@ async function fixture() {
       if (state.complete) state.active.delete(id);
       await json({
         id,
-        status: state.complete ? "succeeded" : "running",
-        errorCode: null,
-        errorMessage: null,
-        retentionExpiresAt: null,
-        artifacts: [],
+        status: state.svgFailed
+          ? "failed"
+          : state.resourceWait
+            ? "queued"
+            : state.complete
+              ? "succeeded"
+              : "running",
+        errorCode: state.resourceWait ? "HOST_RESOURCE_WAIT" : null,
+        errorMessage: state.resourceWait ? "Waiting for host resources" : null,
+        retentionExpiresAt: state.staged ? expiresAt : null,
+        artifacts: state.staged
+          ? [
+              {
+                type: "pdf",
+                relativePath: "result.pdf",
+                size: 100,
+                sha256: "a".repeat(64),
+                createdAt: "2026-01-01T00:00:00.000Z",
+                downloadUrl: `/api/v1/jobs/${id}/artifacts/result.pdf`,
+              },
+              ...(state.svgFailed
+                ? [
+                    {
+                      type: "log",
+                      relativePath: "svg/compile.log",
+                      size: 10,
+                      sha256: "b".repeat(64),
+                      createdAt: "2026-01-01T00:00:00.000Z",
+                      downloadUrl: `/api/v1/jobs/${id}/artifacts/svg/compile.log`,
+                    },
+                  ]
+                : []),
+            ]
+          : [],
         previews: [],
+        ...(state.staged
+          ? {
+              stages: {
+                pdf: {
+                  status: "succeeded",
+                  sha256: "a".repeat(64),
+                  completedAt: "2026-01-01T00:00:00.000Z",
+                  errorCode: null,
+                  errorMessage: null,
+                },
+                svg: {
+                  status: state.svgFailed
+                    ? "failed"
+                    : state.complete
+                      ? "succeeded"
+                      : "running",
+                  attempt: state.svgRetries.length + 1,
+                  completedAt: state.complete
+                    ? "2026-01-01T00:00:00.000Z"
+                    : null,
+                  errorCode: state.svgFailed ? "SVG_GENERATION_FAILED" : null,
+                  errorMessage: null,
+                },
+              },
+            }
+          : {}),
       });
       return;
     }
@@ -326,6 +402,43 @@ async function releaseRead(page: Page, name: string, fail = false) {
 }
 
 describe("App render in the selected browser", () => {
+  it("keeps PDF available while SVG runs, then retries only SVG on the same Job", async () => {
+    const { page, state, errors } = await fixture();
+    await fastTimers(page);
+    state.staged = true;
+    state.complete = false;
+    await page.locator("#app-files").setInputFiles(tex("staged.tex"));
+    await ready(page);
+    await page.locator("#app-render-svg").check();
+    await start(page).click();
+    await expect
+      .poll(() =>
+        page.getByRole("button", { name: "PDF", exact: true }).count(),
+      )
+      .toBe(1);
+    await expect
+      .poll(() => page.locator("body").textContent())
+      .toContain("SVG: 変換中");
+    state.svgFailed = true;
+    state.complete = true;
+    await expect
+      .poll(() => page.locator("body").textContent())
+      .toContain("部分成功");
+    const retry = page.getByRole("button", {
+      name: "SVGだけ再試行",
+      exact: true,
+    });
+    await expect.poll(() => retry.count()).toBe(1);
+    await retry.click();
+    await expect.poll(() => state.svgRetries.length).toBe(1);
+    await expect
+      .poll(() => page.locator("body").textContent())
+      .toContain("SVG: 変換成功");
+    expect(state.requests).toHaveLength(1);
+    expect(state.sources).toHaveLength(1);
+    expect(state.uploads).toHaveLength(1);
+    expect(errors).toEqual([]);
+  });
   it("preserves file selection through reflow zoom and rotation, with touch submission when enabled", async () => {
     const { page, state, errors } = await fixture();
     const name = `${"日本語の長いファイル名".repeat(8)}.tex`;
@@ -453,6 +566,31 @@ describe("App render in the selected browser", () => {
     expect(await start(page).isDisabled()).toBe(true);
     expect(state.requests).toHaveLength(1);
     expect(state.projects).toEqual([{ displayName: "Submitted name" }]);
+    expect(errors).toEqual([]);
+  });
+
+  it("explains resource admission waits without treating a queued job as failed", async () => {
+    const { page, state, errors } = await fixture();
+    state.complete = false;
+    state.resourceWait = true;
+    await fastTimers(page);
+    await page.locator("#app-files").setInputFiles(tex("waiting.tex"));
+    await ready(page);
+    await start(page).click();
+    await expect
+      .poll(async () =>
+        (await page.locator("#app-render-items").textContent())?.includes(
+          "サーバー資源の空きを待っています",
+        ),
+      )
+      .toBe(true);
+    expect(state.requests).toHaveLength(1);
+    state.resourceWait = false;
+    state.complete = true;
+    await finish(page);
+    expect(await page.locator("#app-render-items").textContent()).not.toContain(
+      "サーバー資源の空きを待っています",
+    );
     expect(errors).toEqual([]);
   });
 

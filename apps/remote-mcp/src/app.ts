@@ -81,6 +81,9 @@ export function createRemoteMcpApp(dependencies: RemoteMcpAppDependencies) {
     registrationLimiter = new AnonymousRegistrationLimiter(),
     loginContinuations = new RemoteMcpLoginContinuations(deps.database);
   app.use("*", requestId());
+  app.use("*", (c, next) =>
+    withMcpDiagnostics(c.get("requestId"), "mcp_request", next),
+  );
   app.use("*", async (c, next) => {
     await next();
     const route = c.req.path;
@@ -414,7 +417,10 @@ export function createRemoteMcpApp(dependencies: RemoteMcpAppDependencies) {
                   400,
                 );
               })();
-    oauthStage("token_issued", c.get("requestId"));
+    oauthStage(
+      grant === "refresh_token" ? "refresh_issued" : "token_issued",
+      c.get("requestId"),
+    );
     return c.json(tokens);
   });
 
@@ -451,7 +457,8 @@ export function createRemoteMcpApp(dependencies: RemoteMcpAppDependencies) {
       oauth = c.req.path.startsWith("/oauth/");
     if (error instanceof RegistrationError)
       c.header("Retry-After", String(error.retryAfter));
-    else if (safe.status === 503) c.header("Retry-After", "60");
+    else if (safe.status === 503)
+      c.header("Retry-After", safe.code === "OAUTH_REFRESH_RETRY" ? "1" : "60");
     console.error(
       JSON.stringify({
         event: "remote_mcp.error",
@@ -865,6 +872,7 @@ function oauthErrorCode(code: string): string {
     OAUTH_CLIENT_ADDRESS_UNAVAILABLE: "temporarily_unavailable",
     OAUTH_REGISTRATION_CAPACITY: "temporarily_unavailable",
     OAUTH_LOGIN_CAPACITY: "temporarily_unavailable",
+    OAUTH_REFRESH_RETRY: "temporarily_unavailable",
     INVALID_OAUTH_LOGIN_CONTINUATION: "invalid_request",
   };
   return known[code] ?? "server_error";

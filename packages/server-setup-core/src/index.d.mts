@@ -88,6 +88,8 @@ export interface ServerRuntimeLimits {
   readonly maxUserStorageBytes: number;
   readonly minFreeStorageBytes: number;
   readonly jobTimeoutSeconds: number;
+  readonly minimumAvailableMemoryBytes: number;
+  readonly admissionWaitSeconds: number;
 }
 export interface ServerRuntimeReview {
   readonly databasePath: string;

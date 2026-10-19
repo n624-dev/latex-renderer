@@ -64,6 +64,24 @@ export class RendererClient {
     );
     return ticketResponseSchema.parse(await responseJson(response));
   }
+  async retrySvgJob(
+    jobId: string,
+    idempotencyKey: string,
+  ): Promise<SourceRenderResponse> {
+    const response = await fetch(
+      new URL(`${PUBLIC_API_PREFIX}/render-tickets`, this.#baseUrl),
+      {
+        method: "POST",
+        headers: this.headers({
+          "Content-Type": "application/json",
+          "Idempotency-Key": idempotencyKey,
+        }),
+        body: JSON.stringify({ retrySvgJobId: jobId }),
+        redirect: "error",
+      },
+    );
+    return sourceRenderResponseSchema.parse(await responseJson(response));
+  }
   async upload(
     ticket: TicketResponse,
     zipPath: string,

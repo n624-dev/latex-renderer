@@ -17,6 +17,7 @@ import {
 } from "./docker.js";
 import { generateMetadata } from "./metadata.js";
 import { classifyRenderResult } from "./render-result.js";
+import { processStagedJob } from "./staged-job-processor.js";
 
 export async function processJob(
   database: RendererDatabase,
@@ -64,6 +65,8 @@ export async function processJob(
     });
     return;
   }
+  if (renderOutputs(job.outputs_json).includes("svg"))
+    return processStagedJob(database, config, job);
   const lease = { lost: false };
   const leaseIsLost = (): boolean => lease.lost;
   const renewLease = () => {
@@ -239,13 +242,22 @@ export async function processJob(
         return;
       }
       const result = classifyRenderResult(exitCode, timedOut, stderr);
+      config.diagnostic?.({
+        event: "renderer_worker.render_result",
+        jobId: job.id,
+        exitCode,
+        result: result.status,
+        code: result.errorCode,
+        elapsedMs: Math.max(0, Date.now() - Date.parse(startedAt)),
+      });
       await inspectOutputTree(config, staging);
       await generateMetadata(
         staging,
         result.status === "timeout" && exitCode === 0 ? 124 : exitCode,
         config.maxLogBytes,
         job.entrypoint,
-        result.status === "timeout"
+        result.status === "timeout" ||
+          result.errorCode === "RENDERER_MEMORY_LIMIT"
           ? (result.errorMessage ?? undefined)
           : undefined,
       );

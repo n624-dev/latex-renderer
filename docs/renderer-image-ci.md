@@ -47,8 +47,11 @@ Both `renderer-image` and `renderer-image-daily` use
 3. Build one temporary English/Japanese Runtime from that exact Base using the
    application's language-runtime builder, with layer-cache reuse disabled.
 4. Run basic rendering, English/Japanese PDF + PNG, SVG and compatibility smoke
-   tests, then Source/client integration.
+   tests, compare cold/precomputed font caches, then Source/client integration.
 5. Remove the temporary Runtime and unused default-builder cache, even on failure.
+
+Font-cache comparisons and host admission controls are described in
+[レンダリング資源保護とRemote MCPの再認証](runtime-resource-and-oauth-recovery.md).
 
 On ephemeral hosted runners, both workflows select and verify the native
 `default` Docker builder by default, avoiding a separate builder container.

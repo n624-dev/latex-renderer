@@ -1,8 +1,32 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { createHmac, randomBytes } from "node:crypto";
+import type { OAuthDiagnostic } from "@latex-renderer/remote-mcp-core";
+import { diagnosticWriter } from "../../../deploy/scripts/service-diagnostics.mjs";
 
 export type McpStage =
   "initialize" | "notifications/initialized" | "tools/list" | "mcp_request";
 const context = new AsyncLocalStorage<{ requestId: string; stage: McpStage }>();
+export function oauthDiagnostics(
+  storageRoot: string,
+): (event: OAuthDiagnostic) => void {
+  const write = diagnosticWriter(storageRoot, "remote-mcp"),
+    key = randomBytes(32);
+  return (event) =>
+    write({
+      event: "remote_mcp.refresh_result",
+      outcome: event.outcome,
+      requestId: context.getStore()?.requestId ?? "unavailable",
+      ...(event.familyId === undefined
+        ? {}
+        : {
+            family: createHmac("sha256", key)
+              .update(event.familyId)
+              .digest("hex")
+              .slice(0, 16),
+          }),
+      ...(event.sequence === undefined ? {} : { sequence: event.sequence }),
+    });
+}
 export function diagnosticRequestId(value: unknown): string {
   return typeof value === "string" && /^[a-f0-9-]{36}$/i.test(value)
     ? value

@@ -31,6 +31,7 @@ export async function validateArtifacts(
   directory: string,
   requirePdf: boolean,
   requireSvg = false,
+  diagnosticPrefix: "" | "svg/" = "",
 ): Promise<ValidatedArtifact[]> {
   const tree = await scanOutputTree(directory, config),
     files = tree.files,
@@ -82,8 +83,8 @@ export async function validateArtifacts(
     throw new AppError("PDF_MISSING", "Renderer did not emit result.pdf");
   if (requireSvg) await validateSvgSet(config, directory, result);
   if (
-    !result.some((item) => item.type === "log") ||
-    !result.some((item) => item.type === "errors")
+    !result.some((item) => item.path === `${diagnosticPrefix}compile.log`) ||
+    !result.some((item) => item.path === `${diagnosticPrefix}errors.json`)
   )
     throw new AppError(
       "DIAGNOSTICS_MISSING",
@@ -94,9 +95,10 @@ export async function validateArtifacts(
 
 function artifactType(path: string): string | undefined {
   if (path === "result.pdf") return "pdf";
-  if (path === "compile.log") return "log";
-  if (path === "errors.json") return "errors";
-  if (path === "dependencies.json") return "dependencies";
+  if (path === "compile.log" || path === "svg/compile.log") return "log";
+  if (path === "errors.json" || path === "svg/errors.json") return "errors";
+  if (path === "dependencies.json" || path === "svg/dependencies.json")
+    return "dependencies";
   if (path === "svg/manifest.json") return "svg_manifest";
   if (/^svg\/objects\/(?:math|tikz)-[0-9]{6}\.svg$/.test(path)) return "svg";
   if (/^previews\/page-[0-9]+\.png$/.test(path)) return "preview";

@@ -90,10 +90,14 @@ latex-render projects delete <projectId> --yes
 latex-render jobs get <jobId>
 latex-render jobs cancel <jobId>
 latex-render jobs download <jobId> --output .render
+latex-render jobs download <jobId> --pdf-only --output .render
+latex-render jobs retry-svg <jobId> --output .render
 latex-render jobs delete <jobId> --yes
 ```
 
 ジョブ操作時はAPIキーで操作用トークンを更新します。`jobs download` は指定Jobが終了するまで待ってから成果物を切り替えます。待機中にキャンセルした場合や待機が失敗した場合、保存済みの一式は変更しません。削除は終了済みジョブだけが対象です。
+
+新しいPDF＋SVGジョブはPDFを先に公開します。`--pdf-only` はPDFの確定まで待って取得し、SVG完了は待ちません。SVGだけが失敗した場合は、PDFを保存した上で部分成功を表示します。`retry-svg` は同じJob・Source・確定PDFを使ってSVGだけを再試行し、PDFを再コンパイルしません。初回を含め最大8回で、保持期限は延長しません。Runtimeが変わった場合はJob全体を新規作成してください。詳細は[PDFとSVGの独立処理](https://github.com/n624-dev/latex-renderer/blob/main/docs/independent-output-stages.md)を参照してください。
 
 終了待ちの状態取得で、一時的なHTTP 502・503・504（HTTPエラーまたは不正なJSON応答）が発生した場合は、同じJobの状態取得だけを最大5回再試行します。待ち時間は1・2・4・8・8秒で、待機全体のタイムアウトは延長しません。ジョブ作成・アップロード・操作用トークン更新・成果物の検証は再試行せず、認証や権限のエラーもそのまま返します。状態取得が失敗しても、サーバー上のジョブが停止したとは限りません。
 

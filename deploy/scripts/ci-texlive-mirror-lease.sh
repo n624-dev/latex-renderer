@@ -43,6 +43,8 @@ case "$operation" in
     date_value=${2:?date required}
     upstream_installer=${3:?upstream installer checksum required}
     architecture=${4:-amd64}
+    snapshot_id=${5:-}
+    upstream_database=${6:-}
     : "${TEXLIVE_CI_HOST:?TEXLIVE_CI_HOST required}"
     : "${TEXLIVE_CI_SSH_KEY:?TEXLIVE_CI_SSH_KEY required}"
     prepare_access
@@ -54,18 +56,25 @@ case "$operation" in
     printf '%s\n' "$TEXLIVE_CI_SSH_KEY" > "$key"
     printf '%s\n' "${TEXLIVE_CI_KNOWN_HOSTS:?}" > "$known_hosts"
     chmod 600 "$key" "$known_hosts"
-    run_lease_ssh "$key" "$known_hosts" "$response" \
-      reserve "$date_value" "$owner" "$architecture"
+    if [ -n "$snapshot_id" ]; then
+      run_lease_ssh "$key" "$known_hosts" "$response" \
+        reserve-snapshot "$snapshot_id" "$date_value" "$owner" "$architecture"
+    else
+      run_lease_ssh "$key" "$known_hosts" "$response" \
+        reserve "$date_value" "$owner" "$architecture"
+    fi
     node -e '
       const fs=require("fs"); const r=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));
       if(r.canonicalDate!==process.argv[2] || r.installerSha512!==process.argv[3]) throw new Error("mirror identity differs from canonical archive");
+      if(process.argv[5]&&r.snapshotId!==process.argv[5])throw new Error("reserved snapshot differs from selected snapshot");
+      if(process.argv[6]&&r.databaseSha512!==process.argv[6])throw new Error("mirror database identity differs from canonical archive");
       const id=/^tl20\d{2}-[0-9a-f]{16}-[0-9a-f]{16}-[0-9a-f]{16}-v[1-9][0-9]*$/;
       if(!id.test(r.snapshotId)||!/^[0-9a-f]{64}$/.test(r.token)) throw new Error("invalid reservation response");
       const url=new URL(r.url);
       const expectedHost=process.env.TEXLIVE_CI_MIRROR_HOST;
       if(!expectedHost||url.hostname!==expectedHost||url.port||url.protocol!=="https:"||url.username||url.password||url.search||url.hash||url.pathname!==`/snapshots/${r.snapshotId}/tlnet`||r.url!==url.origin+url.pathname) throw new Error("invalid reservation URL");
       fs.appendFileSync(process.env.GITHUB_OUTPUT,`repository=${r.url}\ntoken=${r.token}\nowner=${process.argv[4]}\nsnapshot_id=${r.snapshotId}\n`);
-    ' "$response" "$date_value" "$upstream_installer" "$owner"
+    ' "$response" "$date_value" "$upstream_installer" "$owner" "$snapshot_id" "$upstream_database"
     ;;
   release)
     token=${2:?token required}

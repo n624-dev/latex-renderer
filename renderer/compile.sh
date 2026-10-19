@@ -36,11 +36,39 @@ cp -R /opt/texlive/2026/texmf-var/luatex-cache/generic/names \
 cd /work/input
 renderer_log=/tmp/renderer-compile.log
 : > "$renderer_log"
+renderer_stage=setup
+renderer_stage_started=$(date +%s)
+renderer_oom_start=$(awk '$1=="oom_kill" {print $2}' /sys/fs/cgroup/memory.events 2>/dev/null || true)
+record_stage() {
+  renderer_now=$(date +%s)
+  renderer_peak=$(cat /sys/fs/cgroup/memory.peak 2>/dev/null || printf unknown)
+  renderer_oom=$(awk '$1=="oom_kill" {print $2}' /sys/fs/cgroup/memory.events 2>/dev/null || true)
+  renderer_cpu=$(awk '$1=="usage_usec" {print $2}' /sys/fs/cgroup/cpu.stat 2>/dev/null || true)
+  renderer_io=unknown
+  if [ -r /sys/fs/cgroup/io.stat ]; then
+    renderer_io=$(awk '{for(i=2;i<=NF;i++){split($i,p,"=");if(p[1]=="rbytes")r+=p[2];if(p[1]=="wbytes")w+=p[2]}} END {printf "%.0f:%.0f",r,w}' /sys/fs/cgroup/io.stat 2>/dev/null || true)
+    case "$renderer_io" in *:*) ;; *) renderer_io=unknown ;; esac
+  fi
+  renderer_temporary=$(du -sk /tmp /work/output 2>/dev/null | awk '{n+=$1} END {printf "%.0f",n*1024}')
+  case "$renderer_peak" in ''|*[!0-9]*) renderer_peak=unknown ;; esac
+  case "$renderer_oom" in ''|*[!0-9]*) renderer_oom=unknown ;; esac
+  case "$renderer_cpu" in ''|*[!0-9]*) renderer_cpu=unknown ;; esac
+  printf 'RENDERER_METRIC stage=%s elapsed_seconds=%s memory_peak_bytes=%s oom_kill=%s cpu_usage_usec=%s io_read_write_bytes=%s sampled_temporary_bytes=%s\n' \
+    "$renderer_stage" "$((renderer_now-renderer_stage_started))" "$renderer_peak" "$renderer_oom" "$renderer_cpu" "$renderer_io" "$renderer_temporary" >> "$renderer_log"
+  renderer_stage_started=$renderer_now
+}
 # TeX may need /work/output/compile.log itself when the entrypoint is
 # compile.tex. Keep renderer output private until every TeX pass has exited.
 publish_renderer_log() {
   status=$?
   trap - EXIT
+  record_stage || true
+  case "$renderer_oom_start:$renderer_oom" in *unknown*|:*|*:) ;; *)
+    if [ "$renderer_oom" -gt "$renderer_oom_start" ]; then
+      printf '%s\n' 'renderer: memory limit exceeded' >> "$renderer_log"
+      status=84
+    fi ;;
+  esac
   [ ! -d /work/output/compile.log ] || exit 80
   # A file moved from /tmp keeps its tmpfs ACL, so the host worker cannot read
   # it through a rootless Docker bind mount. Create the replacement inside the
@@ -62,11 +90,20 @@ case "$entrypoint" in *.[tT][eE][xX]) ;; *) printf '%s\n' 'renderer: invalid ent
 output_name=${entrypoint##*/}
 output_name=${output_name%.*}.pdf
 outputs=${LATEX_OUTPUTS:-pdf}
+render_stage=${LATEX_RENDER_STAGE:-all}
+case "$render_stage" in all|pdf|svg) ;; *) exit 78 ;; esac
 case "$outputs" in
   pdf) svg_requested=false ;;
   pdf,svg|svg,pdf) svg_requested=true ;;
   *) printf '%s\n' 'renderer: outputs must be pdf or pdf,svg' >> "$renderer_log"; exit 78 ;;
 esac
+
+canonical_pdf=/work/output/result.pdf
+if [ "$render_stage" = svg ]; then
+  [ "$svg_requested" = true ] || exit 78
+  canonical_pdf=/work/pdf/result.pdf
+  [ -f "$canonical_pdf" ] && [ -f /work/pdf/result.synctex.gz ] || exit 79
+else
 
 # Parse hostile image/PDF metadata inside this sandbox before TeX sees it.
 if ! timeout -s TERM -k 2 30 sh -c "find /work/input -type f \( -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg' \) -print0 | xargs -0 -r identify -format '%w %h\\n' --" > /tmp/image-dimensions; then
@@ -96,6 +133,8 @@ if ! awk '{total+=$1} END {if(total>100) exit 1}' /tmp/pdf-pages; then
 fi
 
 set +e
+record_stage
+renderer_stage=compile
 timeout -s TERM -k 2 300 latexmk -norc -r /opt/renderer/latexmkrc -lualatex -interaction=nonstopmode -halt-on-error \
   -file-line-error -recorder -synctex=1 -outdir=/work/output "/work/input/$entrypoint" \
   >> "$renderer_log" 2>&1
@@ -130,6 +169,8 @@ if [ "$svg_requested" = true ]; then
   fi
 fi
 set +e
+record_stage
+renderer_stage=pdfinfo
 timeout -s TERM -k 2 10 pdfinfo /work/output/result.pdf > /tmp/output-pdf-info
 pdfinfo_status=$?
 set -e
@@ -151,6 +192,8 @@ if [ "$pages" -gt 100 ]; then
 fi
 
 set +e
+record_stage
+renderer_stage=preview
 timeout -s TERM -k 2 60 pdftoppm -png -r 150 /work/output/result.pdf /work/output/previews/page
 preview_status=$?
 set -e
@@ -177,8 +220,13 @@ for preview in /work/output/previews/page-*.png; do
   fi
 done
 
+fi
+[ "$render_stage" != pdf ] || exit 0
+
 if [ "$svg_requested" = true ]; then
   capture=/tmp/svg-capture
+  record_stage
+  renderer_stage=svg_capture
   rm -rf "$capture"
   mkdir -p "$capture"
   prepare_output_dirs "$capture"
@@ -200,10 +248,12 @@ if [ "$svg_requested" = true ]; then
     printf '%s\n' 'renderer: SVG capture failed' >> "$renderer_log"
     exit 79
   fi
+  record_stage
+  renderer_stage=svg_export
   set +e
   timeout -s TERM -k 2 "${SVG_CONVERSION_TIMEOUT_SECONDS:-120}" \
     /opt/renderer/export-svg.pl "$capture/objects.pdf" "$capture/objects.meta" \
-      /work/output/result.pdf /work/output/svg \
+      "$canonical_pdf" /work/output/svg \
     >> "$renderer_log" 2>&1
   export_status=$?
   set -e

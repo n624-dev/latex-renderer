@@ -146,6 +146,22 @@ No rows are deleted, but old application code ignores the visibility boundary;
 full recovery point, not an application-only rollback or live column removal.
 See [the migration and recovery guide](deploy/migrations/019_internal_smoke_visibility.rollback.md).
 
+## Migration 021: Independent output stages
+
+Migration 021 adds `job_output_stages` and terminal/recovery triggers. New
+PDF+SVG Jobs use separate fenced, immutable output generations. PDF publication
+persists its digest, SyncTeX checkpoint and retention start independently of SVG.
+SVG-only retries reuse the same Job, increment a bounded attempt counter, and
+never extend the PDF deadline. Legacy and PDF-only Jobs keep their existing
+execution and response contracts; no historical Job is rerendered or backfilled.
+
+The [output-stage contract](docs/independent-output-stages.md) describes partial
+success and compatibility. Apply all consumers together after a verified encrypted
+backup, restore test and migration-copy preflight. The target schema is 21.
+`rollbackCompatible` remains false: downgrading only the application would ignore
+stage publication and retention semantics. Recovery requires the verified full
+recovery point, not live table removal.
+
 ## Migration 020: Bounded OAuth login continuations
 
 Migration 020 adds `remote_mcp_login_continuations` and its expiry index. Long

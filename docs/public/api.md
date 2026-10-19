@@ -136,6 +136,12 @@ Idempotency-Key: <16〜200文字>
 
 ZIP送信時は `Content-Length` と予約時のサイズ・SHA-256が一致する必要があります。正常時はHTTP 204です。
 
+### PDFの先行公開とSVGの再試行
+
+新しいPDF＋SVGのJobは、検証済みPDFとプレビューをSVG完了前に取得できます。Jobの `status` は要求全体の成否のままです。任意項目 `stages.pdf` / `stages.svg` に個別の状態・完了時刻・エラーを返し、PDFには `sha256`、SVGには `attempt` も含めます。PDF成功・SVG失敗でもPDFは利用可能です。
+
+SVGだけの再試行は `POST /api/v1/render-tickets` に `{"retrySvgJobId":"job_..."}` と `Idempotency-Key` を送信します。元のJob用ticketを返し、PDFの再コンパイルや保持期限の延長はしません。初回を含め最大8回で、元Source・PDF・Runtimeが一致する必要があります。認証には通常のAPIキーを使い、Job ticketでは再試行できません。SVG専用診断は `svg/compile.log`、`svg/errors.json`、`svg/dependencies.json` です。旧Jobには個別状態を推測して追加しません。
+
 SVG出力は `svg/objects/math-NNNNNN.svg` または `tikz-NNNNNN.svg` として保存され、`svg/manifest.json` が実行順、ソースファイル・行、特定できた場合のPDFページ上の座標を対応付けます。新しいmanifestは `schemaVersion: 2` です。位置を特定できるオブジェクトは次の形式です。
 
 ```json

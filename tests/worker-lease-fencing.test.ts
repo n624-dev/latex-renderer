@@ -8,6 +8,29 @@ afterEach(() => {
 });
 
 describe("Worker lease fencing", () => {
+  it("publishes a bounded wait reason, does not claim a newer head at a stale deadline, and clears the reason on start", () => {
+    const f = setup();
+    f.database.worker.setAdmissionReason(true, "2026-08-31T00:00:00.000Z");
+    expect(f.database.jobs.get(f.jobId)?.error_code).toBe("HOST_RESOURCE_WAIT");
+    expect(
+      f.database.worker.claimNext(
+        "worker",
+        "2026-08-31T00:00:00.000Z",
+        "2026-08-31T00:00:30.000Z",
+        "2000-01-01T00:00:00.000Z",
+      ),
+    ).toBeUndefined();
+    expect(f.database.jobs.get(f.jobId)?.status).toBe("queued");
+    expect(
+      f.database.worker.claimNext(
+        "worker",
+        "2026-08-31T00:00:00.000Z",
+        "2026-08-31T00:00:30.000Z",
+      ),
+    ).toBeDefined();
+    expect(f.database.jobs.get(f.jobId)?.error_code).toBeNull();
+    expect(f.database.jobs.get(f.jobId)?.error_message).toBeNull();
+  });
   it("tracks unfinished jobs across worker restart without treating SQL wildcard characters as another owner", () => {
     const f = setup();
     f.database.worker.claimNext(

@@ -1,9 +1,18 @@
-import type { JobResponse, SourceRenderResponse } from "@latex-renderer/contracts";
+import type {
+  JobResponse,
+  SourceRenderResponse,
+} from "@latex-renderer/contracts";
 import { AppError } from "@latex-renderer/shared";
 import type { ClientTransport, RenderOptions } from "./index.js";
 
 const terminalStatuses = new Set([
-  "succeeded", "failed", "timeout", "canceled", "rejected", "deleted", "expired",
+  "succeeded",
+  "failed",
+  "timeout",
+  "canceled",
+  "rejected",
+  "deleted",
+  "expired",
 ]);
 
 /** Keep both the status request and any injected/custom transport bounded. */
@@ -11,21 +20,36 @@ export async function pollUntilTerminal(
   client: Pick<ClientTransport, "job" | "renewJobTicket">,
   ticket: SourceRenderResponse,
   options: RenderOptions,
+  ready?: (job: JobResponse) => boolean,
 ): Promise<{ job: JobResponse; jobTicket: string }> {
   const interval = options.pollIntervalMs ?? 1000,
     timeout = options.pollTimeoutMs,
     now = options.now ?? Date.now,
     customSleep = options.sleep;
   if (timeout !== undefined && (!Number.isSafeInteger(timeout) || timeout <= 0))
-    throw new AppError("INVALID_POLL_TIMEOUT", "Poll timeout must be a positive integer", 400);
-  if (!Number.isSafeInteger(interval) || interval < 0 || interval > 2_147_483_647)
-    throw new AppError("INVALID_POLL_INTERVAL", "Poll interval must be a nonnegative integer", 400);
-  const startedAt = now(), controller = new AbortController();
-  const timeoutError = () => new AppError(
-    "RENDER_POLL_TIMEOUT",
-    "Render did not reach a terminal state before the local timeout",
-    504,
-  );
+    throw new AppError(
+      "INVALID_POLL_TIMEOUT",
+      "Poll timeout must be a positive integer",
+      400,
+    );
+  if (
+    !Number.isSafeInteger(interval) ||
+    interval < 0 ||
+    interval > 2_147_483_647
+  )
+    throw new AppError(
+      "INVALID_POLL_INTERVAL",
+      "Poll interval must be a nonnegative integer",
+      400,
+    );
+  const startedAt = now(),
+    controller = new AbortController();
+  const timeoutError = () =>
+    new AppError(
+      "RENDER_POLL_TIMEOUT",
+      "Render did not reach a terminal state before the local timeout",
+      504,
+    );
   let timer: ReturnType<typeof setTimeout> | undefined;
   const assertDeadline = () => {
     if (timeout !== undefined && now() - startedAt >= timeout)
@@ -36,13 +60,17 @@ export async function pollUntilTerminal(
     if (timeout === undefined) return;
     // Node timers clamp oversized delays to 1 ms; schedule long deadlines in
     // bounded slices rather than accidentally timing out immediately.
-    timer = setTimeout(() => {
-      const remaining = timeout - (now() - startedAt);
-      if (remaining <= 0) controller.abort(timeoutError());
-      else scheduleDeadline();
-    }, Math.max(1, Math.min(timeout - (now() - startedAt), 2_147_483_647)));
+    timer = setTimeout(
+      () => {
+        const remaining = timeout - (now() - startedAt);
+        if (remaining <= 0) controller.abort(timeoutError());
+        else scheduleDeadline();
+      },
+      Math.max(1, Math.min(timeout - (now() - startedAt), 2_147_483_647)),
+    );
   };
-  let jobTicket = ticket.jobTicket, expiresAt = Date.parse(ticket.expiresAt);
+  let jobTicket = ticket.jobTicket,
+    expiresAt = Date.parse(ticket.expiresAt);
   const renew = async () => {
     const renewed = await abortable(controller.signal, () =>
       client.renewJobTicket(ticket.jobId, { signal: controller.signal }),
@@ -76,7 +104,8 @@ export async function pollUntilTerminal(
   try {
     for (;;) {
       assertDeadline();
-      if (Number.isFinite(expiresAt) && expiresAt <= now() + 60_000) await renew();
+      if (Number.isFinite(expiresAt) && expiresAt <= now() + 60_000)
+        await renew();
       assertDeadline();
       let job: JobResponse;
       try {
@@ -84,14 +113,20 @@ export async function pollUntilTerminal(
       } catch (error) {
         // Do not turn revocation or a security-version change into a silent
         // authorization retry. Only an invalid/expired ticket is refreshed.
-        if (!(error instanceof AppError) || error.code !== "INVALID_TICKET") throw error;
+        if (!(error instanceof AppError) || error.code !== "INVALID_TICKET")
+          throw error;
         assertDeadline();
         await renew();
         job = await readStatus();
       }
       assertDeadline();
-      options.onEvent?.({ type: "job.status", jobId: ticket.jobId, status: job.status });
-      if (terminalStatuses.has(job.status)) return { job, jobTicket };
+      options.onEvent?.({
+        type: "job.status",
+        jobId: ticket.jobId,
+        status: job.status,
+      });
+      if (terminalStatuses.has(job.status) || ready?.(job) === true)
+        return { job, jobTicket };
       await wait(interval);
     }
   } finally {
@@ -100,9 +135,11 @@ export async function pollUntilTerminal(
 }
 
 function isTransientStatusError(error: unknown): boolean {
-  return error instanceof AppError &&
+  return (
+    error instanceof AppError &&
     (error.code === "HTTP_ERROR" || error.code === "INVALID_RESPONSE") &&
-    [502, 503, 504].includes(error.status);
+    [502, 503, 504].includes(error.status)
+  );
 }
 
 function abortReason(signal: AbortSignal): Error {
@@ -110,7 +147,10 @@ function abortReason(signal: AbortSignal): Error {
   return reason instanceof Error ? reason : new Error("Polling aborted");
 }
 
-async function abortable<T>(signal: AbortSignal, operation: () => Promise<T>): Promise<T> {
+async function abortable<T>(
+  signal: AbortSignal,
+  operation: () => Promise<T>,
+): Promise<T> {
   signal.throwIfAborted();
   let onAbort: () => void = () => undefined;
   const aborted = new Promise<never>((_resolve, reject) => {

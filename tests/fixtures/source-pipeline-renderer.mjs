@@ -5,7 +5,15 @@ import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import process from "node:process";
 import { setTimeout } from "node:timers/promises";
-const [input, output, entrypoint, gate] = process.argv.slice(2);
+const [
+  input,
+  output,
+  entrypoint,
+  gate,
+  mode = "all",
+  pdfDirectory,
+  svgExit = "0",
+] = process.argv.slice(2);
 const source = await readFile(join(input, entrypoint), "utf8");
 const pages = Number(/% pipeline-pages: ([1-3])/.exec(source)?.[1]);
 assert.ok(pages >= 1 && pages <= 3);
@@ -23,8 +31,52 @@ if (gate) {
   }
   assert.ok(ready, "Gated renderer fixture was not released within 10 seconds");
 }
+if (mode === "svg") {
+  assert(
+    (await readFile(join(pdfDirectory, "result.pdf"), "utf8")).startsWith(
+      "%PDF-",
+    ),
+  );
+  await writeFile(join(output, "compile.log"), "SVG deterministic fixture\n");
+  if (Number(svgExit) !== 0) process.exit(Number(svgExit));
+  await mkdir(join(output, "svg/objects"), { recursive: true });
+  await writeFile(
+    join(output, "svg/manifest.json"),
+    JSON.stringify({
+      schemaVersion: 2,
+      coordinateSystem: {
+        unit: "pdf-point",
+        origin: "top-left",
+        xAxis: "right",
+        yAxis: "down",
+      },
+      objects: [
+        {
+          id: 1,
+          kind: "math",
+          sourceFile: entrypoint,
+          sourceLine: 1,
+          artifact: "svg/objects/math-000001.svg",
+          placementStatus: "unknown",
+          width: 10,
+          height: 10,
+        },
+      ],
+    }),
+  );
+  await writeFile(
+    join(output, "svg/objects/math-000001.svg"),
+    '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><path d="M0 0L1 1"/></svg>',
+  );
+  process.exit(0);
+}
 await mkdir(join(output, "previews"), { recursive: true });
 await writeFile(join(output, "result.pdf"), "%PDF-1.7\n" + source);
+if (mode === "pdf")
+  await writeFile(
+    join(output, "result.synctex.gz"),
+    "deterministic-synctex-fixture",
+  );
 await writeFile(join(output, "compile.log"), "Output written on result.pdf\n");
 for (let page = 1; page <= pages; page++)
   await writeFile(

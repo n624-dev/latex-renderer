@@ -4,12 +4,18 @@ import { serve } from "@hono/node-server";
 import { ApiKeyService } from "@latex-renderer/auth";
 import { RendererDatabase } from "@latex-renderer/database";
 import { loadSigningKeyRing, TicketService } from "@latex-renderer/ticket";
-import { loadResourceLimits, positiveBytesEnvironment, positiveIntegerEnvironment, validPortEnvironment } from "@latex-renderer/shared";
+import {
+  loadResourceLimits,
+  positiveBytesEnvironment,
+  positiveIntegerEnvironment,
+  validPortEnvironment,
+} from "@latex-renderer/shared";
 import { createInternalApp } from "./app.js";
 
 function required(name: string): string {
   const value = process.env[name];
-  if (value === undefined || value.length === 0) throw new Error(`${name} is required`);
+  if (value === undefined || value.length === 0)
+    throw new Error(`${name} is required`);
   return value;
 }
 
@@ -21,20 +27,53 @@ const pepperPath = process.env.CREDENTIALS_DIRECTORY
   : required("API_KEY_PEPPER_FILE");
 const pepper = readFileSync(pepperPath);
 const signingKid = process.env.TICKET_SIGNING_KID ?? "v1";
-const signingKeys=loadSigningKeyRing(signingKid,process.env.TICKET_SIGNING_KEY_DIR,process.env.TICKET_SIGNING_KEY_FILE);
+const signingKeys = loadSigningKeyRing(
+  signingKid,
+  process.env.TICKET_SIGNING_KEY_DIR,
+  process.env.TICKET_SIGNING_KEY_FILE,
+);
 const app = createInternalApp({
   database,
   apiKeys: new ApiKeyService(database, new Map([[pepperId, pepper]]), pepperId),
-  tickets: new TicketService(database, "latex-renderer", "latex-render", signingKeys.active, signingKeys.verification),
+  tickets: new TicketService(
+    database,
+    "latex-renderer",
+    "latex-render",
+    signingKeys.active,
+    signingKeys.verification,
+  ),
   rendererPublicUrl: required("RENDERER_PUBLIC_URL"),
   rendererVersion: process.env.RENDERER_IMAGE ?? "latex-renderer:development",
   maxUploadBytes: loadResourceLimits(process.env).maxUploadBytes,
-  maxOutputBytes: positiveBytesEnvironment(process.env,"MAX_OUTPUT_BYTES",200*1024*1024),
-  maxQueueLength: positiveIntegerEnvironment(process.env,"MAX_QUEUE_LENGTH",100),
-  maxUserStorageBytes: positiveBytesEnvironment(process.env,"MAX_USER_STORAGE_BYTES",1024*1024*1024),
+  maxOutputBytes: positiveBytesEnvironment(
+    process.env,
+    "MAX_OUTPUT_BYTES",
+    200 * 1024 * 1024,
+  ),
+  maxQueueLength: positiveIntegerEnvironment(
+    process.env,
+    "MAX_QUEUE_LENGTH",
+    100,
+  ),
+  maxUserStorageBytes: positiveBytesEnvironment(
+    process.env,
+    "MAX_USER_STORAGE_BYTES",
+    1024 * 1024 * 1024,
+  ),
+  artifactRetentionHours: positiveIntegerEnvironment(
+    process.env,
+    "ARTIFACT_RETENTION_HOURS",
+    24,
+  ),
 });
 
-const port = validPortEnvironment(process.env,"PORT",3103);
+const port = validPortEnvironment(process.env, "PORT", 3103);
 serve({ fetch: app.fetch, hostname: "127.0.0.1", port }, (info) => {
-  console.log(JSON.stringify({ event: "internal_api.started", address: info.address, port: info.port }));
+  console.log(
+    JSON.stringify({
+      event: "internal_api.started",
+      address: info.address,
+      port: info.port,
+    }),
+  );
 });

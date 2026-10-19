@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import type { AccessJwtVerifier } from "@latex-renderer/auth";
 import { RendererDatabase } from "@latex-renderer/database";
-import type { ResourceLimits } from "@latex-renderer/shared";
+import { AppError, type ResourceLimits } from "@latex-renderer/shared";
 import { validateAndExtract } from "@latex-renderer/zip-validation";
 import {
   RemoteOAuthService,
@@ -56,6 +56,67 @@ afterEach(async () => {
 });
 
 describe("Remote MCP HTTP server", () => {
+  it("keeps profile identity stable across reconnection and declares tool scopes", async () => {
+    const f = await createFixture();
+    const first = issueAccessToken(f.oauth, "user_test");
+    const second = issueAccessToken(f.oauth, "user_test");
+    for (const token of [first, second]) {
+      const profile = await mcpRequest(f.app, token, {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "get_profile", arguments: {} },
+      });
+      expect(profile.result.structuredContent).toEqual({ id: "user_test" });
+      expect(JSON.stringify(profile)).not.toContain("user@example");
+      const listed = await mcpRequest(f.app, token, {
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/list",
+        params: {},
+      });
+      for (const tool of listed.result.tools ?? []) {
+        expect(tool._meta?.securitySchemes).toEqual([
+          {
+            type: "oauth2",
+            scopes:
+              tool.name === "get_profile"
+                ? []
+                : [expect.stringMatching(/^mcp:(read|render|cancel|delete)$/)],
+          },
+        ]);
+      }
+      expect(
+        listed.result.tools?.find((t) => t.name === "get_profile")?._meta?.[
+          "openai/profile"
+        ],
+      ).toBe(true);
+    }
+  });
+  it("returns temporarily_unavailable, not invalid_grant, when a refresh reply was lost", async () => {
+    const f = await createFixture();
+    vi.spyOn(f.oauth, "refresh").mockImplementation(() => {
+      throw new AppError("OAUTH_REFRESH_RETRY", "Retry later", 503);
+    });
+    const response = await f.app.request("/oauth/token", {
+      method: "POST",
+      headers: {
+        Host: "latex.example.com",
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        client_id: "test",
+        refresh_token: "test",
+        resource: RESOURCE,
+      }).toString(),
+    });
+    expect(response.status).toBe(503);
+    expect(response.headers.get("Retry-After")).toBe("1");
+    expect(await response.json()).toMatchObject({
+      error: "temporarily_unavailable",
+    });
+  });
   it("resumes a maximum-length OAuth state through a short browser-bound login handle", async () => {
     const f = await createFixture();
     const client = f.oauth.registerClient({
@@ -916,6 +977,7 @@ describe("Remote MCP HTTP server", () => {
         "update_project_file",
         "delete_project_file",
         "render_project_revision",
+        "get_profile",
         "create_source",
         "begin_source_upload",
         "upload_source_chunk",
@@ -925,6 +987,7 @@ describe("Remote MCP HTTP server", () => {
         "create_source_ref",
         "create_render",
         "retry_render",
+        "retry_svg_render",
         "get_render_status",
         "get_render_diagnostics",
         "get_render_preview",
@@ -2209,6 +2272,9 @@ describe("Remote MCP HTTP server", () => {
       ["errors", "errors.json", Buffer.from('{"errors":[]}')],
       ["dependencies", "dependencies.json", Buffer.from('{"files":[]}')],
       ["svg_manifest", "svg/manifest.json", Buffer.from('{"objects":[]}')],
+      ["log", "svg/compile.log", Buffer.from("SVG-only diagnostics\n")],
+      ["errors", "svg/errors.json", Buffer.from('{"errors":[]}')],
+      ["dependencies", "svg/dependencies.json", Buffer.from('{"inputs":[]}')],
       ["svg", "svg/objects/math-000001.svg", Buffer.from('<svg id="math"/>')],
       ["svg", "svg/objects/tikz-000002.svg", Buffer.from('<svg id="tikz"/>')],
     ] as const;
@@ -2233,7 +2299,7 @@ describe("Remote MCP HTTP server", () => {
         resourceUri: string;
         mimeType: string;
       }>;
-    expect(artifacts).toHaveLength(7);
+    expect(artifacts).toHaveLength(10);
     for (const [index, artifact] of artifacts.entries()) {
       const response = await mcpRequest(fixture.app, token, {
           jsonrpc: "2.0",
@@ -3047,7 +3113,7 @@ async function mcpRequest(
 interface JsonRpcResponse {
   result: {
     protocolVersion?: unknown;
-    tools?: Array<{ name: string }>;
+    tools?: Array<{ name: string; _meta?: Record<string, unknown> }>;
     structuredContent?: unknown;
     content?: unknown[];
     contents?: Array<Record<string, unknown>>;

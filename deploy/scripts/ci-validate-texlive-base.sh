@@ -63,6 +63,7 @@ run_stage basic sh "$script_root/smoke-test-renderer-basic.sh" "$validation_runt
 run_stage en-jp sh "$script_root/smoke-test-renderer-en-jp.sh" "$validation_runtime"
 run_stage svg sh "$script_root/smoke-test-renderer-svg.sh" "$validation_runtime"
 run_stage compat sh "$script_root/smoke-test-renderer-compat.sh" "$validation_runtime"
+run_stage font-cache sh "$script_root/ci-font-cache-benchmark.sh" "$validation_runtime"
 # Reuse this exact immutable local Runtime before the existing cleanup trap;
 # Source/client integration success is also mandatory before Base publication.
 run_stage source-pipeline sh "$script_root/ci-source-pipeline-e2e.sh" "$validation_runtime"
