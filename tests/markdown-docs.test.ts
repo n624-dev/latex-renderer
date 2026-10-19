@@ -6,6 +6,7 @@ import {
   docsPage,
   integrationsDocsPage,
   publicDocs,
+  renderPublicDoc,
   renderMarkdown,
 } from "../apps/admin-web/src/markdown-docs.js";
 import {
@@ -104,7 +105,7 @@ describe("Markdown public documentation", () => {
     expect(page).toContain('id="最短でpdfを作る"');
     expect(page).toContain('href="#最短でpdfを作る"');
     expect(page).toContain('aria-current="page"');
-    expect(page).toContain('<time datetime="2026-08-28">');
+    expect(page).toContain('<time datetime="2026-10-19">');
   });
 
   it("deduplicates heading fragments and escapes raw HTML", () => {
@@ -116,6 +117,29 @@ describe("Markdown public documentation", () => {
     expect(html).toContain('id="同じ見出し-2"');
     expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
     expect(html).not.toContain("<script>");
+  });
+
+  it("keeps every document reachable without decorative headings or repeated metadata", () => {
+    for (const document of publicDocs) {
+      const page = renderPublicDoc(document.slug);
+      expect(page).not.toContain('class="eyebrow"');
+      expect(page).toContain(
+        '<details class="docs-menu"><summary>使い方の一覧</summary>',
+      );
+      expect(page.match(/class="docs-nav-group"/g)).toHaveLength(2);
+      for (const entry of publicDocs) {
+        expect(page).toContain(
+          `href="${entry.slug === "index" ? "/docs/" : `/docs/${entry.slug}/`}"`,
+        );
+      }
+      expect(page.indexOf('class="docs-meta"')).toBeGreaterThan(
+        page.indexOf("</article>"),
+      );
+      expect(page).toContain(`/edit/main/${document.sourcePath}`);
+      expect(page.includes('class="docs-toc"')).toBe(
+        document.headings.length >= 5,
+      );
+    }
   });
 
   it.each([

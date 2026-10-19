@@ -216,7 +216,7 @@ summary { cursor: pointer; font-weight: 700; min-height: 44px; padding: 0.65rem 
 details > :not(summary) { margin-inline: 0.9rem; margin-bottom: 0.75rem; }
 .job-technical code { white-space: pre-wrap; display: block; }
 #app-error:empty, #app-status:empty, #error:empty, #success:empty { margin: 0; }
-.login-form { max-width: 30rem; margin-inline: auto; }
+.login-panel { max-width: 30rem; margin-inline: auto; }
 
 #error, #render-error, #app-error { color: var(--danger); white-space: pre-wrap; }
 #success { color: var(--success); white-space: pre-wrap; }
@@ -244,10 +244,10 @@ details > :not(summary) { margin-inline: 0.9rem; margin-bottom: 0.75rem; }
 }
 
 .dialog-backdrop, dialog::backdrop { background: rgba(0, 0, 0, 0.65); backdrop-filter: blur(2px); }
-dialog { width: min(680px, calc(100vw - 2rem)); max-height: calc(100vh - 2rem); max-height: calc(100dvh - 2rem); overflow: auto; overscroll-behavior: contain; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 0.9rem; box-shadow: var(--shadow); padding: 1.1rem; }
+dialog { width: min(680px, calc(100% - 2rem)); max-height: calc(100vh - 2rem); max-height: calc(100dvh - 2rem); overflow: auto; overscroll-behavior: contain; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 0.9rem; box-shadow: var(--shadow); padding: 1.1rem; }
 body:has(dialog[open]) { overflow: hidden; }
 dialog :focus-visible { scroll-margin-block: 1rem; }
-dialog.wide { width: min(900px, calc(100vw - 2rem)); }
+dialog.wide { width: min(900px, calc(100% - 2rem)); }
 .dialog-heading { display: flex; align-items: flex-start; gap: 1rem; border-bottom: 1px solid var(--border); padding-bottom: 0.75rem; margin-bottom: 0.85rem; }
 .dialog-heading h2 { margin: 0; flex: 1; }
 .dialog-close { flex: 0 0 auto; min-width: 44px; min-height: 44px; padding: 0.35rem 0.6rem; font-size: 1.35rem; line-height: 1; }
@@ -261,6 +261,7 @@ dialog.wide { width: min(900px, calc(100vw - 2rem)); }
 .dialog-error { color: var(--danger); min-height: 1.55em; margin: 0; white-space: pre-wrap; }
 .dialog-error:empty { display: none; }
 .dialog-json { max-height: min(65vh, 720px); }
+.update-log { max-height: 24rem; }
 .admin-dialog[data-busy="true"] .dialog-close { visibility: hidden; }
 
 .docs-layout { display: grid; grid-template-columns: minmax(220px, 280px) minmax(0, 1fr); gap: 2rem; align-items: start; }
@@ -269,15 +270,18 @@ dialog.wide { width: min(900px, calc(100vw - 2rem)); }
 .docs-nav-group { display: grid; gap: 0.3rem; padding: 0; margin: 0; border: 0; background: transparent; }
 .docs-nav-group h2 { margin: 0; color: var(--muted); font-size: 0.78rem; text-transform: uppercase; }
 .docs-nav-group a { padding: 0.25rem 0.5rem; }
+.docs-menu { border: 0; background: transparent; }
+.docs-menu > summary { font-weight: 650; }
+.docs-menu > .docs-nav { margin: 0; }
 .docs-search-results { font-size: 0.86rem; }
 .docs-search-results ul { margin: 0; padding-left: 1.2rem; }
 .docs-main { min-width: 0; }
-.docs-hero { padding-top: 2.5rem; }
+.docs-hero { padding: 0 0 1rem; border: 0; background: transparent; }
 .docs-meta { color: var(--muted); font-size: 0.9rem !important; }
 .docs-content { max-width: 860px; }
 .docs-content h2, .docs-content h3 { scroll-margin-top: 6rem; }
-.heading-permalink { margin-left: 0.45rem; color: var(--muted); font-size: 0.72em; text-decoration: none; }
-.heading-permalink:hover, .heading-permalink:focus-visible { color: var(--text); }
+.heading-permalink { margin-left: 0.45rem; color: var(--muted); font-size: 0.72em; text-decoration: none; opacity: 0; }
+.docs-content :is(h1,h2,h3,h4,h5,h6):hover .heading-permalink, .heading-permalink:focus-visible { color: var(--text); opacity: 1; }
 .notice.note { border-left-color: var(--focus); }
 .docs-toc { display: grid; gap: 0.3rem; border-left: 3px solid var(--border); padding: 0.6rem 1rem; margin-bottom: 1.5rem; }
 .docs-toc .toc-depth-3 { padding-left: 1rem; font-size: 0.92rem; }
@@ -303,7 +307,7 @@ dialog.wide { width: min(900px, calc(100vw - 2rem)); }
   .site-header nav a { white-space: nowrap; min-height: 44px; display: inline-flex; align-items: center; }
   .header-meta { margin-left: 0; }
   main { padding-top: 1.25rem; }
-  dialog, dialog.wide { width: calc(100vw - 1rem); max-height: calc(100vh - 1rem); max-height: calc(100dvh - 1rem); padding: 0.9rem; }
+  dialog, dialog.wide { width: calc(100% - 1rem); max-height: calc(100vh - 1rem); max-height: calc(100dvh - 1rem); padding: 0.9rem; }
   .dialog-actions { display: grid; grid-template-columns: 1fr; }
   .dialog-actions button { width: 100%; }
   .docs-layout { grid-template-columns: 1fr; }
@@ -317,7 +321,7 @@ dialog.wide { width: min(900px, calc(100vw - 2rem)); }
   .responsive-table td { grid-template-columns: minmax(5rem, 30%) minmax(0, 1fr); gap: 0.5rem; }
   .preview-controls { flex-wrap: wrap; gap: 0.5rem; }
   .code-label { flex-wrap: wrap; }
-  dialog, dialog.wide { width: calc(100vw - 1rem); max-width: calc(100vw - 1rem); margin: auto; padding-bottom: max(0.9rem, env(safe-area-inset-bottom)); }
+  dialog, dialog.wide { width: calc(100% - 1rem); max-width: calc(100% - 1rem); margin: auto; padding-bottom: max(0.9rem, env(safe-area-inset-bottom)); }
 }
 
 @media (prefers-reduced-motion: reduce) {

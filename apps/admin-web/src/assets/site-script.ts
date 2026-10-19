@@ -21,6 +21,13 @@ export const siteScript = `
 
   apply(initial);
   document.addEventListener('DOMContentLoaded', () => {
+    const docsMenu = document.querySelector('.docs-menu');
+    if (docsMenu) {
+      const narrow = window.matchMedia('(max-width: 820px)');
+      const syncMenu = () => { docsMenu.open = !narrow.matches; };
+      syncMenu();
+      narrow.addEventListener('change', syncMenu);
+    }
     let current = document.documentElement.dataset.themePreference || 'system';
     syncButtons(current);
     document.querySelectorAll('[data-theme-toggle]').forEach((button) => {

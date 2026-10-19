@@ -1,6 +1,6 @@
 export const setupHtml = `<!doctype html>
 <html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Server settings</title><link rel="stylesheet" href="/style.css">
+<title>サーバー設定</title><link rel="stylesheet" href="/style.css">
 <main><h1>サーバー設定</h1>
 <p id="scope">準備済みの既存環境専用です。OS・Docker・ユーザー・ディスク構成は変更しません。
 秘密情報・owner・保存場所・公開URL・HTTPSの変更はこの画面では行いません。</p>
@@ -9,7 +9,7 @@ export const setupHtml = `<!doctype html>
 <form id="settings"><fieldset disabled id="fields"><legend>容量・時間・認証の確認</legend>
 <p id="origin"></p><div id="limits"></div>
 <label>詳細設定（秘密情報を入力しないでください）<textarea id="review" rows="16" spellcheck="false"></textarea></label>
-<section id="initial" hidden><h2>初期owner・秘密情報</h2>
+<section id="initial" hidden><h2 id="credentials-heading">管理者と認証情報</h2>
 <p>秘密情報は確認表示・ブラウザー保存・ログには出しません。HTTPSはPEM証明書と秘密鍵を使用します。</p>
 <label>owner表示名<input id="owner-name" autocomplete="off"></label>
 <label>Updaterのビルドに使う既存の非rootユーザー<input id="deployment-user" autocomplete="off"></label>
@@ -34,6 +34,7 @@ export const setupStyle = `
   --page:#f5f5f5; --surface:#ffffff; --text:#1a1a1a; --border:#808080; --accent:#262626; --on-accent:#ffffff; }
 @media(prefers-color-scheme:dark) { :root { --page:#111111; --surface:#1b1b1b; --text:#f5f5f5; --border:#737373; --accent:#ededed; --on-accent:#171717; } }
 * { box-sizing:border-box; }
+[hidden] { display:none !important; }
 ::selection { background:var(--accent); color:var(--on-accent); }
 body { margin:0; background:var(--page); color:var(--text); overflow-wrap:anywhere; }
 main { max-width:56rem; margin:auto; padding:clamp(.75rem,3vw,2rem); }
@@ -68,6 +69,12 @@ export const setupScript = `"use strict";
   };
   const synchronize = () => {
     model = JSON.parse(el("review").value);
+    const auth = model.deployment.authentication.authentication;
+    const password = auth.backend === "native" && auth.passwordEnabled;
+    for (const id of ["owner-login", "owner-password", "owner-confirm"]) el(id).closest("label").hidden = !initial || !password;
+    el("owner-subject").closest("label").hidden = !initial || password;
+    el("oidc-secret").closest("label").hidden = !initial || auth.backend !== "native" || !auth.oidcEnabled;
+    for (const id of ["tls-certificate", "tls-key"]) el(id).closest("label").hidden = !ingress && !(initial && model.deployment.ingress.mode === "standalone");
     el("limits").replaceChildren();
     for (const [name, value] of Object.entries(model.runtime.limits)) {
       const label = document.createElement("label"); label.textContent = name + (/Bytes$/.test(name) ? " (bytes)" : /Seconds$/.test(name) ? " (seconds)" : "");
@@ -126,6 +133,7 @@ export const setupScript = `"use strict";
       initial = value.scope === "initial-prepared-host"; ingress = value.scope === "ingress-prepared-host";
       if (initial || ingress) {
         el("initial").hidden = false; el("recover").hidden = false;
+        el("credentials-heading").textContent = initial ? "管理者と認証情報" : "HTTPS証明書";
         el("scope").textContent = initial ? "準備済み環境への初期導入です。実際のHTTPS origin・公開範囲・immutable imageを設定し、初期ownerを作成します。OS・Docker・ユーザー・ディスクは変更しません。" : "既存StandaloneのHTTPS・公開範囲を変更します。owner・認証方式・imageは維持し、失敗時は以前の設定へ戻します。";
         if (ingress) for (const id of ["owner-name", "deployment-user", "owner-email", "owner-login", "owner-password", "owner-confirm", "owner-subject", "oidc-secret"]) el(id).closest("label").hidden = true;
       }
