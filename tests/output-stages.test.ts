@@ -1,10 +1,15 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RendererDatabase, SvgRetryOperations } from "@latex-renderer/database";
 import { readFileSync } from "node:fs";
 import { outputStagesV21Sql } from "../packages/database/src/schema.js";
 const databases: RendererDatabase[] = [];
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-19T01:00:00.000Z"));
+});
 afterEach(() => {
   for (const db of databases.splice(0)) db.close();
+  vi.useRealTimers();
 });
 const now = "2026-10-19T00:00:00.000Z",
   id = `job_${"7".repeat(32)}`;
