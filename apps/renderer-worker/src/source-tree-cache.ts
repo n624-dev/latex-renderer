@@ -127,7 +127,10 @@ export async function prepareSourceInput(
       try {
         if (
           row.reserved_bytes >
-          Math.min(config.sourceTreeMaxBytes!, config.sourceTreeUserMaxBytes!)
+          Math.min(
+            config.sourceTreeMaxBytes ?? 0,
+            config.sourceTreeUserMaxBytes ?? 0,
+          )
         )
           throw new Error("Source tree exceeds current cache budget");
         const root = treePath(canonicalRoot, row.id),
@@ -216,8 +219,8 @@ export async function prepareSourceInput(
       row,
       job.id,
       job.lease_generation,
-      config.sourceTreeMaxBytes!,
-      config.sourceTreeUserMaxBytes!,
+      config.sourceTreeMaxBytes ?? 0,
+      config.sourceTreeUserMaxBytes ?? 0,
       config.maxUserStorageBytes ?? 1024 ** 3,
     );
   if (!reserve()) {

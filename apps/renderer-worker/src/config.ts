@@ -161,7 +161,7 @@ export function loadWorkerConfig(): WorkerConfig {
   if (config.containerUid === 0 || config.containerGid === 0)
     throw new Error("Renderer container UID and GID must both be non-zero");
   if (
-    config.sourceTreeUserMaxBytes! > config.sourceTreeMaxBytes! &&
+    (config.sourceTreeUserMaxBytes ?? 0) > (config.sourceTreeMaxBytes ?? 0) &&
     config.sourceTreeMaxBytes !== 0
   )
     throw new Error(

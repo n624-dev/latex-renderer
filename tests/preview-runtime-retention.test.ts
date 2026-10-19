@@ -1,3 +1,4 @@
+import { defined } from "./helpers/assert-defined.js";
 import { DatabaseSync } from "node:sqlite";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -114,7 +115,7 @@ describe("retained PDF Runtime lifetime", () => {
                   }),
           ),
         dockerLogged: (_op: unknown, args: string[]) => {
-          if (args[0] === "image") removed.push(args[args.length - 1]!);
+          if (args[0] === "image") removed.push(defined(args[args.length - 1]));
           return Promise.resolve();
         },
         persistState: () => Promise.resolve(),

@@ -178,9 +178,11 @@ export async function processPreview(
   let failure: string | undefined;
   try {
     const document = db.previews.document(request.job_id);
+    if (!document)
+      throw new AppError("ARTIFACT_NOT_FOUND", "PDF no longer available", 404);
     const pdf = db.transaction(() => {
       const row = db.previews.verifiedPdf(request.job_id, policy);
-      if (!row || !document || !owns())
+      if (!row || !owns())
         throw new AppError(
           "ARTIFACT_NOT_FOUND",
           "PDF no longer available",
@@ -265,7 +267,7 @@ export async function processPreview(
     };
     const result = await runRendererStage(
       db,
-      { ...config, image: document!.runtime_image, maxOutputBytes: limit },
+      { ...config, image: document.runtime_image, maxOutputBytes: limit },
       job,
       input,
       staging,

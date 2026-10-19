@@ -41,8 +41,7 @@ export async function processStagedJob(
       ? join(root, "input/source.zip")
       : join(config.storageRoot, job.source_storage_key);
   let preserveAttempt = false;
-  let rendererInput = input,
-    releaseInput = () => {};
+  let releaseInput = () => {};
   const owns = () => {
     const row = db.worker.runtimeState(job.id);
     return (
@@ -108,7 +107,7 @@ export async function processStagedJob(
     // prepareSourceInput verifies archive size/SHA on misses and every cached
     // file on hits; do not hash the same archive again here.
     const prepared = await prepareSourceInput(db, config, job, source, input);
-    rendererInput = prepared.input;
+    const rendererInput = prepared.input;
     releaseInput = prepared.release;
     if (
       db.worker.transitionOwned(

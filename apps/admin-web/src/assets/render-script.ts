@@ -494,7 +494,7 @@ export function parseJobStatus(
     previews,
     ...(record.previewPageCount === undefined
       ? {}
-      : { previewPageCount: record.previewPageCount as number }),
+      : { previewPageCount: record.previewPageCount }),
     ...(stages === undefined ? {} : { stages }),
   };
 }

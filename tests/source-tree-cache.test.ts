@@ -1,3 +1,4 @@
+import { defined } from "./helpers/assert-defined.js";
 import {
   lstat,
   mkdir,
@@ -95,7 +96,7 @@ describe("bounded owner-bound Source input reuse (fixture renderer, no Docker)",
       const a = await f.next(),
         first = await a.prepare(),
         before = await lstat(join(first.input, "main.tex")),
-        row = f.rows()[0]!;
+        row = defined(f.rows()[0]);
       expect(first.hit).toBe(false);
       expect(first.input).not.toBe(a.destination);
       await expect(lstat(a.destination)).rejects.toMatchObject({
@@ -132,7 +133,7 @@ describe("bounded owner-bound Source input reuse (fixture renderer, no Docker)",
       first.release();
       second.release();
       second.release();
-      expect(f.rows()[0]!.expires_at).toBe(row.expires_at);
+      expect(defined(f.rows()[0]).expires_at).toBe(row.expires_at);
       await collectSourceTrees(f.database.raw, f.storage, true);
       expect(f.rows()).toHaveLength(0);
       await expect(lstat(first.input)).rejects.toMatchObject({
@@ -149,7 +150,7 @@ describe("bounded owner-bound Source input reuse (fixture renderer, no Docker)",
       try {
         const a = await f.next(),
           first = await a.prepare(),
-          row = f.rows()[0]!;
+          row = defined(f.rows()[0]);
         first.release();
         if (mode === "content")
           await writeFile(join(first.input, "main.tex"), "corrupted");
@@ -196,7 +197,7 @@ describe("bounded owner-bound Source input reuse (fixture renderer, no Docker)",
     try {
       const a = await f.next(),
         first = await a.prepare(),
-        row = f.rows()[0]!;
+        row = defined(f.rows()[0]);
       expect(
         f.database.sourceTrees.acquire(
           row.identity,

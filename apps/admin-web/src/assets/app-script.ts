@@ -478,7 +478,7 @@ function renderJobResult(
       select = document.createElement("select"),
       selected = document.createElement("span");
     label.textContent = "プレビューのページ";
-    for (let page = 1; page <= job.previewPageCount!; page++) {
+    for (let page = 1; page <= (job.previewPageCount ?? 0); page++) {
       const option = document.createElement("option");
       option.value = String(page);
       option.textContent = String(page);

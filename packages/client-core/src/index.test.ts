@@ -50,7 +50,7 @@ describe("client core", () => {
       };
     const client: ClientTransport = new FakeClient([initial, complete]);
     const requested: number[] = [];
-    client.preparePreview = (_id, page, _ticket) => {
+    client.preparePreview = (_id, page) => {
       requested.push(page);
       return Promise.resolve();
     };

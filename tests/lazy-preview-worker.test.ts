@@ -1,3 +1,4 @@
+import { defined } from "./helpers/assert-defined.js";
 import * as fs from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -79,7 +80,7 @@ describe("bounded lazy preview publication (fixture conversion, no TeX)", () => 
     const f = await fixture();
     let pending: Promise<void> | undefined;
     try {
-      const row = f.database.jobs.get(f.job.id)!,
+      const row = defined(f.database.jobs.get(f.job.id)),
         ticket = {
           jobTicket: await f.tickets.issueJob({
             jobId: f.job.id,
@@ -112,9 +113,9 @@ describe("bounded lazy preview publication (fixture conversion, no TeX)", () => 
       const after = await f.client.job(f.job.id, ticket.jobTicket);
       expect(after.previews).toHaveLength(2);
       expect(after.previewPageCount).toBe(3);
-      const png = after.previews.find(
-        (a) => a.relativePath === "previews/page-2.png",
-      )!;
+      const png = defined(
+        after.previews.find((a) => a.relativePath === "previews/page-2.png"),
+      );
       await f.client.download(
         url,
         ticket.jobTicket,
@@ -158,12 +159,12 @@ describe("bounded lazy preview publication (fixture conversion, no TeX)", () => 
   it("publishes a real checksummed PNG into an immutable generation and charges actual bytes without changing the Job/PDF/deadline", async () => {
     const f = await fixture();
     try {
-      const before = f.database.jobs.get(f.job.id)!,
+      const before = defined(f.database.jobs.get(f.job.id)),
         request = f.claim(),
         wait = waitForPreview(f.database, f.job.id, 2, {}, { timeoutMs: 1000 });
       await processPreview(f.database, f.config, request);
       const png = await wait,
-        after = f.database.jobs.get(f.job.id)!;
+        after = defined(f.database.jobs.get(f.job.id));
       expect(png.size).toBe(8);
       expect(png.storage_generation).toBeGreaterThan(2 ** 40);
       expect(await fs.readFile(artifactStoragePath(f.storage, png))).toEqual(
@@ -192,7 +193,7 @@ describe("bounded lazy preview publication (fixture conversion, no TeX)", () => 
       const f = await fixture();
       try {
         const request = f.claim(),
-          original = f.database.jobs.get(f.job.id)!;
+          original = defined(f.database.jobs.get(f.job.id));
         if (failure === "quota")
           f.database.settings.upsert(
             "max_user_storage_bytes",
@@ -247,7 +248,7 @@ describe("bounded lazy preview publication (fixture conversion, no TeX)", () => 
       await expect(
         processPreview(f.database, f.config, request),
       ).rejects.toBeInstanceOf(docker.RendererCleanupDeferred);
-      const retained = f.database.previews.get(f.job.id, 2)!;
+      const retained = defined(f.database.previews.get(f.job.id, 2));
       expect(retained.reserved_bytes).toBeGreaterThan(0);
       expect(
         f.database.previews.claim("other", new Date().toISOString()),

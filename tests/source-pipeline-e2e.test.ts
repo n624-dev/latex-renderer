@@ -1,3 +1,4 @@
+import { defined } from "./helpers/assert-defined.js";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -176,7 +177,7 @@ describe(`Source pipeline HTTP/DB/Worker E2E (${realPipelineImage === undefined 
       });
       expect(first.job.previewPageCount).toBe(3);
       expect(first.artifacts.previews).toHaveLength(1);
-      const pdf = await readFile(first.artifacts.pdf!),
+      const pdf = await readFile(defined(first.artifacts.pdf)),
         completed = f.database.jobs.get(first.job.id)?.completed_at;
       const generated = await f.withPreviewWorker(() =>
         downloadJobArtifacts(f.client, first.job.id, output, {
@@ -186,12 +187,14 @@ describe(`Source pipeline HTTP/DB/Worker E2E (${realPipelineImage === undefined 
       expect(
         generated.artifacts.previews.map((p) => p.split(/[\\/]/).at(-1)).sort(),
       ).toEqual(["page-1.png", "page-3.png"]);
-      expect(await readFile(generated.artifacts.pdf!)).toEqual(pdf);
+      expect(await readFile(defined(generated.artifacts.pdf))).toEqual(pdf);
       expect(f.database.jobs.get(first.job.id)?.completed_at).toBe(completed);
       expect(f.database.previews.get(first.job.id, 2)).toBeUndefined();
-      const row = generated.job.previews.find(
-          (a) => a.relativePath === "previews/page-3.png",
-        )!,
+      const row = defined(
+          generated.job.previews.find(
+            (a) => a.relativePath === "previews/page-3.png",
+          ),
+        ),
         bytes = await readFile(join(output, row.relativePath));
       expect(bytes.length).toBe(row.size);
       expect(createHash("sha256").update(bytes).digest("hex")).toBe(row.sha256);

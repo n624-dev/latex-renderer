@@ -27,6 +27,11 @@ export class RendererJobsService {
       const item = artifactItem(id, artifact);
       (artifact.type === "preview" ? previews : artifacts).push(item);
     }
+    const previewDocument = this.deps.database.previews.verifiedPdf(id, {
+      retentionHours: this.deps.artifactRetentionHours,
+    })
+      ? this.deps.database.previews.document(id)
+      : undefined;
     return {
       id: row.id,
       status: row.status,
@@ -52,13 +57,8 @@ export class RendererJobsService {
       ),
       artifacts,
       previews,
-      ...(this.deps.database.previews.verifiedPdf(id, {
-        retentionHours: this.deps.artifactRetentionHours,
-      })
-        ? {
-            previewPageCount:
-              this.deps.database.previews.document(id)!.page_count,
-          }
+      ...(previewDocument
+        ? { previewPageCount: previewDocument.page_count }
         : {}),
       ...(stages === undefined ? {} : { stages }),
     };

@@ -89,6 +89,11 @@ export class AdminJobsService {
             : null,
       };
     };
+    const previewDocument = this.deps.database.previews.verifiedPdf(id, {
+      retentionHours: this.deps.artifactRetentionHours ?? 24,
+    })
+      ? this.deps.database.previews.document(id)
+      : undefined;
     return {
       id: row.id,
       user_id: row.user_id,
@@ -127,13 +132,8 @@ export class AdminJobsService {
       previews: artifacts
         .filter((artifact) => artifact.type === "preview")
         .map(item),
-      ...(this.deps.database.previews.verifiedPdf(id, {
-        retentionHours: this.deps.artifactRetentionHours ?? 24,
-      })
-        ? {
-            preview_page_count:
-              this.deps.database.previews.document(id)!.page_count,
-          }
+      ...(previewDocument
+        ? { preview_page_count: previewDocument.page_count }
         : {}),
     };
   }

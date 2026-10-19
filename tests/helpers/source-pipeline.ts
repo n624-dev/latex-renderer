@@ -429,7 +429,12 @@ export async function sourcePipelineFixture(
         }, 20);
         try {
           const result = await work();
-          if (failure) throw failure;
+          if (failure)
+            throw failure instanceof Error
+              ? failure
+              : new Error("Fixture preview processing failed", {
+                  cause: failure,
+                });
           return result;
         } finally {
           clearInterval(timer);

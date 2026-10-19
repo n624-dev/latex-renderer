@@ -67,7 +67,7 @@ export async function verifyValidatedSourceTree(
   entrypoint = "main.tex",
 ): Promise<ExtractResult> {
   if (
-    manifest.version !== 1 ||
+    (manifest as { version: unknown }).version !== 1 ||
     manifest.files.length > limits.maxFiles ||
     manifest.directories.length > limits.maxEntries
   )

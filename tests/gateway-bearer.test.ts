@@ -1,3 +1,4 @@
+import { defined } from "./helpers/assert-defined.js";
 import { describe, expect, it } from "vitest";
 import { proxyGatewayJson } from "../packages/gateway-core/src/index.js";
 
@@ -15,7 +16,9 @@ describe("public Gateway Bearer scheme", () => {
         requestId: "fixture",
         bodyRequired: false,
         fetchUpstream: (_url, init) => {
-          forwarded.push(new Headers(init.headers).get("Authorization")!);
+          forwarded.push(
+            defined(new Headers(init.headers).get("Authorization")),
+          );
           return Promise.resolve(Response.json({ items: [] }));
         },
       });
