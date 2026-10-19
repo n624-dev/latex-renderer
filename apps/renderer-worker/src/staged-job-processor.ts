@@ -12,7 +12,7 @@ import {
 import { join } from "node:path";
 import type { RendererDatabase, WorkerJobRow } from "@latex-renderer/database";
 import { AppError, newId, nowIso } from "@latex-renderer/shared";
-import { validateAndExtract } from "@latex-renderer/zip-validation";
+import { prepareSourceInput } from "./source-tree-cache.js";
 import type { WorkerConfig } from "./config.js";
 import {
   inspectOutputTree,
@@ -24,6 +24,7 @@ import { RendererCleanupDeferred } from "./docker.js";
 import { generateMetadata } from "./metadata.js";
 import { classifyRenderResult } from "./render-result.js";
 import { runRendererStage } from "./renderer-stage.js";
+import { previewPageCount } from "./preview-metadata.js";
 
 /** PDF and SVG use separate daemon containers and separate immutable storage
  * generations. Only a fenced database transaction makes a generation public. */
@@ -40,6 +41,7 @@ export async function processStagedJob(
       ? join(root, "input/source.zip")
       : join(config.storageRoot, job.source_storage_key);
   let preserveAttempt = false;
+  let releaseInput = () => {};
   const owns = () => {
     const row = db.worker.runtimeState(job.id);
     return (
@@ -102,28 +104,11 @@ export async function processStagedJob(
     await rm(attempt, { recursive: true, force: true });
     await mkdir(attempt, { recursive: true, mode: 0o770 });
     await chmod(attempt, 0o770);
-    const sourceDigest = await digestRegularFile(source, config.maxUploadBytes);
-    if (
-      sourceDigest.sha256 !== job.source_sha256 ||
-      sourceDigest.bytes !== job.source_size
-    )
-      throw new AppError(
-        "SOURCE_CHECKSUM_INVALID",
-        "The verified Source has changed",
-      );
-    await validateAndExtract(
-      source,
-      input,
-      {
-        maxExtractedBytes: config.maxExtractedBytes,
-        maxFileBytes: config.maxUploadBytes,
-        maxEntries: config.maxZipEntries,
-        maxFiles: config.maxFileCount,
-        maxDepth: 10,
-        maxNameLength: 200,
-      },
-      job.entrypoint,
-    );
+    // prepareSourceInput verifies archive size/SHA on misses and every cached
+    // file on hits; do not hash the same archive again here.
+    const prepared = await prepareSourceInput(db, config, job, source, input);
+    const rendererInput = prepared.input;
+    releaseInput = prepared.release;
     if (
       db.worker.transitionOwned(
         job.id,
@@ -157,7 +142,7 @@ export async function processStagedJob(
         db,
         config,
         job,
-        input,
+        rendererInput,
         staging,
         { mode: "pdf" },
         deadline - Date.now(),
@@ -243,6 +228,7 @@ export async function processStagedJob(
         throw new AppError("PREVIEW_MISSING", "PDF preview is missing");
       const pdf = artifacts.find((a) => a.path === "result.pdf");
       if (!pdf) throw new Error("Validated PDF is missing");
+      const pageCount = await previewPageCount(staging, artifacts);
       const sync = await digestRegularFile(
         join(staging, "result.synctex.gz"),
         config.maxOutputBytes,
@@ -288,7 +274,7 @@ export async function processStagedJob(
           )
         )
           return false;
-        insertArtifacts(artifacts, generation, timestamp);
+        insertArtifacts(artifacts, generation, timestamp, pageCount);
         if (
           db.worker.transitionOwned(
             job.id,
@@ -388,7 +374,7 @@ export async function processStagedJob(
         db,
         config,
         job,
-        input,
+        rendererInput,
         staging,
         { mode: "svg", pdfDirectory },
         deadline - Date.now(),
@@ -608,16 +594,22 @@ export async function processStagedJob(
       for (const path of published)
         await rm(path, { recursive: true, force: true });
       await rm(attempt, { recursive: true, force: true });
+      releaseInput();
+      // Cancellation can win during ZIP validation, before a container exists.
+      // Release only our fenced lease, after all daemon work/cleanup is proven.
+      canceled();
     }
   }
   function insertArtifacts(
     artifacts: ValidatedArtifact[],
     generation: number,
     timestamp: string,
+    pageCount?: number,
   ) {
-    for (const a of artifacts)
+    for (const a of artifacts) {
+      const artifactId = newId("artifact");
       db.artifacts.publishStage({
-        id: newId("artifact"),
+        id: artifactId,
         job_id: job.id,
         type: a.type,
         relative_path: a.path,
@@ -626,6 +618,16 @@ export async function processStagedJob(
         sha256: a.sha256,
         created_at: timestamp,
       });
+      if (a.type === "pdf" && pageCount !== undefined)
+        db.previews.register({
+          job_id: job.id,
+          pdf_artifact_id: artifactId,
+          pdf_sha256: a.sha256,
+          page_count: pageCount,
+          runtime_image: config.image,
+          created_at: timestamp,
+        });
+    }
   }
 }
 

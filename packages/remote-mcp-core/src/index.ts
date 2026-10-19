@@ -29,6 +29,7 @@ import {
   artifactStoragePath,
   protectArtifactDownloadLeases,
   ARTIFACT_DOWNLOAD_LEASE_MS,
+  waitForPreview,
 } from "@latex-renderer/database";
 import {
   AppError,
@@ -1701,7 +1702,11 @@ export class RemoteRenderService {
         );
       if (candidates.length > 1)
         throw new AppError("INVALID_PREVIEW", "Preview page is ambiguous", 409);
-      artifact = candidates[0];
+      artifact =
+        candidates[0] ??
+        (await waitForPreview(this.database, jobId, page, {
+          retentionHours: this.artifactRetentionHours,
+        }));
     }
     if (artifact === undefined)
       throw new AppError("ARTIFACT_NOT_FOUND", "Artifact does not exist", 404);
@@ -2547,7 +2552,11 @@ export class RemoteRenderService {
         this.database.serviceAccounts.insert({
           id: principal.service_account_id,
           ownerUserId: userId,
-          name: "Remote MCP",
+          // Display names are user-editable, not a reserved identity. Keep a
+          // same-named account separate and check under this write transaction.
+          name: this.database.serviceAccounts.nameExists(userId, "Remote MCP")
+            ? `Remote MCP (${principal.service_account_id})`
+            : "Remote MCP",
           clientType: "mcp",
           timestamp,
         });
@@ -2732,11 +2741,19 @@ export class RemoteRenderService {
     const artifacts = this.database.artifacts.listDownloadable(row.id, {
         retentionHours: this.artifactRetentionHours,
       }),
-      previewPages = artifacts
+      generatedPages = artifacts
         .filter((artifact) => artifact.type === "preview")
         .map((artifact) => previewPage(artifact.relative_path))
         .filter((page): page is number => page !== null)
-        .sort((left, right) => left - right);
+        .sort((left, right) => left - right),
+      document = this.database.previews.verifiedPdf(row.id, {
+        retentionHours: this.artifactRetentionHours,
+      })
+        ? this.database.previews.document(row.id)
+        : undefined,
+      previewPages = document
+        ? Array.from({ length: document.page_count }, (_, index) => index + 1)
+        : generatedPages;
     return {
       id: row.id,
       status: row.status,

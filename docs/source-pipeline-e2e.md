@@ -15,6 +15,11 @@ The scenarios cover:
   that directory in the next Source; deduplication avoids a second upload.
 - Rerendering a three-page document as one page and removing old previews while
   verifying downloaded bytes against Worker-generated size/SHA-256 metadata.
+- Generating only page 1 initially, then requesting an ungenerated page through
+  the existing HTTP endpoint and real Worker preview queue. The requested PNG
+  is checksum-verified without generating the intervening page, recompiling
+  TeX, replacing the PDF or renewing its retention deadline. The ordinary
+  deterministic child tests both legacy eager and current lazy output layouts.
 - `jobs download` waiting for a queued Job without modifying the old generation.
   The ordinary child fixture also holds a running Job and checks the entire old
   set before allowing publication.

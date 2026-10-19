@@ -4,6 +4,7 @@ import { dirname, isAbsolute, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pruneServiceDiagnostics } from "./service-diagnostics.mjs";
 import { sourceReferenceCountSql } from "../../packages/database/dist/source-lifecycle.js";
+import { collectSourceTrees } from "./source-tree-gc.mjs";
 import {
   readAuditCheckpoint,
   validateAuditCheckpoint,
@@ -43,6 +44,15 @@ db.exec("PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON");
 const itemFailures = [];
 let itemFailureCount = 0;
 const now = new Date().toISOString();
+try {
+  await collectSourceTrees(db, storageRoot);
+} catch {
+  recordFailure(
+    "source-tree-gc",
+    "bounded-cache",
+    new Error("Source tree collection failed"),
+  );
+}
 const staleJobUploadsRecovered = recoverStaleJobUploads(now),
   staleSourceUploadsRecovered = recoverStaleSourceUploads(now);
 const reservationCutoff = new Date(
@@ -131,6 +141,7 @@ const jobs = db
           AND (j.deletion_next_attempt_at IS NULL OR j.deletion_next_attempt_at<=?))
     ) AND NOT EXISTS
     (SELECT 1 FROM artifact_download_leases l WHERE l.job_id=j.id AND l.expires_at>?)
+    AND NOT EXISTS (SELECT 1 FROM job_preview_requests p WHERE p.job_id=j.id AND p.status='running')
     ORDER BY COALESCE(j.deletion_next_attempt_at,j.completed_at,j.updated_at),j.id LIMIT 100`,
   )
   .all(cutoff, now, now);
@@ -152,7 +163,8 @@ for (const record of jobs) {
           OR (deletion_status IN ('pending','deleting','retry')
               AND (deletion_next_attempt_at IS NULL OR deletion_next_attempt_at<=?))
         ) AND NOT EXISTS
-          (SELECT 1 FROM artifact_download_leases WHERE job_id=? AND expires_at>?)`,
+          (SELECT 1 FROM artifact_download_leases WHERE job_id=? AND expires_at>?)
+          AND NOT EXISTS (SELECT 1 FROM job_preview_requests p WHERE p.job_id=jobs.id AND p.status='running')`,
       )
       .run(now, id, cutoff, now, id, now);
     db.exec("COMMIT");
@@ -169,7 +181,14 @@ for (const record of jobs) {
       )
       .get(id)?.storage_key;
     if (sourceStorage === `jobs/${id}/input/source.zip`) {
-      for (const child of ["output", "outputs", "work", "staging", "attempts"])
+      for (const child of [
+        "output",
+        "outputs",
+        "work",
+        "staging",
+        "attempts",
+        "preview-attempts",
+      ])
         await rm(join(storageRoot, "jobs", id, child), {
           recursive: true,
           force: true,
@@ -359,6 +378,16 @@ try {
         )
         .run(BigInt(checkpoint.sequence), auditPruneBatchSize).changes,
     );
+    // Classification outlives resource history, not the retained audit rows.
+    // These index-covered lookups do not read/export or discard audit content.
+    db.prepare(
+      `DELETE FROM internal_resource_tombstones WHERE (kind,id) IN (
+      SELECT t.kind,t.id FROM internal_resource_tombstones t
+      WHERE NOT EXISTS (SELECT 1 FROM audit_logs a WHERE a.actor_type=t.kind AND a.actor_id=t.id)
+        AND NOT EXISTS (SELECT 1 FROM audit_logs a WHERE a.target_type=t.kind AND a.target_id=t.id)
+        AND (t.kind!='job' OR NOT EXISTS (SELECT 1 FROM audit_logs a WHERE a.target_type='render' AND a.target_id=t.id))
+      ORDER BY t.kind,t.id LIMIT ?)`,
+    ).run(auditPruneBatchSize);
   }
   db.exec("COMMIT");
 } catch (error) {

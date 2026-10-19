@@ -146,6 +146,40 @@ No rows are deleted, but old application code ignores the visibility boundary;
 full recovery point, not an application-only rollback or live column removal.
 See [the migration and recovery guide](deploy/migrations/019_internal_smoke_visibility.rollback.md).
 
+## Migration 022: PDF-bound preview requests
+
+The same migration adds bounded `source_trees` and `source_tree_readers` for
+owner-bound, read-only validated input reuse. Reservations include filesystem
+blocks and metadata and remain charged until deletion completes. Reader pins
+survive process restarts and require exact daemon-stop confirmation before
+recovery. Deploy the application, Worker and common timer collector together;
+see [Source input reuse](docs/source-input-reuse.md). The numbered SQL is tested
+against the canonical application SQL, including byte reservations and the
+internal audit tombstones below.
+
+Migration 022 adds `job_preview_documents` and `job_preview_requests` for
+page counts bound to an immutable PDF artifact and deduplicated, bounded page
+requests. Queuing a request must not extend the PDF retention deadline or
+change the Job result. Conversion remains the responsibility of a sandboxed
+Worker, never an HTTP request handler. The migration is infrastructure: it does
+not by itself switch an existing Runtime from eager to on-demand previews.
+Historical previews remain available without backfilling or rerendering.
+The same migration retains positively classified internal-smoke resource IDs
+after physical Job/Source/key/account deletion, so their audit records do not
+reappear in user-facing views. Raw diagnostic export remains unfiltered.
+Classification IDs are collected only once no retained audit row refers to them;
+unattributable historical records are not hidden by name-based guesses.
+Running conversions reserve bounded bytes in per-user storage accounting;
+cleanup protects them even after a lease expires until daemon recovery has
+verified the old container stopped. Updated six-file Runtimes emit page metadata
+and generate page 1 initially. See [the preview contract](docs/lazy-previews.md).
+
+Deploy database consumers and cleanup together after an encrypted backup,
+restore test and private-copy migration preflight, and verify schema 22.
+`rollbackCompatible` remains false; downgrade requires the verified full
+recovery point. Do not remove live tables or replay expired page requests.
+See [migration 22 recovery](deploy/migrations/022_lazy_previews.rollback.md).
+
 ## Migration 021: Independent output stages
 
 Migration 021 adds `job_output_stages` and terminal/recovery triggers. New

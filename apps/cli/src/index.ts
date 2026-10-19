@@ -473,8 +473,15 @@ jobs
   .argument("<id>")
   .option("--output <directory>", "output directory", ".render")
   .option("--pdf-only", "download the committed PDF without waiting for SVG")
+  .option(
+    "--preview-page <pages...>",
+    "generate selected preview pages (1..100), not every page",
+  )
   .action(
-    async (id: string, options: { output: string; pdfOnly?: boolean }) => {
+    async (
+      id: string,
+      options: { output: string; pdfOnly?: boolean; previewPage?: string[] },
+    ) => {
       const result = await downloadJobArtifacts(
         await configuredClient(),
         id,
@@ -482,6 +489,9 @@ jobs
         {
           ...(isJsonMode() ? {} : { onEvent: humanRenderEvent }),
           ...(options.pdfOnly === true ? { pdfOnly: true } : {}),
+          ...(options.previewPage === undefined
+            ? {}
+            : { previewPages: options.previewPage.map(Number) }),
         },
       );
       emitSuccess("jobs.download", result, () => {

@@ -13,7 +13,28 @@ const [
   mode = "all",
   pdfDirectory,
   svgExit = "0",
+  previewPage = "0",
+  lazyPreviews = "0",
 ] = process.argv.slice(2);
+const png = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=",
+  "base64",
+);
+if (mode === "preview") {
+  assert(
+    (await readFile(join(pdfDirectory, "result.pdf"), "utf8")).startsWith(
+      "%PDF-",
+    ),
+  );
+  assert(Number(previewPage) >= 1 && Number(previewPage) <= 3);
+  await mkdir(join(output, "previews"), { recursive: true });
+  await writeFile(join(output, `previews/page-${previewPage}.png`), png);
+  await writeFile(
+    join(output, "compile.log"),
+    "Preview deterministic fixture\n",
+  );
+  process.exit(0);
+}
 const source = await readFile(join(input, entrypoint), "utf8");
 const pages = Number(/% pipeline-pages: ([1-3])/.exec(source)?.[1]);
 assert.ok(pages >= 1 && pages <= 3);
@@ -78,11 +99,10 @@ if (mode === "pdf")
     "deterministic-synctex-fixture",
   );
 await writeFile(join(output, "compile.log"), "Output written on result.pdf\n");
-for (let page = 1; page <= pages; page++)
+if (lazyPreviews === "1")
   await writeFile(
-    join(output, "previews", `page-${page}.png`),
-    Buffer.from(
-      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=",
-      "base64",
-    ),
+    join(output, ".preview-info.json"),
+    JSON.stringify({ schemaVersion: 1, pages, dpi: 150 }),
   );
+for (let page = 1; page <= (lazyPreviews === "1" ? 1 : pages); page++)
+  await writeFile(join(output, "previews", `page-${page}.png`), png);

@@ -10,6 +10,11 @@ import { claimNextJob } from "./queue.js";
 import { assessHostResources, readHostResources } from "./admission.js";
 import { diagnosticWriter } from "../../../deploy/scripts/service-diagnostics.mjs";
 import { recoverStaleLeases } from "./recovery.js";
+import { processPreview, recoverPreviewRequests } from "./preview-processor.js";
+import {
+  collectSourceTrees,
+  recoverSourceTreeReaders,
+} from "./source-tree-cache.js";
 
 export async function runWorker(
   database: RendererDatabase,
@@ -36,6 +41,7 @@ export async function runWorker(
   );
   await assertDockerIsolation(config.apparmorProfile);
   await recoverStaleLeases(database, config);
+  await recoverPreviewRequests(database, config);
   console.log(
     JSON.stringify({
       event: "renderer_worker.started",
@@ -50,13 +56,40 @@ export async function runWorker(
   let nextResourceCheck = 0,
     admission: ReturnType<typeof assessHostResources> = "ready",
     previousAdmission = "";
+  let preferPreview = false,
+    nextPreviewRecovery = 0;
+  let nextSourceTreeCollection = 0;
   try {
     while (!isShuttingDown()) {
       await recoverExpiredLeases();
+      if (Date.now() >= nextSourceTreeCollection) {
+        try {
+          await recoverSourceTreeReaders(database);
+          await collectSourceTrees(
+            database.raw,
+            config.storageRoot,
+            false,
+            32,
+            config.sourceTreeMaxBytes ?? 64 * 1024 ** 2,
+            config.sourceTreeUserMaxBytes ?? 32 * 1024 ** 2,
+          );
+        } catch {
+          diagnostic({ event: "renderer_worker.source_tree_gc_failed" });
+        }
+        nextSourceTreeCollection = Date.now() + 15 * 60_000;
+      }
+      if (Date.now() >= nextPreviewRecovery) {
+        await recoverPreviewRequests(database, config);
+        nextPreviewRecovery = Date.now() + 10_000;
+      }
       if (isShuttingDown()) break;
       for (const id of awaitingRecovery) {
         const row = database.worker.runtimeState(id);
-        if (!row || !["running", "validating"].includes(row.status))
+        if (
+          !row ||
+          (!["running", "validating"].includes(row.status) &&
+            !(row.status === "canceled" && row.lease_owner !== null))
+        )
           awaitingRecovery.delete(id);
       }
       if (awaitingRecovery.size) {
@@ -89,6 +122,34 @@ export async function runWorker(
         );
         previousAdmission = admission;
       }
+      // Alternate waiting preview work and ordinary Jobs. A small conversion
+      // may proceed below the 1GiB renderer gate, never under memory/I/O pressure.
+      if (
+        (preferPreview ||
+          admission !== "ready" ||
+          !database.worker.nextQueued()) &&
+        (config.minimumAvailableMemoryBytes === undefined ||
+          assessHostResources(readHostResources(), 384 * 1024 * 1024) ===
+            "ready")
+      ) {
+        const preview = database.transaction(() =>
+          database.previews.claim(config.workerId, nowIso()),
+        );
+        if (preview) {
+          preferPreview = false;
+          try {
+            await processPreview(database, config, preview);
+          } catch (error) {
+            if (!(error instanceof RendererCleanupDeferred)) throw error;
+            diagnostic({
+              event: "renderer_worker.preview_cleanup_deferred",
+              jobId: preview.job_id,
+              page: preview.page,
+            });
+          }
+          continue;
+        }
+      }
       if (admission !== "ready") {
         const pending = database.worker.nextQueued();
         if (
@@ -120,6 +181,7 @@ export async function runWorker(
       }
       try {
         await processJob(database, config, job);
+        preferPreview = true;
       } catch (error) {
         if (error instanceof RendererCleanupDeferred) {
           awaitingRecovery.add(job.id);

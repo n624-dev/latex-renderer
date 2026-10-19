@@ -2,8 +2,9 @@ import { spawn } from "node:child_process";
 import type { WorkerConfig } from "./config.js";
 
 export interface RendererStageOptions {
-  mode: "pdf" | "svg";
+  mode: "pdf" | "svg" | "preview";
   pdfDirectory?: string;
+  page?: number;
 }
 
 export function spawnRenderer(
@@ -16,7 +17,11 @@ export function spawnRenderer(
   outputs: readonly string[] = ["pdf"],
   stage?: RendererStageOptions,
 ) {
-  const containerName = rendererContainerName(jobId, leaseGeneration);
+  const containerName = rendererContainerName(
+    jobId,
+    leaseGeneration,
+    stage?.mode === "preview" ? stage.page : undefined,
+  );
   const args = rendererRunArguments(
     config,
     jobId,
@@ -45,8 +50,18 @@ export function rendererRunArguments(
   leaseGeneration = 0,
   stage?: RendererStageOptions,
 ): string[] {
-  if (stage?.mode === "svg" && stage.pdfDirectory === undefined)
-    throw new Error("SVG stage requires an immutable PDF checkpoint");
+  if (
+    (stage?.mode === "svg" || stage?.mode === "preview") &&
+    stage.pdfDirectory === undefined
+  )
+    throw new Error("Conversion stage requires an immutable PDF checkpoint");
+  if (
+    stage?.mode === "preview" &&
+    (!Number.isSafeInteger(stage.page) ||
+      (stage.page ?? 0) < 1 ||
+      (stage.page ?? 0) > 100)
+  )
+    throw new Error("Invalid preview page");
   const securityOptions = [
     "--security-opt",
     "no-new-privileges",
@@ -63,7 +78,11 @@ export function rendererRunArguments(
     "--rm",
     "--init",
     "--name",
-    rendererContainerName(jobId, leaseGeneration),
+    rendererContainerName(
+      jobId,
+      leaseGeneration,
+      stage?.mode === "preview" ? stage.page : undefined,
+    ),
     "--label",
     `latex-renderer.job=${jobId}`,
     "--label",
@@ -81,9 +100,15 @@ export function rendererRunArguments(
     "--cpus",
     "1.5",
     "--memory",
-    "1g",
+    stage?.mode === "preview" ? "256m" : "1g",
     "--memory-swap",
-    "1g",
+    stage?.mode === "preview" ? "256m" : "1g",
+    ...(stage?.mode === "preview"
+      ? [
+          "--ulimit",
+          `fsize=${Math.min(config.maxOutputBytes, 10 * 1024 * 1024)}:${Math.min(config.maxOutputBytes, 10 * 1024 * 1024)}`,
+        ]
+      : []),
     "--tmpfs",
     `/tmp:rw,noexec,nosuid,nodev,size=256m,uid=${config.containerUid},gid=${config.containerGid}`,
     "--env",
@@ -105,6 +130,9 @@ export function rendererRunArguments(
     ...(stage === undefined
       ? []
       : ["--env", `LATEX_RENDER_STAGE=${stage.mode}`]),
+    ...(stage?.mode === "preview"
+      ? ["--env", `LATEX_PREVIEW_PAGE=${stage.page ?? 0}`]
+      : []),
     ...(stage?.pdfDirectory === undefined
       ? []
       : [
@@ -117,10 +145,16 @@ export function rendererRunArguments(
 export function rendererContainerName(
   jobId: string,
   leaseGeneration: number,
+  previewPage?: number,
 ): string {
   if (!Number.isSafeInteger(leaseGeneration) || leaseGeneration < 0)
     throw new Error("Worker lease generation is invalid");
-  return `latex-render-${jobId}-g${leaseGeneration}`;
+  if (
+    previewPage !== undefined &&
+    (!Number.isSafeInteger(previewPage) || previewPage < 1 || previewPage > 100)
+  )
+    throw new Error("Invalid preview page");
+  return `latex-render-${jobId}${previewPage === undefined ? "" : `-p${previewPage}`}-g${leaseGeneration}`;
 }
 export async function dockerStop(name: string): Promise<void> {
   await dockerStopVerified(name);

@@ -48,6 +48,12 @@ export { shouldExcludeProjectPath } from "./project-files.js";
 export { openLocalTarget } from "./open-local-target.js";
 
 export interface ClientTransport {
+  preparePreview?(
+    jobId: string,
+    page: number,
+    ticket: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<void>;
   retrySvgJob?(
     jobId: string,
     idempotencyKey: string,
@@ -126,6 +132,8 @@ export interface ClientCoreOptions {
   onEvent?: (event: ClientCoreEvent) => void;
   outputs?: readonly RenderOutput[];
   pdfOnly?: boolean;
+  /** Explicitly generate these pages; default downloads only existing PNGs. */
+  previewPages?: readonly number[];
 }
 
 export interface UploadedSource {
@@ -293,7 +301,7 @@ export async function downloadJobArtifacts(
   options: RenderOptions = {},
 ): Promise<DownloadArtifactsResult> {
   const renewed = await client.renewJobTicket(jobId);
-  const { job, jobTicket } = await pollUntilTerminal(
+  const settled = await pollUntilTerminal(
     client,
     {
       jobId,
@@ -305,6 +313,56 @@ export async function downloadJobArtifacts(
       ? (job) => job.stages?.pdf.status === "succeeded"
       : undefined,
   );
+  let job = settled.job;
+  const jobTicket = settled.jobTicket;
+  if (options.previewPages !== undefined) {
+    if (
+      options.previewPages.length > 100 ||
+      options.previewPages.some(
+        (page) =>
+          !Number.isSafeInteger(page) ||
+          page < 1 ||
+          page > (job.previewPageCount ?? 100),
+      )
+    )
+      throw new AppError(
+        "PREVIEW_PAGE_INVALID",
+        "Requested preview page is outside the PDF",
+        400,
+      );
+    for (const page of new Set(options.previewPages)) {
+      if (
+        job.previews.some(
+          (a) =>
+            Number(/^previews\/page-(\d+)\.png$/.exec(a.relativePath)?.[1]) ===
+            page,
+        )
+      )
+        continue;
+      if (!client.preparePreview)
+        throw new AppError(
+          "PREVIEW_UNSUPPORTED",
+          "This transport cannot request ungenerated pages",
+          501,
+        );
+      await client.preparePreview(jobId, page, jobTicket);
+    }
+    // Sizes/digests always come from the published artifact transaction.
+    job = await client.job(jobId, jobTicket);
+    for (const page of new Set(options.previewPages))
+      if (
+        !job.previews.some(
+          (a) =>
+            Number(/^previews\/page-(\d+)\.png$/.exec(a.relativePath)?.[1]) ===
+            page,
+        )
+      )
+        throw new AppError(
+          "PREVIEW_PENDING",
+          "Preview metadata is not available",
+          503,
+        );
+  }
   const output = resolve(outputDirectory);
   const artifacts = await downloadArtifacts(
     client,

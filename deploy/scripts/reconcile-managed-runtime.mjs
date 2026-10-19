@@ -12,7 +12,7 @@ if (process.getuid?.() !== 0) {
 const endpoint = new URL(process.env.IMAGE_MANAGER_URL ?? "http://127.0.0.1:3110");
 if (
   endpoint.protocol !== "http:" ||
-  !["127.0.0.1", "::1", "localhost"].includes(endpoint.hostname) ||
+  !["127.0.0.1", "[::1]", "localhost"].includes(endpoint.hostname) ||
   endpoint.username !== "" ||
   endpoint.password !== ""
 ) {

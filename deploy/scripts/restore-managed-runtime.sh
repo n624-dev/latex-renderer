@@ -41,7 +41,6 @@ base_image=$(printf '%s\n' "$state_values" | sed -n '2p')
 runtime_ref=$(printf '%s\n' "$state_values" | sed -n '3p')
 snapshot_date=$(printf '%s\n' "$state_values" | sed -n '4p')
 languages=$(printf '%s\n' "$state_values" | sed -n '5p')
-previous_runtime=$(printf '%s\n' "$state_values" | sed -n '6p')
 [ -n "$runtime_image" ] || exit 0
 [ -n "$base_image" ] || {
   echo "Managed TeX runtime has no clean base image recorded" >&2
@@ -177,7 +176,6 @@ if [ "$image_fingerprint" != "$current_fingerprint" ] || \
   done
   effective_csv=$(printf '%s\n' "$effective_languages" | sed '/^$/d' | paste -sd, -)
 
-  old_runtime_image=$runtime_image
   runtime_image=$new_runtime_image
   runtime_ref=$new_runtime_ref
   /usr/local/bin/node - "$state_file" "$runtime_image" "$runtime_ref" "$current_fingerprint" "$effective_csv" "$runtime_identity" "$runtime_source" "$runtime_package_ref" <<'NODE'
@@ -208,9 +206,8 @@ fs.writeFileSync(tmp, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o640 });
 fs.renameSync(tmp, path);
 NODE
 
-  if [ "$old_runtime_image" != "$runtime_image" ] && [ "$old_runtime_image" != "$previous_runtime" ]; then
-    rootless_docker image rm "$old_runtime_image" >/dev/null 2>&1 || true
-  fi
+  # Defer obsolete image removal to Image Manager cleanup. Retained PDFs may
+  # still require this exact Runtime for on-demand previews after an update.
 fi
 
 old_image=$(sed -n 's/^RENDERER_IMAGE=//p' "$renderer_env" | tail -n 1)

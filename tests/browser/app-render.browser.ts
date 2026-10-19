@@ -13,6 +13,11 @@ import { appRenderPage } from "../../apps/admin-web/src/templates-app.js";
 // Real browser, real File/crypto/fetch/DOM, shipped HTML/CSS/script. The API
 // boundary is simulated; this does not claim to run TeX or production auth.
 const expiresAt = "2099-01-01T00:00:00.000Z";
+const previewPng = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aT1cAAAAASUVORK5CYII=",
+  "base64",
+);
+const previewSha = createHash("sha256").update(previewPng).digest("hex");
 // Serialize the actual tsc-built module in native Node. Vitest's SSR import
 // rewriting changes function.toString(), which is how App emits its script.
 const appScript = execFileSync(
@@ -75,6 +80,11 @@ async function fixture() {
     sourceError: false,
     statusError: false,
     sourceGate: Promise.resolve(),
+    lazyPages: 0,
+    previewReady: false,
+    previewPending: 0,
+    previewCalls: [] as number[],
+    previewDigestMismatch: false,
   };
   // WebKit's interception protocol does not expose Blob request bytes through
   // postDataBuffer(). Receive real network bytes instead, in both engines;
@@ -237,6 +247,36 @@ async function fixture() {
       });
       return;
     }
+    if (/^\/app\/api\/v1\/jobs\/job_[a-f0-9]{32}\/access-ticket$/.test(path)) {
+      await json({
+        jobId: path.split("/").at(-2),
+        jobTicket: "test-job-ticket-1234567890",
+        expiresAt,
+      });
+      return;
+    }
+    if (
+      /^\/api\/v1\/jobs\/job_[a-f0-9]{32}\/previews\/page-[1-9][0-9]*\.png$/.test(
+        path,
+      )
+    ) {
+      const selected = Number(/page-(\d+)\.png$/.exec(path)?.[1]);
+      state.previewCalls.push(selected);
+      expect(request.headers().authorization).toBe(
+        "Bearer test-job-ticket-1234567890",
+      );
+      if (state.previewPending-- > 0) {
+        await route.fulfill({
+          status: 503,
+          json: { error: { code: "PREVIEW_PENDING" } },
+          headers: { "Retry-After": "2" },
+        });
+      } else {
+        state.previewReady = true;
+        await route.fulfill({ contentType: "image/png", body: previewPng });
+      }
+      return;
+    }
     if (/^\/app\/api\/v1\/jobs\/job_[a-f0-9]{32}\/retry-svg$/.test(path)) {
       expect(request.method()).toBe("POST");
       const key = request.headers()["idempotency-key"];
@@ -298,7 +338,21 @@ async function fixture() {
                 : []),
             ]
           : [],
-        previews: [],
+        ...(state.lazyPages > 0 ? { previewPageCount: state.lazyPages } : {}),
+        previews:
+          state.lazyPages > 0
+            ? [1, ...(state.previewReady ? [3] : [])].map((number) => ({
+                type: "preview",
+                relativePath: `previews/page-${number}.png`,
+                size: previewPng.length,
+                sha256:
+                  state.previewDigestMismatch && number === 3
+                    ? "0".repeat(64)
+                    : previewSha,
+                createdAt: "2026-01-01T00:00:00.000Z",
+                downloadUrl: `/api/v1/jobs/${id}/previews/page-${number}.png`,
+              }))
+            : [],
         ...(state.staged
           ? {
               stages: {
@@ -402,11 +456,50 @@ async function releaseRead(page: Page, name: string, fail = false) {
 }
 
 describe("App render in the selected browser", () => {
+  it.each([false, true])(
+    "requests only the selected missing PNG, retries pending generation and verifies SHA before opening: mismatch=%s",
+    async (mismatch) => {
+      const { page, state, errors } = await fixture();
+      await fastTimers(page);
+      state.lazyPages = 3;
+      state.previewPending = 1;
+      state.previewDigestMismatch = mismatch;
+      await page.locator("#app-files").setInputFiles(tex("lazy.tex"));
+      await ready(page);
+      await start(page).click();
+      await finish(page);
+      const select = page.getByLabel("プレビューのページ");
+      await expect.poll(() => select.count()).toBe(1);
+      expect(state.previewCalls).toEqual([]);
+      await select.selectOption("3");
+      const opened = page.waitForEvent("popup");
+      await page
+        .getByRole("button", { name: "プレビュー", exact: true })
+        .click();
+      const popup = await opened;
+      pages.push(popup);
+      await expect.poll(() => state.previewCalls.length).toBe(2);
+      expect(state.previewCalls).toEqual([3, 3]);
+      if (mismatch) {
+        await expect
+          .poll(() => page.locator("#app-error").textContent())
+          .toContain("SHA-256");
+        await expect.poll(() => popup.isClosed()).toBe(true);
+      } else {
+        await expect.poll(() => popup.url()).toMatch(/^blob:/);
+        expect(await page.locator("#app-error").textContent()).toBe("");
+      }
+      expect(state.requests).toHaveLength(1);
+      expect(errors).toEqual([]);
+    },
+  );
   it("keeps PDF available while SVG runs, then retries only SVG on the same Job", async () => {
     const { page, state, errors } = await fixture();
     await fastTimers(page);
     state.staged = true;
     state.complete = false;
+    expect(await page.locator("#app-render-svg").isVisible()).toBe(false);
+    await page.locator("#app-render-options > summary").click();
     await page.locator("#app-files").setInputFiles(tex("staged.tex"));
     await ready(page);
     await page.locator("#app-render-svg").check();
@@ -509,6 +602,7 @@ describe("App render in the selected browser", () => {
 
   it("snapshots Project/output options, rejects duplicate submit, and preserves a new selection", async () => {
     const { page, state, errors } = await fixture();
+    await page.locator("#app-render-options > summary").click();
     let release!: () => void;
     state.sourceGate = new Promise<void>((resolve) => {
       release = resolve;
@@ -545,6 +639,7 @@ describe("App render in the selected browser", () => {
 
   it("keeps a cleared selection disabled after the submitted batch finishes", async () => {
     const { page, state, errors } = await fixture();
+    await page.locator("#app-render-options > summary").click();
     let release!: () => void;
     state.sourceGate = new Promise<void>((resolve) => {
       release = resolve;

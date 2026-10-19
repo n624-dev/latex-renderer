@@ -41,6 +41,7 @@ describe("public web static build", () => {
       "docs/integrations/index.html",
       "docs/mcp/index.html",
       "docs/projects/index.html",
+      "docs/reference/index.html",
       "docs/security/index.html",
       "docs/self-hosting/index.html",
       "docs/troubleshooting/index.html",

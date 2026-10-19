@@ -2,7 +2,7 @@ import { chmod, mkdir, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { RendererDatabase, WorkerJobRow } from "@latex-renderer/database";
 import { newId, nowIso } from "@latex-renderer/shared";
-import { validateAndExtract } from "@latex-renderer/zip-validation";
+import { prepareSourceInput } from "./source-tree-cache.js";
 import {
   inspectOutputTree,
   publishArtifacts,
@@ -18,6 +18,7 @@ import {
 import { generateMetadata } from "./metadata.js";
 import { classifyRenderResult } from "./render-result.js";
 import { processStagedJob } from "./staged-job-processor.js";
+import { previewPageCount } from "./preview-metadata.js";
 
 export async function processJob(
   database: RendererDatabase,
@@ -96,6 +97,8 @@ export async function processJob(
     output = join(root, "outputs", String(job.lease_generation));
   let published = false,
     committed = false;
+  let rendererInput = extracted,
+    releaseInput = () => {};
   const needsOutputCleanup = (): boolean => published && !committed;
   const rendererState: {
     spawned?: ReturnType<typeof spawnRenderer>;
@@ -117,19 +120,15 @@ export async function processJob(
       // write through the bind mount.
       await mkdir(staging, { recursive: true, mode: 0o770 });
       await chmod(staging, 0o770);
-      await validateAndExtract(
+      const prepared = await prepareSourceInput(
+        database,
+        config,
+        job,
         source,
         extracted,
-        {
-          maxExtractedBytes: config.maxExtractedBytes,
-          maxFileBytes: config.maxUploadBytes,
-          maxEntries: config.maxZipEntries,
-          maxFiles: config.maxFileCount,
-          maxDepth: 10,
-          maxNameLength: 200,
-        },
-        job.entrypoint,
       );
+      rendererInput = prepared.input;
+      releaseInput = prepared.release;
       const startedAt = nowIso();
       if (
         leaseIsLost() ||
@@ -148,7 +147,7 @@ export async function processJob(
         config,
         job.id,
         job.lease_generation,
-        extracted,
+        rendererInput,
         staging,
         job.entrypoint,
         outputs,
@@ -267,6 +266,10 @@ export async function processJob(
         result.status === "succeeded",
         result.status === "succeeded" && outputs.includes("svg"),
       );
+      const pageCount =
+        result.status === "succeeded"
+          ? await previewPageCount(staging, artifacts)
+          : undefined;
       await publishArtifacts(staging, candidateOutput, artifacts);
       renewLease();
       if (leaseIsLost()) return;
@@ -298,9 +301,10 @@ export async function processJob(
           );
         }
         const timestamp = nowIso();
-        for (const artifact of artifacts)
+        for (const artifact of artifacts) {
+          const artifactId = newId("artifact");
           database.artifacts.insert({
-            id: newId("artifact"),
+            id: artifactId,
             job_id: job.id,
             type: artifact.type,
             relative_path: artifact.path,
@@ -309,6 +313,16 @@ export async function processJob(
             sha256: artifact.sha256,
             created_at: timestamp,
           });
+          if (artifact.type === "pdf" && pageCount !== undefined)
+            database.previews.register({
+              job_id: job.id,
+              pdf_artifact_id: artifactId,
+              pdf_sha256: artifact.sha256,
+              page_count: pageCount,
+              runtime_image: config.image,
+              created_at: timestamp,
+            });
+        }
         const total = artifacts.reduce((sum, item) => sum + item.size, 0);
         if (
           database.worker.transitionOwned(
@@ -370,6 +384,15 @@ export async function processJob(
   }
   if (needsOutputCleanup()) await rm(output, { recursive: true, force: true });
   await rm(attempt, { recursive: true, force: true });
+  releaseInput();
+  const finalState = database.worker.runtimeState(job.id);
+  if (finalState?.cancel_requested_at != null)
+    database.worker.markCanceled(
+      job.id,
+      config.workerId,
+      job.lease_generation,
+      nowIso(),
+    );
   if (processingFailed) throw processingError;
 }
 

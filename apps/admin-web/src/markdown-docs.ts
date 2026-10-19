@@ -45,17 +45,48 @@ const sourceFiles = [
   "security.md",
   "api.md",
   "contributing.md",
+  "reference.md",
 ] as const;
+
+// Keep all existing URLs, ordering metadata and search categories intact.
+// Navigation groups are presentation only, not document identity.
+const navigationGroups = [
+  {
+    title: "利用する",
+    slugs: [
+      "index",
+      "web",
+      "client",
+      "windows",
+      "cli",
+      "integrations",
+      "mcp",
+      "projects",
+    ],
+  },
+  {
+    title: "運用・開発",
+    slugs: [
+      "self-hosting",
+      "troubleshooting",
+      "security",
+      "api",
+      "contributing",
+      "reference",
+    ],
+  },
+];
 
 export function renderPublicDoc(slug: string): string {
   const document = docsBySlug.get(slug);
   if (document === undefined)
     throw new Error(`Unknown public document: ${slug}`);
-  const navigation = [...new Set(publicDocs.map(({ category }) => category))]
+  const navigation = navigationGroups
     .map(
-      (category) =>
-        `<section class="docs-nav-group"><h2>${escapeHtml(category)}</h2>${publicDocs
-          .filter((item) => item.category === category)
+      ({ title, slugs }) =>
+        `<section class="docs-nav-group"><h2>${escapeHtml(title)}</h2>${slugs
+          .map((itemSlug) => docsBySlug.get(itemSlug))
+          .filter((item): item is PublicDoc => item !== undefined)
           .map(
             (item) =>
               `<a href="${docUrl(item.slug)}"${item.slug === slug ? ' aria-current="page"' : ""}>${escapeHtml(item.title)}</a>`,
@@ -64,7 +95,7 @@ export function renderPublicDoc(slug: string): string {
     )
     .join("");
   const toc =
-    document.headings.length === 0
+    document.headings.length < 5
       ? ""
       : `<nav class="docs-toc" aria-label="ページ内目次"><strong>このページ</strong>${document.headings.map((heading) => `<a class="toc-depth-${heading.depth}" href="#${escapeHtml(heading.id)}">${escapeHtml(heading.text)}</a>`).join("")}</nav>`;
   const index = publicDocs.indexOf(document);
@@ -73,7 +104,7 @@ export function renderPublicDoc(slug: string): string {
   const pager = `<nav class="docs-pager" aria-label="前後のページ">${previous === undefined ? "<span></span>" : `<a rel="prev" href="${docUrl(previous.slug)}">← ${escapeHtml(previous.title)}</a>`}${next === undefined ? "<span></span>" : `<a rel="next" href="${docUrl(next.slug)}">${escapeHtml(next.title)} →</a>`}</nav>`;
   return shell(
     document.title,
-    `<div class="docs-layout"><aside class="docs-sidebar"><label for="docs-search">ドキュメント検索</label><input id="docs-search" type="search" autocomplete="off" placeholder="本文と見出しを検索" aria-controls="docs-search-results"><div id="docs-search-results" class="docs-search-results" role="status" aria-live="polite"></div><nav class="docs-nav" aria-label="ドキュメント内ナビゲーション">${navigation}</nav></aside><div class="docs-main"><div class="hero docs-hero"><p class="eyebrow">${escapeHtml(document.category)}</p><h1>${escapeHtml(document.title)}</h1><p>${escapeHtml(document.description)}</p><p class="docs-meta">更新: <time datetime="${escapeHtml(document.updated)}">${escapeHtml(document.updated)}</time> / 対象: ${escapeHtml(document.since)}以降</p><p><a class="docs-edit-link" href="https://github.com/n624-dev/latex-renderer/edit/main/${encodeURI(document.sourcePath)}">GitHubで編集</a></p></div>${toc}<article class="docs-content">${document.html}</article>${pager}</div></div>`,
+    `<div class="docs-layout"><aside class="docs-sidebar"><label for="docs-search">ドキュメント検索</label><input id="docs-search" type="search" autocomplete="off" placeholder="本文と見出しを検索" aria-controls="docs-search-results"><div id="docs-search-results" class="docs-search-results" role="status" aria-live="polite"></div><details class="docs-menu"><summary>使い方の一覧</summary><nav class="docs-nav" aria-label="ドキュメント内ナビゲーション">${navigation}</nav></details></aside><div class="docs-main"><div class="hero docs-hero"><h1>${escapeHtml(document.title)}</h1><p>${escapeHtml(document.description)}</p></div>${toc}<article class="docs-content">${document.html}</article><footer class="docs-meta"><p>更新: <time datetime="${escapeHtml(document.updated)}">${escapeHtml(document.updated)}</time> / 対象: ${escapeHtml(document.since)}以降</p><p><a class="docs-edit-link" href="https://github.com/n624-dev/latex-renderer/edit/main/${encodeURI(document.sourcePath)}">GitHubで編集</a></p></footer>${pager}</div></div>`,
   );
 }
 
@@ -196,6 +227,17 @@ class DocsRenderer extends Renderer {
   }
 
   override blockquote({ tokens }: Tokens.Blockquote): string {
+    // A deliberately small Markdown-only disclosure syntax. Raw HTML remains
+    // escaped; titles and nested content use the existing safe renderers.
+    const first = tokens[0];
+    const firstText: unknown =
+      first?.type === "paragraph" ? first.text : undefined;
+    if (
+      typeof firstText === "string" &&
+      /^\[!DETAILS\] [^\n]+$/.test(firstText)
+    ) {
+      return `<details class="docs-details"><summary>${escapeHtml(firstText.slice(11))}</summary>${this.parser.parse(tokens.slice(1))}</details>\n`;
+    }
     const rendered = this.parser.parse(tokens);
     const match = rendered.match(/^<p>\[!(NOTE|WARNING)\]\s*/);
     if (match === null) return `<blockquote>\n${rendered}</blockquote>\n`;

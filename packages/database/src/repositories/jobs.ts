@@ -324,7 +324,18 @@ export class JobsRepository {
         )
         .get(id) as { bytes: number }
     ).bytes;
-    return sourceBytes + jobBytes;
+    const previews = this.db
+      .prepare(
+        `SELECT COALESCE(SUM(p.reserved_bytes),0) AS bytes
+      FROM job_preview_requests p JOIN jobs j ON j.id=p.job_id WHERE j.user_id=? AND p.status='running'`,
+      )
+      .get(id) as { bytes: number };
+    const trees = this.db
+      .prepare(
+        "SELECT COALESCE(SUM(reserved_bytes),0) AS bytes FROM source_trees WHERE owner_user_id=?",
+      )
+      .get(id) as { bytes: number };
+    return sourceBytes + jobBytes + previews.bytes + trees.bytes;
   }
 
   statusCounts(): Array<{ status: JobStatus; count: number }> {

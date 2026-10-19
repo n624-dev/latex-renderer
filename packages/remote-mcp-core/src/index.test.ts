@@ -310,6 +310,57 @@ describe("Remote MCP core", () => {
     ).not.toThrow();
   });
 
+  it.each(["active", "disabled"] as const)(
+    "creates a separate MCP principal when an %s user account already has its display name",
+    async (status) => {
+      const database = seededDatabase(),
+        storage = await mkdtemp(join(tmpdir(), "remote-mcp-name-"));
+      temporary.push(storage);
+      database.serviceAccounts.insert({
+        id: "sa_user_named_remote",
+        ownerUserId: "user_test",
+        name: "Remote MCP",
+        clientType: "generic",
+        timestamp: new Date().toISOString(),
+      });
+      if (status === "disabled")
+        database.serviceAccounts.setStatus(
+          "sa_user_named_remote",
+          status,
+          new Date().toISOString(),
+        );
+      const before = database.serviceAccounts.get("sa_user_named_remote"),
+        service = new RemoteRenderService(
+          database,
+          storage,
+          "renderer:test",
+          "https://latex.example.com",
+        ),
+        identity = { userId: "user_test", scopes: ["mcp:render"] as const },
+        input = {
+          inlineSource:
+            "\\documentclass{article}\\begin{document}ok\\end{document}",
+          entrypoint: "main.tex",
+        };
+      const first = await service.createRender(identity, input),
+        principal = database.remoteMcp.principal("user_test");
+      if (!principal) throw new Error("Missing MCP principal");
+      expect(first.status).toBe("queued");
+      expect(principal.service_account_id).not.toBe("sa_user_named_remote");
+      expect(
+        database.serviceAccounts.get(principal.service_account_id)?.name,
+      ).toBe(`Remote MCP (${principal.service_account_id})`);
+      expect(database.serviceAccounts.get("sa_user_named_remote")).toEqual(
+        before,
+      );
+      await service.createRender(identity, input);
+      expect(database.remoteMcp.principal("user_test")).toEqual(principal);
+      expect(database.serviceAccounts.get("sa_user_named_remote")).toEqual(
+        before,
+      );
+    },
+  );
+
   it("renders small inline source without creating an external API key", async () => {
     const database = seededDatabase(),
       storage = await mkdtemp(join(tmpdir(), "remote-mcp-core-"));

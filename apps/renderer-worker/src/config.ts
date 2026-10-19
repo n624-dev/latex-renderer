@@ -28,6 +28,12 @@ export interface WorkerConfig extends ResourceLimits {
   jobTimeoutMs: number;
   minimumAvailableMemoryBytes?: number;
   admissionWaitTimeoutMs?: number;
+  artifactRetentionHours?: number;
+  maxUserStorageBytes?: number;
+  minFreeStorageBytes?: number;
+  sourceTreeMaxBytes?: number;
+  sourceTreeUserMaxBytes?: number;
+  sourceTreeTtlMs?: number;
   diagnostic?: (record: Readonly<Record<string, unknown>>) => void;
 }
 
@@ -102,6 +108,43 @@ export function loadWorkerConfig(): WorkerConfig {
         420,
         86400,
       ) * 1000,
+    artifactRetentionHours: positiveIntegerEnvironment(
+      process.env,
+      "ARTIFACT_RETENTION_HOURS",
+      24,
+    ),
+    maxUserStorageBytes: positiveBytesEnvironment(
+      process.env,
+      "MAX_USER_STORAGE_BYTES",
+      1024 * 1024 * 1024,
+    ),
+    minFreeStorageBytes: positiveBytesEnvironment(
+      process.env,
+      "MIN_FREE_STORAGE_BYTES",
+      5 * 1024 * 1024 * 1024,
+    ),
+    sourceTreeMaxBytes: boundedIntegerEnvironment(
+      process.env,
+      "SOURCE_TREE_MAX_BYTES",
+      64 * 1024 ** 2,
+      0,
+      1024 ** 3,
+    ),
+    sourceTreeUserMaxBytes: boundedIntegerEnvironment(
+      process.env,
+      "SOURCE_TREE_USER_MAX_BYTES",
+      32 * 1024 ** 2,
+      0,
+      1024 ** 3,
+    ),
+    sourceTreeTtlMs:
+      boundedIntegerEnvironment(
+        process.env,
+        "SOURCE_TREE_TTL_SECONDS",
+        21600,
+        60,
+        86400,
+      ) * 1000,
     minimumAvailableMemoryBytes: positiveBytesEnvironment(
       process.env,
       "RENDERER_MIN_AVAILABLE_MEMORY_BYTES",
@@ -117,6 +160,13 @@ export function loadWorkerConfig(): WorkerConfig {
   };
   if (config.containerUid === 0 || config.containerGid === 0)
     throw new Error("Renderer container UID and GID must both be non-zero");
+  if (
+    (config.sourceTreeUserMaxBytes ?? 0) > (config.sourceTreeMaxBytes ?? 0) &&
+    config.sourceTreeMaxBytes !== 0
+  )
+    throw new Error(
+      "SOURCE_TREE_USER_MAX_BYTES must not exceed SOURCE_TREE_MAX_BYTES",
+    );
   if (
     !isImmutableImageReference(config.image) &&
     process.env.ALLOW_MUTABLE_RENDERER_IMAGE !== "true"

@@ -76,6 +76,47 @@ const childEnvironment = {
   PATH: "/usr/local/bin:/usr/bin:/bin",
   LANG: "C.UTF-8",
 };
+
+/** Private replacement EnvironmentFile, not a public configuration review.
+ * HTTPS-only changes preserve operator settings, comments and rotated key IDs.
+ * Public/profile parsers intentionally continue to omit unrelated/secret keys. */
+export function serverSetupEnvironmentFile(kind, contents, review, workerUid) {
+  if (!["initial", "ingress"].includes(kind))
+    throw new Error("Invalid setup environment mode");
+  if (kind === "ingress") parseEnvironmentFile(contents);
+  const env = serverSetupReviewEnvironment(review);
+  if (kind === "initial")
+    for (const [key, value] of Object.entries({
+      CLIENT_DIST_ROOT: "/opt/latex-renderer/current/client-dist",
+      API_KEY_PEPPER_ID: "v1",
+      TICKET_SIGNING_KID: "v1",
+      TICKET_SIGNING_KEY_DIR: "/etc/latex-renderer/ticket-keys",
+      DOCKER_HOST: `unix:///run/user/${workerUid}/docker.sock`,
+      RENDERER_CONTAINER_UID: "10000",
+      RENDERER_CONTAINER_GID: "10000",
+      RENDERER_SECCOMP_PROFILE: "/etc/latex-renderer/seccomp.json",
+      ADMIN_API_WRITE_ENABLED: "true",
+      ADMIN_API_ENABLED: "true",
+      ADMIN_UI_ENABLED: "true",
+    }))
+      env.set(key, value);
+  const lines = (kind === "ingress" ? contents.split("\n") : []).filter(
+    (line) => {
+      const key = /^([A-Z][A-Z0-9_]*)=/.exec(line)?.[1];
+      // A legacy AUTH_MODE is replaced by the reviewed multi-method fields,
+      // not retained alongside the mutually exclusive AUTH_BACKEND syntax.
+      return !(
+        env.has(key) ||
+        (key === "AUTH_MODE" && env.has("AUTH_BACKEND"))
+      );
+    },
+  );
+  while (lines.at(-1) === "") lines.pop();
+  for (const [key, value] of env) lines.push(`${key}=${value}`);
+  const result = `${lines.join("\n")}\n`;
+  importServerSetupReview(result);
+  return result;
+}
 function command(path, args, timeout = 60_000) {
   return execFileSync(path, args, {
     encoding: "utf8",
@@ -651,30 +692,13 @@ export async function createInitialServerSetupHost(kind = "initial") {
       }
     },
     async files(review, credentials) {
-      const env =
-        kind === "ingress"
-          ? parseEnvironmentFile(await store.read(store.slot("environment")))
-          : new Map();
-      for (const [key, value] of serverSetupReviewEnvironment(review))
-        env.set(key, value);
-      for (const [key, value] of Object.entries({
-        CLIENT_DIST_ROOT: "/opt/latex-renderer/current/client-dist",
-        API_KEY_PEPPER_ID: "v1",
-        TICKET_SIGNING_KID: "v1",
-        TICKET_SIGNING_KEY_DIR: "/etc/latex-renderer/ticket-keys",
-        DOCKER_HOST: `unix:///run/user/${workerUid}/docker.sock`,
-        RENDERER_CONTAINER_UID: "10000",
-        RENDERER_CONTAINER_GID: "10000",
-        RENDERER_SECCOMP_PROFILE: "/etc/latex-renderer/seccomp.json",
-        ADMIN_API_WRITE_ENABLED: "true",
-        ADMIN_API_ENABLED: "true",
-        ADMIN_UI_ENABLED: "true",
-      }))
-        env.set(key, value);
       const result = {
-        environment: [...env]
-          .map(([key, value]) => `${key}=${value}\n`)
-          .join(""),
+        environment: serverSetupEnvironmentFile(
+          kind,
+          kind === "ingress" ? await store.read(store.slot("environment")) : "",
+          review,
+          workerUid,
+        ),
         oidcSecret:
           kind === "ingress"
             ? await store.read(store.slot("oidcSecret"))

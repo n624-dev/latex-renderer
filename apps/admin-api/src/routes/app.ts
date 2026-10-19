@@ -13,6 +13,7 @@ import { requireAppActor } from "../auth/actor.js";
 import {
   adminArtifactResponse,
   adminArtifactsArchiveResponse,
+  adminPreviewResponse,
 } from "../services/artifacts.js";
 import { AdminJobsService } from "../services/jobs.js";
 import { AppProjectsService } from "../services/app-projects.js";
@@ -101,13 +102,12 @@ export function createAppV1Router(deps: AdminDependencies): Hono {
     const actor = await requireAppActor(deps, c),
       id = parse(jobId, c.req.param("id"));
     assertOwnedJob(deps, actor, id);
-    return adminArtifactResponse(
+    return adminPreviewResponse(
       deps,
       actor,
       id,
       c.req.param("name"),
-      true,
-      true,
+      c.req.raw.signal,
     );
   });
   router.post("/jobs/:id/cancel", async (c) => {

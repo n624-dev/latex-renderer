@@ -4,7 +4,7 @@ category: AI・MCP
 title: Codex・Claude Code・MCP
 description: ローカルに保存した資格情報をCLIとMCPから共通利用します。
 navOrder: 40
-updated: "2026-08-22"
+updated: "2026-10-19"
 since: "v1.0.0"
 ---
 
@@ -21,23 +21,9 @@ latex-render doctor --json
 
 ## MCPの登録
 
-クラウドから利用する場合は[Remote MCP](/docs/mcp/)を第一推奨とし、対応するAIクライアントへ `https://latex-render.n624.jp/mcp` を登録します。OAuthで利用者ごとに認可され、ローカルAPIキーは不要です。標準tool `content` だけを公開するクライアントでも、次の呼び出しに必要なID、状態、検索結果、safe errorを取得してworkflowを継続できます。
+クラウドのAIからは[Remote MCPの接続手順](/docs/mcp/#通常はremote-mcpを使う)を使用します。APIキーは不要です。ローカルファイルを直接扱う場合は[Local MCPの登録](/docs/mcp/#local-mcpの登録)を使用します。
 
-ローカルファイルを直接扱う場合、`latex-render setup` はCodex/Claude Code CLIを検出し、同名登録がない場合だけLocal MCPをユーザースコープへ登録します。Claude Desktopでは[ダウンロード](/downloads/)の署名付き `.mcpb` も利用できます。既存登録のコマンドが異なる場合は保持し、`doctor` で競合として報告します。手動登録する場合は次を使います。
-
-```text
-codex mcp add latex-renderer -- latex-renderer-mcp
-claude mcp add --scope user latex-renderer -- latex-renderer-mcp
-```
-
-MCPツールは `upload_source`、`create_render_job`、`render_project`、`get_render_status`、`download_render_artifacts`、`cancel_render`、`delete_render` を提供します。単一文書は `render_project`、利用者が明示した複数entrypointは `upload_source` 1回と `create_render_job` 複数回で処理します。各ツールは `outputSchema` に沿った `structuredContent` と、互換用の短いTextContentを返します。
-
-```text
-latex-render setup status
-latex-render setup repair
-```
-
-修復と削除の対象になるのはmanaged stateで所有を確認できる登録だけです。
+共通セットアップは既存の別登録を上書きしません。競合や修復は[クライアントの診断](/docs/client/#状態確認と修復)で確認してください。
 
 ## 依頼例
 

@@ -88,6 +88,7 @@ export interface BrowserJobStatus {
   retentionExpiresAt: string | null;
   artifacts: BrowserJobArtifact[];
   previews: BrowserJobArtifact[];
+  previewPageCount?: number;
   sourceId?: string | null;
   entrypoint?: string;
   stages?: import("@latex-renderer/contracts").JobStages;
@@ -213,7 +214,9 @@ export function inspectZipCandidates(
         throw new Error("ZIP内のファイル数が500件を超えています。");
       if (name === "main.tex") mainTex = true;
       if (name.toLowerCase().endsWith(".tex"))
-        texFiles.push(name.normalize("NFC"));
+        // The extractor preserves ZIP spelling. Normalize only duplicate keys,
+        // never an entrypoint subsequently sent back to the server.
+        texFiles.push(name);
     }
     cursor = next;
   }
@@ -425,6 +428,14 @@ export function parseJobStatus(
   const previews = record.previews.map((artifact) =>
     parseJobArtifact(artifact, expectedJobId, true),
   );
+  if (
+    record.previewPageCount !== undefined &&
+    (typeof record.previewPageCount !== "number" ||
+      !Number.isInteger(record.previewPageCount) ||
+      record.previewPageCount < 1 ||
+      record.previewPageCount > 100)
+  )
+    throw new Error("プレビューページ数が不正です。");
   let stages: BrowserJobStatus["stages"];
   if (record.stages !== undefined) {
     const value = record.stages;
@@ -481,6 +492,9 @@ export function parseJobStatus(
     retentionExpiresAt,
     artifacts,
     previews,
+    ...(record.previewPageCount === undefined
+      ? {}
+      : { previewPageCount: record.previewPageCount }),
     ...(stages === undefined ? {} : { stages }),
   };
 }

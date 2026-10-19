@@ -5,6 +5,11 @@ import { pipeline } from "node:stream/promises";
 import { Transform } from "node:stream";
 import yauzl, { type Entry, type ZipFile } from "yauzl";
 import { AppError } from "@latex-renderer/shared";
+export {
+  captureValidatedSourceTree,
+  verifyValidatedSourceTree,
+  type VerifiedSourceTree,
+} from "./verified-tree.js";
 
 const allowedExtensions = new Set([
   ".tex",

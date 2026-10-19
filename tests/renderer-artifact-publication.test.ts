@@ -1,4 +1,13 @@
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  lstat,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -28,8 +37,20 @@ describe("renderer artifact publication", () => {
     await writeFile(join(staging, "main.aux"), "must not persist\n");
     await writeFile(join(staging, "renderer-secret.tmp"), "unknown\n");
 
-    const artifacts = await validateArtifacts(config(root), staging, false);
-    await publishArtifacts(staging, output, artifacts);
+    const timings = { scanMs: 0, formatMs: 0, hashMs: 0, copyMs: 0 };
+    const artifacts = await validateArtifacts(
+      config(root),
+      staging,
+      false,
+      false,
+      "",
+      timings,
+    );
+    await publishArtifacts(staging, output, artifacts, timings);
+    for (const duration of Object.values(timings)) {
+      expect(Number.isFinite(duration)).toBe(true);
+      expect(duration).toBeGreaterThanOrEqual(0);
+    }
 
     expect(await readdir(output)).toEqual([
       "compile.log",
@@ -42,7 +63,43 @@ describe("renderer artifact publication", () => {
     expect(await directorySize(output)).toBe(
       artifacts.reduce((total, artifact) => total + artifact.size, 0),
     );
+    const original = await lstat(join(staging, "compile.log")),
+      published = await lstat(join(output, "compile.log"));
+    expect(original.nlink).toBe(1);
+    expect(published.nlink).toBe(1);
+    expect(original.ino).not.toBe(published.ino);
+    await writeFile(join(staging, "compile.log"), "changed\n");
+    expect(await readFile(join(output, "compile.log"), "utf8")).toBe(
+      "compiled\n",
+    );
+    await expect(
+      publishArtifacts(staging, output, artifacts),
+    ).rejects.toMatchObject({ code: "EEXIST" });
+    expect(await readFile(join(output, "compile.log"), "utf8")).toBe(
+      "compiled\n",
+    );
   });
+  it.skipIf(process.platform === "win32")(
+    "does not replace a symlink at the copy destination",
+    async () => {
+      const root = await mkdtemp(join(tmpdir(), "artifact-copy-link-"));
+      roots.push(root);
+      const staging = join(root, "staging"),
+        output = join(root, "output"),
+        outside = join(root, "outside");
+      await mkdir(staging);
+      await mkdir(output);
+      await writeFile(join(staging, "compile.log"), "new");
+      await writeFile(outside, "keep");
+      await symlink(outside, join(output, "compile.log"));
+      await expect(
+        publishArtifacts(staging, output, [
+          { path: "compile.log", type: "log", size: 3, sha256: "0".repeat(64) },
+        ]),
+      ).rejects.toMatchObject({ code: "EEXIST" });
+      expect(await readFile(outside, "utf8")).toBe("keep");
+    },
+  );
 });
 
 function config(storageRoot: string): WorkerConfig {

@@ -25,6 +25,7 @@ import { acquireMutationLock } from "./mutation-lock.mjs";
 import {
   eligibleManagedImage,
   imageCleanupPolicy,
+  retainedPreviewRuntimeIds,
 } from "./image-cleanup-policy.mjs";
 import {
   boundedIntegerEnvironment,
@@ -1046,6 +1047,15 @@ function rendererEnvWithImage(contents, imageId) {
 }
 
 async function restartRendererConsumers() {
+  const gateway = "latex-renderer-standalone-gateway.service";
+  const restoreGateway = await runCapture("systemctl", [
+    "is-enabled",
+    "--quiet",
+    gateway,
+  ]).then(
+    () => true,
+    () => false,
+  );
   await runCapture("systemctl", ["restart", "latex-renderer-worker.service"]);
   await runCapture("systemctl", [
     "try-restart",
@@ -1053,6 +1063,12 @@ async function restartRendererConsumers() {
     "latex-renderer-admin-api.service",
     "latex-renderer-remote-mcp.service",
   ]);
+  // Requires=Internal API stops this dependent during a restart; try-restart
+  // cannot bring back a unit already stopped by that dependency transition.
+  if (restoreGateway) {
+    await runCapture("systemctl", ["start", gateway]);
+    await runCapture("systemctl", ["is-active", "--quiet", gateway]);
+  }
 }
 
 async function restoreActivation(snapshot) {
@@ -1307,6 +1323,10 @@ async function cleanup(op, automatic = false) {
       ])
     ).trim(),
   );
+  const previewDatabase =
+    process.env.DATABASE_PATH ?? "/var/lib/latex-renderer/renderer.sqlite3";
+  for (const id of retainedPreviewRuntimeIds(previewDatabase))
+    protectedIds.add(id);
   const ids = [
     ...new Set(
       (await dockerCapture(["image", "ls", "--all", "--no-trunc", "--quiet"]))
@@ -1337,6 +1357,9 @@ async function cleanup(op, automatic = false) {
       )
     )
       continue;
+    // Recheck directly before deletion; do not rely on an earlier list while
+    // PDF publication/recovery may still be making progress.
+    if (retainedPreviewRuntimeIds(previewDatabase).has(id)) continue;
     await dockerLogged(op, ["image", "rm", "--force", id])
       .then(() => {
         removed += 1;
@@ -1374,7 +1397,7 @@ async function cleanup(op, automatic = false) {
   await persistState();
   await appendLog(
     op,
-    `Removed ${removed} unused managed image(s); protected ${protectedIds.size} current/rollback/configured image ID(s). Unused build cache was pruned with a ${cleanupPolicy.cacheMaxGiB} GiB retention target.\n`,
+    `Removed ${removed} unused managed image(s); protected ${protectedIds.size} current/rollback/configured/preview image ID(s). Unused build cache was pruned with a ${cleanupPolicy.cacheMaxGiB} GiB retention target.\n`,
   );
 }
 
@@ -1682,7 +1705,10 @@ const server = createServer(async (req, res) => {
     if (!auth?.startsWith("Bearer ") || !safeToken(auth.slice(7))) {
       throw httpError(401, "UNAUTHORIZED", "Invalid image manager credential");
     }
-    const url = new globalThis.URL(req.url ?? "/", `http://${host}:${port}`);
+    const url = new globalThis.URL(
+      req.url ?? "/",
+      `http://${host === "::1" ? "[::1]" : host}:${port}`,
+    );
 
     if (req.method === "GET" && url.pathname === "/v1/state") {
       return send(res, 200, { ...state, activeOperationId, quiescing });

@@ -31,7 +31,7 @@ const appScript = execFileSync(
 );
 const origin = "http://127.0.0.1:43128";
 const projectId = `project_${"a".repeat(32)}`;
-type Kind = "jobs" | "projects" | "revisions";
+type Kind = "jobs" | "projects" | "revisions" | "revisionJobs";
 let browser: Browser | undefined;
 const pages: Page[] = [];
 
@@ -58,10 +58,41 @@ function nextButtonFor(kind: Kind): string {
     ? "#app-jobs-next"
     : kind === "projects"
       ? "#app-projects-next"
-      : "#app-revisions-next";
+      : kind === "revisionJobs"
+        ? "[data-revision-jobs-next]"
+        : "#app-revisions-next";
 }
 
 function pageData(kind: Kind, second: boolean): unknown {
+  if (kind === "revisionJobs") {
+    const job = (number: string) => ({
+      id: `job_${number.repeat(32)}`,
+      status: "succeeded",
+      createdAt: "2026-10-19T00:00:00.000Z",
+      outputs: ["pdf"],
+    });
+    return second
+      ? { items: [job("2")], hasMore: false, nextCursor: null }
+      : {
+          displayName: "Project",
+          revisions: [
+            {
+              id: "revision_1",
+              revisionNumber: 1,
+              displayName: "First revision",
+              originalFilename: "main.tex",
+              entrypoint: "main.tex",
+              createdAt: "2026-10-19T00:00:00.000Z",
+              jobs: [job("1")],
+              jobCount: 2,
+              jobsHasMore: true,
+              jobsNextCursor: "next",
+            },
+          ],
+          revisionsHasMore: false,
+          revisionsNextCursor: null,
+        };
+  }
   if (kind === "jobs")
     return {
       items: [
@@ -158,12 +189,22 @@ async function fixture(kind: Kind) {
       await route.fulfill({ json: { isAdmin: false } });
       return;
     }
+    if (
+      kind === "revisionJobs" &&
+      url.pathname === `/app/api/v1/projects/${projectId}`
+    ) {
+      cursors.push(null);
+      await route.fulfill({ json: pageData(kind, false) });
+      return;
+    }
     const expectedApi =
       kind === "jobs"
         ? "/app/api/v1/jobs"
         : kind === "projects"
           ? "/app/api/v1/projects"
-          : `/app/api/v1/projects/${projectId}`;
+          : kind === "revisionJobs"
+            ? `/app/api/v1/projects/${projectId}/revisions/revision_1/jobs`
+            : `/app/api/v1/projects/${projectId}`;
     if (url.pathname === expectedApi) {
       const cursor = url.searchParams.get("cursor");
       cursors.push(cursor);
@@ -186,7 +227,7 @@ async function fixture(kind: Kind) {
 }
 
 describe("App pagination retry in a real browser", () => {
-  it.each(["jobs", "projects", "revisions"] as const)(
+  it.each(["jobs", "projects", "revisions", "revisionJobs"] as const)(
     "keeps %s history and pagination usable on phone and tablet",
     async (kind) => {
       const { page, errors, releaseSecond } = await fixture(kind);
@@ -213,7 +254,7 @@ describe("App pagination retry in a real browser", () => {
     },
   );
 
-  it.each(["jobs", "projects", "revisions"] as const)(
+  it.each(["jobs", "projects", "revisions", "revisionJobs"] as const)(
     "retries the same cursor after a transient %s failure without double submission",
     async (kind) => {
       const { page, errors, cursors, releaseSecond } = await fixture(kind);
@@ -242,7 +283,10 @@ describe("App pagination retry in a real browser", () => {
         await button.waitFor({ state: "detached" });
         const content = await page.locator("main").textContent();
         expect(content).toContain("First");
-        expect(content).toContain("Second");
+        if (kind === "revisionJobs") {
+          expect(await page.locator('a[href^="/app/jobs/"]').count()).toBe(2);
+          expect(content).not.toContain("詳細APIのcursor");
+        } else expect(content).toContain("Second");
         expect(errors).toEqual([]);
       } finally {
         releaseSecond();

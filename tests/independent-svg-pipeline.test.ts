@@ -3,6 +3,7 @@ import { readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import * as docker from "../apps/renderer-worker/src/docker.js";
+import { recoverStaleLeases } from "../apps/renderer-worker/src/recovery.js";
 import {
   downloadJobArtifacts,
   renderSource,
@@ -70,6 +71,102 @@ describe(`independent stages with ${realPipelineImage === undefined ? "determini
 describe.skipIf(realPipelineImage !== undefined)(
   "independent PDF/SVG HTTP and Worker pipeline (deterministic, not TeX)",
   () => {
+    it.each([false, true])(
+      "recovers a canceled validation after a Worker crash (daemon inspection fails: %s)",
+      async (inspectionFails) => {
+        const f = await sourcePipelineFixture();
+        const inspect = vi.spyOn(docker, "runDocker");
+        try {
+          const job = await f.renders.createRender(identity, {
+            inlineSource: pipelineDocument(),
+            outputs: ["pdf", "svg"],
+          });
+          f.failNextSvg(79);
+          await f.runNext();
+          f.renders.retrySvgRender(identity, job.id, randomUUID());
+          const now = new Date().toISOString();
+          const claimed = f.database.worker.claimNext(
+            f.config.workerId,
+            now,
+            "2000-01-01T00:00:00.000Z",
+          );
+          expect(claimed?.id).toBe(job.id);
+          f.database.jobs.cancel(job.id, now);
+          if (inspectionFails)
+            inspect.mockRejectedValue(new Error("Daemon unavailable"));
+          else inspect.mockResolvedValue("");
+          await recoverStaleLeases(f.database, f.config);
+          const recovered = f.database.worker.runtimeState(job.id);
+          expect(recovered?.status).toBe("canceled");
+          if (inspectionFails)
+            expect(recovered?.lease_owner).toContain(":recovery:");
+          else expect(recovered?.lease_owner).toBeNull();
+          expect(f.renders.job(identity, job.id).stages?.pdf.status).toBe(
+            "succeeded",
+          );
+          if (inspectionFails) {
+            expect(() =>
+              f.renders.retrySvgRender(identity, job.id, randomUUID()),
+            ).toThrow();
+            inspect.mockResolvedValue("");
+            await new Promise((resolve) => setTimeout(resolve, 5));
+            await recoverStaleLeases(f.database, f.config);
+          }
+          f.renders.retrySvgRender(identity, job.id, randomUUID());
+          await f.runNext();
+          expect(f.renders.job(identity, job.id).status).toBe("succeeded");
+        } finally {
+          inspect.mockRestore();
+          await f.close();
+        }
+      },
+    );
+    it.each(["pdf", "svg", "svg-retry"] as const)(
+      "releases a canceled validation lease before %s starts",
+      async (mode) => {
+        const f = await sourcePipelineFixture();
+        try {
+          const job = await f.renders.createRender(identity, {
+            inlineSource: pipelineDocument(),
+            outputs: mode === "pdf" ? ["pdf"] : ["pdf", "svg"],
+          });
+          if (mode === "svg-retry") {
+            f.failNextSvg(79);
+            await f.runNext();
+            f.renders.retrySvgRender(identity, job.id, randomUUID());
+          }
+          const transition = f.database.worker.transitionOwned.bind(
+            f.database.worker,
+          );
+          const spy = vi
+            .spyOn(f.database.worker, "transitionOwned")
+            .mockImplementation((...args) => {
+              if (args[3].includes("validating") && args[4] === "running")
+                f.database.jobs.cancel(job.id, new Date().toISOString());
+              return transition(...args);
+            });
+          const previousContainers = vi.mocked(docker.spawnRenderer).mock.calls
+            .length;
+          await f.runNext();
+          expect(vi.mocked(docker.spawnRenderer).mock.calls.length).toBe(
+            previousContainers,
+          );
+          expect(f.database.worker.runtimeState(job.id)).toMatchObject({
+            status: "canceled",
+            lease_owner: null,
+          });
+          expect(f.database.jobs.get(job.id)?.completed_at).not.toBeNull();
+          spy.mockRestore();
+          if (mode === "svg-retry") {
+            f.renders.retrySvgRender(identity, job.id, randomUUID());
+            await f.runNext();
+            expect(f.renders.job(identity, job.id).status).toBe("succeeded");
+          }
+        } finally {
+          await f.close();
+        }
+      },
+    );
     it("defers uncertain SVG container cleanup without hiding PDF or deleting the live attempt", async () => {
       const f = await sourcePipelineFixture();
       const stop = vi.mocked(docker.dockerStopVerified),

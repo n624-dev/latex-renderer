@@ -108,10 +108,10 @@ describe("administrator external identity lifecycle", () => {
 
   it("shows explicit provider-neutral identity controls in the UI", () => {
     expect(adminScript).toContain("issuer＋subject");
-    expect(adminScript).toContain("外部identityのsubject");
+    expect(adminScript).toContain("外部認証の利用者識別子（subject）");
     expect(adminScript).toContain("メールによる自動再連携は行いません");
     expect(adminScript).toContain("me.role==='owner'&&x.identities?.length");
-    expect(adminScript).toContain("identityを解除");
+    expect(adminScript).toContain("外部ログインを解除");
     expect(adminScript).toContain('name="reason"');
     expect(adminScript).toContain('name="confirm" required');
     expect(adminScript).toContain("秘密値は入力しないでください");

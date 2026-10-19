@@ -95,6 +95,16 @@ export class ServiceAccountsRepository {
       .get(id) as unknown as ServiceAccountRow | undefined;
   }
 
+  nameExists(ownerUserId: string, name: string): boolean {
+    return (
+      this.db
+        .prepare(
+          "SELECT 1 FROM service_accounts WHERE owner_user_id=? AND name=?",
+        )
+        .get(ownerUserId, name) !== undefined
+    );
+  }
+
   activeExists(id: string): boolean {
     return (
       this.db

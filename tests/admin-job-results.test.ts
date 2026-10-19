@@ -137,6 +137,37 @@ describe("administrator Job results and Sources", () => {
       database.raw.prepare("SELECT COUNT(*) AS count FROM audit_logs").get(),
     ).toEqual({ count: 2 });
     expect(database.jobs.get(jobId)?.status).toBe("reserved");
+    database.audit({
+      actorType: "system",
+      actorId: "fixture-worker",
+      action: "render.fixture_finished",
+      targetType: "job",
+      targetId: jobId,
+      result: "success",
+    });
+    database.audit({
+      actorType: "system",
+      actorId: "fixture-worker",
+      action: "user.unrelated",
+      targetType: "job",
+      targetId: `job_${"f".repeat(32)}`,
+      result: "success",
+    });
+    // Physical history retention must not make Worker-authored smoke records
+    // reappear after the join to the original Job becomes impossible.
+    database.raw.prepare("DELETE FROM jobs WHERE id=?").run(jobId);
+    expect(database.auditLogs.list().map((row) => row.action)).toEqual([
+      "user.unrelated",
+    ]);
+    expect(database.auditLogs.search({ page: 1, pageSize: 10 }).total).toBe(1);
+    expect(
+      database.raw
+        .prepare("SELECT id FROM internal_resource_tombstones WHERE kind='job'")
+        .get(),
+    ).toEqual({ id: jobId });
+    expect(
+      database.raw.prepare("SELECT COUNT(*) AS count FROM audit_logs").get(),
+    ).toEqual({ count: 4 });
   });
 
   it("retries a failed Job using retained input after its orphan deadline", async () => {
@@ -186,170 +217,198 @@ describe("administrator Job results and Sources", () => {
     });
   });
 
-  it("shows retained metadata and streams authenticated, integrity-labelled artifacts", async () => {
-    const fixture = await setup(),
-      jobId = `job_${"a".repeat(32)}`,
-      sourceId = `source_${"b".repeat(32)}`,
-      now = new Date(),
-      started = new Date(now.getTime() - 3_000).toISOString(),
-      completed = now.toISOString(),
-      pdf = new TextEncoder().encode("%PDF-test"),
-      log = new TextEncoder().encode("compile output"),
-      errors = new TextEncoder().encode(
-        JSON.stringify({ errors: [], warnings: [] }),
-      ),
-      svg = new TextEncoder().encode(
-        '<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0"/></svg>',
-      );
-    seedSource(fixture.database, sourceId, now.toISOString(), [
-      "main.tex",
-      "images/a.png",
-    ]);
-    fixture.database.raw
-      .prepare(
-        `INSERT INTO jobs
-      (id,user_id,service_account_id,api_key_id,status,renderer_version,source_size,source_sha256,source_id,entrypoint,created_at,updated_at,queued_at,started_at,completed_at,exit_code,output_size)
-      VALUES (?,'user_owner','sa_web','key_web','succeeded','test',100,?,?,? ,?,?,?,?,?,0,?)`,
-      )
-      .run(
-        jobId,
-        "1".repeat(64),
-        sourceId,
+  it.each(["page-1.png", "page-01.png", "page-001.png"])(
+    "shows retained metadata and streams authenticated, integrity-labelled artifacts (%s)",
+    async (previewName) => {
+      const fixture = await setup(),
+        jobId = `job_${"a".repeat(32)}`,
+        sourceId = `source_${"b".repeat(32)}`,
+        now = new Date(),
+        started = new Date(now.getTime() - 3_000).toISOString(),
+        completed = now.toISOString(),
+        pdf = new TextEncoder().encode("%PDF-test"),
+        log = new TextEncoder().encode("compile output"),
+        errors = new TextEncoder().encode(
+          JSON.stringify({ errors: [], warnings: [] }),
+        ),
+        svg = new TextEncoder().encode(
+          '<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0"/></svg>',
+        );
+      seedSource(fixture.database, sourceId, now.toISOString(), [
         "main.tex",
-        started,
-        completed,
-        started,
-        started,
-        completed,
-        pdf.length,
-      );
-    await mkdir(join(fixture.root, "jobs", jobId, "output", "previews"), {
-      recursive: true,
-    });
-    await mkdir(join(fixture.root, "jobs", jobId, "output", "svg", "objects"), {
-      recursive: true,
-    });
-    await Promise.all([
-      store(fixture, jobId, "pdf", "result.pdf", pdf, "artifact_pdf"),
-      store(fixture, jobId, "log", "compile.log", log, "artifact_log"),
-      store(fixture, jobId, "errors", "errors.json", errors, "artifact_errors"),
-      store(
-        fixture,
-        jobId,
-        "svg",
-        "svg/objects/math-000001.svg",
-        svg,
-        "artifact_svg",
-      ),
-      store(
-        fixture,
-        jobId,
-        "preview",
-        "previews/page-1.png",
-        new Uint8Array([1, 2, 3]),
-        "artifact_preview",
-      ),
-    ]);
-    const detail = await fixture.app.request(`/admin/api/v1/jobs/${jobId}`, {
-      headers: fixture.headers,
-    });
-    expect(detail.status).toBe(200);
-    const detailBody = (await detail.json()) as {
-      artifacts: Array<{ relative_path: string; size: number }>;
-      previews: Array<{ relative_path: string }>;
-      [key: string]: unknown;
-    };
-    expect(detailBody).toMatchObject({
-      id: jobId,
-      source_id: sourceId,
-      entrypoint: "main.tex",
-      duration_ms: 3000,
-      artifacts_available: true,
-      previews: [{ relative_path: "previews/page-1.png" }],
-    });
-    expect(
-      detailBody.artifacts.find((item) => item.relative_path === "result.pdf"),
-    ).toMatchObject({ size: pdf.length });
-    const download = await fixture.app.request(
-      `/admin/api/v1/jobs/${jobId}/artifacts/result.pdf`,
-      { headers: fixture.headers },
-    );
-    expect(download.status).toBe(200);
-    expect(download.headers.get("content-disposition")).toContain("attachment");
-    expect(download.headers.get("x-artifact-sha256")).toBe(hash(pdf));
-    expect(download.headers.get("cache-control")).toContain("no-store");
-    expect(new Uint8Array(await download.arrayBuffer())).toEqual(pdf);
-    const svgDownload = await fixture.app.request(
-      `/admin/api/v1/jobs/${jobId}/artifacts/svg/objects/math-000001.svg?disposition=inline`,
-      { headers: fixture.headers },
-    );
-    expect(svgDownload.status).toBe(200);
-    expect(svgDownload.headers.get("content-type")).toBe("image/svg+xml");
-    expect(svgDownload.headers.get("content-disposition")).toContain(
-      "attachment",
-    );
-    expect(svgDownload.headers.get("x-content-type-options")).toBe("nosniff");
-    expect(new Uint8Array(await svgDownload.arrayBuffer())).toEqual(svg);
-    const archive = await fixture.app.request(
-      `/admin/api/v1/jobs/${jobId}/archive`,
-      { headers: fixture.headers },
-    );
-    expect(archive.status).toBe(200);
-    expect(archive.headers.get("content-type")).toBe("application/zip");
-    expect(archive.headers.get("cache-control")).toContain("no-store");
-    const archiveBytes = Buffer.from(await archive.arrayBuffer());
-    expect(archiveBytes.subarray(0, 4).toString("hex")).toBe("504b0304");
-    for (const name of [
-      "result.pdf",
-      "compile.log",
-      "errors.json",
-      "svg/objects/math-000001.svg",
-      "previews/page-1.png",
-    ])
-      expect(archiveBytes.includes(Buffer.from(name))).toBe(true);
-    expect(
+        "images/a.png",
+      ]);
       fixture.database.raw
         .prepare(
-          "SELECT COUNT(*) AS count FROM artifact_download_leases WHERE job_id=?",
+          `INSERT INTO jobs
+      (id,user_id,service_account_id,api_key_id,status,renderer_version,source_size,source_sha256,source_id,entrypoint,created_at,updated_at,queued_at,started_at,completed_at,exit_code,output_size)
+      VALUES (?,'user_owner','sa_web','key_web','succeeded','test',100,?,?,? ,?,?,?,?,?,0,?)`,
         )
-        .get(jobId),
-    ).toEqual({ count: 0 });
-    const inline = await fixture.app.request(
-      `/admin/api/v1/jobs/${jobId}/artifacts/result.pdf?disposition=inline`,
-      { headers: fixture.headers },
-    );
-    expect(inline.headers.get("content-disposition")).toContain("inline");
-    await inline.arrayBuffer();
-    const auditActions = fixture.database.raw
-      .prepare(
-        "SELECT action FROM audit_logs ORDER BY created_at DESC LIMIT 20",
-      )
-      .all() as Array<{ action: string }>;
-    expect(auditActions.map((row) => row.action)).toEqual(
-      expect.arrayContaining([
-        "admin.artifact.downloaded",
-        "admin.artifact.viewed",
-        "admin.artifacts.archive_downloaded",
-      ]),
-    );
-    fixture.database.raw
-      .prepare("UPDATE jobs SET completed_at=?,updated_at=? WHERE id=?")
-      .run("2026-01-01T00:00:00.000Z", "2026-01-01T00:00:00.000Z", jobId);
-    const expiredDetail = await fixture.app.request(
-      `/admin/api/v1/jobs/${jobId}`,
-      { headers: fixture.headers },
-    );
-    await expect(expiredDetail.json()).resolves.toMatchObject({
-      artifacts_available: false,
-      artifacts: [],
-      previews: [],
-    });
-    const expiredDownload = await fixture.app.request(
-      `/admin/api/v1/jobs/${jobId}/artifacts/result.pdf`,
-      { headers: fixture.headers },
-    );
-    expect(expiredDownload.status).toBe(410);
-  });
+        .run(
+          jobId,
+          "1".repeat(64),
+          sourceId,
+          "main.tex",
+          started,
+          completed,
+          started,
+          started,
+          completed,
+          pdf.length,
+        );
+      await mkdir(join(fixture.root, "jobs", jobId, "output", "previews"), {
+        recursive: true,
+      });
+      await mkdir(
+        join(fixture.root, "jobs", jobId, "output", "svg", "objects"),
+        {
+          recursive: true,
+        },
+      );
+      await Promise.all([
+        store(fixture, jobId, "pdf", "result.pdf", pdf, "artifact_pdf"),
+        store(fixture, jobId, "log", "compile.log", log, "artifact_log"),
+        store(
+          fixture,
+          jobId,
+          "errors",
+          "errors.json",
+          errors,
+          "artifact_errors",
+        ),
+        store(
+          fixture,
+          jobId,
+          "svg",
+          "svg/objects/math-000001.svg",
+          svg,
+          "artifact_svg",
+        ),
+        store(
+          fixture,
+          jobId,
+          "preview",
+          `previews/${previewName}`,
+          new Uint8Array([1, 2, 3]),
+          "artifact_preview",
+        ),
+      ]);
+      const detail = await fixture.app.request(`/admin/api/v1/jobs/${jobId}`, {
+        headers: fixture.headers,
+      });
+      expect(detail.status).toBe(200);
+      const detailBody = (await detail.json()) as {
+        artifacts: Array<{ relative_path: string; size: number }>;
+        previews: Array<{ relative_path: string }>;
+        [key: string]: unknown;
+      };
+      expect(detailBody).toMatchObject({
+        id: jobId,
+        source_id: sourceId,
+        entrypoint: "main.tex",
+        duration_ms: 3000,
+        artifacts_available: true,
+        previews: [{ relative_path: `previews/${previewName}` }],
+      });
+      expect(
+        detailBody.artifacts.find(
+          (item) => item.relative_path === "result.pdf",
+        ),
+      ).toMatchObject({ size: pdf.length });
+      const download = await fixture.app.request(
+        `/admin/api/v1/jobs/${jobId}/artifacts/result.pdf`,
+        { headers: fixture.headers },
+      );
+      expect(download.status).toBe(200);
+      expect(download.headers.get("content-disposition")).toContain(
+        "attachment",
+      );
+      expect(download.headers.get("x-artifact-sha256")).toBe(hash(pdf));
+      expect(download.headers.get("cache-control")).toContain("no-store");
+      expect(new Uint8Array(await download.arrayBuffer())).toEqual(pdf);
+      const svgDownload = await fixture.app.request(
+        `/admin/api/v1/jobs/${jobId}/artifacts/svg/objects/math-000001.svg?disposition=inline`,
+        { headers: fixture.headers },
+      );
+      expect(svgDownload.status).toBe(200);
+      expect(svgDownload.headers.get("content-type")).toBe("image/svg+xml");
+      expect(svgDownload.headers.get("content-disposition")).toContain(
+        "attachment",
+      );
+      expect(svgDownload.headers.get("x-content-type-options")).toBe("nosniff");
+      expect(new Uint8Array(await svgDownload.arrayBuffer())).toEqual(svg);
+      const archive = await fixture.app.request(
+        `/admin/api/v1/jobs/${jobId}/archive`,
+        { headers: fixture.headers },
+      );
+      expect(archive.status).toBe(200);
+      expect(archive.headers.get("content-type")).toBe("application/zip");
+      expect(archive.headers.get("cache-control")).toContain("no-store");
+      const archiveBytes = Buffer.from(await archive.arrayBuffer());
+      expect(archiveBytes.subarray(0, 4).toString("hex")).toBe("504b0304");
+      for (const name of [
+        "result.pdf",
+        "compile.log",
+        "errors.json",
+        "svg/objects/math-000001.svg",
+        `previews/${previewName}`,
+      ])
+        expect(archiveBytes.includes(Buffer.from(name))).toBe(true);
+      for (const prefix of ["/admin/api/v1", "/app/api/v1"])
+        for (const name of new Set([previewName, "page-1.png"])) {
+          const response = await fixture.app.request(
+            `${prefix}/jobs/${jobId}/previews/${name}`,
+            { headers: fixture.headers },
+          );
+          expect(response.status).toBe(200);
+          expect(new Uint8Array(await response.arrayBuffer())).toEqual(
+            new Uint8Array([1, 2, 3]),
+          );
+        }
+      expect(
+        fixture.database.raw
+          .prepare(
+            "SELECT COUNT(*) AS count FROM artifact_download_leases WHERE job_id=?",
+          )
+          .get(jobId),
+      ).toEqual({ count: 0 });
+      const inline = await fixture.app.request(
+        `/admin/api/v1/jobs/${jobId}/artifacts/result.pdf?disposition=inline`,
+        { headers: fixture.headers },
+      );
+      expect(inline.headers.get("content-disposition")).toContain("inline");
+      await inline.arrayBuffer();
+      const auditActions = fixture.database.raw
+        .prepare(
+          "SELECT action FROM audit_logs ORDER BY created_at DESC LIMIT 20",
+        )
+        .all() as Array<{ action: string }>;
+      expect(auditActions.map((row) => row.action)).toEqual(
+        expect.arrayContaining([
+          "admin.artifact.downloaded",
+          "admin.artifact.viewed",
+          "admin.artifacts.archive_downloaded",
+        ]),
+      );
+      fixture.database.raw
+        .prepare("UPDATE jobs SET completed_at=?,updated_at=? WHERE id=?")
+        .run("2026-01-01T00:00:00.000Z", "2026-01-01T00:00:00.000Z", jobId);
+      const expiredDetail = await fixture.app.request(
+        `/admin/api/v1/jobs/${jobId}`,
+        { headers: fixture.headers },
+      );
+      await expect(expiredDetail.json()).resolves.toMatchObject({
+        artifacts_available: false,
+        artifacts: [],
+        previews: [],
+      });
+      const expiredDownload = await fixture.app.request(
+        `/admin/api/v1/jobs/${jobId}/artifacts/result.pdf`,
+        { headers: fixture.headers },
+      );
+      expect(expiredDownload.status).toBe(410);
+    },
+  );
 
   it("lists, reuses, references, and safely deletes Sources", async () => {
     const fixture = await setup(),

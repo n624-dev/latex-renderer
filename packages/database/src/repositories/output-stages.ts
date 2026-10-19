@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { JobStages } from "@latex-renderer/contracts";
+import { readySourceSql } from "../source-lifecycle.js";
 
 export interface OutputStageCheckpoint {
   job_id: string;
@@ -206,9 +207,8 @@ export class OutputStagesRepository {
           AND a.type='pdf' AND a.storage_generation=p.pdf_generation AND a.sha256=p.pdf_sha256)
         AND p.pdf_completed_at>? AND p.svg_status IN ('failed','timeout','canceled') AND p.svg_attempt<8)
       AND EXISTS(SELECT 1 FROM sources s WHERE s.id=jobs.source_id AND s.owner_user_id=jobs.user_id
-        AND s.status='ready' AND s.sha256=jobs.source_sha256 AND s.size=jobs.source_size
-        AND (s.expires_at>? OR EXISTS(SELECT 1 FROM project_revisions r JOIN projects p ON p.id=r.project_id
-          WHERE r.source_id=s.id AND p.deleted_at IS NULL)))`,
+        AND s.sha256=jobs.source_sha256 AND s.size=jobs.source_size
+        AND ${readySourceSql("s")})`,
       )
       .run(now, now, reservedBytes, jobId, userId, cutoff, now).changes;
     if (changed !== 1) return false;

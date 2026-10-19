@@ -6,6 +6,20 @@ import {
 } from "../apps/renderer-worker/src/docker.js";
 afterEach(() => vi.unstubAllEnvs());
 describe("renderer worker config", () => {
+  it("bounds Source tree storage and allows disabling it without changing ZIP limits", () => {
+    stubRequiredEnvironment();
+    expect(loadWorkerConfig()).toMatchObject({
+      sourceTreeMaxBytes: 64 * 1024 ** 2,
+      sourceTreeUserMaxBytes: 32 * 1024 ** 2,
+      sourceTreeTtlMs: 21600000,
+    });
+    vi.stubEnv("SOURCE_TREE_MAX_BYTES", "1");
+    expect(() => loadWorkerConfig()).toThrow("SOURCE_TREE_USER_MAX_BYTES");
+    vi.stubEnv("SOURCE_TREE_MAX_BYTES", "0");
+    expect(loadWorkerConfig().sourceTreeMaxBytes).toBe(0);
+    vi.stubEnv("SOURCE_TREE_TTL_SECONDS", "0");
+    expect(() => loadWorkerConfig()).toThrow("SOURCE_TREE_TTL_SECONDS");
+  });
   it("validates host admission headroom and queue deadline", () => {
     stubRequiredEnvironment();
     vi.stubEnv("RENDERER_MIN_AVAILABLE_MEMORY_BYTES", "0");
@@ -78,6 +92,81 @@ describe("renderer worker config", () => {
     expect(args).toContain("latex-render-job_test-g7");
     expect(args).toContain("latex-renderer.lease-generation=7");
   });
+  it("bounds a page conversion sandbox without changing normal renderer memory", () => {
+    stubRequiredEnvironment();
+    const config = loadWorkerConfig();
+    const args = rendererRunArguments(
+      config,
+      "job_test",
+      "/input",
+      "/output",
+      "main.tex",
+      ["pdf"],
+      7,
+      { mode: "preview", page: 2, pdfDirectory: "/checkpoint" },
+    );
+    expect(args[args.indexOf("--memory") + 1]).toBe("256m");
+    expect(args[args.indexOf("--memory-swap") + 1]).toBe("256m");
+    expect(args[args.indexOf("--network") + 1]).toBe("none");
+    expect(args).toContain("--read-only");
+    expect(args).toContain("LATEX_PREVIEW_PAGE=2");
+    expect(args).toContain("LATEX_RENDER_STAGE=preview");
+    expect(args).toContain("fsize=10485760:10485760");
+    expect(args).toContain("type=bind,src=/checkpoint,dst=/work/pdf,readonly");
+    expect(args).toContain("no-new-privileges");
+    expect(args).toContain("seccomp=/tmp/seccomp");
+    const normal = rendererRunArguments(
+      config,
+      "job_test",
+      "/input",
+      "/output",
+    );
+    expect(normal[normal.indexOf("--memory") + 1]).toBe("1g");
+    expect(normal[normal.indexOf("--memory-swap") + 1]).toBe("1g");
+    expect(
+      normal.some((value) => value.startsWith("LATEX_PREVIEW_PAGE=")),
+    ).toBe(false);
+  });
+  it.each([undefined, 0, -1, 101, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+    "rejects an invalid preview page %s",
+    (page) => {
+      stubRequiredEnvironment();
+      expect(() =>
+        rendererRunArguments(
+          loadWorkerConfig(),
+          "job_test",
+          "/input",
+          "/output",
+          "main.tex",
+          ["pdf"],
+          1,
+          {
+            mode: "preview",
+            ...(page === undefined ? {} : { page }),
+            pdfDirectory: "/checkpoint",
+          },
+        ),
+      ).toThrow("Invalid preview page");
+    },
+  );
+  it.each(["svg", "preview"] as const)(
+    "requires a read-only checkpoint for %s",
+    (mode) => {
+      stubRequiredEnvironment();
+      expect(() =>
+        rendererRunArguments(
+          loadWorkerConfig(),
+          "job_test",
+          "/input",
+          "/output",
+          "main.tex",
+          ["pdf"],
+          1,
+          { mode, page: 1 },
+        ),
+      ).toThrow("immutable PDF checkpoint");
+    },
+  );
   it("rejects AppArmor when Docker is rootless", () => {
     expect(() =>
       validateDockerIsolation(

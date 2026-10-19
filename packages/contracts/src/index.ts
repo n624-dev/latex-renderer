@@ -238,6 +238,7 @@ export const jobResponseSchema = z.object({
   retentionExpiresAt: z.iso.datetime().nullable().default(null),
   artifacts: z.array(jobArtifactSchema).default([]),
   previews: z.array(jobArtifactSchema).default([]),
+  previewPageCount: z.number().int().min(1).max(100).optional(),
   stages: jobStagesSchema.optional(),
 });
 export type JobResponse = z.infer<typeof jobResponseSchema>;

@@ -64,6 +64,10 @@ on:
         type: choice
         options: ["1", "16", "64"]
         default: "64"
+      io_benchmark:
+        description: "Measure document, ZIP and artifact I/O on this disposable runner"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -90,6 +94,7 @@ jobs:
       REQUESTED_DATE: ${{ inputs.texlive_date || 'latest' }}
       CI_ARCHITECTURE: ${{ matrix.architecture }}
       CI_FONT_CACHE_COMPARE: "1"
+      CI_RENDERER_IO_BENCHMARK: ${{ inputs.io_benchmark && '1' || '0' }}
       # Register the private distribution hostname with the runner's log
       # masker before any step can emit a snapshot URL.
       TEXLIVE_CI_MIRROR_HOST: ${{ secrets.TEXLIVE_CI_MIRROR_HOST }}

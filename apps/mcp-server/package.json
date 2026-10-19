@@ -1,6 +1,6 @@
 {
   "name": "@latex-renderer/mcp-server",
-  "version": "1.5.0-rc.7",
+  "version": "1.5.0-rc.8",
   "private": true,
   "license": "Apache-2.0",
   "type": "module",
@@ -15,6 +15,6 @@
     "@modelcontextprotocol/server": "^2.3.1",
     "@latex-renderer/mcp-core": "workspace:*",
     "@latex-renderer/shared": "workspace:*",
-    "zod": "^4.6.5"
+    "zod": "^4.6.7"
   }
 }

@@ -25,6 +25,7 @@ import {
 import { createInternalApp } from "../../apps/internal-api/src/app.js";
 import { createRendererApp } from "../../apps/renderer-api/src/app.js";
 import { processJob } from "../../apps/renderer-worker/src/job-processor.js";
+import { processPreview } from "../../apps/renderer-worker/src/preview-processor.js";
 import { recordFailure } from "../../apps/renderer-worker/src/failure.js";
 import type { WorkerConfig } from "../../apps/renderer-worker/src/config.js";
 import * as docker from "../../apps/renderer-worker/src/docker.js";
@@ -44,6 +45,7 @@ export function pipelineDocument(pages = 1, text = "Pipeline") {
 // Only the Docker child boundary is replaced in ordinary (no-image) tests.
 export async function sourcePipelineFixture(
   overrides: Partial<ResourceLimits> = {},
+  options: { lazyPreviews?: boolean } = {},
 ) {
   // All consumers must see the same instance limits, not only the MCP producer.
   const limits = { ...DEFAULT_RESOURCE_LIMITS, ...overrides };
@@ -52,6 +54,7 @@ export async function sourcePipelineFixture(
   const database = await createFixtureDatabase(root);
   const servers: Server[] = [],
     children: ChildProcess[] = [];
+  const sourceInputs: string[] = [];
   const containers = new Map<ChildProcess, string>();
   let run: Promise<void> | undefined;
   let restoreSpawn = () => {};
@@ -274,6 +277,7 @@ export async function sourcePipelineFixture(
       containerUid: process.getuid?.() || 10_000,
       containerGid: process.getgid?.() || 10_000,
       jobTimeoutMs: 90_000,
+      minFreeStorageBytes: 0,
     };
     let holdNext = false,
       holdSvg = false,
@@ -285,6 +289,7 @@ export async function sourcePipelineFixture(
       .mockImplementation(
         (cfg, id, generation, input, staging, entrypoint, outputs, stage) => {
           const held = holdNext && (!holdSvg || stage?.mode === "svg");
+          if (stage?.mode !== "preview") sourceInputs.push(input);
           const result =
             realPipelineImage !== undefined
               ? originalSpawn(
@@ -315,6 +320,8 @@ export async function sourcePipelineFixture(
                       stage?.mode ?? "all",
                       stage?.pdfDirectory ?? "",
                       String(stage?.mode === "svg" ? nextSvgExit : 0),
+                      String(stage?.page ?? 0),
+                      options.lazyPreviews ? "1" : "0",
                     ],
                     { stdio: ["ignore", "pipe", "pipe"] },
                   ),
@@ -400,8 +407,40 @@ export async function sourcePipelineFixture(
       sibling,
       outsider,
       renders,
+      tickets,
       requests,
+      sourceInputs,
       runNext,
+      async withPreviewWorker<T>(work: () => Promise<T>): Promise<T> {
+        let pending: Promise<void> | undefined, failure: unknown;
+        const timer = setInterval(() => {
+          if (pending || failure) return;
+          const request = database.transaction(() =>
+            database.previews.claim(config.workerId, new Date().toISOString()),
+          );
+          if (request)
+            pending = processPreview(database, config, request)
+              .catch((error: unknown) => {
+                failure = error;
+              })
+              .finally(() => {
+                pending = undefined;
+              });
+        }, 20);
+        try {
+          const result = await work();
+          if (failure)
+            throw failure instanceof Error
+              ? failure
+              : new Error("Fixture preview processing failed", {
+                  cause: failure,
+                });
+          return result;
+        } finally {
+          clearInterval(timer);
+          await pending;
+        }
+      },
       close,
       failNextSvg(exitCode: number) {
         assert.equal(realPipelineImage, undefined);

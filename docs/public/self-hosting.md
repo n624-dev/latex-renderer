@@ -4,7 +4,7 @@ category: セルフホスト
 title: 自分のサーバーに構築
 description: 対応するサーバー構成、導入前の準備、初期設定、更新とバックアップを説明します。
 navOrder: 18
-updated: "2026-09-02"
+updated: "2026-10-19"
 since: "v1.2.0"
 ---
 
@@ -95,9 +95,7 @@ since: "v1.2.0"
 
 ## v1.3.6をダウンロードして検証
 
-RC.3からRC.4への更新は、旧Updaterが5ファイル、新しい配布metadataが6ファイルでRenderer識別hashを計算する互換性問題により、サービス切替前に失敗します。RC.4を再適用したり、検証を無効化したりせず、修正版RC.5を明示してください。
-
-RC.5は旧Updater用の5ファイルのmetadata項目を固定し、6ファイルのRuntime識別値を別のバージョン付き項目へ分離します。新Updaterは両方を照合します。旧Updaterも追加ファイルを含む配布物全体のchecksumとprovenanceを検証するため、追加ファイルが署名の対象外になることはありません。Runtimeの再利用判定には引き続き6ファイルを使います。稼働中のUpdaterへの直接パッチは不要です。
+初回導入には以下の固定版の検証手順を使います。過去RCから更新する場合だけ、[RC固有の互換性情報](/docs/reference/#過去rcのrenderer識別情報)を先に確認してください。
 
 次のコマンドは、固定されたReleaseであることをGitHub APIで確認し、APIが返すdigestとダウンロードしたbundleを照合します。通常の非rootユーザーで実行します。
 
@@ -399,7 +397,7 @@ Release workflowはtag refそのもの（Stableの`refs/tags/vX.Y.Z`または保
 
 Webでは`/admin/updates/`から更新確認、方針変更、適用、operation確認、rollbackを行います。認証済みのAdmin CLIを使う場合も同じAPIと安全検査を使用します。これが通常の更新経路です。v1.2.xのroot Updaterから初回移行する場合だけ、後述の一回限りの専用sudo transitionを使います。
 
-Update Managerは配布物を検証したroot所有の`verified` tree、依存導入とbuildだけを行う非rootの`build` tree、許可した成果物だけを戻したroot所有の`assembly` treeを分離します。rootが実行するデプロイスクリプトは`assembly`側の検証済みコピーで、非root build tree内のスクリプトは実行しません。Cloudflare公開処理などを設定済みdeployment userで行う場合も、controller所有treeを直接渡さず、rootが検査後に固定した一時`deployment-build`コピーを使用します。rollbackも同じ分離を使います。
+Updaterの権限分離とビルド領域は[運用仕様](/docs/reference/#updaterの実行領域)を参照してください。署名検証を省略したり、稼働中の配布ファイルを直接編集したりしません。
 
 適用中はAdmin API自身も新しいReleaseで再起動するため、画面が一時的に「Admin APIへ再接続中」となったり、プロキシが短時間502を返したりすることがあります。画面は同じoperation IDへ再接続するので、その間に更新ボタンをもう一度押しません。修正版のデプロイ処理は、アプリ更新が保持しているmutation lockをTeX Runtime復元処理から重ねて取得せず、Image Manager起動時に検証済みの保存状態を復元します。デプロイが途中で失敗した場合も、停止したローカルserviceとtimerを復旧してからoperationを失敗として確定します。
 
@@ -427,76 +425,15 @@ v1.2.0からの更新で、service smoke testと公開route更新が成功した
 
 ### v1.2.xのroot Updaterから権限分離Updaterへ移行する場合
 
-v1.2.xまでのUpdate Managerはroot daemonです。v1.3.0以降は、長寿命controllerを`latex-renderer-update`ユーザーへ分離し、固定verbだけを受け取る短命root helperを使用します。旧Updaterから初回更新すると`Application Update Manager must use a separate non-root build tree`で停止する場合があります。同じWeb operationを繰り返しません。
-
-この移行だけは、先にこのページの「ダウンロードして検証」を通常ユーザーで実行し、展開した対象Releaseから次の専用コマンドを一度実行します。`VERSION`は`bundle_root`のReleaseと完全一致させます。通常のデプロイスクリプトをuser所有build treeからsudo実行する旧手順は使用しません。
-
-```bash
-VERSION=1.3.6
-cd "$bundle_root"
-sudo sh deploy/scripts/bootstrap-update-manager-transition.sh "$VERSION"
-```
-
-専用コマンドはroot側で同じImmutable Releaseを再ダウンロードし、GitHub APIのdigest、固定tag／commit、匿名取得したSigstore bundle、archive上限、埋め込みmetadataを再検証します。GitHub CLIはroot所有かつgroup／other書込み不可の`/usr/local/bin/gh`または`/usr/bin/gh`だけを許可します。その後、root所有の`verified` tree、非rootの`bootstrap-build` tree、許可した成果物だけを含むroot所有の`assembly` treeを作ります。pnpmはoperation専用tree内のCorepack shimから固定versionだけを使用し、user／global環境を変更しません。旧managerを止めるのはbuildと検証が終わり、共有mutation lockを取得した後だけです。失敗時は旧managerを再開し、成功時は`User=latex-renderer-update`になったことまで確認します。Web／APIへsudo権限やGitHub tokenを渡しません。
-
-成功後は次だけを確認します。以後の更新はWebまたはAdmin CLIを使用し、このtransitionコマンドは再実行しません。
-
-```bash
-readlink -f /opt/latex-renderer/current
-systemctl show latex-renderer-update-manager.service \
-  --property=User --property=ActiveState --property=SubState
-systemctl is-active \
-  latex-renderer-image-manager.service \
-  latex-renderer-api.service \
-  latex-renderer-admin-api.service \
-  latex-renderer-admin-web.service \
-  latex-renderer-worker.service
-```
-
-途中で失敗したら同じコマンドをそのまま再実行せず、最初のエラー、`/opt/latex-renderer/current`の指すRelease、停止中serviceを確認します。host固有の設定・credential・データベースはRelease外に保持し、bundle、Git、Issue、未編集のlogへコピーしません。
+通常更新とは異なる一度限りの管理者操作です。[移行手順と全警告](/docs/reference/#v1-2-xのroot-updaterから権限分離updaterへ移行する場合)を確認してください。同じ失敗操作を繰り返しません。
 
 ### GNU tarの展開がFunction not implementedで停止する場合
 
-UbuntuのGNU tarが`openat2`を使う環境では、Updaterの`RestrictSUIDSGID=true`によって展開が`ENOSYS`（Function not implemented）で失敗することがあります。平坦なファイルだけのテストでは再現しないため、階層付きarchiveで検証します。新しいUpdaterは署名・checksum・GNU tarによるarchive検査を維持し、展開だけ固定の`/usr/bin/bsdtar`に切り替えます。所有者・ACL・拡張属性等をarchiveから取り込まず、私有の空stagingだけに展開します。`RestrictSUIDSGID`を解除したり、システム全体の`tar`を置き換えたりしません。
-
-旧Updaterは修正版自身の展開にも失敗するため、この場合の初回移行だけは既にインストール済みの管理者向けbootstrapを使用します。先にoperationが終了済み、アプリとDBが正常、復旧処理がpendingでないことと暗号化backupの復元可能性を確認します。`VERSION`には、この修正を含む**公開済みimmutable Release**を指定してください。例のversionが未公開の場合は実行しません。
-
-```bash
-sudo apt-get install --no-install-recommends libarchive-tools
-VERSION=... # この修正を含む公開済みimmutable Releaseのversionに置換
-sudo /usr/local/bin/node \
-  /opt/latex-renderer/updater/bootstrap-v1/updater-bootstrap.mjs upgrade "$VERSION"
-```
-
-bootstrapは通常の管理者shellから実行します。固定Releaseをroot側で再取得してdigest・tag/commit attestation・archive制限とUpdater envelopeを検証し、共有mutation lockの下で独立Updaterだけを更新します。アプリの`current`やDBはこの操作で切り替えません。凍結されたbootstrap-v1自体も差し替えません。途中で失敗した場合は状態とログを確認し、無条件に再実行しません。Updaterの新version/commit、ready/pending=false、active operationなしを確認後、同じ固定versionを通常のWeb／Admin CLI `update apply`で適用します。署名検証を迂回する手動コピーは使用しません。
-
-`v1.4.0-rc.3`のUpdaterには、rootがコピーしたbundleの所有者が非rootのまま残る環境で、アプリ適用が`Release extraction requires a private regular bundle`で停止する既知の問題があります。このエラーに対して所有者検査を解除したり、公開済みslotを直接編集したりしません。所有者修正を含む新しい公開済みReleaseへUpdaterのみ先行更新し、その後アプリを適用してください。Updater更新の成功だけではアプリ更新の成功を意味しません。アプリのcurrent、DB、service、recovery pendingを別々に確認します。
-
-root/systemd環境が必要な展開検証は、修正済みソースの`sudo /usr/local/bin/node deploy/ci/restricted-release-extraction.mjs`で実施できます。専用の小fixtureで実際のhelperのコピー処理を呼び、非root所有の入力を変更せず、新しいroot専用コピーだけがroot:root/0600/単一inodeとなることと、そのコピーの展開を検証します。さらに短命非root unitで、実際の`RestrictSUIDSGID=true`等の制限下で現行の展開moduleを実行します。既存serviceの設定は変えず、一時ファイルは終了時に削除します。リリース前の署名付き更新・復旧E2Eも両方の検証を実行します。
+署名・所有者検証やsystemdの制限を解除しないでください。[展開障害の復旧手順](/docs/reference/#gnu-tarの展開がfunction-not-implementedで停止する場合)を確認し、アプリ・DBとUpdaterの復旧を区別します。
 
 ### mutation lockが使用中と表示される場合
 
-`MUTATION_LOCK_BUSY`はアプリ更新とTeX変更の同時実行を防ぐ安全機構です。Webに実行中operationが表示されている間は、完了を待ちます。ロックファイル自体を削除してはいけません。使用中のファイルを削除すると、新旧2つのロックが同時に存在できてしまいます。
-
-アプリ更新中の内部TeX Runtime復元でこのエラーが出た場合は、同じWeb operationを再実行しません。Update Manager自身が保持するlockとの自己競合である可能性があるため、operation log、現在のRelease、停止中serviceを確認します。rollbackでは保護済みのimmutable Releaseを直接非rootユーザーへ公開せず、専用stagingへ一時複製して固定デプロイ処理を実行し、完了後に複製を削除します。
-
-実行中operationがなく、managerのログでも直前の処理が完了しているのに同じ表示が続く場合だけ、managerを停止して保持者を確認します。
-
-```bash
-sudo systemctl stop latex-renderer-image-manager.service \
-  latex-renderer-update-manager.service
-sudo fuser --verbose /run/latex-renderer/mutation.lock
-```
-
-表示されたprocessが完了済みoperationの孤立したlock helperであることを確認できた場合だけ、ロックを保持しているprocessを終了してmanagerを再開します。設定ファイルやcredentialは操作しません。
-
-```bash
-sudo fuser --kill /run/latex-renderer/mutation.lock
-sudo systemctl start latex-renderer-image-manager.service \
-  latex-renderer-update-manager.service
-```
-
-再開後にWebから状態を読み直し、アプリ更新とTeX変更を同時には開始しないでください。原因をIssueへ報告する場合も、`/etc/latex-renderer`、credential、入力文書、生成物、未編集の実ログは添付しません。
+処理中は完了を待ち、ロックファイル自体を削除しないでください。[安全確認と復旧手順](/docs/reference/#mutation-lockが使用中と表示される場合)へ進んでください。
 
 ## バックアップ
 

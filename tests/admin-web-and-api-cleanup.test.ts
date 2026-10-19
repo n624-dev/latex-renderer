@@ -336,8 +336,9 @@ describe("public and administrative Web", () => {
     expect(adminScript).toContain("watchAdminJob");
     expect(adminScript).toContain('aria-label="前のページ"');
     expect(adminScript).toContain('aria-label="次のページ"');
-    expect(adminScript).toContain("img.alt='PDF '+(previewIndex+1)");
-    expect(adminScript).toContain("cold build");
+    expect(adminScript).toContain("img.alt='PDF '+page+'ページ目のプレビュー'");
+    expect(adminScript).toContain("数十分〜数時間");
+    expect(adminScript).toContain("CPU・ディスク容量");
     expect(adminScript).toContain("responsive-table");
     expect(adminScript).toContain("システム状態");
   });

@@ -67,6 +67,11 @@ run_stage font-cache sh "$script_root/ci-font-cache-benchmark.sh" "$validation_r
 # Reuse this exact immutable local Runtime before the existing cleanup trap;
 # Source/client integration success is also mandatory before Base publication.
 run_stage source-pipeline sh "$script_root/ci-source-pipeline-e2e.sh" "$validation_runtime"
+case "${CI_RENDERER_IO_BENCHMARK:-0}" in
+  1) run_stage renderer-io-benchmark sh "$script_root/ci-renderer-io-benchmark.sh" "$validation_runtime" ;;
+  0) ;;
+  *) echo 'CI_RENDERER_IO_BENCHMARK must be 0 or 1' >&2; exit 64 ;;
+esac
 # Success is the exit status of this complete sequence, never a cached marker.
 cleanup
 sh "$script_root/ci-renderer-disk.sh" after-language-validation 0

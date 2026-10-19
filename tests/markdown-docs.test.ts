@@ -6,6 +6,7 @@ import {
   docsPage,
   integrationsDocsPage,
   publicDocs,
+  renderPublicDoc,
   renderMarkdown,
 } from "../apps/admin-web/src/markdown-docs.js";
 import {
@@ -46,8 +47,9 @@ describe("Markdown public documentation", () => {
       "security",
       "api",
       "contributing",
+      "reference",
     ]);
-    expect(new Set(publicDocs.map(({ navOrder }) => navOrder)).size).toBe(13);
+    expect(new Set(publicDocs.map(({ navOrder }) => navOrder)).size).toBe(14);
     for (const document of publicDocs) {
       expect(document.sourcePath).toBe(`docs/public/${document.slug}.md`);
       expect(document.title).not.toBe("");
@@ -68,16 +70,15 @@ describe("Markdown public documentation", () => {
 
   it("publishes the versioned general-user self-hosting guide", () => {
     const selfHosting = publicDocs.find(({ slug }) => slug === "self-hosting");
+    const reference = publicDocs.find(({ slug }) => slug === "reference");
     expect(selfHosting).toBeDefined();
     expect(selfHosting?.html).toContain("latex-renderer-server-1.3.6.tar.gz");
     expect(selfHosting?.html).toContain("/opt/latex-renderer/update-staging");
     expect(selfHosting?.html).toContain("bootstrap-published-host.mjs");
     expect(selfHosting?.html).toContain("/opt/latex-renderer/updater");
-    expect(selfHosting?.html).toContain(
-      "bootstrap-update-manager-transition.sh",
-    );
-    expect(selfHosting?.html).toContain("bootstrap-build");
-    expect(selfHosting?.html).toContain("GitHub tokenを渡しません");
+    expect(reference?.html).toContain("bootstrap-update-manager-transition.sh");
+    expect(reference?.html).toContain("bootstrap-build");
+    expect(reference?.html).toContain("GitHub tokenを渡しません");
     expect(selfHosting?.html).toContain("--bundle");
     expect(selfHosting?.html).not.toContain(
       "chmod 2770 /var/lib/latex-renderer",
@@ -104,7 +105,7 @@ describe("Markdown public documentation", () => {
     expect(page).toContain('id="最短でpdfを作る"');
     expect(page).toContain('href="#最短でpdfを作る"');
     expect(page).toContain('aria-current="page"');
-    expect(page).toContain('<time datetime="2026-08-28">');
+    expect(page).toContain('<time datetime="2026-10-19">');
   });
 
   it("deduplicates heading fragments and escapes raw HTML", () => {
@@ -116,6 +117,59 @@ describe("Markdown public documentation", () => {
     expect(html).toContain('id="同じ見出し-2"');
     expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
     expect(html).not.toContain("<script>");
+  });
+
+  it("folds Markdown details without allowing raw HTML and retains nested anchors", () => {
+    const html = renderMarkdown(
+      '> [!DETAILS] <img src=x onerror=alert(1)>\n>\n> ### 詳細の見出し\n>\n> ```js\n> console.log("example");\n> ```\n>\n> <script>alert(1)</script>',
+    );
+    expect(html).toContain('<details class="docs-details">');
+    expect(html).toContain("<summary>&lt;img");
+    expect(html).toContain('id="詳細の見出し"');
+    expect(html).toContain('class="language-js"');
+    expect(html).not.toMatch(/<(?:script|img)\b/);
+  });
+
+  it("keeps relocated operating constraints and safe recovery procedures reachable", () => {
+    const reference = renderPublicDoc("reference");
+    for (const text of [
+      "OUTPUT_BUSY",
+      "X-Latex-Renderer-Client-IP",
+      "remote_mcp.rpc_result",
+      "bootstrap-update-manager-transition.sh",
+      "ロックファイル自体を削除してはいけません",
+      "Content",
+      "1,000",
+      "10,000",
+    ]) {
+      expect(reference).toContain(text);
+    }
+    expect(renderPublicDoc("api").match(/class="docs-details"/g)).toHaveLength(
+      4,
+    );
+  });
+
+  it("keeps every document reachable without decorative headings or repeated metadata", () => {
+    for (const document of publicDocs) {
+      const page = renderPublicDoc(document.slug);
+      expect(page).not.toContain('class="eyebrow"');
+      expect(page).toContain(
+        '<details class="docs-menu"><summary>使い方の一覧</summary>',
+      );
+      expect(page.match(/class="docs-nav-group"/g)).toHaveLength(2);
+      for (const entry of publicDocs) {
+        expect(page).toContain(
+          `href="${entry.slug === "index" ? "/docs/" : `/docs/${entry.slug}/`}"`,
+        );
+      }
+      expect(page.indexOf('class="docs-meta"')).toBeGreaterThan(
+        page.indexOf("</article>"),
+      );
+      expect(page).toContain(`/edit/main/${document.sourcePath}`);
+      expect(page.includes('class="docs-toc"')).toBe(
+        document.headings.length >= 5,
+      );
+    }
   });
 
   it.each([

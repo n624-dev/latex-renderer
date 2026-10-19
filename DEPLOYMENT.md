@@ -1,9 +1,26 @@
 # Deployment
 
-Migration 021 adds durable, independently published PDF/SVG stages. Deploy all
-database consumers and cleanup together after the encrypted backup, restore test
-and private-copy migration preflight, then verify schema 21. Existing Jobs are not
-reprocessed. New PDF+SVG Jobs may expose a verified PDF before SVG finishes; SVG
+Validated Source input reuse is bounded to 64MiB globally and 32MiB per user by
+default, with a six-hour lifetime and existing user-quota accounting. It does not
+add an unbounded download cache or change the separate CI mirror's 15GiB limit.
+Install the shared collector with the Worker and existing cleanup timer. Use
+`SOURCE_TREE_MAX_BYTES=0` to disable reuse while retaining normal ZIP validation.
+See [Source reuse and recovery](docs/source-input-reuse.md) and the optional
+[environment additions](deploy/renderer-io.env.example).
+
+Migration 022 adds PDF-bound page metadata and a deduplicated preview request
+queue. Upgrade database consumers and cleanup together after the encrypted
+backup, restore test and private-copy migration preflight, then verify schema 22. Updated Runtimes generate page 1 first; the Worker generates other pages on
+authenticated demand. Older Runtimes keep their eager preview behavior without
+backfilling historical Jobs. Requests must not extend PDF retention or replace
+its immutable identity. Application-only downgrade remains disabled. See
+[the lazy-preview contract](docs/lazy-previews.md),
+[Migration 022](MIGRATIONS.md#migration-022-pdf-bound-preview-requests) and
+[the recovery procedure](deploy/migrations/022_lazy_previews.rollback.md).
+
+Migration 021 introduced durable, independently published PDF/SVG stages,
+retained by the current schema. Existing Jobs are not reprocessed.
+New PDF+SVG Jobs may expose a verified PDF before SVG finishes; SVG
 retries retain that PDF and its original retention deadline. Application-only
 downgrade remains disabled. See [Migration 021](MIGRATIONS.md#migration-021-independent-output-stages)
 and [the output-stage contract](docs/independent-output-stages.md).

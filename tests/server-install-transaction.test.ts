@@ -129,6 +129,31 @@ describe("durable prepared-host installation", () => {
     expect(() => installationUnitActive("not-found", "inactive")).toThrow();
     expect(() => installationUnitActive("loaded", "unknown")).toThrow();
   });
+  it.each([0o600, 0o000])(
+    "recovers an empty pre-chmod temporary file with mode %i",
+    async (mode) => {
+      const f = await fixture(),
+        slot = { ...f.store.slot("environment"), mode: 0o640 },
+        temporary = `${slot.path}.server-setup-tmp`;
+      await writeFile(temporary, "");
+      await chmod(temporary, mode);
+      await f.store.write(slot, "recovered");
+      expect(await f.store.read(slot)).toBe("recovered");
+      await expect(lstat(temporary)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+  it("does not discard a partial temporary file with unprepared permissions", async () => {
+    const f = await fixture(),
+      slot = { ...f.store.slot("environment"), mode: 0o640 },
+      temporary = `${slot.path}.server-setup-tmp`;
+    await writeFile(temporary, "partial");
+    await chmod(temporary, 0o600);
+    await expect(f.store.write(slot, "replacement")).rejects.toThrow(
+      "Unsafe installation temporary entry",
+    );
+    expect(await readFile(temporary, "utf8")).toBe("partial");
+    expect(await f.store.read(slot)).toBeNull();
+  });
   it("recovers real SIGKILL after actual SQLite owner commit without creating a second owner", async () => {
     const f = await fixture();
     const databasePath = join(f.root, "killed-owner.sqlite3");

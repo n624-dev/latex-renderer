@@ -119,6 +119,14 @@ done
 # root-owned successful history, the pre-switch release and recovery references
 # before selecting any deletion; failed candidate mtimes cannot displace them.
 tools_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
+preview_runtimes=$(/usr/local/bin/node "$tools_root/deploy/scripts/image-cleanup-policy.mjs" \
+  --retained-preview-runtimes "${DATABASE_PATH:-/var/lib/latex-renderer/renderer.sqlite3}") || {
+  echo "refusing cleanup: preview Runtime protection is unreadable" >&2
+  exit 78
+}
+if [ -n "$preview_runtimes" ]; then
+  managed_protected=true
+fi
 /usr/local/bin/node "$tools_root/deploy/scripts/release-retention.mjs" collect "$release_id"
 if [ "$managed_active" = true ] || [ "$managed_protected" = true ]; then
   # Managed-image cleanup is intentionally delegated to the Image Manager,

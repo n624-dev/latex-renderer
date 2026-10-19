@@ -99,6 +99,14 @@ paths:
         "200": { description: PNG preview }
         "401": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+        "503":
+          description: PREVIEW_PENDING or bounded preview queue unavailable; retry later
+          headers:
+            Retry-After:
+              schema: { type: integer, minimum: 1 }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
 components:
   parameters:
     JobId:
@@ -166,7 +174,13 @@ components:
           items: { $ref: "#/components/schemas/JobArtifact" }
         previews:
           type: array
+          description: Only generated artifacts with real sizes and SHA-256 digests
           items: { $ref: "#/components/schemas/JobArtifact" }
+        previewPageCount:
+          type: integer
+          minimum: 1
+          maximum: 100
+          description: Total pages for a PDF supporting on-demand PNG generation
     JobArtifact:
       type: object
       required: [type, relativePath, size, sha256, createdAt, downloadUrl]

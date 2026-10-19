@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { createReadStream } from "node:fs";
+import { constants, createReadStream, type Stats } from "node:fs";
 import {
   copyFile,
   lstat,
@@ -9,6 +9,8 @@ import {
   readdir,
 } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
+import { performance } from "node:perf_hooks";
+import { StringDecoder } from "node:string_decoder";
 import { AppError } from "@latex-renderer/shared";
 import { SaxesParser } from "saxes";
 import type { WorkerConfig } from "./config.js";
@@ -26,22 +28,36 @@ export interface OutputTreeStats {
   directoryCount: number;
 }
 
+/** Opt-in benchmark counters; durations do not change validation decisions. */
+export interface ArtifactIoTimings {
+  scanMs: number;
+  formatMs: number;
+  hashMs: number;
+  copyMs: number;
+}
+
 export async function validateArtifacts(
   config: WorkerConfig,
   directory: string,
   requirePdf: boolean,
   requireSvg = false,
   diagnosticPrefix: "" | "svg/" = "",
+  timings?: ArtifactIoTimings,
+  // null selects the historical reader only for the disposable comparison.
+  candidateReader:
+    typeof readArtifactSinglePass | null = readArtifactSinglePass,
 ): Promise<ValidatedArtifact[]> {
+  const scanStarted = performance.now();
   const tree = await scanOutputTree(directory, config),
     files = tree.files,
     result: ValidatedArtifact[] = [];
+  if (timings) timings.scanMs += performance.now() - scanStarted;
   let total = 0,
     previewTotal = 0,
     svgTotal = 0;
   for (const { file, info } of files) {
     const path = relative(directory, file),
-      size = Number(info.size);
+      size = info.size;
     const type = artifactType(path);
     if (type === undefined) continue;
     total += size;
@@ -56,6 +72,12 @@ export async function validateArtifacts(
       svgTotal > config.maxSvgTotalBytes
     )
       throw new AppError("OUTPUT_LIMIT", "Renderer output exceeds limit");
+    if (candidateReader) {
+      const validated = await candidateReader(file, type, info, timings);
+      result.push({ path, type, size, sha256: validated.sha256 });
+      continue;
+    }
+    const formatStarted = performance.now();
     const prefix = await readPrefix(file, 8);
     if (type === "pdf" && prefix.subarray(0, 5).toString("ascii") !== "%PDF-")
       throw new AppError("PDF_MAGIC_INVALID", "result.pdf is not a PDF");
@@ -69,9 +91,12 @@ export async function validateArtifacts(
     if (type === "errors" || type === "dependencies")
       JSON.parse(await readFile(file, "utf8"));
     if (type === "svg") validateSvg(await readFile(file, "utf8"));
+    if (timings) timings.formatMs += performance.now() - formatStarted;
+    const hashStarted = performance.now();
     const hash = createHash("sha256");
     for await (const chunk of createReadStream(file))
       hash.update(chunk as Buffer);
+    if (timings) timings.hashMs += performance.now() - hashStarted;
     result.push({
       path,
       type,
@@ -81,7 +106,11 @@ export async function validateArtifacts(
   }
   if (requirePdf && !result.some((item) => item.type === "pdf"))
     throw new AppError("PDF_MISSING", "Renderer did not emit result.pdf");
-  if (requireSvg) await validateSvgSet(config, directory, result);
+  if (requireSvg) {
+    const formatStarted = performance.now();
+    await validateSvgSet(config, directory, result);
+    if (timings) timings.formatMs += performance.now() - formatStarted;
+  }
   if (
     !result.some((item) => item.path === `${diagnosticPrefix}compile.log`) ||
     !result.some((item) => item.path === `${diagnosticPrefix}errors.json`)
@@ -109,13 +138,17 @@ export async function publishArtifacts(
   source: string,
   destination: string,
   artifacts: readonly ValidatedArtifact[],
+  timings?: ArtifactIoTimings,
+  copyMode = constants.COPYFILE_FICLONE | constants.COPYFILE_EXCL,
 ): Promise<void> {
+  const started = performance.now();
   await mkdir(destination, { recursive: true, mode: 0o770 });
   for (const artifact of artifacts) {
     const target = join(destination, artifact.path);
     await mkdir(dirname(target), { recursive: true, mode: 0o770 });
-    await copyFile(join(source, artifact.path), target);
+    await copyFile(join(source, artifact.path), target, copyMode);
   }
+  if (timings) timings.copyMs += performance.now() - started;
 }
 
 export async function directorySize(directory: string): Promise<number> {
@@ -130,10 +163,7 @@ export async function inspectOutputTree(
     compileLog = tree.files.find(
       ({ file }) => relative(directory, file) === "compile.log",
     );
-  if (
-    compileLog !== undefined &&
-    Number(compileLog.info.size) > config.maxLogBytes
-  )
+  if (compileLog !== undefined && compileLog.info.size > config.maxLogBytes)
     throw new AppError("OUTPUT_LIMIT", "Renderer log exceeds limit");
   return {
     totalBytes: tree.totalBytes,
@@ -143,6 +173,15 @@ export async function inspectOutputTree(
 }
 
 function validateSvg(value: string): void {
+  try {
+    createSvgParser().write(value).close();
+  } catch (error) {
+    if (error instanceof AppError) throw error;
+    throw new AppError("SVG_INVALID", "SVG is not well-formed XML");
+  }
+}
+
+function createSvgParser(): SaxesParser<{ xmlns: true }> {
   const state = { root: false },
     forbidden = new Set([
       "script",
@@ -201,14 +240,95 @@ function validateSvg(value: string): void {
         );
     }
   });
+  parser.on("end", () => {
+    if (!state.root)
+      throw new AppError("SVG_INVALID", "SVG root element is missing");
+  });
+  return parser;
+}
+
+/** Parse and hash the same bytes through one descriptor.
+ * SVG parsing is streaming; no new whole-PDF/PNG/SVG buffers are retained. */
+export async function readArtifactSinglePass(
+  file: string,
+  type: string,
+  expected: Stats,
+  timings?: ArtifactIoTimings,
+): Promise<{ sha256: string; metadata?: Buffer }> {
+  const handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW);
+  const hash = createHash("sha256"),
+    parser = type === "svg" ? createSvgParser() : undefined,
+    decoder = new StringDecoder("utf8"),
+    chunks = ["errors", "dependencies", "svg_manifest"].includes(type)
+      ? ([] as Buffer[])
+      : undefined;
+  let bytes = 0,
+    prefix = Buffer.alloc(0),
+    formatMs = 0;
+  const started = performance.now();
+  const unchanged = (info: Stats) =>
+    info.isFile() &&
+    info.nlink === 1 &&
+    info.dev === expected.dev &&
+    info.ino === expected.ino &&
+    info.size === expected.size &&
+    info.mtimeMs === expected.mtimeMs &&
+    info.ctimeMs === expected.ctimeMs;
   try {
-    parser.write(value).close();
+    if (!unchanged(await handle.stat()))
+      throw new AppError(
+        "UNSAFE_ARTIFACT",
+        "Artifact changed during validation",
+      );
+    for await (const value of handle.createReadStream({ autoClose: false })) {
+      const chunk = value as Buffer;
+      bytes += chunk.length;
+      if (bytes > expected.size)
+        throw new AppError(
+          "UNSAFE_ARTIFACT",
+          "Artifact grew during validation",
+        );
+      hash.update(chunk);
+      const formatStarted = performance.now();
+      if (prefix.length < 8)
+        prefix = Buffer.concat([prefix, chunk.subarray(0, 8 - prefix.length)]);
+      chunks?.push(chunk);
+      if (parser) parser.write(decoder.write(chunk));
+      formatMs += performance.now() - formatStarted;
+    }
+    if (bytes !== expected.size || !unchanged(await handle.stat()))
+      throw new AppError(
+        "UNSAFE_ARTIFACT",
+        "Artifact changed during validation",
+      );
+    const formatStarted = performance.now();
+    if (type === "pdf" && prefix.subarray(0, 5).toString("ascii") !== "%PDF-")
+      throw new AppError("PDF_MAGIC_INVALID", "result.pdf is not a PDF");
+    if (
+      type === "preview" &&
+      !prefix.equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+    )
+      throw new AppError("PNG_MAGIC_INVALID", "Preview is not a PNG");
+    const metadata = chunks ? Buffer.concat(chunks, bytes) : undefined;
+    if ((type === "errors" || type === "dependencies") && metadata)
+      JSON.parse(metadata.toString("utf8"));
+    if (parser) parser.write(decoder.end()).close();
+    formatMs += performance.now() - formatStarted;
+    if (timings) {
+      timings.formatMs += formatMs;
+      timings.hashMs += Math.max(0, performance.now() - started - formatMs);
+    }
+    return {
+      sha256: hash.digest("hex"),
+      ...(type === "svg_manifest" && metadata ? { metadata } : {}),
+    };
   } catch (error) {
-    if (error instanceof AppError) throw error;
-    throw new AppError("SVG_INVALID", "SVG is not well-formed XML");
+    if (parser && !(error instanceof AppError) && !errorCode(error))
+      throw new AppError("SVG_INVALID", "SVG is not well-formed XML");
+    throw error;
+  } finally {
+    await handle.close();
   }
-  if (!state.root)
-    throw new AppError("SVG_INVALID", "SVG root element is missing");
 }
 
 async function validateSvgSet(
@@ -345,12 +465,12 @@ async function scanOutputTree(
   >,
 ): Promise<
   OutputTreeStats & {
-    files: Array<{ file: string; info: Awaited<ReturnType<typeof lstat>> }>;
+    files: Array<{ file: string; info: Stats }>;
   }
 > {
   const files: Array<{
       file: string;
-      info: Awaited<ReturnType<typeof lstat>>;
+      info: Stats;
     }> = [],
     pending = [root];
   let totalBytes = 0,

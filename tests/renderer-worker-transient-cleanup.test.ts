@@ -1,6 +1,7 @@
 import { mkdtemp, mkdir, rm, stat, writeFile } from "node:fs/promises";
 import * as fs from "node:fs/promises";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import * as docker from "../apps/renderer-worker/src/docker.js";
 import yazl from "yazl";
 import { pipeline } from "node:stream/promises";
@@ -23,6 +24,24 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   return { ...actual, rename: vi.fn(actual.rename) };
 });
 const temporaryRoots: string[] = [];
+
+// Cleanup/fencing tests still pass a real validated ZIP boundary. Synthetic
+// placeholder sizes/hashes must not bypass the Worker's archive verification.
+async function verifiedWorkerJob(
+  database: RendererDatabase,
+  root: string,
+  jobId: string,
+) {
+  const bytes = await fs.readFile(
+      join(root, "jobs", jobId, "input", "source.zip"),
+    ),
+    source_size = bytes.length,
+    source_sha256 = createHash("sha256").update(bytes).digest("hex");
+  database.raw
+    .prepare("UPDATE jobs SET source_size=?,source_sha256=? WHERE id=?")
+    .run(source_size, source_sha256, jobId);
+  return { ...workerJob(jobId), source_size, source_sha256 };
+}
 
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -56,7 +75,11 @@ describe("renderer transient workspace cleanup", () => {
       .spyOn(docker, "dockerStopVerified")
       .mockRejectedValue(new Error("daemon unavailable"));
     await expect(
-      processJob(database, config, workerJob(jobId)),
+      processJob(
+        database,
+        config,
+        await verifiedWorkerJob(database, root, jobId),
+      ),
     ).rejects.toBeInstanceOf(docker.RendererCleanupDeferred);
     expect(stopped).toHaveBeenCalledOnce();
     expect(database.jobs.get(jobId)).toMatchObject({
@@ -107,7 +130,11 @@ describe("renderer transient workspace cleanup", () => {
           .prepare("UPDATE jobs SET cancel_requested_at=? WHERE id=?")
           .run(new Date().toISOString(), jobId);
     });
-    await processJob(database, config, workerJob(jobId));
+    await processJob(
+      database,
+      config,
+      await verifiedWorkerJob(database, root, jobId),
+    );
     const bytes = await directorySize(
       join(root, "jobs", jobId, "outputs", "1"),
     );
@@ -134,18 +161,16 @@ describe("renderer transient workspace cleanup", () => {
     await writeFile(join(input, "source.zip"), "not a zip");
 
     await expect(
-      processJob(database, config, {
-        id: jobId,
-        source_size: 9,
-        source_sha256: "0".repeat(64),
-        status: "validating",
-        source_id: null,
-        source_storage_key: null,
-        entrypoint: "main.tex",
-        outputs_json: '["pdf"]',
-        lease_generation: 1,
-      }),
-    ).rejects.toThrow();
+      processJob(
+        database,
+        config,
+        await verifiedWorkerJob(database, root, jobId),
+      ),
+    ).rejects.toThrow(/zip|central directory/i);
+
+    expect(await pathExists(join(root, "jobs", jobId, "attempts", "1"))).toBe(
+      false,
+    );
 
     await expect(pathExists(join(root, "jobs", jobId, "work"))).resolves.toBe(
       false,
@@ -233,6 +258,7 @@ describe("renderer transient workspace cleanup", () => {
       zip.addBuffer(Buffer.from("test"), "main.tex");
       zip.end();
       await writing;
+      const inputJob = await verifiedWorkerJob(database, root, jobId);
       vi.spyOn(docker, "spawnRenderer").mockImplementation(
         (_config, _id, generation, _extracted, staging) => {
           writeFileSync(
@@ -284,7 +310,7 @@ describe("renderer transient workspace cleanup", () => {
             "FAILED",
             "failed",
           )
-        : processJob(database, config, workerJob(jobId));
+        : processJob(database, config, inputJob);
       try {
         await reached;
         database.raw
@@ -295,7 +321,7 @@ describe("renderer transient workspace cleanup", () => {
         await processJob(
           database,
           { ...config, workerId: "worker_new" },
-          { ...workerJob(jobId), lease_generation: 2 },
+          { ...inputJob, lease_generation: 2 },
         );
         const row = database.artifacts.getDownloadable(jobId, "compile.log");
         if (row === undefined)

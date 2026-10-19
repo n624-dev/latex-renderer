@@ -54,7 +54,7 @@ export class WorkerRepository {
     return (
       this.db
         .prepare(
-          `SELECT id FROM jobs WHERE status IN ('validating','running') AND (lease_owner=? OR substr(lease_owner,1,?)=?)`,
+          `SELECT id FROM jobs WHERE status IN ('validating','running','canceled') AND (lease_owner=? OR substr(lease_owner,1,?)=?)`,
         )
         .all(workerId, recoveryPrefix.length, recoveryPrefix) as {
         id: string;
@@ -68,6 +68,14 @@ export class WorkerRepository {
     leaseExpiresAt: string,
     queuedBefore?: string,
   ): WorkerJobRow | undefined {
+    if (
+      this.db
+        .prepare(
+          "SELECT 1 FROM job_preview_requests WHERE status='running' LIMIT 1",
+        )
+        .get() !== undefined
+    )
+      return undefined;
     const job = this.db
       .prepare(
         `SELECT j.id,j.source_size,j.source_sha256,j.status,j.source_id,j.entrypoint,j.outputs_json,j.lease_generation,s.storage_key AS source_storage_key
@@ -236,7 +244,7 @@ export class WorkerRepository {
     return this.db
       .prepare(
         `SELECT id,status,lease_owner,lease_expires_at,lease_generation FROM jobs
-         WHERE status IN ('validating','running') AND lease_owner IS NOT NULL
+         WHERE status IN ('validating','running','canceled') AND lease_owner IS NOT NULL
          AND lease_expires_at<?`,
       )
       .all(now) as unknown as StaleLeaseRow[];
@@ -279,7 +287,7 @@ export class WorkerRepository {
         .prepare(
           `UPDATE jobs SET lease_expires_at=?,updated_at=?
            WHERE id=? AND lease_owner=? AND lease_generation=?
-           AND status IN ('validating','running')`,
+           AND status IN ('validating','running','canceled')`,
         )
         .run(now, now, jobId, recoveryOwner, leaseGeneration).changes,
     );

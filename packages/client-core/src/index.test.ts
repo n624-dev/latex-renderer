@@ -38,22 +38,74 @@ afterEach(async () => {
 });
 
 describe("client core", () => {
+  it("generates only explicitly requested pages and downloads against fresh real metadata", async () => {
+    const root = await temporaryRoot(),
+      initial = { ...job("succeeded"), previewPageCount: 3 },
+      complete = {
+        ...initial,
+        previews: [
+          ...initial.previews,
+          artifact("preview", "previews/page-3.png"),
+        ],
+      };
+    const client: ClientTransport = new FakeClient([initial, complete]);
+    const requested: number[] = [];
+    client.preparePreview = (_id, page) => {
+      requested.push(page);
+      return Promise.resolve();
+    };
+    const result = await downloadJobArtifacts(
+      client,
+      initial.id,
+      join(root, "out"),
+      { previewPages: [3, 3] },
+    );
+    expect(requested).toEqual([3]);
+    expect(result.job.previews).toEqual(complete.previews);
+    expect(
+      result.artifacts.previews.map((p) => p.split(/[\\/]/).at(-1)),
+    ).toEqual(["page-1.png", "page-3.png"]);
+  });
+  it("leaves prior artifacts untouched when a requested preview is still pending", async () => {
+    const root = await temporaryRoot(),
+      output = join(root, "out"),
+      initial = { ...job("succeeded"), previewPageCount: 3 };
+    const client: ClientTransport = new FakeClient([initial, initial]);
+    await downloadJobArtifacts(client, initial.id, output);
+    const before = await readFile(join(output, "job.json"), "utf8");
+    client.preparePreview = () => Promise.reject(new Error("preview pending"));
+    await expect(
+      downloadJobArtifacts(client, initial.id, output, { previewPages: [2] }),
+    ).rejects.toThrow("preview pending");
+    expect(await readFile(join(output, "job.json"), "utf8")).toBe(before);
+  });
   it("does not publish a mixed set or successful events when a later artifact is corrupt", async () => {
-    const root = await temporaryRoot(), output = join(root, ".render"), value = job("succeeded");
+    const root = await temporaryRoot(),
+      output = join(root, ".render"),
+      value = job("succeeded");
     const transport = new FakeClient([value, value]);
     await downloadJobArtifacts(transport, value.id, output);
     const before = await readFile(join(output, "job.json"), "utf8");
     value.updatedAt = "2026-09-19T00:00:00.000Z";
     const normalDownload = transport.download.bind(transport);
     transport.download = async (url, ticket, destination) => {
-      if (url === "artifact:errors.json") await writeFile(destination, "broken.json");
+      if (url === "artifact:errors.json")
+        await writeFile(destination, "broken.json");
       else await normalDownload(url, ticket, destination);
     };
     const events: ClientCoreEvent[] = [];
-    await expect(downloadJobArtifacts(transport, value.id, output, { onEvent: event => events.push(event) })).rejects.toMatchObject({ code: "ARTIFACT_INTEGRITY_ERROR" });
+    await expect(
+      downloadJobArtifacts(transport, value.id, output, {
+        onEvent: (event) => events.push(event),
+      }),
+    ).rejects.toMatchObject({ code: "ARTIFACT_INTEGRITY_ERROR" });
     expect(await readFile(join(output, "job.json"), "utf8")).toBe(before);
-    expect(await readFile(join(output, "errors.json"), "utf8")).toBe("errors.json");
-    expect(events.filter(event => event.type === "artifact.downloaded")).toEqual([]);
+    expect(await readFile(join(output, "errors.json"), "utf8")).toBe(
+      "errors.json",
+    );
+    expect(
+      events.filter((event) => event.type === "artifact.downloaded"),
+    ).toEqual([]);
   });
   it.each([
     "main.log",
@@ -137,37 +189,53 @@ describe("client core", () => {
     ["custom", "out"],
     ["nested", "build/out"],
     ["outside", "../results"],
-  ] as const)("does not archive the %s output directory on rerender", async (_name, target) => {
-    const workspace = await temporaryRoot(), project = join(workspace, "project");
-    await mkdir(join(project, "out-copy"), { recursive: true, mode: 0o700 });
-    await writeFile(join(project, "main.tex"), "main");
-    await writeFile(join(project, "out-copy", "keep.txt"), "user file");
-    const client = new FakeClient([job("succeeded"), job("succeeded")]);
-    const options = target === undefined ? {} : { outputDirectory: resolve(project, target) };
+  ] as const)(
+    "does not archive the %s output directory on rerender",
+    async (_name, target) => {
+      const workspace = await temporaryRoot(),
+        project = join(workspace, "project");
+      await mkdir(join(project, "out-copy"), { recursive: true, mode: 0o700 });
+      await writeFile(join(project, "main.tex"), "main");
+      await writeFile(join(project, "out-copy", "keep.txt"), "user file");
+      const client = new FakeClient([job("succeeded"), job("succeeded")]);
+      const options =
+        target === undefined
+          ? {}
+          : { outputDirectory: resolve(project, target) };
 
-    await renderProject(client, project, options);
-    await renderProject(client, project, options);
+      await renderProject(client, project, options);
+      await renderProject(client, project, options);
 
-    expect(client.archiveNames).toEqual([
-      "main.tex", "out-copy/keep.txt", "main.tex", "out-copy/keep.txt",
-    ]);
-    expect(await readFile(join(project, "out-copy", "keep.txt"), "utf8")).toBe("user file");
-  });
+      expect(client.archiveNames).toEqual([
+        "main.tex",
+        "out-copy/keep.txt",
+        "main.tex",
+        "out-copy/keep.txt",
+      ]);
+      expect(
+        await readFile(join(project, "out-copy", "keep.txt"), "utf8"),
+      ).toBe("user file");
+    },
+  );
 
   it("rejects the project root itself as an output directory before Source reservation", async () => {
     const project = await temporaryRoot();
     await writeFile(join(project, "main.tex"), "main");
     const client = new FakeClient([]);
 
-    await expect(renderProject(client, project, { outputDirectory: project })).rejects.toMatchObject({
+    await expect(
+      renderProject(client, project, { outputDirectory: project }),
+    ).rejects.toMatchObject({
       code: "INVALID_OUTPUT_DIRECTORY",
     });
     expect(client.createdTickets).toBe(0);
   });
 
   it("waits for a terminal Job without changing the previous artifact generation", async () => {
-    const root = await temporaryRoot(), output = join(root, ".render");
-    const first = job("succeeded"), last = job("succeeded");
+    const root = await temporaryRoot(),
+      output = join(root, ".render");
+    const first = job("succeeded"),
+      last = job("succeeded");
     last.updatedAt = "2026-09-27T00:00:00.000Z";
     const client = new FakeClient([first, job("queued"), job("running"), last]);
     await downloadJobArtifacts(client, first.id, output);
@@ -179,7 +247,9 @@ describe("client core", () => {
       sleep: async () => {
         waits += 1;
         expect(await readFile(join(output, "job.json"), "utf8")).toBe(previous);
-        expect(await readFile(join(output, "result.pdf"), "utf8")).toBe("result.pdf");
+        expect(await readFile(join(output, "result.pdf"), "utf8")).toBe(
+          "result.pdf",
+        );
       },
     });
 
@@ -189,17 +259,22 @@ describe("client core", () => {
   });
 
   it("leaves the previous generation intact when waiting for a Job times out", async () => {
-    const root = await temporaryRoot(), output = join(root, ".render");
+    const root = await temporaryRoot(),
+      output = join(root, ".render");
     const client = new FakeClient([job("succeeded"), job("running")]);
     await downloadJobArtifacts(client, "job_test", output);
     const previous = await readFile(join(output, "job.json"), "utf8");
 
-    await expect(downloadJobArtifacts(client, "job_test", output, {
-      pollIntervalMs: 1_000,
-      pollTimeoutMs: 20,
-    })).rejects.toMatchObject({ code: "RENDER_POLL_TIMEOUT" });
+    await expect(
+      downloadJobArtifacts(client, "job_test", output, {
+        pollIntervalMs: 1_000,
+        pollTimeoutMs: 20,
+      }),
+    ).rejects.toMatchObject({ code: "RENDER_POLL_TIMEOUT" });
     expect(await readFile(join(output, "job.json"), "utf8")).toBe(previous);
-    expect(await readFile(join(output, "result.pdf"), "utf8")).toBe("result.pdf");
+    expect(await readFile(join(output, "result.pdf"), "utf8")).toBe(
+      "result.pdf",
+    );
   });
 
   it("bounds polling for long-running MCP and automation callers", async () => {
@@ -495,7 +570,9 @@ function artifact(
     type,
     relativePath,
     size: Buffer.byteLength(relativePath.replace(/^previews\//, "")),
-    sha256: createHash("sha256").update(relativePath.replace(/^previews\//, "")).digest("hex"),
+    sha256: createHash("sha256")
+      .update(relativePath.replace(/^previews\//, ""))
+      .digest("hex"),
     createdAt: "2026-08-11T00:00:00.000Z",
     downloadUrl: `/api/v1/jobs/job_test/artifacts/${relativePath}`,
   };
