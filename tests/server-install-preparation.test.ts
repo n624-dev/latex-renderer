@@ -69,7 +69,11 @@ it.each([
       unlink = vi.fn().mockResolvedValue(undefined),
       rename = vi.fn().mockResolvedValue(undefined),
       open = vi.fn().mockResolvedValue(handle),
-      context = { uid: 1000, read: async () => null, sync: async () => {} },
+      context = {
+        uid: 1000,
+        read: () => Promise.resolve(null),
+        sync: () => Promise.resolve(),
+      },
       slot = {
         path: "/trusted/environment",
         gid: 20,
@@ -84,14 +88,15 @@ it.each([
       rename,
       open,
       process: { getgid: () => 10 },
-      lstat: async () => ({
-        isFile: () => fixture.regular !== false,
-        nlink: fixture.nlink ?? 1,
-        uid: fixture.uid ?? 1000,
-        gid: fixture.gid,
-        mode: fixture.mode,
-        size: fixture.size,
-      }),
+      lstat: () =>
+        Promise.resolve({
+          isFile: () => fixture.regular !== false,
+          nlink: fixture.nlink ?? 1,
+          uid: fixture.uid ?? 1000,
+          gid: fixture.gid,
+          mode: fixture.mode,
+          size: fixture.size,
+        }),
     }) as (
       this: typeof context,
       target: typeof slot,
