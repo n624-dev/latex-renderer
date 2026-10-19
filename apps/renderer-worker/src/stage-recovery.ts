@@ -34,7 +34,7 @@ export async function pruneRecoveredStageAttempt(
     return (
       row?.lease_owner === recoveryOwner &&
       row.lease_generation === recoveryGeneration &&
-      ["validating", "running"].includes(row.status)
+      ["validating", "running", "canceled"].includes(row.status)
     );
   };
   const references = db.transaction(() => {

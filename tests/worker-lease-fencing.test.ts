@@ -8,6 +8,33 @@ afterEach(() => {
 });
 
 describe("Worker lease fencing", () => {
+  it("recovers an expired canceled lease without requeueing it or releasing a replacement owner's lease", () => {
+    const { database, jobId } = setup();
+    const now = "2026-08-31T00:00:00.000Z";
+    database.worker.claimNext("old", now, "2026-08-31T00:00:30.000Z");
+    database.jobs.cancel(jobId, now);
+    expect(database.worker.ownedActiveJobIds("old")).toEqual([jobId]);
+    const stale = database.worker.staleLeases("2026-08-31T00:00:31.000Z")[0];
+    if (!stale) throw new Error("Canceled lease was not recovered");
+    expect(stale.status).toBe("canceled");
+    const generation = database.worker.claimExpiredLease(
+      stale,
+      "recovery",
+      "2026-08-31T00:00:31.000Z",
+      "2026-08-31T00:05:31.000Z",
+    );
+    expect(generation).toBe(2);
+    expect(database.worker.markCanceled(jobId, "old", 1, now)).toBe(0);
+    expect(database.worker.expireRecoveryClaim(jobId, "recovery", 2, now)).toBe(
+      1,
+    );
+    expect(database.worker.markCanceled(jobId, "recovery", 2, now)).toBe(1);
+    expect(database.worker.runtimeState(jobId)).toMatchObject({
+      status: "canceled",
+      lease_owner: null,
+    });
+    expect(database.worker.staleLeases("2099-01-01T00:00:00.000Z")).toEqual([]);
+  });
   it("publishes a bounded wait reason, does not claim a newer head at a stale deadline, and clears the reason on start", () => {
     const f = setup();
     f.database.worker.setAdmissionReason(true, "2026-08-31T00:00:00.000Z");

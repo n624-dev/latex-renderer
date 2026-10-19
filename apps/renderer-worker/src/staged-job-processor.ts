@@ -608,6 +608,9 @@ export async function processStagedJob(
       for (const path of published)
         await rm(path, { recursive: true, force: true });
       await rm(attempt, { recursive: true, force: true });
+      // Cancellation can win during ZIP validation, before a container exists.
+      // Release only our fenced lease, after all daemon work/cleanup is proven.
+      canceled();
     }
   }
   function insertArtifacts(

@@ -71,19 +71,27 @@ export async function recoverStaleLeases(
 
     const timestamp = nowIso();
     database.transaction(() => {
-      const changed = exists
-        ? database.worker.recoverFailed(
-            job.id,
-            recoveryOwner,
-            recoveryGeneration,
-            timestamp,
-          )
-        : database.worker.recoverQueued(
-            job.id,
-            recoveryOwner,
-            recoveryGeneration,
-            timestamp,
-          );
+      const changed =
+        job.status === "canceled"
+          ? database.worker.markCanceled(
+              job.id,
+              recoveryOwner,
+              recoveryGeneration,
+              timestamp,
+            )
+          : exists
+            ? database.worker.recoverFailed(
+                job.id,
+                recoveryOwner,
+                recoveryGeneration,
+                timestamp,
+              )
+            : database.worker.recoverQueued(
+                job.id,
+                recoveryOwner,
+                recoveryGeneration,
+                timestamp,
+              );
       if (changed !== 1) return;
       database.audit({
         actorType: "system",

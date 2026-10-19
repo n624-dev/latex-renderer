@@ -54,7 +54,7 @@ export class WorkerRepository {
     return (
       this.db
         .prepare(
-          `SELECT id FROM jobs WHERE status IN ('validating','running') AND (lease_owner=? OR substr(lease_owner,1,?)=?)`,
+          `SELECT id FROM jobs WHERE status IN ('validating','running','canceled') AND (lease_owner=? OR substr(lease_owner,1,?)=?)`,
         )
         .all(workerId, recoveryPrefix.length, recoveryPrefix) as {
         id: string;
@@ -236,7 +236,7 @@ export class WorkerRepository {
     return this.db
       .prepare(
         `SELECT id,status,lease_owner,lease_expires_at,lease_generation FROM jobs
-         WHERE status IN ('validating','running') AND lease_owner IS NOT NULL
+         WHERE status IN ('validating','running','canceled') AND lease_owner IS NOT NULL
          AND lease_expires_at<?`,
       )
       .all(now) as unknown as StaleLeaseRow[];
@@ -279,7 +279,7 @@ export class WorkerRepository {
         .prepare(
           `UPDATE jobs SET lease_expires_at=?,updated_at=?
            WHERE id=? AND lease_owner=? AND lease_generation=?
-           AND status IN ('validating','running')`,
+           AND status IN ('validating','running','canceled')`,
         )
         .run(now, now, jobId, recoveryOwner, leaseGeneration).changes,
     );

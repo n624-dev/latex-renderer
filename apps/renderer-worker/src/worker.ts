@@ -56,7 +56,11 @@ export async function runWorker(
       if (isShuttingDown()) break;
       for (const id of awaitingRecovery) {
         const row = database.worker.runtimeState(id);
-        if (!row || !["running", "validating"].includes(row.status))
+        if (
+          !row ||
+          (!["running", "validating"].includes(row.status) &&
+            !(row.status === "canceled" && row.lease_owner !== null))
+        )
           awaitingRecovery.delete(id);
       }
       if (awaitingRecovery.size) {

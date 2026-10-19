@@ -228,7 +228,7 @@ export class SourcesRepository {
   ): SourceRow | undefined {
     return this.db
       .prepare(
-        `SELECT * FROM sources WHERE owner_user_id=? AND sha256=? AND size=?
+        `SELECT * FROM sources WHERE owner_user_id=? AND sha256=? AND size=? AND dedupe_eligible=1
       AND purpose=COALESCE((SELECT purpose FROM service_accounts WHERE id=?),'user')
       AND ${readySourceSql("sources")} ORDER BY created_at DESC LIMIT 1`,
       )

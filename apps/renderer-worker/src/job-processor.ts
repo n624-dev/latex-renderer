@@ -370,6 +370,14 @@ export async function processJob(
   }
   if (needsOutputCleanup()) await rm(output, { recursive: true, force: true });
   await rm(attempt, { recursive: true, force: true });
+  const finalState = database.worker.runtimeState(job.id);
+  if (finalState?.cancel_requested_at != null)
+    database.worker.markCanceled(
+      job.id,
+      config.workerId,
+      job.lease_generation,
+      nowIso(),
+    );
   if (processingFailed) throw processingError;
 }
 

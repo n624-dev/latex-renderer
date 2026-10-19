@@ -23,6 +23,35 @@ afterEach(async () => {
 });
 
 describe("immutable shared Sources", () => {
+  it("never deduplicates an unindexed legacy Source without a validated path inventory", async () => {
+    const { database, actor, sourceService } = await fixture();
+    const input = { size: 1, sha256: "a".repeat(64) };
+    const original = await sourceService.create(
+      actor,
+      input,
+      "legacy-source-original-123456",
+    );
+    database.raw
+      .prepare(
+        "UPDATE sources SET status='ready',dedupe_eligible=0,paths_json=NULL WHERE id=?",
+      )
+      .run(original.value.sourceId);
+    expect(
+      database.sources.findReady(
+        actor.userId,
+        input.sha256,
+        input.size,
+        new Date().toISOString(),
+      ),
+    ).toBeUndefined();
+    const next = await sourceService.create(
+      actor,
+      input,
+      "legacy-source-next-123456",
+    );
+    expect(next.value.sourceId).not.toBe(original.value.sourceId);
+    expect(next.value.uploadRequired).toBe(true);
+  });
   it.each([
     "reserved",
     "uploading",
