@@ -18,7 +18,7 @@ const rendererConsumers = [
 const endpoint = new globalThis.URL(baseUrl);
 if (
   endpoint.protocol !== "http:" ||
-  !["127.0.0.1", "::1", "localhost"].includes(endpoint.hostname) ||
+  !["127.0.0.1", "[::1]", "localhost"].includes(endpoint.hostname) ||
   endpoint.username !== "" ||
   endpoint.password !== ""
 ) throw new Error("IMAGE_MANAGER_URL must be an unauthenticated loopback HTTP URL");

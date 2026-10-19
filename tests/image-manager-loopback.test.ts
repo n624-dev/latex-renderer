@@ -5,6 +5,34 @@ import { ImageManagerClient } from "../apps/admin-api/src/services/image-manager
 
 afterEach(() => vi.unstubAllGlobals());
 
+it.each([
+  "deploy/scripts/reconcile-managed-runtime.mjs",
+  "deploy/scripts/run-image-refresh.mjs",
+  "deploy/scripts/watch-image-manager-operation.mjs",
+])(
+  "keeps the actual %s endpoint guard consistent without reading credentials",
+  (path) => {
+    const source = readFileSync(path, "utf8");
+    const match = /if \(\n  (endpoint\.protocol[\s\S]*?)\n\)/.exec(source);
+    const condition = match?.[1];
+    if (!condition) throw new Error("Missing Manager endpoint guard");
+    for (const [input, rejected] of [
+      ["http://127.0.0.1:3110", false],
+      ["http://localhost:3110", false],
+      ["http://[::1]:3110", false],
+      ["http://[::]:3110", true],
+      ["http://example.test:3110", true],
+      ["https://127.0.0.1:3110", true],
+      ["http://user:password@localhost:3110", true],
+    ] as const) {
+      const actual: unknown = runInNewContext(condition, {
+        endpoint: new URL(input),
+      });
+      expect(actual, input).toBe(rejected);
+    }
+  },
+);
+
 it.each(["127.0.0.1", "localhost", "[::1]"])(
   "uses the validated %s loopback endpoint",
   async (host) => {
