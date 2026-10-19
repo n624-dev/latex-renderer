@@ -131,6 +131,7 @@ const jobs = db
           AND (j.deletion_next_attempt_at IS NULL OR j.deletion_next_attempt_at<=?))
     ) AND NOT EXISTS
     (SELECT 1 FROM artifact_download_leases l WHERE l.job_id=j.id AND l.expires_at>?)
+    AND NOT EXISTS (SELECT 1 FROM job_preview_requests p WHERE p.job_id=j.id AND p.status='running')
     ORDER BY COALESCE(j.deletion_next_attempt_at,j.completed_at,j.updated_at),j.id LIMIT 100`,
   )
   .all(cutoff, now, now);
@@ -152,7 +153,8 @@ for (const record of jobs) {
           OR (deletion_status IN ('pending','deleting','retry')
               AND (deletion_next_attempt_at IS NULL OR deletion_next_attempt_at<=?))
         ) AND NOT EXISTS
-          (SELECT 1 FROM artifact_download_leases WHERE job_id=? AND expires_at>?)`,
+          (SELECT 1 FROM artifact_download_leases WHERE job_id=? AND expires_at>?)
+          AND NOT EXISTS (SELECT 1 FROM job_preview_requests p WHERE p.job_id=jobs.id AND p.status='running')`,
       )
       .run(now, id, cutoff, now, id, now);
     db.exec("COMMIT");
@@ -169,7 +171,14 @@ for (const record of jobs) {
       )
       .get(id)?.storage_key;
     if (sourceStorage === `jobs/${id}/input/source.zip`) {
-      for (const child of ["output", "outputs", "work", "staging", "attempts"])
+      for (const child of [
+        "output",
+        "outputs",
+        "work",
+        "staging",
+        "attempts",
+        "preview-attempts",
+      ])
         await rm(join(storageRoot, "jobs", id, child), {
           recursive: true,
           force: true,

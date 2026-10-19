@@ -13,6 +13,7 @@ CREATE TABLE job_preview_requests (
   page INTEGER NOT NULL CHECK(page BETWEEN 1 AND 100),
   status TEXT NOT NULL CHECK(status IN ('queued','running','succeeded','failed')),
   attempt INTEGER NOT NULL DEFAULT 0 CHECK(attempt BETWEEN 0 AND 3),
+  reserved_bytes INTEGER NOT NULL DEFAULT 0 CHECK(reserved_bytes>=0),
   lease_owner TEXT,
   lease_expires_at TEXT,
   error_code TEXT,

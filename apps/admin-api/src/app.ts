@@ -37,6 +37,8 @@ export function createAdminApp(deps: AdminDependencies): Hono {
   });
   app.onError((error, c) => {
     const safe = safeError(error);
+    if (safe.status === 503 && safe.code.startsWith("PREVIEW_"))
+      c.header("Retry-After", "2");
     console.error(
       JSON.stringify({
         event: "admin_api.error",

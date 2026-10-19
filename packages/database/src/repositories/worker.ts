@@ -68,6 +68,14 @@ export class WorkerRepository {
     leaseExpiresAt: string,
     queuedBefore?: string,
   ): WorkerJobRow | undefined {
+    if (
+      this.db
+        .prepare(
+          "SELECT 1 FROM job_preview_requests WHERE status='running' LIMIT 1",
+        )
+        .get() !== undefined
+    )
+      return undefined;
     const job = this.db
       .prepare(
         `SELECT j.id,j.source_size,j.source_sha256,j.status,j.source_id,j.entrypoint,j.outputs_json,j.lease_generation,s.storage_key AS source_storage_key

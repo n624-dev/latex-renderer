@@ -322,3 +322,68 @@ it("logs out from the static API documentation with session-specific CSRF", asyn
   ]);
   expect(errors).toEqual([]);
 });
+
+it("navigates ungenerated pages, retries a pending PNG and does not fetch untouched pages", async () => {
+  const { page, errors } = await fixture("jobs");
+  const requested: number[] = [];
+  const png = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=",
+    "base64",
+  );
+  await page.route("**/admin/api/v1/jobs/*/previews/*", async (route) => {
+    const number = Number(/page-(\d+)\.png/.exec(route.request().url())?.[1]);
+    requested.push(number);
+    if (number === 2 && requested.filter((p) => p === 2).length === 1)
+      await route.fulfill({
+        status: 503,
+        json: { error: { code: "PREVIEW_PENDING" } },
+        headers: { "Retry-After": "2" },
+      });
+    else await route.fulfill({ contentType: "image/png", body: png });
+  });
+  await page.evaluate(
+    async (next) => {
+      const render = (
+        window as typeof window & {
+          renderJobFixture: (id: string, job: unknown) => Promise<unknown>;
+        }
+      ).renderJobFixture;
+      await render(next.id, next);
+    },
+    {
+      ...job,
+      status: "succeeded",
+      preview_page_count: 3,
+      previews: [
+        {
+          open_url: `/admin/api/v1/jobs/${jobId}/previews/page-1.png`,
+          relative_path: "previews/page-1.png",
+          type: "preview",
+          size: png.length,
+          sha256: "a".repeat(64),
+        },
+      ],
+    },
+  );
+  await page.locator("#job-preview").waitFor({ state: "visible" });
+  expect(await page.locator("#preview-count").textContent()).toBe("1 / 3");
+  await page.locator("#preview-next").click();
+  await page.waitForFunction(
+    () =>
+      document.querySelector("#preview-message")?.textContent ===
+      "プレビュー生成を待っています…",
+  );
+  await page.waitForFunction(() => {
+    const img = document.querySelector<HTMLImageElement>("#job-preview");
+    return Boolean(
+      img &&
+      !img.hidden &&
+      img.alt === "PDF 2ページ目のプレビュー" &&
+      img.naturalWidth > 0,
+    );
+  });
+  expect(requested.filter((p) => p === 2)).toHaveLength(2);
+  expect(requested).not.toContain(3);
+  expect(await page.locator("#preview-count").textContent()).toBe("2 / 3");
+  expect(errors).toEqual([]);
+});

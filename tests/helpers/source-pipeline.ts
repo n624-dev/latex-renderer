@@ -400,6 +400,7 @@ export async function sourcePipelineFixture(
       sibling,
       outsider,
       renders,
+      tickets,
       requests,
       runNext,
       close,

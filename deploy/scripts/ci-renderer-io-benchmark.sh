@@ -47,6 +47,44 @@ for pages in 1 10 50 100; do
       "$(find "$output/previews" -type f -name '*.png' | wc -l)"
     awk '/^RENDERER_METRIC / {print}' "$output/compile.log"
     node "$repo_root/deploy/ci/renderer-io-benchmark.mjs" "$output"
+    chmod -R a+rX "$output"
+    # Same immutable PDF, same Poppler and DPI. The legacy comparator generates
+    # every page; it does not recompile the document or mutate the lazy result.
+    eager="$bench_root/eager"; mkdir "$eager"
+    eager_started=$(date +%s)
+    run_smoke_container "$image" "$eager" \
+      --network none --read-only --cap-drop ALL \
+      --security-opt "seccomp=$repo_root/deploy/security/seccomp.json" \
+      --pids-limit 128 --memory 1g --memory-swap 1g --cpus 1.5 \
+      --tmpfs /tmp:rw,noexec,nosuid,nodev,size=256m,uid=10000,gid=10000 \
+      --mount "type=bind,src=$output,dst=/work/pdf,readonly" \
+      --entrypoint /bin/sh "$image" -c '
+        timeout -s TERM -k 2 60 pdftoppm -png -r 150 /work/pdf/result.pdf /work/output/page
+        printf "RENDERER_EAGER_METRIC memory_peak_bytes=%s cpu_usage_usec=%s\n" \
+          "$(cat /sys/fs/cgroup/memory.peak)" "$(awk '\''$1=="usage_usec" {print $2}'\'' /sys/fs/cgroup/cpu.stat)"
+      '
+    eager_first=$(find "$eager" -maxdepth 1 -name 'page-*.png' | sort | head -n 1)
+    cmp "$output/previews/page-1.png" "$eager_first"
+    printf 'RENDERER_PREVIEW_COMPARISON pages=%s outputs=%s eager_elapsed_seconds=%s eager_png_bytes=%s eager_png_files=%s lazy_png_files=1 first_page_identical=true\n' \
+      "$pages" "$outputs" "$(($(date +%s)-eager_started))" \
+      "$(find "$eager" -name '*.png' -printf '%s\n' | awk '{n+=$1} END {printf "%.0f",n}')" \
+      "$(find "$eager" -name '*.png' | wc -l)"
+    # Exercise the new frozen six-file Runtime's isolated page mode as well.
+    single="$bench_root/single"; mkdir "$single"
+    run_smoke_container "$image" "$single" \
+      --network none --read-only --cap-drop ALL \
+      --security-opt "seccomp=$repo_root/deploy/security/seccomp.json" \
+      --pids-limit 128 --memory 256m --memory-swap 256m --cpus 1.5 \
+      --ulimit fsize=10485760:10485760 \
+      --tmpfs /tmp:rw,noexec,nosuid,nodev,size=256m,uid=10000,gid=10000 \
+      --env LATEX_RENDER_STAGE=preview --env "LATEX_PREVIEW_PAGE=$pages" \
+      --mount "type=bind,src=$input,dst=/work/input,readonly" \
+      --mount "type=bind,src=$output,dst=/work/pdf,readonly" "$image"
+    eager_last=$(find "$eager" -maxdepth 1 -name 'page-*.png' | sort | tail -n 1)
+    cmp "$single/previews/page-$pages.png" "$eager_last"
+    awk '/^RENDERER_METRIC / {print}' "$single/compile.log"
+    printf 'RENDERER_LAZY_PAGE_CHECK pages=%s outputs=%s requested_page=%s bytes_identical=true\n' "$pages" "$outputs" "$pages"
+    rm -rf -- "$eager" "$single"
     rm -rf -- "$output"
   done
   rm -rf -- "$input"

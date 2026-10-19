@@ -80,9 +80,9 @@ export function createLatexRendererMcpServer(
         openWorldHint: false,
       },
     },
-    async ({ sourceId, entrypoint }) =>
+    async ({ sourceId, entrypoint, outputs }) =>
       runTool("create_render_job", () =>
-        operations.createRenderJob(sourceId, entrypoint),
+        operations.createRenderJob(sourceId, entrypoint, outputs),
       ),
   );
 
@@ -101,9 +101,9 @@ export function createLatexRendererMcpServer(
         openWorldHint: false,
       },
     },
-    async ({ directory, entrypoint }) =>
+    async ({ directory, entrypoint, outputs }) =>
       runTool("render_project", () =>
-        operations.renderProject(directory, entrypoint),
+        operations.renderProject(directory, entrypoint, outputs),
       ),
   );
   server.registerTool(
@@ -139,9 +139,13 @@ export function createLatexRendererMcpServer(
         openWorldHint: false,
       },
     },
-    async ({ jobId, outputDirectory }) =>
+    async ({ jobId, outputDirectory, previewPages }) =>
       runTool("download_render_artifacts", () =>
-        operations.downloadRenderArtifacts(jobId, outputDirectory),
+        operations.downloadRenderArtifacts(
+          jobId,
+          outputDirectory,
+          previewPages,
+        ),
       ),
   );
   server.registerTool(

@@ -155,6 +155,10 @@ change the Job result. Conversion remains the responsibility of a sandboxed
 Worker, never an HTTP request handler. The migration is infrastructure: it does
 not by itself switch an existing Runtime from eager to on-demand previews.
 Historical previews remain available without backfilling or rerendering.
+Running conversions reserve bounded bytes in per-user storage accounting;
+cleanup protects them even after a lease expires until daemon recovery has
+verified the old container stopped. Updated six-file Runtimes emit page metadata
+and generate page 1 initially. See [the preview contract](docs/lazy-previews.md).
 
 Deploy database consumers and cleanup together after an encrypted backup,
 restore test and private-copy migration preflight, and verify schema 22.

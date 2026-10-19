@@ -11,6 +11,97 @@ afterEach(() => {
 });
 
 describe("administrator Web render jobs", () => {
+  it.each([2, 24 * 1024 * 1024])(
+    "enforces the configured %i-byte limit before reserving either kind of upload",
+    async (limit) => {
+      const database = new RendererDatabase(":memory:");
+      databases.push(database);
+      database.migrate();
+      const now = new Date().toISOString();
+      database.raw
+        .prepare(
+          `INSERT INTO users(id,access_subject,email,display_name,role,status,security_version,created_by,created_at,updated_at)
+        VALUES ('user_owner','subject','owner@example.test','Owner','owner','active',1,'test',?,?)`,
+        )
+        .run(now, now);
+      database.raw
+        .prepare(
+          `INSERT INTO service_accounts(id,owner_user_id,name,client_type,status,security_version,created_at,updated_at)
+        VALUES ('sa_web','user_owner','Web render','generic','active',1,?,?)`,
+        )
+        .run(now, now);
+      database.raw
+        .prepare(
+          `INSERT INTO api_keys(id,service_account_id,name,prefix,secret_hash,pepper_id,scopes_json,created_at,created_by)
+        VALUES ('key_web','sa_web','Browser jobs','lrk_fixture','fixture-hash','v1','["render:create"]',?,'test')`,
+        )
+        .run(now);
+      const access = {
+        verify: () =>
+          Promise.resolve({ subject: "subject", payload: { sub: "subject" } }),
+      } as unknown as AccessJwtVerifier;
+      const tickets = new TicketService(
+        database,
+        "latex-renderer",
+        "latex-render",
+        { kid: "v1", secret: Buffer.alloc(32, 9) },
+        [],
+      );
+      const app = createAdminApp({
+        database,
+        apiKeys: new ApiKeyService(
+          database,
+          new Map([["v1", Buffer.alloc(32, 1)]]),
+          "v1",
+        ),
+        browserAuth: legacyTestBrowserAuth(database, access),
+        deploymentMode: "cloudflare",
+        publicOrigin: "https://renderer.example.test",
+        allowedOrigins: new Set(),
+        writeEnabled: true,
+        storageRoot: process.cwd(),
+        rendererVersion: "test",
+        maxUploadBytes: limit,
+        maxOutputBytes: 1,
+        maxQueueLength: 100,
+        maxUserStorageBytes: 1024 ** 3,
+        minFreeStorageBytes: 1,
+        activeTicketKid: "v1",
+        verificationTicketKids: [],
+        renderTickets: {
+          tickets,
+          rendererPublicUrl: "https://renderer.example.test",
+        },
+      });
+      const counts = () =>
+        database.raw
+          .prepare(
+            "SELECT (SELECT COUNT(*) FROM jobs) AS jobs,(SELECT COUNT(*) FROM sources) AS sources,(SELECT COUNT(*) FROM source_upload_nonces) AS tickets",
+          )
+          .get();
+      for (const kind of ["source-tickets", "render-tickets"]) {
+        const before = counts();
+        const send = (size: number) =>
+          app.request(`/admin/api/v1/jobs/${kind}`, {
+            method: "POST",
+            headers: {
+              "Cf-Access-Jwt-Assertion": "fixture",
+              "X-CSRF-Token": "1",
+              "Content-Type": "application/json",
+              "Idempotency-Key": `limit-${kind}-${limit}-${size}`,
+            },
+            body: JSON.stringify({
+              apiKeyId: "key_web",
+              size,
+              sha256: (kind === "source-tickets" ? "a" : "b").repeat(64),
+            }),
+          });
+        expect((await send(limit + 1)).status).toBe(400);
+        expect(counts()).toEqual(before);
+        expect((await send(limit)).status).toBe(201);
+      }
+    },
+  );
   it("lists safe targets and creates an idempotent job without exposing an API key secret", async () => {
     const database = new RendererDatabase(":memory:");
     databases.push(database);

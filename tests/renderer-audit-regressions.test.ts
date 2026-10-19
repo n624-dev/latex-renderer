@@ -86,8 +86,9 @@ console.log('renderer stdout');`,
           join(bin, "pdftoppm"),
           `
 const fs = require('node:fs');
-const count = Number(process.env.TEST_PAGE_COUNT), prefix = process.argv.at(-1);
-for (let i = 1; i <= count; i++) fs.writeFileSync(prefix + '-' + String(i).padStart(String(count).length, '0') + '.png', 'preview');`,
+const args=process.argv.slice(2), prefix = args.at(-1);
+if(!args.includes('-singlefile')||args[args.indexOf('-f')+1]!=='1'||args[args.indexOf('-l')+1]!=='1')process.exit(95);
+fs.writeFileSync(prefix + '.png', 'preview');`,
         );
         await executable(
           join(bin, "lualatex"),
@@ -149,10 +150,13 @@ for (let i = 1; i <= count; i++) fs.writeFileSync(prefix + '-' + String(i).padSt
         }
         assert.deepEqual(
           (await readdir(join(work, "output/previews"))).sort(),
-          Array.from(
-            { length: pages },
-            (_, index) => `page-${index + 1}.png`,
-          ).sort(),
+          ["page-1.png"],
+        );
+        assert.deepEqual(
+          JSON.parse(
+            await readFile(join(work, "output/.preview-info.json"), "utf8"),
+          ),
+          { schemaVersion: 1, pages, dpi: 150 },
         );
         if (outputs.includes("svg"))
           assert.equal(

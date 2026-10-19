@@ -2,11 +2,11 @@
 
 Migration 022 adds PDF-bound page metadata and a deduplicated preview request
 queue. Upgrade database consumers and cleanup together after the encrypted
-backup, restore test and private-copy migration preflight, then verify schema
-22. The migration alone does not enable lazy conversion: existing Runtime
-preview behavior remains unchanged until its Worker and client integration is
-deployed. Requests must not extend PDF retention or replace its immutable
-identity. Application-only downgrade remains disabled. See
+backup, restore test and private-copy migration preflight, then verify schema 22. Updated Runtimes generate page 1 first; the Worker generates other pages on
+authenticated demand. Older Runtimes keep their eager preview behavior without
+backfilling historical Jobs. Requests must not extend PDF retention or replace
+its immutable identity. Application-only downgrade remains disabled. See
+[the lazy-preview contract](docs/lazy-previews.md),
 [Migration 022](MIGRATIONS.md#migration-022-pdf-bound-preview-requests) and
 [the recovery procedure](deploy/migrations/022_lazy_previews.rollback.md).
 

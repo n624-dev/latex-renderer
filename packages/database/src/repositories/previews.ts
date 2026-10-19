@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { AppError } from "@latex-renderer/shared";
 import { ArtifactsRepository, type ArtifactRow } from "./artifacts.js";
 import type { ArtifactAvailability } from "../artifact-availability.js";
+import { JobsRepository } from "./jobs.js";
 
 export interface PreviewDocument {
   job_id: string;
@@ -17,6 +18,7 @@ export interface PreviewRequest {
   page: number;
   status: "queued" | "running" | "succeeded" | "failed";
   attempt: number;
+  reserved_bytes: number;
   lease_owner: string | null;
   lease_expires_at: string | null;
   error_code: string | null;
@@ -115,6 +117,9 @@ export class PreviewsRepository {
       .run(jobId, page, timestamp, timestamp);
   }
   claim(workerId: string, timestamp: string): PreviewRequest | undefined {
+    // Expired work still blocks new I/O until the daemon has been checked by
+    // recovery. A lease timeout is not evidence that its container has exited.
+    if (this.busy()) return undefined;
     const next = this.db
       .prepare(
         "SELECT * FROM job_preview_requests WHERE status='queued' ORDER BY created_at,sequence LIMIT 1",
@@ -134,6 +139,76 @@ export class PreviewsRepository {
       );
     return changed.changes === 1 ? this.get(next.job_id, next.page) : undefined;
   }
+  busy(): boolean {
+    return (
+      this.db
+        .prepare(
+          "SELECT 1 FROM job_preview_requests WHERE status='running' LIMIT 1",
+        )
+        .get() !== undefined ||
+      this.db
+        .prepare(
+          "SELECT 1 FROM jobs WHERE status IN ('validating','running') OR (status='canceled' AND lease_owner IS NOT NULL) LIMIT 1",
+        )
+        .get() !== undefined
+    );
+  }
+  reserve(
+    request: PreviewRequest,
+    workerId: string,
+    bytes: number,
+    maximumUserBytes: number,
+  ): boolean {
+    const job = this.db
+      .prepare("SELECT user_id FROM jobs WHERE id=?")
+      .get(request.job_id) as { user_id: string } | undefined;
+    if (
+      !job ||
+      !this.owns(request, workerId) ||
+      !Number.isSafeInteger(bytes) ||
+      bytes < 1 ||
+      new JobsRepository(this.db).storageUsageForUser(job.user_id) + bytes >
+        maximumUserBytes
+    )
+      return false;
+    return (
+      this.db
+        .prepare(
+          "UPDATE job_preview_requests SET reserved_bytes=? WHERE sequence=? AND status='running' AND lease_owner=? AND attempt=? AND reserved_bytes=0",
+        )
+        .run(bytes, request.sequence, workerId, request.attempt).changes === 1
+    );
+  }
+  charge(jobId: string, bytes: number): void {
+    this.db
+      .prepare(
+        "UPDATE jobs SET output_size=COALESCE(output_size,0)+? WHERE id=?",
+      )
+      .run(bytes, jobId);
+  }
+  /** Fence the old publisher before touching its daemon/files. */
+  claimRecovery(
+    request: PreviewRequest,
+    workerId: string,
+    timestamp: string,
+  ): PreviewRequest | undefined {
+    const changed = this.db
+      .prepare(
+        "UPDATE job_preview_requests SET lease_owner=?,lease_expires_at=?,updated_at=? WHERE sequence=? AND status='running' AND lease_owner=? AND attempt=? AND lease_expires_at<?",
+      )
+      .run(
+        workerId,
+        new Date(Date.parse(timestamp) + 120_000).toISOString(),
+        timestamp,
+        request.sequence,
+        request.lease_owner,
+        request.attempt,
+        timestamp,
+      );
+    return changed.changes === 1
+      ? this.get(request.job_id, request.page)
+      : undefined;
+  }
   owns(request: PreviewRequest, workerId: string): boolean {
     const row = this.get(request.job_id, request.page);
     return (
@@ -151,7 +226,7 @@ export class PreviewsRepository {
     return (
       this.db
         .prepare(
-          `UPDATE job_preview_requests SET status=?,error_code=?,lease_owner=NULL,lease_expires_at=NULL,updated_at=?
+          `UPDATE job_preview_requests SET status=?,error_code=?,reserved_bytes=0,lease_owner=NULL,lease_expires_at=NULL,updated_at=?
       WHERE sequence=? AND status='running' AND lease_owner=? AND attempt=?`,
         )
         .run(

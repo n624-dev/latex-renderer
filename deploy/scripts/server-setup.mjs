@@ -122,7 +122,10 @@ export async function createPreparedServerSetupHost() {
         process.execPath,
         [entry, action, ...(path ? [path] : [])],
         {
-          timeout: action === "--setup-apply" ? 25 * 60_000 : 30_000,
+          // Recovery uses the same Worker drain/readiness budget as apply.
+          timeout: ["--setup-apply", "--recover"].includes(action)
+            ? 25 * 60_000
+            : 30_000,
           maxBuffer: 128 * 1024,
           // Do not forward a credential-bearing ambient environment to a child.
           env: childEnvironment,

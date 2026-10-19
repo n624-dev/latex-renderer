@@ -3,6 +3,7 @@ import { createReadStream, createWriteStream } from "node:fs";
 import { lstat, rename, rm } from "node:fs/promises";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { setTimeout as delay } from "node:timers/promises";
 import {
   jobResponseSchema,
   projectPageSchema,
@@ -445,6 +446,71 @@ export class RendererClient {
       `${PUBLIC_API_PREFIX}/jobs/${jobId}/previews/${encodeURIComponent(page)}`,
       this.#baseUrl,
     ).toString();
+  }
+  /** Request one page, then let the caller fetch real Job metadata before a
+   * verified download. No invented checksum and no whole-PNG buffer. */
+  async preparePreview(
+    jobId: string,
+    page: number,
+    ticket: string,
+    options: RendererRequestOptions = {},
+  ): Promise<void> {
+    if (!Number.isSafeInteger(page) || page < 1 || page > 100)
+      throw new AppError(
+        "PREVIEW_PAGE_INVALID",
+        "Preview page must be 1..100",
+        400,
+      );
+    const target = this.credentialTarget(
+        this.previewUrl(jobId, `page-${page}.png`),
+      ),
+      deadline = Date.now() + 60_000;
+    for (let attempt = 0; attempt < 6 && Date.now() < deadline; attempt++) {
+      options.signal?.throwIfAborted();
+      const timeout = AbortSignal.timeout(Math.max(1, deadline - Date.now())),
+        signal = options.signal
+          ? AbortSignal.any([options.signal, timeout])
+          : timeout;
+      const response = await fetch(freshUrl(target), {
+        headers: noStoreRequestHeaders({ Authorization: `Bearer ${ticket}` }),
+        cache: "no-store",
+        redirect: "error",
+        signal,
+      });
+      if (response.ok) {
+        await response.body?.cancel();
+        return;
+      }
+      if (response.status !== 503) await throwResponse(response);
+      const body: unknown = await response.json();
+      const error =
+        typeof body === "object" && body !== null && "error" in body
+          ? body.error
+          : undefined;
+      if (
+        typeof error !== "object" ||
+        error === null ||
+        !("code" in error) ||
+        typeof error.code !== "string" ||
+        !error.code.startsWith("PREVIEW_")
+      )
+        throw new AppError(
+          "PREVIEW_UNAVAILABLE",
+          "Preview service unavailable",
+          503,
+        );
+      if (attempt < 5 && Date.now() + 2000 < deadline)
+        await delay(
+          2000,
+          undefined,
+          options.signal ? { signal: options.signal } : undefined,
+        );
+    }
+    throw new AppError(
+      "PREVIEW_PENDING",
+      "Preview is not ready; retry shortly",
+      503,
+    );
   }
   async download(
     url: string,

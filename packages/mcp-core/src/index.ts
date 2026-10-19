@@ -23,6 +23,7 @@ import {
   jobStagesSchema,
   type JobArtifact,
   type JobResponse,
+  type RenderOutput,
 } from "@latex-renderer/contracts";
 import { loadCredential } from "@latex-renderer/setup-core";
 import {
@@ -56,6 +57,7 @@ export const renderProjectInputSchema = z
   .object({
     directory: z.string().min(1),
     entrypoint: z.string().min(1).default("main.tex"),
+    outputs: renderOutputsSchema.optional(),
   })
   .strict();
 export const uploadSourceInputSchema = z
@@ -65,6 +67,7 @@ export const createRenderJobInputSchema = z
   .object({
     sourceId: z.string().regex(/^source_[a-f0-9]{32}$/),
     entrypoint: z.string().min(1).default("main.tex"),
+    outputs: renderOutputsSchema.optional(),
   })
   .strict();
 export const jobInputSchema = z.object({ jobId: mcpJobIdSchema }).strict();
@@ -72,6 +75,7 @@ export const downloadArtifactsInputSchema = z
   .object({
     jobId: mcpJobIdSchema,
     outputDirectory: z.string().min(1).default(".render"),
+    previewPages: z.array(z.number().int().min(1).max(100)).max(100).optional(),
   })
   .strict();
 export const projectIdInputSchema = z
@@ -336,15 +340,18 @@ export interface McpOperations {
   createRenderJob(
     sourceId: string,
     entrypoint: string,
+    outputs?: RenderOutput[],
   ): Promise<CreateRenderJobOutput>;
   renderProject(
     directory: string,
     entrypoint: string,
+    outputs?: RenderOutput[],
   ): Promise<RenderProjectOutput>;
   getRenderStatus(jobId: string): Promise<GetRenderStatusOutput>;
   downloadRenderArtifacts(
     jobId: string,
     outputDirectory: string,
+    previewPages?: number[],
   ): Promise<DownloadArtifactsOutput>;
   cancelRender(jobId: string): Promise<CancelRenderOutput>;
   deleteRender(jobId: string): Promise<DeleteRenderOutput>;
@@ -405,16 +412,21 @@ export function createMcpOperations(
         },
       };
     },
-    createRenderJob: async (sourceId, entrypoint) => ({
+    createRenderJob: async (sourceId, entrypoint, outputs) => ({
       success: true,
       operation: "create_render_job",
       result: {
         job: summarizeJob(
-          await createSourceRenderJob(await client(), sourceId, entrypoint),
+          await createSourceRenderJob(
+            await client(),
+            sourceId,
+            entrypoint,
+            outputs === undefined ? {} : { outputs },
+          ),
         ),
       },
     }),
-    renderProject: async (directory, entrypoint) => {
+    renderProject: async (directory, entrypoint, outputs) => {
       const localDirectory = await resolveAllowedMcpPath(
         directory,
         allowedRoots(),
@@ -422,6 +434,7 @@ export function createMcpOperations(
       );
       const rendered = await renderProject(await client(), localDirectory, {
         entrypoint,
+        ...(outputs === undefined ? {} : { outputs }),
         ...(options.renderTimeoutMs === undefined
           ? {}
           : { pollTimeoutMs: options.renderTimeoutMs }),
@@ -450,7 +463,7 @@ export function createMcpOperations(
       operation: "get_render_status",
       result: { job: summarizeJob(await getJob(await client(), jobId)) },
     }),
-    downloadRenderArtifacts: async (jobId, outputDirectory) => {
+    downloadRenderArtifacts: async (jobId, outputDirectory, previewPages) => {
       const localOutput = await resolveAllowedMcpPath(
         outputDirectory,
         allowedRoots(),
@@ -460,6 +473,12 @@ export function createMcpOperations(
         await client(),
         jobId,
         localOutput,
+        {
+          ...(previewPages === undefined ? {} : { previewPages }),
+          ...(options.renderTimeoutMs === undefined
+            ? {}
+            : { pollTimeoutMs: options.renderTimeoutMs }),
+        },
       );
       return {
         success: true,

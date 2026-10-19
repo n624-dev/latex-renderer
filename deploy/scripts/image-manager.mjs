@@ -1046,6 +1046,15 @@ function rendererEnvWithImage(contents, imageId) {
 }
 
 async function restartRendererConsumers() {
+  const gateway = "latex-renderer-standalone-gateway.service";
+  const restoreGateway = await runCapture("systemctl", [
+    "is-enabled",
+    "--quiet",
+    gateway,
+  ]).then(
+    () => true,
+    () => false,
+  );
   await runCapture("systemctl", ["restart", "latex-renderer-worker.service"]);
   await runCapture("systemctl", [
     "try-restart",
@@ -1053,6 +1062,12 @@ async function restartRendererConsumers() {
     "latex-renderer-admin-api.service",
     "latex-renderer-remote-mcp.service",
   ]);
+  // Requires=Internal API stops this dependent during a restart; try-restart
+  // cannot bring back a unit already stopped by that dependency transition.
+  if (restoreGateway) {
+    await runCapture("systemctl", ["start", gateway]);
+    await runCapture("systemctl", ["is-active", "--quiet", gateway]);
+  }
 }
 
 async function restoreActivation(snapshot) {

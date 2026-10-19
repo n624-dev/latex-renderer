@@ -17,6 +17,9 @@ import {
   renderProjectOutputSchema,
   resolveAllowedMcpPath,
   validateRenderTimeout,
+  renderProjectInputSchema,
+  createRenderJobInputSchema,
+  downloadArtifactsInputSchema,
 } from "./index.js";
 
 const temporaryRoots: string[] = [];
@@ -43,6 +46,45 @@ afterEach(async () => {
 });
 
 describe("MCP core", () => {
+  it("accepts explicit PDF/SVG and bounded preview pages without weakening strict tool arguments", () => {
+    const source = {
+      sourceId: `source_${"a".repeat(32)}`,
+      outputs: ["pdf", "svg"],
+    };
+    expect(createRenderJobInputSchema.parse(source).outputs).toEqual([
+      "pdf",
+      "svg",
+    ]);
+    expect(
+      renderProjectInputSchema.parse({
+        directory: ".",
+        outputs: ["pdf", "svg"],
+      }).outputs,
+    ).toEqual(["pdf", "svg"]);
+    expect(renderProjectInputSchema.parse({ directory: "." }).outputs).toEqual([
+      "pdf",
+    ]);
+    expect(
+      renderProjectInputSchema.safeParse({ directory: ".", outputs: ["png"] })
+        .success,
+    ).toBe(false);
+    expect(
+      renderProjectInputSchema.safeParse({ directory: ".", unexpected: true })
+        .success,
+    ).toBe(false);
+    expect(
+      downloadArtifactsInputSchema.parse({
+        jobId: `job_${"a".repeat(32)}`,
+        previewPages: [2, 5],
+      }).previewPages,
+    ).toEqual([2, 5]);
+    expect(
+      downloadArtifactsInputSchema.safeParse({
+        jobId: `job_${"a".repeat(32)}`,
+        previewPages: [101],
+      }).success,
+    ).toBe(false);
+  });
   it("exposes Source and entrypoint tools alongside stable job tools", () => {
     expect(MCP_TOOL_NAMES).toEqual([
       "upload_source",

@@ -97,6 +97,7 @@ describe("renderer worker config", () => {
     expect(args).toContain("--read-only");
     expect(args).toContain("LATEX_PREVIEW_PAGE=2");
     expect(args).toContain("LATEX_RENDER_STAGE=preview");
+    expect(args).toContain("fsize=10485760:10485760");
     expect(args).toContain("type=bind,src=/checkpoint,dst=/work/pdf,readonly");
     expect(args).toContain("no-new-privileges");
     expect(args).toContain("seccomp=/tmp/seccomp");

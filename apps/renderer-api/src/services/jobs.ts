@@ -52,6 +52,14 @@ export class RendererJobsService {
       ),
       artifacts,
       previews,
+      ...(this.deps.database.previews.verifiedPdf(id, {
+        retentionHours: this.deps.artifactRetentionHours,
+      })
+        ? {
+            previewPageCount:
+              this.deps.database.previews.document(id)!.page_count,
+          }
+        : {}),
       ...(stages === undefined ? {} : { stages }),
     };
   }

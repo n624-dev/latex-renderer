@@ -80,7 +80,7 @@ if(name==='objects') fs.writeFileSync(path.join(out,'objects.meta'),'capture met
         await executable(join(bin, "pdfinfo"), "console.log('Pages: 1');");
         await executable(
           join(bin, "pdftoppm"),
-          "require('node:fs').writeFileSync(process.argv.at(-1)+'-1.png','preview');",
+          "require('node:fs').writeFileSync(process.argv.at(-1)+'.png','preview');",
         );
         await executable(
           join(opt, "renderer/export-svg.pl"),

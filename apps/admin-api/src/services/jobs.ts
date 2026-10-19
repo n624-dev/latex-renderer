@@ -127,6 +127,14 @@ export class AdminJobsService {
       previews: artifacts
         .filter((artifact) => artifact.type === "preview")
         .map(item),
+      ...(this.deps.database.previews.verifiedPdf(id, {
+        retentionHours: this.deps.artifactRetentionHours ?? 24,
+      })
+        ? {
+            preview_page_count:
+              this.deps.database.previews.document(id)!.page_count,
+          }
+        : {}),
     };
   }
 

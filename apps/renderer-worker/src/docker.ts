@@ -17,7 +17,11 @@ export function spawnRenderer(
   outputs: readonly string[] = ["pdf"],
   stage?: RendererStageOptions,
 ) {
-  const containerName = rendererContainerName(jobId, leaseGeneration);
+  const containerName = rendererContainerName(
+    jobId,
+    leaseGeneration,
+    stage?.mode === "preview" ? stage.page : undefined,
+  );
   const args = rendererRunArguments(
     config,
     jobId,
@@ -74,7 +78,11 @@ export function rendererRunArguments(
     "--rm",
     "--init",
     "--name",
-    rendererContainerName(jobId, leaseGeneration),
+    rendererContainerName(
+      jobId,
+      leaseGeneration,
+      stage?.mode === "preview" ? stage.page : undefined,
+    ),
     "--label",
     `latex-renderer.job=${jobId}`,
     "--label",
@@ -95,6 +103,12 @@ export function rendererRunArguments(
     stage?.mode === "preview" ? "256m" : "1g",
     "--memory-swap",
     stage?.mode === "preview" ? "256m" : "1g",
+    ...(stage?.mode === "preview"
+      ? [
+          "--ulimit",
+          `fsize=${Math.min(config.maxOutputBytes, 10 * 1024 * 1024)}:${Math.min(config.maxOutputBytes, 10 * 1024 * 1024)}`,
+        ]
+      : []),
     "--tmpfs",
     `/tmp:rw,noexec,nosuid,nodev,size=256m,uid=${config.containerUid},gid=${config.containerGid}`,
     "--env",
@@ -131,10 +145,16 @@ export function rendererRunArguments(
 export function rendererContainerName(
   jobId: string,
   leaseGeneration: number,
+  previewPage?: number,
 ): string {
   if (!Number.isSafeInteger(leaseGeneration) || leaseGeneration < 0)
     throw new Error("Worker lease generation is invalid");
-  return `latex-render-${jobId}-g${leaseGeneration}`;
+  if (
+    previewPage !== undefined &&
+    (!Number.isSafeInteger(previewPage) || previewPage < 1 || previewPage > 100)
+  )
+    throw new Error("Invalid preview page");
+  return `latex-render-${jobId}${previewPage === undefined ? "" : `-p${previewPage}`}-g${leaseGeneration}`;
 }
 export async function dockerStop(name: string): Promise<void> {
   await dockerStopVerified(name);

@@ -334,12 +334,19 @@ function artifactButton(
   const artifact = [...job.artifacts, ...job.previews].find(
     (item) => item.relativePath === path,
   );
-  if (!artifact) return null;
+  const requestedPage = Number(
+      /^previews\/page-([1-9][0-9]{0,2})\.png$/.exec(path)?.[1],
+    ),
+    lazyPage =
+      Number.isInteger(requestedPage) &&
+      requestedPage <= (job.previewPageCount ?? 0);
+  if (!artifact && !lazyPage) return null;
   const button = document.createElement("button");
   button.type = "button";
   button.className = "secondary";
   button.textContent = label;
   button.onclick = () => {
+    button.disabled = true;
     const opensInWindow = label === "PDF" || label === "プレビュー",
       popup = opensInWindow ? window.open("about:blank", "_blank") : null;
     void (async () => {
@@ -348,35 +355,65 @@ function artifactButton(
           found = [...current.artifacts, ...current.previews].find(
             (item) => item.relativePath === path,
           );
-        if (!found) throw new Error("成果物が見つかりません。");
+        if (!found && !lazyPage) throw new Error("成果物が見つかりません。");
         const access = await issueAccess(fetcher, job.id),
-          response = await fetcher(found.downloadUrl, {
+          url =
+            found?.downloadUrl ??
+            `/api/v1/jobs/${encodeURIComponent(job.id)}/previews/page-${requestedPage}.png`;
+        let response!: Response;
+        for (let attempt = 0; attempt < 5; attempt++) {
+          response = await fetcher(url, {
             headers: { Authorization: `Bearer ${access.jobTicket}` },
             cache: "no-store",
+            signal: AbortSignal.timeout(15000),
           });
+          if (!lazyPage || response.status !== 503 || attempt === 4) break;
+          await response.body?.cancel();
+          button.textContent = "プレビュー生成を待っています…";
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+        }
         if (!response.ok)
           throw new Error(
             `成果物を取得できませんでした (HTTP ${response.status})。`,
           );
-        const blob = await response.blob(),
-          url = URL.createObjectURL(blob);
+        const blob = await response.blob();
+        if (lazyPage) {
+          const published = (await tracker.get()).previews.find(
+            (a) => a.relativePath === path,
+          );
+          if (!published || published.size !== blob.size)
+            throw new Error("プレビューの検証情報が一致しません。");
+          const digest = [
+            ...new Uint8Array(
+              await crypto.subtle.digest("SHA-256", await blob.arrayBuffer()),
+            ),
+          ]
+            .map((v) => v.toString(16).padStart(2, "0"))
+            .join("");
+          if (digest !== published.sha256)
+            throw new Error("プレビューのSHA-256が一致しません。");
+        }
+        const objectUrl = URL.createObjectURL(blob);
         if (opensInWindow && popup) {
           // The blank window was opened during the user gesture, so Safari and
           // other popup blockers do not reject the later blob navigation.
           popup.opener = null;
-          popup.location.href = url;
+          popup.location.href = objectUrl;
         } else {
           const anchor = document.createElement("a");
-          anchor.href = url;
+          anchor.href = objectUrl;
           anchor.download = path.split("/").at(-1) ?? "artifact";
           document.body.append(anchor);
           anchor.click();
           anchor.remove();
         }
-        setTimeout(() => URL.revokeObjectURL(url), 60_000);
+        setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
       } catch (error) {
         popup?.close();
         showError(error);
+      } finally {
+        button.disabled = false;
+        button.textContent = label;
       }
     })();
   };
@@ -424,7 +461,9 @@ function renderJobResult(
     )[0]?.relativePath;
   const links: Array<readonly [string, string]> = [
     ["result.pdf", "PDF"],
-    ...(firstPreview ? [[firstPreview, "プレビュー"] as const] : []),
+    ...(firstPreview && (job.previewPageCount ?? 1) <= 1
+      ? [[firstPreview, "プレビュー"] as const]
+      : []),
     ["compile.log", "ログ"],
     ["errors.json", "エラー詳細"],
     ["svg/compile.log", "SVGログ"],
@@ -433,6 +472,35 @@ function renderJobResult(
   for (const [path, label] of links) {
     const button = artifactButton(fetcher, tracker, job, path, label);
     if (button) actions.append(button);
+  }
+  if ((job.previewPageCount ?? 0) > 1) {
+    const label = document.createElement("label"),
+      select = document.createElement("select"),
+      selected = document.createElement("span");
+    label.textContent = "プレビューのページ";
+    for (let page = 1; page <= job.previewPageCount!; page++) {
+      const option = document.createElement("option");
+      option.value = String(page);
+      option.textContent = String(page);
+      select.append(option);
+    }
+    select.value = container.dataset.previewPage ?? "1";
+    if (!select.value) select.value = "1";
+    const update = () => {
+      container.dataset.previewPage = select.value;
+      const button = artifactButton(
+        fetcher,
+        tracker,
+        job,
+        `previews/page-${select.value}.png`,
+        "プレビュー",
+      );
+      selected.replaceChildren(...(button ? [button] : []));
+    };
+    select.onchange = update;
+    update();
+    label.append(select);
+    actions.append(label, selected);
   }
   if (
     job.stages?.pdf.status === "succeeded" &&

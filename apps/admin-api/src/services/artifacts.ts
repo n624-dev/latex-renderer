@@ -5,6 +5,7 @@ import {
   artifactRetentionExpiresAt,
   bindArtifactDownloadLeases,
   ARTIFACT_DOWNLOAD_LEASE_MS,
+  waitForPreview,
 } from "@latex-renderer/database";
 import { Readable } from "node:stream";
 import { AppError, newId, nowIso } from "@latex-renderer/shared";
@@ -14,6 +15,37 @@ import type { AdminDependencies, AppActor } from "../types.js";
 const ARTIFACT_NAME =
   /^(?:result\.pdf|compile\.log|errors\.json|dependencies\.json|svg\/(?:compile\.log|errors\.json|dependencies\.json|manifest\.json)|svg\/objects\/(?:math|tikz)-[0-9]{6}\.svg)$/;
 const PREVIEW_NAME = /^page-[1-9][0-9]{0,2}\.png$/;
+
+/** Caller must first apply admin scope or same-user Job authorization. */
+export async function adminPreviewResponse(
+  deps: AdminDependencies,
+  actor: AppActor,
+  jobId: string,
+  name: string,
+  signal: AbortSignal,
+): Promise<Response> {
+  if (
+    !/^job_[a-f0-9]{32}$/.test(jobId) ||
+    !deps.database.jobs.getVisible(jobId) ||
+    !PREVIEW_NAME.test(name)
+  )
+    throw new AppError("ARTIFACT_NOT_FOUND", "Artifact does not exist", 404);
+  const row = await waitForPreview(
+    deps.database,
+    jobId,
+    Number(name.slice(5, -4)),
+    { retentionHours: deps.artifactRetentionHours ?? 24 },
+    { signal },
+  );
+  return adminArtifactResponse(
+    deps,
+    actor,
+    jobId,
+    row.relative_path.slice("previews/".length),
+    true,
+    true,
+  );
+}
 
 export function adminArtifactsArchiveResponse(
   deps: AdminDependencies,

@@ -28,6 +28,9 @@ export interface WorkerConfig extends ResourceLimits {
   jobTimeoutMs: number;
   minimumAvailableMemoryBytes?: number;
   admissionWaitTimeoutMs?: number;
+  artifactRetentionHours?: number;
+  maxUserStorageBytes?: number;
+  minFreeStorageBytes?: number;
   diagnostic?: (record: Readonly<Record<string, unknown>>) => void;
 }
 
@@ -102,6 +105,21 @@ export function loadWorkerConfig(): WorkerConfig {
         420,
         86400,
       ) * 1000,
+    artifactRetentionHours: positiveIntegerEnvironment(
+      process.env,
+      "ARTIFACT_RETENTION_HOURS",
+      24,
+    ),
+    maxUserStorageBytes: positiveBytesEnvironment(
+      process.env,
+      "MAX_USER_STORAGE_BYTES",
+      1024 * 1024 * 1024,
+    ),
+    minFreeStorageBytes: positiveBytesEnvironment(
+      process.env,
+      "MIN_FREE_STORAGE_BYTES",
+      5 * 1024 * 1024 * 1024,
+    ),
     minimumAvailableMemoryBytes: positiveBytesEnvironment(
       process.env,
       "RENDERER_MIN_AVAILABLE_MEMORY_BYTES",

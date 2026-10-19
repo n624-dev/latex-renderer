@@ -374,6 +374,12 @@ paths:
           schema: { type: string, enum: [attachment, inline] }
       responses:
         "200": { description: Integrity-labelled PNG stream }
+        "404": { description: PDF or page unavailable }
+        "503":
+          description: Preview pending or bounded queue unavailable
+          headers:
+            Retry-After:
+              schema: { type: integer, minimum: 1 }
         "410": { description: Job artifact retention has expired }
   /sources:
     get:

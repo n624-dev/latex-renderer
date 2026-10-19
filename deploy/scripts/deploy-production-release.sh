@@ -102,6 +102,10 @@ restore_services_after_failure() {
     "$web_service" \
     latex-renderer-remote-mcp.service \
     latex-renderer-worker.service >/dev/null 2>&1 || recovery_failed=true
+  if [ "${deployment_mode:-}" = standalone ]; then
+    systemctl start latex-renderer-standalone-gateway.service >/dev/null 2>&1 || recovery_failed=true
+    systemctl is-active --quiet latex-renderer-standalone-gateway.service || recovery_failed=true
+  fi
   systemctl start \
     latex-renderer-update-refresh.timer \
     latex-renderer-image-refresh.timer \

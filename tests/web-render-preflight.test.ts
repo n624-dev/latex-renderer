@@ -117,6 +117,14 @@ describe("Web render ZIP preflight", () => {
     expect(inspectZip(bytes)).toEqual({ entries: 2, files: 2, mainTex: true });
   });
 
+  it.each(["reports/cafe\u0301.tex", "reports/caf\u00e9.tex"])(
+    "preserves ZIP entrypoint spelling: %s",
+    async (name) => {
+      const archive = await zip([[name, "entrypoint"]]);
+      expect(inspectZipCandidates(archive).texFiles).toEqual([name]);
+    },
+  );
+
   it("rejects an archive without a root main.tex", async () => {
     const bytes = await zip([["project/main.tex", "nested"]]);
 

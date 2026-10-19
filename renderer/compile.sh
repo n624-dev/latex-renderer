@@ -1,6 +1,26 @@
 #!/bin/sh
 set -eu
 
+# Preview conversion never initializes TeX/font caches or reads Source. Its
+# read-only input is the already published PDF, selected by the Worker lease.
+if [ "${LATEX_RENDER_STAGE:-all}" = preview ]; then
+  umask 0007
+  preview_started=$(date +%s)
+  page=${LATEX_PREVIEW_PAGE:-}
+  case "$page" in ''|*[!0-9]*|0*) exit 78 ;; esac
+  [ "$page" -le 100 ] || exit 78
+  mkdir -p /work/output/previews
+  [ -f /work/pdf/result.pdf ] || exit 79
+  timeout -s TERM -k 2 60 pdftoppm -f "$page" -l "$page" -singlefile -png -r 150 \
+    /work/pdf/result.pdf "/work/output/previews/page-$page" > /work/output/compile.log 2>&1
+  [ -s "/work/output/previews/page-$page.png" ] || exit 71
+  printf 'RENDERER_METRIC stage=preview_page elapsed_seconds=%s memory_peak_bytes=%s cpu_usage_usec=%s\n' \
+    "$(($(date +%s)-preview_started))" \
+    "$(cat /sys/fs/cgroup/memory.peak 2>/dev/null || printf unknown)" \
+    "$(awk '$1=="usage_usec" {print $2}' /sys/fs/cgroup/cpu.stat 2>/dev/null || printf unknown)" >> /work/output/compile.log
+  exit 0
+fi
+
 export HOME=/tmp/home
 export TEXMFHOME=/tmp/texlive/texmf-home
 export TEXMFCONFIG=/tmp/texlive/texmf-config
@@ -194,7 +214,7 @@ fi
 set +e
 record_stage
 renderer_stage=preview
-timeout -s TERM -k 2 60 pdftoppm -png -r 150 /work/output/result.pdf /work/output/previews/page
+timeout -s TERM -k 2 60 pdftoppm -f 1 -l 1 -singlefile -png -r 150 /work/output/result.pdf /work/output/previews/page-1
 preview_status=$?
 set -e
 if [ "$preview_status" -eq 124 ] || [ "$preview_status" -eq 137 ]; then
@@ -219,6 +239,7 @@ for preview in /work/output/previews/page-*.png; do
     mv "$preview" "$target"
   fi
 done
+printf '{"schemaVersion":1,"pages":%s,"dpi":150}\n' "$pages" > /work/output/.preview-info.json
 
 fi
 [ "$render_stage" != pdf ] || exit 0

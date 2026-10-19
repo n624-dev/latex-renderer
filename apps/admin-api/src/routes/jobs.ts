@@ -2,16 +2,17 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { AppError, pageSize } from "@latex-renderer/shared";
 import {
-  legacyRenderTicketRequestSchema,
+  createLegacyRenderTicketRequestSchema,
   renderOutputsSchema,
   sourceRenderTicketRequestSchema,
-  sourceTicketRequestSchema,
+  createSourceTicketRequestSchema,
 } from "@latex-renderer/contracts";
 import { requireActor } from "../auth/actor.js";
 import { AdminJobsService } from "../services/jobs.js";
 import {
   adminArtifactResponse,
   adminArtifactsArchiveResponse,
+  adminPreviewResponse,
 } from "../services/artifacts.js";
 import type { AdminDependencies } from "../types.js";
 import { parse } from "./helpers.js";
@@ -49,7 +50,7 @@ export function createJobsRouter(deps: AdminDependencies): Hono {
       );
     const input = parse(
         z.union([
-          legacyRenderTicketRequestSchema.extend({
+          createLegacyRenderTicketRequestSchema(deps.maxUploadBytes).extend({
             apiKeyId: z.string().min(1).max(128),
             outputs: renderOutputsSchema,
           }),
@@ -72,7 +73,7 @@ export function createJobsRouter(deps: AdminDependencies): Hono {
         400,
       );
     const input = parse(
-        sourceTicketRequestSchema.extend({
+        createSourceTicketRequestSchema(deps.maxUploadBytes).extend({
           apiKeyId: z.string().min(1).max(128),
         }),
         await c.req.json<unknown>(),
@@ -129,13 +130,12 @@ export function createJobsRouter(deps: AdminDependencies): Hono {
   });
   r.get("/:id/previews/:name", async (c) => {
     const actor = await requireActor(deps, c, "admin:jobs:read");
-    return adminArtifactResponse(
+    return adminPreviewResponse(
       deps,
       actor,
       c.req.param("id"),
       c.req.param("name"),
-      true,
-      true,
+      c.req.raw.signal,
     );
   });
   r.post("/:id/cancel", async (c) => {
