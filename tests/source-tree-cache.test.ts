@@ -39,9 +39,9 @@ async function fixture() {
       { path: "main.tex", text: pipelineDocument() },
       { path: "other.tex", text: pipelineDocument(1, "Other") },
     ]);
-    const next = async (entrypoint = "main.tex") => {
+    const next = async (entrypoint = "main.tex", selectedSource = source) => {
       const job = await f.renders.createRender(identity, {
-        sourceId: source.id,
+        sourceId: selectedSource.id,
         entrypoint,
       });
       const claimed = f.database.worker.claimNext(
@@ -60,7 +60,7 @@ async function fixture() {
             f.database,
             f.config,
             claimed,
-            join(f.storage, "sources", source.id, "source.zip"),
+            join(f.storage, "sources", selectedSource.id, "source.zip"),
             destination,
           ),
       };
@@ -86,6 +86,65 @@ describe("bounded owner-bound Source input reuse (fixture renderer, no Docker)",
       first.release();
       await collectSourceTrees(f.database.raw, f.storage, false, 32, 0);
       expect(f.rows()).toHaveLength(0);
+    } finally {
+      await f.close();
+    }
+  });
+  it("collects an unpinned owner's excess after lowering only the user cache limit", async () => {
+    const f = await fixture();
+    try {
+      const a = await f.next(),
+        first = await a.prepare(),
+        row = defined(f.rows()[0]);
+      const collect = () =>
+        collectSourceTrees(
+          f.database.raw,
+          f.storage,
+          false,
+          32,
+          f.config.sourceTreeMaxBytes,
+          row.reserved_bytes - 1,
+        );
+      await collect();
+      expect(f.rows()).toHaveLength(1);
+      first.release();
+      await collect();
+      expect(f.rows()).toHaveLength(0);
+      await expect(lstat(first.input)).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      await f.close();
+    }
+  });
+  it("enforces the lowered aggregate owner budget when individual inputs still fit", async () => {
+    const f = await fixture();
+    try {
+      const a = await f.next(),
+        first = await a.prepare();
+      const other = await f.renders.createSource(identity, [
+        { path: "main.tex", text: pipelineDocument(1, "Another Source") },
+      ]);
+      const b = await f.next("main.tex", other),
+        second = await b.prepare(),
+        rows = f.rows();
+      expect(rows).toHaveLength(2);
+      const cap = Math.max(...rows.map((row) => row.reserved_bytes));
+      expect(
+        rows.reduce((sum, row) => sum + row.reserved_bytes, 0),
+      ).toBeGreaterThan(cap);
+      first.release();
+      second.release();
+      await collectSourceTrees(
+        f.database.raw,
+        f.storage,
+        false,
+        32,
+        f.config.sourceTreeMaxBytes,
+        cap,
+      );
+      expect(f.rows()).toHaveLength(1);
+      expect(defined(f.rows()[0]).reserved_bytes).toBeLessThanOrEqual(cap);
     } finally {
       await f.close();
     }
@@ -201,7 +260,11 @@ describe("bounded owner-bound Source input reuse (fixture renderer, no Docker)",
         if (mode === "raised") f.config.maxUserStorageBytes = 1;
         f.database.settings.upsert(
           "max_user_storage_bytes",
-          mode === "lowered" ? 1 : mode === "raised" ? 20 * 1024 ** 2 : "invalid",
+          mode === "lowered"
+            ? 1
+            : mode === "raised"
+              ? 20 * 1024 ** 2
+              : "invalid",
           "fixture",
           new Date().toISOString(),
         );

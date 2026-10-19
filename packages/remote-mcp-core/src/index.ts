@@ -2552,7 +2552,11 @@ export class RemoteRenderService {
         this.database.serviceAccounts.insert({
           id: principal.service_account_id,
           ownerUserId: userId,
-          name: "Remote MCP",
+          // Display names are user-editable, not a reserved identity. Keep a
+          // same-named account separate and check under this write transaction.
+          name: this.database.serviceAccounts.nameExists(userId, "Remote MCP")
+            ? `Remote MCP (${principal.service_account_id})`
+            : "Remote MCP",
           clientType: "mcp",
           timestamp,
         });

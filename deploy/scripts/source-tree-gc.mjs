@@ -16,6 +16,13 @@ export async function collectSourceTrees(
     0,
     1024 ** 3,
   ),
+  maximumUserBytes = boundedIntegerEnvironment(
+    process.env,
+    "SOURCE_TREE_USER_MAX_BYTES",
+    32 * 1024 ** 2,
+    0,
+    1024 ** 3,
+  ),
 ) {
   for (let n = 0; n < maximum; n++) {
     let row;
@@ -24,11 +31,18 @@ export async function collectSourceTrees(
       row = db
         .prepare(
           `SELECT * FROM source_trees t WHERE NOT EXISTS (SELECT 1 FROM source_tree_readers r WHERE r.tree_id=t.id)
-        AND (? OR (SELECT COALESCE(SUM(reserved_bytes),0) FROM source_trees)>? OR t.status IN ('building','invalid','deleting') OR t.expires_at<=?
+        AND (? OR (SELECT COALESCE(SUM(reserved_bytes),0) FROM source_trees)>?
+          OR (SELECT COALESCE(SUM(owned.reserved_bytes),0) FROM source_trees owned WHERE owned.owner_user_id=t.owner_user_id)>?
+          OR t.status IN ('building','invalid','deleting') OR t.expires_at<=?
           OR NOT EXISTS (SELECT 1 FROM sources s WHERE s.id=t.source_id AND s.status='ready' AND s.owner_user_id=t.owner_user_id))
         ORDER BY CASE WHEN t.status='deleting' THEN 0 WHEN t.status!='ready' THEN 1 ELSE 2 END,t.last_used_at,t.id LIMIT 1`,
         )
-        .get(pressure ? 1 : 0, maximumBytes, new Date().toISOString());
+        .get(
+          pressure ? 1 : 0,
+          maximumBytes,
+          maximumUserBytes,
+          new Date().toISOString(),
+        );
       if (row)
         db.prepare("UPDATE source_trees SET status='deleting' WHERE id=?").run(
           row.id,

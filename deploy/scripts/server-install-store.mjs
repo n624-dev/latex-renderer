@@ -122,12 +122,20 @@ export class ServerInstallStore {
       throw error;
     });
     if (stale) {
+      const mode = stale.mode & 0o7777,
+        prepared = stale.gid === slot.gid && mode === slot.mode,
+        // No bytes are written before chown and chmod have completed. A killed
+        // creator can leave only an empty file in its original group, with
+        // permissions narrowed by umask. Do not admit partial unsafe contents.
+        preparing =
+          stale.size === 0 &&
+          [slot.gid, process.getgid?.() ?? this.uid].includes(stale.gid) &&
+          (mode & ~slot.mode) === 0;
       if (
         !stale.isFile() ||
         stale.nlink !== 1 ||
         stale.uid !== this.uid ||
-        stale.gid !== slot.gid ||
-        (stale.mode & 0o7777) !== slot.mode ||
+        (!prepared && !preparing) ||
         stale.size > slot.maximum
       )
         throw new Error("Unsafe installation temporary entry");

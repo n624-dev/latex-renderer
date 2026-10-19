@@ -5,4 +5,5 @@ export function collectSourceTrees(
   pressure?: boolean,
   maximum?: number,
   maximumBytes?: number,
+  maximumUserBytes?: number,
 ): Promise<void>;

@@ -71,6 +71,7 @@ export async function runWorker(
             false,
             32,
             config.sourceTreeMaxBytes ?? 64 * 1024 ** 2,
+            config.sourceTreeUserMaxBytes ?? 32 * 1024 ** 2,
           );
         } catch {
           diagnostic({ event: "renderer_worker.source_tree_gc_failed" });
