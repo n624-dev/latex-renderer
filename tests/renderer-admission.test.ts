@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { assessHostResources } from "../apps/renderer-worker/src/admission.js";
+import {
+  assessHostResources,
+  resourceWaitMessage,
+} from "../apps/renderer-worker/src/admission.js";
 describe("host render admission", () => {
   const ready = {
     availableBytes: 2048,
@@ -22,5 +25,27 @@ describe("host render admission", () => {
     expect(assessHostResources({ ...ready, ioStallPercent: 50 }, 1)).toBe(
       "io_pressure",
     );
+  });
+  it("explains memory and pressure waits without representing waiting as a failed render", () => {
+    const message = resourceWaitMessage(
+      "memory_low",
+      { ...ready, availableBytes: 700 * 1024 ** 2 },
+      832 * 1024 ** 2,
+      true,
+    );
+    expect(message).toContain("700MiB");
+    expect(message).toContain("832MiB");
+    expect(message).toContain("待機だけではJobを失敗にしません");
+    expect(resourceWaitMessage("io_pressure", ready, 1, false)).toContain(
+      "ディスクI/O",
+    );
+    expect(
+      resourceWaitMessage(
+        "metrics_unavailable",
+        { ...ready, availableBytes: null },
+        1,
+        false,
+      ),
+    ).toContain("不明");
   });
 });

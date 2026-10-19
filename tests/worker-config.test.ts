@@ -3,9 +3,17 @@ import { loadWorkerConfig } from "../apps/renderer-worker/src/config.js";
 import {
   rendererRunArguments,
   validateDockerIsolation,
+  validateDockerMemoryLimits,
 } from "../apps/renderer-worker/src/docker.js";
 afterEach(() => vi.unstubAllEnvs());
 describe("renderer worker config", () => {
+  it("requires actual daemon memory and swap-limit support instead of trusting CLI flags alone", () => {
+    expect(() => validateDockerMemoryLimits("true true\n")).not.toThrow();
+    for (const value of ["", "false true", "true false", "false false"])
+      expect(() => validateDockerMemoryLimits(value)).toThrow(
+        "limit enforcement",
+      );
+  });
   it("bounds Source tree storage and allows disabling it without changing ZIP limits", () => {
     stubRequiredEnvironment();
     expect(loadWorkerConfig()).toMatchObject({
@@ -20,7 +28,7 @@ describe("renderer worker config", () => {
     vi.stubEnv("SOURCE_TREE_TTL_SECONDS", "0");
     expect(() => loadWorkerConfig()).toThrow("SOURCE_TREE_TTL_SECONDS");
   });
-  it("validates host admission headroom and queue deadline", () => {
+  it("validates host admission headroom and long-wait notice interval", () => {
     stubRequiredEnvironment();
     vi.stubEnv("RENDERER_MIN_AVAILABLE_MEMORY_BYTES", "0");
     expect(() => loadWorkerConfig()).toThrow(
@@ -29,6 +37,39 @@ describe("renderer worker config", () => {
     vi.stubEnv("RENDERER_MIN_AVAILABLE_MEMORY_BYTES", "1024");
     vi.stubEnv("RENDERER_ADMISSION_WAIT_SECONDS", "86401");
     expect(() => loadWorkerConfig()).toThrow(/RENDERER_ADMISSION_WAIT_SECONDS/);
+  });
+  it("uses the same bounded memory and no-swap budget for an observed lightweight Job", () => {
+    stubRequiredEnvironment();
+    const config = {
+      ...loadWorkerConfig(),
+      containerMemoryBytes: 576 * 1024 ** 2,
+    };
+    const args = rendererRunArguments(config, "job_test", "/input", "/output");
+    expect(args[args.indexOf("--memory") + 1]).toBe(
+      String(config.containerMemoryBytes),
+    );
+    expect(args[args.indexOf("--memory-swap") + 1]).toBe(
+      String(config.containerMemoryBytes),
+    );
+  });
+  it.each([
+    0,
+    -1,
+    63 * 1024 ** 2,
+    129 * 1024 ** 2,
+    1088 * 1024 ** 2,
+    NaN,
+    Infinity,
+  ])("rejects an invalid worker-selected cap %s", (containerMemoryBytes) => {
+    stubRequiredEnvironment();
+    expect(() =>
+      rendererRunArguments(
+        { ...loadWorkerConfig(), containerMemoryBytes },
+        "job_test",
+        "/input",
+        "/output",
+      ),
+    ).toThrow("memory cap");
   });
   it("rejects mutable images", () => {
     stubRequiredEnvironment("latest");

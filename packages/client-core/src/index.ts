@@ -102,7 +102,12 @@ export type ClientCoreEvent =
   | { type: "archive.created"; size: number; sha256: string; files: number }
   | { type: "source.ready"; sourceId: string; uploadRequired: boolean }
   | { type: "job.queued"; jobId: string }
-  | { type: "job.status"; jobId: string; status: JobResponse["status"] }
+  | {
+      type: "job.status";
+      jobId: string;
+      status: JobResponse["status"];
+      resourceWait?: string;
+    }
   | { type: "artifact.downloaded"; name: string; path: string };
 
 export interface ArtifactPaths {

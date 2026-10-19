@@ -1,6 +1,6 @@
 {
   "name": "@latex-renderer/client-core",
-  "version": "1.5.0-rc.10",
+  "version": "1.5.0-rc.11",
   "private": true,
   "license": "Apache-2.0",
   "type": "module",

@@ -43,3 +43,20 @@ export function readHostResources(): HostResources {
     ioStallPercent: stall("io"),
   };
 }
+
+export function resourceWaitMessage(
+  state: ReturnType<typeof assessHostResources>,
+  resources: HostResources,
+  requiredBytes: number,
+  longWait: boolean,
+): string {
+  const reasons = {
+    ready: "開始可能",
+    memory_low: "空きメモリ不足",
+    memory_pressure: "メモリ回収の負荷が高い",
+    io_pressure: "ディスクI/Oの負荷が高い",
+    metrics_unavailable: "メモリ情報を取得できない",
+  };
+  const mib = (bytes: number) => Math.ceil(bytes / 1024 ** 2);
+  return `${reasons[state]}のため開始待機中です。利用可能メモリ: ${resources.availableBytes === null ? "不明" : `${Math.floor(resources.availableBytes / 1024 ** 2)}MiB`}、開始条件: ${mib(requiredBytes)}MiB。${longWait ? "長時間待機していますが、待機だけではJobを失敗にしません。" : "条件が整うと自動的に開始します。"}不要になった場合はキャンセルできます。`;
+}

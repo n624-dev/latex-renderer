@@ -8,6 +8,59 @@ afterEach(() => {
 });
 
 describe("Worker lease fencing", () => {
+  it("pages through a bounded admission window without losing the rest of the queue", () => {
+    const f = setup(),
+      original = f.database.jobs.get(f.jobId);
+    if (!original?.source_id) throw new Error("Missing fixture Source");
+    for (let i = 0; i < 32; i++)
+      f.database.jobs.insertQueued({
+        id: `job_extra_${i.toString().padStart(2, "0")}`,
+        userId: original.user_id,
+        serviceAccountId: original.service_account_id,
+        apiKeyId: original.api_key_id,
+        rendererVersion: original.renderer_version,
+        sourceId: original.source_id,
+        entrypoint: original.entrypoint,
+        timestamp: "2026-08-31T00:00:00.000Z",
+        reservedOutputBytes: 0,
+      });
+    const first = f.database.worker.admissionCandidates();
+    expect(first).toHaveLength(32);
+    const second = f.database.worker.admissionCandidates(first.at(-1));
+    expect(second).toHaveLength(1);
+    expect(new Set([...first, ...second].map((r) => r.id)).size).toBe(33);
+  });
+  it("claims only the selected queued ID and does not fall back after cancellation", () => {
+    const f = setup(),
+      now = "2026-08-31T00:00:00.000Z";
+    expect(
+      f.database.worker.claimNext("worker", now, now, undefined, "job_missing"),
+    ).toBeUndefined();
+    expect(f.database.jobs.get(f.jobId)?.status).toBe("queued");
+    f.database.jobs.cancel(f.jobId, now);
+    expect(
+      f.database.worker.claimNext("worker", now, now, undefined, f.jobId),
+    ).toBeUndefined();
+  });
+  it("updates only the selected Job's wait reason, without needless repeated writes", () => {
+    const f = setup(),
+      now = "2026-08-31T00:00:00.000Z";
+    f.database.worker.setAdmissionReason(true, now, "job_missing", "waiting");
+    expect(f.database.jobs.get(f.jobId)?.error_code).toBeNull();
+    f.database.worker.setAdmissionReason(true, now, f.jobId, "memory low");
+    f.database.worker.setAdmissionReason(
+      true,
+      "2026-08-31T01:00:00.000Z",
+      f.jobId,
+      "memory low",
+    );
+    expect(f.database.jobs.get(f.jobId)).toMatchObject({
+      status: "queued",
+      error_code: "HOST_RESOURCE_WAIT",
+      error_message: "memory low",
+      updated_at: now,
+    });
+  });
   it("recovers an expired canceled lease without requeueing it or releasing a replacement owner's lease", () => {
     const { database, jobId } = setup();
     const now = "2026-08-31T00:00:00.000Z";

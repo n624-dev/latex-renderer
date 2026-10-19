@@ -7,7 +7,12 @@ import { startWorkerHeartbeat } from "./heartbeat.js";
 import { processJob } from "./job-processor.js";
 import { createPeriodicLeaseRecovery } from "./periodic-recovery.js";
 import { claimNextJob } from "./queue.js";
-import { assessHostResources, readHostResources } from "./admission.js";
+import {
+  assessHostResources,
+  readHostResources,
+  resourceWaitMessage,
+} from "./admission.js";
+import { planRenderMemory, rememberRenderMemory } from "./memory-plan.js";
 import { diagnosticWriter } from "../../../deploy/scripts/service-diagnostics.mjs";
 import { recoverStaleLeases } from "./recovery.js";
 import { processPreview, recoverPreviewRequests } from "./preview-processor.js";
@@ -56,6 +61,8 @@ export async function runWorker(
   let nextResourceCheck = 0,
     admission: ReturnType<typeof assessHostResources> = "ready",
     previousAdmission = "";
+  let resources = readHostResources();
+  let admissionAfter: { queued_at: string; id: string } | undefined;
   let preferPreview = false,
     nextPreviewRecovery = 0;
   let nextSourceTreeCollection = 0;
@@ -105,18 +112,67 @@ export async function runWorker(
         config.minimumAvailableMemoryBytes !== undefined &&
         Date.now() >= nextResourceCheck
       ) {
-        admission = assessHostResources(
-          readHostResources(),
-          config.minimumAvailableMemoryBytes,
-        );
-        database.worker.setAdmissionReason(admission !== "ready", nowIso());
+        resources = readHostResources();
         nextResourceCheck = Date.now() + 5000;
       }
+      let candidates = database.worker.admissionCandidates(admissionAfter);
+      if (!candidates.length && admissionAfter) {
+        admissionAfter = undefined;
+        candidates = database.worker.admissionCandidates();
+      }
+      const planned = candidates.map((candidate) => {
+        const plan = planRenderMemory(
+          database,
+          candidate,
+          config.image,
+          config.minimumAvailableMemoryBytes,
+        );
+        const state =
+          plan.minimum === undefined
+            ? "ready"
+            : assessHostResources(resources, plan.minimum);
+        database.worker.setAdmissionReason(
+          state !== "ready",
+          nowIso(),
+          candidate.id,
+          resourceWaitMessage(
+            state,
+            resources,
+            plan.minimum ?? 0,
+            Date.now() - Date.parse(candidate.queued_at) >=
+              (config.admissionWaitTimeoutMs ?? 900000),
+          ),
+        );
+        return { candidate, plan, state };
+      });
+      const selected = planned.find((p) => p.state === "ready");
+      admissionAfter = selected ? undefined : candidates.at(-1);
+      const plan =
+        selected?.plan ??
+        planned[0]?.plan ??
+        planRenderMemory(
+          database,
+          undefined,
+          config.image,
+          config.minimumAvailableMemoryBytes,
+        );
+      admission =
+        selected?.state ??
+        planned[0]?.state ??
+        (plan.minimum === undefined
+          ? "ready"
+          : assessHostResources(resources, plan.minimum));
       if (admission !== previousAdmission) {
         diagnostic({ event: "renderer_worker.admission", state: admission });
         database.settings.upsert(
           "worker_admission",
-          { state: admission, checkedAt: nowIso() },
+          {
+            state: admission,
+            checkedAt: nowIso(),
+            availableBytes: resources.availableBytes,
+            requiredBytes: plan.minimum ?? null,
+            containerMemoryBytes: plan.limit,
+          },
           "system",
           nowIso(),
         );
@@ -151,36 +207,61 @@ export async function runWorker(
         }
       }
       if (admission !== "ready") {
-        const pending = database.worker.nextQueued();
-        if (
-          pending &&
-          Date.now() - Date.parse(pending.queued_at) >=
-            (config.admissionWaitTimeoutMs ?? 900000)
-        ) {
-          const cutoff = new Date(
-            Date.now() - (config.admissionWaitTimeoutMs ?? 900000),
-          ).toISOString();
-          const blocked = claimNextJob(database, config.workerId, cutoff);
-          if (blocked)
-            await recordFailure(
-              database,
-              config,
-              blocked,
-              "Rendering could not start within the queue deadline because host resources were insufficient",
-              "HOST_RESOURCE_BUSY",
-              "failed",
-            );
-        }
+        // Resource waiting is not a failed rendering. The old configured
+        // interval now controls the long-wait notice, never a fake failure.
         await idleDelay();
         continue;
       }
-      const job = claimNextJob(database, config.workerId);
+      const job = selected
+        ? claimNextJob(
+            database,
+            config.workerId,
+            undefined,
+            selected.candidate.id,
+          )
+        : claimNextJob(database, config.workerId);
       if (job === undefined) {
         await idleDelay();
         continue;
       }
+      const samples = new Map<string, number>();
+      const completeRun = !database.artifacts.hasPublishedPdf(job.id);
+      const executionConfig: WorkerConfig = {
+        ...config,
+        containerMemoryBytes: plan.limit,
+        observeContainerMemory:
+          config.minimumAvailableMemoryBytes === undefined
+            ? undefined
+            : (container, peak) => {
+                samples.set(
+                  container,
+                  Math.max(samples.get(container) ?? 0, peak),
+                );
+              },
+      };
       try {
-        await processJob(database, config, job);
+        await processJob(database, executionConfig, job);
+        const terminal = database.jobs.get(job.id);
+        const requiredSamples = job.outputs_json.includes('"svg"') ? 2 : 1;
+        const peak =
+          samples.size >= requiredSamples
+            ? Math.max(...samples.values())
+            : undefined;
+        if (
+          terminal?.status === "succeeded" &&
+          terminal.lease_generation === job.lease_generation &&
+          completeRun
+        )
+          rememberRenderMemory(database, selected?.plan.key, peak, true);
+        else if (terminal?.error_code === "RENDERER_MEMORY_LIMIT")
+          rememberRenderMemory(database, selected?.plan.key, undefined, false);
+        diagnostic({
+          event: "renderer_worker.memory_result",
+          jobId: job.id,
+          memoryPeakBytes: peak ?? null,
+          memoryLimitBytes: plan.limit,
+          result: terminal?.status ?? "unknown",
+        });
         preferPreview = true;
       } catch (error) {
         if (error instanceof RendererCleanupDeferred) {
@@ -199,6 +280,8 @@ export async function runWorker(
               ? error.message.slice(0, 1000)
               : "Unknown renderer error",
           rejected = error instanceof AppError && error.status === 422;
+        if (error instanceof AppError && error.code === "RENDERER_MEMORY_LIMIT")
+          rememberRenderMemory(database, selected?.plan.key, undefined, false);
         await recordFailure(
           database,
           config,

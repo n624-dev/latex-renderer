@@ -6,6 +6,7 @@ import {
   parseJobStatus,
   parseSourceTicket,
   responseError,
+  resourceWaitLabel,
   runBoundedBatch,
   sha256Hex,
   uploadSourceZip,
@@ -440,14 +441,14 @@ function renderJobResult(
     state = document.createElement("p"),
     actions = document.createElement("div");
   heading.textContent = title;
-  state.textContent = `${statusLabel(job.status)}${job.status === "queued" && job.errorCode === "HOST_RESOURCE_WAIT" ? " — サーバー資源の空きを待っています" : ""}${connection === "connected" ? "" : " — 接続が切れました。再接続しています…"}`;
+  state.textContent = `${statusLabel(job.status)}${resourceWaitLabel(job)}${connection === "connected" ? "" : " — 接続が切れました。再接続しています…"}`;
   if (job.stages) {
     const partial =
       job.stages.pdf.status === "succeeded" &&
       ["failed", "timeout", "canceled", "skipped"].includes(
         job.stages.svg.status,
       );
-    state.textContent = `${partial ? "部分成功 — " : ""}PDF: ${statusLabel(job.stages.pdf.status)} / SVG: ${statusLabel(job.stages.svg.status)}${job.status === "queued" && job.errorCode === "HOST_RESOURCE_WAIT" ? " — サーバー資源の空きを待っています" : ""}${connection === "connected" ? "" : " — 再接続中"}`;
+    state.textContent = `${partial ? "部分成功 — " : ""}PDF: ${statusLabel(job.stages.pdf.status)} / SVG: ${statusLabel(job.stages.svg.status)}${resourceWaitLabel(job)}${connection === "connected" ? "" : " — 再接続中"}`;
   }
   actions.className = "actions";
   const firstPreview = job.previews

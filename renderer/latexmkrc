@@ -1,4 +1,6 @@
-$lualatex = 'lualatex -no-shell-escape %O %S';
+my $gc = ($ENV{RENDERER_LUA_GC_SCRIPT} // '') eq '/tmp/renderer-memory.lua'
+    ? '-fmt=lualatex -lua=/tmp/renderer-memory.lua ' : '';
+$lualatex = 'lualatex -no-shell-escape ' . $gc . '%O %S';
 $pdf_mode = 4;
 $max_repeat = 5;
 $bibtex_use = 2;

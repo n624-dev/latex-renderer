@@ -1,6 +1,6 @@
 import { afterEach, describe, it, expect, vi } from "vitest";
 import { RendererDatabase, type WorkerJobRow } from "@latex-renderer/database";
-import { DEFAULT_RESOURCE_LIMITS } from "@latex-renderer/shared";
+import { AppError, DEFAULT_RESOURCE_LIMITS } from "@latex-renderer/shared";
 import type { WorkerConfig } from "../apps/renderer-worker/src/config.js";
 import * as docker from "../apps/renderer-worker/src/docker.js";
 import * as recovery from "../apps/renderer-worker/src/recovery.js";
@@ -10,6 +10,12 @@ import * as failure from "../apps/renderer-worker/src/failure.js";
 import * as queue from "../apps/renderer-worker/src/queue.js";
 import * as admission from "../apps/renderer-worker/src/admission.js";
 import { runWorker } from "../apps/renderer-worker/src/worker.js";
+import {
+  MIB,
+  memoryProfileKey,
+  planRenderMemory,
+  rememberRenderMemory,
+} from "../apps/renderer-worker/src/memory-plan.js";
 
 const databases: RendererDatabase[] = [];
 afterEach(() => {
@@ -72,6 +78,120 @@ function fixture() {
   };
 }
 describe("worker stop and orphan-recovery lifecycle", () => {
+  it("invalidates a lightweight prediction after actual memory exhaustion without retrying it in a loop", async () => {
+    const f = fixture();
+    f.config.minimumAvailableMemoryBytes = 832 * MIB;
+    const candidate = {
+      id: job.id,
+      user_id: "owner",
+      source_sha256: "b".repeat(64),
+      entrypoint: "main.tex",
+      outputs_json: '["pdf"]',
+      queued_at: new Date().toISOString(),
+    };
+    vi.spyOn(f.database.worker, "admissionCandidates").mockReturnValue([
+      candidate,
+    ]);
+    rememberRenderMemory(
+      f.database,
+      memoryProfileKey(candidate, f.config.image),
+      191 * MIB,
+      true,
+    );
+    vi.spyOn(admission, "readHostResources").mockReturnValue({
+      availableBytes: 750 * MIB,
+      memoryStallPercent: 0,
+      ioStallPercent: 0,
+    });
+    f.processed.mockImplementation(() => {
+      f.abort.abort();
+      return Promise.reject(
+        new AppError("RENDERER_MEMORY_LIMIT", "Memory limit exceeded"),
+      );
+    });
+    await runWorker(f.database, f.config, f.abort.signal);
+    expect(f.processed).toHaveBeenCalledOnce();
+    expect(f.failed).toHaveBeenCalledOnce();
+    expect(
+      planRenderMemory(f.database, candidate, f.config.image, 832 * MIB)
+        .estimatedPeak,
+    ).toBeNull();
+  });
+  it("starts an observed lightweight Job behind a blocked unknown head with a matching sandbox cap", async () => {
+    const f = fixture();
+    f.config.minimumAvailableMemoryBytes = 832 * MIB;
+    const heavy = {
+      id: "job_heavy",
+      user_id: "owner",
+      source_sha256: "b".repeat(64),
+      entrypoint: "main.tex",
+      outputs_json: '["pdf"]',
+      queued_at: new Date(Date.now() - 1000000).toISOString(),
+    };
+    const light = { ...heavy, id: job.id, source_sha256: "c".repeat(64) };
+    vi.spyOn(f.database.worker, "admissionCandidates").mockReturnValue([
+      heavy,
+      light,
+    ]);
+    rememberRenderMemory(
+      f.database,
+      memoryProfileKey(light, f.config.image),
+      407 * MIB,
+      true,
+    );
+    vi.spyOn(admission, "readHostResources").mockReturnValue({
+      availableBytes: 750 * MIB,
+      memoryStallPercent: 0,
+      ioStallPercent: 0,
+    });
+    f.processed.mockImplementation((_db, config) => {
+      expect(config.containerMemoryBytes).toBe(576 * MIB);
+      f.abort.abort();
+      return Promise.resolve();
+    });
+    await runWorker(f.database, f.config, f.abort.signal);
+    expect(f.claimed).toHaveBeenCalledWith(
+      f.database,
+      f.config.workerId,
+      undefined,
+      light.id,
+    );
+    expect(f.failed).not.toHaveBeenCalled();
+  });
+  it("does not use a small prediction to bypass severe host memory pressure", async () => {
+    const f = fixture();
+    f.config.minimumAvailableMemoryBytes = 832 * MIB;
+    const candidate = {
+      id: job.id,
+      user_id: "owner",
+      source_sha256: "b".repeat(64),
+      entrypoint: "main.tex",
+      outputs_json: '["pdf"]',
+      queued_at: new Date().toISOString(),
+    };
+    vi.spyOn(f.database.worker, "admissionCandidates").mockReturnValue([
+      candidate,
+    ]);
+    rememberRenderMemory(
+      f.database,
+      memoryProfileKey(candidate, f.config.image),
+      191 * MIB,
+      true,
+    );
+    vi.spyOn(admission, "readHostResources").mockReturnValue({
+      availableBytes: 750 * MIB,
+      memoryStallPercent: 15,
+      ioStallPercent: 0,
+    });
+    await runWorker(f.database, f.config, f.abort.signal, {
+      idleDelay: () => {
+        f.abort.abort();
+        return Promise.resolve();
+      },
+    });
+    expect(f.claimed).not.toHaveBeenCalled();
+    expect(f.failed).not.toHaveBeenCalled();
+  });
   it("keeps low-memory jobs queued without launching a renderer", async () => {
     const f = fixture();
     f.config.minimumAvailableMemoryBytes = 1024;
@@ -96,7 +216,7 @@ describe("worker stop and orphan-recovery lifecycle", () => {
       state: "memory_low",
     });
   });
-  it("finishes a resource-blocked job at its queue deadline without rendering it", async () => {
+  it("does not fail a resource-blocked job when its long-wait notice becomes due", async () => {
     const f = fixture();
     f.config.minimumAvailableMemoryBytes = 1024;
     f.config.admissionWaitTimeoutMs = 1000;
@@ -116,14 +236,8 @@ describe("worker stop and orphan-recovery lifecycle", () => {
       },
     });
     expect(f.processed).not.toHaveBeenCalled();
-    expect(f.failed).toHaveBeenCalledWith(
-      f.database,
-      f.config,
-      job,
-      expect.any(String),
-      "HOST_RESOURCE_BUSY",
-      "failed",
-    );
+    expect(f.claimed).not.toHaveBeenCalled();
+    expect(f.failed).not.toHaveBeenCalled();
   });
   it("does not claim another job or finish shutdown before the active render completes", async () => {
     const f = fixture();

@@ -258,6 +258,29 @@ describe("client core", () => {
     expect(await readFile(join(output, "job.json"), "utf8")).not.toBe(previous);
   });
 
+  it("reports a host-resource wait without turning it into a terminal render failure", async () => {
+    const root = await temporaryRoot();
+    const queued = {
+      ...job("queued"),
+      errorCode: "HOST_RESOURCE_WAIT",
+      errorMessage: "Waiting for host resources",
+    };
+    const client = new FakeClient([queued, job("succeeded")]);
+    const events: ClientCoreEvent[] = [];
+    const result = await downloadJobArtifacts(client, queued.id, root, {
+      pollIntervalMs: 0,
+      sleep: () => Promise.resolve(),
+      onEvent: (event) => events.push(event),
+    });
+    expect(result.job.status).toBe("succeeded");
+    expect(events).toContainEqual({
+      type: "job.status",
+      jobId: queued.id,
+      status: "queued",
+      resourceWait: queued.errorMessage,
+    });
+  });
+
   it("leaves the previous generation intact when waiting for a Job times out", async () => {
     const root = await temporaryRoot(),
       output = join(root, ".render");
@@ -270,7 +293,10 @@ describe("client core", () => {
         pollIntervalMs: 1_000,
         pollTimeoutMs: 20,
       }),
-    ).rejects.toMatchObject({ code: "RENDER_POLL_TIMEOUT" });
+    ).rejects.toMatchObject({
+      code: "RENDER_POLL_TIMEOUT",
+      message: expect.stringContaining("did not cancel the server Job"),
+    });
     expect(await readFile(join(output, "job.json"), "utf8")).toBe(previous);
     expect(await readFile(join(output, "result.pdf"), "utf8")).toBe(
       "result.pdf",

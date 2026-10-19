@@ -136,6 +136,8 @@ export function diagnosticWriter(storageRoot, channel, now = Date.now) {
         "code",
         "elapsedMs",
         "state",
+        "memoryPeakBytes",
+        "memoryLimitBytes",
       ]) {
         const value = record[key];
         if (
