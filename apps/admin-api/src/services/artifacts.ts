@@ -14,7 +14,7 @@ import type { AdminDependencies, AppActor } from "../types.js";
 
 const ARTIFACT_NAME =
   /^(?:result\.pdf|compile\.log|errors\.json|dependencies\.json|svg\/(?:compile\.log|errors\.json|dependencies\.json|manifest\.json)|svg\/objects\/(?:math|tikz)-[0-9]{6}\.svg)$/;
-const PREVIEW_NAME = /^page-[1-9][0-9]{0,2}\.png$/;
+const PREVIEW_NAME = /^page-[0-9]{1,3}\.png$/;
 
 /** Caller must first apply admin scope or same-user Job authorization. */
 export async function adminPreviewResponse(
@@ -167,7 +167,11 @@ export function adminArtifactResponse(
 ): Response {
   if (!/^job_[a-f0-9]{32}$/.test(jobId))
     throw new AppError("JOB_NOT_FOUND", "Job does not exist", 404);
-  if (!(preview ? PREVIEW_NAME : ARTIFACT_NAME).test(name))
+  if (
+    !(preview ? PREVIEW_NAME : ARTIFACT_NAME).test(name) ||
+    (preview &&
+      (Number(name.slice(5, -4)) < 1 || Number(name.slice(5, -4)) > 100))
+  )
     throw new AppError("ARTIFACT_NOT_FOUND", "Artifact does not exist", 404);
   const relativePath = preview ? `previews/${name}` : name;
   const leased = deps.database.transaction(() => {

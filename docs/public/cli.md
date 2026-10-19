@@ -91,11 +91,14 @@ latex-render jobs get <jobId>
 latex-render jobs cancel <jobId>
 latex-render jobs download <jobId> --output .render
 latex-render jobs download <jobId> --pdf-only --output .render
+latex-render jobs download <jobId> --preview-page 2 5 --output .render
 latex-render jobs retry-svg <jobId> --output .render
 latex-render jobs delete <jobId> --yes
 ```
 
 ジョブ操作時はAPIキーで操作用トークンを更新します。`jobs download` は指定Jobが終了するまで待ってから成果物を切り替えます。待機中にキャンセルした場合や待機が失敗した場合、保存済みの一式は変更しません。削除は終了済みジョブだけが対象です。
+
+新しいRuntimeではPNGは初期1ページ＋要求したページだけを生成します。通常のダウンロードは生成済みPNGだけを取得し、`--preview-page 2 5` で追加ページを要求できます。PDFの再コンパイルや保持期限の延長は行わず、生成後の実際のサイズ・SHA-256を確認して保存します。
 
 新しいPDF＋SVGジョブはPDFを先に公開します。`--pdf-only` はPDFの確定まで待って取得し、SVG完了は待ちません。SVGだけが失敗した場合は、PDFを保存した上で部分成功を表示します。`retry-svg` は同じJob・Source・確定PDFを使ってSVGだけを再試行し、PDFを再コンパイルしません。初回を含め最大8回で、保持期限は延長しません。Runtimeが変わった場合はJob全体を新規作成してください。詳細は[PDFとSVGの独立処理](https://github.com/n624-dev/latex-renderer/blob/main/docs/independent-output-stages.md)を参照してください。
 

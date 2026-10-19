@@ -16,7 +16,11 @@ import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { pipeline } from "node:stream/promises";
 import { ZipFile } from "yazl";
-import { validateAndExtract } from "../../packages/zip-validation/dist/index.js";
+import {
+  validateAndExtract,
+  captureValidatedSourceTree,
+  verifyValidatedSourceTree,
+} from "../../packages/zip-validation/dist/index.js";
 import {
   publishArtifacts,
   readArtifactSinglePass,
@@ -105,6 +109,12 @@ try {
         ),
         "main.tex",
       );
+      zip.addBuffer(
+        Buffer.from(
+          "\\documentclass{article}\\begin{document}Other entrypoint\\end{document}",
+        ),
+        "other.tex",
+      );
       const data = randomBytes(bytes);
       for (let index = 0; index < count; index++)
         zip.addBuffer(data, `assets/${index}.png`);
@@ -125,6 +135,41 @@ try {
         });
         await rm(target, { recursive: true, force: true });
       }
+      const snapshot = join(root, `${name}-verified-tree`);
+      let manifest;
+      await measure(`source-cache-capture-${name}`, async () => {
+        const extracted = await validateAndExtract(archive, snapshot, limits);
+        manifest = await captureValidatedSourceTree(
+          snapshot,
+          extracted,
+          limits,
+        );
+        return {
+          files: extracted.files,
+          bytes: extracted.bytes,
+          additionalStoredBytes: extracted.bytes,
+          manifestBytes: Buffer.byteLength(JSON.stringify(manifest)),
+          candidateOnly: true,
+        };
+      });
+      for (let attempt = 0; attempt < 3; attempt++)
+        await measure(`source-cache-verify-${name}-${attempt}`, async () => {
+          const entrypoint = attempt % 2 ? "other.tex" : "main.tex",
+            verified = await verifyValidatedSourceTree(
+              snapshot,
+              manifest,
+              limits,
+              entrypoint,
+            );
+          return {
+            files: verified.files,
+            bytes: verified.bytes,
+            entrypoint,
+            additionalJobInputBytes: 0,
+            candidateOnly: true,
+          };
+        });
+      await rm(snapshot, { recursive: true, force: true });
       await rm(archive);
     }
     for (const pages of [1, 20, 100]) {

@@ -74,6 +74,8 @@ SVGだけ失敗した場合は `retry_svg_render` を使用します。同じJob
 
 完全なPDF・ログ・SVGは、対応するMCPクライアントから取得できます。結果の表現とResourceの仕様は[開発者向け資料](/docs/reference/#mcpの結果とresource)を参照してください。
 
+プレビューは初期1ページのみ生成し、`get_render_preview` やpreview Resourceで明示したページを追加生成します。`previewPages` とPDFの `pageCount` は有効な総ページ数を表し、成果物一覧は生成済みファイルの実際のサイズ・SHA-256だけを返します。準備中なら同じJobとページを再取得し、別Jobを作り直さないでください。既存の全ページ生成済みJobも利用できます。
+
 AIクライアントはWeb UIを開かず、`create_source` → `create_render` → `get_render_status` → `get_render_diagnostics` / `get_render_preview` → Source revision → `retry_render`または再render → Resource読取の順でレンダリング、修正、再確認まで進められます。Web結果リンクは人が確認する場合の補助です。
 
 利用環境は事前に問い合わせできます。現在のengineは `lualatex`、shell escapeとコンテナ外networkは無効です。package・font検索は1回50件まで返し、続きがある場合だけcursorを返します。
@@ -120,6 +122,8 @@ claude mcp add --scope user latex-renderer -- latex-renderer-mcp
 単一文書は `render_project` を使えます。`entrypoint` を省略すると `main.tex`、`outputs` を省略すると `["pdf"]` です。SVGが必要な場合は `["pdf","svg"]` を指定します。利用者が複数のentrypointを指定した場合は、`upload_source` を1回呼び、返された同じ `sourceId` で `create_render_job` を文書ごとに呼びます。利用者が対象を指定していない場合、すべての `.tex` を独立文書と推測して実行しません。
 
 保存する場合は `upload_source` の後に `attach_project_revision` を呼びます。ローカルMCPの改訂保存はアップロード済みSourceを参照します。保存Projectを使わない `render_project` も引き続き利用できます。
+
+`download_render_artifacts` は通常、生成済みPNGだけを保存します。追加ページが必要なときは `previewPages: [2, 5]` を指定します。全ページを暗黙に生成せず、生成待ちが失敗しても既存の保存成果物は切り替えません。
 
 各ツールはobject-rootの `outputSchema` を公開し、機械処理用の `structuredContent` と、旧クライアント向けの短いTextContentを返します。状態、Source ID、ジョブID、成果物パス、構造化エラーは `structuredContent` を参照してください。
 

@@ -1,7 +1,10 @@
 const MAX_JSON_BYTES = 1024;
 const MAX_PROJECT_JSON_BYTES = 4096;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
-const API_KEY = /^Bearer lrk_[a-f0-9]{32}_[A-Za-z0-9_-]{43}$/;
+// Only the scheme is case-insensitive. The token remains byte-for-byte and
+// retains its strict alphabet; RFC Bearer allows one or more ASCII spaces.
+const API_KEY =
+  /^[Bb][Ee][Aa][Rr][Ee][Rr] +lrk_[a-f0-9]{32}_[A-Za-z0-9_-]{43}$/;
 const IDEMPOTENCY_KEY = /^[A-Za-z0-9][A-Za-z0-9._:-]{15,199}$/;
 
 export const GATEWAY_RESPONSE_HEADERS = Object.freeze({

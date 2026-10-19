@@ -9,6 +9,10 @@ export function userJobSql(alias = "jobs"): string {
 
 /** The diagnostic log export is deliberately unfiltered; only its Web/API view is filtered. */
 export const userAuditSql = `
+  NOT EXISTS (SELECT 1 FROM internal_resource_tombstones t
+    WHERE (t.kind=actor_type AND t.id=actor_id)
+       OR (t.kind=CASE WHEN target_type='render' THEN 'job' ELSE target_type END AND t.id=target_id))
+  AND
   NOT (actor_type='service_account' AND actor_id IN
     (SELECT id FROM service_accounts WHERE purpose='production-smoke'))
   AND NOT (actor_type='api_key' AND actor_id IN

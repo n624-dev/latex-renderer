@@ -28,7 +28,18 @@ describe(`Source pipeline HTTP/DB/Worker E2E (${realPipelineImage === undefined 
       };
       const first = await renderProject(f.client, project, options);
       expect(first.job.status).toBe("succeeded");
-      expect(first.artifacts.previews).toHaveLength(3);
+      expect(first.artifacts.previews).toHaveLength(
+        realPipelineImage === undefined ? 3 : 1,
+      );
+      if (realPipelineImage !== undefined) {
+        expect(first.job.previewPageCount).toBe(3);
+        const expanded = await f.withPreviewWorker(() =>
+          downloadJobArtifacts(f.client, first.job.id, output, {
+            previewPages: [2, 3],
+          }),
+        );
+        expect(expanded.artifacts.previews).toHaveLength(3);
+      }
       expect(first.source.uploadRequired).toBe(true);
       const second = await renderProject(f.client, project, options);
       expect(second.job.status).toBe("succeeded");
@@ -82,6 +93,44 @@ describe(`Source pipeline HTTP/DB/Worker E2E (${realPipelineImage === undefined 
           .prepare("SELECT COUNT(*) AS n FROM artifact_download_leases")
           .get(),
       ).toMatchObject({ n: 0 });
+    } finally {
+      await f.close();
+    }
+  });
+
+  it("generates only requested pages through real HTTP, fenced Worker publication and verified client download", async () => {
+    const f = await sourcePipelineFixture({}, { lazyPreviews: true });
+    try {
+      const project = join(f.root, "lazy-project"),
+        output = join(f.root, "lazy-result");
+      await mkdir(project);
+      await writeFile(join(project, "main.tex"), pipelineDocument(3));
+      const first = await renderProject(f.client, project, {
+        outputDirectory: output,
+        sleep: f.runNext,
+        pollTimeoutMs: 120000,
+      });
+      expect(first.job.previewPageCount).toBe(3);
+      expect(first.artifacts.previews).toHaveLength(1);
+      const pdf = await readFile(first.artifacts.pdf!),
+        completed = f.database.jobs.get(first.job.id)?.completed_at;
+      const generated = await f.withPreviewWorker(() =>
+        downloadJobArtifacts(f.client, first.job.id, output, {
+          previewPages: [3],
+        }),
+      );
+      expect(
+        generated.artifacts.previews.map((p) => p.split(/[\\/]/).at(-1)).sort(),
+      ).toEqual(["page-1.png", "page-3.png"]);
+      expect(await readFile(generated.artifacts.pdf!)).toEqual(pdf);
+      expect(f.database.jobs.get(first.job.id)?.completed_at).toBe(completed);
+      expect(f.database.previews.get(first.job.id, 2)).toBeUndefined();
+      const row = generated.job.previews.find(
+          (a) => a.relativePath === "previews/page-3.png",
+        )!,
+        bytes = await readFile(join(output, row.relativePath));
+      expect(bytes.length).toBe(row.size);
+      expect(createHash("sha256").update(bytes).digest("hex")).toBe(row.sha256);
     } finally {
       await f.close();
     }

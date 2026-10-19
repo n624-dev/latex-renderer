@@ -368,6 +368,16 @@ try {
         )
         .run(BigInt(checkpoint.sequence), auditPruneBatchSize).changes,
     );
+    // Classification outlives resource history, not the retained audit rows.
+    // These index-covered lookups do not read/export or discard audit content.
+    db.prepare(
+      `DELETE FROM internal_resource_tombstones WHERE (kind,id) IN (
+      SELECT t.kind,t.id FROM internal_resource_tombstones t
+      WHERE NOT EXISTS (SELECT 1 FROM audit_logs a WHERE a.actor_type=t.kind AND a.actor_id=t.id)
+        AND NOT EXISTS (SELECT 1 FROM audit_logs a WHERE a.target_type=t.kind AND a.target_id=t.id)
+        AND (t.kind!='job' OR NOT EXISTS (SELECT 1 FROM audit_logs a WHERE a.target_type='render' AND a.target_id=t.id))
+      ORDER BY t.kind,t.id LIMIT ?)`,
+    ).run(auditPruneBatchSize);
   }
   db.exec("COMMIT");
 } catch (error) {

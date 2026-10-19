@@ -155,6 +155,11 @@ change the Job result. Conversion remains the responsibility of a sandboxed
 Worker, never an HTTP request handler. The migration is infrastructure: it does
 not by itself switch an existing Runtime from eager to on-demand previews.
 Historical previews remain available without backfilling or rerendering.
+The same migration retains positively classified internal-smoke resource IDs
+after physical Job/Source/key/account deletion, so their audit records do not
+reappear in user-facing views. Raw diagnostic export remains unfiltered.
+Classification IDs are collected only once no retained audit row refers to them;
+unattributable historical records are not hidden by name-based guesses.
 Running conversions reserve bounded bytes in per-user storage accounting;
 cleanup protects them even after a lease expires until daemon recovery has
 verified the old container stopped. Updated six-file Runtimes emit page metadata

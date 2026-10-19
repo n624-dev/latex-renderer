@@ -5,6 +5,12 @@ import type {
   ServerIngressCredentials,
 } from "../../packages/server-setup-core/src/index.mjs";
 export function controlledServerSetupRelease(): Promise<string>;
+export function serverSetupEnvironmentFile(
+  kind: "initial" | "ingress",
+  contents: string,
+  review: ServerSetupReview,
+  workerUid: number,
+): string;
 export function inspectInitialSetupDatabase(
   path: string,
   id: string,

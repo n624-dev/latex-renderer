@@ -57,11 +57,71 @@ const users = program.command("users");
 users.command("list").action(async () => print(await request("GET", "/users")));
 users
   .command("create")
-  .requiredOption("--email <email>")
+  .option("--email <email>")
   .requiredOption("--display-name <name>")
   .requiredOption("--role <role>")
-  .action(async (o: { email: string; displayName: string; role: string }) =>
-    print(await request("POST", "/users", o)),
+  .requiredOption("--authentication <type>", "password or external")
+  .option("--login-name <name>", "password login name")
+  .option(
+    "--password-stdin",
+    "read the initial password from standard input, never argv",
+  )
+  .option("--subject <subject>", "external provider subject")
+  .option("--preferred-username <name>")
+  .option("--email-at-provider <email>")
+  .action(
+    async (o: {
+      email?: string;
+      displayName: string;
+      role: string;
+      authentication: string;
+      loginName?: string;
+      passwordStdin?: boolean;
+      subject?: string;
+      preferredUsername?: string;
+      emailAtProvider?: string;
+    }) => {
+      if (
+        !["password", "external"].includes(o.authentication) ||
+        (o.authentication === "password"
+          ? !o.loginName ||
+            !o.passwordStdin ||
+            o.subject !== undefined ||
+            o.preferredUsername !== undefined ||
+            o.emailAtProvider !== undefined
+          : !o.subject || o.loginName !== undefined || o.passwordStdin)
+      )
+        throw new AppError(
+          "INVALID_OPTION",
+          "Choose password with --login-name and --password-stdin, or external with --subject",
+          400,
+        );
+      const authentication =
+        o.authentication === "password"
+          ? {
+              type: "password",
+              loginName: o.loginName,
+              password: (await readStdin()).replace(/\r?\n$/, ""),
+            }
+          : {
+              type: "external",
+              subject: o.subject,
+              ...(o.preferredUsername === undefined
+                ? {}
+                : { preferredUsername: o.preferredUsername }),
+              ...(o.emailAtProvider === undefined
+                ? {}
+                : { emailAtProvider: o.emailAtProvider }),
+            };
+      print(
+        await request("POST", "/users", {
+          displayName: o.displayName,
+          role: o.role,
+          ...(o.email === undefined ? {} : { email: o.email }),
+          authentication,
+        }),
+      );
+    },
   );
 users
   .command("disable")
@@ -452,12 +512,24 @@ async function request(
     PUBLIC_ORIGIN,
     process.env.LATEX_RENDER_TRUSTED_ADMIN_ORIGINS,
   );
+  const accessId = process.env.CF_ACCESS_CLIENT_ID,
+    accessSecret = process.env.CF_ACCESS_CLIENT_SECRET;
+  if (Boolean(accessId) !== Boolean(accessSecret))
+    throw new AppError(
+      "CONFIG_REQUIRED",
+      "Configure both Cloudflare Access service-token fields, or neither for Standalone",
+      400,
+    );
   const response = await fetch(new URL(`${ADMIN_API_PREFIX}${path}`, base), {
     method,
     headers: {
       Authorization: `Bearer ${await loadKey()}`,
-      "CF-Access-Client-Id": required("CF_ACCESS_CLIENT_ID"),
-      "CF-Access-Client-Secret": required("CF_ACCESS_CLIENT_SECRET"),
+      ...(accessId && accessSecret
+        ? {
+            "CF-Access-Client-Id": accessId,
+            "CF-Access-Client-Secret": accessSecret,
+          }
+        : {}),
       ...(body === undefined ? {} : { "Content-Type": "application/json" }),
       ...extraHeaders,
     },
@@ -629,12 +701,15 @@ async function loadKey(): Promise<string> {
 async function readStdin(): Promise<string> {
   let value = "";
   process.stdin.setEncoding("utf8");
-  for await (const chunk of process.stdin) value += String(chunk);
-  return value;
-}
-function required(name: string): string {
-  const value = process.env[name];
-  if (!value) throw new AppError("CONFIG_REQUIRED", `${name} is required`);
+  for await (const chunk of process.stdin) {
+    value += String(chunk);
+    if (Buffer.byteLength(value, "utf8") > 8192)
+      throw new AppError(
+        "INPUT_TOO_LARGE",
+        "Credential input exceeds the size limit",
+        400,
+      );
+  }
   return value;
 }
 function print(value: unknown): void {

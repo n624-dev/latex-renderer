@@ -131,7 +131,10 @@ describe("bounded lazy preview publication (fixture conversion, no TeX)", () => 
     const f = await fixture();
     let pending: ReturnType<typeof f.renders.artifact> | undefined;
     try {
-      const identity = { userId: "pipeline_user", scopes: ["mcp:read"] };
+      const identity = {
+        userId: "pipeline_user",
+        scopes: ["mcp:read"] as const,
+      };
       const summary = f.renders.job(identity, f.job.id);
       expect(summary.previewPages).toEqual([1, 2, 3]);
       expect(

@@ -1,4 +1,35 @@
+export const internalAuditTombstonesSql = `
+CREATE TABLE internal_resource_tombstones (
+  kind TEXT NOT NULL CHECK(kind IN ('job','source','service_account','api_key')),
+  id TEXT NOT NULL,
+  PRIMARY KEY(kind,id)
+);
+-- Retain only positively attributable identities; never infer from user names.
+INSERT OR IGNORE INTO internal_resource_tombstones(kind,id)
+SELECT 'job',a.target_id FROM audit_logs a JOIN service_accounts s
+ ON a.actor_type='service_account' AND a.actor_id=s.id
+ WHERE s.purpose='production-smoke' AND a.target_type IN ('job','render')
+ AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.id=a.target_id);
+CREATE TRIGGER internal_job_deleted BEFORE DELETE ON jobs
+WHEN EXISTS (SELECT 1 FROM service_accounts s WHERE s.id=OLD.service_account_id AND s.purpose='production-smoke')
+BEGIN INSERT OR IGNORE INTO internal_resource_tombstones VALUES ('job',OLD.id); END;
+CREATE TRIGGER internal_source_deleted BEFORE DELETE ON sources
+WHEN OLD.purpose='production-smoke'
+BEGIN INSERT OR IGNORE INTO internal_resource_tombstones VALUES ('source',OLD.id); END;
+CREATE TRIGGER internal_key_deleted BEFORE DELETE ON api_keys
+WHEN EXISTS (SELECT 1 FROM service_accounts s WHERE s.id=OLD.service_account_id AND s.purpose='production-smoke')
+BEGIN INSERT OR IGNORE INTO internal_resource_tombstones VALUES ('api_key',OLD.id); END;
+CREATE TRIGGER internal_account_deleted BEFORE DELETE ON service_accounts
+WHEN OLD.purpose='production-smoke'
+BEGIN
+  INSERT OR IGNORE INTO internal_resource_tombstones VALUES ('service_account',OLD.id);
+  INSERT OR IGNORE INTO internal_resource_tombstones SELECT 'api_key',id FROM api_keys WHERE service_account_id=OLD.id;
+  INSERT OR IGNORE INTO internal_resource_tombstones SELECT 'job',id FROM jobs WHERE service_account_id=OLD.id;
+END;
+`;
+
 export const lazyPreviewsV22Sql = `
+${internalAuditTombstonesSql}
 CREATE TABLE job_preview_documents (
   job_id TEXT PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,
   pdf_artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,

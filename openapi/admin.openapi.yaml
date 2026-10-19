@@ -368,7 +368,7 @@ paths:
         - in: path
           name: name
           required: true
-          schema: { type: string, pattern: "^page-[1-9][0-9]{0,2}\\.png$" }
+          schema: { type: string, pattern: "^page-[0-9]{1,3}\\.png$" }
         - in: query
           name: disposition
           schema: { type: string, enum: [attachment, inline] }

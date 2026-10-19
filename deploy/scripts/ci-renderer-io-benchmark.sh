@@ -59,11 +59,13 @@ for pages in 1 10 50 100; do
       --tmpfs /tmp:rw,noexec,nosuid,nodev,size=256m,uid=10000,gid=10000 \
       --mount "type=bind,src=$output,dst=/work/pdf,readonly" \
       --entrypoint /bin/sh "$image" -c '
+        set -eu
         timeout -s TERM -k 2 60 pdftoppm -png -r 150 /work/pdf/result.pdf /work/output/page
         printf "RENDERER_EAGER_METRIC memory_peak_bytes=%s cpu_usage_usec=%s\n" \
           "$(cat /sys/fs/cgroup/memory.peak)" "$(awk '\''$1=="usage_usec" {print $2}'\'' /sys/fs/cgroup/cpu.stat)"
       '
     eager_first=$(find "$eager" -maxdepth 1 -name 'page-*.png' | sort | head -n 1)
+    [ "$(find "$eager" -maxdepth 1 -name 'page-*.png' | wc -l)" -eq "$pages" ]
     cmp "$output/previews/page-1.png" "$eager_first"
     printf 'RENDERER_PREVIEW_COMPARISON pages=%s outputs=%s eager_elapsed_seconds=%s eager_png_bytes=%s eager_png_files=%s lazy_png_files=1 first_page_identical=true\n' \
       "$pages" "$outputs" "$(($(date +%s)-eager_started))" \
@@ -82,6 +84,7 @@ for pages in 1 10 50 100; do
       --mount "type=bind,src=$output,dst=/work/pdf,readonly" "$image"
     eager_last=$(find "$eager" -maxdepth 1 -name 'page-*.png' | sort | tail -n 1)
     cmp "$single/previews/page-$pages.png" "$eager_last"
+    [ "$(find "$single/previews" -type f -name '*.png' | wc -l)" -eq 1 ]
     awk '/^RENDERER_METRIC / {print}' "$single/compile.log"
     printf 'RENDERER_LAZY_PAGE_CHECK pages=%s outputs=%s requested_page=%s bytes_identical=true\n' "$pages" "$outputs" "$pages"
     rm -rf -- "$eager" "$single"

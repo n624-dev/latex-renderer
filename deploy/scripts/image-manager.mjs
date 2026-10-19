@@ -25,6 +25,7 @@ import { acquireMutationLock } from "./mutation-lock.mjs";
 import {
   eligibleManagedImage,
   imageCleanupPolicy,
+  retainedPreviewRuntimeIds,
 } from "./image-cleanup-policy.mjs";
 import {
   boundedIntegerEnvironment,
@@ -1322,6 +1323,10 @@ async function cleanup(op, automatic = false) {
       ])
     ).trim(),
   );
+  const previewDatabase =
+    process.env.DATABASE_PATH ?? "/var/lib/latex-renderer/renderer.sqlite3";
+  for (const id of retainedPreviewRuntimeIds(previewDatabase))
+    protectedIds.add(id);
   const ids = [
     ...new Set(
       (await dockerCapture(["image", "ls", "--all", "--no-trunc", "--quiet"]))
@@ -1352,6 +1357,9 @@ async function cleanup(op, automatic = false) {
       )
     )
       continue;
+    // Recheck directly before deletion; do not rely on an earlier list while
+    // PDF publication/recovery may still be making progress.
+    if (retainedPreviewRuntimeIds(previewDatabase).has(id)) continue;
     await dockerLogged(op, ["image", "rm", "--force", id])
       .then(() => {
         removed += 1;
@@ -1389,7 +1397,7 @@ async function cleanup(op, automatic = false) {
   await persistState();
   await appendLog(
     op,
-    `Removed ${removed} unused managed image(s); protected ${protectedIds.size} current/rollback/configured image ID(s). Unused build cache was pruned with a ${cleanupPolicy.cacheMaxGiB} GiB retention target.\n`,
+    `Removed ${removed} unused managed image(s); protected ${protectedIds.size} current/rollback/configured/preview image ID(s). Unused build cache was pruned with a ${cleanupPolicy.cacheMaxGiB} GiB retention target.\n`,
   );
 }
 

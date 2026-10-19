@@ -156,7 +156,9 @@ it.each(["runtime", "standalone"])(
       result: "success",
     });
     db.raw
-      .exec(`DROP INDEX idx_service_accounts_purpose; DROP INDEX idx_sources_purpose;
+      .exec(`DROP TRIGGER internal_job_deleted; DROP TRIGGER internal_source_deleted;
+    DROP TRIGGER internal_key_deleted; DROP TRIGGER internal_account_deleted;
+    DROP INDEX idx_service_accounts_purpose; DROP INDEX idx_sources_purpose;
     ALTER TABLE service_accounts DROP COLUMN purpose; ALTER TABLE sources DROP COLUMN purpose;
     DELETE FROM schema_migrations WHERE version=19;`);
     if (mode === "runtime") db.migrate();

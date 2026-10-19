@@ -1,3 +1,4 @@
+export function retainedPreviewRuntimeIds(databasePath: string): Set<string>;
 export function imageCleanupPolicy(
   environment: Record<string, string | undefined>,
 ): {
