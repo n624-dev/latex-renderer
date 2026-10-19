@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { runInNewContext } from "node:vm";
 import { part6 } from "../apps/admin-web/src/assets/admin-script-parts/part-6.js";
+import { part5 } from "../apps/admin-web/src/assets/admin-script-parts/part-5.js";
 import { escapeHtml } from "../apps/admin-web/src/templates-shared.js";
 import {
   homePage,
@@ -10,6 +11,35 @@ import {
 import { setupStyle } from "../deploy/scripts/server-setup-assets.mjs";
 
 describe("concise public UI", () => {
+  it("does not enable non-functional selection controls in the current job list", async () => {
+    const selectionFlags: boolean[] = [];
+    await new Promise<void>((resolve, reject) => {
+      runInNewContext(`${part5}\njobs().then(done, fail)`, {
+        location: { search: "" },
+        URLSearchParams,
+        request: () => Promise.resolve({ items: [] }),
+        out: { innerHTML: "" },
+        section: (_title: string, body: string) => body,
+        table: (
+          _items: unknown,
+          _columns: unknown,
+          _actions: unknown,
+          select = false,
+        ) => {
+          selectionFlags.push(select);
+          return "";
+        },
+        nextPage: () => "",
+        esc: escapeHtml,
+        document: { querySelector: () => ({ onsubmit: null }) },
+        bindAction: () => {},
+        done: resolve,
+        fail: reject,
+      });
+    });
+    expect(selectionFlags).toEqual([false]);
+  });
+
   it("retains Runtime fingerprints and dependent languages inside optional details", () => {
     const html: unknown = runInNewContext(
       `${part6}\ntexRuntimeCard(runtime, '現在の環境')`,
