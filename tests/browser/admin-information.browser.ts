@@ -25,6 +25,7 @@ const userId = `user_${"a".repeat(32)}`;
 const accountId = `sa_${"a".repeat(32)}`;
 const requestedId = `sa_${"b".repeat(32)}`;
 const jobId = `job_${"c".repeat(32)}`;
+const retryId = `job_${"f".repeat(32)}`;
 const sourceId = `source_${"d".repeat(32)}`;
 const user = {
   id: userId,
@@ -95,7 +96,12 @@ async function fixture(kind: string, query = "", pagedOwners = false) {
         csrf: request.headers()["x-csrf-token"],
         body: request.postData(),
       });
-      await route.fulfill({ json: {} });
+      await route.fulfill({
+        json:
+          url.pathname === `/admin/api/v1/jobs/${jobId}/retry`
+            ? { id: retryId, retryOfJobId: jobId }
+            : {},
+      });
       return;
     }
     if (url.pathname === "/admin/assets/styles.css") {
@@ -186,6 +192,7 @@ async function fixture(kind: string, query = "", pagedOwners = false) {
       },
       "/jobs": { items: [job], nextCursor: null },
       [`/jobs/${jobId}`]: job,
+      [`/jobs/${retryId}`]: { ...job, id: retryId, retry_of_job_id: jobId },
       "/jobs/render-targets": { items: [] },
       "/sources": {
         items: [
@@ -353,6 +360,30 @@ it("selects an explicit account outside the first page and keeps scope labels al
     `/admin/api/v1/service-accounts/${requestedId}/api-keys`,
   );
   expect(mutations[0]?.csrf).toBe("fixture-csrf");
+  expect(errors).toEqual([]);
+});
+
+it("opens the newly created Job after an administrator retry", async () => {
+  const { page, errors, mutations } = await fixture("jobs", `?job=${jobId}`);
+  await page.locator("#job-technical").waitFor({ state: "attached" });
+  await page.evaluate(async (next) => {
+    const render = (
+      window as typeof window & {
+        renderJobFixture: (id: string, job: unknown) => Promise<unknown>;
+      }
+    ).renderJobFixture;
+    await render(next.id, { ...next, status: "failed" });
+  }, job);
+  await page.locator("[data-j-retry]").click();
+  await page.locator('dialog button[type="submit"]').click();
+  await page.waitForURL(`${origin}/admin/jobs/?job=${retryId}`);
+  expect(mutations).toEqual([
+    {
+      path: `/admin/api/v1/jobs/${jobId}/retry`,
+      csrf: "fixture-csrf",
+      body: "{}",
+    },
+  ]);
   expect(errors).toEqual([]);
 });
 
