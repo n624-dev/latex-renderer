@@ -399,7 +399,9 @@ export async function createInitialServerSetupHost(kind = "initial") {
       databasePath,
       id,
       { uid: rendererUid, gid },
-      existingJournal,
+      // Web setup reuses this adapter after apply/recovery. Ownership must
+      // follow the current durable journal, not the factory's initial view.
+      await store.journal(),
     );
   }
   const adapter = {
