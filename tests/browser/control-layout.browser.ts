@@ -45,13 +45,8 @@ describe.each(["light", "dark"] as const)("control layout: %s", (theme) => {
         );
         await page.goto("https://renderer.invalid/");
         const result = await page.evaluate(() => {
-          const required = <T extends Element = HTMLElement>(
-            selector: string,
-            root: ParentNode = document,
-          ): T => {
-            const element = root.querySelector<T>(selector);
-            if (!element)
-              throw new Error(`Missing layout fixture: ${selector}`);
+          const required = <T extends Element>(element: T | null): T => {
+            if (!element) throw new Error("Missing layout fixture element");
             return element;
           };
           const rect = (element: Element) => element.getBoundingClientRect();
@@ -71,24 +66,30 @@ describe.each(["light", "dark"] as const)("control layout: %s", (theme) => {
                 : after.left - before.right;
             });
           });
-          const pdf = required<HTMLButtonElement>("#pdf"),
-            svg = required<HTMLDetailsElement>("#svg"),
+          const pdf = required(
+              document.querySelector<HTMLButtonElement>("#pdf"),
+            ),
+            svg = required(document.querySelector<HTMLDetailsElement>("#svg")),
             before = rect(pdf).height;
           svg.open = true;
           const heightDifference = rect(pdf).height - before;
-          const button = required<HTMLButtonElement>(".code-copy"),
-            pre = required<HTMLPreElement>("pre"),
-            code = required("code", pre);
+          const button = required(
+              document.querySelector<HTMLButtonElement>(".code-copy"),
+            ),
+            pre = required(document.querySelector("pre")),
+            code = required(pre.querySelector("code"));
           pre.scrollLeft = 200;
           const copyOutside = !pre.contains(button),
             copyBeforeCode = rect(button).bottom <= rect(code).top;
-          const dialog = required<HTMLDialogElement>("dialog");
+          const dialog = required(document.querySelector("dialog"));
           dialog.showModal();
           const bounds = rect(dialog),
-            close = rect(required(".dialog-close", dialog));
-          const hidden = getComputedStyle(required("[hidden]", dialog)).display;
+            close = rect(required(dialog.querySelector(".dialog-close")));
+          const hidden = getComputedStyle(
+            required(dialog.querySelector("[hidden]")),
+          ).display;
           dialog.close();
-          const cell = required("td.actions-cell");
+          const cell = required(document.querySelector("td.actions-cell"));
           return {
             gaps,
             heightDifference,
@@ -99,12 +100,15 @@ describe.each(["light", "dark"] as const)("control layout: %s", (theme) => {
             hidden,
             overflow: document.documentElement.scrollWidth > innerWidth,
             cellDisplay: getComputedStyle(cell).display,
-            lastRowDivider: getComputedStyle(required("tbody tr:last-child td"))
-              .borderBottomWidth,
+            lastRowDivider: getComputedStyle(
+              required(document.querySelector("tbody tr:last-child td")),
+            ).borderBottomWidth,
             technicalWhitespace: getComputedStyle(
-              required(".job-technical code"),
+              required(document.querySelector(".job-technical code")),
             ).whiteSpace,
-            emptyMargin: getComputedStyle(required("#app-error")).marginTop,
+            emptyMargin: getComputedStyle(
+              required(document.querySelector("#app-error")),
+            ).marginTop,
           };
         });
         for (const gap of result.gaps) expect(gap).toBeGreaterThanOrEqual(8);
