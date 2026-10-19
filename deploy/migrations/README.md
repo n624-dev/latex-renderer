@@ -15,7 +15,7 @@ Before migrations on production:
    node deploy/scripts/preflight-users-migration.mjs /var/lib/latex-renderer/renderer.sqlite3
    ```
 
-4. Confirm the preflight reports target version 21. Deploy the application; the
+4. Confirm the preflight reports target version 22. Deploy the application; the
    first process holding `BEGIN IMMEDIATE` performs the migration and later
    processes observe it as already applied.
 5. Verify `PRAGMA integrity_check`, `PRAGMA foreign_key_check`, migration version,
@@ -68,3 +68,9 @@ consumers and cleanup together. SVG retries must not extend PDF retention or
 replace its immutable generation. Historical and PDF-only Jobs are not
 backfilled. Application-only downgrade remains unsupported; see
 [migration 21 recovery](021_independent_output_stages.rollback.md).
+
+Migration 22 adds PDF-bound preview page counts and a deduplicated request queue.
+Preview conversion must remain in the sandboxed Worker; queuing or retrying a
+page must not extend PDF retention or change the Job result. Historical eager
+previews remain usable without backfilling. Keep `rollbackCompatible: false`;
+see [migration 22 recovery](022_lazy_previews.rollback.md).

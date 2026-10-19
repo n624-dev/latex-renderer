@@ -4,6 +4,7 @@ import {
   internalSmokeVisibilitySql,
   remoteMcpLoginContinuationsSql,
   outputStagesV21Sql,
+  lazyPreviewsV22Sql,
 } from "./schema.js";
 
 const usersAccessSubjectV2Sql = `
@@ -64,6 +65,15 @@ export function applyDatabaseMigrations(db: DatabaseSync): void {
   applyInternalSmokeVisibilityV19(db);
   applyRemoteMcpLoginContinuationsV20(db);
   applyOutputStagesV21(db);
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    if (!db.prepare("SELECT 1 FROM schema_migrations WHERE version=22").get())
+      db.exec(lazyPreviewsV22Sql);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
 }
 
 function applyOutputStagesV21(db: DatabaseSync): void {

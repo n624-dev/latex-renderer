@@ -11,6 +11,7 @@ export {
 } from "./svg-retry-operations.js";
 export { sourceRequestExpiresAt } from "./source-lifecycle.js";
 export { artifactRetentionExpiresAt } from "./artifact-availability.js";
+export { waitForPreview } from "./preview-wait.js";
 export {
   bindArtifactDownloadLeases,
   protectArtifactDownloadLeases,
@@ -32,6 +33,7 @@ import {
   ProjectsRepository,
   BrowserAuthRepository,
   OutputStagesRepository,
+  PreviewsRepository,
 } from "./repositories/index.js";
 
 export interface DatabaseOptions {
@@ -56,6 +58,7 @@ export class RendererDatabase {
   public readonly projects: ProjectsRepository;
   public readonly browserAuth: BrowserAuthRepository;
   public readonly outputStages: OutputStagesRepository;
+  public readonly previews: PreviewsRepository;
 
   constructor(path: string, options: DatabaseOptions = {}) {
     this.raw = new DatabaseSync(path, {
@@ -78,6 +81,7 @@ export class RendererDatabase {
     this.projects = new ProjectsRepository(this.raw);
     this.browserAuth = new BrowserAuthRepository(this.raw);
     this.outputStages = new OutputStagesRepository(this.raw);
+    this.previews = new PreviewsRepository(this.raw);
   }
 
   migrate(): void {

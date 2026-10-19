@@ -18,6 +18,7 @@ import {
 import { generateMetadata } from "./metadata.js";
 import { classifyRenderResult } from "./render-result.js";
 import { processStagedJob } from "./staged-job-processor.js";
+import { previewPageCount } from "./preview-metadata.js";
 
 export async function processJob(
   database: RendererDatabase,
@@ -267,6 +268,10 @@ export async function processJob(
         result.status === "succeeded",
         result.status === "succeeded" && outputs.includes("svg"),
       );
+      const pageCount =
+        result.status === "succeeded"
+          ? await previewPageCount(staging, artifacts)
+          : undefined;
       await publishArtifacts(staging, candidateOutput, artifacts);
       renewLease();
       if (leaseIsLost()) return;
@@ -298,9 +303,10 @@ export async function processJob(
           );
         }
         const timestamp = nowIso();
-        for (const artifact of artifacts)
+        for (const artifact of artifacts) {
+          const artifactId = newId("artifact");
           database.artifacts.insert({
-            id: newId("artifact"),
+            id: artifactId,
             job_id: job.id,
             type: artifact.type,
             relative_path: artifact.path,
@@ -309,6 +315,16 @@ export async function processJob(
             sha256: artifact.sha256,
             created_at: timestamp,
           });
+          if (artifact.type === "pdf" && pageCount !== undefined)
+            database.previews.register({
+              job_id: job.id,
+              pdf_artifact_id: artifactId,
+              pdf_sha256: artifact.sha256,
+              page_count: pageCount,
+              runtime_image: config.image,
+              created_at: timestamp,
+            });
+        }
         const total = artifacts.reduce((sum, item) => sum + item.size, 0);
         if (
           database.worker.transitionOwned(

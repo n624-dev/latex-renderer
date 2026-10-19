@@ -24,6 +24,7 @@ import { RendererCleanupDeferred } from "./docker.js";
 import { generateMetadata } from "./metadata.js";
 import { classifyRenderResult } from "./render-result.js";
 import { runRendererStage } from "./renderer-stage.js";
+import { previewPageCount } from "./preview-metadata.js";
 
 /** PDF and SVG use separate daemon containers and separate immutable storage
  * generations. Only a fenced database transaction makes a generation public. */
@@ -243,6 +244,7 @@ export async function processStagedJob(
         throw new AppError("PREVIEW_MISSING", "PDF preview is missing");
       const pdf = artifacts.find((a) => a.path === "result.pdf");
       if (!pdf) throw new Error("Validated PDF is missing");
+      const pageCount = await previewPageCount(staging, artifacts);
       const sync = await digestRegularFile(
         join(staging, "result.synctex.gz"),
         config.maxOutputBytes,
@@ -288,7 +290,7 @@ export async function processStagedJob(
           )
         )
           return false;
-        insertArtifacts(artifacts, generation, timestamp);
+        insertArtifacts(artifacts, generation, timestamp, pageCount);
         if (
           db.worker.transitionOwned(
             job.id,
@@ -617,10 +619,12 @@ export async function processStagedJob(
     artifacts: ValidatedArtifact[],
     generation: number,
     timestamp: string,
+    pageCount?: number,
   ) {
-    for (const a of artifacts)
+    for (const a of artifacts) {
+      const artifactId = newId("artifact");
       db.artifacts.publishStage({
-        id: newId("artifact"),
+        id: artifactId,
         job_id: job.id,
         type: a.type,
         relative_path: a.path,
@@ -629,6 +633,16 @@ export async function processStagedJob(
         sha256: a.sha256,
         created_at: timestamp,
       });
+      if (a.type === "pdf" && pageCount !== undefined)
+        db.previews.register({
+          job_id: job.id,
+          pdf_artifact_id: artifactId,
+          pdf_sha256: a.sha256,
+          page_count: pageCount,
+          runtime_image: config.image,
+          created_at: timestamp,
+        });
+    }
   }
 }
 

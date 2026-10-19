@@ -90,7 +90,7 @@ function assertSchema(db) {
     undefined
   )
     throw new Error("Migration version 4 is absent");
-  for (const version of [5, 6, 17, 18, 19, 20, 21]) {
+  for (const version of [5, 6, 17, 18, 19, 20, 21, 22]) {
     if (
       db
         .prepare("SELECT 1 FROM schema_migrations WHERE version=?")
