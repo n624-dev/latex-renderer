@@ -165,6 +165,30 @@ override, Draft flag or verification-disable option. Downloads are temporary;
 interrupted bootstrap downloads are collected under the shared lock on activation or
 the next bootstrap mutation. Upgrade requires 4 GiB free for its bounded peak.
 
+### RC8 / RC9 cleanup dependency
+
+The `1.5.0-rc.8` and `1.5.0-rc.9` Updater envelopes omit
+`deploy/scripts/image-cleanup-policy.mjs`, which their sealed pruning script
+requires. Updating the application can pass rendering checks and still stop at
+`artifact-pruning` with `MODULE_NOT_FOUND`. An active application is not proof
+that its Updater switch or deployment transaction completed.
+
+Before another application update, use the documented bootstrap `upgrade`
+operation above with a **published fixed release** whose verified Updater
+envelope includes `image-cleanup-policy.mjs`. Verify its signature, provenance
+and complete envelope. Merely activating the
+pending RC9 candidate does not fix this omission. Never append files to an
+existing immutable slot or disable the cleanup protection check.
+
+If the previous application update failed, preserve its recovery journal and
+point. Check the actual application and Updater identities, database integrity,
+saved inputs, configuration and service health. Only after explicit operator
+review may the exact pending point be acknowledged using
+[the recovery procedure](update-recovery.md#failure-inspection-and-recovery).
+Do not restore the database or force a code rollback merely to bypass this
+missing-file failure. Apply the fixed application release through the standard
+Updater after the independently updated controller is healthy.
+
 The privileged application helper must not assume that copying a controller-
 owned bundle as root changes its owner. It exclusively creates a new copy in a
 canonical root-owned private directory, sets only that copy to root:root/0600,
