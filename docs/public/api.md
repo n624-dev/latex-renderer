@@ -4,7 +4,7 @@ category: API
 title: 公開API
 description: Source・保存Project共有、ジョブ作成、状態確認、成果物取得をHTTPから行います。
 navOrder: 70
-updated: "2026-09-23"
+updated: "2026-10-19"
 since: "v1.0.0"
 ---
 
@@ -209,82 +209,90 @@ Content-Length: <ZIPサイズ>
 
 ## curlの例
 
-```bash
-SIZE=$(wc -c < source.zip)
-SHA=$(sha256sum source.zip | cut -d' ' -f1)
-curl -sS -X POST https://latex-render.n624.jp/api/v1/render-tickets \
-  -H "Authorization: Bearer $LATEX_RENDER_API_KEY" \
-  -H "Content-Type: application/json" \
-  -H "Idempotency-Key: $(uuidgen)" \
-  -d '{"size":'$SIZE',"sha256":"'$SHA'"}'
-```
+> [!DETAILS] curlの例を表示
+>
+> ```bash
+> SIZE=$(wc -c < source.zip)
+> SHA=$(sha256sum source.zip | cut -d' ' -f1)
+> curl -sS -X POST https://latex-render.n624.jp/api/v1/render-tickets \
+>   -H "Authorization: Bearer $LATEX_RENDER_API_KEY" \
+>   -H "Content-Type: application/json" \
+>   -H "Idempotency-Key: $(uuidgen)" \
+>   -d '{"size":'$SIZE',"sha256":"'$SHA'"}'
+> ```
 
 ## PowerShell
 
-```powershell
-$zip = Resolve-Path .\source.zip
-$bytes = [IO.File]::ReadAllBytes($zip)
-$sha = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant()
-$headers = @{
-  Authorization = "Bearer $env:LATEX_RENDER_API_KEY"
-  "Idempotency-Key" = [guid]::NewGuid().ToString()
-}
-$ticket = Invoke-RestMethod -Method Post `
-  -Uri https://latex-render.n624.jp/api/v1/render-tickets `
-  -Headers $headers -ContentType application/json `
-  -Body (@{size=$bytes.Length;sha256=$sha} | ConvertTo-Json)
-Invoke-WebRequest -Method Put -Uri $ticket.uploadUrl `
-  -Headers @{Authorization="Bearer $($ticket.uploadTicket)"} `
-  -ContentType application/zip -InFile $zip
-```
+> [!DETAILS] PowerShellを表示
+>
+> ```powershell
+> $zip = Resolve-Path .\source.zip
+> $bytes = [IO.File]::ReadAllBytes($zip)
+> $sha = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant()
+> $headers = @{
+>   Authorization = "Bearer $env:LATEX_RENDER_API_KEY"
+>   "Idempotency-Key" = [guid]::NewGuid().ToString()
+> }
+> $ticket = Invoke-RestMethod -Method Post `
+>   -Uri https://latex-render.n624.jp/api/v1/render-tickets `
+>   -Headers $headers -ContentType application/json `
+>   -Body (@{size=$bytes.Length;sha256=$sha} | ConvertTo-Json)
+> Invoke-WebRequest -Method Put -Uri $ticket.uploadUrl `
+>   -Headers @{Authorization="Bearer $($ticket.uploadTicket)"} `
+>   -ContentType application/zip -InFile $zip
+> ```
 
 ## JavaScript / TypeScript
 
-```typescript
-const zip = await readFile("source.zip");
-const sha256 = createHash("sha256").update(zip).digest("hex");
-const response = await fetch(
-  "https://latex-render.n624.jp/api/v1/render-tickets",
-  {
-    method: "POST",
-    headers: {
-      Authorization: "Bearer " + process.env.LATEX_RENDER_API_KEY,
-      "Content-Type": "application/json",
-      "Idempotency-Key": crypto.randomUUID(),
-    },
-    body: JSON.stringify({ size: zip.length, sha256 }),
-  },
-);
-const ticket = await response.json();
-await fetch(ticket.uploadUrl, {
-  method: "PUT",
-  headers: {
-    Authorization: "Bearer " + ticket.uploadTicket,
-    "Content-Type": "application/zip",
-  },
-  body: zip,
-});
-```
+> [!DETAILS] JavaScript / TypeScriptを表示
+>
+> ```typescript
+> const zip = await readFile("source.zip");
+> const sha256 = createHash("sha256").update(zip).digest("hex");
+> const response = await fetch(
+>   "https://latex-render.n624.jp/api/v1/render-tickets",
+>   {
+>     method: "POST",
+>     headers: {
+>       Authorization: "Bearer " + process.env.LATEX_RENDER_API_KEY,
+>       "Content-Type": "application/json",
+>       "Idempotency-Key": crypto.randomUUID(),
+>     },
+>     body: JSON.stringify({ size: zip.length, sha256 }),
+>   },
+> );
+> const ticket = await response.json();
+> await fetch(ticket.uploadUrl, {
+>   method: "PUT",
+>   headers: {
+>     Authorization: "Bearer " + ticket.uploadTicket,
+>     "Content-Type": "application/zip",
+>   },
+>   body: zip,
+> });
+> ```
 
 ## Python
 
-```python
-data = pathlib.Path("source.zip").read_bytes()
-headers = {
-    "Authorization": "Bearer " + os.environ["LATEX_RENDER_API_KEY"],
-    "Idempotency-Key": str(uuid.uuid4()),
-}
-ticket = requests.post(
-    "https://latex-render.n624.jp/api/v1/render-tickets",
-    headers=headers,
-    json={"size": len(data), "sha256": hashlib.sha256(data).hexdigest()},
-).json()
-requests.put(
-    ticket["uploadUrl"],
-    headers={
-        "Authorization": "Bearer " + ticket["uploadTicket"],
-        "Content-Type": "application/zip",
-    },
-    data=data,
-).raise_for_status()
-```
+> [!DETAILS] Pythonを表示
+>
+> ```python
+> data = pathlib.Path("source.zip").read_bytes()
+> headers = {
+>     "Authorization": "Bearer " + os.environ["LATEX_RENDER_API_KEY"],
+>     "Idempotency-Key": str(uuid.uuid4()),
+> }
+> ticket = requests.post(
+>     "https://latex-render.n624.jp/api/v1/render-tickets",
+>     headers=headers,
+>     json={"size": len(data), "sha256": hashlib.sha256(data).hexdigest()},
+> ).json()
+> requests.put(
+>     ticket["uploadUrl"],
+>     headers={
+>         "Authorization": "Bearer " + ticket["uploadTicket"],
+>         "Content-Type": "application/zip",
+>     },
+>     data=data,
+> ).raise_for_status()
+> ```

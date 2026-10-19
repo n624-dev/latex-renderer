@@ -45,6 +45,7 @@ const sourceFiles = [
   "security.md",
   "api.md",
   "contributing.md",
+  "reference.md",
 ] as const;
 
 // Keep all existing URLs, ordering metadata and search categories intact.
@@ -71,6 +72,7 @@ const navigationGroups = [
       "security",
       "api",
       "contributing",
+      "reference",
     ],
   },
 ];
@@ -225,6 +227,15 @@ class DocsRenderer extends Renderer {
   }
 
   override blockquote({ tokens }: Tokens.Blockquote): string {
+    // A deliberately small Markdown-only disclosure syntax. Raw HTML remains
+    // escaped; titles and nested content use the existing safe renderers.
+    const first = tokens[0];
+    if (
+      first?.type === "paragraph" &&
+      /^\[!DETAILS\] [^\n]+$/.test(first.text)
+    ) {
+      return `<details class="docs-details"><summary>${escapeHtml(first.text.slice(11))}</summary>${this.parser.parse(tokens.slice(1))}</details>\n`;
+    }
     const rendered = this.parser.parse(tokens);
     const match = rendered.match(/^<p>\[!(NOTE|WARNING)\]\s*/);
     if (match === null) return `<blockquote>\n${rendered}</blockquote>\n`;

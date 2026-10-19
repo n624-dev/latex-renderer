@@ -4,7 +4,7 @@ category: Web
 title: Webアプリ
 description: ブラウザでのPDF変換、履歴、プロジェクト、公開サイトの使い分けです。
 navOrder: 25
-updated: "2026-08-29"
+updated: "2026-10-19"
 since: "v1.0.0"
 ---
 
@@ -32,10 +32,7 @@ TeXファイルを複数選ぶと文書ごとに変換します。ZIPに複数�
 
 ## 公開・利用・管理機能の境界
 
-`/app/`、`/admin/` とそのAPIはserver-side sessionで保護され、公開Webの検索索引には
-含まれません。一般利用者は `/app/`、admin／ownerだけが `/admin/` を利用できます。emailと表示名は認証情報ではなく、外部IdPではissuer＋subject、password modeではlogin nameを使用します。
-ZIP upload、Job、artifact、TeX compileはVPS上のRendererへ送られます。
+`/app/` はログインした利用者、`/admin/` は管理者・所有者だけが利用できます。文書や結果は公開検索に含まれません。[認証の仕様](/docs/reference/#web認証の境界)を参照してください。
 
-> [!NOTE]
-> Jobへの接続に使う短時間の認証情報はブラウザへ永続保存しません。必要なときに
-> server-side sessionから再発行します。session cookie、CSRF token、短時間ticketをコピーして共有しないでください。
+> [!WARNING]
+> Cookieや操作用トークンをコピーして共有しないでください。

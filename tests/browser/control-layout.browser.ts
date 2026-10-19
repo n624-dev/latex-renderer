@@ -38,6 +38,10 @@ describe.each(["light", "dark"] as const)("control layout: %s", (theme) => {
         </tbody></table></div>
         <article class="docs-content"><pre><code>${"long_code ".repeat(50)}</code></pre></article>
         <p id="app-error" aria-live="polite"></p>
+        <div class="grid"><article class="card">状態</article><article class="card">概要</article></div>
+        <label class="check" id="scope"><input type="checkbox"><span>長い権限の説明を折り返してもチェック項目と重ならないことを確認します。</span></label>
+        <label>使用できない入力<input id="disabled-input" disabled value="現在は編集できません"></label>
+        <label>ファイル<input id="file" type="file"></label><dl class="details"><dt>環境</dt><dd id="environment-value">LuaLaTeX</dd></dl>
         <details class="job-technical"><summary>技術情報</summary><code>Job ID: test\nERROR: example</code></details>
         <button id="open-dialog">設定を開く</button><dialog><div class="dialog-heading"><h2>設定</h2><button class="dialog-close" aria-label="閉じる">×</button></div><label hidden>非表示<input value="hidden"></label><div class="dialog-actions"><button>保存</button></div></dialog>
         </main></body></html>`,
@@ -109,6 +113,25 @@ describe.each(["light", "dark"] as const)("control layout: %s", (theme) => {
             emptyMargin: getComputedStyle(
               required(document.querySelector("#app-error")),
             ).marginTop,
+            cardMargin: getComputedStyle(
+              required(document.querySelector(".grid .card")),
+            ).marginBottom,
+            definitionMargin: getComputedStyle(
+              required(document.querySelector("#environment-value")),
+            ).marginLeft,
+            fileButtonHeight: parseFloat(
+              getComputedStyle(
+                required(document.querySelector("#file")),
+                "::file-selector-button",
+              ).minHeight,
+            ),
+            summaryHeight: rect(required(svg.querySelector("summary"))).height,
+            scopeGap:
+              rect(required(document.querySelector("#scope span"))).left -
+              rect(required(document.querySelector("#scope input"))).right,
+            disabledBorder: getComputedStyle(
+              required(document.querySelector("#disabled-input")),
+            ).borderStyle,
           };
         });
         for (const gap of result.gaps) expect(gap).toBeGreaterThanOrEqual(8);
@@ -125,6 +148,24 @@ describe.each(["light", "dark"] as const)("control layout: %s", (theme) => {
         if (width <= 860) expect(result.lastRowDivider).toBe("1px");
         expect(result.technicalWhitespace).toBe("pre-wrap");
         expect(result.emptyMargin).toBe("0px");
+        expect(result.cardMargin).toBe("0px");
+        expect(result.definitionMargin).toBe("0px");
+        expect(result.fileButtonHeight).toBeGreaterThanOrEqual(44);
+        expect(result.summaryHeight).toBeGreaterThanOrEqual(44);
+        expect(result.scopeGap).toBeGreaterThan(0);
+        expect(result.disabledBorder).toBe("dashed");
+        await page.locator(".site-header nav a").first().focus();
+        await page.keyboard.press("Tab");
+        expect(
+          await page
+            .locator(".site-header nav a")
+            .nth(1)
+            .evaluate(
+              (link) =>
+                document.activeElement === link &&
+                getComputedStyle(link).outlineStyle !== "none",
+            ),
+        ).toBe(true);
         await page.locator("#disabled").hover();
         expect(
           await page

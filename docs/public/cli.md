@@ -4,7 +4,7 @@ category: CLI
 title: CLI
 description: 実装済みのコマンドと保存される成果物を説明します。
 navOrder: 30
-updated: "2026-09-23"
+updated: "2026-10-19"
 since: "v1.0.0"
 ---
 
@@ -99,7 +99,7 @@ latex-render jobs delete <jobId> --yes
 
 新しいPDF＋SVGジョブはPDFを先に公開します。`--pdf-only` はPDFの確定まで待って取得し、SVG完了は待ちません。SVGだけが失敗した場合は、PDFを保存した上で部分成功を表示します。`retry-svg` は同じJob・Source・確定PDFを使ってSVGだけを再試行し、PDFを再コンパイルしません。初回を含め最大8回で、保持期限は延長しません。Runtimeが変わった場合はJob全体を新規作成してください。詳細は[PDFとSVGの独立処理](https://github.com/n624-dev/latex-renderer/blob/main/docs/independent-output-stages.md)を参照してください。
 
-終了待ちの状態取得で、一時的なHTTP 502・503・504（HTTPエラーまたは不正なJSON応答）が発生した場合は、同じJobの状態取得だけを最大5回再試行します。待ち時間は1・2・4・8・8秒で、待機全体のタイムアウトは延長しません。ジョブ作成・アップロード・操作用トークン更新・成果物の検証は再試行せず、認証や権限のエラーもそのまま返します。状態取得が失敗しても、サーバー上のジョブが停止したとは限りません。
+状態確認の一時的な通信障害は自動で再試行します。認証・権限エラーは自動再試行しません。画面側の待機が止まってもサーバーの処理が続く場合があるため、新規作成せず同じジョブを確認してください。[再試行条件](/docs/reference/#cliの待機と再試行)を参照してください。
 
 ## 成果物
 
@@ -127,24 +127,4 @@ latex-render jobs download <jobId> --output .render --json
 latex-render doctor --json
 ```
 
-成功時の形式:
-
-```json
-{ "success": true, "command": "auth.status", "result": { "configured": true } }
-```
-
-エラー時の形式:
-
-```json
-{
-  "success": false,
-  "command": "auth.login",
-  "error": {
-    "code": "INVALID_API_KEY",
-    "message": "Input is not a render API key",
-    "status": 400
-  }
-}
-```
-
-レンダリングがコンパイル失敗などの終了状態になった場合は、`result` にジョブと保存先を含めたうえで `success: false` を返し、終了コードを `2` にします。通常のCLI/APIエラーは終了コード `1` です。APIキー、upload ticket、job ticketはJSONへ含めません。
+JSONの成功・失敗形式と終了コードは[機械処理用の仕様](/docs/reference/#cliのjson形式)を参照してください。APIキーや短時間トークンは出力されません。

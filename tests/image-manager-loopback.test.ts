@@ -13,7 +13,7 @@ it.each([
   "keeps the actual %s endpoint guard consistent without reading credentials",
   (path) => {
     const source = readFileSync(path, "utf8");
-    const match = /if \(\n  (endpoint\.protocol[\s\S]*?)\n\)/.exec(source);
+    const match = /if \(\n {2}(endpoint\.protocol[\s\S]*?)\n\)/.exec(source);
     const condition = match?.[1];
     if (!condition) throw new Error("Missing Manager endpoint guard");
     for (const [input, rejected] of [

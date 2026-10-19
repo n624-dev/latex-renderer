@@ -72,7 +72,8 @@ describe("audit Web pagination and retained previews", () => {
       `/app/projects/project_${"a".repeat(32)}/`,
     ).installProjects((_input, init) => {
       if (init?.method === "POST") {
-        if (typeof init.body !== "string") throw new Error("Expected JSON body");
+        if (typeof init.body !== "string")
+          throw new Error("Expected JSON body");
         submitted = JSON.parse(init.body);
         return Promise.resolve(Response.json({}));
       }
@@ -212,7 +213,7 @@ describe("audit Web pagination and retained previews", () => {
     const click = next.onclick;
     if (!click) throw new Error("Missing pagination handler");
     click();
-    await vi.waitFor(() => expect(detail.innerHTML).toContain("Revision 2"));
+    await vi.waitFor(() => expect(detail.innerHTML).toContain("改訂 2"));
     expect(detail.innerHTML).not.toContain('id="app-revisions-next"');
     click();
     await new Promise((resolve) => setTimeout(resolve, 0));

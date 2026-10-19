@@ -63,6 +63,7 @@ it.each([
       document: { getElementById: get, createElement: element },
       location: { hash: "#fixture-bootstrap" },
       history: { replaceState: () => {} },
+      structuredClone,
       fetch: (path: string) =>
         Promise.resolve({
           ok: true,

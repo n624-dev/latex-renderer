@@ -37,55 +37,9 @@ ChatGPTのRemote MCP接続も、公開HTTPSのMCP URLとOAuth認可コード＋P
 このサーバーはDCRを広告しており、CIMDやSSEへの切替を接続失敗の推測だけで必須にしません。
 AIサービスのドメインをWebの許可Originへ追加したり、認証を無効化したりしないでください。
 
-未完了の接続登録は、作成または正しく検証された認可要求から30日間の非活動期間を目安に整理します。
-有効な認可コードやtoken familyが参照する登録は先に消しません。全登録は最大10,000件です。
-整理済みの登録が `invalid_client` となった場合は、クライアント側で接続登録を作り直してください。
-名前を送らない標準的なDCR要求も受け付けますが、指定された名前・redirect URIの検証は維持します。
+接続に失敗したら、登録・ログイン・同意・ツール取得のどこで止まったかを確認します。`invalid_client` は接続登録の作り直し、429は `Retry-After` の時間を待って再試行してください。失効した接続操作は最初からやり直します。
 
-ブラウザーログインを挟む認可要求は、短いランダムIDで一時保存します。長いOAuth `state` を
-ログインの戻り先URLへ埋め直さず、元の要求をそのまま復元します。記録は10分で失効し、
-認証済みブラウザーと専用Cookieが一致する場合に一度だけ使用できます。並行するタブは別のIDを使います。
-全体で1,000件、ブラウザーの継続用Cookieは8件までとし、上限では既存の要求を消さず503を返します。
-DBにはIDとCookie値のハッシュを保存し、期限切れ記録はアクセス時と定期cleanupで回収します。
-再起動・バックアップ復旧で有効期限は延長しません。失効した場合は接続操作を最初からやり直してください。
-スキーマ20はこの一時記録だけを追加し、既存の利用者・資格情報・Project・Sourceは変更しません。
-
-登録は信頼する送信元IPごとに15分間10回までです。同じプロキシ出口IPの利用者はこの枠を共有します。
-11回目以降はHTTP 429、`temporarily_unavailable` と `Retry-After` を返すので、その秒数後に再試行します。
-不正な登録metadataは枠を消費しません。送信元が欠落・不正な場合は共通の利用者枠へ混ぜず、
-HTTP 503として管理者へプロキシ設定の確認を促します。
-バックエンドはloopbackのままとし、プロキシが `X-Latex-Renderer-Client-IP` を実際の送信元から
-上書きする構成を使います。任意の `X-Forwarded-For` は採用しません。
-Cloudflare経路では信頼境界内で設定された `CF-Connecting-IP` も扱います。
-
-管理者はソース内の次のコマンドで、資格情報を送らず公開discoveryと401 challengeを確認できます。
-接続の追加・設定変更・redirectの追跡は行わず、返却本文・Cookie・秘密情報は出力しません。
-
-```sh
-node deploy/scripts/check-remote-mcp.mjs https://your-renderer.example
-```
-
-200のJSON metadataと401のBearer challengeは、実際のブラウザーログインやChatGPTのツール一覧成功を
-証明しません。接続が失敗する場合は、画面で止まった段階と時刻、`X-Request-ID`、サーバーの
-`remote_mcp.http_result` / `remote_mcp.oauth_stage` / `remote_mcp.protocol_error` / `remote_mcp.rpc_result` を対応させます。
-診断はdiscovery・register・authorize GET/POST・token・initialize・tools/listの段階、HTTP status、
-許可されたエラー分類だけを記録します。401の資格情報拒否と、検証処理自体の5xxを区別します。
-OAuth code、token、Cookie、PKCE verifier、Source、利用者IDをIssueやログへ貼らないでください。
-
-「認証成功、アクション検出失敗」やツール更新失敗では、token発行後の `initialize`、初期化通知、
-`tools/list` を分けて確認します。HTTP 200でもJSON-RPCの `error` は成功ではありません。
-`remote_mcp.rpc_result` は、HTTP status、固定の成功／失敗分類、対応するprotocol version、
-ツール件数、応答バイト数と一覧の基本形を記録します。全スキーマのコンパイル検査はHTTP試験で行い、
-実行時には大きなスキーマキャッシュを追加しません。本文の確認用領域は最大256KiBで、超過時は
-`inspection_limited` と記録するだけです。応答は省略・書換えせず、そのまま送信します。
-通常のツール実行結果や文書本文はこの確認の対象外です。
-
-記録がない場合も、ログ範囲の不足と、クライアント・プロキシから要求が到達しない場合を区別してください。
-SSE応答やGETの405だけで障害と判断せず、HTTPのAccept・Content-Type・protocolの交渉を確認します。
-一覧の基本形やCIのスキーマ検査が成功しても、実際のChatGPTでの登録・同意・ツール一覧取得と更新の確認は別途必要です。
-
-リポジトリのHTTP試験は、ローカルsocket経由で登録・同意・PKCE交換・SDK初期化・ツール一覧を
-確認します。外部OIDC、Cloudflareの実ポリシー、ChatGPT Webの実アカウントでの接続成功とは区別します。
+管理者向けの登録上限、Cookie・DB、プロキシ、診断イベントは[登録・診断の仕様](/docs/reference/#remote-mcpの登録-診断)にまとめています。秘密情報や文書本文を問い合わせへ貼らないでください。
 
 Remote MCPは次のツールを提供します。
 
@@ -118,11 +72,7 @@ SVGだけ失敗した場合は `retry_svg_render` を使用します。同じJob
 
 継続して扱う文書は `create_project` で保存先を作り、`attach_project_revision` でready Sourceを固定の改訂として保存します。保存済み改訂からのファイル編集は `update_project_file`／`delete_project_file` を使います。元の改訂を変更せず、新しいSourceと改訂を一緒に登録します。`render_project_revision` は指定した改訂をレンダリングし、結果Jobを同じ履歴へ結び付けます。Web・CLI・公開APIと同じユーザー所有のProjectを共有します。Projectに保存しない従来の一時的なSource・Jobも使えます。削除操作は利用者の明示的な依頼を確認してから実行してください。
 
-Remote MCPの結果は3層で返します。標準 `content` には、AIが判断や次のtool呼び出しに必要なSource ID、Job ID、status、offset、cursor、availability、bounded diagnosticsを必ず含めます。`structuredContent` は同じvalidated resultの完全な機械処理表現として維持します。PDF、完全なcompile log、raw JSON等の大容量データは、同じOAuth利用者だけが読める `latex-renderer://jobs/...` Resourceとして返します。
-
-SVG出力を指定したJobでは、結果に含まれる `svg/manifest.json` と `svg/objects/*.svg` の `resourceUri` も同じMCP Resource読取で取得できます。所有者・保持期限・Resourceのサイズ上限はPDF等と共通です。
-
-`structuredContent` やcustom Resourceをモデルへ公開しないMCPクライアントでも、標準 `content` だけでSource作成、chunk upload、render、状態確認、修正、再renderまで継続できます。Resource対応クライアントは完全PDFや完全ログも取得できます。APIキー、OAuth token、upload/render ticket、Source本文、raw base64は結果へ追加しません。
+完全なPDF・ログ・SVGは、対応するMCPクライアントから取得できます。結果の表現とResourceの仕様は[開発者向け資料](/docs/reference/#mcpの結果とresource)を参照してください。
 
 AIクライアントはWeb UIを開かず、`create_source` → `create_render` → `get_render_status` → `get_render_diagnostics` / `get_render_preview` → Source revision → `retry_render`または再render → Resource読取の順でレンダリング、修正、再確認まで進められます。Web結果リンクは人が確認する場合の補助です。
 

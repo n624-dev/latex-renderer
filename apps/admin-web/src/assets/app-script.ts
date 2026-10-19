@@ -951,17 +951,25 @@ function installProjects(fetcher: Fetcher) {
           }>;
           jobCount: number;
           jobsHasMore: boolean;
+          jobsNextCursor: string | null;
         }>;
         revisionsHasMore: boolean;
       } | null = null;
+    const pendingJobPages = new Set<string>();
+    const pendingRenders = new Set<string>();
+    let pendingRevisionPage = false;
     const loadDetail = async (append = false) => {
       if (append && (!project?.revisionsHasMore || !revisionCursor)) return;
+      if (pendingRevisionPage) return;
+      pendingRevisionPage = true;
       const query = new URLSearchParams({ pageSize: "50" });
       if (append && revisionCursor) query.set("cursor", revisionCursor);
-      const raw = await json(
-        fetcher,
-        `/app/api/v1/projects/${match[1]}?${query}`,
-      );
+      let raw: unknown;
+      try {
+        raw = await json(fetcher, `/app/api/v1/projects/${match[1]}?${query}`);
+      } finally {
+        pendingRevisionPage = false;
+      }
       const value = raw as typeof project & {
         revisionsNextCursor: string | null;
         revisionsHasMore: boolean;
@@ -973,22 +981,94 @@ function installProjects(fetcher: Fetcher) {
           revisions: [...project.revisions, ...value.revisions],
         };
       revisionCursor = value.revisionsNextCursor;
+      renderDetail();
+    };
+    const renderDetail = () => {
+      if (!project) return;
+      const rerenderChoices = new Map(
+        [
+          ...detail.querySelectorAll<HTMLSelectElement>(
+            'select[id^="outputs-"]',
+          ),
+        ].map((select) => [select.id, select.value] as const),
+      );
       const currentProject = project;
-      detail.innerHTML = `<div class="hero"><h1>${escape(project.displayName)}</h1><p class="notice warning">プロジェクトを削除すると、このプロジェクトの記録だけが一覧から消えます。紐付いたSourceとJobの入力・成果物は各自の保存期限まで残ります。完全削除が必要な場合は管理者へ相談してください。</p></div>${
+      detail.innerHTML = `<div class="hero"><h1>${escape(project.displayName)}</h1></div>${
         project.revisions
           .map(
             (revision) =>
-              `<section><div class="page-heading"><div><h2>Revision ${revision.revisionNumber}: ${escape(revision.displayName)}</h2><p>${escape(revision.originalFilename)}・${escape(new Date(revision.createdAt).toLocaleString("ja-JP"))}</p></div><label>出力形式<select id="outputs-${escape(revision.id)}"><option value="">初回の設定</option><option value="pdf">PDF</option><option value="svg">PDF＋SVG</option></select></label><button type="button" class="secondary" data-rerender="${escape(revision.id)}">もう一度変換</button></div><ul>${revision.jobs.map((job) => `<li>${escape(jobStatusLabel(job.status, job.stages))}・${escape((job.outputs ?? []).join("＋").toUpperCase())} <a href="/app/jobs/${encodeURIComponent(job.id)}/">${escape(new Date(job.createdAt).toLocaleString("ja-JP"))}</a></li>`).join("") || "<li>変換履歴はありません。</li>"}</ul>${revision.jobCount > revision.jobs.length ? `<p class="muted">Job ${revision.jobs.length} / ${revision.jobCount}件を表示中（詳細APIのcursorで続きへ進めます）。</p>` : ""}</section>`,
+              `<section><div class="page-heading"><div><h2>改訂 ${revision.revisionNumber}: ${escape(revision.displayName)}</h2><p>${escape(revision.originalFilename)}・${escape(new Date(revision.createdAt).toLocaleString("ja-JP"))}</p></div><label>出力形式<select id="outputs-${escape(revision.id)}"><option value="">初回の設定</option><option value="pdf">PDF</option><option value="svg">PDF＋SVG</option></select></label><button type="button" class="secondary" data-rerender="${escape(revision.id)}">もう一度変換</button></div><ul>${revision.jobs.map((job) => `<li>${escape(jobStatusLabel(job.status, job.stages))}・${escape((job.outputs ?? []).join("＋").toUpperCase())} <a href="/app/jobs/${encodeURIComponent(job.id)}/">${escape(new Date(job.createdAt).toLocaleString("ja-JP"))}</a></li>`).join("") || "<li>変換履歴はありません。</li>"}</ul>${revision.jobsHasMore && revision.jobsNextCursor ? `<div class="actions"><button type="button" class="secondary" data-revision-jobs-next="${escape(revision.id)}">この改訂の履歴をさらに表示</button><span class="muted">${revision.jobs.length} / ${revision.jobCount}件</span></div>` : ""}</section>`,
           )
           .join("") || "<section>改訂はありません。</section>"
       }${project.revisionsHasMore ? '<div class="actions"><button type="button" class="secondary" id="app-revisions-next">次の改訂ページ</button></div>' : ""}`;
       for (const button of detail.querySelectorAll<HTMLButtonElement>(
-        "[data-rerender]",
-      ))
+        "[data-revision-jobs-next]",
+      )) {
+        button.disabled = pendingJobPages.has(
+          button.dataset.revisionJobsNext ?? "",
+        );
         button.onclick = () => {
+          if (button.disabled) return;
+          const revision = currentProject.revisions.find(
+            (item) => item.id === button.dataset.revisionJobsNext,
+          );
+          if (
+            !revision?.jobsHasMore ||
+            !revision.jobsNextCursor ||
+            pendingJobPages.has(revision.id)
+          )
+            return;
+          pendingJobPages.add(revision.id);
           button.disabled = true;
+          const query = new URLSearchParams({
+            pageSize: "50",
+            cursor: revision.jobsNextCursor,
+          });
+          void json(
+            fetcher,
+            `/app/api/v1/projects/${match[1]}/revisions/${encodeURIComponent(revision.id)}/jobs?${query}`,
+          )
+            .then((raw) => {
+              const page = raw as {
+                items: typeof revision.jobs;
+                hasMore: boolean;
+                nextCursor: string | null;
+              };
+              // Another revision page may have been loaded while waiting.
+              // The revision object itself remains in the accumulated list.
+              const known = new Set(revision.jobs.map((job) => job.id));
+              revision.jobs.push(
+                ...page.items.filter((job) => !known.has(job.id)),
+              );
+              revision.jobsHasMore = page.hasMore;
+              revision.jobsNextCursor = page.nextCursor;
+              pendingJobPages.delete(revision.id);
+              renderDetail();
+              detail
+                .querySelector<HTMLButtonElement>(
+                  `[data-revision-jobs-next="${CSS.escape(revision.id)}"], [data-rerender="${CSS.escape(revision.id)}"]`,
+                )
+                ?.focus();
+            })
+            .catch((error: unknown) => {
+              pendingJobPages.delete(revision.id);
+              const current = detail.querySelector<HTMLButtonElement>(
+                `[data-revision-jobs-next="${CSS.escape(revision.id)}"]`,
+              );
+              if (current) current.disabled = false;
+              showError(error);
+            });
+        };
+      }
+      for (const button of detail.querySelectorAll<HTMLButtonElement>(
+        "[data-rerender]",
+      )) {
+        button.disabled = pendingRenders.has(button.dataset.rerender ?? "");
+        button.onclick = () => {
           const revisionId = button.dataset.rerender;
-          if (!revisionId) return;
+          if (!revisionId || pendingRenders.has(revisionId)) return;
+          pendingRenders.add(revisionId);
+          button.disabled = true;
           const output = detail.querySelector<HTMLSelectElement>(
             `#outputs-${CSS.escape(revisionId)}`,
           )?.value;
@@ -1012,10 +1092,15 @@ function installProjects(fetcher: Fetcher) {
               location.assign(`/app/jobs/${encodeURIComponent(ticket.jobId)}/`);
             })
             .catch((error: unknown) => {
-              button.disabled = false;
+              pendingRenders.delete(revisionId);
+              const current = detail.querySelector<HTMLButtonElement>(
+                `[data-rerender="${CSS.escape(revisionId)}"]`,
+              );
+              if (current) current.disabled = false;
               showError(error);
             });
         };
+      }
       const heading = detail.querySelector("h1");
       if (heading) {
         const actions = document.createElement("div"),
@@ -1044,7 +1129,7 @@ function installProjects(fetcher: Fetcher) {
         remove.onclick = () => {
           if (
             !confirm(
-              "このプロジェクトを一覧から削除しますか？\n\nプロジェクトの記録だけを削除します。紐付いたSourceとJobの入力・成果物は、各自の保存期限まで残ります。完全削除が必要な場合は管理者へ相談してください。",
+              "このプロジェクトを一覧から削除しますか？\n\nプロジェクトの記録だけを削除します。入力ファイルと変換結果は、各自の保存期限まで残ります。完全削除が必要な場合は管理者へ相談してください。",
             )
           )
             return;
@@ -1061,15 +1146,26 @@ function installProjects(fetcher: Fetcher) {
       const nextRevision = document.querySelector<HTMLButtonElement>(
         "#app-revisions-next",
       );
-      if (nextRevision)
+      if (nextRevision) {
+        nextRevision.disabled = pendingRevisionPage;
         nextRevision.onclick = () => {
           if (nextRevision.disabled) return;
           nextRevision.disabled = true;
           void loadDetail(true).catch((error: unknown) => {
-            if (nextRevision.isConnected) nextRevision.disabled = false;
+            const current = document.querySelector<HTMLButtonElement>(
+              "#app-revisions-next",
+            );
+            if (current) current.disabled = false;
             showError(error);
           });
         };
+      }
+      for (const [id, value] of rerenderChoices) {
+        const select = detail.querySelector<HTMLSelectElement>(
+          `#${CSS.escape(id)}`,
+        );
+        if (select) select.value = value;
+      }
     };
     void loadDetail().catch(showError);
   }
@@ -1088,7 +1184,7 @@ function installEnvironment(fetcher: Fetcher) {
         shellEscape: boolean;
         networkAccess: boolean;
       };
-      summary.innerHTML = `<h2>現在の環境</h2><dl class="details"><dt>TeX Live</dt><dd>${escape(value.texliveVersion)}</dd><dt>エンジン</dt><dd>${escape(value.engines.join(", "))}</dd><dt>shell escape</dt><dd>${value.shellEscape ? "有効" : "無効"}</dd><dt>ネットワーク</dt><dd>${value.networkAccess ? "有効" : "無効"}</dd></dl>`;
+      summary.innerHTML = `<h2>現在の環境</h2><dl class="details"><dt>TeX Live</dt><dd>${escape(value.texliveVersion)}</dd><dt>エンジン</dt><dd>${escape(value.engines.join(", "))}</dd><dt>外部コマンド実行</dt><dd>${value.shellEscape ? "有効" : "無効"}</dd><dt>ネットワーク</dt><dd>${value.networkAccess ? "有効" : "無効"}</dd></dl>`;
     })
     .catch(showError);
   for (const [kind, formId, outputId] of [

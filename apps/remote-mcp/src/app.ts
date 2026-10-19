@@ -656,12 +656,9 @@ function consentPage(
     csrf,
   };
   const scopes = request.scopes
-    .map(
-      (scope) =>
-        `<li><code>${escapeHtml(scope)}</code> — ${escapeHtml(scopeDescription(scope))}</li>`,
-    )
+    .map((scope) => `<li>${escapeHtml(scopeDescription(scope))}</li>`)
     .join("");
-  return `<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>Remote MCPを承認 | LaTeX Renderer</title><link rel="stylesheet" href="/assets/styles.css"></head><body><header class="site-header"><strong><a href="/">LaTeX Renderer</a></strong></header><main><div class="hero"><p class="eyebrow">Remote MCP</p><h1>接続を承認</h1><p><strong>${escapeHtml(clientName)}</strong> がLaTeX Rendererへの接続を要求しています。</p></div><section class="card"><h2>許可する操作</h2><ul>${scopes}</ul><p class="muted">許可すると、この接続はあなたが所有するSourceとジョブだけを操作できます。</p><form class="actions" method="post" action="/oauth/authorize">${Object.entries(
+  return `<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>Remote MCPを承認 | LaTeX Renderer</title><link rel="stylesheet" href="/assets/styles.css"></head><body><header class="site-header"><strong><a href="/">LaTeX Renderer</a></strong></header><main><div class="hero"><h1>接続を承認</h1><p><strong>${escapeHtml(clientName)}</strong> がLaTeX Rendererへの接続を要求しています。</p></div><section class="card"><h2>許可する操作</h2><ul>${scopes}</ul><p class="muted">許可すると、この接続はあなたが所有する入力ファイルと変換だけを操作できます。</p><details><summary>権限の識別子</summary><ul>${request.scopes.map((scope) => `<li><code>${escapeHtml(scope)}</code></li>`).join("")}</ul></details><form class="actions" method="post" action="/oauth/authorize">${Object.entries(
     fields,
   )
     .filter((entry): entry is [string, string] => entry[1] !== undefined)

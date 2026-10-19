@@ -136,9 +136,9 @@ legend { padding: 0 0.35rem; font-weight: 700; }
 .header-meta { display: flex; flex-wrap: wrap; min-width: 0; align-items: center; gap: 0.55rem; color: var(--muted); font-size: 0.9rem; overflow-wrap: anywhere; }
 
 main { width: min(1180px, 100%); margin: 0 auto; padding: clamp(1rem, 3vw, 2rem) max(0.75rem, env(safe-area-inset-left)) max(4rem, env(safe-area-inset-bottom)); }
-.hero { padding: clamp(1.25rem, 4vw, 3rem) 0 1.5rem; max-width: 780px; }
-.hero h1 { margin: 0 0 1rem; font-size: clamp(2rem, 5vw, 3.5rem); line-height: 1.1; letter-spacing: -0.025em; }
-.hero p { font-size: clamp(1rem, 2.2vw, 1.2rem); }
+.hero { padding: 0.5rem 0 1rem; max-width: 780px; }
+.hero h1 { margin: 0 0 0.75rem; font-size: clamp(1.6rem, 4vw, 2.25rem); line-height: 1.2; }
+.hero p { font-size: 1rem; }
 .eyebrow { color: var(--muted); font-weight: 700; letter-spacing: 0.03em; }
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 235px), 1fr)); gap: 1rem; }
 .card, section {
@@ -149,6 +149,7 @@ main { width: min(1180px, 100%); margin: 0 auto; padding: clamp(1rem, 3vw, 2rem)
   margin-bottom: 1rem;
 }
 .card { box-shadow: none; }
+section section, .card section { border: 0; border-radius: 0; background: transparent; padding: 0.5rem 0; }
 .grid > .card, .grid > section { margin-bottom: 0; }
 .card h2, section h2 { margin-top: 0; }
 .actions { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--control-gap); margin: 0.9rem 0; }
@@ -200,6 +201,16 @@ th { background: var(--surface-subtle); white-space: nowrap; }
 tr:last-child td { border-bottom: 0; }
 .actions-cell { min-width: 180px; }
 .actions-group { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--control-gap); }
+.row-options { margin: 0; min-width: 0; }
+.identifier { border: 0; margin: 0; background: transparent; }
+.identifier > summary { padding-inline: 0; font-size: 0.85rem; }
+.row-options > .actions { margin-block: 0.5rem; }
+.header-options { min-width: 0; margin: 0; }
+.header-options > summary { white-space: nowrap; }
+.header-options[open] { flex-basis: 100%; }
+.header-options .stack { padding-block: 0.5rem; }
+.check > span { min-width: 0; overflow-wrap: anywhere; }
+.check > span > small { display: block; color: var(--muted); }
 .status { display: inline-flex; align-items: center; gap: 0.35rem; border: 1px solid var(--border); border-radius: 999px; padding: 0.15rem 0.55rem; white-space: nowrap; }
 .status::before { content: ""; width: 0.55rem; height: 0.55rem; border-radius: 50%; background: currentColor; }
 .status.active, .status.succeeded, .status.running { color: var(--success); }
@@ -248,12 +259,12 @@ dialog { width: min(680px, calc(100% - 2rem)); max-height: calc(100vh - 2rem); m
 body:has(dialog[open]) { overflow: hidden; }
 dialog :focus-visible { scroll-margin-block: 1rem; }
 dialog.wide { width: min(900px, calc(100% - 2rem)); }
-.dialog-heading { display: flex; align-items: flex-start; gap: 1rem; border-bottom: 1px solid var(--border); padding-bottom: 0.75rem; margin-bottom: 0.85rem; }
+.dialog-heading { position: sticky; top: -1.1rem; z-index: 2; background: var(--surface); display: flex; align-items: flex-start; gap: 1rem; border-bottom: 1px solid var(--border); padding-block: 0.5rem 0.75rem; margin-bottom: 0.85rem; }
 .dialog-heading h2 { margin: 0; flex: 1; }
 .dialog-close { flex: 0 0 auto; min-width: 44px; min-height: 44px; padding: 0.35rem 0.6rem; font-size: 1.35rem; line-height: 1; }
 .dialog-description { color: var(--muted); overflow-wrap: anywhere; }
 .dialog-form { display: grid; gap: 0.9rem; }
-.dialog-fields { align-items: start; }
+.dialog-fields { align-items: start; max-height: min(50dvh, 36rem); overflow: auto; overscroll-behavior: contain; padding: 0.25rem; }
 .dialog-summary { padding: 0.15rem 0; }
 .dialog-summary > :first-child { margin-top: 0; }
 .dialog-summary > :last-child { margin-bottom: 0; }
@@ -294,6 +305,8 @@ dialog.wide { width: min(900px, calc(100% - 2rem)); }
 .endpoint code:first-child { font-weight: 800; }
 
 @media (max-width: 1100px) {
+  html { scroll-padding-block-start: 1rem; }
+  .site-header { position: static; }
   .site-header nav { order: 3; flex-basis: 100%; width: 100%; }
   .docs-sidebar { position: static; max-height: none; }
 }

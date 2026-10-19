@@ -13,7 +13,7 @@ afterAll(async () => {
   await browser?.close();
 });
 
-it.each([390, 768, 1200])(
+it.each([390, 768, 821, 960, 1100, 1200])(
   "keeps document navigation accessible at %ipx",
   async (width) => {
     if (!browser) throw new Error("Browser not started");
@@ -78,3 +78,38 @@ it.each([390, 768, 1200])(
     }
   },
 );
+
+it("opens relocated technical details for an existing heading fragment", async () => {
+  if (!browser) throw new Error("Browser not started");
+  const page = await newTestPage(browser, {
+    viewport: { width: 960, height: 900 },
+  });
+  try {
+    await page.route("https://renderer.invalid/**", (route) => {
+      const path = new URL(route.request().url()).pathname;
+      return route.fulfill(
+        path === "/assets/site.js"
+          ? { contentType: "text/javascript", body: siteScript }
+          : path === "/assets/styles.css"
+            ? { contentType: "text/css", body: styles }
+            : { contentType: "text/html", body: renderPublicDoc("reference") },
+      );
+    });
+    const id = "v1-2-xのroot-updaterから権限分離updaterへ移行する場合";
+    await page.goto(
+      `https://renderer.invalid/docs/reference/#${encodeURIComponent(id)}`,
+    );
+    expect(await page.locator(`[id="${id}"]`).isVisible()).toBe(true);
+    expect(
+      await page.locator(`[id="${id}"]`).evaluate((node) => {
+        const bounds = node.getBoundingClientRect();
+        return bounds.top >= 0 && bounds.top < innerHeight;
+      }),
+    ).toBe(true);
+    expect(await page.locator(".docs-content").textContent()).toContain(
+      "Web／APIへsudo権限やGitHub tokenを渡しません",
+    );
+  } finally {
+    await page.close();
+  }
+});

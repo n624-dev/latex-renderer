@@ -2,13 +2,12 @@ export const setupHtml = `<!doctype html>
 <html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>サーバー設定</title><link rel="stylesheet" href="/style.css">
 <main><h1>サーバー設定</h1>
-<p id="scope">準備済みの既存環境専用です。OS・Docker・ユーザー・ディスク構成は変更しません。
-秘密情報・owner・保存場所・公開URL・HTTPSの変更はこの画面では行いません。</p>
-<p>既存サービスの停止時間に合わせ、jobTimeoutSeconds は840秒以下にしてください。</p>
+<p id="scope">既存環境の容量・時間制限を設定します。</p>
+<details><summary>変更範囲と注意</summary><p>OS・Docker・ユーザー・ディスク構成は変更しません。通常設定では秘密情報・管理者・保存場所・公開URL・HTTPSを維持します。処理時間はサービスの停止猶予に合わせ840秒以下にしてください。</p></details>
 <p id="status" role="status" aria-live="polite">接続中…</p>
 <form id="settings"><fieldset disabled id="fields"><legend>容量・時間・認証の確認</legend>
-<p id="origin"></p><div id="limits"></div>
-<label>詳細設定（秘密情報を入力しないでください）<textarea id="review" rows="16" spellcheck="false"></textarea></label>
+<p id="origin"></p><div id="configuration"></div><h2>容量・時間の上限</h2><div id="limits"></div>
+<details><summary>上級設定（JSON）</summary><label>秘密情報は入力しないでください<textarea id="review" rows="8" spellcheck="false"></textarea></label></details>
 <section id="initial" hidden><h2 id="credentials-heading">管理者と認証情報</h2>
 <p>秘密情報は確認表示・ブラウザー保存・ログには出しません。HTTPSはPEM証明書と秘密鍵を使用します。</p>
 <label>owner表示名<input id="owner-name" autocomplete="off"></label>
@@ -24,7 +23,7 @@ export const setupHtml = `<!doctype html>
 </section>
 <button type="submit">変更内容を確認</button></fieldset></form>
 <section id="confirmation" hidden><h2>適用前の確認</h2><p>サービスを一度停止して適用します。処理中はこの画面を閉じずにお待ちください。</p>
-<pre id="summary"></pre><button id="apply" type="button">この内容で適用する</button></section>
+<div id="summary"></div><details><summary>確認済み設定の詳細データ</summary><pre id="summary-json"></pre></details><button id="apply" type="button">この内容で適用する</button></section>
 <button id="close" type="button">終了（未適用の変更は破棄）</button>
 <button id="recover" type="button" hidden>中断した設定を復旧する</button>
 </main><script src="/script.js" defer></script></html>`;
@@ -42,8 +41,11 @@ h1,h2 { line-height:1.25; text-wrap:balance; }
 fieldset,section { min-width:0; margin:1rem 0; border:1px solid var(--border); border-radius:.8rem; background:var(--surface); padding:clamp(.65rem,2vw,1.25rem); }
 legend { padding:0 .4rem; font-weight:700; }
 label { display:grid; gap:.4rem; margin:.85rem 0; min-width:0; }
-input,textarea,button { font:inherit; font-size:max(1rem,16px); min-width:0; max-width:100%; }
-input,textarea { width:100%; min-height:44px; padding:.65rem; color:var(--text); background:var(--page); border:1px solid var(--border); border-radius:.45rem; }
+input,textarea,select,button { font:inherit; font-size:max(1rem,16px); min-width:0; max-width:100%; }
+input,textarea,select { width:100%; min-height:44px; padding:.65rem; color:var(--text); background:var(--page); border:1px solid var(--border); border-radius:.45rem; }
+input:disabled,textarea:disabled,select:disabled { opacity:.65; }
+summary { padding:.65rem 0; min-height:44px; cursor:pointer; }
+dl { display:grid; grid-template-columns:minmax(6rem,1fr) minmax(0,2fr); gap:.5rem 1rem; } dd { margin:0; }
 input[type=checkbox] { width:1.25rem; height:1.25rem; min-height:0; accent-color:var(--accent); }
 label:has(>input[type=checkbox]) { display:flex; align-items:center; min-height:44px; }
 button { min-height:44px; min-width:44px; padding:.65rem 1rem; margin:.4rem 0; cursor:pointer; border:1px solid var(--accent); border-radius:.5rem; background:var(--accent); color:var(--on-accent); font-weight:650; }
@@ -59,7 +61,12 @@ export const setupScript = `"use strict";
 (() => {
   const bootstrap = location.hash.slice(1); history.replaceState(null, "", "/");
   const el = (id) => document.getElementById(id);
-  let token, csrf, confirmation, model, initial = false, ingress = false;
+  let token, csrf, confirmation, model, baseline, initial = false, ingress = false;
+  const limitLabels = { maxUploadBytes:"アップロード上限（バイト）", maxExtractedBytes:"展開後の上限（バイト）", maxFileCount:"入力ファイル数", maxZipEntries:"ZIP内の項目数", maxOutputBytes:"成果物の上限（バイト）", maxOutputFileCount:"成果物のファイル数", maxOutputDirectoryCount:"成果物のフォルダー数", maxLogBytes:"ログの上限（バイト）", maxSvgObjects:"SVGの個数", maxSvgBytes:"SVG 1個の上限（バイト）", maxSvgTotalBytes:"SVG合計の上限（バイト）", svgConversionTimeoutSeconds:"SVG変換の制限時間（秒）", maxQueueLength:"待機ジョブ数", maxUserStorageBytes:"利用者ごとの保存容量（バイト）", minFreeStorageBytes:"確保する空き容量（バイト）", jobTimeoutSeconds:"変換の制限時間（秒・840以下）", minimumAvailableMemoryBytes:"開始時に必要な空きメモリ（バイト）", admissionWaitSeconds:"開始条件を待つ時間（秒）" };
+  const fieldLabels = { publicOrigin:"公開URL", rendererPublicUrl:"結果取得用URL", mode:"公開方式", backend:"認証方式", passwordEnabled:"パスワード認証", oidcEnabled:"OIDC認証", issuer:"認証先URL", clientId:"認証クライアントID", displayName:"表示名", adminAudience:"管理画面の認証対象", remoteMcpAudience:"MCPの認証対象", allowedAlgorithms:"署名方式", accessScope:"公開範囲", tlsProvider:"HTTPS方式", listenAddress:"待受アドレス", allowedNetworks:"許可するネットワーク", databasePath:"データベースの場所", storageRoot:"保存先", rendererImage:"固定されたTeXイメージ" };
+  const flatten = (value, prefix = [], result = []) => { for (const [key, item] of Object.entries(value || {})) { const path = [...prefix,key]; if (key === "format") continue; if (item && typeof item === "object" && !Array.isArray(item)) flatten(item,path,result); else result.push({ path, key, value:item }); } return result; };
+  const invalidate = () => { confirmation = null; el("confirmation").hidden = true; };
+  const saveModel = () => { el("review").value = JSON.stringify(model, null, 2); invalidate(); };
   const status = (message) => { el("status").textContent = message; };
   const post = async (path, body) => {
     const response = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", ...(token ? { Authorization: "Bearer " + token, "X-CSRF-Token": csrf } : {}) }, body: JSON.stringify(body) });
@@ -75,11 +82,27 @@ export const setupScript = `"use strict";
     el("owner-subject").closest("label").hidden = !initial || password;
     el("oidc-secret").closest("label").hidden = !initial || auth.backend !== "native" || !auth.oidcEnabled;
     for (const id of ["tls-certificate", "tls-key"]) el(id).closest("label").hidden = !ingress && !(initial && model.deployment.authentication.deployment.mode === "standalone");
+    el("configuration").replaceChildren();
+    for (const field of flatten(model)) {
+      if (field.path.includes("limits") || !fieldLabels[field.key]) continue;
+      const label = document.createElement("label"); label.textContent = fieldLabels[field.key];
+      const input = document.createElement("input"); input.type = "text";
+      input.value = typeof field.value === "boolean" ? (field.value ? "有効" : "無効") : Array.isArray(field.value) ? field.value.join(", ") : String(field.value ?? "未設定");
+      const structural = ["mode", "backend", "passwordEnabled", "oidcEnabled", "tlsProvider"].includes(field.key);
+      input.readOnly = structural || (!initial && !(ingress && ["publicOrigin","rendererPublicUrl","accessScope","listenAddress","allowedNetworks"].includes(field.key)));
+      input.addEventListener("change", () => {
+        let target = model; for (const key of field.path.slice(0,-1)) target = target[key];
+        target[field.key] = Array.isArray(field.value) ? input.value.split(",").map(value=>value.trim()).filter(Boolean) : input.value;
+        if (field.key === "publicOrigin") { model.deployment.authentication.deployment.publicOrigin = input.value; if(model.deployment.ingress) model.deployment.ingress.publicOrigin = input.value; }
+        saveModel();
+      });
+      label.append(input); el("configuration").append(label);
+    }
     el("limits").replaceChildren();
     for (const [name, value] of Object.entries(model.runtime.limits)) {
-      const label = document.createElement("label"); label.textContent = name + (/Bytes$/.test(name) ? " (bytes)" : /Seconds$/.test(name) ? " (seconds)" : "");
+      const label = document.createElement("label"); label.textContent = limitLabels[name] || name;
       const input = document.createElement("input"); input.type = "number"; input.min = "1"; input.step = "1"; input.value = String(value); input.required = true; input.setAttribute("aria-label", name);
-      input.addEventListener("input", () => { model.runtime.limits[name] = Number(input.value); el("review").value = JSON.stringify(model, null, 2); confirmation = null; el("confirmation").hidden = true; });
+      input.addEventListener("input", () => { model.runtime.limits[name] = Number(input.value); saveModel(); });
       label.append(input); el("limits").append(label);
     }
   };
@@ -87,7 +110,17 @@ export const setupScript = `"use strict";
   el("review").addEventListener("change", () => { try { synchronize(); } catch { status("設定JSONを確認してください。"); } });
   el("settings").addEventListener("submit", async (event) => {
     event.preventDefault(); confirmation = null; el("confirmation").hidden = true; el("fields").disabled = true;
-    try { const value = await post("/api/preview", { review: JSON.parse(el("review").value) }); model = value.review; confirmation = value.confirmation; el("summary").textContent = JSON.stringify(value.review, null, 2); el("confirmation").hidden = false; status("確認済み。適用には下のボタンが必要です。"); }
+    try {
+      const value = await post("/api/preview", { review: JSON.parse(el("review").value) }); model = value.review; confirmation = value.confirmation;
+      el("summary-json").textContent = JSON.stringify(value.review, null, 2);
+      el("summary").replaceChildren();
+      const before = new Map(flatten(baseline).map(field => [field.path.join("."),JSON.stringify(field.value)]));
+      const changes = flatten(model).filter(field => before.get(field.path.join(".")) !== JSON.stringify(field.value));
+      const list = document.createElement("dl");
+      for (const field of changes) { const title=document.createElement("dt"),description=document.createElement("dd"); title.textContent=limitLabels[field.key]||fieldLabels[field.key]||field.key; description.textContent=JSON.stringify(field.value); list.append(title,description); }
+      if(changes.length) el("summary").append(list); else el("summary").textContent="設定値の変更はありません。初期導入・証明書の設定はこの確認後に適用します。";
+      el("confirmation").hidden = false; status("確認済み。適用には下のボタンが必要です。");
+    }
     catch (error) { status(error.message); } finally { el("fields").disabled = false; }
   });
   el("apply").addEventListener("click", async () => {
@@ -129,7 +162,7 @@ export const setupScript = `"use strict";
   (async () => {
     try {
       const session = await post("/api/session", { bootstrap }); token = session.token; csrf = session.csrf;
-      const value = await post("/api/status", {}); model = value.review;
+      const value = await post("/api/status", {}); model = value.review; baseline = structuredClone(model);
       initial = value.scope === "initial-prepared-host"; ingress = value.scope === "ingress-prepared-host";
       if (initial || ingress) {
         el("initial").hidden = false; el("recover").hidden = false;
