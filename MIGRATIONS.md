@@ -146,6 +146,22 @@ No rows are deleted, but old application code ignores the visibility boundary;
 full recovery point, not an application-only rollback or live column removal.
 See [the migration and recovery guide](deploy/migrations/019_internal_smoke_visibility.rollback.md).
 
+## Migration 022: PDF-bound preview requests
+
+Migration 022 adds `job_preview_documents` and `job_preview_requests` for
+page counts bound to an immutable PDF artifact and deduplicated, bounded page
+requests. Queuing a request must not extend the PDF retention deadline or
+change the Job result. Conversion remains the responsibility of a sandboxed
+Worker, never an HTTP request handler. The migration is infrastructure: it does
+not by itself switch an existing Runtime from eager to on-demand previews.
+Historical previews remain available without backfilling or rerendering.
+
+Deploy database consumers and cleanup together after an encrypted backup,
+restore test and private-copy migration preflight, and verify schema 22.
+`rollbackCompatible` remains false; downgrade requires the verified full
+recovery point. Do not remove live tables or replay expired page requests.
+See [migration 22 recovery](deploy/migrations/022_lazy_previews.rollback.md).
+
 ## Migration 021: Independent output stages
 
 Migration 021 adds `job_output_stages` and terminal/recovery triggers. New

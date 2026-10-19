@@ -1682,7 +1682,10 @@ const server = createServer(async (req, res) => {
     if (!auth?.startsWith("Bearer ") || !safeToken(auth.slice(7))) {
       throw httpError(401, "UNAUTHORIZED", "Invalid image manager credential");
     }
-    const url = new globalThis.URL(req.url ?? "/", `http://${host}:${port}`);
+    const url = new globalThis.URL(
+      req.url ?? "/",
+      `http://${host === "::1" ? "[::1]" : host}:${port}`,
+    );
 
     if (req.method === "GET" && url.pathname === "/v1/state") {
       return send(res, 200, { ...state, activeOperationId, quiescing });

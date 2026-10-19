@@ -1520,6 +1520,15 @@ def gc(
 ) -> dict[str, Any]:
     now = now or utcnow()
     ensure_layout(config)
+    # Serialize trash walkers, not reservations. A sync may hold sync.lock
+    # before entering here; the reverse sync-lock probe is always nonblocking.
+    with locked(config.root / "state" / "locks" / "gc.lock"):
+        return _gc_locked(config, now, reserve_bytes)
+
+
+def _gc_locked(
+    config: Config, now: dt.datetime, reserve_bytes: int
+) -> dict[str, Any]:
     before = filesystem_metrics(config.root)
     moved: list[str] = []
     with locked(config.root / "state" / "locks" / "management.lock"):
@@ -1544,12 +1553,37 @@ def gc(
         # the process-level sync lock is held.
         if not sync_is_running(config):
             recover_staging(config, state, now)
-        # Existing trash is already unavailable for reservation. Drain outside lock.
-        pressure = (
-            before["managedBytes"] >= config.gc_start
-            or before["managedBytes"] + reserve_bytes > config.sync_peak_limit
+        save_state(config, state)
+    # Reclaim existing trash and abandoned staging before selecting snapshots.
+    # A rename alone frees no blocks. Always drain outside the management lock.
+    trash_count = drain_trash(config)
+    current = filesystem_metrics(config.root)
+    pressure = (
+        before["managedBytes"] >= config.gc_start
+        or before["managedBytes"] + reserve_bytes > config.sync_peak_limit
+    )
+    while True:
+        pressure = pressure or (
+            current["managedBytes"] >= config.gc_start
+            or current["managedBytes"] + reserve_bytes > config.sync_peak_limit
         )
-        for snapshot_id in delete_candidates(config, state, now, pressure):
+        with locked(config.root / "state" / "locks" / "management.lock"):
+            # Reservations and internal protections may change while deletion
+            # runs. Reload and decide atomically with every rename.
+            state = load_state(config)
+            reconcile_state(config, state)
+            candidates = delete_candidates(config, state, now, False)
+            if not candidates:
+                if not pressure or (
+                    current["managedBytes"] <= config.gc_target
+                    and current["managedBytes"] + reserve_bytes
+                    <= config.sync_peak_limit
+                ):
+                    break
+                candidates = delete_candidates(config, state, now, True)
+            if not candidates:
+                break
+            snapshot_id = candidates[0]
             source = safe_child(config.root / "snapshots", snapshot_id)
             if not source.exists():
                 raise StateError(
@@ -1574,17 +1608,9 @@ def gc(
             del state["snapshots"][snapshot_id]
             moved.append(snapshot_id)
             save_state(config, state)
-            if not pressure:
-                continue
-            # Do not assume apparent snapshot size equals freed blocks.
-            current = filesystem_metrics(config.root)
-            if (
-                current["managedBytes"] <= config.gc_target
-                and current["managedBytes"] + reserve_bytes <= config.sync_peak_limit
-            ):
-                break
-        save_state(config, state)
-    trash_count = drain_trash(config)
+        trash_count += drain_trash(config)
+        # Use observed allocation/free space, never the removed tree's size.
+        current = filesystem_metrics(config.root)
     after = filesystem_metrics(config.root)
     result = {
         "deletedSnapshots": moved,

@@ -6,6 +6,7 @@ import {
   docsPage,
   publicDocs,
   publicDocsSearchJson,
+  renderPublicDoc,
 } from "../apps/admin-web/src/markdown-docs.js";
 
 const bytes = new TextEncoder().encode("test");
@@ -24,14 +25,15 @@ const distribution = {
 };
 
 describe("documentation navigation", () => {
-  it("provides grouped navigation, search, a table of contents, and paging", () => {
+  it("provides grouped navigation, search, stable anchors, and paging", () => {
     const page = docsPage();
 
     expect(page).toContain('class="docs-layout"');
     expect(page).toContain('<label for="docs-search">');
     expect(page).toContain('aria-controls="docs-search-results"');
     expect(page).toContain('class="docs-nav-group"');
-    expect(page).toContain('class="docs-toc"');
+    expect(page).not.toContain('class="docs-toc"');
+    expect(renderPublicDoc("api")).toContain('class="docs-toc"');
     expect(page).toContain('href="#最短でpdfを作る"');
     expect(page).toContain('rel="next"');
     expect(page).toContain('aria-current="page"');

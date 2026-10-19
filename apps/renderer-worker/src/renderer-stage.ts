@@ -18,6 +18,7 @@ export async function runRendererStage(
   staging: string,
   options: RendererStageOptions,
   timeoutMs: number,
+  lifecycle?: { owns: () => boolean },
 ): Promise<{ exitCode: number; timedOut: boolean; stderr: string }> {
   const renderer = spawnRenderer(
     config,
@@ -62,11 +63,13 @@ export async function runRendererStage(
     monitoring = (async () => {
       const row = database.worker.runtimeState(job.id);
       if (
-        !row ||
-        row.lease_owner !== config.workerId ||
-        row.lease_generation !== job.lease_generation ||
-        row.status !== "running" ||
-        row.cancel_requested_at !== null
+        lifecycle
+          ? !lifecycle.owns()
+          : !row ||
+            row.lease_owner !== config.workerId ||
+            row.lease_generation !== job.lease_generation ||
+            row.status !== "running" ||
+            row.cancel_requested_at !== null
       ) {
         await requestStop();
         return;

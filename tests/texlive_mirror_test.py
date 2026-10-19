@@ -1,4 +1,5 @@
 import datetime as dt
+import dataclasses
 import contextlib
 import errno
 import hashlib
@@ -636,13 +637,104 @@ class MirrorTest(unittest.TestCase):
             "inodeTotal": 200,
         }
         low = {**high, "managedBytes": 9 * mirror.GIB}
+
+        def measured_after_unlink(_root):
+            # Renaming to trash must not be mistaken for releasing allocation.
+            if (self.root / "snapshots" / old).exists() or list(
+                (self.root / "trash").iterdir()
+            ):
+                return high
+            return low
+
         with mock.patch.object(
-            mirror, "filesystem_metrics", side_effect=[high, low, low]
+            mirror, "filesystem_metrics", side_effect=measured_after_unlink
         ):
             result = mirror.gc(
                 self.config, dt.datetime(2026, 9, 7, tzinfo=dt.timezone.utc)
             )
         self.assertIn(old, result["deletedSnapshots"])
+
+    def test_pressure_stops_after_actual_allocation_reaches_target(self):
+        oldest, _ = self.publish(1, hours_ago=2)
+        middle, _ = self.publish(2, hours_ago=1)
+        latest, _ = self.publish(3)
+        before = mirror.filesystem_metrics(self.root)["managedBytes"]
+        oldest_bytes = mirror.apparent_unique_bytes(self.root / "snapshots" / oldest)
+        self.assertGreater(oldest_bytes, 0)
+        config = dataclasses.replace(
+            self.config, gc_start=before,
+            gc_target=before - max(1, oldest_bytes // 2),
+        )
+        result = mirror.gc(config, dt.datetime(2026, 9, 7, tzinfo=dt.timezone.utc))
+        self.assertEqual(result["deletedSnapshots"], [oldest])
+        self.assertTrue((self.root / "snapshots" / middle).is_dir())
+        self.assertTrue((self.root / "snapshots" / latest).is_dir())
+        self.assertLessEqual(result["after"]["managedBytes"], config.gc_target)
+        self.assertEqual(list((self.root / "trash").iterdir()), [])
+
+    def test_pressure_drains_existing_trash_before_selecting_snapshots(self):
+        older, _ = self.publish(1, hours_ago=1)
+        self.publish(2)
+        trash = self.root / "trash/staging-abandoned.1"
+        trash.mkdir()
+        (trash / "payload").write_bytes(b"x" * 8192)
+        before = mirror.filesystem_metrics(self.root)["managedBytes"]
+        trash_bytes = mirror.apparent_unique_bytes(trash)
+        config = dataclasses.replace(
+            self.config, gc_start=before,
+            gc_target=before - max(1, trash_bytes // 2),
+        )
+        result = mirror.gc(config, dt.datetime(2026, 9, 7, tzinfo=dt.timezone.utc))
+        self.assertEqual(result["deletedSnapshots"], [])
+        self.assertTrue((self.root / "snapshots" / older).is_dir())
+        self.assertFalse(trash.exists())
+        self.assertLessEqual(result["after"]["managedBytes"], config.gc_target)
+
+    def test_recursive_trash_deletion_does_not_hold_management_lock(self):
+        old, _ = self.publish(1, hours_ago=100)
+        self.publish(2)
+        actual_drain = mirror.drain_trash
+
+        def drain(config):
+            with mirror.locked(
+                self.root / "state/locks/management.lock", nonblocking=True
+            ):
+                pass
+            return actual_drain(config)
+
+        with mock.patch.object(mirror, "drain_trash", side_effect=drain):
+            result = mirror.gc(
+                self.config, dt.datetime(2026, 9, 7, tzinfo=dt.timezone.utc)
+            )
+        self.assertEqual(result["deletedSnapshots"], [old])
+
+    def test_new_reservation_between_unlinks_is_rechecked(self):
+        old, _ = self.publish(1, hours_ago=2)
+        middle, _ = self.publish(2, hours_ago=1)
+        latest, _ = self.publish(3)
+        config = dataclasses.replace(self.config, gc_start=1, gc_target=0)
+        now = dt.datetime(2026, 9, 7, tzinfo=dt.timezone.utc)
+        actual_drain = mirror.drain_trash
+        reserved = []
+
+        def drain(config):
+            with mirror.locked(
+                self.root / "state/locks/management.lock", nonblocking=True
+            ):
+                pass
+            count = actual_drain(config)
+            if count and not reserved:
+                reserved.append(mirror.reserve(
+                    config, middle, None, "10:1:build:amd64", "amd64", now
+                ))
+            return count
+
+        with mock.patch.object(mirror, "drain_trash", side_effect=drain):
+            result = mirror.gc(config, now)
+        self.assertEqual(len(reserved), 1)
+        self.assertEqual(result["deletedSnapshots"], [old])
+        self.assertTrue((self.root / "snapshots" / middle).exists())
+        self.assertTrue((self.root / "snapshots" / latest).exists())
 
     def fake_metadata(self, _config, _date, tlnet):
         payload_checksum = hashlib.sha512(b"payload").hexdigest()
@@ -912,6 +1004,12 @@ class MirrorTest(unittest.TestCase):
                 {
                     "managedBytes": 12,
                     "filesystemFreeBytes": 10,
+                    "inodeFree": 1,
+                    "inodeTotal": 2,
+                },
+                {
+                    "managedBytes": 8,
+                    "filesystemFreeBytes": 14,
                     "inodeFree": 1,
                     "inodeTotal": 2,
                 },

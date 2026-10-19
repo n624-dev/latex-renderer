@@ -31,7 +31,7 @@ export class ImageManagerClient {
     const endpoint = new URL(baseUrl);
     if (
       endpoint.protocol !== "http:" ||
-      !["127.0.0.1", "::1", "localhost"].includes(endpoint.hostname) ||
+      !["127.0.0.1", "[::1]", "localhost"].includes(endpoint.hostname) ||
       endpoint.username !== "" ||
       endpoint.password !== ""
     ) {

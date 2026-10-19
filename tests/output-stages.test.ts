@@ -246,6 +246,69 @@ describe("independent output checkpoints", () => {
       ),
     ).toBe(false);
   });
+  it("retries a retained temporary Job after its Source orphan deadline without extending PDF retention", () => {
+    const db = fixture();
+    pdf(db);
+    db.worker.transitionOwned(id, "worker", 1, ["running"], "failed", now, {
+      completed_at: now,
+      lease_owner: null,
+      lease_expires_at: null,
+    });
+    const expired = "2026-10-19T00:30:00.000Z";
+    db.raw
+      .prepare("UPDATE sources SET expires_at=? WHERE id='source'")
+      .run(expired);
+    expect(
+      db.sources.getReady("source", "2026-10-19T01:30:00.000Z"),
+    ).toBeDefined();
+    const checkpoint = db.outputStages.checkpoint(id);
+    expect(
+      db.transaction(() =>
+        db.outputStages.requeueSvg(
+          id,
+          "user",
+          "2026-10-19T01:30:00.000Z",
+          "2026-10-18T01:30:00.000Z",
+          100,
+        ),
+      ),
+    ).toBe(true);
+    expect(db.outputStages.checkpoint(id)).toMatchObject({
+      pdf_sha256: checkpoint?.pdf_sha256,
+      pdf_generation: checkpoint?.pdf_generation,
+      pdf_completed_at: now,
+      svg_status: "queued",
+    });
+    expect(
+      db.raw.prepare("SELECT expires_at FROM sources WHERE id='source'").get(),
+    ).toMatchObject({ expires_at: expired });
+  });
+
+  it.each(["deleting", "deleted"])(
+    "does not revive a %s Source for SVG retry",
+    (status) => {
+      const db = fixture();
+      pdf(db);
+      db.worker.transitionOwned(id, "worker", 1, ["running"], "failed", now, {
+        completed_at: now,
+        lease_owner: null,
+        lease_expires_at: null,
+      });
+      db.raw
+        .prepare("UPDATE sources SET status=?,expires_at=? WHERE id='source'")
+        .run(status, "2026-10-19T00:30:00.000Z");
+      expect(
+        db.outputStages.requeueSvg(
+          id,
+          "user",
+          "2026-10-19T01:30:00.000Z",
+          "2026-10-18T01:30:00.000Z",
+          100,
+        ),
+      ).toBe(false);
+      expect(db.jobs.get(id)?.status).toBe("failed");
+    },
+  );
   it("recovery queues only unfinished stages and preserves a published PDF", () => {
     const db = fixture();
     pdf(db);

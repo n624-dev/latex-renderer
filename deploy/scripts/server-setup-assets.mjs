@@ -74,7 +74,7 @@ export const setupScript = `"use strict";
     for (const id of ["owner-login", "owner-password", "owner-confirm"]) el(id).closest("label").hidden = !initial || !password;
     el("owner-subject").closest("label").hidden = !initial || password;
     el("oidc-secret").closest("label").hidden = !initial || auth.backend !== "native" || !auth.oidcEnabled;
-    for (const id of ["tls-certificate", "tls-key"]) el(id).closest("label").hidden = !ingress && !(initial && model.deployment.ingress.mode === "standalone");
+    for (const id of ["tls-certificate", "tls-key"]) el(id).closest("label").hidden = !ingress && !(initial && model.deployment.authentication.deployment.mode === "standalone");
     el("limits").replaceChildren();
     for (const [name, value] of Object.entries(model.runtime.limits)) {
       const label = document.createElement("label"); label.textContent = name + (/Bytes$/.test(name) ? " (bytes)" : /Seconds$/.test(name) ? " (seconds)" : "");

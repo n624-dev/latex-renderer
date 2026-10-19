@@ -375,8 +375,16 @@ and stops. It never expands storage or deletes protected content.
 
 Deletion rechecks protection while holding the management lock, changes state,
 atomically moves the directory to private `trash`, and releases the lock before
-recursive deletion. The next GC resumes an interrupted trash deletion. Staging
-recovery requires both an expired operation deadline and absence of the live
+recursive deletion. The next GC resumes an interrupted trash deletion.
+
+Trash is drained before selecting snapshots and after each snapshot rename;
+actual allocation and free space are remeasured before choosing another one.
+Moving a directory to trash does not count as freeing it. A separate `gc.lock`
+serializes trash walkers without blocking lease registration during recursive
+deletion. Lock order is cycle/sync (when held), GC, then management; the probe
+for a live sync under the management lock is nonblocking.
+
+Staging recovery requires both an expired operation deadline and absence of the live
 sync lock; PID or directory mtime alone is never trusted. Unexpected symlinks,
 mounts, names, missing state, malformed leases or corrupt JSON stop deletion and
 sync for operator review.

@@ -1,9 +1,18 @@
 # Deployment
 
-Migration 021 adds durable, independently published PDF/SVG stages. Deploy all
-database consumers and cleanup together after the encrypted backup, restore test
-and private-copy migration preflight, then verify schema 21. Existing Jobs are not
-reprocessed. New PDF+SVG Jobs may expose a verified PDF before SVG finishes; SVG
+Migration 022 adds PDF-bound page metadata and a deduplicated preview request
+queue. Upgrade database consumers and cleanup together after the encrypted
+backup, restore test and private-copy migration preflight, then verify schema
+22. The migration alone does not enable lazy conversion: existing Runtime
+preview behavior remains unchanged until its Worker and client integration is
+deployed. Requests must not extend PDF retention or replace its immutable
+identity. Application-only downgrade remains disabled. See
+[Migration 022](MIGRATIONS.md#migration-022-pdf-bound-preview-requests) and
+[the recovery procedure](deploy/migrations/022_lazy_previews.rollback.md).
+
+Migration 021 introduced durable, independently published PDF/SVG stages,
+retained by the current schema. Existing Jobs are not reprocessed.
+New PDF+SVG Jobs may expose a verified PDF before SVG finishes; SVG
 retries retain that PDF and its original retention deadline. Application-only
 downgrade remains disabled. See [Migration 021](MIGRATIONS.md#migration-021-independent-output-stages)
 and [the output-stage contract](docs/independent-output-stages.md).
