@@ -192,6 +192,31 @@ describe("bounded owner-bound Source input reuse (fixture renderer, no Docker)",
       }
     },
   );
+  it.each(["lowered", "raised", "invalid"])(
+    "uses the effective %s storage quota at cache reservation time",
+    async (mode) => {
+      const f = await fixture();
+      try {
+        const a = await f.next();
+        if (mode === "raised") f.config.maxUserStorageBytes = 1;
+        f.database.settings.upsert(
+          "max_user_storage_bytes",
+          mode === "lowered" ? 1 : mode === "raised" ? 20 * 1024 ** 2 : "invalid",
+          "fixture",
+          new Date().toISOString(),
+        );
+        const input = await a.prepare();
+        expect(input.input === a.destination).toBe(mode !== "raised");
+        expect(f.rows()).toHaveLength(mode === "raised" ? 1 : 0);
+        expect(await readFile(join(input.input, "main.tex"), "utf8")).toBe(
+          pipelineDocument(),
+        );
+        input.release();
+      } finally {
+        await f.close();
+      }
+    },
+  );
   it("isolates an owned tree from foreign users and rejects a mismatched Job/Source binding", async () => {
     const f = await fixture();
     try {

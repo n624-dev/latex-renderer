@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { JobsRepository } from "./jobs.js";
+import { SettingsRepository } from "./settings.js";
 
 export interface SourceTreeRow {
   id: string;
@@ -61,10 +62,22 @@ export class SourceTreesRepository {
     generation: number,
     globalBytes: number,
     userBytes: number,
-    userStorageBytes: number,
+    defaultUserStorageBytes: number,
   ): boolean {
     return this.transaction(() => {
       if (!this.ownedJob(row, job, generation)) return false;
+      // Read the effective quota under the same write lock as its charge.
+      // Environment values are defaults, not overrides of owner settings.
+      const userStorageBytes = new SettingsRepository(this.db).value<unknown>(
+        "max_user_storage_bytes",
+        defaultUserStorageBytes,
+      );
+      if (
+        typeof userStorageBytes !== "number" ||
+        !Number.isSafeInteger(userStorageBytes) ||
+        userStorageBytes < 0
+      )
+        return false;
       const usage = this.db
         .prepare(
           "SELECT COUNT(*) AS count,COALESCE(SUM(reserved_bytes),0) AS bytes,COALESCE(SUM(CASE WHEN owner_user_id=? THEN reserved_bytes ELSE 0 END),0) AS owned FROM source_trees",
