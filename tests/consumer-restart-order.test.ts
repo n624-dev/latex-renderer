@@ -4,6 +4,48 @@ import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 
 describe("consumer dependency restart boundaries (no systemd mutation)", () => {
+  it.each([false, true])(
+    "watchdog restores the complete consumer set and rejects a stopped gateway: %s",
+    async (stuck) => {
+      const source = await readFile(
+          "deploy/scripts/watch-image-manager-operation.mjs",
+          "utf8",
+        ),
+        list = /const rendererConsumers = (\[[\s\S]*?\]);/.exec(source)?.[1],
+        body = /function restoreRendererConsumers\(units\) \{[\s\S]*?\n\}/.exec(
+          source,
+        )?.[0];
+      if (!list || !body)
+        throw new Error("Missing watchdog recovery implementation");
+      const units = runInNewContext(list) as string[],
+        calls: string[][] = [];
+      expect(units).toContain("latex-renderer-admin-api.service");
+      expect(units.at(-1)).toBe("latex-renderer-standalone-gateway.service");
+      const execute = runInNewContext(`(${body})`, {
+        systemctl: (args: string[]) => {
+          calls.push(args);
+          return {
+            status:
+              stuck &&
+              args[0] === "is-active" &&
+              args.at(-1) === "latex-renderer-standalone-gateway.service"
+                ? 3
+                : 0,
+          };
+        },
+      }) as (units: string[]) => void;
+      if (stuck) expect(() => execute(units)).toThrow("still inactive");
+      else execute(units);
+      expect(
+        calls.filter((args) => args[0] === "start").map((args) => args[1]),
+      ).toEqual(units);
+      expect(
+        calls
+          .filter((args) => args[0] === "is-active")
+          .map((args) => args.at(-1)),
+      ).toEqual(units);
+    },
+  );
   it.each([true, false])(
     "restores the configured standalone gateway after Internal API: %s",
     async (enabled) => {

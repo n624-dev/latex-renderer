@@ -166,19 +166,21 @@ describe("Admin CLI native and external user contract", () => {
     expect(result.received).toEqual([]);
     expect(result.stderr).toContain("Configure both");
   });
-  it.each([
-    ["--authentication", "password", "--login-name", "fixture"],
+  it.each(
     [
-      "--authentication",
-      "external",
-      "--subject",
-      "fixture",
-      "--password-stdin",
-    ],
-    ["--authentication", "unknown"],
-  ])(
+      ["--authentication", "password", "--login-name", "fixture"],
+      [
+        "--authentication",
+        "external",
+        "--subject",
+        "fixture",
+        "--password-stdin",
+      ],
+      ["--authentication", "unknown"],
+    ].map((args) => ({ args })),
+  )(
     "rejects incoherent authentication options before HTTP: %j",
-    async (args) => {
+    async ({ args }) => {
       const result = await run([...common, ...args]);
       expect(result.status).toBe(1);
       expect(result.received).toEqual([]);
