@@ -56,7 +56,7 @@ fs.mkdirSync(cache,{recursive:true});fs.writeFileSync(path.join(cache,font+'.luc
             timeout: 10000,
             env: {
               ...process.env,
-              PATH: join(root, "bin") + ":" + process.env.PATH,
+              PATH: `${join(root, "bin")}:${process.env.PATH ?? ""}`,
               TMPDIR: join(root, "tmp"),
               TEST_TRACE: join(root, "trace"),
               ...env,

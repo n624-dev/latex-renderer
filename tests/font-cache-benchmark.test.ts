@@ -50,7 +50,7 @@ if(a[0]==='cp'){
           timeout: 15000,
           env: {
             ...process.env,
-            PATH: join(root, "bin") + ":" + process.env.PATH,
+            PATH: `${join(root, "bin")}:${process.env.PATH ?? ""}`,
             TMPDIR: join(root, "tmp"),
             GITHUB_ACTIONS: "true",
             RUNNER_ENVIRONMENT: "github-hosted",

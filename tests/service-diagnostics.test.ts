@@ -40,7 +40,9 @@ describe("bounded service diagnostics", () => {
     );
     log({ event: "rotated" });
     await log.flush();
-    expect(JSON.parse(readFileSync(path, "utf8")).event).toBe("rotated");
+    expect(JSON.parse(readFileSync(path, "utf8")) as unknown).toMatchObject({
+      event: "rotated",
+    });
     expect(statSync(path + ".1").size).toBe(2 * 1024 * 1024);
     expect(readdirSync(join(p, "diagnostics")).length).toBe(2);
     log({ oversized: "x".repeat(4096) });
