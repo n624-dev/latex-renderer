@@ -53,6 +53,21 @@ mkdir -p "$TEXMFVAR/luatex-cache/generic"
 cp -R /opt/texlive/2026/texmf-var/luatex-cache/generic/names \
   "$TEXMFVAR/luatex-cache/generic/"
 
+# Lua's default collector waits for the live heap to double between cycles.
+# A smaller pause can release transient font-loader tables earlier. It does
+# not remove fonts, change TeX limits or force a full collection per page.
+# Keep standard behavior by default: the disposable-runner comparison has not
+# demonstrated a consistent memory or timing benefit from the tuned policy.
+case "${RENDERER_LUA_GC_MODE:-standard}" in
+  balanced)
+    printf '%s\n' 'collectgarbage("setpause", 120)' 'collectgarbage("setstepmul", 200)' \
+      > /tmp/renderer-memory.lua
+    export RENDERER_LUA_GC_SCRIPT=/tmp/renderer-memory.lua
+    ;;
+  standard) unset RENDERER_LUA_GC_SCRIPT ;;
+  *) printf '%s\n' 'renderer: invalid Lua GC mode' >&2; exit 78 ;;
+esac
+
 cd /work/input
 renderer_log=/tmp/renderer-compile.log
 : > "$renderer_log"
@@ -70,11 +85,15 @@ record_stage() {
     case "$renderer_io" in *:*) ;; *) renderer_io=unknown ;; esac
   fi
   renderer_temporary=$(du -sk /tmp /work/output 2>/dev/null | awk '{n+=$1} END {printf "%.0f",n*1024}')
+  renderer_memory_parts=unknown
+  if [ -r /sys/fs/cgroup/memory.stat ]; then
+    renderer_memory_parts=$(awk '$1=="anon" {a=$2; na=1} $1=="file" {f=$2; nf=1} $1=="shmem" {s=$2; ns=1} END {if(na&&nf&&ns) printf "%.0f:%.0f:%.0f",a,f,s; else printf "unknown"}' /sys/fs/cgroup/memory.stat)
+  fi
   case "$renderer_peak" in ''|*[!0-9]*) renderer_peak=unknown ;; esac
   case "$renderer_oom" in ''|*[!0-9]*) renderer_oom=unknown ;; esac
   case "$renderer_cpu" in ''|*[!0-9]*) renderer_cpu=unknown ;; esac
-  printf 'RENDERER_METRIC stage=%s elapsed_seconds=%s memory_peak_bytes=%s oom_kill=%s cpu_usage_usec=%s io_read_write_bytes=%s sampled_temporary_bytes=%s\n' \
-    "$renderer_stage" "$((renderer_now-renderer_stage_started))" "$renderer_peak" "$renderer_oom" "$renderer_cpu" "$renderer_io" "$renderer_temporary" >> "$renderer_log"
+  printf 'RENDERER_METRIC stage=%s elapsed_seconds=%s memory_peak_bytes=%s oom_kill=%s cpu_usage_usec=%s io_read_write_bytes=%s sampled_temporary_bytes=%s sampled_memory_anon_file_shmem_bytes=%s\n' \
+    "$renderer_stage" "$((renderer_now-renderer_stage_started))" "$renderer_peak" "$renderer_oom" "$renderer_cpu" "$renderer_io" "$renderer_temporary" "$renderer_memory_parts" >> "$renderer_log"
   renderer_stage_started=$renderer_now
 }
 # TeX may need /work/output/compile.log itself when the entrypoint is

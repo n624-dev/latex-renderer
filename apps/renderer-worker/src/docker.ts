@@ -1,5 +1,7 @@
 import { spawn } from "node:child_process";
 import type { WorkerConfig } from "./config.js";
+import { containerMemoryProbe } from "./container-memory.js";
+import { MIB, RENDER_MEMORY_MAX } from "./memory-plan.js";
 
 export interface RendererStageOptions {
   mode: "pdf" | "svg" | "preview";
@@ -32,11 +34,42 @@ export function spawnRenderer(
     leaseGeneration,
     stage,
   );
+  const process = spawn("docker", args, {
+    stdio: ["ignore", "pipe", "pipe"],
+    env: dockerEnvironment(),
+  });
+  if (config.observeContainerMemory && stage?.mode !== "preview") {
+    const probe = containerMemoryProbe(containerName, (name) =>
+      runDocker(["inspect", "--format", "{{.Id}} {{.State.Pid}}", name], 2000),
+    );
+    let busy = false,
+      closed = false;
+    const timer = setInterval(() => {
+      if (busy || closed) return;
+      busy = true;
+      void probe()
+        .then((peak) => {
+          if (!closed && peak !== undefined)
+            config.observeContainerMemory?.(
+              `${containerName}:${stage?.mode ?? "all"}`,
+              peak,
+            );
+        })
+        .catch(() => {})
+        .finally(() => {
+          busy = false;
+        });
+    }, 1000);
+    timer.unref();
+    const stop = () => {
+      closed = true;
+      clearInterval(timer);
+    };
+    process.once("close", stop);
+    process.once("error", stop);
+  }
   return {
-    process: spawn("docker", args, {
-      stdio: ["ignore", "pipe", "pipe"],
-      env: dockerEnvironment(),
-    }),
+    process,
     containerName,
   };
 }
@@ -50,6 +83,15 @@ export function rendererRunArguments(
   leaseGeneration = 0,
   stage?: RendererStageOptions,
 ): string[] {
+  const memory = config.containerMemoryBytes ?? RENDER_MEMORY_MAX;
+  if (
+    !Number.isSafeInteger(memory) ||
+    memory < 128 * MIB ||
+    memory > RENDER_MEMORY_MAX ||
+    memory % (64 * MIB) !== 0
+  )
+    throw new Error("Invalid worker-selected renderer memory cap");
+  const memoryArgument = memory === RENDER_MEMORY_MAX ? "1g" : String(memory);
   if (
     (stage?.mode === "svg" || stage?.mode === "preview") &&
     stage.pdfDirectory === undefined
@@ -100,9 +142,9 @@ export function rendererRunArguments(
     "--cpus",
     "1.5",
     "--memory",
-    stage?.mode === "preview" ? "256m" : "1g",
+    stage?.mode === "preview" ? "256m" : memoryArgument,
     "--memory-swap",
-    stage?.mode === "preview" ? "256m" : "1g",
+    stage?.mode === "preview" ? "256m" : memoryArgument,
     ...(stage?.mode === "preview"
       ? [
           "--ulimit",
@@ -189,6 +231,18 @@ export async function assertDockerIsolation(
     apparmorProfile,
     process.env.ALLOW_ROOTFUL_DOCKER === "true",
   );
+  const limits = await runDocker([
+    "info",
+    "--format",
+    "{{.MemoryLimit}} {{.SwapLimit}}",
+  ]).catch(() => "");
+  validateDockerMemoryLimits(limits);
+}
+export function validateDockerMemoryLimits(value: string): void {
+  if (value.trim() !== "true true")
+    throw new Error(
+      "Docker memory and swap limit enforcement is required for render admission",
+    );
 }
 export function validateDockerIsolation(
   options: string,

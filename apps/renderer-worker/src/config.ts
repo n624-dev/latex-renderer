@@ -28,6 +28,9 @@ export interface WorkerConfig extends ResourceLimits {
   jobTimeoutMs: number;
   minimumAvailableMemoryBytes?: number;
   admissionWaitTimeoutMs?: number;
+  /** Worker-selected per-Job cap; never supplied by the document/client. */
+  containerMemoryBytes?: number;
+  observeContainerMemory?: (containerName: string, peakBytes: number) => void;
   artifactRetentionHours?: number;
   maxUserStorageBytes?: number;
   minFreeStorageBytes?: number;

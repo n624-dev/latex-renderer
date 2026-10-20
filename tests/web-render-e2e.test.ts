@@ -7,6 +7,7 @@ import {
   inspectZip,
   sha256Hex,
   uploadRenderZip,
+  resourceWaitLabel,
   type BrowserJobArtifact,
   type RenderFetch,
 } from "../apps/admin-web/src/assets/render-script.js";
@@ -14,6 +15,18 @@ import {
 afterEach(() => vi.restoreAllMocks());
 
 describe("Web render sample ZIP E2E", () => {
+  it("keeps resource waiting distinct from Job failure and preserves its detailed reason", () => {
+    const job = {
+      status: "queued" as const,
+      errorCode: "HOST_RESOURCE_WAIT",
+      errorMessage: "空きメモリ不足: 700MiB / 704MiB",
+    };
+    expect(resourceWaitLabel(job)).toContain("704MiB");
+    expect(resourceWaitLabel({ ...job, status: "running" })).toBe("");
+    expect(resourceWaitLabel({ ...job, errorMessage: null })).toContain(
+      "サーバー資源",
+    );
+  });
   it("runs ticket, direct upload, status, preview, and artifact download without logging credentials", async () => {
     const consoleLog = vi
       .spyOn(console, "log")

@@ -47,7 +47,7 @@ export async function pollUntilTerminal(
   const timeoutError = () =>
     new AppError(
       "RENDER_POLL_TIMEOUT",
-      "Render did not reach a terminal state before the local timeout",
+      "Local status-wait timeout. This client did not cancel the server Job; check its status or cancel it explicitly",
       504,
     );
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -124,6 +124,11 @@ export async function pollUntilTerminal(
         type: "job.status",
         jobId: ticket.jobId,
         status: job.status,
+        ...(job.status === "queued" &&
+        job.errorCode === "HOST_RESOURCE_WAIT" &&
+        job.errorMessage
+          ? { resourceWait: job.errorMessage }
+          : {}),
       });
       if (terminalStatuses.has(job.status) || ready?.(job) === true)
         return { job, jobTicket };

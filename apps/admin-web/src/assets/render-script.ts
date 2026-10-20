@@ -94,6 +94,14 @@ export interface BrowserJobStatus {
   stages?: import("@latex-renderer/contracts").JobStages;
 }
 
+export function resourceWaitLabel(
+  job: Pick<BrowserJobStatus, "status" | "errorCode" | "errorMessage">,
+): string {
+  if (job.status !== "queued" || job.errorCode !== "HOST_RESOURCE_WAIT")
+    return "";
+  return ` — サーバー資源の空きを待っています${job.errorMessage ? `：${job.errorMessage}` : ""}`;
+}
+
 export type RenderFetch = (
   input: RequestInfo | URL,
   init?: RequestInit,
@@ -1331,6 +1339,7 @@ function installRenderWorkflow(csrfToken: string): void {
           (partial ? "部分成功 — " : "") +
           `PDF: ${jobStatusLabel(pdf.status)} / SVG: ${jobStatusLabel(svg.status)}`;
       }
+      if (task.job) state.textContent += resourceWaitLabel(task.job);
       job.textContent = task.jobId ?? "—";
       if (
         !TERMINAL_JOB_STATUSES.has(task.state) &&
@@ -1854,6 +1863,7 @@ export const renderScript = `
   const parseRenderTicket = ${parseRenderTicket.toString()};
   const parseJobArtifact = ${parseJobArtifact.toString()};
   const parseJobStatus = ${parseJobStatus.toString()};
+  const resourceWaitLabel = ${resourceWaitLabel.toString()};
   const responseError = ${responseError.toString()};
   const responseJson = ${responseJson.toString()};
   const parseAdminRenderTargets = ${parseAdminRenderTargets.toString()};

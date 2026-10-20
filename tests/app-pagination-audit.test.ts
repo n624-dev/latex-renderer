@@ -1,6 +1,36 @@
+import { execFileSync } from "node:child_process";
 import { runInNewContext } from "node:vm";
 import { describe, expect, it, vi } from "vitest";
-import { appScript } from "../apps/admin-web/src/assets/app-script.js";
+
+// Function serialization must run outside Vitest's SSR import rewriting,
+// just as the real-browser tests use the native built module. This lightweight
+// harness transpiles just the two asset modules without a workspace build or
+// type-checking the dependency graph. tsx adds __name closures of its own.
+const appScript = execFileSync(
+  process.execPath,
+  [
+    "--input-type=module",
+    "--eval",
+    `import ts from 'typescript';
+     import {readFileSync} from 'node:fs';
+     const app = new URL(process.argv[1]);
+     const compile = url => ts.transpileModule(readFileSync(url, 'utf8'), {
+       compilerOptions: {target:ts.ScriptTarget.ES2023,module:ts.ModuleKind.ESNext}
+     }).outputText;
+     const dataUrl = source => 'data:text/javascript;base64,'+Buffer.from(source).toString('base64');
+     const render = dataUrl(compile(new URL('./render-script.ts',app)));
+     const source = compile(app).replace('./render-script.js',render);
+     const module = await import(dataUrl(source));
+     process.stdout.write(module.appScript);`,
+    new URL("../apps/admin-web/src/assets/app-script.ts", import.meta.url).href,
+  ],
+  {
+    encoding: "utf8",
+    timeout: 10_000,
+    maxBuffer: 2 * 1024 * 1024,
+    env: { ...process.env, NODE_OPTIONS: "--max-old-space-size=96" },
+  },
+);
 
 class Element {
   innerHTML = "";
@@ -239,5 +269,24 @@ describe("audit Web pagination and retained previews", () => {
         (item) => item.textContent,
       ),
     ).toContain("プレビュー");
+  });
+
+  it("shows detailed queued resource waiting through the shipped result renderer", () => {
+    const container = new Element();
+    harness(new Map()).renderJobResult(
+      container,
+      () => {},
+      {},
+      {
+        id: "job_test",
+        status: "queued",
+        errorCode: "HOST_RESOURCE_WAIT",
+        errorMessage: "利用可能: 700MiB、開始条件: 704MiB",
+        artifacts: [],
+        previews: [],
+      },
+      "Result",
+    );
+    expect(container.children[0]?.children[1]?.textContent).toContain("704MiB");
   });
 });

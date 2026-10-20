@@ -5,6 +5,7 @@ export function claimNextJob(
   database: RendererDatabase,
   workerId: string,
   queuedBefore?: string,
+  expectedJobId?: string,
 ): WorkerJobRow | undefined {
   return database.transaction(() => {
     const now = nowIso();
@@ -13,6 +14,7 @@ export function claimNextJob(
       now,
       new Date(Date.now() + 30_000).toISOString(),
       queuedBefore,
+      expectedJobId,
     );
   });
 }

@@ -67,6 +67,7 @@ export class WorkerRepository {
     now: string,
     leaseExpiresAt: string,
     queuedBefore?: string,
+    expectedJobId?: string,
   ): WorkerJobRow | undefined {
     if (
       this.db
@@ -79,10 +80,14 @@ export class WorkerRepository {
     const job = this.db
       .prepare(
         `SELECT j.id,j.source_size,j.source_sha256,j.status,j.source_id,j.entrypoint,j.outputs_json,j.lease_generation,s.storage_key AS source_storage_key
-      FROM jobs j LEFT JOIN sources s ON s.id=j.source_id WHERE j.status='queued' AND (? IS NULL OR j.queued_at<=?) ORDER BY j.queued_at,j.id LIMIT 1`,
+      FROM jobs j LEFT JOIN sources s ON s.id=j.source_id WHERE j.status='queued' AND (? IS NULL OR j.queued_at<=?) AND (? IS NULL OR j.id=?) ORDER BY j.queued_at,j.id LIMIT 1`,
       )
-      .get(queuedBefore ?? null, queuedBefore ?? null) as
-      WorkerJobRow | undefined;
+      .get(
+        queuedBefore ?? null,
+        queuedBefore ?? null,
+        expectedJobId ?? null,
+        expectedJobId ?? null,
+      ) as WorkerJobRow | undefined;
     if (job === undefined) return undefined;
     const changed = this.db
       .prepare(
@@ -103,19 +108,51 @@ export class WorkerRepository {
       .get() as { id: string; queued_at: string } | undefined;
   }
 
-  setAdmissionReason(blocked: boolean, timestamp: string): void {
+  admissionCandidates(after?: { queued_at: string; id: string }): {
+    id: string;
+    user_id: string;
+    source_sha256: string;
+    entrypoint: string;
+    outputs_json: string;
+    queued_at: string;
+  }[] {
+    return this.db
+      .prepare(
+        "SELECT id,user_id,source_sha256,entrypoint,outputs_json,queued_at FROM jobs WHERE status='queued' AND (? IS NULL OR queued_at>? OR (queued_at=? AND id>?)) ORDER BY queued_at,id LIMIT 32",
+      )
+      .all(
+        after?.queued_at ?? null,
+        after?.queued_at ?? null,
+        after?.queued_at ?? null,
+        after?.id ?? null,
+      ) as {
+      id: string;
+      user_id: string;
+      source_sha256: string;
+      entrypoint: string;
+      outputs_json: string;
+      queued_at: string;
+    }[];
+  }
+
+  setAdmissionReason(
+    blocked: boolean,
+    timestamp: string,
+    jobId?: string,
+    message = "Waiting for host memory or I/O pressure to recover",
+  ): void {
     if (blocked)
       this.db
         .prepare(
-          "UPDATE jobs SET error_code='HOST_RESOURCE_WAIT',error_message='Waiting for host memory or I/O pressure to recover',updated_at=? WHERE status='queued' AND error_code IS NULL",
+          "UPDATE jobs SET error_code='HOST_RESOURCE_WAIT',error_message=?,updated_at=? WHERE status='queued' AND (? IS NULL OR id=?) AND (error_code IS NULL OR error_code='HOST_RESOURCE_WAIT') AND error_message IS NOT ?",
         )
-        .run(timestamp);
+        .run(message, timestamp, jobId ?? null, jobId ?? null, message);
     else
       this.db
         .prepare(
-          "UPDATE jobs SET error_code=NULL,error_message=NULL,updated_at=? WHERE status='queued' AND error_code='HOST_RESOURCE_WAIT'",
+          "UPDATE jobs SET error_code=NULL,error_message=NULL,updated_at=? WHERE status='queued' AND error_code='HOST_RESOURCE_WAIT' AND (? IS NULL OR id=?)",
         )
-        .run(timestamp);
+        .run(timestamp, jobId ?? null, jobId ?? null);
   }
 
   subjectState(jobId: string): WorkerSubjectState | undefined {

@@ -24,7 +24,7 @@ mkdir "$bench_root/input"
 cp "$repo_root/tests/fixtures/font-cache/main.tex" "$bench_root/input/main.tex"
 chmod -R a+rX "$bench_root/input"
 case "${CI_FONT_CACHE_COMPARE:-0}" in
-  1) modes='cold warm warm-repeat' ;;
+  1) modes='cold standard warm warm-repeat' ;;
   0) modes=warm ;;
   *) echo 'CI_FONT_CACHE_COMPARE must be 0 or 1' >&2; exit 64 ;;
 esac
@@ -38,8 +38,11 @@ if [ "${CI_FONT_CACHE_COMPARE:-0}" = 1 ]; then
   cold_image=$cold_candidate
 fi
 for mode in $modes; do
-  selected=$image; require_cache=1
+  selected=$image; require_cache=1; gc_mode=standard
   if [ "$mode" = cold ]; then selected=$cold_image; require_cache=0; fi
+  if [ "${CI_FONT_CACHE_COMPARE:-0}" = 1 ]; then
+    case "$mode" in warm|warm-repeat) gc_mode=balanced ;; esac
+  fi
   output="$bench_root/$mode"; mkdir "$output"
   started=$(date +%s)
   status=0
@@ -50,13 +53,22 @@ for mode in $modes; do
     --pids-limit 128 --memory 1g --memory-swap 1g --cpus 1.5 \
     --tmpfs /tmp:rw,noexec,nosuid,nodev,size=256m,uid=10000,gid=10000 \
     --env REQUIRE_PREWARMED_FONTS="$require_cache" --env LATEX_OUTPUTS=pdf,svg \
+    --env RENDERER_LUA_GC_MODE="$gc_mode" \
+    --env SOURCE_DATE_EPOCH=946684800 --env FORCE_SOURCE_DATE=1 --env TZ=UTC \
     --mount "type=bind,src=$bench_root/input,dst=/work/input,readonly" "$selected"
   status=$?
   set -e
   elapsed=$(($(date +%s)-started))
-  printf 'FONT_CACHE_BENCHMARK mode=%s elapsed_seconds=%s exit=%s\n' "$mode" "$elapsed" "$status"
+  printf 'FONT_CACHE_BENCHMARK mode=%s gc=%s elapsed_seconds=%s exit=%s\n' "$mode" "$gc_mode" "$elapsed" "$status"
   if [ -f "$output/compile.log" ]; then
     awk '/^RENDERER_METRIC / {print}' "$output/compile.log"
+    # These are cumulative cgroup counters, not a sum of per-stage peaks.
+    peak=$(awk '/^RENDERER_METRIC / {for(i=1;i<=NF;i++){split($i,p,"=");if(p[1]=="memory_peak_bytes" && p[2]~/^[0-9]+$/ && p[2]>m)m=p[2]}} END {if(m>0)printf "%.0f",m;else printf "unknown"}' "$output/compile.log")
+    cpu=$(awk '/^RENDERER_METRIC / {for(i=1;i<=NF;i++){split($i,p,"=");if(p[1]=="cpu_usage_usec" && p[2]~/^[0-9]+$/ && p[2]>m)m=p[2]}} END {if(m>0)printf "%.0f",m;else printf "unknown"}' "$output/compile.log")
+    printf 'RENDERER_MEMORY_COMPARISON mode=%s gc=%s elapsed_seconds=%s peak_bytes=%s cpu_usage_usec=%s\n' "$mode" "$gc_mode" "$elapsed" "$peak" "$cpu"
+    if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+      printf '\nMemory comparison: %s / %s, peak %s bytes, CPU %s us.\n' "$mode" "$gc_mode" "$peak" "$cpu" >> "$GITHUB_STEP_SUMMARY"
+    fi
   fi
   if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     printf '\nFont cache: %s, elapsed %ss, exit %s.\n' "$mode" "$elapsed" "$status" >> "$GITHUB_STEP_SUMMARY"
@@ -80,3 +92,46 @@ for mode in $modes; do
     grep -Eq 'memory_peak_bytes=[1-9][0-9]*' "$output/compile.log"
   fi
 done
+# Peak reduction is evidence to report, not a pass/fail requirement. A valid
+# document can retain a large live font heap with either collector policy.
+# Require unchanged rendered output instead of asserting a smaller heap.
+same_preview() {
+  if ! cmp -s "$1" "$2"; then
+    echo 'Renderer memory comparison changed rendered PNG output' >&2
+    exit 65
+  fi
+}
+if [ -d "$bench_root/standard" ]; then
+  same_preview "$bench_root/standard/previews/page-1.png" "$bench_root/warm/previews/page-1.png"
+  same_preview "$bench_root/standard/previews/page-1.png" "$bench_root/warm-repeat/previews/page-1.png"
+  # Explicitly request the other fixture page through the production preview
+  # entrypoint. Do not reintroduce eager all-page PNG generation in rendering.
+  for mode in standard warm warm-repeat; do
+    page_output="$bench_root/$mode-page-2"; mkdir "$page_output"
+    # docker cp preserves the private output directory/file modes. Its host
+    # owner can compare them, but sandbox UID 10000 cannot traverse that bind.
+    # Publish only this disposable fixture's PDF into a separate read-only
+    # input; never widen production artifacts or bind the whole output tree.
+    page_input="$bench_root/$mode-page-2-input"; mkdir "$page_input"
+    cp "$bench_root/$mode/result.pdf" "$page_input/result.pdf"
+    chmod 0755 "$page_input"
+    chmod 0644 "$page_input/result.pdf"
+    if run_smoke_container "$image" "$page_output" \
+      --network none --read-only --cap-drop ALL \
+      --security-opt "seccomp=$repo_root/deploy/security/seccomp.json" \
+      --pids-limit 128 --memory 256m --memory-swap 256m --cpus 1.5 \
+      --tmpfs /tmp:rw,noexec,nosuid,nodev,size=256m,uid=10000,gid=10000 \
+      --env LATEX_RENDER_STAGE=preview --env LATEX_PREVIEW_PAGE=2 \
+      --mount "type=bind,src=$page_input,dst=/work/pdf,readonly" "$image"; then
+      test -s "$page_output/previews/page-2.png" || {
+        echo 'Renderer memory comparison produced no second-page PNG' >&2; exit 65;
+      }
+    else
+      echo 'Renderer memory comparison second-page preview failed' >&2
+      if [ -f "$page_output/compile.log" ]; then tail -n 60 "$page_output/compile.log" >&2; fi
+      exit 65
+    fi
+  done
+  same_preview "$bench_root/standard-page-2/previews/page-2.png" "$bench_root/warm-page-2/previews/page-2.png"
+  same_preview "$bench_root/standard-page-2/previews/page-2.png" "$bench_root/warm-repeat-page-2/previews/page-2.png"
+fi

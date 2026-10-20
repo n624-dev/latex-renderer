@@ -1,4 +1,4 @@
-import { Script } from "node:vm";
+import { Script, runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 import yazl from "yazl";
 import {
@@ -21,6 +21,7 @@ import {
   type RenderFetch,
 } from "../apps/admin-web/src/assets/render-script.js";
 import { adminRenderPage } from "../apps/admin-web/src/templates-admin.js";
+import { appScript } from "../apps/admin-web/src/assets/app-script.js";
 
 describe("Web render ZIP preflight", () => {
   it("validates per-output state and accepts only the three canonical SVG diagnostic paths", () => {
@@ -190,6 +191,27 @@ describe("Web render ZIP preflight", () => {
     expect(renderScript).not.toContain("indexedDB");
     expect(renderScript).not.toContain("console.log");
   });
+
+  it.each([
+    ["App", appScript, "  (function installApp("],
+    ["Admin", renderScript, "  fetch('/auth/session'"],
+  ])(
+    "embeds the resource-wait helper in the shipped %s script",
+    (_name, script, startup) => {
+      // Syntax checks and direct module calls do not detect omitted dependencies
+      // in these serialized browser closures. Execute the actual emitted helper.
+      const end = script.lastIndexOf(startup);
+      expect(end).toBeGreaterThan(0);
+      const context = { label: "" };
+      runInNewContext(
+        script.slice(0, end) +
+          'globalThis.label = resourceWaitLabel({status:"queued",errorCode:"HOST_RESOURCE_WAIT",errorMessage:"700MiB / 704MiB"});})();',
+        context,
+      );
+      expect(context.label).toContain("サーバー資源の空きを待っています");
+      expect(context.label).toContain("704MiB");
+    },
+  );
 
   it("renders an accessible batch workflow without operator details", () => {
     const page = adminRenderPage();

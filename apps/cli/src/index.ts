@@ -563,7 +563,12 @@ function humanRenderEvent(event: ClientCoreEvent): void {
     return;
   }
   if (event.type !== "job.status") return;
-  process.stdout.write(`\r${event.status.padEnd(12)}`);
+  const wait = event.resourceWait
+    ?.replace(/[\p{Cc}\p{Cf}]/gu, " ")
+    .slice(0, 300);
+  process.stdout.write(
+    `\r${`${event.status}${wait ? ` — ${wait}` : ""}`.padEnd(160)}`,
+  );
   if (isTerminalStatus(event.status)) process.stdout.write("\n");
 }
 

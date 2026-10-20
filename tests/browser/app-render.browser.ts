@@ -312,7 +312,9 @@ async function fixture() {
               ? "succeeded"
               : "running",
         errorCode: state.resourceWait ? "HOST_RESOURCE_WAIT" : null,
-        errorMessage: state.resourceWait ? "Waiting for host resources" : null,
+        errorMessage: state.resourceWait
+          ? "空きメモリ不足。利用可能: 700MiB、開始条件: 704MiB。待機だけではJobを失敗にしません。"
+          : null,
         retentionExpiresAt: state.staged ? expiresAt : null,
         artifacts: state.staged
           ? [
@@ -679,6 +681,9 @@ describe("App render in the selected browser", () => {
         ),
       )
       .toBe(true);
+    expect(await page.locator("#app-render-items").textContent()).toContain(
+      "704MiB",
+    );
     expect(state.requests).toHaveLength(1);
     state.resourceWait = false;
     state.complete = true;

@@ -13,8 +13,82 @@ import {
   realPipelineImage,
   sourcePipelineFixture,
 } from "./helpers/source-pipeline.js";
+import {
+  MIB,
+  memoryProfileKey,
+  planRenderMemory,
+  rememberRenderMemory,
+} from "../apps/renderer-worker/src/memory-plan.js";
 
 describe(`Source pipeline HTTP/DB/Worker E2E (${realPipelineImage === undefined ? "deterministic renderer, NOT TeX" : "real TeX container"})`, () => {
+  it.skipIf(realPipelineImage === undefined)(
+    "observes a real sandbox outside TeX and rerenders the same Source with a bounded learned cap",
+    async () => {
+      const f = await sourcePipelineFixture();
+      try {
+        const samples = new Map<string, number>();
+        f.config.observeContainerMemory = (container, peak) => {
+          samples.set(container, Math.max(samples.get(container) ?? 0, peak));
+        };
+        const source = await f.renders.createSource(
+          { userId: "pipeline_user", scopes: ["mcp:render", "mcp:read"] },
+          [
+            {
+              path: "main.tex",
+              text: pipelineDocument(
+                1,
+                "\\directlua{local t=os.clock(); while os.clock()-t<2 do end}Measured sandbox. $x^2+y^2=z^2$",
+              ),
+            },
+          ],
+        );
+        const first = await renderSource(f.client, source.id, {
+          outputs: ["pdf", "svg"],
+          outputDirectory: join(f.root, "memory-first"),
+          pollTimeoutMs: 120000,
+          sleep: f.runNext,
+        });
+        expect(first.job.status).toBe("succeeded");
+        expect(samples.size).toBe(2);
+        const row = defined(f.database.sources.get(source.id));
+        const candidate = {
+          id: first.job.id,
+          user_id: "pipeline_user",
+          source_sha256: row.sha256,
+          entrypoint: "main.tex",
+          outputs_json: '["pdf","svg"]',
+          queued_at: new Date().toISOString(),
+        };
+        rememberRenderMemory(
+          f.database,
+          memoryProfileKey(candidate, f.config.image),
+          Math.max(...samples.values()),
+          true,
+        );
+        const plan = planRenderMemory(
+          f.database,
+          candidate,
+          f.config.image,
+          1152 * MIB,
+        );
+        expect(plan.estimatedPeak).toBeGreaterThan(0);
+        expect(plan.limit).toBeLessThanOrEqual(1024 * MIB);
+        f.config.containerMemoryBytes = plan.limit;
+        const second = await renderSource(f.client, source.id, {
+          outputs: ["pdf", "svg"],
+          outputDirectory: join(f.root, "memory-second"),
+          pollTimeoutMs: 120000,
+          sleep: f.runNext,
+        });
+        expect(second.job.status).toBe("succeeded");
+        expect(await readFile(defined(second.artifacts.previews[0]))).toEqual(
+          await readFile(defined(first.artifacts.previews[0])),
+        );
+      } finally {
+        await f.close();
+      }
+    },
+  );
   it("keeps PDF/PNG/SVG validation and output bytes equivalent with cache disabled, on first fill and on a read-only hit", async () => {
     const f = await sourcePipelineFixture();
     try {
