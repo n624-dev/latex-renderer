@@ -13,5 +13,15 @@ overrides:
   "postcss>source-map-js": 1.2.2
   # GHSA-2883-xcg3-v3hh: retain gray-matter's v3 API with the merge-budget fix.
   "gray-matter>js-yaml": 3.15.2
+  # Remove sprintf-js (GHSA-hp3w-g68c-fv3c); the accompanying js-yaml patch
+  # adapts its CLI to argparse's current API without changing YAML parsing.
+  "js-yaml@3.15.2>argparse": 3.0.3
   nanoid: 3.3.18
   tmp: 0.2.7
+patchedDependencies:
+  js-yaml@3.15.2: patches/js-yaml@3.15.2.patch
+  # No upstream release fixes GHSA-86w9-cpqp-85rv yet. Validate the nested
+  # DigestAlgorithm as well as DigestInfo; keep ordinary RSA signatures valid.
+  # Upstream proposal: https://github.com/digitalbazaar/forge/pull/1152
+  # Also reject nonempty NULL parameters, which can hide the same garbage.
+  node-forge@1.4.0: patches/node-forge@1.4.0.patch
