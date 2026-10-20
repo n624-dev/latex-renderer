@@ -1863,6 +1863,7 @@ export const renderScript = `
   const parseRenderTicket = ${parseRenderTicket.toString()};
   const parseJobArtifact = ${parseJobArtifact.toString()};
   const parseJobStatus = ${parseJobStatus.toString()};
+  const resourceWaitLabel = ${resourceWaitLabel.toString()};
   const responseError = ${responseError.toString()};
   const responseJson = ${responseJson.toString()};
   const parseAdminRenderTargets = ${parseAdminRenderTargets.toString()};

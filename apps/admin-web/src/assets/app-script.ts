@@ -1323,6 +1323,7 @@ export const appScript = `
   const uploadSourceZip = ${uploadSourceZip.toString()};
   const parseJobArtifact = ${parseJobArtifact.toString()};
   const parseJobStatus = ${parseJobStatus.toString()};
+  const resourceWaitLabel = ${resourceWaitLabel.toString()};
   const json = ${json.toString()};
   const friendly = ${friendly.toString()};
   const showError = ${showError.toString()};

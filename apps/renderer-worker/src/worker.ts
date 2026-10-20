@@ -127,7 +127,7 @@ export async function runWorker(
           config.image,
           config.minimumAvailableMemoryBytes,
         );
-        const state =
+        const state: ReturnType<typeof assessHostResources> =
           plan.minimum === undefined
             ? "ready"
             : assessHostResources(resources, plan.minimum);
@@ -229,16 +229,11 @@ export async function runWorker(
       const executionConfig: WorkerConfig = {
         ...config,
         containerMemoryBytes: plan.limit,
-        observeContainerMemory:
-          config.minimumAvailableMemoryBytes === undefined
-            ? undefined
-            : (container, peak) => {
-                samples.set(
-                  container,
-                  Math.max(samples.get(container) ?? 0, peak),
-                );
-              },
       };
+      if (config.minimumAvailableMemoryBytes !== undefined)
+        executionConfig.observeContainerMemory = (container, peak) => {
+          samples.set(container, Math.max(samples.get(container) ?? 0, peak));
+        };
       try {
         await processJob(database, executionConfig, job);
         const terminal = database.jobs.get(job.id);

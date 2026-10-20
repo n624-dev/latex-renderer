@@ -38,9 +38,11 @@ if [ "${CI_FONT_CACHE_COMPARE:-0}" = 1 ]; then
   cold_image=$cold_candidate
 fi
 for mode in $modes; do
-  selected=$image; require_cache=1; gc_mode=balanced
+  selected=$image; require_cache=1; gc_mode=standard
   if [ "$mode" = cold ]; then selected=$cold_image; require_cache=0; fi
-  if [ "$mode" = standard ]; then gc_mode=standard; fi
+  if [ "${CI_FONT_CACHE_COMPARE:-0}" = 1 ]; then
+    case "$mode" in warm|warm-repeat) gc_mode=balanced ;; esac
+  fi
   output="$bench_root/$mode"; mkdir "$output"
   started=$(date +%s)
   status=0
@@ -106,14 +108,29 @@ if [ -d "$bench_root/standard" ]; then
   # entrypoint. Do not reintroduce eager all-page PNG generation in rendering.
   for mode in standard warm warm-repeat; do
     page_output="$bench_root/$mode-page-2"; mkdir "$page_output"
-    run_smoke_container "$image" "$page_output" \
+    # docker cp preserves the private output directory/file modes. Its host
+    # owner can compare them, but sandbox UID 10000 cannot traverse that bind.
+    # Publish only this disposable fixture's PDF into a separate read-only
+    # input; never widen production artifacts or bind the whole output tree.
+    page_input="$bench_root/$mode-page-2-input"; mkdir "$page_input"
+    cp "$bench_root/$mode/result.pdf" "$page_input/result.pdf"
+    chmod 0755 "$page_input"
+    chmod 0644 "$page_input/result.pdf"
+    if run_smoke_container "$image" "$page_output" \
       --network none --read-only --cap-drop ALL \
       --security-opt "seccomp=$repo_root/deploy/security/seccomp.json" \
       --pids-limit 128 --memory 256m --memory-swap 256m --cpus 1.5 \
       --tmpfs /tmp:rw,noexec,nosuid,nodev,size=256m,uid=10000,gid=10000 \
       --env LATEX_RENDER_STAGE=preview --env LATEX_PREVIEW_PAGE=2 \
-      --mount "type=bind,src=$bench_root/$mode,dst=/work/pdf,readonly" "$image"
-    test -s "$page_output/previews/page-2.png"
+      --mount "type=bind,src=$page_input,dst=/work/pdf,readonly" "$image"; then
+      test -s "$page_output/previews/page-2.png" || {
+        echo 'Renderer memory comparison produced no second-page PNG' >&2; exit 65;
+      }
+    else
+      echo 'Renderer memory comparison second-page preview failed' >&2
+      if [ -f "$page_output/compile.log" ]; then tail -n 60 "$page_output/compile.log" >&2; fi
+      exit 65
+    fi
   done
   same_preview "$bench_root/standard-page-2/previews/page-2.png" "$bench_root/warm-page-2/previews/page-2.png"
   same_preview "$bench_root/standard-page-2/previews/page-2.png" "$bench_root/warm-repeat-page-2/previews/page-2.png"

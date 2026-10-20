@@ -56,8 +56,9 @@ cp -R /opt/texlive/2026/texmf-var/luatex-cache/generic/names \
 # Lua's default collector waits for the live heap to double between cycles.
 # A smaller pause can release transient font-loader tables earlier. It does
 # not remove fonts, change TeX limits or force a full collection per page.
-# Keep an explicit standard mode for controlled, disposable-runner comparison.
-case "${RENDERER_LUA_GC_MODE:-balanced}" in
+# Keep standard behavior by default: the disposable-runner comparison has not
+# demonstrated a consistent memory or timing benefit from the tuned policy.
+case "${RENDERER_LUA_GC_MODE:-standard}" in
   balanced)
     printf '%s\n' 'collectgarbage("setpause", 120)' 'collectgarbage("setstepmul", 200)' \
       > /tmp/renderer-memory.lua
