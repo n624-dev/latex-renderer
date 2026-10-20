@@ -1,0 +1,3 @@
+# pnpm records patch content hashes. Keep them identical on Windows and Unix.
+# A unified diff's empty context line contains a required leading space.
+patches/*.patch text eol=lf whitespace=-blank-at-eol

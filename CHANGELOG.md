@@ -2,7 +2,17 @@
 
 ## Unreleased
 
-## 1.5.0-rc.11 - Unreleased
+## 1.5.0-rc.12 - Unreleased
+
+- MCPB署名ツールのnode-forgeへ固定パッチを適用し、RSA署名検証で
+  DigestAlgorithm内の余分な要素や不正なNULLパラメーターを拒否する。
+  正常署名・異常署名の回帰検証を追加する。上流修正版は未公開のため、
+  バージョンだけで判定するDependabotの警告が残る可能性がある。
+- ドキュメント依存のargparseを更新してsprintf-jsを依存集合から取り除く。
+  js-yamlのCLIを現行APIへ対応させ、YAMLの安全な解析・マージ上限と
+  既存CLIオプションを維持する。
+
+## 1.5.0-rc.11 - 2026-10-20
 
 - 資源不足で開始を待っているJobを、待機時間の経過だけで失敗にしない。
   待機理由・利用可能メモリ・開始条件をWeb・CLI・API・MCPへ伝える。
