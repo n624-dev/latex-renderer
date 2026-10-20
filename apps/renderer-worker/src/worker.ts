@@ -59,7 +59,6 @@ export async function runWorker(
   const diagnostic = diagnosticWriter(config.storageRoot, "renderer-worker");
   config.diagnostic = diagnostic;
   let nextResourceCheck = 0,
-    admission: ReturnType<typeof assessHostResources> = "ready",
     previousAdmission = "";
   let resources = readHostResources();
   let admissionAfter: { queued_at: string; id: string } | undefined;
@@ -158,7 +157,7 @@ export async function runWorker(
           config.image,
           config.minimumAvailableMemoryBytes,
         );
-      admission =
+      const admission: ReturnType<typeof assessHostResources> =
         selected?.state ??
         planned[0]?.state ??
         (plan.minimum === undefined

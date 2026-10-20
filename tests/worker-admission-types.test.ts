@@ -57,7 +57,6 @@ function diagnostics(expression: string) {
        declare function nowIso():string;
        declare function resourceWaitMessage(state:ReturnType<typeof assessHostResources>,resources:HostResources,minimum:number,longWait:boolean):string;
        let admissionAfter: Candidate|undefined;
-       let admission: ReturnType<typeof assessHostResources>;
        ${expression}`,
     ],
   ]);

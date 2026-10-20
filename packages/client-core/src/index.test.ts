@@ -288,15 +288,14 @@ describe("client core", () => {
     await downloadJobArtifacts(client, "job_test", output);
     const previous = await readFile(join(output, "job.json"), "utf8");
 
-    await expect(
-      downloadJobArtifacts(client, "job_test", output, {
-        pollIntervalMs: 1_000,
-        pollTimeoutMs: 20,
-      }),
-    ).rejects.toMatchObject({
-      code: "RENDER_POLL_TIMEOUT",
-      message: expect.stringContaining("did not cancel the server Job"),
+    const download = downloadJobArtifacts(client, "job_test", output, {
+      pollIntervalMs: 1_000,
+      pollTimeoutMs: 20,
     });
+    await expect(download).rejects.toMatchObject({
+      code: "RENDER_POLL_TIMEOUT",
+    });
+    await expect(download).rejects.toThrow("did not cancel the server Job");
     expect(await readFile(join(output, "job.json"), "utf8")).toBe(previous);
     expect(await readFile(join(output, "result.pdf"), "utf8")).toBe(
       "result.pdf",
