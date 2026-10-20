@@ -143,7 +143,9 @@ export async function runWorker(
               (config.admissionWaitTimeoutMs ?? 900000),
           ),
         );
-        return { candidate, plan, state };
+        // Preserve literal states on the returned object; annotating the local
+        // variable alone still allows map's mutable properties to widen.
+        return { candidate, plan, state } as const;
       });
       const selected = planned.find((p) => p.state === "ready");
       admissionAfter = selected ? undefined : candidates.at(-1);
