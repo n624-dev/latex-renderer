@@ -462,6 +462,9 @@ def validate_snapshot_record(snapshot_id: str, record: Any) -> None:
     }:
         raise StateError(f"snapshot status is invalid: {snapshot_id}")
     parse_time(record["publishedAt"])
+    if "lastVerifiedAt" in record:
+        if parse_time(record["lastVerifiedAt"]) < parse_time(record["publishedAt"]):
+            raise StateError("snapshot verification time precedes publication")
     primary = record["canonicalDate"]
     if not isinstance(primary, str):
         raise StateError(f"snapshot canonical date is invalid: {snapshot_id}")
@@ -1552,7 +1555,9 @@ def _gc_locked(
         reconcile_state(config, state)
         latest = state.get("latest")
         if latest and now - parse_time(
-            state["snapshots"][latest]["publishedAt"]
+            state["snapshots"][latest].get(
+                "lastVerifiedAt", state["snapshots"][latest]["publishedAt"]
+            )
         ) >= dt.timedelta(hours=config.stale_update_hours):
             emit_event(
                 config,
@@ -1917,6 +1922,7 @@ def _sync_attempt(
             snapshot_id = make_snapshot_id(
                 config.active_year, db_hash, installer_hash, selection
             )
+            unchanged = False
             with locked(config.root / "state" / "locks" / "management.lock"):
                 state = load_state(config)
                 existing = state["snapshots"].get(snapshot_id)
@@ -1925,27 +1931,74 @@ def _sync_attempt(
                     and existing.get("status") == "published"
                     and safe_child(config.root / "snapshots", snapshot_id).is_dir()
                 ):
+                    # Protect before hashing, but do not hold the reservation
+                    # management lock during potentially large payload reads.
+                    protect(config, state, snapshot_id, run_id, now)
+                    save_state(config, state)
+                    unchanged = True
+                else:
+                    source_id = state.get("latest")
+                    if source_id:
+                        protect(config, state, source_id, run_id, now)
+                    save_state(config, state)
+                    index = existing_checksum_index(config, state)
+            if unchanged:
+                snapshot = safe_child(config.root / "snapshots", snapshot_id)
+                manifest = read_json(snapshot / ".snapshot.json")
+                if (
+                    manifest.get("snapshotId") != snapshot_id
+                    or manifest.get("databaseSha512") != db_hash
+                    or manifest.get("installerSha512") != installer_hash
+                    or manifest.get("selection") != selection
+                ):
+                    raise VerificationError("existing snapshot identity differs")
+                try:
+                    validate_snapshot_payload(snapshot, manifest)
+                    stored = {item["path"]: item for item in manifest["files"]}
+                    # Bind package checksums back to the freshly verified
+                    # upstream DB, not only a locally stored manifest. Retain
+                    # older valid signature/compression representations.
+                    for item in files:
+                        if item["path"].startswith("archive/") or item["path"] in {
+                            "install-tl-unx.tar.gz",
+                            "tlpkg/texlive.tlpdb",
+                        }:
+                            if stored.get(item["path"]) != item:
+                                raise StateError("stored package identity differs")
+                    if manifest.get("aliases", []) != sorted(
+                        aliases, key=lambda item: item["path"]
+                    ):
+                        raise StateError("stored package aliases differ")
+                except StateError as error:
+                    raise VerificationError(
+                        "existing snapshot payload is invalid"
+                    ) from error
+                with locked(config.root / "state" / "locks" / "management.lock"):
+                    state = load_state(config)
+                    existing = state["snapshots"].get(snapshot_id)
+                    if not existing or existing["status"] != "published":
+                        raise StateError("verified snapshot became unavailable")
                     dates = existing.setdefault(
                         "canonicalDates", [existing["canonicalDate"]]
                     )
                     if canonical_date not in dates:
                         dates.append(canonical_date)
                         dates.sort()
+                    existing["lastVerifiedAt"] = iso(now)
                     state["latest"] = snapshot_id
                     state["internalProtections"].pop(run_id, None)
+                    emit_event(
+                        config, state, "sync_unchanged", {"snapshotId": snapshot_id}, now
+                    )
                     save_state(config, state)
                     publish_latest_metadata(config, state)
-                    safe_rmtree(staging, config.root.stat().st_dev)
-                    return {
-                        "status": "unchanged",
-                        "snapshotId": snapshot_id,
-                        "url": f"{config.public_base_url}/snapshots/{snapshot_id}/tlnet",
-                    }
-                source_id = state.get("latest")
-                if source_id:
-                    protect(config, state, source_id, run_id, now)
-                save_state(config, state)
-                index = existing_checksum_index(config, state)
+                safe_rmtree(staging, config.root.stat().st_dev)
+                gc(config, now)
+                return {
+                    "status": "unchanged",
+                    "snapshotId": snapshot_id,
+                    "url": f"{config.public_base_url}/snapshots/{snapshot_id}/tlnet",
+                }
             metrics = filesystem_metrics(config.root)
             peak, new_bytes = estimate_peak(
                 metrics,
@@ -2059,6 +2112,7 @@ def _sync_attempt(
                 state["snapshots"][snapshot_id] = {
                     "year": config.active_year,
                     "publishedAt": iso(now),
+                    "lastVerifiedAt": iso(now),
                     "status": "published",
                     "canonicalDate": canonical_date,
                     "canonicalDates": [canonical_date],

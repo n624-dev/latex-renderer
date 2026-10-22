@@ -812,6 +812,59 @@ class MirrorTest(unittest.TestCase):
         self.assertEqual(alias.stat().st_ino, target.stat().st_ino)
         self.assertEqual(alias.read_bytes(), b"payload")
 
+    def test_unchanged_sync_rejects_same_size_payload_corruption(self):
+        def download(_url, target, expected_size=None):
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(b"payload")
+
+        now = dt.datetime(2026, 9, 7, tzinfo=dt.timezone.utc)
+        with (
+            mock.patch.object(mirror, "verified_metadata", side_effect=self.fake_metadata),
+            mock.patch.object(mirror, "curl_download", side_effect=download),
+        ):
+            first = mirror.sync(self.config, "2026-09-07", now)
+            snapshot = self.root / "snapshots" / first["snapshotId"]
+            package = snapshot / "tlnet/archive/payload.r1.tar.xz"
+            package.chmod(0o644)
+            package.write_bytes(b"CORRUPT")
+            package.chmod(0o444)
+            with self.assertRaises(mirror.VerificationError):
+                mirror.sync(self.config, "2026-09-07", now + dt.timedelta(hours=1))
+        state = mirror.load_state(self.config)
+        self.assertEqual(state["latest"], first["snapshotId"])
+        self.assertEqual(len(state["snapshots"]), 1)
+        self.assertEqual(state["internalProtections"], {})
+        self.assertEqual(package.read_bytes(), b"CORRUPT")
+
+    def test_successful_daily_revalidation_is_not_stale_or_a_new_generation(self):
+        def download(_url, target, expected_size=None):
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(b"payload")
+
+        now = dt.datetime(2026, 9, 7, tzinfo=dt.timezone.utc)
+        with (
+            mock.patch.object(mirror, "verified_metadata", side_effect=self.fake_metadata),
+            mock.patch.object(mirror, "curl_download", side_effect=download),
+        ):
+            first = mirror.sync(self.config, "2026-09-07", now)
+            snapshot = self.root / "snapshots" / first["snapshotId"]
+            manifest_before = (snapshot / ".snapshot.json").read_bytes()
+            published_at = mirror.load_state(self.config)["snapshots"][first["snapshotId"]]["publishedAt"]
+            for day in (1, 2, 3):
+                current = now + dt.timedelta(days=day)
+                result = mirror.sync(self.config, current.date().isoformat(), current)
+                self.assertEqual(result["status"], "unchanged")
+        mirror.gc(self.config, now + dt.timedelta(days=3, seconds=1))
+        state = mirror.load_state(self.config)
+        record = state["snapshots"][first["snapshotId"]]
+        self.assertEqual(state["lastEvent"]["kind"], "sync_unchanged")
+        self.assertEqual(record["publishedAt"], published_at)
+        self.assertEqual(record["lastVerifiedAt"], mirror.iso(now + dt.timedelta(days=3)))
+        self.assertEqual(len(state["snapshots"]), 1)
+        self.assertEqual((snapshot / ".snapshot.json").read_bytes(), manifest_before)
+        mirror.gc(self.config, now + dt.timedelta(days=7))
+        self.assertEqual(mirror.load_state(self.config)["lastEvent"]["kind"], "stale")
+
     def test_snapshot_alias_must_be_an_internal_hardlink(self):
         def download(_url, target, expected_size=None):
             target.parent.mkdir(parents=True, exist_ok=True)

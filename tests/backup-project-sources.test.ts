@@ -35,6 +35,59 @@ afterEach(() => {
 describe.runIf(ageAvailable && linuxDescriptorAccess)(
   "Project Source backup boundary",
   () => {
+    it("does not publish or retain partially encrypted backups on encryption failure", () => {
+      const fixture = backupFixture();
+      const bin = join(fixture.root, "failure-bin");
+      mkdirSync(bin);
+      const executable = join(bin, "age");
+      writeFileSync(
+        executable,
+        '#!/bin/sh\nwhile [ "$#" -gt 0 ]; do if [ "$1" = -o ]; then shift; printf partial > "$1"; exit 1; fi; shift; done\nexit 1\n',
+        { mode: 0o700 },
+      );
+      const retained = join(fixture.backupDirectory, "existing.tar.age");
+      writeFileSync(retained, "existing-valid-backup");
+      const result = runBackup(fixture, {
+        PATH: `${bin}:${process.env.PATH ?? ""}`,
+      });
+      expect(result.status).not.toBe(0);
+      expect(readdirSync(fixture.backupDirectory)).toEqual([
+        "existing.tar.age",
+      ]);
+      expect(readFileSync(retained, "utf8")).toBe("existing-valid-backup");
+    });
+
+    it.runIf(existsSync("/usr/bin/prlimit") && existsSync("/usr/bin/age"))(
+      "does not publish partial output from real age under a child-only file limit",
+      () => {
+        const fixture = backupFixture();
+        const bin = join(fixture.root, "limited-bin");
+        mkdirSync(bin);
+        writeFileSync(
+          join(bin, "age"),
+          '#!/bin/sh\nexec /usr/bin/prlimit --fsize=1024:1024 /usr/bin/age "$@"\n',
+          { mode: 0o700 },
+        );
+        const result = runBackup(fixture, {
+          PATH: `${bin}:${process.env.PATH ?? ""}`,
+        });
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("age failed");
+        expect(readdirSync(fixture.backupDirectory)).toEqual([]);
+      },
+    );
+
+    it("retains a completed local backup if the optional upload fails", () => {
+      const fixture = backupFixture();
+      const result = runBackup(fixture, {
+        BACKUP_UPLOAD_EXECUTABLE: "/bin/false",
+      });
+      expect(result.status).not.toBe(0);
+      expect(readdirSync(fixture.backupDirectory)).toHaveLength(1);
+      const restored = runRestore(fixture, backupArchive(fixture));
+      expect(restored.status, restored.stderr).toBe(0);
+    }, 20_000);
+
     it("includes migrated job-backed Sources alongside current Sources, without duplicating revisions' archives", () => {
       const fixture = backupFixture();
       const legacyId = `source_${"4".repeat(32)}`;
@@ -608,12 +661,12 @@ function runBackup(
     timeout: 15_000,
     env: {
       ...process.env,
-      ...environment,
       DATABASE_PATH: fixture.databasePath,
       STORAGE_ROOT: fixture.storageRoot,
       BACKUP_DIRECTORY: fixture.backupDirectory,
       BACKUP_AGE_RECIPIENT_FILE: fixture.recipient,
       BACKUP_UPLOAD_EXECUTABLE: "",
+      ...environment,
     },
   });
 }

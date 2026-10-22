@@ -30,6 +30,7 @@ import {
   protectArtifactDownloadLeases,
   ARTIFACT_DOWNLOAD_LEASE_MS,
   waitForPreview,
+  assertSourceWritable,
 } from "@latex-renderer/database";
 import {
   AppError,
@@ -848,6 +849,7 @@ export class RemoteRenderService {
     sourceRef: string;
     expiresAt: string;
   } {
+    assertSourceWritable(this.database);
     const source = this.database.sources.getOwnedReady(
         sourceId,
         userId,
@@ -862,13 +864,16 @@ export class RemoteRenderService {
           ? Date.now() + SOURCE_REF_MS
           : Math.min(Date.now() + SOURCE_REF_MS, Date.parse(source.expires_at)),
       ).toISOString();
-    this.database.remoteMcp.insertSourceRef({
-      id: sourceRef,
-      source_id: sourceId,
-      owner_user_id: userId,
-      created_at: timestamp,
-      expires_at: expiresAt,
-      revoked_at: null,
+    this.database.transaction(() => {
+      assertSourceWritable(this.database);
+      this.database.remoteMcp.insertSourceRef({
+        id: sourceRef,
+        source_id: sourceId,
+        owner_user_id: userId,
+        created_at: timestamp,
+        expires_at: expiresAt,
+        revoked_at: null,
+      });
     });
     this.database.audit({
       actorType: "user",
@@ -895,6 +900,7 @@ export class RemoteRenderService {
     files: readonly RemoteSourceFileInput[],
   ): Promise<RemoteSourceSummary> {
     requireScope(identity.scopes, "mcp:render");
+    assertSourceWritable(this.database);
     const limits = this.directSourceLimits();
     if (files.length < 1 || files.length > limits.files)
       throw new AppError(
@@ -978,6 +984,7 @@ export class RemoteRenderService {
     sha256: string,
   ): Promise<RemoteSourceUpload> {
     requireScope(identity.scopes, "mcp:render");
+    assertSourceWritable(this.database);
     if (
       !Number.isSafeInteger(expectedBytes) ||
       expectedBytes < 1 ||
@@ -1016,6 +1023,7 @@ export class RemoteRenderService {
       expiresAt = new Date(Date.now() + SOURCE_UPLOAD_MS).toISOString();
     this.database.transaction(() => {
       this.assertStorageQuota(identity.userId, expectedBytes);
+      assertSourceWritable(this.database);
       this.database.sources.insertReserved({
         id: sourceId,
         ownerUserId: identity.userId,
@@ -1034,6 +1042,7 @@ export class RemoteRenderService {
       // whose DB lease expired mid-I/O from overwriting a newer writer's bytes.
       await mkdir(join(dirname(path), ".chunks"), { mode: 0o770 });
       this.database.transaction(() => {
+        assertSourceWritable(this.database);
         this.database.sources.transitionBeforeExpiry(
           sourceId,
           ["reserved"],
@@ -1065,6 +1074,7 @@ export class RemoteRenderService {
     base64: string,
   ): Promise<RemoteSourceUpload> {
     requireScope(identity.scopes, "mcp:render");
+    assertSourceWritable(this.database);
     return this.appendSourceChunk(identity.userId, uploadId, offset, base64);
   }
 
@@ -1073,6 +1083,7 @@ export class RemoteRenderService {
     uploadId: string,
   ): Promise<RemoteSourceSummary> {
     requireScope(identity.scopes, "mcp:render");
+    assertSourceWritable(this.database);
     return this.completeSourceUpload(identity.userId, uploadId);
   }
 
@@ -1082,6 +1093,7 @@ export class RemoteRenderService {
     file: RemoteSourceFileInput,
   ): Promise<RemoteSourceSummary> {
     requireScope(identity.scopes, "mcp:render");
+    assertSourceWritable(this.database);
     const path = validateSourceFilePath(file.path);
     if ((file.text === undefined) === (file.base64 === undefined))
       throw new AppError(
@@ -1116,6 +1128,7 @@ export class RemoteRenderService {
     filePath: string,
   ): Promise<RemoteSourceSummary> {
     requireScope(identity.scopes, "mcp:render");
+    assertSourceWritable(this.database);
     const path = validateSourceFilePath(filePath);
     return this.reviseSource(identity.userId, sourceId, async (root) => {
       const target = join(root, ...path.split("/"));
@@ -2006,13 +2019,16 @@ export class RemoteRenderService {
       await writeUploadChunk(chunks, offset, bytes);
       const nextOffset = offset + bytes.byteLength;
       if (
-        this.database.sources.commitUploadOffset(
-          uploadId,
-          leaseOwner,
-          expectedOffset,
-          nextOffset,
-          nowIso(),
-        ) !== 1
+        this.database.transaction(() => {
+          assertSourceWritable(this.database);
+          return this.database.sources.commitUploadOffset(
+            uploadId,
+            leaseOwner,
+            expectedOffset,
+            nextOffset,
+            nowIso(),
+          );
+        }) !== 1
       )
         throw new AppError(
           "SOURCE_UPLOAD_CONCURRENT",
@@ -2073,6 +2089,7 @@ export class RemoteRenderService {
       if (heartbeatState.error !== undefined) throw heartbeatState.error;
     };
     const renewLease = (): void => {
+        assertSourceWritable(this.database);
         const timestamp = nowIso();
         if (
           this.database.sources.extendUploadLease(
@@ -2161,13 +2178,16 @@ export class RemoteRenderService {
           await syncDirectory(dirname(path));
         }
         if (
-          this.database.sources.completeUpload(
-            leased.id,
-            leaseOwner,
-            timestamp,
-            expiresAt,
-            JSON.stringify([...result.paths].sort()),
-          ) !== 1
+          this.database.transaction(() => {
+            assertSourceWritable(this.database);
+            return this.database.sources.completeUpload(
+              leased.id,
+              leaseOwner,
+              timestamp,
+              expiresAt,
+              JSON.stringify([...result.paths].sort()),
+            );
+          }) !== 1
         )
           throw new AppError(
             "SOURCE_UPLOAD_CONCURRENT",
@@ -2203,6 +2223,7 @@ export class RemoteRenderService {
     archive: Buffer,
     paths: readonly string[],
   ): Promise<SourceRow> {
+    assertSourceWritable(this.database);
     const sha256 = sha256Hex(archive),
       existing = this.database.sources.findReady(
         userId,
@@ -2219,6 +2240,7 @@ export class RemoteRenderService {
       stagingExpiresAt = new Date(Date.now() + SOURCE_UPLOAD_MS).toISOString();
     this.database.transaction(() => {
       this.assertStorageQuota(userId, archive.byteLength);
+      assertSourceWritable(this.database);
       this.database.sources.insertReserved({
         id: sourceId,
         ownerUserId: userId,
@@ -2233,6 +2255,7 @@ export class RemoteRenderService {
       await mkdir(dirname(path), { recursive: true, mode: 0o770 });
       await writeFile(path, archive, { flag: "wx", mode: 0o660 });
       this.database.transaction(() => {
+        assertSourceWritable(this.database);
         this.database.sources.transitionBeforeExpiry(
           sourceId,
           ["reserved"],
@@ -2265,6 +2288,7 @@ export class RemoteRenderService {
     paths: readonly string[],
     onReady?: (sourceId: string) => void,
   ): Promise<SourceRow> {
+    assertSourceWritable(this.database);
     const metadata = await stat(archive);
     if (
       !metadata.isFile() ||
@@ -2304,6 +2328,7 @@ export class RemoteRenderService {
       stagingExpiresAt = new Date(Date.now() + SOURCE_UPLOAD_MS).toISOString();
     this.database.transaction(() => {
       this.assertStorageQuota(userId, metadata.size);
+      assertSourceWritable(this.database);
       this.database.sources.insertReserved({
         id: sourceId,
         ownerUserId: userId,
@@ -2319,6 +2344,7 @@ export class RemoteRenderService {
       await rename(archive, path);
       await syncDirectory(dirname(path));
       this.database.transaction(() => {
+        assertSourceWritable(this.database);
         this.database.sources.transitionBeforeExpiry(
           sourceId,
           ["reserved"],
@@ -2351,6 +2377,7 @@ export class RemoteRenderService {
     mutation: (root: string) => Promise<void>,
     onReady?: (sourceId: string) => void,
   ): Promise<RemoteSourceSummary> {
+    assertSourceWritable(this.database);
     const source = this.resolveOwnedSource(userId, sourceId),
       root = await mkdtemp(
         join(this.storageRoot, `.remote-revision-${source.id}-`),
@@ -2613,6 +2640,7 @@ export class RemoteRenderService {
     content: string,
     entrypoint: string,
   ): Promise<SourceRow> {
+    assertSourceWritable(this.database);
     const contentBytes = Buffer.byteLength(content, "utf8");
     if (contentBytes < 1 || contentBytes > INLINE_SOURCE_MAX_BYTES)
       throw new AppError(
@@ -2637,6 +2665,7 @@ export class RemoteRenderService {
       stagingExpiresAt = new Date(Date.now() + SOURCE_UPLOAD_MS).toISOString();
     this.database.transaction(() => {
       this.assertStorageQuota(userId, archive.byteLength);
+      assertSourceWritable(this.database);
       this.database.sources.insertReserved({
         id: sourceId,
         ownerUserId: userId,
@@ -2651,6 +2680,7 @@ export class RemoteRenderService {
       await mkdir(dirname(path), { recursive: true, mode: 0o770 });
       await writeFile(path, archive, { flag: "wx", mode: 0o660 });
       this.database.transaction(() => {
+        assertSourceWritable(this.database);
         this.database.sources.transitionBeforeExpiry(
           sourceId,
           ["reserved"],

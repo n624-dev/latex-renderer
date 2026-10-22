@@ -23,6 +23,116 @@ afterEach(async () => {
 });
 
 describe("immutable shared Sources", () => {
+  it.each(["read-only", "lockdown", "reject-new-jobs"])(
+    "rechecks maintenance for a previously reserved Source upload (%s)",
+    async (mode) => {
+      const { database, actor, tickets, sourceService, storageRoot } =
+        await fixture();
+      const bytes = await zip([["main.tex", "Fixture"]]);
+      const reservation = await sourceService.create(
+        actor,
+        {
+          size: bytes.length,
+          sha256: createHash("sha256").update(bytes).digest("hex"),
+        },
+        "maintenance-reserved-source",
+      );
+      database.settings.upsert(
+        "maintenance_mode",
+        mode,
+        "test",
+        new Date().toISOString(),
+      );
+      const app = createRendererApp({
+        database,
+        tickets,
+        storageRoot,
+        maxUploadBytes: 20 * 1024 * 1024,
+        minFreeStorageBytes: 1,
+        artifactRetentionHours: 24,
+      });
+      const response = await app.request(
+        `/api/v1/sources/${reservation.value.sourceId}/content`,
+        {
+          method: "PUT",
+          headers: {
+            Authorization: `Bearer ${reservation.value.uploadTicket}`,
+            "Content-Type": "application/zip",
+            "Content-Length": String(bytes.length),
+          },
+          body: new Uint8Array(bytes).slice().buffer,
+        },
+      );
+      expect(response.status).toBe(mode === "reject-new-jobs" ? 204 : 503);
+      expect(database.sources.get(reservation.value.sourceId)?.status).toBe(
+        mode === "reject-new-jobs" ? "ready" : "reserved",
+      );
+      if (mode !== "reject-new-jobs")
+        expect(await response.json()).toMatchObject({
+          error: { code: "MAINTENANCE" },
+        });
+    },
+  );
+
+  it("rolls back publication if maintenance changes after an upload is claimed", async () => {
+    const { database, actor, tickets, sourceService, storageRoot } =
+      await fixture();
+    const bytes = await zip([["main.tex", "Fixture"]]);
+    const reservation = await sourceService.create(
+      actor,
+      {
+        size: bytes.length,
+        sha256: createHash("sha256").update(bytes).digest("hex"),
+      },
+      "maintenance-claim-source",
+    );
+    const actual = database.sources.transition.bind(database.sources);
+    const transition = vi
+      .spyOn(database.sources, "transition")
+      .mockImplementation((...args) => {
+        const result = actual(...args);
+        if (args[2] === "uploading")
+          database.settings.upsert(
+            "maintenance_mode",
+            "read-only",
+            "test",
+            new Date().toISOString(),
+          );
+        return result;
+      });
+    const app = createRendererApp({
+      database,
+      tickets,
+      storageRoot,
+      maxUploadBytes: 20 * 1024 * 1024,
+      minFreeStorageBytes: 1,
+      artifactRetentionHours: 24,
+    });
+    try {
+      const response = await app.request(
+        `/api/v1/sources/${reservation.value.sourceId}/content`,
+        {
+          method: "PUT",
+          headers: {
+            Authorization: `Bearer ${reservation.value.uploadTicket}`,
+            "Content-Type": "application/zip",
+            "Content-Length": String(bytes.length),
+          },
+          body: new Uint8Array(bytes).slice().buffer,
+        },
+      );
+      expect(response.status).toBe(503);
+      expect(database.sources.get(reservation.value.sourceId)?.status).toBe(
+        "reserved",
+      );
+      expect(
+        database.raw.prepare("SELECT state FROM source_upload_nonces").get(),
+      ).toMatchObject({ state: "released" });
+    } finally {
+      transition.mockRestore();
+    }
+  });
+
   it("never deduplicates an unindexed legacy Source without a validated path inventory", async () => {
     const { database, actor, sourceService } = await fixture();
     const input = { size: 1, sha256: "a".repeat(64) };

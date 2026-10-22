@@ -1617,29 +1617,33 @@ function installRenderWorkflow(csrfToken: string): void {
     outputs: ("pdf" | "svg")[],
   ) => {
     const selected = tasks;
-    if (sharedBlob && selected.length > 1 && !selected[0]?.legacy) {
-      const shared = selected[0] as Task;
-      try {
-        const sourceId = await reserveSource(shared, apiKeyId);
-        for (const item of selected) item.sourceId = sourceId;
-      } catch (caught) {
-        for (const item of selected) {
-          item.state = "failed-local";
-          item.message =
-            caught instanceof Error ? caught.message : String(caught);
+    try {
+      if (sharedBlob && selected.length > 1 && !selected[0]?.legacy) {
+        const shared = selected[0] as Task;
+        try {
+          const sourceId = await reserveSource(shared, apiKeyId);
+          for (const item of selected) item.sourceId = sourceId;
+        } catch (caught) {
+          for (const item of selected) {
+            item.state = "failed-local";
+            item.message =
+              caught instanceof Error ? caught.message : String(caught);
+          }
+          renderRows();
+          return;
         }
-        renderRows();
-        return;
       }
+      await runBoundedBatch(selected, 3, async (task) => {
+        if (!task.canceled) await runTask(task, apiKeyId, current, outputs);
+      });
+      status.textContent = "すべての処理が終了しました。";
+    } finally {
+      running = false;
+      input.disabled = false;
+      directory.disabled = false;
+      target.disabled = false;
+      updateStart();
     }
-    await runBoundedBatch(selected, 3, async (task) => {
-      if (!task.canceled) await runTask(task, apiKeyId, current, outputs);
-    });
-    status.textContent = "すべての処理が終了しました。";
-    running = false;
-    input.disabled = false;
-    target.disabled = false;
-    updateStart();
   };
   form.addEventListener("submit", (event) => {
     event.preventDefault();

@@ -1,3 +1,20 @@
+import { AppError } from "@latex-renderer/shared";
+import type { RendererDatabase } from "./index.js";
+
+/** Source preparation remains available in reject-new-jobs, but not in
+ * read-only/lockdown or unknown modes. Recheck before durable publication. */
+export function assertSourceWritable(
+  database: Pick<RendererDatabase, "settings">,
+): void {
+  const mode = database.settings.value<string>("maintenance_mode", "normal");
+  if (mode !== "normal" && mode !== "reject-new-jobs")
+    throw new AppError(
+      "MAINTENANCE",
+      "Source writes are temporarily unavailable",
+      503,
+    );
+}
+
 /** SQL fragments accept only internal aliases, never request input. */
 export function sourceReferenceCountSql(
   alias: "s" | "sources",

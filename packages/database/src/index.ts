@@ -9,7 +9,10 @@ export {
   type SvgRetryActor,
   type SvgRetryLimits,
 } from "./svg-retry-operations.js";
-export { sourceRequestExpiresAt } from "./source-lifecycle.js";
+export {
+  sourceRequestExpiresAt,
+  assertSourceWritable,
+} from "./source-lifecycle.js";
 export { artifactRetentionExpiresAt } from "./artifact-availability.js";
 export { waitForPreview } from "./preview-wait.js";
 export {

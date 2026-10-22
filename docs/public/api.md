@@ -56,7 +56,7 @@ Authorization: Bearer <TOKEN>
 
 Projectの一覧・詳細・Job履歴は `cursor` と `pageSize` でページングできます。改訂保存は `sourceId`、Source内の相対 `.tex` パスである `entrypoint`、`displayName`、`originalFilename`、`outputs` を送ります。同じProject・Source・entrypointなら改訂を再利用します。改訂のレンダリングは `Idempotency-Key`（16〜200文字）が必須で、本文の `outputs` を省略するとその改訂の初回設定を使います。返された固定の `projectId`／`revisionId` で履歴を参照してください。従来の一時的なSource→Jobフローも引き続き利用できます。
 
-保守モードが `reject-new-jobs` の間はProjectの閲覧・改名・削除・改訂保存は可能ですが、新しいJobは作成できません。`read-only` と `lockdown` ではProjectの変更も拒否されます。Project削除は記録の非表示であり、SourceやJobの即時完全削除ではありません。
+保守モードが `reject-new-jobs` の間はProjectの閲覧・改名・削除・改訂保存とSourceの準備は可能ですが、新しいJobは作成できません。`read-only` と `lockdown` ではProjectの変更に加え、Sourceの予約・アップロード・改訂・参照作成も拒否されます。予約済みのアップロードも公開直前に再確認し、保守モードが変更された場合は完成扱いにしません。Project削除は記録の非表示であり、SourceやJobの即時完全削除ではありません。
 
 ## ジョブ作成
 
