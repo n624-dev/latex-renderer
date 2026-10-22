@@ -165,9 +165,7 @@ describe.skipIf(realPipelineImage !== undefined)(
           name: "Replacement",
           clientType: "generic",
         });
-        expect(() =>
-          service.changeStatus(actor, disabled, "enable"),
-        ).toThrowError(
+        expect(() => service.changeStatus(actor, disabled, "enable")).toThrow(
           expect.objectContaining({ code: "SERVICE_ACCOUNT_LIMIT" }),
         );
         expect(f.database.serviceAccounts.get(disabled)?.status).toBe(

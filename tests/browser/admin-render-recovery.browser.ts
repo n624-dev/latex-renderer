@@ -42,6 +42,7 @@ it.each([true, false])(
     const page = await newTestPage(browser, {
       viewport: { width: 390, height: 844 },
     });
+    page.setDefaultTimeout(5_000);
     pages.push(page);
     const errors: string[] = [];
     let reservations = 0,
@@ -138,7 +139,6 @@ it.each([true, false])(
       return route.abort();
     });
     await page.goto(`${origin}/admin/render`);
-    await page.locator("#render-target").selectOption("key_fixture");
     const document = Buffer.from(
       "\\documentclass{article}\\begin{document}Fixture\\end{document}",
     );
@@ -152,6 +152,7 @@ it.each([true, false])(
       ),
     });
     await page.locator("#inspect-files").click();
+    await page.locator("#render-target").selectOption("key_fixture");
     await expect
       .poll(() => page.locator("#start-render").isEnabled())
       .toBe(true);
