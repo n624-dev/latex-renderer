@@ -9,20 +9,25 @@ const read = (path: string) =>
 const scripts = (path: string) =>
   (JSON.parse(read(path)) as { scripts: Record<string, string> }).scripts;
 
+function workflowStepRun(workflow: string, name: string): string {
+  const step = workflow.split(`      - name: ${name}\n`)[1];
+  const block = step?.match(/^ {8}run: \|\n((?: {10}.*\n)+)/)?.[1];
+  if (block === undefined) throw new Error(`Missing workflow step: ${name}`);
+  return block
+    .split("\n")
+    .map((line) => line.slice(10))
+    .join("\n");
+}
+
 describe("cache-free CI validation", () => {
   it.skipIf(process.platform === "win32")(
     "rejects branches, malformed versions and shell text before release checkout",
     () => {
       const workflow = read(".github/workflows/release-browser-validation.yml");
-      const step = workflow.split(
-        "      - name: Validate requested release tag\n",
-      )[1];
-      const block = step?.match(/^        run: \|\n((?:          .*\n)+)/)?.[1];
-      expect(block).toBeDefined();
-      const script = block!
-        .split("\n")
-        .map((line) => line.slice(10))
-        .join("\n");
+      const script = workflowStepRun(
+        workflow,
+        "Validate requested release tag",
+      );
       for (const tag of ["v1.5.2", "v1.5.2-rc.3"])
         expect(
           spawnSync("bash", ["-c", script], {
@@ -69,19 +74,15 @@ describe("cache-free CI validation", () => {
     () => {
       const commands = ["ci", "release-browser-validation"].map((name) => {
         const workflow = read(`.github/workflows/${name}.yml`);
-        const step = workflow.split(
-          "      - name: Install WebKit and its disposable-runner prerequisites\n",
-        )[1];
-        const block = step?.match(
-          /^        run: \|\n((?:          .*\n)+)/,
-        )?.[1];
-        expect(block).toBeDefined();
-        return block!
-          .split("\n")
-          .map((line) => line.slice(10))
-          .join("\n");
+        return workflowStepRun(
+          workflow,
+          "Install WebKit and its disposable-runner prerequisites",
+        );
       });
       expect(commands[0]).toBe(commands[1]);
+      const command = commands[0];
+      if (command === undefined)
+        throw new Error("Missing Ubuntu mirror command");
       const root = mkdtempSync(join(tmpdir(), "ci-ubuntu-mirror-"));
       try {
         const file = join(root, "mirrors.txt");
@@ -89,7 +90,7 @@ describe("cache-free CI validation", () => {
           file,
           "http://azure.archive.ubuntu.com/ubuntu/\nhttps://azure.archive.ubuntu.com/ubuntu/\nhttps://security.ubuntu.com/ubuntu/\n",
         );
-        const script = commands[0]!
+        const script = command
           .replaceAll("/etc/apt/apt-mirrors.txt", file)
           .replace("sudo sed", "sed")
           .replace("pnpm exec playwright install --with-deps webkit", "");
