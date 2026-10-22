@@ -1,7 +1,15 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { createReadStream } from "node:fs";
-import { mkdir, mkdtemp, open, rm, stat, writeFile } from "node:fs/promises";
+import {
+  link,
+  mkdir,
+  mkdtemp,
+  open,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { createHash } from "node:crypto";
@@ -81,9 +89,30 @@ try {
   // Do not publish a backup that the shared restore boundary cannot inspect.
   await validateBackupArchive(tarPath);
   const output = join(destination, `${basename(tarPath)}.age`);
-  await run("age", ["-R", recipientFile, "-o", output, tarPath]);
-  if ((await stat(output)).size === 0)
-    throw new Error("Encrypted backup is empty");
+  const pending = await mkdtemp(join(destination, ".pending-backup-"));
+  try {
+    const candidate = join(pending, "encrypted.age");
+    await run("age", ["-R", recipientFile, "-o", candidate, tarPath]);
+    const handle = await open(candidate, "r");
+    try {
+      if ((await handle.stat()).size === 0)
+        throw new Error("Encrypted backup is empty");
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    // Atomic create-only publication on the destination filesystem. A name
+    // collision must never replace a previously completed backup.
+    await link(candidate, output);
+    const directory = await open(destination, "r");
+    try {
+      await directory.sync();
+    } finally {
+      await directory.close();
+    }
+  } finally {
+    await rm(pending, { recursive: true, force: true });
+  }
   await uploadIfConfigured(output);
   console.log(
     JSON.stringify({

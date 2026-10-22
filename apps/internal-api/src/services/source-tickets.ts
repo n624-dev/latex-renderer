@@ -1,6 +1,9 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { AuthenticatedServiceAccount } from "@latex-renderer/auth";
-import { sourceRequestExpiresAt } from "@latex-renderer/database";
+import {
+  sourceRequestExpiresAt,
+  assertSourceWritable,
+} from "@latex-renderer/database";
 import { AppError, nowIso } from "@latex-renderer/shared";
 import type { InternalApiDependencies } from "../types.js";
 
@@ -12,6 +15,7 @@ export class SourceTicketsService {
     input: { size: number; sha256: string },
     idempotencyKey: string,
   ) {
+    assertSourceWritable(this.deps.database);
     const requestHash = createHash("sha256")
         .update(JSON.stringify(input))
         .digest("hex"),
@@ -52,6 +56,7 @@ export class SourceTicketsService {
     if (ready !== undefined) {
       try {
         this.deps.database.transaction(() => {
+          assertSourceWritable(this.deps.database);
           const timestamp = nowIso();
           if (
             this.deps.database.sources.getOwnedReady(
@@ -114,6 +119,7 @@ export class SourceTicketsService {
     });
     try {
       this.deps.database.transaction(() => {
+        assertSourceWritable(this.deps.database);
         this.assertStorage(actor.userId, input.size);
         this.deps.database.sources.insertReserved({
           id: sourceId,

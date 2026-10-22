@@ -53,6 +53,15 @@ it does not run GC, sync payloads, alter leases, change publication timestamps,
 or create a snapshot generation. Normal sync and GC also maintain this schema.
 Do not manually invent an alias date or rewrite a published snapshot.
 
+An identical sync rechecks the immutable payload and internal aliases, binding
+package checksums to the freshly verified upstream database before accepting a
+new canonical date. Corruption fails the sync without repairing or replacing
+published hardlinks. Management state records `lastVerifiedAt` separately from
+immutable `publishedAt`: freshness alerts use the last successful verification,
+while retention still uses publication time. Older state without that field
+falls back to publication time until the next successful sync. Neither a failed
+verification nor a metadata-only refresh advances verification freshness.
+
 The daily workflow resolves the canonical date once before launching native
 builds. Each runner performs the full Base, English/Japanese PDF/PNG/SVG,
 compatibility and Source pipeline validation without an Actions build cache.

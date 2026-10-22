@@ -5,6 +5,7 @@ import {
   ProjectOperations,
   SvgRetryOperations,
   sourceRequestExpiresAt,
+  assertSourceWritable,
   type JobRow,
 } from "@latex-renderer/database";
 import type { RenderOutput } from "@latex-renderer/contracts";
@@ -381,6 +382,7 @@ export class AdminJobsService {
     input: { apiKeyId: string; size: number; sha256: string },
     idempotencyKey: string,
   ) {
+    assertSourceWritable(this.deps.database);
     if (idempotencyKey.length < 16 || idempotencyKey.length > 200)
       throw new AppError(
         "IDEMPOTENCY_KEY_REQUIRED",
@@ -436,6 +438,7 @@ export class AdminJobsService {
       try {
         this.deps.database.transaction(() => {
           const timestamp = nowIso();
+          assertSourceWritable(this.deps.database);
           if (
             this.deps.database.sources.getOwnedReady(
               ready.id,
@@ -503,6 +506,7 @@ export class AdminJobsService {
     try {
       this.deps.database.transaction(() => {
         this.assertStorage(identity.user_id, input.size);
+        assertSourceWritable(this.deps.database);
         this.deps.database.sources.insertReserved({
           id: sourceId,
           ownerUserId: identity.user_id,

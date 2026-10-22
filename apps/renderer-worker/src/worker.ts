@@ -249,7 +249,10 @@ export async function runWorker(
           completeRun
         )
           rememberRenderMemory(database, selected?.plan.key, peak, true);
-        else if (terminal?.error_code === "RENDERER_MEMORY_LIMIT")
+        else if (
+          terminal?.error_code === "RENDERER_MEMORY_LIMIT" ||
+          terminal?.error_code === "SVG_MEMORY_LIMIT"
+        )
           rememberRenderMemory(database, selected?.plan.key, undefined, false);
         diagnostic({
           event: "renderer_worker.memory_result",
@@ -276,7 +279,10 @@ export async function runWorker(
               ? error.message.slice(0, 1000)
               : "Unknown renderer error",
           rejected = error instanceof AppError && error.status === 422;
-        if (error instanceof AppError && error.code === "RENDERER_MEMORY_LIMIT")
+        if (
+          error instanceof AppError &&
+          ["RENDERER_MEMORY_LIMIT", "SVG_MEMORY_LIMIT"].includes(error.code)
+        )
           rememberRenderMemory(database, selected?.plan.key, undefined, false);
         await recordFailure(
           database,

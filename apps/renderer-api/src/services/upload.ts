@@ -11,6 +11,7 @@ import {
   nowIso,
 } from "@latex-renderer/shared";
 import type { SourceTicketClaims, TicketClaims } from "@latex-renderer/ticket";
+import { assertSourceWritable } from "@latex-renderer/database";
 import { validateAndExtract } from "@latex-renderer/zip-validation";
 import type { RendererApiDependencies } from "../types.js";
 
@@ -53,6 +54,7 @@ async function uploadSharedSource(
   context: { nonceKind: "job"; jobId: string } | { nonceKind: "source" },
 ): Promise<void> {
   assertUploadClaims(deps, request, claims);
+  assertSourceWritable(deps.database);
   const source = deps.database.sources.get(sourceId);
   if (source === undefined)
     throw new AppError("SOURCE_NOT_FOUND", "Source does not exist", 404);
@@ -76,6 +78,7 @@ async function uploadSharedSource(
     claimOwner = newId("upload"),
     claimUntil = new Date(Date.now() + 120_000).toISOString();
   deps.database.transaction(() => {
+    assertSourceWritable(deps.database);
     if (context.nonceKind === "source")
       deps.database.claimSourceNonce(nonce, sourceId, claimOwner, claimUntil);
     else {
@@ -126,6 +129,7 @@ async function uploadSharedSource(
     await handle.sync();
     await handle.close();
     heartbeat.assertOwned();
+    assertSourceWritable(deps.database);
     await rename(temporaryPath, finalPath);
     const timestamp = nowIso(),
       orphanRetentionMinutes = deps.database.settings.value(
@@ -136,6 +140,7 @@ async function uploadSharedSource(
         Date.now() + orphanRetentionMinutes * 60_000,
       ).toISOString();
     deps.database.transaction(() => {
+      assertSourceWritable(deps.database);
       if (context.nonceKind === "source")
         deps.database.consumeSourceNonce(nonce, claimOwner);
       else deps.database.consumeNonce(nonce, claimOwner);
@@ -208,6 +213,7 @@ async function uploadLegacyJobSource(
   claims: TicketClaims,
 ): Promise<void> {
   assertUploadClaims(deps, request, claims);
+  assertSourceWritable(deps.database);
   const current = deps.database.jobs.getUploadState(jobId),
     finalPath = join(deps.storageRoot, "jobs", jobId, "input", "source.zip");
   if (current?.status === "queued" && current.source_sha256 === claims.sha256)
@@ -216,6 +222,7 @@ async function uploadLegacyJobSource(
     throw new AppError("JOB_NOT_UPLOADABLE", "Job is not awaiting upload", 409);
   const claimOwner = newId("upload");
   deps.database.transaction(() => {
+    assertSourceWritable(deps.database);
     deps.database.claimNonce(
       claims.nonce as string,
       jobId,
@@ -247,8 +254,10 @@ async function uploadLegacyJobSource(
     await handle.sync();
     await handle.close();
     heartbeat.assertOwned();
+    assertSourceWritable(deps.database);
     await rename(temporaryPath, finalPath);
     deps.database.transaction(() => {
+      assertSourceWritable(deps.database);
       deps.database.consumeNonce(claims.nonce as string, claimOwner);
       deps.database.transitionJob(jobId, ["uploading"], "queued", {
         queued_at: nowIso(),
