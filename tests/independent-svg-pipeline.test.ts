@@ -64,7 +64,15 @@ EXECUTE {end.bib}
           pollTimeoutMs: 120000,
           sleep: f.runNext,
         });
-        expect(result.job.stages).toMatchObject({
+        const diagnostic =
+          result.job.status === "succeeded"
+            ? undefined
+            : JSON.stringify(result.job.stages) +
+              "\n" +
+              (result.artifacts.log === undefined
+                ? "No compile log was published"
+                : (await readFile(result.artifacts.log, "utf8")).slice(-12000));
+        expect(result.job.stages, diagnostic).toMatchObject({
           pdf: { status: "succeeded" },
           svg: { status: "succeeded" },
         });
