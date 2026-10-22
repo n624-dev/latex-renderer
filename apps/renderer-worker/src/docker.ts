@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { setTimeout as delay } from "node:timers/promises";
 import type { WorkerConfig } from "./config.js";
 import { containerMemoryProbe } from "./container-memory.js";
 import { MIB, RENDER_MEMORY_MAX } from "./memory-plan.js";
@@ -207,16 +208,48 @@ export async function dockerStopVerified(identifier: string): Promise<void> {
     !/^latex-render-[A-Za-z0-9_-]+-g[0-9]+$/.test(identifier)
   )
     throw new Error("Invalid renderer container identifier");
-  await runDocker(["stop", "--time", "2", identifier]).catch(() => undefined);
-  await runDocker(["kill", identifier]).catch(() => undefined);
+  const deadline = performance.now() + 15_000;
+  const command = (args: readonly string[], limit: number) => {
+    const remaining = Math.floor(deadline - performance.now());
+    if (remaining < 1) throw new Error("Renderer cleanup deadline exceeded");
+    return runDocker(args, Math.min(limit, remaining));
+  };
+  await command(["stop", "--time", "2", identifier], 5_000).catch(
+    () => undefined,
+  );
+  await command(["kill", identifier], 2_000).catch(() => undefined);
   const selector = /^[a-f0-9]{12,64}$/.test(identifier)
     ? `id=${identifier}`
     : `name=^${identifier}$`;
-  const remaining = (
-    await runDocker(["ps", "-aq", "--filter", selector])
-  ).trim();
-  if (remaining !== "")
-    throw new Error(`Renderer container could not be stopped: ${identifier}`);
+  const present = async () =>
+    (await command(["ps", "-aq", "--filter", selector], 2_000)).trim() !== "";
+  if (!(await present())) return;
+  // stop/kill acknowledgements do not prove that --rm has finished removing
+  // the container. Remove only this exact lease generation, then wait for
+  // confirmed absence. An unavailable daemon never counts as successful cleanup.
+  await command(["rm", "--force", identifier], 3_000).catch(() => undefined);
+  const confirmationDeadline = Math.min(
+    deadline - 1_000,
+    performance.now() + 5_000,
+  );
+  while (performance.now() < confirmationDeadline) {
+    if (!(await present())) return;
+    const remaining = Math.floor(confirmationDeadline - performance.now());
+    if (remaining > 0) await delay(Math.min(250, remaining));
+  }
+  const result = await command(
+    ["inspect", "--format", "{{.State.Status}}", identifier],
+    1_000,
+  ).catch(() => "unavailable");
+  const state =
+    /^(created|running|paused|restarting|removing|exited|dead)$/.test(
+      result.trim(),
+    )
+      ? result.trim()
+      : "unavailable";
+  throw new Error(
+    `Renderer container could not be stopped: ${identifier} (state=${state})`,
+  );
 }
 export async function assertDockerIsolation(
   apparmorProfile: string | undefined,
