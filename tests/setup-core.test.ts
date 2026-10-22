@@ -43,21 +43,28 @@ describe("setup-core", () => {
       const root = await temporaryRoot();
       const relativeInstall = join(root, "install");
       const paths = testPaths(root);
-      const result = await installDistribution({
-        ...(await clientDistribution()),
+      const distribution = await clientDistribution();
+      const options = {
+        ...distribution,
         ...paths,
         platform,
         installDirectory: relative(process.cwd(), relativeInstall),
         binDirectory: relative(process.cwd(), paths.binDirectory),
-        skillTarget: "none",
-        mcpTarget: "none",
+        skillTarget: "none" as const,
+        mcpTarget: "none" as const,
         output: sink,
         warning: sink,
+      };
+      const result = await installDistribution({
+        ...options,
       });
       expect(result.status.status).toBe("healthy");
       expect(await realpath(result.status.paths.cliLauncher)).toBe(
         await realpath(join(root, "install", "bin", "latex-render")),
       );
+      const repeated = await installDistribution(options);
+      expect(repeated.action).toBe("current");
+      expect(repeated.status.status).toBe("healthy");
       await removeSetup({
         ...result.status.paths,
         keepCredential: true,

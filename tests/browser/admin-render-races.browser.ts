@@ -9,6 +9,7 @@ import { styles } from "../../apps/admin-web/src/assets/styles.js";
 import {
   zipSingleTex,
   zipStoredFiles,
+  parseRenderTicket,
 } from "../../apps/admin-web/src/assets/render-script.js";
 
 const script = execFileSync(
@@ -50,9 +51,8 @@ async function fixture(
   page.on("pageerror", (error) => errors.push(error.message));
   if (slowFile)
     await page.addInitScript(() => {
-      const original = File.prototype.arrayBuffer;
       File.prototype.arrayBuffer = async function () {
-        const bytes = await original.call(this);
+        const bytes = await Blob.prototype.arrayBuffer.bind(this)();
         if (this.name.startsWith("A."))
           await new Promise<void>((resolve) => {
             (
@@ -106,7 +106,7 @@ async function fixture(
         json: {
           sourceId,
           uploadRequired: true,
-          uploadTicket: "fixture-upload",
+          uploadTicket: "fixture-source-upload-ticket",
           uploadUrl: `${origin}/api/v1/sources/${sourceId}/content`,
           expiresAt: "2099-01-01T00:00:00Z",
         },
@@ -127,13 +127,16 @@ async function fixture(
   return { page, errors };
 }
 function ticket(n: number) {
-  return {
-    jobId: jobId(n),
-    jobTicket: `fixture-job-${n}`,
-    uploadTicket: `fixture-upload-${n}`,
-    uploadUrl: `${origin}/api/v1/jobs/${jobId(n)}/source`,
-    expiresAt: "2099-01-01T00:00:00Z",
-  };
+  return parseRenderTicket(
+    {
+      jobId: jobId(n),
+      jobTicket: `fixture-job-ticket-${n}`,
+      uploadTicket: `fixture-upload-ticket-${n}`,
+      uploadUrl: `${origin}/api/v1/jobs/${jobId(n)}/source`,
+      expiresAt: "2099-01-01T00:00:00Z",
+    },
+    origin,
+  );
 }
 function job(id: string, status: string) {
   return {

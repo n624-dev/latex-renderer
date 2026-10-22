@@ -1718,7 +1718,10 @@ function installRenderWorkflow(csrfToken: string): void {
     current: number,
     outputs: ("pdf" | "svg")[],
   ) => {
-    if (task.canceled) return;
+    // Cancellation can be changed by another event handler while awaiting a
+    // reservation. Read through a function instead of narrowing it once.
+    const isCanceled = () => task.canceled;
+    if (isCanceled()) return;
     try {
       task.state = "preparing";
       renderRows();
@@ -1738,7 +1741,7 @@ function installRenderWorkflow(csrfToken: string): void {
         task.jobId = ticket.jobId;
         task.jobTicket = ticket.jobTicket;
         task.expiresAt = ticket.expiresAt;
-        if (task.canceled) {
+        if (isCanceled()) {
           ticket.uploadTicket = "";
           await cancelTask(task);
           if (task.state !== "failed-local") await poll(task, current);
@@ -1747,7 +1750,7 @@ function installRenderWorkflow(csrfToken: string): void {
         task.state = "uploading";
         renderRows();
         await bounded(async () => {
-          if (!task.canceled)
+          if (!isCanceled())
             await uploadRenderZip(fetcher, ticket, task.blob as File);
         });
         ticket.uploadTicket = "";
@@ -1770,7 +1773,7 @@ function installRenderWorkflow(csrfToken: string): void {
         task.jobId = ticket.jobId;
         task.jobTicket = ticket.jobTicket;
         task.expiresAt = ticket.expiresAt;
-        if (task.canceled) {
+        if (isCanceled()) {
           await cancelTask(task);
           if (task.state !== "failed-local") await poll(task, current);
           return;

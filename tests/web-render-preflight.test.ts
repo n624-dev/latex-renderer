@@ -35,7 +35,9 @@ describe("admin batch bearer renewal", () => {
     };
     const used: string[] = [];
     const fetcher: RenderFetch = (url, init) => {
-      if (String(url).endsWith("/auth/session"))
+      const address =
+        typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
+      if (address.endsWith("/auth/session"))
         return Promise.resolve(Response.json({ csrfToken: "new-csrf" }));
       const csrf = new Headers(init?.headers).get("X-CSRF-Token");
       if (csrf === null) throw new Error("Missing fixture CSRF header");
