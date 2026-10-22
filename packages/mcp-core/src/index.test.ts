@@ -22,7 +22,7 @@ import {
   downloadArtifactsInputSchema,
   createMcpOperations,
 } from "./index.js";
-import { RendererClient } from "../../api-client/src/index.js";
+import { RendererClient } from "@latex-renderer/api-client";
 import type { JobResponse } from "@latex-renderer/contracts";
 
 const temporaryRoots: string[] = [];
