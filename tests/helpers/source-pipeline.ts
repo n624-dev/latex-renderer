@@ -281,7 +281,8 @@ export async function sourcePipelineFixture(
     };
     let holdNext = false,
       holdSvg = false,
-      nextSvgExit = 0;
+      nextSvgExit = 0,
+      nextPdfExit = 0;
     let resolveSpawn: (() => void) | undefined;
     const originalSpawn = docker.spawnRenderer;
     const spawnSpy = vi
@@ -319,7 +320,7 @@ export async function sourcePipelineFixture(
                       held ? gatePath : "",
                       stage?.mode ?? "all",
                       stage?.pdfDirectory ?? "",
-                      String(stage?.mode === "svg" ? nextSvgExit : 0),
+                      String(stage?.mode === "svg" ? nextSvgExit : nextPdfExit),
                       String(stage?.page ?? 0),
                       options.lazyPreviews ? "1" : "0",
                     ],
@@ -328,6 +329,7 @@ export async function sourcePipelineFixture(
                 };
           if (held) holdNext = false;
           if (stage?.mode === "svg") nextSvgExit = 0;
+          else if (stage?.mode !== "preview") nextPdfExit = 0;
           children.push(result.process);
           if (realPipelineImage !== undefined)
             containers.set(result.process, result.containerName);
@@ -442,6 +444,11 @@ export async function sourcePipelineFixture(
         }
       },
       close,
+      failNextPdf(exitCode: number) {
+        assert.equal(realPipelineImage, undefined);
+        assert.equal(exitCode, 1);
+        nextPdfExit = exitCode;
+      },
       failNextSvg(exitCode: number) {
         assert.equal(realPipelineImage, undefined);
         assert([79, 83, 84].includes(exitCode));

@@ -328,5 +328,48 @@ describe("administrator Web render jobs", () => {
       source_id: sourceTicket.sourceId,
       entrypoint: "reports/a.tex",
     });
+    const renew = (
+      headers: Record<string, string> = {
+        ...accessHeaders,
+        "X-CSRF-Token": "1",
+      },
+    ) =>
+      app.request(`/admin/api/v1/jobs/${sourceJobValue.jobId}/access-ticket`, {
+        method: "POST",
+        headers,
+      });
+    expect((await renew({})).status).toBe(401);
+    expect((await renew(accessHeaders)).status).toBe(403);
+    const renewed = await renew();
+    expect(renewed.status).toBe(200);
+    const renewedValue = (await renewed.json()) as {
+      jobId: string;
+      jobTicket: string;
+    };
+    expect(renewedValue.jobId).toBe(sourceJobValue.jobId);
+    await expect(
+      tickets.verify(renewedValue.jobTicket, "status", sourceJobValue.jobId),
+    ).resolves.toMatchObject({ api_key_id: "key_web" });
+    database.raw
+      .prepare("UPDATE api_keys SET revoked_at=? WHERE id='key_web'")
+      .run(now);
+    expect((await renew()).status).toBe(403);
+    database.raw
+      .prepare("UPDATE api_keys SET revoked_at=NULL WHERE id='key_web'")
+      .run();
+    database.raw
+      .prepare("UPDATE users SET role='user' WHERE id='user_owner'")
+      .run();
+    expect((await renew()).status).toBe(403);
+    database.raw
+      .prepare("UPDATE users SET role='owner' WHERE id='user_owner'")
+      .run();
+    database.raw
+      .prepare("UPDATE jobs SET status='succeeded',completed_at=? WHERE id=?")
+      .run(
+        new Date(Date.now() - 48 * 3600_000).toISOString(),
+        sourceJobValue.jobId,
+      );
+    expect((await renew()).status).toBe(410);
   });
 });

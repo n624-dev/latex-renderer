@@ -243,6 +243,11 @@ export const jobResponseSchema = z.object({
 });
 export type JobResponse = z.infer<typeof jobResponseSchema>;
 
+export interface JobRetryResponse {
+  id: string;
+  retryOfJobId: string;
+}
+
 export const errorResponseSchema = z.object({
   error: z.object({
     code: z.string(),

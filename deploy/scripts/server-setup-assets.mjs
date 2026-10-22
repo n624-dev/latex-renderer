@@ -124,10 +124,9 @@ export const setupScript = `"use strict";
     catch (error) { status(error.message); } finally { el("fields").disabled = false; }
   });
   el("apply").addEventListener("click", async () => {
-    if (!confirmation) return; const approved = confirmation; confirmation = null;
-    el("fields").disabled = true; el("apply").disabled = true; el("close").disabled = true; status("適用中… workerの終了を待つ場合があります。");
+    if (!confirmation) return;
+    const body = { confirmation };
     try {
-      const body = { confirmation: approved };
       if (initial) {
         const auth = model.deployment.authentication.authentication;
         const password = auth.backend === "native" && auth.passwordEnabled;
@@ -142,6 +141,10 @@ export const setupScript = `"use strict";
         if (model.deployment.ingress.mode === "standalone") body.credentials.tls = { certificate: el("tls-certificate").value, privateKey: el("tls-key").value };
       }
       if (ingress) body.credentials = { tls: { certificate: el("tls-certificate").value, privateKey: el("tls-key").value } };
+    } catch (error) { status(error.message); return; }
+    confirmation = null;
+    el("fields").disabled = true; el("apply").disabled = true; el("close").disabled = true; status("適用中… workerの終了を待つ場合があります。");
+    try {
       await post("/api/apply", body); status("適用完了。設定画面は停止しました。ownerログインと代表的なレンダリングを確認してください。");
     }
     catch { status("適用を確認できませんでした。下の復旧ボタンで状態を確認してください。変更をそのまま再送しないでください。"); el("recover").hidden = false; }

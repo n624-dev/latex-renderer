@@ -5,11 +5,12 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   rm,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { Writable } from "node:stream";
 import {
   doctorSetup,
@@ -36,21 +37,173 @@ afterEach(async () => {
 });
 
 describe("setup-core", () => {
+  it.skipIf(process.platform === "win32").each(["linux", "darwin"] as const)(
+    "canonicalizes relative Unix paths before installing on %s",
+    async (platform) => {
+      const root = await temporaryRoot();
+      const relativeInstall = join(root, "install");
+      const paths = testPaths(root);
+      const distribution = await clientDistribution();
+      const options = {
+        ...distribution,
+        ...paths,
+        platform,
+        installDirectory: relative(process.cwd(), relativeInstall),
+        binDirectory: relative(process.cwd(), paths.binDirectory),
+        skillTarget: "none" as const,
+        mcpTarget: "none" as const,
+        output: sink,
+        warning: sink,
+      };
+      const result = await installDistribution({
+        ...options,
+      });
+      expect(result.status.status).toBe("healthy");
+      expect(await realpath(result.status.paths.cliLauncher)).toBe(
+        await realpath(join(root, "install", "bin", "latex-render")),
+      );
+      const repeated = await installDistribution(options);
+      expect(repeated.action).toBe("current");
+      expect(repeated.status.status).toBe("healthy");
+      await removeSetup({
+        ...result.status.paths,
+        keepCredential: true,
+        keepSkills: true,
+        output: sink,
+        warning: sink,
+      });
+    },
+  );
+
   it.each([
-    { install: undefined, bin: undefined, expectedInstall: "C:\\Users\\tester\\AppData\\Local\\LaTeXRenderer", expectedBin: "C:\\Users\\tester\\AppData\\Local\\LaTeXRenderer\\bin" },
-    { install: "D:\\Tools\\Renderer", bin: undefined, expectedInstall: "D:\\Tools\\Renderer", expectedBin: "D:\\Tools\\Renderer\\bin" },
-    { install: undefined, bin: "D:\\Commands", expectedInstall: "C:\\Users\\tester\\AppData\\Local\\LaTeXRenderer", expectedBin: "D:\\Commands" },
-    { install: "D:\\Tools\\Renderer", bin: "D:\\Commands", expectedInstall: "D:\\Tools\\Renderer", expectedBin: "D:\\Commands" },
-  ])("keeps Windows launchers and PATH together: $expectedBin", ({ install, bin, expectedInstall, expectedBin }) => {
-    const paths = resolveSetupPaths({ platform: "win32", home: "C:\\Users\\tester", env: {},
-      ...(install === undefined ? {} : { installDirectory: install }),
-      ...(bin === undefined ? {} : { binDirectory: bin }),
+    "suffix",
+    "prefix",
+    "argument",
+    "cwd",
+    "environment",
+    "whitespace",
+    "json",
+    "claude-suffix",
+  ])("preserves edited MCP registrations (%s)", async (variant) => {
+    const root = await temporaryRoot(),
+      paths = testPaths(root);
+    let registered = false,
+      edited = false,
+      removed = 0;
+    const client = variant.startsWith("claude") ? "claude" : "codex";
+    const runner: CommandRunner = (_command, args) => {
+      if (args[0] === "--version")
+        return { status: 0, stdout: "fixture", stderr: "" };
+      if (args[1] === "get") {
+        if (!registered) return { status: 1, stdout: "not found", stderr: "" };
+        const expected = join(
+          paths.installDirectory,
+          "bin",
+          "latex-renderer-mcp",
+        );
+        const command = !edited
+          ? expected
+          : variant === "prefix"
+            ? `${expected}/other`
+            : variant.includes("suffix")
+              ? `${expected}-custom`
+              : variant === "whitespace"
+                ? `${expected} extra`
+                : expected;
+        const transport = {
+          type: "stdio",
+          command,
+          args: edited && variant === "argument" ? ["--custom"] : [],
+          ...(edited && variant === "cwd" ? { cwd: root } : {}),
+          ...(edited && variant === "environment"
+            ? { env: { CUSTOM: "1" } }
+            : {}),
+        };
+        return {
+          status: 0,
+          stdout:
+            edited && variant === "json"
+              ? "invalid JSON"
+              : client === "claude"
+                ? `Type: stdio\nCommand: ${command}\nArgs: \n`
+                : JSON.stringify({ enabled: true, transport }),
+          stderr: "",
+        };
+      }
+      if (args[1] === "add") {
+        registered = true;
+        return { status: 0, stdout: "", stderr: "" };
+      }
+      if (args[1] === "remove") {
+        removed++;
+        return { status: 0, stdout: "", stderr: "" };
+      }
+      return { status: 1, stdout: "", stderr: "unexpected command" };
+    };
+    await installDistribution({
+      ...(await clientDistribution()),
+      ...paths,
+      skillTarget: "none",
+      mcpTarget: client,
+      runner,
+      output: sink,
+      warning: sink,
     });
-    expect(paths.installDirectory).toBe(expectedInstall);
-    expect(paths.binDirectory).toBe(expectedBin);
-    expect(paths.cliLauncher).toBe(`${expectedBin}\\latex-render.cmd`);
-    expect(paths.mcpLauncher).toBe(`${expectedBin}\\latex-renderer-mcp.cmd`);
+    edited = true;
+    const result = await removeSetup({
+      ...paths,
+      runner,
+      keepCredential: true,
+      keepSkills: true,
+      output: sink,
+      warning: sink,
+    });
+    expect(removed).toBe(0);
+    expect(result.preserved).toContain(
+      `mcp:${client}:${variant === "json" ? "error" : "modified"}`,
+    );
   });
+  it.each([
+    {
+      install: undefined,
+      bin: undefined,
+      expectedInstall: "C:\\Users\\tester\\AppData\\Local\\LaTeXRenderer",
+      expectedBin: "C:\\Users\\tester\\AppData\\Local\\LaTeXRenderer\\bin",
+    },
+    {
+      install: "D:\\Tools\\Renderer",
+      bin: undefined,
+      expectedInstall: "D:\\Tools\\Renderer",
+      expectedBin: "D:\\Tools\\Renderer\\bin",
+    },
+    {
+      install: undefined,
+      bin: "D:\\Commands",
+      expectedInstall: "C:\\Users\\tester\\AppData\\Local\\LaTeXRenderer",
+      expectedBin: "D:\\Commands",
+    },
+    {
+      install: "D:\\Tools\\Renderer",
+      bin: "D:\\Commands",
+      expectedInstall: "D:\\Tools\\Renderer",
+      expectedBin: "D:\\Commands",
+    },
+  ])(
+    "keeps Windows launchers and PATH together: $expectedBin",
+    ({ install, bin, expectedInstall, expectedBin }) => {
+      const paths = resolveSetupPaths({
+        platform: "win32",
+        home: "C:\\Users\\tester",
+        env: {},
+        ...(install === undefined ? {} : { installDirectory: install }),
+        ...(bin === undefined ? {} : { binDirectory: bin }),
+      });
+      expect(paths.installDirectory).toBe(expectedInstall);
+      expect(paths.binDirectory).toBe(expectedBin);
+      expect(paths.cliLauncher).toBe(`${expectedBin}\\latex-render.cmd`);
+      expect(paths.mcpLauncher).toBe(`${expectedBin}\\latex-renderer-mcp.cmd`);
+    },
+  );
   it("rejects oversized manifest and archive responses before buffering them", async () => {
     const distribution = await clientDistribution();
     let archiveRequested = false;
@@ -304,7 +457,13 @@ describe("setup-core", () => {
       if (args[0] === "--version")
         return { status: 0, stdout: "1.0.0", stderr: "" };
       if (args[0] === "mcp" && args[1] === "get")
-        return { status: 0, stdout: "command: another-server", stderr: "" };
+        return {
+          status: 0,
+          stdout: JSON.stringify({
+            transport: { type: "stdio", command: "another-server", args: [] },
+          }),
+          stderr: "",
+        };
       return { status: 1, stdout: "", stderr: "unexpected mutation" };
     };
 
@@ -323,55 +482,72 @@ describe("setup-core", () => {
     ).resolves.toBe("user launcher");
   });
 
-  it("registers and later removes only an MCP entry created by setup", async () => {
-    const root = await temporaryRoot();
-    const paths = testPaths(root);
-    let registered = false;
-    const runner: CommandRunner = (_command, args) => {
-      if (args[0] === "--version")
-        return { status: 0, stdout: "1.0.0", stderr: "" };
-      if (args[0] === "mcp" && args[1] === "get")
-        return registered
-          ? {
-              status: 0,
-              stdout: join(paths.installDirectory, "bin", "latex-renderer-mcp"),
-              stderr: "",
-            }
-          : { status: 1, stdout: "", stderr: "not found" };
-      if (args[0] === "mcp" && args[1] === "add") {
-        registered = true;
-        return { status: 0, stdout: "added", stderr: "" };
-      }
-      if (args[0] === "mcp" && args[1] === "remove") {
-        registered = false;
-        return { status: 0, stdout: "removed", stderr: "" };
-      }
-      return { status: 1, stdout: "", stderr: "unexpected" };
-    };
+  it.each(["codex", "claude"] as const)(
+    "registers and later removes only a %s entry created by setup",
+    async (client) => {
+      const root = await temporaryRoot();
+      const paths = testPaths(root);
+      let registered = false;
+      const runner: CommandRunner = (_command, args) => {
+        if (args[0] === "--version")
+          return { status: 0, stdout: "1.0.0", stderr: "" };
+        if (args[0] === "mcp" && args[1] === "get")
+          return registered
+            ? {
+                status: 0,
+                stdout:
+                  client === "codex"
+                    ? JSON.stringify({
+                        enabled: true,
+                        transport: {
+                          type: "stdio",
+                          command: join(
+                            paths.installDirectory,
+                            "bin",
+                            "latex-renderer-mcp",
+                          ),
+                          args: [],
+                        },
+                      })
+                    : `Type: stdio\nCommand: ${join(paths.installDirectory, "bin", "latex-renderer-mcp")}\nArgs:\n`,
+                stderr: "",
+              }
+            : { status: 1, stdout: "", stderr: "not found" };
+        if (args[0] === "mcp" && args[1] === "add") {
+          registered = true;
+          return { status: 0, stdout: "added", stderr: "" };
+        }
+        if (args[0] === "mcp" && args[1] === "remove") {
+          registered = false;
+          return { status: 0, stdout: "removed", stderr: "" };
+        }
+        return { status: 1, stdout: "", stderr: "unexpected" };
+      };
 
-    const installed = await installDistribution({
-      ...(await clientDistribution()),
-      ...paths,
-      skillTarget: "none",
-      mcpTarget: "codex",
-      runner,
-      output: sink,
-      warning: sink,
-    });
-    expect(installed.status.status).toBe("healthy");
-    expect(installed.status.state?.managedMcpClients).toEqual(["codex"]);
-    expect(registered).toBe(true);
+      const installed = await installDistribution({
+        ...(await clientDistribution()),
+        ...paths,
+        skillTarget: "none",
+        mcpTarget: client,
+        runner,
+        output: sink,
+        warning: sink,
+      });
+      expect(installed.status.status).toBe("healthy");
+      expect(installed.status.state?.managedMcpClients).toEqual([client]);
+      expect(registered).toBe(true);
 
-    await removeSetup({
-      ...paths,
-      runner,
-      keepCredential: true,
-      keepSkills: true,
-      output: sink,
-      warning: sink,
-    });
-    expect(registered).toBe(false);
-  });
+      await removeSetup({
+        ...paths,
+        runner,
+        keepCredential: true,
+        keepSkills: true,
+        output: sink,
+        warning: sink,
+      });
+      expect(registered).toBe(false);
+    },
+  );
 
   it("removes only managed launchers and preserves modified ones", async () => {
     const root = await temporaryRoot();

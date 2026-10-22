@@ -5,6 +5,6 @@
 - For Japanese text, prefer `luatexja` and Harano Aji fonts.
 - Prefer TikZ and pgfplots for reproducible diagrams and graphs.
 - Use raster/PDF images only for figures that are impractical to reproduce.
-- Allowed project file types are `.tex`, `.sty`, `.cls`, `.bib`, `.csv`, `.dat`, `.txt`, `.png`, `.jpg`, `.jpeg`, and `.pdf`.
+- Allowed project file types are `.tex`, `.sty`, `.cls`, `.bib`, `.bst`, `.csv`, `.dat`, `.txt`, `.png`, `.jpg`, `.jpeg`, and `.pdf`.
 - Do not require shell escape, minted, gnuplot execution, Inkscape conversion, Python, SVG auto-conversion, another TeX engine, or a custom compilation command.
 - Keep generated files out of the source tree; `.render/` is output-only.

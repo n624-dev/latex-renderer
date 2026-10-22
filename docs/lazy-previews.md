@@ -17,6 +17,8 @@
 - Remote MCPは有効な全ページ番号とPDFの総ページ数を返し、
   `get_render_preview`／preview resourceの明示的取得時だけ生成します。
 - CLIの通常ダウンロードとLocal MCPは生成済みPNGだけを保存します。
+  Local MCPの `get_render_status` も、判明している場合は `previewPageCount`
+  に総ページ数を返します。未確定の場合は省略し、生成済み件数から推測しません。
   `latex-render jobs download JOB --preview-page 2 5`、または
   `download_render_artifacts` の `previewPages: [2, 5]` で追加要求できます。
   取得後に実際の成果物メタデータを再読込し、従来のサイズ・SHA-256照合を行います。

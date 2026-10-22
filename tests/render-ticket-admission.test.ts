@@ -3,8 +3,10 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AuthenticatedServiceAccount } from "@latex-renderer/auth";
+import { ApiKeyService } from "@latex-renderer/auth";
 import { RendererDatabase } from "@latex-renderer/database";
 import { TicketService } from "@latex-renderer/ticket";
+import { createInternalApp } from "../apps/internal-api/src/app.js";
 import { RenderTicketsService } from "../apps/internal-api/src/services/render-tickets.js";
 
 const databases: RendererDatabase[] = [];
@@ -16,6 +18,220 @@ afterEach(async () => {
 });
 
 describe("render ticket admission", () => {
+  it.each(["legacy", "source"] as const)(
+    "keeps %s Job renewal and replay bound to its original API key over HTTP",
+    async (mode) => {
+      const f = fixture({ maxStorage: 100, maxQueue: 20 }),
+        { database, tickets, apiKeys, app } = f,
+        keyA = insertKey(f, "service"),
+        keyB = insertKey(f, "service"),
+        timestamp = new Date().toISOString();
+      database.serviceAccounts.insert({
+        id: "other_service",
+        ownerUserId: "user",
+        name: "Other service",
+        clientType: "generic",
+        timestamp,
+      });
+      const otherKey = insertKey(f, "other_service"),
+        body =
+          mode === "legacy"
+            ? { size: 1, sha256: "b".repeat(64) }
+            : { sourceId: readySource(database) },
+        request = (token: string, path: string, replayKey?: string) =>
+          app.request(`/internal/v1/${path}`, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${token}`,
+              ...(replayKey === undefined
+                ? {}
+                : {
+                    "Content-Type": "application/json",
+                    "Idempotency-Key": replayKey,
+                  }),
+            },
+            ...(replayKey === undefined ? {} : { body: JSON.stringify(body) }),
+          }),
+        key = `original-${mode}-123456789`,
+        created = await request(keyA.token, "render-tickets", key);
+      expect(created.status).toBe(201);
+      const original = (await created.json()) as {
+        jobId: string;
+        jobTicket: string;
+      };
+      await expect(
+        tickets.verify(original.jobTicket, "status", original.jobId),
+      ).resolves.toMatchObject({ api_key_id: keyA.id });
+
+      for (const denied of [keyB, otherKey]) {
+        for (const response of [
+          await request(denied.token, `jobs/${original.jobId}/ticket`),
+          // Same-Service-Account idempotency replay must not mint an unusable ticket.
+          ...(denied === keyB
+            ? [await request(denied.token, "render-tickets", key)]
+            : []),
+        ]) {
+          expect(response.status).toBe(404);
+          expect(await response.json()).toEqual({
+            error: { code: "JOB_NOT_FOUND", message: "Job does not exist" },
+          });
+        }
+      }
+      const mismatched = await tickets.issueJob({
+        jobId: original.jobId,
+        userId: "user",
+        serviceAccountId: "service",
+        apiKeyId: keyB.id,
+        userSecurityVersion: 1,
+        serviceAccountSecurityVersion: 1,
+      });
+      await expect(
+        tickets.verify(mismatched, "status", original.jobId),
+      ).rejects.toMatchObject({ code: "JOB_NOT_FOUND", status: 404 });
+
+      for (const response of [
+        await request(keyA.token, `jobs/${original.jobId}/ticket`),
+        await request(keyA.token, "render-tickets", key),
+      ]) {
+        expect(response.status).toBe(200);
+        const renewed = (await response.json()) as { jobTicket: string };
+        await expect(
+          tickets.verify(renewed.jobTicket, "status", original.jobId),
+        ).resolves.toMatchObject({ api_key_id: keyA.id });
+      }
+      // Source sharing is unchanged: B can create its own Job with a new key.
+      const own = await request(keyB.token, "render-tickets", `new-${key}`);
+      expect(own.status).toBe(201);
+      const owned = (await own.json()) as { jobId: string; jobTicket: string };
+      expect(owned.jobId).not.toBe(original.jobId);
+      await expect(
+        tickets.verify(owned.jobTicket, "status", owned.jobId),
+      ).resolves.toMatchObject({ api_key_id: keyB.id });
+      expect(
+        (await request(keyB.token, `jobs/${owned.jobId}/ticket`)).status,
+      ).toBe(200);
+
+      database.raw
+        .prepare("UPDATE api_keys SET revoked_at=? WHERE id=?")
+        .run(timestamp, keyA.id);
+      expect(() => apiKeys.authenticate(keyA.token)).toThrow(/revoked/);
+      expect(
+        (await request(keyA.token, `jobs/${original.jobId}/ticket`)).status,
+      ).toBe(401);
+      expect((await request(keyA.token, "render-tickets", key)).status).toBe(
+        401,
+      );
+      await expect(
+        tickets.verify(original.jobTicket, "status", original.jobId),
+      ).rejects.toMatchObject({ code: "TICKET_SUBJECT_INACTIVE", status: 401 });
+      expect(
+        (await request(keyB.token, `jobs/${original.jobId}/ticket`)).status,
+      ).toBe(404);
+      expect(database.jobs.countActive()).toBe(2);
+    },
+  );
+
+  it("rejects another key's SVG retry before mutating stages, audit or idempotency", async () => {
+    const f = fixture({ maxStorage: 100, maxQueue: 20 }),
+      { database, service, tickets, actor } = f,
+      keyB = insertKey(f, actor.serviceAccountId),
+      actorB = f.apiKeys.authenticate(keyB.token),
+      created = await service.create(
+        actor,
+        { sourceId: readySource(database), outputs: ["pdf", "svg"] },
+        "svg-original-123456789",
+      ),
+      jobId = created.value.jobId,
+      timestamp = new Date().toISOString();
+    database.worker.claimNext("worker", timestamp, "2099-01-01T00:00:00.000Z");
+    expect(
+      database.outputStages.initialize(jobId, "worker", 1, "fixture"),
+    ).toBe(true);
+    database.worker.transitionOwned(
+      jobId,
+      "worker",
+      1,
+      ["validating"],
+      "running",
+      timestamp,
+    );
+    expect(database.outputStages.start(jobId, "pdf", "worker", 1)).toBe(true);
+    expect(
+      database.outputStages.completePdf(jobId, "worker", 1, {
+        storageGeneration: 1,
+        sha256: "a".repeat(64),
+        synctexSha256: "c".repeat(64),
+        synctexBytes: 1,
+        completedAt: timestamp,
+      }),
+    ).toBe(true);
+    database.artifacts.insert({
+      id: "artifact_pdf",
+      job_id: jobId,
+      type: "pdf",
+      relative_path: "result.pdf",
+      storage_generation: 1,
+      size: 1,
+      sha256: "a".repeat(64),
+      created_at: timestamp,
+    });
+    database.worker.transitionOwned(
+      jobId,
+      "worker",
+      1,
+      ["running"],
+      "failed",
+      timestamp,
+      {
+        completed_at: timestamp,
+        lease_owner: null,
+        lease_expires_at: null,
+        output_size: 1,
+      },
+    );
+    const snapshot = () => ({
+        job: database.jobs.getOwned(
+          jobId,
+          actor.userId,
+          actor.serviceAccountId,
+        ),
+        stages: database.outputStages.checkpoint(jobId),
+        audit: database.raw
+          .prepare("SELECT * FROM audit_logs ORDER BY id")
+          .all(),
+        idempotency: database.raw
+          .prepare("SELECT * FROM idempotency_records ORDER BY key_hash")
+          .all(),
+      }),
+      before = snapshot(),
+      retryKey = "svg-retry-123456789";
+    await expect(
+      service.create(actorB, { retrySvgJobId: jobId }, retryKey),
+    ).rejects.toMatchObject({ code: "JOB_NOT_FOUND", status: 404 });
+    expect(snapshot()).toEqual(before);
+    const first = await service.create(
+      actor,
+      { retrySvgJobId: jobId },
+      retryKey,
+    );
+    expect(first.status).toBe(202);
+    await expect(
+      tickets.verify(first.value.jobTicket, "status", jobId),
+    ).resolves.toMatchObject({ api_key_id: actor.apiKeyId });
+    const queued = snapshot();
+    await expect(
+      service.create(actorB, { retrySvgJobId: jobId }, retryKey),
+    ).rejects.toMatchObject({ code: "JOB_NOT_FOUND", status: 404 });
+    expect(snapshot()).toEqual(queued);
+    expect(
+      (await service.create(actor, { retrySvgJobId: jobId }, retryKey)).status,
+    ).toBe(200);
+    expect(database.outputStages.publicState(jobId)?.svg).toMatchObject({
+      status: "queued",
+      attempt: 2,
+    });
+  });
+
   it("rejects a request that would cross the user storage boundary", async () => {
     const { database, service, actor } = fixture({
       maxStorage: 10,
@@ -311,9 +527,14 @@ function fixture(options: {
     { kid: "v1", secret: Buffer.alloc(32, 8) },
     [],
   );
-  const service = new RenderTicketsService({
+  const apiKeys = new ApiKeyService(
     database,
-    apiKeys: {} as never,
+    new Map([["v1", Buffer.alloc(32, 7)]]),
+    "v1",
+  );
+  const deps = {
+    database,
+    apiKeys,
     tickets,
     rendererPublicUrl: "https://latex.example.com",
     rendererVersion: "test",
@@ -321,8 +542,47 @@ function fixture(options: {
     maxOutputBytes: options.maxOutput ?? 1,
     maxQueueLength: options.maxQueue,
     maxUserStorageBytes: options.maxStorage,
+  };
+  const service = new RenderTicketsService(deps),
+    app = createInternalApp(deps);
+  return { database, service, actor, tickets, apiKeys, app };
+}
+
+function insertKey(f: ReturnType<typeof fixture>, serviceAccountId: string) {
+  const key = f.apiKeys.create("render");
+  f.database.apiKeys.insert({
+    id: key.id,
+    serviceAccountId,
+    name: key.id,
+    prefix: key.prefix,
+    kind: key.kind,
+    secretHash: key.secretHash,
+    pepperId: key.pepperId,
+    scopes: ["render:create", "render:read:own"],
+    createdAt: new Date().toISOString(),
+    createdBy: "fixture",
   });
-  return { database, service, actor, tickets };
+  return key;
+}
+
+function readySource(database: RendererDatabase) {
+  const id = `source_${"e".repeat(32)}`,
+    timestamp = new Date().toISOString();
+  database.sources.insertReserved({
+    id,
+    ownerUserId: "user",
+    size: 1,
+    sha256: "e".repeat(64),
+    storageKey: `sources/${id}/source.zip`,
+    timestamp,
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  });
+  database.raw
+    .prepare(
+      "UPDATE sources SET status='ready',uploaded_at=?,paths_json='[\"main.tex\"]' WHERE id=?",
+    )
+    .run(timestamp, id);
+  return id;
 }
 
 async function concurrentFixture(options: {

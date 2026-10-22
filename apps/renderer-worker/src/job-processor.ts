@@ -215,6 +215,19 @@ export async function processJob(
         clearTimeout(timeout);
       });
       await monitorRun;
+      // A failed Docker CLI is not proof that its daemon container stopped.
+      // Do this before cancel/finalization can release the durable Job lease.
+      if (rendererState.uncertain) {
+        try {
+          await dockerStopVerified(spawned.containerName);
+          rendererState.uncertain = false;
+        } catch (error) {
+          throw new RendererCleanupDeferred(
+            "Renderer container cleanup could not be verified",
+            { cause: error },
+          );
+        }
+      }
       const runtime = database.worker.runtimeState(job.id);
       if (runtime === undefined)
         throw new Error("Renderer job disappeared during processing");
@@ -368,6 +381,10 @@ export async function processJob(
   }
   clearInterval(leaseHeartbeat);
   const rendered = rendererState.spawned;
+  if (processingError instanceof RendererCleanupDeferred) {
+    if (rendered && !rendererClosed()) rendered.process.kill("SIGKILL");
+    throw processingError;
+  }
   if (rendered && (!rendererClosed() || rendererState.uncertain)) {
     try {
       await dockerStopVerified(rendered.containerName);

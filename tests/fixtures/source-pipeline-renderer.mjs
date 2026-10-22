@@ -36,6 +36,10 @@ if (mode === "preview") {
   process.exit(0);
 }
 const source = await readFile(join(input, entrypoint), "utf8");
+if (mode !== "svg" && Number(svgExit) !== 0) {
+  await writeFile(join(output, "compile.log"), "Deterministic PDF failure\n");
+  process.exit(Number(svgExit));
+}
 const pages = Number(/% pipeline-pages: ([1-3])/.exec(source)?.[1]);
 assert.ok(pages >= 1 && pages <= 3);
 if (gate) {

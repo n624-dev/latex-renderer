@@ -1335,6 +1335,13 @@ export class AdminJobsService {
     return this.issueAccessTicketForRow(actor, row);
   }
 
+  async issueAdminAccessTicket(actor: AppActor, jobId: string) {
+    const row = this.deps.database.jobs.getVisible(jobId);
+    if (row === undefined)
+      throw new AppError("JOB_NOT_FOUND", "Job does not exist", 404);
+    return this.issueAccessTicketForRow(actor, row);
+  }
+
   private async issueAccessTicketForRow(
     actor: AppActor,
     row: JobRow,
@@ -1358,7 +1365,7 @@ export class AdminJobsService {
     );
     if (
       identity === undefined ||
-      identity.user_id !== actor.userId ||
+      identity.user_id !== row.user_id ||
       identity.service_account_id !== row.service_account_id
     )
       throw new AppError(

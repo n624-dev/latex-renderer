@@ -16,3 +16,5 @@ Remove only the stored API key with `latex-render auth logout`. Run `uninstall.m
 Add `--json` to any CLI operation to emit one structured result on stdout. Structured output never contains API keys, upload tickets, or job tickets.
 
 Run `latex-render setup` to install or idempotently update the cross-platform client, Skill, launchers, and available Codex/Claude MCP registrations. Run `latex-render setup --gui` for the authenticated loopback-only setup UI. Run `latex-render doctor --json` for a read-only, secret-free diagnosis, `latex-render setup repair` to repair owned settings, and `latex-render setup remove --yes` to remove only managed settings. Conflicting or modified settings are preserved.
+
+On Linux and macOS, relative `--install-directory` and `--bin-directory` values are resolved against the working directory before creating launchers or saving installation state. MCP removal requires an exact command and argument match. Edited registrations and unrecognized CLI output are preserved and reported instead of inferred from a matching path substring.

@@ -126,6 +126,7 @@ const jobSchema = z
     retentionExpiresAt: z.string().nullable(),
     artifacts: z.array(artifactSchema),
     previews: z.array(artifactSchema),
+    previewPageCount: z.number().int().nonnegative().optional(),
     sourceId: z.string().nullable().optional(),
     entrypoint: z.string().optional(),
     stages: jobStagesSchema.optional(),
@@ -598,6 +599,9 @@ function summarizeJob(job: JobResponse): z.infer<typeof jobSchema> {
     retentionExpiresAt: job.retentionExpiresAt,
     artifacts: job.artifacts.map(summarizeArtifact),
     previews: job.previews.map(summarizeArtifact),
+    ...(job.previewPageCount === undefined
+      ? {}
+      : { previewPageCount: job.previewPageCount }),
     ...(job.sourceId === undefined ? {} : { sourceId: job.sourceId }),
     ...(job.entrypoint === undefined ? {} : { entrypoint: job.entrypoint }),
     ...(job.stages === undefined

@@ -1,5 +1,5 @@
 import { Script, runInNewContext } from "node:vm";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import yazl from "yazl";
 import {
   cancelRenderJob,
@@ -18,10 +18,176 @@ import {
   uploadRenderZip,
   zipSingleTex,
   zipStoredFiles,
+  withAdminJobTicket,
   type RenderFetch,
 } from "../apps/admin-web/src/assets/render-script.js";
 import { adminRenderPage } from "../apps/admin-web/src/templates-admin.js";
 import { appScript } from "../apps/admin-web/src/assets/app-script.js";
+
+afterEach(() => vi.restoreAllMocks());
+
+describe("admin batch bearer renewal", () => {
+  it("uses a newly authenticated session's CSRF token without resubmitting a Job", async () => {
+    const access = {
+      jobId: `job_${"a".repeat(32)}`,
+      jobTicket: "old",
+      expiresAt: "2000-01-01T00:00:00Z",
+    };
+    const used: string[] = [];
+    const fetcher: RenderFetch = (url, init) => {
+      const address =
+        typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
+      if (address.endsWith("/auth/session"))
+        return Promise.resolve(Response.json({ csrfToken: "new-csrf" }));
+      const csrf = new Headers(init?.headers).get("X-CSRF-Token");
+      if (csrf === null) throw new Error("Missing fixture CSRF header");
+      used.push(csrf);
+      return Promise.resolve(
+        csrf === "new-csrf"
+          ? Response.json({
+              jobId: access.jobId,
+              jobTicket: "new",
+              expiresAt: "2099-01-01T00:00:00Z",
+            })
+          : Response.json(
+              { error: { code: "CSRF_TOKEN_REQUIRED" } },
+              { status: 403 },
+            ),
+      );
+    };
+    await withAdminJobTicket(
+      fetcher,
+      "https://renderer.invalid",
+      "old-csrf",
+      access,
+      (ticket) => {
+        expect(ticket).toBe("new");
+        return Promise.resolve();
+      },
+    );
+    expect(used).toEqual(["old-csrf", "new-csrf"]);
+  });
+  it.each([1799, 1800, 1801])(
+    "renews at the server expiry boundary (%s seconds)",
+    async (elapsed) => {
+      const base = Date.parse("2026-10-22T00:00:00.000Z");
+      vi.spyOn(Date, "now").mockReturnValue(base + elapsed * 1000);
+      const access = {
+        jobId: `job_${"a".repeat(32)}`,
+        jobTicket: "old",
+        expiresAt: new Date(base + 1800_000).toISOString(),
+      };
+      const fetcher = vi.fn<RenderFetch>().mockImplementation(() =>
+        Promise.resolve(
+          Response.json({
+            jobId: access.jobId,
+            jobTicket: "new",
+            expiresAt: new Date(base + 3600_000).toISOString(),
+          }),
+        ),
+      );
+      const used: string[] = [];
+      await withAdminJobTicket(
+        fetcher,
+        "https://renderer.invalid",
+        "csrf",
+        access,
+        (ticket) => {
+          used.push(ticket);
+          return Promise.resolve();
+        },
+      );
+      expect(used).toEqual([elapsed < 1800 ? "old" : "new"]);
+      expect(fetcher).toHaveBeenCalledTimes(elapsed < 1800 ? 0 : 1);
+    },
+  );
+  it("shares one renewal for polling, PDF/ZIP fetch and cancel, and bounds 401 retries", async () => {
+    const access = { jobId: `job_${"a".repeat(32)}`, jobTicket: "old" };
+    const fetcher = vi.fn<RenderFetch>().mockResolvedValue(
+      Response.json({
+        jobId: access.jobId,
+        jobTicket: "new",
+        expiresAt: "2099-01-01T00:00:00Z",
+      }),
+    );
+    const attempts: string[] = [];
+    await Promise.all(
+      Array.from({ length: 4 }, () =>
+        withAdminJobTicket(
+          fetcher,
+          "https://renderer.invalid",
+          "csrf",
+          access,
+          (ticket) => {
+            attempts.push(ticket);
+            if (ticket === "old")
+              return Promise.reject(
+                Object.assign(new Error("expired"), { status: 401 }),
+              );
+            return Promise.resolve();
+          },
+        ),
+      ),
+    );
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(attempts.filter((ticket) => ticket === "new")).toHaveLength(4);
+    const failures = vi
+      .fn<(ticket: string) => Promise<void>>()
+      .mockRejectedValue(
+        Object.assign(new Error("still unauthorized"), { status: 401 }),
+      );
+    const second = vi.fn<RenderFetch>().mockResolvedValue(
+      Response.json({
+        jobId: access.jobId,
+        jobTicket: "renewed-again",
+        expiresAt: "2099-01-01T00:00:00Z",
+      }),
+    );
+    await expect(
+      withAdminJobTicket(
+        second,
+        "https://renderer.invalid",
+        "csrf",
+        access,
+        failures,
+      ),
+    ).rejects.toThrow("still unauthorized");
+    expect(failures).toHaveBeenCalledTimes(2);
+    expect(second).toHaveBeenCalledOnce();
+  });
+  it.each([401, 403, 410])(
+    "does not bypass an unavailable admin session or retained artifact boundary (HTTP %s)",
+    async (status) => {
+      const access = {
+        jobId: `job_${"a".repeat(32)}`,
+        jobTicket: "old",
+        expiresAt: "2000-01-01T00:00:00Z",
+      };
+      const fetcher = vi
+        .fn<RenderFetch>()
+        .mockResolvedValue(
+          Response.json(
+            { error: { code: "UNAVAILABLE", message: "Unavailable" } },
+            { status },
+          ),
+        );
+      const operation = vi
+        .fn<(ticket: string) => Promise<void>>()
+        .mockResolvedValue();
+      await expect(
+        withAdminJobTicket(
+          fetcher,
+          "https://renderer.invalid",
+          "csrf",
+          access,
+          operation,
+        ),
+      ).rejects.toMatchObject({ status });
+      expect(operation).not.toHaveBeenCalled();
+      expect(access.jobTicket).toBe("old");
+    },
+  );
+});
 
 describe("Web render ZIP preflight", () => {
   it("validates per-output state and accepts only the three canonical SVG diagnostic paths", () => {

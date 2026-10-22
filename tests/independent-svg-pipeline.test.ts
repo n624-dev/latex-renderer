@@ -19,6 +19,70 @@ const identity = {
 };
 const digest = (b: Buffer) => createHash("sha256").update(b).digest("hex");
 describe(`independent stages with ${realPipelineImage === undefined ? "deterministic boundary (not TeX)" : "real pinned TeX Runtime"}`, () => {
+  it.each(["plain", "fixture"])(
+    "resolves nested bibliography files with %s BST in both PDF and SVG stages",
+    async (style) => {
+      const f = await sourcePipelineFixture();
+      try {
+        const source = await f.renders.createSource(identity, [
+          {
+            path: "main.tex",
+            text: pipelineDocument(
+              1,
+              `Equation: \\(a^2+b^2=c^2\\). \\cite{fixture,extra}\\bibliographystyle{${style}}\\bibliography{references/refs,references/more/extra}`,
+            ),
+          },
+          {
+            path: "references/refs.bib",
+            text: "@article{fixture, title={Fixture bibliography}, author={Example, A}, year={2026}}",
+          },
+          {
+            path: "references/more/extra.bib",
+            text: "@article{extra, title={Extra bibliography}, year={2026}}",
+          },
+          ...(style === "fixture"
+            ? [
+                {
+                  path: "styles/fixture.bst",
+                  text: String.raw`ENTRY { title } {} {}
+FUNCTION {begin.bib} { "\begin{thebibliography}{1}" write$ newline$ }
+FUNCTION {article} { "\bibitem{" write$ cite$ write$ "}" write$ title write$ newline$ }
+FUNCTION {default.type} { article }
+FUNCTION {end.bib} { "\end{thebibliography}" write$ newline$ }
+READ
+EXECUTE {begin.bib}
+ITERATE {call.type$}
+EXECUTE {end.bib}
+`,
+                },
+              ]
+            : []),
+        ]);
+        const result = await renderSource(f.client, source.id, {
+          outputs: ["pdf", "svg"],
+          outputDirectory: join(f.root, "bibliography-result"),
+          pollTimeoutMs: 120000,
+          sleep: f.runNext,
+        });
+        const diagnostic =
+          result.job.status === "succeeded"
+            ? undefined
+            : JSON.stringify(result.job.stages) +
+              "\n" +
+              (result.artifacts.log === undefined
+                ? "No compile log was published"
+                : (await readFile(result.artifacts.log, "utf8")).slice(-12000));
+        expect(result.job.stages, diagnostic).toMatchObject({
+          pdf: { status: "succeeded" },
+          svg: { status: "succeeded" },
+        });
+        expect(result.artifacts.pdf).toBeDefined();
+        expect(result.artifacts.svg.length).toBeGreaterThan(1);
+      } finally {
+        await f.close();
+      }
+    },
+  );
   it("publishes separate verified PDF/SVG generations through the public API and packaged-client core", async () => {
     const f = await sourcePipelineFixture();
     try {

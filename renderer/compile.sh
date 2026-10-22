@@ -69,6 +69,11 @@ case "${RENDERER_LUA_GC_MODE:-standard}" in
 esac
 
 cd /work/input
+# Both the canonical PDF and the separate SVG capture may invoke BibTeX from
+# their writable output directory. Keep the validated read-only Source tree
+# searchable, including custom styles in subdirectories; retain TeX defaults.
+export BIBINPUTS="/work/input//:"
+export BSTINPUTS="/work/input//:"
 renderer_log=/tmp/renderer-compile.log
 : > "$renderer_log"
 renderer_stage=setup
