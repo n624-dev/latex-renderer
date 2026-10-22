@@ -1,0 +1,66 @@
+name: release-browser-validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Existing immutable-source release tag to validate without changing its code"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-browser-validation-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  webkit-touch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      TEST_BROWSER: webkit
+      TEST_BROWSER_TOUCH: "1"
+      TARGET_TAG: ${{ inputs.version }}
+    steps:
+      - name: Validate requested release tag
+        run: |
+          set -euo pipefail
+          [[ "$TARGET_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.[1-9][0-9]*)?$ ]]
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.version }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: "24"
+      - name: Bind browser validation to the exact release source
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$(git rev-parse --verify --end-of-options "$TARGET_TAG^{commit}")"
+          node --input-type=module -e '
+            import assert from "node:assert/strict";
+            import {readFileSync} from "node:fs";
+            import {execFileSync} from "node:child_process";
+            const tag=process.env.TARGET_TAG;
+            assert.equal(JSON.parse(readFileSync("package.json","utf8")).version,tag.slice(1));
+            const commit=execFileSync("git",["rev-parse","HEAD"],{encoding:"utf8"}).trim();
+            assert.match(commit,/^[a-f0-9]{40}$/);
+            console.log(JSON.stringify({event:"ci.release_browser_source",tag,commit}));
+          '
+      - name: Install and build Web test dependencies without a cache
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+          pnpm --filter @latex-renderer/web... build
+      - name: Install WebKit and its disposable-runner prerequisites
+        run: |
+          # Keep Ubuntu signature verification; avoid a slow regional mirror
+          # only on this disposable amd64 browser runner.
+          test -f /etc/apt/apt-mirrors.txt
+          sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g; s|https://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' /etc/apt/apt-mirrors.txt
+          pnpm exec playwright install --with-deps webkit
+      - name: Verify shipped UI with WebKit and touch enabled
+        run: pnpm test:browser:built

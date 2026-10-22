@@ -1,4 +1,7 @@
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const read = (path: string) =>
@@ -7,6 +10,108 @@ const scripts = (path: string) =>
   (JSON.parse(read(path)) as { scripts: Record<string, string> }).scripts;
 
 describe("cache-free CI validation", () => {
+  it.skipIf(process.platform === "win32")(
+    "rejects branches, malformed versions and shell text before release checkout",
+    () => {
+      const workflow = read(".github/workflows/release-browser-validation.yml");
+      const step = workflow.split(
+        "      - name: Validate requested release tag\n",
+      )[1];
+      const block = step?.match(/^        run: \|\n((?:          .*\n)+)/)?.[1];
+      expect(block).toBeDefined();
+      const script = block!
+        .split("\n")
+        .map((line) => line.slice(10))
+        .join("\n");
+      for (const tag of ["v1.5.2", "v1.5.2-rc.3"])
+        expect(
+          spawnSync("bash", ["-c", script], {
+            env: { ...process.env, TARGET_TAG: tag },
+          }).status,
+          tag,
+        ).toBe(0);
+      for (const tag of [
+        "main",
+        "",
+        "v01.5.2",
+        "v1.5.2-rc.0",
+        "v1.5.2-beta.1",
+        "v1.5.2;exit 0",
+        "$(exit 0)",
+      ])
+        expect(
+          spawnSync("bash", ["-c", script], {
+            env: { ...process.env, TARGET_TAG: tag },
+          }).status,
+          tag,
+        ).not.toBe(0);
+    },
+  );
+
+  it("binds supplemental WebKit acceptance to the requested release code, not the workflow branch", () => {
+    const workflow = read(".github/workflows/release-browser-validation.yml");
+    expect(workflow).toContain("workflow_dispatch:");
+    expect(workflow).toContain("ref: ${{ inputs.version }}");
+    expect(workflow).toContain("contents: read");
+    expect(workflow).toContain("ci.release_browser_source");
+    expect(workflow).toContain('"rev-parse","HEAD"');
+    expect(workflow).toContain("version,tag.slice(1)");
+    expect(workflow).toContain('TEST_BROWSER_TOUCH: "1"');
+    expect(workflow).toContain("pnpm test:browser:built");
+    expect(workflow).toContain("--frozen-lockfile");
+    expect(workflow).not.toContain("continue-on-error");
+    expect(workflow).not.toContain("actions/cache");
+    expect(workflow).not.toContain("contents: write");
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "uses the same signed Ubuntu archive route in both WebKit workflows",
+    () => {
+      const commands = ["ci", "release-browser-validation"].map((name) => {
+        const workflow = read(`.github/workflows/${name}.yml`);
+        const step = workflow.split(
+          "      - name: Install WebKit and its disposable-runner prerequisites\n",
+        )[1];
+        const block = step?.match(
+          /^        run: \|\n((?:          .*\n)+)/,
+        )?.[1];
+        expect(block).toBeDefined();
+        return block!
+          .split("\n")
+          .map((line) => line.slice(10))
+          .join("\n");
+      });
+      expect(commands[0]).toBe(commands[1]);
+      const root = mkdtempSync(join(tmpdir(), "ci-ubuntu-mirror-"));
+      try {
+        const file = join(root, "mirrors.txt");
+        writeFileSync(
+          file,
+          "http://azure.archive.ubuntu.com/ubuntu/\nhttps://azure.archive.ubuntu.com/ubuntu/\nhttps://security.ubuntu.com/ubuntu/\n",
+        );
+        const script = commands[0]!
+          .replaceAll("/etc/apt/apt-mirrors.txt", file)
+          .replace("sudo sed", "sed")
+          .replace("pnpm exec playwright install --with-deps webkit", "");
+        expect(spawnSync("sh", ["-eu", "-c", script]).status).toBe(0);
+        expect(readFileSync(file, "utf8")).toBe(
+          "https://archive.ubuntu.com/ubuntu/\nhttps://archive.ubuntu.com/ubuntu/\nhttps://security.ubuntu.com/ubuntu/\n",
+        );
+        for (const unsafe of [
+          "trusted=yes",
+          "AllowUnauthenticated",
+          "Check-Valid-Until",
+          "--allow-unauthenticated",
+        ])
+          expect(script).not.toContain(unsafe);
+        rmSync(file);
+        expect(spawnSync("sh", ["-eu", "-c", script]).status).not.toBe(0);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("builds fresh once and retains every pnpm check phase and distribution verification", () => {
     const workflow = read(".github/workflows/ci.yml");
     const commands = [
