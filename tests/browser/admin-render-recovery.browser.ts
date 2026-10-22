@@ -157,12 +157,17 @@ it.each([true, false])(
       .poll(() => page.locator("#start-render").isEnabled())
       .toBe(true);
     await page.locator("#start-render").click();
-    await expect.poll(() => reservations).toBe(1);
-    if (failSource)
+    if (failSource) {
+      // The shipped UI retries HTTP 503 four times (300 + 600 + 1200 ms).
+      // Wait for that bounded retry path, not the default one-second poll.
       await expect
-        .poll(() => page.locator("#render-items").innerText())
+        .poll(() => page.locator("#render-items").innerText(), {
+          timeout: 5_000,
+        })
         .toContain("Fixture reservation failure");
-    else {
+      expect(reservations).toBe(4);
+    } else {
+      expect(reservations).toBe(1);
       await expect.poll(() => jobs).toBe(2);
       await expect
         .poll(() => page.locator("#render-status").textContent())
