@@ -1683,6 +1683,7 @@ function installRenderWorkflow(csrfToken: string): void {
             ? "canceling"
             : job.status;
         task.job = job;
+        delete task.message;
         renderRows();
         if (TERMINAL_JOB_STATUSES.has(job.status)) return;
       } catch (caught) {
@@ -1824,6 +1825,7 @@ function installRenderWorkflow(csrfToken: string): void {
           : "一部の処理結果を確認できませんでした。結果詳細で状態を確認してください。";
     } finally {
       setRunning(false);
+      renderRows();
     }
   };
   form.addEventListener("submit", (event) => {

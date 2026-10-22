@@ -51,6 +51,20 @@ async function fixture(
   page.on("pageerror", (error) => errors.push(error.message));
   if (slowFile)
     await page.addInitScript(() => {
+      const fetchOriginal = globalThis.fetch.bind(globalThis);
+      const capture = globalThis as typeof globalThis & {
+        uploadBodies: number[][];
+      };
+      capture.uploadBodies = [];
+      // WebKit's intercepted Request omits Blob bodies. Observe the exact
+      // supplied bytes in-page, then forward the original fetch unchanged.
+      globalThis.fetch = async (input, init) => {
+        if (init?.method === "PUT" && init.body instanceof Blob)
+          capture.uploadBodies.push(
+            Array.from(new Uint8Array(await init.body.arrayBuffer())),
+          );
+        return fetchOriginal(input, init);
+      };
       File.prototype.arrayBuffer = async function () {
         const bytes = await Blob.prototype.arrayBuffer.bind(this)();
         if (this.name.startsWith("A."))
@@ -170,13 +184,11 @@ async function prepare(page: (typeof pages)[number], names = ["main.tex"]) {
 it.each(["zip", "tex"])(
   "only uploads the latest %s selection when the previous read completes late",
   async (extension) => {
-    const uploads: Buffer[] = [],
-      reservations: Record<string, unknown>[] = [];
+    let uploads = 0;
+    const reservations: Record<string, unknown>[] = [];
     const f = await fixture(async (route) => {
       if (route.request().method() === "PUT") {
-        const bytes = route.request().postDataBuffer();
-        if (bytes === null) throw new Error("Expected archive body");
-        uploads.push(bytes);
+        uploads++;
         await route.fulfill({ status: 204 });
         return true;
       }
@@ -223,9 +235,15 @@ it.each(["zip", "tex"])(
     await f.page.waitForTimeout(150);
     await f.page.locator("#render-target").selectOption("key_fixture");
     await f.page.locator("#start-render").click();
-    await expect.poll(() => uploads.length).toBe(1);
+    await expect.poll(() => uploads).toBe(1);
     const expected = extension === "zip" ? b : Buffer.from(zipSingleTex(b));
-    expect(uploads[0]).toEqual(expected);
+    const bodies = await f.page.evaluate(
+      () =>
+        (globalThis as typeof globalThis & { uploadBodies: number[][] })
+          .uploadBodies,
+    );
+    expect(bodies).toHaveLength(1);
+    expect(Buffer.from(bodies[0] ?? [])).toEqual(expected);
     expect(reservations[0]?.sha256).toBe(
       createHash("sha256").update(expected).digest("hex"),
     );
@@ -325,6 +343,9 @@ it.each(
         await expect
           .poll(() => f.page.locator("#render-status").textContent())
           .toBe("すべての処理が終了しました。");
+        expect(await f.page.locator("#render-items").innerText()).toContain(
+          "キャンセル済み",
+        );
       }
       expect(uploads).toBe(0);
       expect(f.errors).toEqual([]);
@@ -374,6 +395,86 @@ it("keeps monitoring a running Job when an inspection submit is forced", async (
   expect(await f.page.locator("#render-status").textContent()).toBe(
     "すべての処理が終了しました。",
   );
+  expect(f.errors).toEqual([]);
+});
+
+it("resumes an existing Job after reauthentication without creating another Job", async () => {
+  let authenticated = false,
+    reservations = 0,
+    renewals = 0;
+  const f = await fixture(async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/auth/session") {
+      await route.fulfill({
+        json: {
+          csrfToken: authenticated ? "reauthenticated-csrf" : "fixture-csrf",
+        },
+      });
+      return true;
+    }
+    if (path.endsWith("/render-tickets")) {
+      reservations++;
+      await route.fulfill({ json: ticket(1) });
+      return true;
+    }
+    if (path.endsWith("/access-ticket")) {
+      renewals++;
+      if (!authenticated)
+        await route.fulfill({
+          status: 401,
+          json: {
+            error: { code: "SESSION_REQUIRED", message: "Log in again" },
+          },
+        });
+      else if (
+        route.request().headers()["x-csrf-token"] !== "reauthenticated-csrf"
+      )
+        await route.fulfill({
+          status: 403,
+          json: { error: { code: "CSRF_TOKEN_REQUIRED" } },
+        });
+      else
+        await route.fulfill({
+          json: {
+            jobId: jobId(1),
+            jobTicket: "fixture-renewed-job-ticket",
+            expiresAt: "2099-01-01T00:00:00Z",
+          },
+        });
+      return true;
+    }
+    if (path === `/api/v1/jobs/${jobId(1)}`) {
+      if (
+        route.request().headers().authorization ===
+        "Bearer fixture-renewed-job-ticket"
+      )
+        await route.fulfill({ json: job(jobId(1), "succeeded") });
+      else
+        await route.fulfill({
+          status: 401,
+          json: { error: { code: "TICKET_EXPIRED" } },
+        });
+      return true;
+    }
+    return false;
+  });
+  await prepare(f.page);
+  await f.page.locator("#start-render").click();
+  const resume = f.page.getByRole("button", { name: "監視を再開" });
+  await expect.poll(() => resume.isEnabled(), { timeout: 8_000 }).toBe(true);
+  expect(await f.page.locator("#render-status").textContent()).not.toBe(
+    "すべての処理が終了しました。",
+  );
+  authenticated = true;
+  await resume.click();
+  await expect
+    .poll(() => f.page.locator("#render-status").textContent())
+    .toBe("Jobの終了状態を確認しました。");
+  expect(await f.page.locator("#render-items").innerText()).toContain(
+    "変換成功",
+  );
+  expect(reservations).toBe(1);
+  expect(renewals).toBe(5);
   expect(f.errors).toEqual([]);
 });
 
