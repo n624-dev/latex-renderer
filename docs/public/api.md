@@ -4,7 +4,7 @@ category: API
 title: 公開API
 description: Source・保存Project共有、ジョブ作成、状態確認、成果物取得をHTTPから行います。
 navOrder: 70
-updated: "2026-10-19"
+updated: "2026-10-22"
 since: "v1.0.0"
 ---
 
@@ -20,6 +20,8 @@ since: "v1.0.0"
 ## 認証とスコープ
 
 ジョブ作成、保存Project操作、操作用トークン更新はAPIキー、アップロードとジョブ操作は応答で返された短時間トークンをBearer認証で送ります。同じユーザーが所有する別のAPIキー／Service Accountは同じ保存Projectを扱えます。他のユーザーには公開されません。
+
+APIキーで作成したJobの操作用トークンは、作成時のAPIキーに固定されます。同じService Accountの別キーでも、既存Jobのチケット更新・同じ `Idempotency-Key` による作成応答の再取得・SVG再試行は404で拒否されます。元のキーが失効しても別キーへ所有権は移りません。Source・保存Projectの同一ユーザー内共有は別の仕組みであり、共有Sourceから別キーで新しいJobを作成することはできます。その場合は新しい `Idempotency-Key` を使ってください。
 
 ```http
 Authorization: Bearer <TOKEN>

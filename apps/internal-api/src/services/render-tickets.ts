@@ -22,6 +22,8 @@ export class RenderTicketsService {
     idempotencyKey: string,
   ) {
     if ("retrySvgJobId" in input) {
+      // Reject before retry() can requeue stages or record idempotency.
+      this.requireOwnedJob(actor, input.retrySvgJobId);
       const result = new SvgRetryOperations(
         this.deps.database,
         this.deps,
@@ -362,18 +364,22 @@ export class RenderTicketsService {
     };
   }
   async renew(actor: AuthenticatedServiceAccount, jobId: string) {
-    const row = this.deps.database.jobs.getOwned(
-      jobId,
-      actor.userId,
-      actor.serviceAccountId,
-    );
-    if (row === undefined)
-      throw new AppError("JOB_NOT_FOUND", "Job does not exist", 404);
+    this.requireOwnedJob(actor, jobId);
     return {
       jobId,
       jobTicket: await this.deps.tickets.issueJob(toSubject(actor, jobId)),
       expiresAt: new Date(Date.now() + 1_800_000).toISOString(),
     };
+  }
+  private requireOwnedJob(actor: AuthenticatedServiceAccount, jobId: string) {
+    const row = this.deps.database.jobs.getOwned(
+      jobId,
+      actor.userId,
+      actor.serviceAccountId,
+    );
+    if (row === undefined || row.api_key_id !== actor.apiKeyId)
+      throw new AppError("JOB_NOT_FOUND", "Job does not exist", 404);
+    return row;
   }
   private assertAccepting(
     actor: AuthenticatedServiceAccount,
@@ -434,17 +440,7 @@ export class RenderTicketsService {
     actor: AuthenticatedServiceAccount,
     jobId: string,
   ) {
-    const row = this.deps.database.jobs.getOwned(
-      jobId,
-      actor.userId,
-      actor.serviceAccountId,
-    );
-    if (row === undefined)
-      throw new AppError(
-        "JOB_NOT_FOUND",
-        "Idempotent job no longer exists",
-        404,
-      );
+    const row = this.requireOwnedJob(actor, jobId);
     if (row.status !== "reserved")
       throw new AppError(
         "IDEMPOTENT_RESOURCE_STATE",
@@ -481,17 +477,7 @@ export class RenderTicketsService {
     actor: AuthenticatedServiceAccount,
     jobId: string,
   ) {
-    const row = this.deps.database.jobs.getOwned(
-      jobId,
-      actor.userId,
-      actor.serviceAccountId,
-    );
-    if (row === undefined)
-      throw new AppError(
-        "JOB_NOT_FOUND",
-        "Idempotent job no longer exists",
-        404,
-      );
+    this.requireOwnedJob(actor, jobId);
     return {
       jobId,
       jobTicket: await this.deps.tickets.issueJob(toSubject(actor, jobId)),
