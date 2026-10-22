@@ -1,3 +1,5 @@
+import type { JobRetryResponse } from "@latex-renderer/contracts";
+
 const MAX_ZIP_BYTES = 20 * 1024 * 1024;
 const JOB_ID_PATTERN = /^job_[a-f0-9]{32}$/;
 export const JOB_STATUSES = [
@@ -966,6 +968,93 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(2)} MiB`;
 }
 
+export interface RenewableAdminJobTicket {
+  jobId: string;
+  jobTicket: string;
+  expiresAt?: string;
+  renewal?: Promise<void>;
+}
+
+// Shared by polling, cancellation and both artifact download paths. An expired
+// bearer is retried once; concurrent operations share the same renewal.
+export async function withAdminJobTicket<T>(
+  fetcher: RenderFetch,
+  origin: string,
+  csrfToken: string,
+  access: RenewableAdminJobTicket,
+  operation: (ticket: string) => Promise<T>,
+): Promise<T> {
+  const renew = async () => {
+    access.renewal ??= (async () => {
+      const request = (csrf: string) =>
+        fetcher(
+          new URL(
+            `/admin/api/v1/jobs/${encodeURIComponent(access.jobId)}/access-ticket`,
+            origin,
+          ),
+          {
+            method: "POST",
+            credentials: "same-origin",
+            cache: "no-store",
+            redirect: "error",
+            referrerPolicy: "no-referrer",
+            headers: {
+              "X-CSRF-Token": csrf,
+              "Content-Type": "application/json",
+            },
+            body: "{}",
+          },
+        );
+      let response = await request(csrfToken);
+      if (response.status === 403) {
+        const error = await responseError(response);
+        if ((error as Error & { code?: string }).code !== "CSRF_TOKEN_REQUIRED")
+          throw error;
+        const session = (await responseJson(
+          await fetcher(new URL("/auth/session", origin), {
+            credentials: "same-origin",
+            cache: "no-store",
+            redirect: "error",
+          }),
+        )) as { csrfToken?: unknown };
+        if (typeof session.csrfToken !== "string" || !session.csrfToken)
+          throw new Error("再ログイン後のセッションを確認できませんでした。");
+        response = await request(session.csrfToken);
+      }
+      const value = (await responseJson(
+        response,
+      )) as Partial<BrowserSourceRenderTicket>;
+      if (
+        value.jobId !== access.jobId ||
+        typeof value.jobTicket !== "string" ||
+        !value.jobTicket ||
+        typeof value.expiresAt !== "string" ||
+        !Number.isFinite(Date.parse(value.expiresAt)) ||
+        Date.parse(value.expiresAt) <= Date.now()
+      )
+        throw new Error("Jobチケット更新の応答が不正です。");
+      access.jobTicket = value.jobTicket;
+      access.expiresAt = value.expiresAt;
+    })();
+    const pending = access.renewal;
+    try {
+      await pending;
+    } finally {
+      if (access.renewal === pending) delete access.renewal;
+    }
+  };
+  if (access.expiresAt && Date.parse(access.expiresAt) <= Date.now())
+    await renew();
+  const used = access.jobTicket;
+  try {
+    return await operation(used);
+  } catch (error) {
+    if ((error as { status?: number } | null)?.status !== 401) throw error;
+    if (access.jobTicket === used) await renew();
+    return operation(access.jobTicket);
+  }
+}
+
 function jobStatusLabel(status: string): string {
   return (
     (
@@ -985,8 +1074,9 @@ function jobStatusLabel(status: string): string {
         expired: "保存期限切れ",
         waiting: "ブラウザ内で待機中",
         preparing: "Source準備中",
-        "failed-local": "失敗",
+        "failed-local": "操作・接続エラー",
         "canceled-local": "キャンセル済み",
+        canceling: "中止を確認中",
       } as Record<string, string>
     )[status] ?? status
   );
@@ -1055,6 +1145,9 @@ function installRenderWorkflow(csrfToken: string): void {
     state: string;
     jobId?: string;
     jobTicket?: string;
+    expiresAt?: string;
+    renewal?: Promise<void>;
+    retryKey?: string;
     job?: BrowserJobStatus;
     message?: string;
     canceled: boolean;
@@ -1064,7 +1157,6 @@ function installRenderWorkflow(csrfToken: string): void {
   let prepared: Prepared[] = [],
     tasks: Task[] = [],
     sharedBlob: Blob | undefined,
-    sharedSize = 0,
     generation = 0,
     targetsReady = false,
     running = false;
@@ -1083,18 +1175,42 @@ function installRenderWorkflow(csrfToken: string): void {
       chosen.length === 0 ||
       (sharedBlob === undefined && chosen.length !== 1);
   };
+  const setRunning = (value: boolean) => {
+    running = value;
+    input.disabled = value;
+    directory.disabled = value;
+    target.disabled = value || !targetsReady;
+    inspect.disabled =
+      value ||
+      (input.files?.length ?? 0) + (directory.files?.length ?? 0) === 0;
+    updateStart();
+  };
+  const withTicket = <T>(
+    task: Task,
+    operation: (ticket: string, jobId: string) => Promise<T>,
+  ) => {
+    const jobId = task.jobId;
+    if (!jobId || !task.jobTicket) throw new Error("Jobチケットがありません。");
+    return withAdminJobTicket(
+      fetcher,
+      origin,
+      csrfToken,
+      task as Task & RenewableAdminJobTicket,
+      (ticket) => operation(ticket, jobId),
+    );
+  };
   const clearTickets = () => {
     for (const task of tasks)
       if (task.jobTicket !== undefined) task.jobTicket = "";
   };
   const reset = () => {
+    if (running) return;
     generation += 1;
+    clearTickets();
     prepared = [];
     tasks = [];
     sharedBlob = undefined;
-    sharedSize = 0;
     running = false;
-    clearTickets();
     summary.hidden = true;
     batchSection.hidden = true;
     selection.replaceChildren();
@@ -1127,6 +1243,7 @@ function installRenderWorkflow(csrfToken: string): void {
     selection.append(label);
   };
   const inspectSelected = async () => {
+    if (running) return;
     const files = [...(input.files ?? []), ...(directory.files ?? [])],
       current = ++generation;
     prepared = [];
@@ -1136,7 +1253,17 @@ function installRenderWorkflow(csrfToken: string): void {
     error.textContent = "";
     status.textContent = "ファイルを確認しています…";
     inspect.disabled = true;
+    updateStart();
+    // Build an isolated selection; publish it only if it is still current.
+    const commitSelection = (items: Prepared[], blob: Blob | undefined) => {
+      prepared = items;
+      sharedBlob = blob;
+    };
     try {
+      let prepared: Prepared[] = [],
+        sharedBlob: Blob | undefined,
+        sharedSize = 0;
+      const details = document.createElement("div");
       if (files.length === 0) throw new Error("ファイルを選択してください。");
       if (files.length > 200)
         throw new Error("一度に選択できるファイルは200件までです。");
@@ -1263,7 +1390,7 @@ function installRenderWorkflow(csrfToken: string): void {
           list.append(item);
         }
         fileList.append(fileSummary, list);
-        selection.append(fileList);
+        details.append(fileList);
         prepared = entrypoints.map((entrypoint) => ({
           label: entrypoint,
           entrypoint,
@@ -1275,6 +1402,8 @@ function installRenderWorkflow(csrfToken: string): void {
         }));
       }
       if (current !== generation) return;
+      commitSelection(prepared, sharedBlob);
+      selection.append(details);
       prepared.forEach(addChoice);
       summary.hidden = false;
       status.textContent = `${prepared.length}件の候補を確認しました。`;
@@ -1330,7 +1459,7 @@ function installRenderWorkflow(csrfToken: string): void {
       actions.className = "actions-cell";
       name.textContent = task.label;
       state.textContent = task.message ?? jobStatusLabel(task.state);
-      if (task.job?.stages) {
+      if (task.job?.stages && task.state !== "failed-local") {
         const { pdf, svg } = task.job.stages,
           partial =
             pdf.status === "succeeded" &&
@@ -1417,6 +1546,15 @@ function installRenderWorkflow(csrfToken: string): void {
         }
       }
       if (task.jobId) {
+        if (task.state === "failed-local" && task.jobTicket) {
+          const resume = document.createElement("button");
+          resume.type = "button";
+          resume.className = "secondary";
+          resume.textContent = "監視を再開";
+          resume.disabled = running;
+          resume.addEventListener("click", () => void resumeMonitoring(task));
+          actions.append(resume);
+        }
         const detail = document.createElement("a");
         detail.className = "button secondary";
         detail.href = `/admin/jobs/?job=${encodeURIComponent(task.jobId)}`;
@@ -1438,7 +1576,7 @@ function installRenderWorkflow(csrfToken: string): void {
     batchSummary.replaceChildren();
     for (const [label, value] of [
       ["成功", succeeded],
-      ["失敗・中止", failed],
+      ["失敗・中止・確認不可", failed],
       ["実行中・待機", active],
     ] as const) {
       const item = document.createElement("div"),
@@ -1455,11 +1593,13 @@ function installRenderWorkflow(csrfToken: string): void {
         task.jobTicket &&
         task.job?.artifacts.some((item) => item.relativePath === "result.pdf"),
     );
-    retryFailed.disabled = !tasks.some(
-      (task) =>
-        task.jobId &&
-        ["failed", "timeout", "canceled", "rejected"].includes(task.state),
-    );
+    retryFailed.disabled =
+      running ||
+      !tasks.some(
+        (task) =>
+          task.jobId &&
+          ["failed", "timeout", "canceled", "rejected"].includes(task.state),
+      );
     if (running) {
       status.textContent = `${tasks.length}件中 ${completed}件完了（最大3件ずつ処理）`;
     }
@@ -1470,10 +1610,13 @@ function installRenderWorkflow(csrfToken: string): void {
       task.message = "中止を要求中";
       renderRows();
       try {
-        await cancelRenderJob(fetcher, origin, task.jobId, task.jobTicket);
+        await withTicket(task, (ticket, jobId) =>
+          cancelRenderJob(fetcher, origin, jobId, ticket),
+        );
+        if (!TERMINAL_JOB_STATUSES.has(task.state)) task.state = "canceling";
       } catch (caught) {
-        task.message =
-          caught instanceof Error ? caught.message : String(caught);
+        task.state = "failed-local";
+        task.message = `中止を確認できませんでした: ${caught instanceof Error ? caught.message : String(caught)}`;
       }
     } else {
       task.state = "canceled-local";
@@ -1488,11 +1631,8 @@ function installRenderWorkflow(csrfToken: string): void {
   ) => {
     if (!task.jobTicket) return;
     try {
-      const blob = await fetchRenderArtifact(
-          fetcher,
-          origin,
-          task.jobTicket,
-          artifact,
+      const blob = await withTicket(task, (ticket) =>
+          fetchRenderArtifact(fetcher, origin, ticket, artifact),
         ),
         url = URL.createObjectURL(blob),
         anchor = document.createElement("a");
@@ -1534,14 +1674,14 @@ function installRenderWorkflow(csrfToken: string): void {
     let failures = 0;
     while (current === generation && task.jobId && task.jobTicket) {
       try {
-        const job = await fetchRenderJob(
-          fetcher,
-          origin,
-          task.jobId,
-          task.jobTicket,
+        const job = await withTicket(task, (ticket, jobId) =>
+          fetchRenderJob(fetcher, origin, jobId, ticket),
         );
         failures = 0;
-        task.state = job.status;
+        task.state =
+          task.canceled && !TERMINAL_JOB_STATUSES.has(job.status)
+            ? "canceling"
+            : job.status;
         task.job = job;
         renderRows();
         if (TERMINAL_JOB_STATUSES.has(job.status)) return;
@@ -1550,6 +1690,26 @@ function installRenderWorkflow(csrfToken: string): void {
         if (failures >= 3) throw caught;
       }
       await sleep(1500);
+    }
+  };
+  const resumeMonitoring = async (task: Task) => {
+    if (running) return;
+    setRunning(true);
+    delete task.message;
+    task.state = task.canceled ? "canceling" : "waiting";
+    renderRows();
+    try {
+      if (task.canceled) await cancelTask(task);
+      await poll(task, generation);
+    } catch (caught) {
+      task.state = "failed-local";
+      task.message = caught instanceof Error ? caught.message : String(caught);
+    } finally {
+      setRunning(false);
+      renderRows();
+      status.textContent = TERMINAL_JOB_STATUSES.has(task.state)
+        ? "Jobの終了状態を確認しました。"
+        : "Jobの状態を確認できませんでした。ログイン状態と結果詳細を確認してください。";
     }
   };
   const runTask = async (
@@ -1577,11 +1737,19 @@ function installRenderWorkflow(csrfToken: string): void {
         );
         task.jobId = ticket.jobId;
         task.jobTicket = ticket.jobTicket;
+        task.expiresAt = ticket.expiresAt;
+        if (task.canceled) {
+          ticket.uploadTicket = "";
+          await cancelTask(task);
+          if (task.state !== "failed-local") await poll(task, current);
+          return;
+        }
         task.state = "uploading";
         renderRows();
-        await bounded(() =>
-          uploadRenderZip(fetcher, ticket, task.blob as File),
-        );
+        await bounded(async () => {
+          if (!task.canceled)
+            await uploadRenderZip(fetcher, ticket, task.blob as File);
+        });
         ticket.uploadTicket = "";
       } else {
         const sourceId = task.sourceId ?? (await reserveSource(task, apiKeyId));
@@ -1601,6 +1769,12 @@ function installRenderWorkflow(csrfToken: string): void {
         );
         task.jobId = ticket.jobId;
         task.jobTicket = ticket.jobTicket;
+        task.expiresAt = ticket.expiresAt;
+        if (task.canceled) {
+          await cancelTask(task);
+          if (task.state !== "failed-local") await poll(task, current);
+          return;
+        }
         task.state = "queued";
       }
       renderRows();
@@ -1636,13 +1810,17 @@ function installRenderWorkflow(csrfToken: string): void {
       await runBoundedBatch(selected, 3, async (task) => {
         if (!task.canceled) await runTask(task, apiKeyId, current, outputs);
       });
-      status.textContent = "すべての処理が終了しました。";
+      status.textContent =
+        current === generation &&
+        selected.every(
+          (task) =>
+            TERMINAL_JOB_STATUSES.has(task.state) ||
+            task.state === "canceled-local",
+        )
+          ? "すべての処理が終了しました。"
+          : "一部の処理結果を確認できませんでした。結果詳細で状態を確認してください。";
     } finally {
-      running = false;
-      input.disabled = false;
-      directory.disabled = false;
-      target.disabled = false;
-      updateStart();
+      setRunning(false);
     }
   };
   form.addEventListener("submit", (event) => {
@@ -1709,10 +1887,7 @@ function installRenderWorkflow(csrfToken: string): void {
       canceled: false,
       sourceKey: `${current}-${index}-${globalThis.crypto.randomUUID()}`,
     }));
-    running = true;
-    input.disabled = true;
-    directory.disabled = true;
-    target.disabled = true;
+    setRunning(true);
     summary.hidden = true;
     batchSection.hidden = false;
     error.textContent = "";
@@ -1745,11 +1920,8 @@ function installRenderWorkflow(csrfToken: string): void {
           );
           if (task.state !== "succeeded" || !task.jobTicket || !artifact)
             continue;
-          const blob = await fetchRenderArtifact(
-            fetcher,
-            origin,
-            task.jobTicket,
-            artifact,
+          const blob = await withTicket(task, (ticket) =>
+            fetchRenderArtifact(fetcher, origin, ticket, artifact),
           );
           files.push({
             name: `${String(index + 1).padStart(2, "0")}-${task.label.replace(/[^A-Za-z0-9._-]+/g, "_")}.pdf`,
@@ -1776,11 +1948,13 @@ function installRenderWorkflow(csrfToken: string): void {
     })();
   });
   retryFailed.addEventListener("click", () => {
+    if (running) return;
+    setRunning(true);
     retryFailed.disabled = true;
     error.textContent = "";
     void (async () => {
+      const created: Task[] = [];
       try {
-        const created: string[] = [];
         for (const task of tasks) {
           if (
             !task.jobId ||
@@ -1797,22 +1971,48 @@ function installRenderWorkflow(csrfToken: string): void {
                 Accept: "application/json",
                 "Content-Type": "application/json",
                 "X-CSRF-Token": csrfToken,
-                "Idempotency-Key": globalThis.crypto.randomUUID(),
+                "Idempotency-Key": (task.retryKey ??=
+                  globalThis.crypto.randomUUID()),
               },
               body: "{}",
             },
           );
-          const value = (await responseJson(response)) as { jobId?: unknown };
-          if (typeof value.jobId !== "string")
+          const value = (await responseJson(
+            response,
+          )) as Partial<JobRetryResponse>;
+          if (
+            typeof value.id !== "string" ||
+            !JOB_ID_PATTERN.test(value.id) ||
+            value.retryOfJobId !== task.jobId
+          )
             throw new Error("再実行Jobの応答が不正です。");
-          created.push(value.jobId);
-          task.message = `再実行: ${value.jobId}`;
+          task.jobId = value.id;
+          task.state = "queued";
+          task.canceled = false;
+          delete task.job;
+          delete task.retryKey;
+          task.expiresAt = new Date(0).toISOString();
+          task.message = `再実行: ${value.id}`;
+          created.push(task);
         }
         status.textContent = `${created.length}件の再実行Jobを作成しました。`;
         renderRows();
       } catch (caught) {
         error.textContent =
           caught instanceof Error ? caught.message : String(caught);
+        renderRows();
+      } finally {
+        // Even when a later reservation fails, monitor Jobs already created.
+        await runBoundedBatch(created, 3, async (task) => {
+          try {
+            await poll(task, generation);
+          } catch (caught) {
+            task.state = "failed-local";
+            task.message =
+              caught instanceof Error ? caught.message : String(caught);
+          }
+        });
+        setRunning(false);
         renderRows();
       }
     })();
@@ -1882,6 +2082,7 @@ export const renderScript = `
   const fetchRenderJob = ${fetchRenderJob.toString()};
   const cancelRenderJob = ${cancelRenderJob.toString()};
   const fetchRenderArtifact = ${fetchRenderArtifact.toString()};
+  const withAdminJobTicket = ${withAdminJobTicket.toString()};
   const formatBytes = ${formatBytes.toString()};
   const jobStatusLabel = ${jobStatusLabel.toString()};
   fetch('/auth/session',{credentials:'same-origin',cache:'no-store'}).then(async response=>{

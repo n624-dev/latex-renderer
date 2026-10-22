@@ -949,6 +949,14 @@ export class RemoteRenderService {
     prepared.sort((left, right) => left.path.localeCompare(right.path));
     assertTexSource(prepared.map((file) => file.path));
     const archive = await zipFiles(prepared);
+    const source = await this.validateAndStoreSource(identity.userId, archive);
+    return this.summarizeSource(source, null);
+  }
+
+  private async validateAndStoreSource(
+    userId: string,
+    archive: Buffer,
+  ): Promise<SourceRow> {
     if (archive.byteLength > this.resourceLimits.maxUploadBytes)
       throw new AppError(
         "SOURCE_ARCHIVE_SIZE",
@@ -967,12 +975,8 @@ export class RemoteRenderService {
           this.zipLimits(),
           "",
         ),
-        source = await this.storeReadySource(
-          identity.userId,
-          archive,
-          verified.paths,
-        );
-      return this.summarizeSource(source, null);
+        source = await this.storeReadySource(userId, archive, verified.paths);
+      return source;
     } finally {
       await rm(archiveRoot, { recursive: true, force: true });
     }
@@ -2648,62 +2652,23 @@ export class RemoteRenderService {
         "Inline source must be between 1 byte and 64 KiB",
         400,
       );
-    const archive = await zipInline(entrypoint, content),
-      sha256 = sha256Hex(archive),
-      existing = this.database.sources.findReady(
-        userId,
-        sha256,
-        archive.byteLength,
-        nowIso(),
+    const limits = this.directSourceLimits();
+    if (contentBytes > limits.fileBytes)
+      throw new AppError(
+        "SOURCE_FILE_SIZE",
+        "Inline Source exceeds the configured file limit",
+        400,
       );
-    if (existing !== undefined) return existing;
-    const sourceId = newId("source"),
-      storageKey = `sources/${sourceId}/source.zip`,
-      path = join(this.storageRoot, storageKey),
-      timestamp = nowIso(),
-      expiresAt = this.sourceRetentionExpiresAt(),
-      stagingExpiresAt = new Date(Date.now() + SOURCE_UPLOAD_MS).toISOString();
-    this.database.transaction(() => {
-      this.assertStorageQuota(userId, archive.byteLength);
-      assertSourceWritable(this.database);
-      this.database.sources.insertReserved({
-        id: sourceId,
-        ownerUserId: userId,
-        size: archive.byteLength,
-        sha256,
-        storageKey,
-        timestamp,
-        expiresAt: stagingExpiresAt,
-      });
-    });
-    try {
-      await mkdir(dirname(path), { recursive: true, mode: 0o770 });
-      await writeFile(path, archive, { flag: "wx", mode: 0o660 });
-      this.database.transaction(() => {
-        assertSourceWritable(this.database);
-        this.database.sources.transitionBeforeExpiry(
-          sourceId,
-          ["reserved"],
-          "ready",
-          nowIso(),
-          {
-            uploaded_at: nowIso(),
-            expires_at: expiresAt,
-            paths_json: JSON.stringify([entrypoint]),
-          },
-        );
-      });
-    } catch (error) {
-      await rm(dirname(path), { recursive: true, force: true });
-      this.database.transaction(() => {
-        this.database.sources.discardReservation(sourceId);
-      });
-      throw error;
-    }
-    const source = this.database.sources.get(sourceId);
-    if (source === undefined)
-      throw new AppError("SOURCE_CREATE_FAILED", "Source creation failed");
-    return source;
+    if (contentBytes > limits.contentBytes)
+      throw new AppError(
+        "SOURCE_TOTAL_SIZE",
+        "Inline Source exceeds the configured content limit",
+        400,
+      );
+    return this.validateAndStoreSource(
+      userId,
+      await zipInline(entrypoint, content),
+    );
   }
 
   private assertQueue(userId: string, serviceAccountId: string): void {

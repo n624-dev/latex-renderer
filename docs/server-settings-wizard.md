@@ -71,6 +71,12 @@ Cloudflare needs an existing working connector/HTTPS origin; no API token is
 requested. Preview is read-only. Explicit confirmation applies the exact reviewed
 candidate; editing invalidates approval.
 
+Web validates password confirmation before sending an apply request. A mismatch
+leaves the reviewed confirmation and input fields available for correction;
+credentials are cleared only after a request is submitted. A lost apply response
+is different: the controls remain locked and recovery must establish whether
+the submitted operation completed before another change is sent.
+
 Initial peppers/ticket keys are random 32-byte keys; management bearer tokens
 are printable 64-digit hex. Valid existing keys are preserved, never rotated to
 repair restore failures. Backup age identity/recipient must match. Owner

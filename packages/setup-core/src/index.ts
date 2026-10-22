@@ -21,7 +21,11 @@ import process from "node:process";
 import { pathToFileURL, URL } from "node:url";
 import { crc32, inflateRawSync } from "node:zlib";
 import { AppError } from "@latex-renderer/shared";
-import { hasExternalWindowsBin, manageWindowsLaunchers, windowsLauncherContents } from "./windows-launchers.js";
+import {
+  hasExternalWindowsBin,
+  manageWindowsLaunchers,
+  windowsLauncherContents,
+} from "./windows-launchers.js";
 
 export { clientSetupFailureDiagnostic } from "./failure-diagnostic.js";
 
@@ -233,17 +237,36 @@ export function resolveSetupPaths(options: CoreOptions = {}): SetupPaths {
   const platform = supportedPlatform(options.platform);
   const home = options.home ?? homedir();
   const env = options.env ?? process.env;
-  const installDirectory =
+  const requestedInstallDirectory =
     options.installDirectory ??
     env.LATEX_RENDER_INSTALL_DIRECTORY ??
     defaultInstallDirectory({ platform, home, env });
-  const binDirectory =
+  const installDirectory =
+    platform === "win32"
+      ? requestedInstallDirectory
+      : posix.resolve(requestedInstallDirectory);
+  const requestedBinDirectory =
     options.binDirectory ??
     env.LATEX_RENDER_BIN_DIRECTORY ??
-    (platform === "win32" ? win32.join(installDirectory, "bin") : defaultBinDirectory({ platform, home, env }));
+    (platform === "win32"
+      ? win32.join(installDirectory, "bin")
+      : defaultBinDirectory({ platform, home, env }));
   const pathApi = platform === "win32" ? win32 : posix;
-  if (platform === "win32" && [installDirectory, binDirectory].some(path => !win32.isAbsolute(path) || /[\r\n\0";]/.test(path)))
-    throw new AppError("INVALID_SETUP_PATH", "Windows installation and bin directories must be absolute paths without quotes, semicolons or control characters", 400);
+  const binDirectory =
+    platform === "win32"
+      ? requestedBinDirectory
+      : posix.resolve(requestedBinDirectory);
+  if (
+    platform === "win32" &&
+    [installDirectory, binDirectory].some(
+      (path) => !win32.isAbsolute(path) || /[\r\n\0";]/.test(path),
+    )
+  )
+    throw new AppError(
+      "INVALID_SETUP_PATH",
+      "Windows installation and bin directories must be absolute paths without quotes, semicolons or control characters",
+      400,
+    );
   return {
     platform,
     home,
@@ -445,7 +468,12 @@ export async function installDistribution({
       skillTarget,
       mcpTarget,
       managedMcpClients: previous?.managedMcpClients ?? [],
-      windowsUserPathAdded: previous !== undefined && normalizePath(previous.binDirectory, paths.platform) === normalizePath(paths.binDirectory, paths.platform) ? previous.windowsUserPathAdded : false,
+      windowsUserPathAdded:
+        previous !== undefined &&
+        normalizePath(previous.binDirectory, paths.platform) ===
+          normalizePath(paths.binDirectory, paths.platform)
+          ? previous.windowsUserPathAdded
+          : false,
       installedAt: previous?.installedAt ?? now,
       updatedAt: now,
     };
@@ -653,7 +681,10 @@ export async function repairSetup({
   const preserved: string[] = [];
 
   if (paths.platform === "win32") {
-    const launchers = await manageWindowsLaunchers(paths.installDirectory, paths.binDirectory);
+    const launchers = await manageWindowsLaunchers(
+      paths.installDirectory,
+      paths.binDirectory,
+    );
     repaired.push(...launchers.repaired);
     preserved.push(...launchers.preserved);
     const pathResult = ensureWindowsUserPath(
@@ -694,12 +725,16 @@ export async function repairSetup({
   repaired.push(...mcp.repaired);
   preserved.push(...mcp.preserved);
   const windowsPathAdded =
-    (normalizePath(stateResult.state.binDirectory, paths.platform) === normalizePath(paths.binDirectory, paths.platform) && stateResult.state.windowsUserPathAdded) ||
+    (normalizePath(stateResult.state.binDirectory, paths.platform) ===
+      normalizePath(paths.binDirectory, paths.platform) &&
+      stateResult.state.windowsUserPathAdded) ||
     repaired.includes("path.windows_user");
   const nextState: ManagedSetupState = {
     ...stateResult.state,
     binDirectory: paths.binDirectory,
-    ...(paths.platform === "win32" ? { windowsLauncherLayout: 1 as const } : {}),
+    ...(paths.platform === "win32"
+      ? { windowsLauncherLayout: 1 as const }
+      : {}),
     skillTarget: selectedSkill,
     mcpTarget: selectedMcp,
     managedMcpClients: mcp.managed,
@@ -756,9 +791,20 @@ export async function removeSetup({
   if (paths.platform !== "win32")
     preserved.push(...(await removeUnixLaunchers(paths, output, warning)));
   else {
-    preserved.push(...(await manageWindowsLaunchers(paths.installDirectory, paths.binDirectory, true)).preserved);
+    preserved.push(
+      ...(
+        await manageWindowsLaunchers(
+          paths.installDirectory,
+          paths.binDirectory,
+          true,
+        )
+      ).preserved,
+    );
     if (state.windowsUserPathAdded)
-      removeWindowsUserPath(state.binDirectory, options.runner ?? defaultCommandRunner);
+      removeWindowsUserPath(
+        state.binDirectory,
+        options.runner ?? defaultCommandRunner,
+      );
   }
 
   await rm(paths.installDirectory, { recursive: true, force: true });
@@ -1033,13 +1079,17 @@ function normalizeState(
     normalizePath(value.installDirectory, paths.platform) ===
       normalizePath(paths.installDirectory, paths.platform) &&
     typeof value.binDirectory === "string" &&
-    (normalizePath(value.binDirectory, paths.platform) === normalizePath(paths.binDirectory, paths.platform) ||
+    (normalizePath(value.binDirectory, paths.platform) ===
+      normalizePath(paths.binDirectory, paths.platform) ||
       // Pre-fix clients recorded a default PATH directory even when the actual
       // Windows payload was installed elsewhere. Repair adopts the corrected
       // directory; the old PATH entry is preserved, not guessed/deleted.
-      (paths.platform === "win32" && value.windowsLauncherLayout === undefined &&
-        win32.isAbsolute(value.binDirectory) && !/[\r\n\0";]/.test(value.binDirectory))) &&
-    (value.windowsLauncherLayout === undefined || value.windowsLauncherLayout === 1) &&
+      (paths.platform === "win32" &&
+        value.windowsLauncherLayout === undefined &&
+        win32.isAbsolute(value.binDirectory) &&
+        !/[\r\n\0";]/.test(value.binDirectory))) &&
+    (value.windowsLauncherLayout === undefined ||
+      value.windowsLauncherLayout === 1) &&
     isTarget(value.skillTarget) &&
     isTarget(value.mcpTarget) &&
     Array.isArray(value.managedMcpClients) &&
@@ -1175,9 +1225,19 @@ async function inspectLauncher(
       message: "Command launcher is missing",
       path: destination,
     };
-  if (paths.platform === "win32" && info.isFile() && info.nlink === 1 &&
-      (!hasExternalWindowsBin(paths.installDirectory, paths.binDirectory) ||
-        (info.size < 16_384 && await readFile(destination, "utf8") === windowsLauncherContents(paths.installDirectory, paths.binDirectory, name))))
+  if (
+    paths.platform === "win32" &&
+    info.isFile() &&
+    info.nlink === 1 &&
+    (!hasExternalWindowsBin(paths.installDirectory, paths.binDirectory) ||
+      (info.size < 16_384 &&
+        (await readFile(destination, "utf8")) ===
+          windowsLauncherContents(
+            paths.installDirectory,
+            paths.binDirectory,
+            name,
+          )))
+  )
     return {
       id: `launcher.${type}`,
       status: "pass",
@@ -1401,9 +1461,11 @@ function removeMcpTargets(
   const preserved: string[] = [];
   for (const client of managed) {
     const inspection = inspectMcpTarget(paths, client, runner);
-    if (inspection === "missing" || inspection === "unavailable") continue;
+    if (inspection === "missing") continue;
     if (inspection !== "current") {
-      preserved.push(`mcp:${client}:modified`);
+      preserved.push(
+        `mcp:${client}:${inspection === "conflict" ? "modified" : inspection}`,
+      );
       continue;
     }
     const result = runner(client, ["mcp", "remove", MCP_SERVER_NAME]);
@@ -1432,11 +1494,57 @@ function inspectMcpTarget(
       ? "missing"
       : "error";
   const expected = mcpCommand(paths);
-  const output = `${result.stdout}\n${result.stderr}`.replaceAll("\\\\", "\\");
-  const tokens = [expected.command, ...expected.args].map((value) =>
-    value.replaceAll("\\\\", "\\"),
-  );
-  return tokens.every((token) => output.includes(token))
+  if (client === "codex") {
+    try {
+      const value: unknown = JSON.parse(result.stdout);
+      if (!value || typeof value !== "object") return "error";
+      const entry = value as Record<string, unknown>;
+      if (!entry.transport || typeof entry.transport !== "object")
+        return "error";
+      const transport = entry.transport as Record<string, unknown>;
+      return entry.enabled === true &&
+        (entry.name === undefined || entry.name === MCP_SERVER_NAME) &&
+        transport.type === "stdio" &&
+        transport.command === expected.command &&
+        Array.isArray(transport.args) &&
+        transport.args.length === expected.args.length &&
+        transport.args.every((arg, index) => arg === expected.args[index]) &&
+        (transport.cwd === undefined || transport.cwd === null) &&
+        (transport.env === undefined ||
+          transport.env === null ||
+          (typeof transport.env === "object" &&
+            !Array.isArray(transport.env) &&
+            Object.keys(transport.env).length === 0)) &&
+        (transport.env_vars === undefined ||
+          transport.env_vars === null ||
+          (Array.isArray(transport.env_vars) &&
+            transport.env_vars.length === 0))
+        ? "current"
+        : "conflict";
+    } catch {
+      return "error";
+    }
+  }
+  // Claude's get command is textual. Accept only unambiguous labelled fields,
+  // never a path occurring in a heading, suffix, diagnostic or other command.
+  const fields = new Map<string, string>();
+  for (const line of result.stdout.split(/\r?\n/)) {
+    if (/^\s*(Environment|Env|Cwd|Working directory):/i.test(line))
+      return "conflict";
+    const match = /^\s*(Type|Command|Args):\s*(.*?)\s*$/.exec(line);
+    const name = match?.[1],
+      value = match?.[2];
+    if (name === undefined || value === undefined) continue;
+    if (fields.has(name)) return "error";
+    fields.set(name, value);
+  }
+  // Text cannot represent quoted/space-containing argument boundaries safely.
+  // In that case retain the registration rather than guess ownership.
+  return fields.get("Type") === "stdio" &&
+    fields.get("Command") === expected.command &&
+    fields.has("Args") &&
+    !expected.args.some((arg) => /\s/.test(arg)) &&
+    fields.get("Args") === expected.args.join(" ")
     ? "current"
     : "conflict";
 }

@@ -16,6 +16,7 @@ const allowedExtensions = new Set([
   ".sty",
   ".cls",
   ".bib",
+  ".bst",
   ".csv",
   ".dat",
   ".txt",

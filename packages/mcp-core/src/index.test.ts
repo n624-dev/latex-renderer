@@ -20,7 +20,10 @@ import {
   renderProjectInputSchema,
   createRenderJobInputSchema,
   downloadArtifactsInputSchema,
+  createMcpOperations,
 } from "./index.js";
+import { RendererClient } from "../../api-client/src/index.js";
+import type { JobResponse } from "@latex-renderer/contracts";
 
 const temporaryRoots: string[] = [];
 
@@ -46,6 +49,59 @@ afterEach(async () => {
 });
 
 describe("MCP core", () => {
+  it.each([
+    { count: undefined, generated: 0 },
+    { count: 0, generated: 0 },
+    { count: 12, generated: 1 },
+    { count: 12, generated: 12 },
+  ])(
+    "keeps total preview pages distinct from generated artifacts ($count/$generated)",
+    async ({ count, generated }) => {
+      const id = `job_${"a".repeat(32)}`;
+      const job: JobResponse = {
+        id,
+        status: "succeeded",
+        sourceSize: 1,
+        sourceSha256: "b".repeat(64),
+        createdAt: "2026-10-22T00:00:00Z",
+        updatedAt: "2026-10-22T00:00:00Z",
+        errorCode: null,
+        errorMessage: null,
+        retentionExpiresAt: null,
+        artifacts: [],
+        previews: Array.from({ length: generated }, (_, i) => ({
+          type: "preview",
+          relativePath: `previews/page-${i + 1}.png`,
+          size: 1,
+          sha256: "c".repeat(64),
+          createdAt: "2026-10-22T00:00:00Z",
+          downloadUrl: `/api/v1/jobs/${id}/previews/page-${i + 1}.png`,
+        })),
+        ...(count === undefined ? {} : { previewPageCount: count }),
+      };
+      class FixtureClient extends RendererClient {
+        override renewJobTicket() {
+          return Promise.resolve({
+            jobTicket: "fixture-ticket",
+            expiresAt: "2099-01-01T00:00:00Z",
+          });
+        }
+        override job() {
+          return Promise.resolve(job);
+        }
+      }
+      const operations = createMcpOperations({
+        clientFactory: () =>
+          Promise.resolve(
+            new FixtureClient("https://renderer.invalid", "fixture-key"),
+          ),
+      });
+      const output = await operations.getRenderStatus(id);
+      expect(output.result?.job.previewPageCount).toBe(count);
+      expect(output.result?.job.previews).toHaveLength(generated);
+      expect(assertValidMcpOutput(output)).toEqual(output);
+    },
+  );
   it("accepts explicit PDF/SVG and bounded preview pages without weakening strict tool arguments", () => {
     const source = {
       sourceId: `source_${"a".repeat(32)}`,

@@ -272,6 +272,8 @@ if [ "$svg_requested" = true ]; then
   prepare_output_dirs "$capture"
   export LATEX_ENTRYPOINT_ABSOLUTE="/work/input/$entrypoint"
   export TEXINPUTS="/work/input//:"
+  export BIBINPUTS="/work/input//:"
+  export BSTINPUTS="/work/input//:"
   set +e
   (cd "$capture" && timeout -s TERM -k 2 "${SVG_CONVERSION_TIMEOUT_SECONDS:-120}" \
     latexmk -norc -r /opt/renderer/latexmkrc -lualatex -interaction=nonstopmode \

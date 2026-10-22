@@ -6,6 +6,7 @@ import {
   renderOutputsSchema,
   sourceRenderTicketRequestSchema,
   createSourceTicketRequestSchema,
+  type JobRetryResponse,
 } from "@latex-renderer/contracts";
 import { requireActor } from "../auth/actor.js";
 import { AdminJobsService } from "../services/jobs.js";
@@ -113,6 +114,13 @@ export function createJobsRouter(deps: AdminDependencies): Hono {
     await requireActor(deps, c, "admin:jobs:read");
     return c.json(service.get(c.req.param("id")));
   });
+  r.post("/:id/access-ticket", async (c) => {
+    await requireActor(deps, c, "admin:jobs:read");
+    const actor = await requireActor(deps, c, "admin:jobs:write");
+    return c.json(
+      await service.issueAdminAccessTicket(actor, c.req.param("id")),
+    );
+  });
   r.get("/:id/archive", async (c) => {
     const actor = await requireActor(deps, c, "admin:jobs:read");
     return adminArtifactsArchiveResponse(deps, actor, c.req.param("id"));
@@ -153,7 +161,10 @@ export function createJobsRouter(deps: AdminDependencies): Hono {
       );
     const result = await service.retry(actor, c.req.param("id"), key);
     return c.json(
-      { id: result.id, retryOfJobId: result.retryOfJobId },
+      {
+        id: result.id,
+        retryOfJobId: result.retryOfJobId,
+      } satisfies JobRetryResponse,
       result.reused ? 200 : 202,
     );
   });

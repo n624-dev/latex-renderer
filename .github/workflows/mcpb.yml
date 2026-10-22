@@ -15,6 +15,7 @@ on:
       - "tests/client-audit-integration.test.ts"
       - "tests/client-launcher-endpoints.test.ts"
       - "tests/windows-setup-layout.test.ts"
+      - "tests/setup-core.test.ts"
       - "tests/mcpb-openssl.test.ts"
       - "tests/vite-dependency.test.ts"
       - "client/unix/**"
@@ -40,6 +41,7 @@ on:
       - "tests/client-audit-integration.test.ts"
       - "tests/client-launcher-endpoints.test.ts"
       - "tests/windows-setup-layout.test.ts"
+      - "tests/setup-core.test.ts"
       - "tests/mcpb-openssl.test.ts"
       - "tests/vite-dependency.test.ts"
       - "client/unix/**"
@@ -82,6 +84,9 @@ jobs:
       - name: Select OpenSSL on macOS
         if: runner.os == 'macOS'
         run: echo "$(brew --prefix openssl@3)/bin" >> "$GITHUB_PATH"
+      - name: Verify Unix setup paths and registration preservation on native macOS
+        if: runner.os == 'macOS'
+        run: pnpm exec vitest run tests/setup-core.test.ts
       - name: Select verified runner OpenSSL on Windows
         if: runner.os == 'Windows'
         run: node client/select-mcpb-openssl.mjs
