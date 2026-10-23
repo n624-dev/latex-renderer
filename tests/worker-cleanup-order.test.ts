@@ -25,7 +25,7 @@ describe.skipIf(realPipelineImage !== undefined)(
       const allowed = new Promise<void>((resolve) => {
         release = resolve;
       });
-      const originalFlush = writer.flush;
+      const originalFlush = writer.flush.bind(writer);
       const flush = vi.spyOn(writer, "flush").mockImplementation(async () => {
         started();
         await allowed;
