@@ -3,6 +3,25 @@ import { isMainModule } from "./is-main-module.mjs";
 import { spawnSync } from "node:child_process";
 import { setTimeout } from "node:timers/promises";
 
+const transientCodes = new Set([
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "ETIMEDOUT",
+  "EAI_AGAIN",
+  "EPIPE",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_BODY_TIMEOUT",
+  "UND_ERR_SOCKET",
+]);
+function transportFailure(error) {
+  for (let depth = 0; error && depth < 4; depth++, error = error.cause) {
+    if (error.name === "TimeoutError") return "TimeoutError";
+    if (transientCodes.has(error.code)) return error.code;
+  }
+  return null;
+}
+
 export async function runGhcrRetention({
   env = process.env,
   fetchImpl = globalThis.fetch,
@@ -119,21 +138,122 @@ export async function runGhcrRetention({
   function apiFetch(url, init = {}) {
     return fetchImpl(url, {
       ...init,
+      redirect: "error",
       signal: globalThis.AbortSignal.timeout(requestTimeoutMs),
     });
+  }
+  async function readApi(url, json = true) {
+    const deadline =
+      globalThis.performance.now() +
+      Math.min(95_000, 3 * requestTimeoutMs + 3000);
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const remaining = deadline - globalThis.performance.now();
+      if (remaining <= 0)
+        throw new Error("GHCR metadata read time budget exhausted");
+      const signal = globalThis.AbortSignal.timeout(
+        Math.max(1, Math.ceil(Math.min(requestTimeoutMs, remaining))),
+      );
+      let response,
+        reason,
+        failure,
+        delay = 1000 * 2 ** (attempt - 1);
+      try {
+        response = await fetchImpl(url, {
+          method: "GET",
+          headers,
+          redirect: "error",
+          signal,
+        });
+        if (response.ok) {
+          let body;
+          if (json) {
+            if (Number(response.headers.get("content-length")) > 8 * 1024 ** 2)
+              throw new Error("GHCR metadata exceeds the 8 MiB limit");
+            if (!response.body)
+              throw new Error("GHCR metadata body is missing");
+            const chunks = [];
+            let bytes = 0;
+            for await (const chunk of response.body) {
+              bytes += chunk.length;
+              if (bytes > 8 * 1024 ** 2)
+                throw new Error("GHCR metadata exceeds the 8 MiB limit");
+              chunks.push(chunk);
+            }
+            body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+          }
+          return { response, body };
+        }
+        const rateLimited =
+          response.status === 429 ||
+          (response.status === 403 &&
+            (response.headers.has("retry-after") ||
+              response.headers.get("x-ratelimit-remaining") === "0"));
+        if (
+          ![408, 500, 502, 503, 504].includes(response.status) &&
+          !rateLimited
+        )
+          return { response };
+        reason = `HTTP ${response.status}`;
+        const hint = response.headers.get("retry-after");
+        if (hint !== null) {
+          const value = /^\d+$/.test(hint)
+            ? Number(hint) * 1000
+            : /^[A-Z][a-z]{2}, \d{2} [A-Z][a-z]{2} \d{4} \d{2}:\d{2}:\d{2} GMT$/.test(
+                  hint,
+                )
+              ? Date.parse(hint) - Date.now()
+              : Infinity;
+          delay = Math.max(delay, value);
+        }
+        if (response.headers.get("x-ratelimit-remaining") === "0") {
+          const reset = response.headers.get("x-ratelimit-reset");
+          delay = Math.max(
+            delay,
+            /^\d+$/.test(reset ?? "")
+              ? Number(reset) * 1000 - Date.now() + 1000
+              : Infinity,
+          );
+        } else if (response.status === 429 && hint === null) delay = Infinity;
+      } catch (error) {
+        reason = transportFailure(error);
+        if (!reason && signal.aborted && signal.reason?.name === "TimeoutError")
+          reason = "TimeoutError";
+        if (!reason) throw error;
+        failure = error;
+      } finally {
+        await response?.body?.cancel().catch(() => {});
+      }
+      if (attempt === 3)
+        throw new Error(`GHCR metadata read failed: ${reason} (attempt 3/3)`, {
+          cause: failure,
+        });
+      if (
+        !Number.isFinite(delay) ||
+        delay > 5000 ||
+        delay >= deadline - globalThis.performance.now()
+      )
+        throw new Error(`GHCR metadata read deferred: ${reason}; retry later`, {
+          cause: failure,
+        });
+      log({
+        event: "retention_api_retry",
+        method: "GET",
+        attempt,
+        nextAttempt: attempt + 1,
+        reason,
+        delayMs: delay,
+      });
+      await sleep(delay);
+    }
   }
   async function versions() {
     const all = [];
     for (let page = 1; page <= 100; page += 1) {
-      const response = await apiFetch(
+      const { response, body: batch } = await readApi(
         `${baseUrl}?state=active&per_page=100&page=${page}`,
-        {
-          headers,
-        },
       );
       if (!response.ok)
         throw new Error(`GHCR version list failed: HTTP ${response.status}`);
-      const batch = await response.json();
       if (!Array.isArray(batch))
         throw new Error("Unexpected GHCR version response");
       for (const version of batch) {
@@ -201,36 +321,48 @@ export async function runGhcrRetention({
       throw new Error(
         "GHCR inventory changed since reference checks; replan before deleting",
       );
-    const response = await apiFetch(`${baseUrl}/${version.id}`, {
-      method: "DELETE",
-      headers,
-    });
-    log({
-      event: "delete_response",
-      versionId: version.id,
-      status: response.status,
-    });
-    if (response.status !== 204 && response.status !== 404)
+    let status;
+    try {
+      const response = await apiFetch(`${baseUrl}/${version.id}`, {
+        method: "DELETE",
+        headers,
+      });
+      status = response.status;
+      await response.body?.cancel().catch(() => {});
+      log({ event: "delete_response", versionId: version.id, status });
+    } catch (error) {
+      const reason = transportFailure(error);
+      if (!reason) throw error;
+      // The server may have committed DELETE before its reply was lost. Do not
+      // resend it. Only a readable fresh inventory can establish absence.
+      log({
+        event: "delete_response_unconfirmed",
+        versionId: version.id,
+        reason,
+      });
+    }
+    if (status !== undefined && status !== 204 && status !== 404)
       throw new Error(
-        `Failed to delete GHCR version ${version.id}: HTTP ${response.status}; check package Admin access and download limits`,
+        `Failed to delete GHCR version ${version.id}: HTTP ${status}; check package Admin access and download limits`,
       );
     for (let attempt = 1; attempt <= 3; attempt += 1) {
       const active = await versions();
       if (!active.some((item) => item.id === version.id)) {
-        const result = response.status === 204 ? "deleted" : "already-absent";
+        const result = status === 204 ? "deleted" : "already-absent";
         accountedAbsent.add(version.id);
         log({
           event: "delete_verified",
           versionId: version.id,
           result,
           attempt,
+          responseConfirmed: status !== undefined,
         });
         return result;
       }
       if (attempt < 3) await sleep(1000);
     }
     throw new Error(
-      `GHCR version ${version.id} remains active after DELETE HTTP ${response.status}; deletion NOT confirmed`,
+      `GHCR version ${version.id} remains active after DELETE ${status === undefined ? "response loss" : `HTTP ${status}`}; deletion NOT confirmed`,
     );
   }
 
@@ -238,9 +370,10 @@ export async function runGhcrRetention({
   if (!dryRun) {
     // Write/push permission is not package Admin/delete permission. This is a
     // non-mutating permission preflight; actual DELETE still needs verification.
-    const permission = await apiFetch(`${baseUrl}?state=deleted&per_page=1`, {
-      headers,
-    });
+    const { response: permission } = await readApi(
+      `${baseUrl}?state=deleted&per_page=1`,
+      false,
+    );
     if (!permission.ok)
       throw new Error(
         `GHCR deletion preflight HTTP ${permission.status}; grant this repository Admin in package Manage Actions access (CLI tokens need read:packages and delete:packages)`,
@@ -497,7 +630,11 @@ export async function runGhcrRetention({
 if (isMainModule(import.meta.url)) {
   runGhcrRetention().catch((error) => {
     console.error(
-      JSON.stringify({ event: "retention_failed", error: error.message }),
+      JSON.stringify({
+        event: "retention_failed",
+        error: error.message,
+        transport: transportFailure(error),
+      }),
     );
     process.exitCode = 1;
   });

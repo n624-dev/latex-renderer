@@ -4,29 +4,35 @@ import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { setTimeout } from "node:timers/promises";
 import { publicationIndex } from "../scripts/ghcr-base-publication.mjs";
+import {
+  cleanupBaseIndexProbe,
+  dockerObjectMissing,
+  registryProbeImage,
+} from "./base-index-cleanup.mjs";
 
 if (process.env.CI_BASE_INDEX_PROBE !== "1")
   throw new Error(
     "Set CI_BASE_INDEX_PROBE=1 to opt into an isolated Docker registry test",
   );
-const run = (args) =>
+const run = (args, timeout = 120_000) =>
   execFileSync("docker", args, {
     encoding: "utf8",
-    timeout: 120_000,
+    timeout,
     stdio: ["ignore", "pipe", "pipe"],
   }).trim();
-const registryImage =
-  "docker.io/library/registry@sha256:ddf754342cfc8acc51a56d5d0ab6af06826461864460636d8bd5c546dab2a7b8";
+const registryImage = registryProbeImage;
 const nonce = randomUUID();
 const digest = (bytes) =>
   `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
 const imageIds = [];
 let container, reference;
 let ownsRegistryImage = false;
+let probeFailure;
 try {
   try {
     run(["image", "inspect", registryImage]);
-  } catch {
+  } catch (error) {
+    if (!dockerObjectMissing(error, "image", registryImage)) throw error;
     ownsRegistryImage = true;
   }
   container = run([
@@ -162,22 +168,27 @@ try {
     // selecting the other platform on the same test daemon.
     run(["image", "rm", reference]);
   }
-  console.log(
-    "OCI index / Docker v2 component interoperability passed for both platform selections (metadata only; no ARM execution).",
-  );
+} catch (error) {
+  probeFailure = error;
+  throw error;
 } finally {
-  if (reference)
-    try {
-      run(["image", "rm", reference]);
-    } catch {
-      /* May already be absent after a failed pull. */
-    }
-  for (const id of imageIds)
-    try {
-      run(["image", "rm", id]);
-    } catch {
-      /* Containerd may collect children with their index. */
-    }
-  if (container) run(["stop", container]);
-  if (ownsRegistryImage) run(["image", "rm", registryImage]);
+  try {
+    await cleanupBaseIndexProbe({
+      run,
+      container,
+      reference,
+      imageIds,
+      ownsRegistryImage,
+    });
+  } catch (error) {
+    if (probeFailure)
+      throw new AggregateError(
+        [probeFailure, error],
+        "Base index validation and cleanup both failed",
+      );
+    throw error;
+  }
 }
+console.log(
+  "OCI index / Docker v2 component interoperability and fixture cleanup passed for both platform selections (metadata only; no ARM execution).",
+);

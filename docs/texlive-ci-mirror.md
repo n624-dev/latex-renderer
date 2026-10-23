@@ -117,6 +117,21 @@ The probe binds its temporary registry only to loopback, uses a digest-pinned
 stable official registry image, supplies no credentials, and removes its own
 container, synthetic images and newly pulled registry image. It does not change
 host Docker configuration, deploy services, or write anything to GHCR.
+Ordinary Linux CI also runs the probe on both native runner architectures.
+Cleanup removes only the probe's exact container, confirms its absence with a
+bounded read-back, and only then removes its owned images. It never forces an
+image deletion or removes a registry image that was already present. The probe
+reports success only after cleanup succeeds.
+
+GHCR retention retries metadata **GET** transport failures and temporary HTTP
+responses at most three times, with bounded waits and a total read budget of
+at most 95 seconds. Authentication failures, invalid JSON, TLS verification
+failures and inventory/reference changes remain failures. It never blindly
+retries a **DELETE**. If a DELETE response is lost, only fresh readable inventory
+can establish absence; that outcome is not counted as a confirmed deletion.
+Unconfirmed or unreadable deletion state still fails cleanup. Retry diagnostics
+contain operation/error categories, not credentials or response bodies. These
+changes do not alter weekly selection, protected descendants or retention ages.
 
 These are Base-only images: the temporary validation Runtime is never pushed.
 The mirror's 15 GiB management limit, leases and GC are unchanged. User-side
