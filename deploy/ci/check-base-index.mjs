@@ -170,25 +170,25 @@ try {
   }
 } catch (error) {
   probeFailure = error;
-  throw error;
-} finally {
-  try {
-    await cleanupBaseIndexProbe({
-      run,
-      container,
-      reference,
-      imageIds,
-      ownsRegistryImage,
-    });
-  } catch (error) {
-    if (probeFailure)
-      throw new AggregateError(
-        [probeFailure, error],
-        "Base index validation and cleanup both failed",
-      );
-    throw error;
-  }
 }
+try {
+  await cleanupBaseIndexProbe({
+    run,
+    container,
+    reference,
+    imageIds,
+    ownsRegistryImage,
+  });
+} catch (error) {
+  if (probeFailure)
+    throw new AggregateError(
+      [probeFailure, error],
+      "Base index validation and cleanup both failed",
+      { cause: error },
+    );
+  throw error;
+}
+if (probeFailure) throw probeFailure;
 console.log(
   "OCI index / Docker v2 component interoperability and fixture cleanup passed for both platform selections (metadata only; no ARM execution).",
 );

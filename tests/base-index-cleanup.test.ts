@@ -245,6 +245,11 @@ describe("isolated Base index probe cleanup", () => {
       source.indexOf("await cleanupBaseIndexProbe("),
     );
     expect(source).toContain("[probeFailure, error]");
+    expect(source).toContain("{ cause: error }");
+    expect(source).not.toContain("finally {");
+    expect(
+      source.indexOf("if (probeFailure) throw probeFailure;"),
+    ).toBeGreaterThan(source.indexOf("await cleanupBaseIndexProbe("));
     expect(source).not.toContain('run(["stop", container])');
     expect(source).toContain(
       'dockerObjectMissing(error, "image", registryImage)',

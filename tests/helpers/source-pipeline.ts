@@ -28,6 +28,7 @@ import { processJob } from "../../apps/renderer-worker/src/job-processor.js";
 import { processPreview } from "../../apps/renderer-worker/src/preview-processor.js";
 import { recordFailure } from "../../apps/renderer-worker/src/failure.js";
 import type { WorkerConfig } from "../../apps/renderer-worker/src/config.js";
+import type { diagnosticWriter } from "../../deploy/scripts/service-diagnostics.mjs";
 import * as docker from "../../apps/renderer-worker/src/docker.js";
 
 export const realPipelineImage = process.env.SOURCE_PIPELINE_RENDERER_IMAGE;
@@ -58,6 +59,7 @@ export async function sourcePipelineFixture(
   const containers = new Map<ChildProcess, string>();
   let run: Promise<void> | undefined;
   let restoreSpawn = () => {};
+  let flushDiagnostics = async () => {};
   const close = async () => {
     for (const child of children) {
       child.stdin?.end();
@@ -68,6 +70,7 @@ export async function sourcePipelineFixture(
       }
     }
     await run?.catch(() => undefined);
+    await flushDiagnostics();
     restoreSpawn();
     const stopped = await Promise.allSettled(
       servers.map(
@@ -278,6 +281,13 @@ export async function sourcePipelineFixture(
       containerGid: process.getgid?.() || 10_000,
       jobTimeoutMs: 90_000,
       minFreeStorageBytes: 0,
+    };
+    // runWorker installs the real asynchronous writer on this config. Its
+    // public callback type omits flush; drain it before deleting fixture data.
+    flushDiagnostics = async () => {
+      const writer = config.diagnostic as
+        ReturnType<typeof diagnosticWriter> | undefined;
+      await writer?.flush();
     };
     let holdNext = false,
       holdSvg = false,
