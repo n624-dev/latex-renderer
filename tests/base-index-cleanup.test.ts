@@ -192,6 +192,53 @@ describe("isolated Base index probe cleanup", () => {
     ).toBe(false);
   });
 
+  it("recognizes Docker's exact familiar name for the pinned registry image", () => {
+    const familiar = registryProbeImage.slice("docker.io/library/".length);
+    expect(
+      dockerObjectMissing(
+        missing("image", familiar),
+        "image",
+        registryProbeImage,
+      ),
+    ).toBe(true);
+    for (const other of [
+      familiar.replace("registry@", "other@"),
+      `registry@sha256:${"0".repeat(64)}`,
+      `example.invalid/library/${familiar}`,
+      `${familiar}\nCannot connect to Docker`,
+    ]) {
+      expect(
+        dockerObjectMissing(
+          missing("image", other),
+          "image",
+          registryProbeImage,
+        ),
+      ).toBe(false);
+    }
+    expect(
+      dockerObjectMissing(
+        missing("container", familiar),
+        "container",
+        registryProbeImage,
+      ),
+    ).toBe(false);
+  });
+
+  it("cleans an already absent registry image with Docker's familiar name", async () => {
+    const f = fixture();
+    const original = f.run.getMockImplementation();
+    if (!original) throw new Error("Missing fixture runner");
+    f.run.mockImplementation((args, timeout) => {
+      if (args[0] === "image" && args.at(-1) === registryProbeImage)
+        throw missing(
+          "image",
+          registryProbeImage.slice("docker.io/library/".length),
+        );
+      return original(args, timeout);
+    });
+    await cleanupBaseIndexProbe(f.options);
+  });
+
   it("reports protocol success only after cleanup and preserves combined failure evidence", () => {
     const source = readFileSync("deploy/ci/check-base-index.mjs", "utf8");
     expect(source.lastIndexOf("console.log(")).toBeGreaterThan(

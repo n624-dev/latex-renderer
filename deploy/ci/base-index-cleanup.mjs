@@ -6,8 +6,15 @@ export const registryProbeImage =
 export function dockerObjectMissing(error, kind, target) {
   const prefixes = ["Error: No such object: "];
   prefixes.push(`Error response from daemon: No such ${kind}: `);
-  return prefixes.some(
-    (prefix) => String(error?.stderr ?? "").trim() === prefix + target,
+  // Docker's familiar-name formatting drops the default registry/namespace.
+  // Accept that exact equivalent name, never a different image or digest.
+  const targets = [target];
+  if (kind === "image" && target.startsWith("docker.io/library/"))
+    targets.push(target.slice("docker.io/library/".length));
+  return prefixes.some((prefix) =>
+    targets.some(
+      (name) => String(error?.stderr ?? "").trim() === prefix + name,
+    ),
   );
 }
 
