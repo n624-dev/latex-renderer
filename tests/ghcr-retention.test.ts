@@ -16,6 +16,13 @@ function version(id: number, tags: string[], updated = "2026-08-01T00:00:00Z") {
   };
 }
 type Version = ReturnType<typeof version>;
+function requestUrl(input: Parameters<typeof fetch>[0]): string {
+  return typeof input === "string"
+    ? input
+    : input instanceof URL
+      ? input.href
+      : input.url;
+}
 function fixture(
   options: {
     mode?:
@@ -37,12 +44,7 @@ function fixture(
     lagId: number | undefined,
     lagReads = 0;
   const fetchImpl = vi.fn<typeof fetch>((input, init) => {
-    const url =
-      typeof input === "string"
-        ? input
-        : input instanceof URL
-          ? input.href
-          : input.url;
+    const url = requestUrl(input);
     if (url.includes("state=deleted"))
       return Promise.resolve(
         new Response("[]", { status: options.permission ?? 200 }),
@@ -109,8 +111,238 @@ function fixture(
 }
 const deleteCalls = (f: ReturnType<typeof fixture>) =>
   f.fetchImpl.mock.calls.filter(([, init]) => init?.method === "DELETE");
+const transportError = (code = "ECONNRESET") =>
+  Object.assign(new TypeError("fetch failed"), {
+    cause: Object.assign(new Error("fixture-not-a-secret"), { code }),
+  });
 
 describe("verified GHCR retention", () => {
+  it.each([
+    "ECONNRESET",
+    "ETIMEDOUT",
+    "UND_ERR_SOCKET",
+    "UND_ERR_CONNECT_TIMEOUT",
+  ])(
+    "retries transient GET %s without leaking transport details",
+    async (code) => {
+      const f = fixture();
+      f.fetchImpl.mockRejectedValueOnce(transportError(code));
+      expect(await runGhcrRetention(f.config)).toMatchObject({
+        deletedVersions: 1,
+      });
+      expect(f.sleep).toHaveBeenCalledExactlyOnceWith(1000);
+      expect(f.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: "retention_api_retry",
+          method: "GET",
+          reason: code,
+        }),
+      );
+      expect(JSON.stringify(f.log.mock.calls)).not.toContain(
+        "fixture-not-a-secret",
+      );
+      expect(deleteCalls(f)).toHaveLength(1);
+    },
+  );
+
+  it("bounds persistent read failures to three requests without mutations", async () => {
+    const f = fixture();
+    f.fetchImpl.mockRejectedValue(transportError());
+    await expect(runGhcrRetention(f.config)).rejects.toThrow("attempt 3/3");
+    expect(f.fetchImpl).toHaveBeenCalledTimes(3);
+    expect(f.sleep.mock.calls).toEqual([[1000], [2000]]);
+    expect(f.spawnImpl).not.toHaveBeenCalled();
+    expect(deleteCalls(f)).toHaveLength(0);
+  });
+
+  it("retries the entire GET after a truncated response body", async () => {
+    const f = fixture();
+    f.fetchImpl.mockResolvedValueOnce(
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.error(transportError("UND_ERR_SOCKET"));
+          },
+        }),
+      ),
+    );
+    expect(await runGhcrRetention(f.config)).toMatchObject({
+      deletedVersions: 1,
+    });
+    expect(f.sleep).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([408, 500, 502, 503, 504])(
+    "retries temporary metadata HTTP %s only on GET",
+    async (status) => {
+      const f = fixture();
+      f.fetchImpl.mockResolvedValueOnce(new Response("temporary", { status }));
+      expect(await runGhcrRetention(f.config)).toMatchObject({
+        deletedVersions: 1,
+      });
+      expect(f.sleep).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each([401, 403, 404])(
+    "does not retry metadata authorization/identity HTTP %s",
+    async (status) => {
+      const f = fixture();
+      f.fetchImpl.mockResolvedValueOnce(new Response(null, { status }));
+      await expect(runGhcrRetention(f.config)).rejects.toThrow(
+        `HTTP ${status}`,
+      );
+      expect(f.fetchImpl).toHaveBeenCalledTimes(1);
+      expect(f.sleep).not.toHaveBeenCalled();
+      expect(deleteCalls(f)).toHaveLength(0);
+    },
+  );
+
+  it("honors a short Retry-After but defers long or missing rate-limit waits", async () => {
+    const f = fixture();
+    f.fetchImpl.mockResolvedValueOnce(
+      new Response(null, { status: 429, headers: { "retry-after": "2" } }),
+    );
+    expect(await runGhcrRetention(f.config)).toMatchObject({
+      deletedVersions: 1,
+    });
+    expect(f.sleep).toHaveBeenCalledExactlyOnceWith(2000);
+    const longHints: HeadersInit[] = [
+      {},
+      { "retry-after": "60" },
+      { "retry-after": "bad" },
+    ];
+    for (const headers of longHints) {
+      const g = fixture();
+      g.fetchImpl.mockResolvedValueOnce(
+        new Response(null, { status: 429, headers }),
+      );
+      await expect(runGhcrRetention(g.config)).rejects.toThrow("deferred");
+      expect(g.fetchImpl).toHaveBeenCalledTimes(1);
+      expect(g.sleep).not.toHaveBeenCalled();
+      expect(deleteCalls(g)).toHaveLength(0);
+    }
+  });
+
+  it("does not retry TLS verification failures or corrupt JSON", async () => {
+    const f = fixture();
+    f.fetchImpl.mockRejectedValueOnce(transportError("CERT_HAS_EXPIRED"));
+    await expect(runGhcrRetention(f.config)).rejects.toThrow("fetch failed");
+    expect(f.fetchImpl).toHaveBeenCalledTimes(1);
+    expect(f.sleep).not.toHaveBeenCalled();
+    const g = fixture();
+    g.fetchImpl.mockResolvedValueOnce(new Response("broken JSON"));
+    await expect(runGhcrRetention(g.config)).rejects.toThrow();
+    expect(g.fetchImpl).toHaveBeenCalledTimes(1);
+    expect(deleteCalls(g)).toHaveLength(0);
+  });
+
+  it("rejects oversized metadata before parsing or mutation", async () => {
+    const f = fixture();
+    f.fetchImpl.mockResolvedValueOnce(
+      new Response("[]", {
+        headers: { "content-length": String(9 * 1024 ** 2) },
+      }),
+    );
+    await expect(runGhcrRetention(f.config)).rejects.toThrow("8 MiB");
+    expect(deleteCalls(f)).toHaveLength(0);
+    expect(f.sleep).not.toHaveBeenCalled();
+  });
+
+  it("rechecks the whole inventory after a retry before DELETE", async () => {
+    const f = fixture({
+      onRead: (list, count) => {
+        if (count === 3) list.push(version(9, ["new-index"]));
+      },
+    });
+    const original = f.fetchImpl.getMockImplementation();
+    if (!original) throw new Error("Missing fixture transport");
+    let reads = 0;
+    f.fetchImpl.mockImplementation((input, init) => {
+      if (requestUrl(input).includes("state=active") && ++reads === 3)
+        return Promise.reject(transportError());
+      return original(input, init);
+    });
+    await expect(runGhcrRetention(f.config)).rejects.toThrow(
+      "inventory changed",
+    );
+    expect(f.sleep).toHaveBeenCalledTimes(1);
+    expect(deleteCalls(f)).toHaveLength(0);
+  });
+
+  it("observes absence after a lost DELETE reply, without resending or claiming confirmed deletion", async () => {
+    const f = fixture();
+    const original = f.fetchImpl.getMockImplementation();
+    if (!original) throw new Error("Missing fixture transport");
+    f.fetchImpl.mockImplementation(async (input, init) => {
+      const response = await original(input, init);
+      if (init?.method === "DELETE") throw transportError();
+      return response;
+    });
+    expect(await runGhcrRetention(f.config)).toMatchObject({
+      deletedVersions: 0,
+      alreadyAbsentVersions: 1,
+    });
+    expect(deleteCalls(f)).toHaveLength(1);
+    expect(f.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "delete_verified",
+        responseConfirmed: false,
+        result: "already-absent",
+      }),
+    );
+  });
+
+  it("stops if a lost DELETE reply leaves the candidate present", async () => {
+    const f = fixture({ mode: "204-present" });
+    const original = f.fetchImpl.getMockImplementation();
+    if (!original) throw new Error("Missing fixture transport");
+    f.fetchImpl.mockImplementation(async (input, init) => {
+      const response = await original(input, init);
+      if (init?.method === "DELETE") throw transportError();
+      return response;
+    });
+    await expect(runGhcrRetention(f.config)).rejects.toThrow(
+      "deletion NOT confirmed",
+    );
+    expect(deleteCalls(f)).toHaveLength(1);
+    expect(
+      f.log.mock.calls.some(([r]) => r.event === "retention_complete"),
+    ).toBe(false);
+  });
+
+  it("does not infer deletion from unreadable inventory after DELETE", async () => {
+    const f = fixture();
+    const original = f.fetchImpl.getMockImplementation();
+    if (!original) throw new Error("Missing fixture transport");
+    let deleted = false;
+    f.fetchImpl.mockImplementation(async (input, init) => {
+      if (deleted) throw transportError();
+      const response = await original(input, init);
+      if (init?.method === "DELETE") deleted = true;
+      return response;
+    });
+    await expect(runGhcrRetention(f.config)).rejects.toThrow("attempt 3/3");
+    expect(deleteCalls(f)).toHaveLength(1);
+    expect(
+      f.log.mock.calls.some(([r]) => r.event === "retention_complete"),
+    ).toBe(false);
+  });
+
+  it("never retries DELETE on a temporary HTTP failure", async () => {
+    const f = fixture();
+    const original = f.fetchImpl.getMockImplementation();
+    if (!original) throw new Error("Missing fixture transport");
+    f.fetchImpl.mockImplementation((input, init) =>
+      init?.method === "DELETE"
+        ? Promise.resolve(new Response(null, { status: 503 }))
+        : original(input, init),
+    );
+    await expect(runGhcrRetention(f.config)).rejects.toThrow("HTTP 503");
+    expect(deleteCalls(f)).toHaveLength(1);
+    expect(f.sleep).not.toHaveBeenCalled();
+  });
+
   it("counts only DELETE 204 followed by absence in a readable active inventory", async () => {
     const f = fixture();
     expect(await runGhcrRetention(f.config)).toMatchObject({

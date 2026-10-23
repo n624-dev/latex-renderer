@@ -66,6 +66,10 @@ jobs:
         run: pnpm --filter '!@latex-renderer/public-web' --filter '!@latex-renderer/gateway-worker' -r build && pnpm build:client
       - name: Native API, SQLite, setup, update and recovery regression tests
         run: pnpm test
+      - name: Verify isolated registry metadata and fixture cleanup
+        env:
+          CI_BASE_INDEX_PROBE: "1"
+        run: node deploy/ci/check-base-index.mjs
       - name: Verify native client deployment and package clean install
         run: |
           pnpm test:client:deployment
@@ -108,6 +112,10 @@ jobs:
         run: node deploy/ci/measure-phase.mjs docs -- pnpm check:docs
       - name: Run regression and integration tests
         run: node deploy/ci/measure-phase.mjs test -- pnpm test
+      - name: Verify isolated registry metadata and fixture cleanup
+        env:
+          CI_BASE_INDEX_PROBE: "1"
+        run: node deploy/ci/check-base-index.mjs
       - name: Lint
         run: node deploy/ci/measure-phase.mjs lint -- pnpm lint
       - name: Install Chromium for Web regression tests

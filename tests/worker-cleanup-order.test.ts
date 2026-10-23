@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { existsSync } from "node:fs";
+import { diagnosticWriter } from "../deploy/scripts/service-diagnostics.mjs";
 import * as docker from "../apps/renderer-worker/src/docker.js";
 import { runWorker } from "../apps/renderer-worker/src/worker.js";
 import { recoverStaleLeases } from "../apps/renderer-worker/src/recovery.js";
@@ -11,6 +13,39 @@ import {
 describe.skipIf(realPipelineImage !== undefined)(
   "PDF lease release ordering with real Worker and SQLite (mock Docker)",
   () => {
+    it("waits for pending diagnostics before deleting fixture storage", async () => {
+      const f = await sourcePipelineFixture();
+      const writer = diagnosticWriter(f.storage, "renderer-worker");
+      f.config.diagnostic = writer;
+      writer({ event: "fixture.shutdown" });
+      let started!: () => void, release!: () => void;
+      const flushing = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      const allowed = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const originalFlush = writer.flush.bind(writer);
+      const flush = vi.spyOn(writer, "flush").mockImplementation(async () => {
+        started();
+        await allowed;
+        await originalFlush();
+      });
+      const closed = f.close();
+      try {
+        await flushing;
+        expect(existsSync(f.storage)).toBe(true);
+        release();
+        await closed;
+        expect(flush).toHaveBeenCalledOnce();
+        expect(existsSync(f.root)).toBe(false);
+      } finally {
+        release();
+        await closed;
+        flush.mockRestore();
+      }
+    });
+
     it.each([true, false])(
       "holds the next Job until failed Renderer cleanup is verified (unavailable: %s)",
       async (unavailable) => {

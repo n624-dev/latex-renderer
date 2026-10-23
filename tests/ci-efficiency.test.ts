@@ -20,6 +20,13 @@ function workflowStepRun(workflow: string, name: string): string {
 }
 
 describe("cache-free CI validation", () => {
+  it("exercises metadata-only registry cleanup on both native Linux CI runners", () => {
+    const workflow = read(".github/workflows/ci.yml");
+    expect(
+      workflow.match(/run: node deploy\/ci\/check-base-index\.mjs/g),
+    ).toHaveLength(2);
+    expect(workflow.match(/CI_BASE_INDEX_PROBE: "1"/g)).toHaveLength(2);
+  });
   it.skipIf(process.platform === "win32")(
     "rejects branches, malformed versions and shell text before release checkout",
     () => {
