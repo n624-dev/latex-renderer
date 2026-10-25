@@ -47,7 +47,8 @@ it("also checks the Undici implementation embedded in the published Wrangler CLI
     // The published bundle keeps its original provenance marker. Its fixed
     // implementation is exercised below, independently of this pin guard.
     expect(version).toBe("7.29.1");
-    expect(root("wrangler/package.json").version).toBe("4.151.0");
+    const metadata = root("wrangler/package.json") as { version: string };
+    expect(metadata.version).toBe("4.151.0");
     expect(readFileSync("pnpm-workspace.yaml", "utf8")).toContain(
       "wrangler@4.151.0: patches/wrangler@4.151.0.patch",
     );
