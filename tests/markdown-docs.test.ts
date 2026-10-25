@@ -71,8 +71,16 @@ describe("Markdown public documentation", () => {
   it("publishes the versioned general-user self-hosting guide", () => {
     const selfHosting = publicDocs.find(({ slug }) => slug === "self-hosting");
     const reference = publicDocs.find(({ slug }) => slug === "reference");
+    const { version } = JSON.parse(
+      readFileSync(
+        new URL("../docs/self-hosting-release.json", import.meta.url),
+        "utf8",
+      ),
+    ) as { version: string };
     expect(selfHosting).toBeDefined();
-    expect(selfHosting?.html).toContain("latex-renderer-server-1.3.6.tar.gz");
+    expect(selfHosting?.html).toContain(
+      `latex-renderer-server-${version}.tar.gz`,
+    );
     expect(selfHosting?.html).toContain("/opt/latex-renderer/update-staging");
     expect(selfHosting?.html).toContain("bootstrap-published-host.mjs");
     expect(selfHosting?.html).toContain("/opt/latex-renderer/updater");
