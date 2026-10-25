@@ -20,6 +20,6 @@
     "@latex-renderer/database": "workspace:*",
     "@latex-renderer/server-setup-core": "workspace:*",
     "@latex-renderer/shared": "workspace:*",
-    "jose": "^6.2.12"
+    "jose": "^6.2.13"
   }
 }
