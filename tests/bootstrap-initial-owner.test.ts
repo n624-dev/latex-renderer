@@ -85,39 +85,56 @@ describe("shared initial-owner bootstrap", () => {
     databases.push(db);
     expect(ownerCount(db)).toBe(1);
   });
-  it("stores a real policy-compliant scrypt credential, normalized login and secret-free audit", async () => {
-    const db = database(),
-      input = passwordInput();
-    const id = await bootstrapInitialOwner(db, input, "0");
-    const credential = db.raw
-      .prepare("SELECT * FROM local_credentials WHERE user_id=?")
-      .get(id) as { login_name: string; password_hash: string };
-    expect(credential.login_name).toBe("owner.login");
-    expect(credential.password_hash).not.toBe(input.password);
-    const auth = new BrowserAuthenticationService({
-      database: db,
-      mode: "password",
-      publicOrigin: "https://bootstrap.invalid",
-      passwordPepper: input.passwordPepper,
-    });
-    expect(
-      await auth.verifyPassword(input.password, credential.password_hash),
-    ).toBe(true);
-    expect(
-      await auth.verifyPassword("wrong password", credential.password_hash),
-    ).toBe(false);
-    expect(
-      db.raw.prepare("SELECT COUNT(*) AS count FROM user_identities").get()
-        ?.count,
-    ).toBe(0);
-    const audit = db.raw
-      .prepare("SELECT * FROM audit_logs WHERE target_id=?")
-      .get(id);
-    expect(JSON.stringify(audit)).not.toMatch(
-      /fixture-only|password_hash|8246/,
-    );
-    expect(ownerCount(db)).toBe(1);
-  });
+  it.each(["0", "8246"])(
+    "stores a real policy-compliant scrypt credential, normalized login and secret-free audit for actor %s",
+    async (actorId) => {
+      const db = database(),
+        input = passwordInput();
+      const id = await bootstrapInitialOwner(db, input, actorId);
+      const credential = db.raw
+        .prepare("SELECT * FROM local_credentials WHERE user_id=?")
+        .get(id) as { login_name: string; password_hash: string };
+      expect(credential.login_name).toBe("owner.login");
+      expect(credential.password_hash).not.toBe(input.password);
+      const auth = new BrowserAuthenticationService({
+        database: db,
+        mode: "password",
+        publicOrigin: "https://bootstrap.invalid",
+        passwordPepper: input.passwordPepper,
+      });
+      expect(
+        await auth.verifyPassword(input.password, credential.password_hash),
+      ).toBe(true);
+      expect(
+        await auth.verifyPassword("wrong password", credential.password_hash),
+      ).toBe(false);
+      expect(
+        db.raw.prepare("SELECT COUNT(*) AS count FROM user_identities").get()
+          ?.count,
+      ).toBe(0);
+      const audit = db.raw
+        .prepare("SELECT * FROM audit_logs WHERE target_id=?")
+        .get(id);
+      // IDs and actor IDs may legitimately contain short password fragments.
+      // Check the complete audit schema instead of matching arbitrary substrings.
+      expect(audit).toEqual({
+        id: expect.stringMatching(/^audit_[a-f0-9]{32}$/),
+        actor_type: "local",
+        actor_id: actorId,
+        action: "user.created",
+        target_type: "user",
+        target_id: id,
+        result: "success",
+        ip_address: null,
+        user_agent: null,
+        metadata_json: JSON.stringify({ role: "owner", authMode: "password" }),
+        created_at: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/),
+      });
+      expect(JSON.stringify(audit)).not.toContain(input.password);
+      expect(JSON.stringify(audit)).not.toContain(credential.password_hash);
+      expect(ownerCount(db)).toBe(1);
+    },
+  );
   it.each(["oidc", "cloudflare-access"] as const)(
     "records an exact explicit %s identity, never email linking",
     async (method) => {
