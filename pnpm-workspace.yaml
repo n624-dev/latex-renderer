@@ -7,6 +7,8 @@ allowBuilds:
   workerd: true
 
 overrides:
+  # GHSA-xjj6-f33q-929c: reject excessive encodings before creating a body.
+  "miniflare>undici": 7.30.1
   # GHSA-rgj7-g3m4-5g8c / GHSA-wq5f-xc86-pv6w: patched libheif and librsvg.
   "miniflare>sharp": 0.35.5
   # GHSA-68fv-2mgg-jv7q: bound indexed maps in the actual Vite/PostCSS path.
@@ -19,6 +21,9 @@ overrides:
   nanoid: 3.3.18
   tmp: 0.2.7
 patchedDependencies:
+  # Wrangler embeds a separate Undici copy; the override cannot replace it.
+  # Backport nodejs/undici@07ded4941b1e72afec862958c3b8ddf468f3b429.
+  wrangler@4.151.0: patches/wrangler@4.151.0.patch
   js-yaml@3.15.2: patches/js-yaml@3.15.2.patch
   # No upstream release fixes GHSA-86w9-cpqp-85rv yet. Validate the nested
   # DigestAlgorithm as well as DigestInfo; keep ordinary RSA signatures valid.

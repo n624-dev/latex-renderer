@@ -14,12 +14,12 @@ function patchedVersion(version: string | undefined) {
   const minor = Number(match[2]);
   const patch = Number(match[3]);
   return (
-    (major === 7 && (minor > 29 || (minor === 29 && patch >= 1))) ||
-    (major === 8 && (minor > 10 || (minor === 10 && patch >= 2)))
+    (major === 7 && (minor > 30 || (minor === 30 && patch >= 1))) ||
+    (major === 8 && (minor > 12 || (minor === 12 && patch >= 2)))
   );
 }
 
-it("keeps every locked Undici copy outside the six selected advisories", () => {
+it("keeps every locked Undici copy outside the selected advisories", () => {
   const lock = readFileSync("pnpm-lock.yaml", "utf8");
   const versions = [...lock.matchAll(/^ {2}undici@([^:]+):/gm)];
   expect(versions.length).toBeGreaterThan(0);
@@ -43,11 +43,24 @@ it("also checks the Undici implementation embedded in the published Wrangler CLI
   // Fail closed if a future bundle removes these provenance markers.
   expect(versions.length).toBeGreaterThan(0);
   for (const version of new Set(versions.map((match) => match[1]))) {
-    expect(patchedVersion(version), version).toBe(true);
+    if (patchedVersion(version)) continue;
+    // The published bundle keeps its original provenance marker. Its fixed
+    // implementation is exercised below, independently of this pin guard.
+    expect(version).toBe("7.29.1");
+    expect(root("wrangler/package.json").version).toBe("4.151.0");
+    expect(readFileSync("pnpm-workspace.yaml", "utf8")).toContain(
+      "wrangler@4.151.0: patches/wrangler@4.151.0.patch",
+    );
+    expect(readFileSync("pnpm-lock.yaml", "utf8")).toMatch(
+      /wrangler@4\.151\.0\(patch_hash=[a-f0-9]+\)/,
+    );
   }
 });
 
-function runUndici(source: string) {
+function runUndici(
+  source: string,
+  implementation: "miniflare" | "wrangler" = "miniflare",
+) {
   execFileSync(
     process.execPath,
     [
@@ -58,10 +71,28 @@ function runUndici(source: string) {
       import { createRequire } from "node:module";
       import { createServer } from "node:http";
       import { once } from "node:events";
+      import { Module } from "node:module";
+      import { readFileSync } from "node:fs";
+      import { dirname } from "node:path";
       const root = createRequire(process.cwd() + "/package.json");
       const wrangler = createRequire(root.resolve("wrangler/package.json"));
       const miniflare = createRequire(wrangler.resolve("miniflare"));
-      const { Client, Pool, BalancedPool, interceptors } = miniflare("undici");
+      let undici;
+      if (${JSON.stringify(implementation)} === "wrangler") {
+        const filename = root.resolve("wrangler");
+        const bundle = readFileSync(filename, "utf8");
+        const start = bundle.indexOf("var require_undici = __commonJS({");
+        const end = bundle.indexOf("\\n// ../workers-utils/src/cfetch/errors.ts", start);
+        assert(start > 0 && end > start, "Wrangler bundle boundary changed");
+        // Execute the shipped modules verbatim, stopping before CLI commands.
+        // Only expose the same private Undici export used by its API caller.
+        const loaded = new Module(filename);
+        loaded.filename = filename;
+        loaded.paths = Module._nodeModulePaths(dirname(filename));
+        loaded._compile(bundle.slice(0, end) + "\\nmodule.exports = require_undici();", filename);
+        undici = loaded.exports;
+      } else undici = miniflare("undici");
+      const { fetch, Client, Pool, BalancedPool, interceptors } = undici;
       async function withServer(handler, run) {
         const server = createServer(handler);
         server.listen(0, "127.0.0.1");
@@ -80,6 +111,131 @@ function runUndici(source: string) {
     { timeout: 10_000, stdio: "pipe" },
   );
 }
+
+it.each(["miniflare", "wrangler"] as const)(
+  "%s rejects excessive encodings followed by an early close without crashing",
+  (implementation) => {
+    runUndici(
+      `
+      const { createServer: createNetServer } = await import("node:net");
+      for (const coding of [Array(6).fill("gzip").join(", "),
+        "gzip, deflate, br, GZIP, gzip, gzip, gzip"]) {
+        let closed;
+        const socketClosed = new Promise(resolve => { closed = resolve; });
+        const server = createNetServer(socket => {
+          socket.once("close", closed);
+          socket.once("data", () => socket.end("HTTP/1.1 200 OK\\r\\n" +
+            "Content-Encoding: " + coding + "\\r\\nContent-Length: 1\\r\\n" +
+            "Connection: close\\r\\n\\r\\n"));
+        });
+        await once(server.listen(0, "127.0.0.1"), "listening");
+        const origin = "http://127.0.0.1:" + server.address().port;
+        const client = new Client(origin);
+        try {
+          await assert.rejects(fetch(origin, { dispatcher: client }),
+            error => error.cause?.message.includes("content-encoding"));
+          await socketClosed;
+        } finally {
+          await client.close();
+          await new Promise(resolve => server.close(resolve));
+        }
+      }
+      await withServer((_req, res) => res.end("still alive"), async origin => {
+        assert.equal(await (await fetch(origin)).text(), "still alive");
+      });
+    `,
+      implementation,
+    );
+  },
+);
+
+it.each(["miniflare", "wrangler"] as const)(
+  "%s preserves plain, gzip and the allowed five-encoding response",
+  (implementation) => {
+    runUndici(
+      `
+      const { gzipSync } = await import("node:zlib");
+      const text = "Small 日本語 response";
+      await withServer((req, res) => {
+        const count = Number(req.url.slice(1));
+        let bytes = Buffer.from(text);
+        for (let i = 0; i < count; i++) bytes = gzipSync(bytes);
+        if (count) res.setHeader("content-encoding", Array(count).fill("gzip").join(", "));
+        res.end(bytes);
+      }, async origin => {
+        for (const count of [0, 1, 5]) {
+          const response = await fetch(origin + "/" + count);
+          assert.equal(response.status, 200);
+          assert.equal(await response.text(), text);
+        }
+      });
+    `,
+      implementation,
+    );
+  },
+);
+
+it("keeps Miniflare's default cf fetch fallback and compressed JSON initialization", () => {
+  runUndici(`
+    const { mkdtempSync, rmSync, existsSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { createServer: createNetServer } = await import("node:net");
+    const directory = mkdtempSync(join(tmpdir(), "undici-cf-fixture-"));
+    process.env.NODE_ENV = "development";
+    delete process.env.CLOUDFLARE_CF_FETCH_ENABLED;
+    process.env.CLOUDFLARE_CF_FETCH_PATH = join(directory, "cf.json");
+    const filename = wrangler.resolve("miniflare");
+    const loaded = new Module(filename);
+    loaded.filename = filename;
+    loaded.paths = Module._nodeModulePaths(dirname(filename));
+    loaded._compile(readFileSync(filename, "utf8") +
+      "\\nmodule.exports.fixture = { setupCf, fallbackCf };", filename);
+    const { setupCf, fallbackCf } = loaded.exports.fixture;
+    const originalFetch = undici.fetch;
+    let origin, warnings = 0, requests = 0;
+    // Redirect only the fixed upstream cf.json request; retain the real fetch.
+    undici.fetch = (url, options) => {
+      assert.equal(url, "https://workers.cloudflare.com/cf.json");
+      requests++;
+      return originalFetch(origin, options);
+    };
+    const log = { debug() {}, warn() { warnings++; } };
+    let closed;
+    const socketClosed = new Promise(resolve => { closed = resolve; });
+    const bad = createNetServer(socket => {
+      socket.once("close", closed);
+      socket.once("data", () => socket.end("HTTP/1.1 200 OK\\r\\n" +
+        "Content-Encoding: gzip, gzip, gzip, gzip, gzip, gzip\\r\\n" +
+        "Content-Length: 1\\r\\nConnection: close\\r\\n\\r\\n"));
+    });
+    try {
+      await once(bad.listen(0, "127.0.0.1"), "listening");
+      origin = "http://127.0.0.1:" + bad.address().port;
+      assert.deepEqual(await setupCf(log, undefined), fallbackCf);
+      await socketClosed;
+      assert.equal(warnings, 1);
+      assert.equal(existsSync(process.env.CLOUDFLARE_CF_FETCH_PATH), false);
+      const { gzipSync } = await import("node:zlib");
+      const data = { colo: "TEST", country: "JP" };
+      await withServer((_req, res) => {
+        res.setHeader("content-encoding", "gzip");
+        res.end(gzipSync(JSON.stringify(data)));
+      }, async url => {
+        origin = url;
+        assert.deepEqual(await setupCf(log, undefined), data);
+        // The successful cache prevents a second request.
+        assert.deepEqual(await setupCf(log, undefined), data);
+      });
+      assert.equal(requests, 2);
+      assert.equal(warnings, 1);
+    } finally {
+      undici.fetch = originalFetch;
+      await new Promise(resolve => bad.close(resolve));
+      rmSync(directory, { recursive: true, force: true });
+    }
+  `);
+});
 
 it.each(["connect", "tls", "connector"])(
   "preserves %s callbacks across BalancedPool option cloning (GHSA-w293-vg96-wgc3)",
