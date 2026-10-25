@@ -1,0 +1,28 @@
+diff --git a/wrangler-dist/cli.js b/wrangler-dist/cli.js
+--- a/wrangler-dist/cli.js
++++ b/wrangler-dist/cli.js
+@@ -57823,7 +57823,6 @@
+                 }
+               }
+               const location = headersList.get("location", true);
+-              this.body = new Readable13({ read: resume });
+               const willFollow = location && request4.redirect === "follow" && redirectStatusSet.has(status2);
+               const decoders = [];
+               if (request4.method !== "HEAD" && request4.method !== "CONNECT" && !nullBodyStatus.includes(status2) && !willFollow) {
+@@ -57830,7 +57829,7 @@
+                 const codings = contentEncoding ? contentEncoding.toLowerCase().split(",") : [];
+                 const maxContentEncodings = 5;
+                 if (codings.length > maxContentEncodings) {
+-                  reject(new Error(`too many content-encodings in response: ${codings.length}, maximum allowed is ${maxContentEncodings}`));
++                  this.abort(new Error(`too many content-encodings in response: ${codings.length}, maximum allowed is ${maxContentEncodings}`));
+                   return true;
+                 }
+                 for (let i8 = codings.length - 1; i8 >= 0; --i8) {
+@@ -57866,6 +57865,7 @@
+                   }
+                 }
+               }
++              this.body = new Readable13({ read: resume });
+               const onError = this.onError.bind(this);
+               resolve36({
+                 status: status2,

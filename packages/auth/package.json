@@ -1,6 +1,6 @@
 {
   "name": "@latex-renderer/auth",
-  "version": "1.5.3-rc.1",
+  "version": "1.5.3-rc.2",
   "private": true,
   "license": "Apache-2.0",
   "type": "module",
@@ -20,6 +20,6 @@
     "@latex-renderer/database": "workspace:*",
     "@latex-renderer/server-setup-core": "workspace:*",
     "@latex-renderer/shared": "workspace:*",
-    "jose": "^6.2.12"
+    "jose": "^6.2.13"
   }
 }

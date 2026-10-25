@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 1.5.3-rc.2 - 2026-10-26
+
+- jose・ignoreと、ESLint・typescript-eslint・Vite・Wrangler・CodeQLを更新する。
+  Vite 8の配布構成に回帰試験を合わせ、更新したworkerdの型定義を再生成する。
+- 開発用MiniflareのUndiciを7.30.1へ固定し、Wrangler同梱のUndiciにも
+  上流の修正を適用する。過剰なContent-Encodingと接続切断の組み合わせで
+  Node.jsが異常終了する問題を防ぎ、正常な圧縮応答・CF情報取得の回帰試験を追加する。
+
 ## 1.5.3-rc.1 - 2026-10-26
 
 - 初回導入の起動前処理で、選択済みimmutable Runtimeのパッケージ・フォント一覧を生成する。
