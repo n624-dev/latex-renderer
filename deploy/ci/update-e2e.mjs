@@ -524,9 +524,66 @@ try {
   run("/bin/sh", [
     "/opt/latex-renderer/current/deploy/scripts/smoke-test-production.sh",
   ]);
-  // Negative fixture: a different local test slot, NOT a mutation of the signed
-  // candidate or a published artifact. The production bootstrap must restore
-  // the prior controller when this intentionally broken entry cannot start.
+  // Exercise the first-install branch with real rootless Docker and the
+  // candidate's exact immutable Runtime, without touching live manager state.
+  const inventoryRoot = join(root, "initial-inventory");
+  const initialEnvironment = await readFile(environmentPath, "utf8");
+  const initialImage = /^RENDERER_IMAGE=(sha256:[a-f0-9]{64})$/m.exec(
+    initialEnvironment,
+  )?.[1];
+  if (!initialImage)
+    throw new Error(
+      "Missing immutable Runtime for initial inventory acceptance",
+    );
+  run(
+    "/bin/sh",
+    [join(candidate, "deploy/scripts/restore-managed-runtime.sh")],
+    {
+      env: {
+        ...process.env,
+        IMAGE_MANAGER_STATE_FILE: join(root, "absent-manager-state.json"),
+        RENDERER_ENV_FILE: environmentPath,
+        RENDERER_ENVIRONMENT_ROOT: inventoryRoot,
+        TMPDIR: join(root, "inventory-tmp"),
+      },
+    },
+  );
+  const { requireInitialRuntimeInventory } = await import(
+    pathToFileURL(
+      join(candidate, "deploy/scripts/server-setup-initial-host.mjs"),
+    )
+  );
+  const inventoryGid = Number(
+    execFileSync("/usr/bin/id", ["-g", "latex-renderer"], {
+      encoding: "utf8",
+      timeout: 5000,
+    }).trim(),
+  );
+  await requireInitialRuntimeInventory(inventoryRoot, initialImage, {
+    uid: 0,
+    gid: inventoryGid,
+  });
+  const packageNames = new Set(
+    (await readFile(join(inventoryRoot, "packages.txt"), "utf8"))
+      .trim()
+      .split(/\r?\n/),
+  );
+  for (const name of ["amsmath", "tikz", "luatexja"])
+    if (!packageNames.has(name))
+      throw new Error("Initial package inventory is incomplete");
+  if ((await readFile(environmentPath, "utf8")) !== initialEnvironment)
+    throw new Error("Initial inventory generation changed Runtime selection");
+  console.log(
+    JSON.stringify({
+      event: "initial.runtime_inventory.passed",
+      immutableRuntime: true,
+      packages: true,
+      fonts: true,
+      permissions: true,
+    }),
+  );
+  // Negative fixture: a separate slot, never a signed/published artifact.
+  // Startup must restore the prior controller when this entry cannot start.
   const broken = join(root, "broken-updater-fixture");
   const startupNonce = randomBytes(24).toString("hex");
   const startupMarker = `/var/lib/latex-renderer/update-manager/ci-startup-${startupNonce}.json`;
@@ -617,6 +674,7 @@ try {
       fullRecoveryPoint: true,
       settingsCutover: true,
       gatewayReady: true,
+      initialRuntimeInventory: true,
     }),
   );
 } finally {

@@ -1,11 +1,70 @@
 import { spawnSync } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
 import { describe, expect, it } from "vitest";
 
 describe("CLI structured output", () => {
+  it.each([
+    ["render", "/missing-project", "--json"],
+    ["--json", "render", "--output", "/output-value", "/missing-project"],
+    ["render", "/missing-project", "--output", "/output-value", "--json"],
+    ["source", "upload", "/missing-project", "--json"],
+    ["jobs", "get", "invalid-job", "--json"],
+  ])(
+    "keeps positional and option values out of operation names: %j",
+    (...args) => {
+      const result = run(args);
+      expect(result.status).not.toBe(0);
+      expect(result.stdout.trim().split("\n")).toHaveLength(1);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        success: false,
+        command: args.includes("render")
+          ? "render"
+          : args.includes("upload")
+            ? "source.upload"
+            : "jobs.get",
+      });
+      expect(result.stderr).toBe("");
+    },
+  );
+  it("identifies render consistently after a real loopback connection failure", async () => {
+    const root = await mkdtemp(join(tmpdir(), "latex-cli-network-test-"));
+    const listener = createServer();
+    try {
+      await writeFile(
+        join(root, "main.tex"),
+        "\\documentclass{article}\\begin{document}fixture\\end{document}",
+      );
+      await new Promise<void>((resolve, reject) => {
+        listener.once("error", reject);
+        listener.listen(0, "127.0.0.1", resolve);
+      });
+      const address = listener.address();
+      if (!address || typeof address === "string")
+        throw new Error("Missing fixture port");
+      await new Promise<void>((resolve, reject) =>
+        listener.close((error) => (error ? reject(error) : resolve())),
+      );
+      const result = run(["render", root, "--json"], undefined, {
+        LATEX_RENDER_BASE_URL: `https://127.0.0.1:${address.port}`,
+      });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toBe("");
+      expect(result.stdout.trim().split("\n")).toHaveLength(1);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        success: false,
+        command: "render",
+        error: { code: "INTERNAL_ERROR", message: "fetch failed" },
+      });
+    } finally {
+      if (listener.listening)
+        await new Promise<void>((resolve) => listener.close(() => resolve()));
+      await rm(root, { recursive: true, force: true });
+    }
+  });
   it("returns one JSON success envelope without human text", () => {
     const result = run(["auth", "status", "--json"]);
 
@@ -150,6 +209,7 @@ describe("CLI structured output", () => {
 function run(
   args: readonly string[],
   input?: string,
+  environment: Record<string, string> = {},
 ): ReturnType<typeof spawnSync> & { stdout: string; stderr: string } {
   const result = spawnSync(
     process.execPath,
@@ -161,6 +221,7 @@ function run(
       env: {
         ...process.env,
         LATEX_RENDER_API_KEY: "test-only-key",
+        ...environment,
       },
     },
   );

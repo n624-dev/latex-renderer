@@ -4,15 +4,15 @@ category: セルフホスト
 title: 自分のサーバーに構築
 description: 対応するサーバー構成、導入前の準備、初期設定、更新とバックアップを説明します。
 navOrder: 18
-updated: "2026-10-19"
+updated: "2026-10-26"
 since: "v1.2.0"
 ---
 
 ## 現在の提供状況
 
-このページは[`v1.3.6`](https://github.com/n624-dev/latex-renderer/releases/tag/v1.3.6)のサーバーbundleを対象にします。バージョンが`-rc.N`のReleaseは指定された検証hostだけへ明示適用し、一般利用者はStableを使用してください。Cloudflare構成に加えて、通常のTLSリバースプロキシとOIDC／ローカルパスワード認証を選択できます。このReleaseは公開後にタグや配布ファイルを差し替えできない設定で固定され、次を含みます。
+このページは[`v1.5.2`](https://github.com/n624-dev/latex-renderer/releases/tag/v1.5.2)のサーバーbundleを対象にします。バージョンが`-rc.N`のReleaseは指定された検証hostだけへ明示適用し、一般利用者はStableを使用してください。Cloudflare構成に加えて、通常のTLSリバースプロキシとOIDC／ローカルパスワード認証を選択できます。このReleaseは公開後にタグや配布ファイルを差し替えできない設定で固定され、次を含みます。
 
-- `latex-renderer-server-1.3.6.tar.gz`
+- `latex-renderer-server-1.5.2.tar.gz`
 - クライアントZIPとClaude Desktop用MCPB
 - 3つの配布ファイルを検証する`SHA256SUMS`
 - commit、バージョン、Renderer fingerprint、Node.js／pnpm要件を記録したbundle内metadata
@@ -24,21 +24,21 @@ since: "v1.2.0"
 
 ## 対応する構成
 
-開発中の次期ReleaseではPassword＋OIDCの同時利用と、確認済み認証設定の
-切替・中断復旧を追加します。上記Stable bundleにはまだ含まれません。
-この機能を含む検証済みReleaseを導入してから使用し、`main`を本番へ直接反映しないでください。
+v1.5.2ではPassword＋OIDCの同時利用と、確認済み認証設定の切替・中断復旧を利用できます。
+併用時は`AUTH_BACKEND=native`、`AUTH_PASSWORD_ENABLED=true`、`AUTH_OIDC_ENABLED=true`を設定します。
+従来の`AUTH_MODE`は単一方式の互換設定です。初回セットアップと認証設定画面で方式を明示し、`main`を本番へ直接反映しないでください。
 
 対応するセルフホスト構成は、公開境界とブラウザ認証をそれぞれ明示選択する単一Linuxホストです。未指定や未知の値ではserviceを起動しません。
 
-| 領域             | 対応構成                                                              |
-| ---------------- | --------------------------------------------------------------------- |
-| ホスト           | `apt`とsystemdを使用できる専用Debian／Ubuntu系Linuxサーバー           |
-| 公開経路         | `cloudflare`（Tunnel＋Worker）または`standalone`（TLS reverse proxy） |
-| ブラウザ認証     | `cloudflare-access`、標準OIDC、またはローカルパスワード               |
-| Renderer         | 専用system userのrootless Docker、networkless／read-only sandbox      |
-| アプリケーション | Node.js 24、pnpm 11、バージョン固定されたRelease                      |
-| TeX              | 公開GHCRの検証済み言語なしBase＋サーバー内Runtime                     |
-| 管理             | `/admin/`、Admin CLI、root所有のImage／Update Manager                 |
+| 領域             | 対応構成                                                                    |
+| ---------------- | --------------------------------------------------------------------------- |
+| ホスト           | `apt`とsystemdを使用できる専用Debian／Ubuntu系Linuxサーバー                 |
+| 公開経路         | `cloudflare`（Tunnel＋Worker）または`standalone`（TLS reverse proxy）       |
+| ブラウザ認証     | `cloudflare-access`、標準OIDC、またはローカルパスワード（nativeでは併用可） |
+| Renderer         | 専用system userのrootless Docker、networkless／read-only sandbox            |
+| アプリケーション | Node.js 24、pnpm 11、バージョン固定されたRelease                            |
+| TeX              | 公開GHCRの検証済み言語なしBase＋サーバー内Runtime                           |
+| 管理             | `/admin/`、Admin CLI、root所有のImage／Update Manager                       |
 
 `standalone`ではNginx、Caddy、Apacheの検証可能な設定例を収録しています。Kubernetes、複数ホスト、平文HTTPでの公開、Admin APIや内部serviceの直接公開はサポート対象外です。
 
@@ -93,14 +93,14 @@ since: "v1.2.0"
 
 公開リポジトリの`*.example`ファイルは項目確認のための雛形です。設定済みファイルを雛形へ上書きしてcommitする運用はしません。
 
-## v1.3.6をダウンロードして検証
+## v1.5.2をダウンロードして検証
 
 初回導入には以下の固定版の検証手順を使います。過去RCから更新する場合だけ、[RC固有の互換性情報](/docs/reference/#過去rcのrenderer識別情報)を先に確認してください。
 
 次のコマンドは、固定されたReleaseであることをGitHub APIで確認し、APIが返すdigestとダウンロードしたbundleを照合します。通常の非rootユーザーで実行します。
 
 ```bash
-version=1.3.6
+version=1.5.2
 repository=n624-dev/latex-renderer
 asset="latex-renderer-server-$version.tar.gz"
 work_dir=$(mktemp -d)

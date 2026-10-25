@@ -535,7 +535,7 @@ void program.parseAsync().catch((error: unknown) => {
     const normalized = normalizeError(error);
     writeJson({
       success: false,
-      command: commandNameFromArguments(process.argv.slice(2)),
+      command: parsedCommandName(program),
       error: normalized,
     });
   } else if (!(error instanceof CommanderError)) {
@@ -618,12 +618,21 @@ function normalizeError(error: unknown): {
   };
 }
 
-function commandNameFromArguments(args: readonly string[]): string {
-  return args
-    .filter((argument) => argument !== "--json")
-    .filter((argument) => !argument.startsWith("-"))
-    .slice(0, 2)
-    .join(".");
+function parsedCommandName(root: Command): string {
+  const path: string[] = [];
+  let current = root;
+  for (;;) {
+    // Commander has already consumed option values. Only registered children
+    // can extend the operation name; positional data is never an identifier.
+    const child = current.commands.find(
+      (command) =>
+        command.name() === current.args[0] ||
+        command.aliases().includes(current.args[0] ?? ""),
+    );
+    if (child === undefined) return path.join(".");
+    path.push(child.name());
+    current = child;
+  }
 }
 
 function isJsonMode(): boolean {

@@ -77,6 +77,41 @@ const childEnvironment = {
   LANG: "C.UTF-8",
 };
 
+/** The boot restoration receipt is written last, after both derived files.
+ * Initial setup must not report success for a missing/different Runtime. */
+export async function requireInitialRuntimeInventory(root, image, identity) {
+  if (!/^sha256:[a-f0-9]{64}$/.test(image) || (await realpath(root)) !== root)
+    throw new Error("Initial Runtime inventory identity is invalid");
+  const device = (await lstat(root)).dev;
+  for (const name of ["packages.txt", "fonts.txt", "runtime-image.txt"]) {
+    const handle = await open(
+      `${root}/${name}`,
+      constants.O_RDONLY | constants.O_NOFOLLOW,
+    );
+    try {
+      const info = await handle.stat();
+      if (
+        !info.isFile() ||
+        info.nlink !== 1 ||
+        info.dev !== device ||
+        info.uid !== identity.uid ||
+        info.gid !== identity.gid ||
+        (info.mode & 0o7777) !== 0o640 ||
+        info.size < 1 ||
+        info.size > 8 * 1024 ** 2
+      )
+        throw new Error("Initial Runtime inventory file is unsafe or empty");
+      const text = (await handle.readFile("utf8")).trim();
+      if (!text || (name === "runtime-image.txt" && text !== image))
+        throw new Error(
+          "Initial Runtime inventory does not match the selected image",
+        );
+    } finally {
+      await handle.close();
+    }
+  }
+}
+
 /** Private replacement EnvironmentFile, not a public configuration review.
  * HTTPS-only changes preserve operator settings, comments and rotated key IDs.
  * Public/profile parsers intentionally continue to omit unrelated/secret keys. */
@@ -752,6 +787,12 @@ export async function createInitialServerSetupHost(kind = "initial") {
       // Type=simple is active before Node has opened its listeners. Allow the
       // bounded readiness checks to finish before verifying socket exposure.
       await checkAuthenticationHealth(files.environment, true);
+      if (kind === "initial")
+        await requireInitialRuntimeInventory(
+          "/var/lib/latex-renderer/environment",
+          review.runtime.rendererImage,
+          { uid: 0, gid },
+        );
       await checkIngressHttpsHealth(
         review.deployment.authentication.deployment.publicOrigin,
       );
