@@ -23,7 +23,7 @@ overrides:
 patchedDependencies:
   # Wrangler embeds a separate Undici copy; the override cannot replace it.
   # Backport nodejs/undici@07ded4941b1e72afec862958c3b8ddf468f3b429.
-  wrangler@4.151.0: patches/wrangler@4.151.0.patch
+  wrangler@4.152.0: patches/wrangler@4.152.0.patch
   js-yaml@3.15.2: patches/js-yaml@3.15.2.patch
   # No upstream release fixes GHSA-86w9-cpqp-85rv yet. Validate the nested
   # DigestAlgorithm as well as DigestInfo; keep ordinary RSA signatures valid.

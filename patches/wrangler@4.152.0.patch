@@ -1,7 +1,7 @@
 diff --git a/wrangler-dist/cli.js b/wrangler-dist/cli.js
 --- a/wrangler-dist/cli.js
 +++ b/wrangler-dist/cli.js
-@@ -57791,7 +57791,6 @@
+@@ -57823,7 +57823,6 @@
                  }
                }
                const location = headersList.get("location", true);
@@ -9,7 +9,7 @@ diff --git a/wrangler-dist/cli.js b/wrangler-dist/cli.js
                const willFollow = location && request4.redirect === "follow" && redirectStatusSet.has(status2);
                const decoders = [];
                if (request4.method !== "HEAD" && request4.method !== "CONNECT" && !nullBodyStatus.includes(status2) && !willFollow) {
-@@ -57798,7 +57797,7 @@
+@@ -57830,7 +57829,7 @@
                  const codings = contentEncoding ? contentEncoding.toLowerCase().split(",") : [];
                  const maxContentEncodings = 5;
                  if (codings.length > maxContentEncodings) {
@@ -18,7 +18,7 @@ diff --git a/wrangler-dist/cli.js b/wrangler-dist/cli.js
                    return true;
                  }
                  for (let i8 = codings.length - 1; i8 >= 0; --i8) {
-@@ -57834,6 +57833,7 @@
+@@ -57866,6 +57865,7 @@
                    }
                  }
                }

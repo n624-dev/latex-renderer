@@ -11,7 +11,7 @@ const root = createRequire(join(process.cwd(), "package.json"));
 const vitest = createRequire(root.resolve("vitest/package.json"));
 const vitePackage = vitest.resolve("vite/package.json");
 const bundle = readFileSync(
-  join(dirname(vitePackage), "dist/node/chunks/config.js"),
+  join(dirname(vitePackage), "dist/node/chunks/node.js"),
   "utf8",
 );
 
@@ -156,14 +156,14 @@ function editorHarness(
   };
 }
 
-it("keeps every locked Vite copy on the patched 7.3 series", () => {
+it("keeps every locked Vite copy on the patched 8.3 series", () => {
   const lock = readFileSync("pnpm-lock.yaml", "utf8");
   const versions = [...lock.matchAll(/^ {2}vite@(\d+)\.(\d+)\.(\d+):/gm)];
   expect(versions.length).toBeGreaterThan(0);
   for (const [, major, minor, patch] of versions) {
-    expect(major).toBe("7");
+    expect(major).toBe("8");
     expect(minor).toBe("3");
-    expect(Number(patch)).toBeGreaterThanOrEqual(7);
+    expect(Number(patch)).toBeGreaterThanOrEqual(5);
   }
   expect(bundle).toContain("/launch-editor@2.14.2/");
   expect(bundle).not.toContain("/launch-editor@2.14.1/");
