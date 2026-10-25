@@ -6,6 +6,7 @@ import {
   isReleaseCandidate,
   validReleaseVersion,
   validStableVersion,
+  compareReleaseVersions,
 } from "./release-version.mjs";
 
 const documentationPaths = new Set([
@@ -21,15 +22,25 @@ export function verifyPromotionContent({
   stableContent,
   candidateVersion,
   stableVersion,
+  documentedStableVersion,
 }) {
   if (documentationPaths.has(path)) return;
   if (candidateContent === null || stableContent === null)
     throw new Error(
       `Stable promotion may not add or remove executable source: ${path}`,
     );
-  const normalized = candidateContent
-    .split(candidateVersion)
-    .join(stableVersion);
+  let normalized = candidateContent.split(candidateVersion).join(stableVersion);
+  if (
+    ["docs/public/self-hosting.md", "docs/self-hosting-release.json"].includes(
+      path,
+    ) &&
+    documentedStableVersion !== undefined
+  ) {
+    validStableVersion(documentedStableVersion);
+    if (compareReleaseVersions(documentedStableVersion, stableVersion) >= 0)
+      throw new Error("Documented Stable must precede the promotion target");
+    normalized = normalized.split(documentedStableVersion).join(stableVersion);
+  }
   if (normalized !== stableContent)
     throw new Error(
       `Stable promotion changes more than the exact version string: ${path}`,
@@ -107,6 +118,15 @@ export function verifyReleaseCandidatePromotion(
       stableContent: fileAt(root, stableTag, path),
       candidateVersion,
       stableVersion,
+      documentedStableVersion: [
+        "docs/public/self-hosting.md",
+        "docs/self-hosting-release.json",
+      ].includes(path)
+        ? JSON.parse(
+            fileAt(root, candidateTag, "docs/self-hosting-release.json") ??
+              "{}",
+          ).version
+        : undefined,
     });
   }
 }

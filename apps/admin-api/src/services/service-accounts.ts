@@ -48,6 +48,7 @@ export class ServiceAccountsService {
           "Active service account limit reached for this user",
           429,
         );
+      this.requireAvailableName(input.ownerUserId, input.name);
       this.deps.database.serviceAccounts.insert({ id, ...input, timestamp });
       this.deps.database.audit({
         actorType: actor.type,
@@ -107,6 +108,9 @@ export class ServiceAccountsService {
     input: { name?: string | undefined; clientType?: ClientType | undefined },
   ): void {
     this.deps.database.transaction(() => {
+      const account = this.get(id);
+      if (input.name !== undefined && input.name !== account.name)
+        this.requireAvailableName(account.owner_user_id, input.name);
       if (this.deps.database.serviceAccounts.update(id, input, nowIso()) !== 1)
         throw new AppError(
           "SERVICE_ACCOUNT_NOT_FOUND",
@@ -123,6 +127,15 @@ export class ServiceAccountsService {
         metadata: input,
       });
     });
+  }
+
+  private requireAvailableName(ownerUserId: string, name: string): void {
+    if (this.deps.database.serviceAccounts.nameExists(ownerUserId, name))
+      throw new AppError(
+        "SERVICE_ACCOUNT_NAME_CONFLICT",
+        "Service account name is already assigned for this user",
+        409,
+      );
   }
 
   delete(actor: AdminActor, id: string): void {

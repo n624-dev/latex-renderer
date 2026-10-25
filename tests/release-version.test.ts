@@ -157,6 +157,32 @@ describe("application release versions", () => {
     ).not.toThrow();
   });
 
+  it.each(["docs/public/self-hosting.md", "docs/self-hosting-release.json"])(
+    "allows only the declared Stable pointer replacement in %s",
+    (path) => {
+      const fields = {
+        path,
+        candidateVersion: "7.8.9-rc.1",
+        stableVersion: "7.8.9",
+        documentedStableVersion: "7.8.8",
+      };
+      expect(() =>
+        verifyPromotionContent({
+          ...fields,
+          candidateContent: "target 7.8.8",
+          stableContent: "target 7.8.9",
+        }),
+      ).not.toThrow();
+      expect(() =>
+        verifyPromotionContent({
+          ...fields,
+          candidateContent: "target 7.8.8",
+          stableContent: "unrelated changed policy 7.8.9",
+        }),
+      ).toThrow();
+    },
+  );
+
   it("accepts a same-source stable promotion and rejects functional drift", () => {
     const verifier = fileURLToPath(
       new URL(

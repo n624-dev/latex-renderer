@@ -4,6 +4,7 @@ export interface PromotionContentCheck {
   stableContent: string | null;
   candidateVersion: string;
   stableVersion: string;
+  documentedStableVersion?: string | undefined;
 }
 
 export function verifyPromotionContent(options: PromotionContentCheck): void;

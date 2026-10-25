@@ -5,6 +5,11 @@ import type {
   ServerIngressCredentials,
 } from "../../packages/server-setup-core/src/index.mjs";
 export function controlledServerSetupRelease(): Promise<string>;
+export function requireInitialRuntimeInventory(
+  root: string,
+  image: string,
+  identity: { uid: number; gid: number },
+): Promise<void>;
 export function serverSetupEnvironmentFile(
   kind: "initial" | "ingress",
   contents: string,
