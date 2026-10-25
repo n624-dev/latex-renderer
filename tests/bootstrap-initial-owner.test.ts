@@ -117,8 +117,10 @@ describe("shared initial-owner bootstrap", () => {
         .get(id);
       // IDs and actor IDs may legitimately contain short password fragments.
       // Check the complete audit schema instead of matching arbitrary substrings.
+      expect(audit?.id).toMatch(/^audit_[a-f0-9]{32}$/);
+      expect(audit?.created_at).toMatch(/^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/);
       expect(audit).toEqual({
-        id: expect.stringMatching(/^audit_[a-f0-9]{32}$/),
+        id: audit?.id,
         actor_type: "local",
         actor_id: actorId,
         action: "user.created",
@@ -128,7 +130,7 @@ describe("shared initial-owner bootstrap", () => {
         ip_address: null,
         user_agent: null,
         metadata_json: JSON.stringify({ role: "owner", authMode: "password" }),
-        created_at: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/),
+        created_at: audit?.created_at,
       });
       expect(JSON.stringify(audit)).not.toContain(input.password);
       expect(JSON.stringify(audit)).not.toContain(credential.password_hash);
