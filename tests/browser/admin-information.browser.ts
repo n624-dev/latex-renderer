@@ -247,8 +247,14 @@ async function fixture(kind: string, query = "", pagedOwners = false) {
           ? "audit-logs"
           : kind;
   await page.goto(`${origin}/admin/${path}/${query}`);
-  if (kind !== "docs")
+  if (kind !== "docs") {
+    await page.waitForFunction(
+      () =>
+        typeof (window as typeof window & { renderJobFixture?: unknown })
+          .renderJobFixture === "function",
+    );
     await page.locator("#updated").waitFor({ state: "attached" });
+  }
   return { page, errors, mutations, ownerState };
 }
 
