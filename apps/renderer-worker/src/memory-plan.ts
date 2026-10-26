@@ -3,11 +3,6 @@ import type { RendererDatabase } from "@latex-renderer/database";
 
 export const MIB = 1024 ** 2;
 export const RENDER_MEMORY_MAX = 1024 * MIB;
-// The existing 1152MiB admission / 1GiB sandbox and 384MiB preview / 256MiB
-// sandbox use this same reserve. It is an engineering allowance, not a claim
-// that every document's memory usage can be predicted to this precision.
-export const RESOURCE_RESERVE = 128 * MIB;
-const QUANTUM = 64 * MIB;
 const KEY = "worker_memory_profiles_v1";
 const MAX_RECORDS = 64;
 const TTL = 7 * 86400_000;
@@ -75,7 +70,6 @@ function records(store: Store, now: number): Record[] {
         typeof r.peak === "number" &&
         Number.isSafeInteger(r.peak) &&
         r.peak > 0 &&
-        r.peak <= RENDER_MEMORY_MAX &&
         "at" in r &&
         typeof r.at === "number" &&
         Number.isSafeInteger(r.at) &&
@@ -100,28 +94,16 @@ export function planRenderMemory(
   image: string,
   configuredMinimum: number | undefined,
   now = Date.now(),
+  maximum = RENDER_MEMORY_MAX,
 ) {
   const key = candidate && memoryProfileKey(candidate, image);
   const record = key && records(store, now).find((r) => r.key === key);
-  const limit = record
-    ? Math.min(
-        RENDER_MEMORY_MAX,
-        Math.ceil((record.peak + RESOURCE_RESERVE) / QUANTUM) * QUANTUM,
-      )
-    : RENDER_MEMORY_MAX;
-  const reserve = Math.max(
-    RESOURCE_RESERVE,
-    (configuredMinimum ?? 0) - RENDER_MEMORY_MAX,
-  );
   return {
     key,
-    limit,
-    // Preserve an operator's explicit full-size threshold. A known smaller
-    // sandbox can start with its own bounded budget plus the existing reserve.
-    minimum:
-      configuredMinimum === undefined
-        ? undefined
-        : Math.min(configuredMinimum, limit + reserve),
+    // Docker allocates memory on demand. A historical observation must not
+    // turn into a lower hard ceiling that kills a still-valid running Job.
+    limit: maximum,
+    minimum: configuredMinimum,
     estimatedPeak: record ? record.peak : null,
   };
 }
@@ -134,6 +116,7 @@ export function rememberRenderMemory(
   peakBytes: number | undefined,
   succeeded: boolean,
   now = Date.now(),
+  maximum = RENDER_MEMORY_MAX,
 ): void {
   if (!key) return;
   const old = records(store, now);
@@ -143,7 +126,7 @@ export function rememberRenderMemory(
     peakBytes !== undefined &&
     Number.isSafeInteger(peakBytes) &&
     peakBytes > 0 &&
-    peakBytes <= RENDER_MEMORY_MAX
+    peakBytes <= maximum
   ) {
     next.push({
       key,

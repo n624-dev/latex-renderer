@@ -59,6 +59,14 @@ Application limits use bytes/seconds, not OS quotas. Fixed DB/storage paths are
 `/var/lib/latex-renderer/renderer.sqlite3` and `/var/lib/latex-renderer/storage`.
 Worker timeout is at most 840 seconds within the existing drain budget.
 
+Memory fields use MiB in CUI/Web and bytes in the advanced review/environment.
+The minimum available RAM is a start condition; it does not reserve RAM or limit
+a running render. RAM is allocated on demand up to the separately configured
+ceiling (for example 1024MiB or 2048MiB). Additional swap is another bounded
+allowance; zero keeps the existing no-swap default. RAM 1024MiB plus swap 1024MiB
+allows at most 2048MiB in total, using existing host swap only. Historical small
+observations never shrink either the reviewed admission setting or RAM ceiling.
+
 Initial owner credentials, deployment user, enabled OIDC client secret and
 custom TLS are separate transient inputs. Web accepts PEM contents; CUI reads
 bounded regular PEM files without following symlinks. Password confirmation and

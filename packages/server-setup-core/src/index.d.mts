@@ -89,6 +89,8 @@ export interface ServerRuntimeLimits {
   readonly minFreeStorageBytes: number;
   readonly jobTimeoutSeconds: number;
   readonly minimumAvailableMemoryBytes: number;
+  readonly maximumMemoryBytes: number;
+  readonly maximumSwapBytes: number;
   readonly admissionWaitSeconds: number;
 }
 export interface ServerRuntimeReview {
@@ -98,7 +100,7 @@ export interface ServerRuntimeReview {
   readonly limits: Readonly<ServerRuntimeLimits>;
 }
 export const SERVER_RUNTIME_LIMITS: Readonly<
-  Record<keyof ServerRuntimeLimits, readonly [string, number, number?]>
+  Record<keyof ServerRuntimeLimits, readonly [string, number, number?, number?]>
 >;
 export interface ServerSetupReview {
   readonly format: 4;

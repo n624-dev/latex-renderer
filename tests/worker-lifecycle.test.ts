@@ -80,7 +80,7 @@ function fixture() {
 describe("worker stop and orphan-recovery lifecycle", () => {
   it("invalidates a lightweight prediction after actual memory exhaustion without retrying it in a loop", async () => {
     const f = fixture();
-    f.config.minimumAvailableMemoryBytes = 832 * MIB;
+    f.config.minimumAvailableMemoryBytes = 500 * MIB;
     const candidate = {
       id: job.id,
       user_id: "owner",
@@ -117,9 +117,10 @@ describe("worker stop and orphan-recovery lifecycle", () => {
         .estimatedPeak,
     ).toBeNull();
   });
-  it("starts an observed lightweight Job behind a blocked unknown head with a matching sandbox cap", async () => {
+  it("lets a Job grow beyond its historical peak up to the configured ceiling", async () => {
     const f = fixture();
-    f.config.minimumAvailableMemoryBytes = 832 * MIB;
+    f.config.minimumAvailableMemoryBytes = 500 * MIB;
+    f.config.maximumMemoryBytes = 2048 * MIB;
     const heavy = {
       id: "job_heavy",
       user_id: "owner",
@@ -129,10 +130,7 @@ describe("worker stop and orphan-recovery lifecycle", () => {
       queued_at: new Date(Date.now() - 1000000).toISOString(),
     };
     const light = { ...heavy, id: job.id, source_sha256: "c".repeat(64) };
-    vi.spyOn(f.database.worker, "admissionCandidates").mockReturnValue([
-      heavy,
-      light,
-    ]);
+    vi.spyOn(f.database.worker, "admissionCandidates").mockReturnValue([light]);
     rememberRenderMemory(
       f.database,
       memoryProfileKey(light, f.config.image),
@@ -145,7 +143,7 @@ describe("worker stop and orphan-recovery lifecycle", () => {
       ioStallPercent: 0,
     });
     f.processed.mockImplementation((_db, config) => {
-      expect(config.containerMemoryBytes).toBe(576 * MIB);
+      expect(config.containerMemoryBytes).toBe(2048 * MIB);
       f.abort.abort();
       return Promise.resolve();
     });
@@ -160,7 +158,7 @@ describe("worker stop and orphan-recovery lifecycle", () => {
   });
   it("does not use a small prediction to bypass severe host memory pressure", async () => {
     const f = fixture();
-    f.config.minimumAvailableMemoryBytes = 832 * MIB;
+    f.config.minimumAvailableMemoryBytes = 500 * MIB;
     const candidate = {
       id: job.id,
       user_id: "owner",

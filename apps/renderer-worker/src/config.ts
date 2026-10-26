@@ -30,6 +30,10 @@ export interface WorkerConfig extends ResourceLimits {
   admissionWaitTimeoutMs?: number;
   /** Worker-selected per-Job cap; never supplied by the document/client. */
   containerMemoryBytes?: number;
+  /** Administrator-selected RAM ceiling, allocated on demand, not reserved. */
+  maximumMemoryBytes?: number;
+  /** Additional swap allowance; zero preserves the no-swap default. */
+  maximumSwapBytes?: number;
   observeContainerMemory?: (containerName: string, peakBytes: number) => void;
   artifactRetentionHours?: number;
   maxUserStorageBytes?: number;
@@ -153,6 +157,18 @@ export function loadWorkerConfig(): WorkerConfig {
       "RENDERER_MIN_AVAILABLE_MEMORY_BYTES",
       1152 * 1024 * 1024,
     ),
+    maximumMemoryBytes: positiveBytesEnvironment(
+      process.env,
+      "RENDERER_MEMORY_MAX_BYTES",
+      1024 ** 3,
+    ),
+    maximumSwapBytes: boundedIntegerEnvironment(
+      process.env,
+      "RENDERER_SWAP_MAX_BYTES",
+      0,
+      0,
+      Number.MAX_SAFE_INTEGER,
+    ),
     admissionWaitTimeoutMs:
       positiveDurationEnvironment(
         process.env,
@@ -163,6 +179,17 @@ export function loadWorkerConfig(): WorkerConfig {
   };
   if (config.containerUid === 0 || config.containerGid === 0)
     throw new Error("Renderer container UID and GID must both be non-zero");
+  const memory = config.maximumMemoryBytes ?? 1024 ** 3;
+  const swap = config.maximumSwapBytes ?? 0;
+  if (
+    memory < 128 * 1024 ** 2 ||
+    memory % (64 * 1024 ** 2) !== 0 ||
+    swap % (64 * 1024 ** 2) !== 0 ||
+    !Number.isSafeInteger(memory + swap)
+  )
+    throw new Error(
+      "Renderer RAM/swap limits must use 64MiB units; RAM must be at least 128MiB and the total must be a safe integer",
+    );
   if (
     (config.sourceTreeUserMaxBytes ?? 0) > (config.sourceTreeMaxBytes ?? 0) &&
     config.sourceTreeMaxBytes !== 0

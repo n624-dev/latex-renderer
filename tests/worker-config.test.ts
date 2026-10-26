@@ -7,6 +7,49 @@ import {
 } from "../apps/renderer-worker/src/docker.js";
 afterEach(() => vi.unstubAllEnvs());
 describe("renderer worker config", () => {
+  it("separates a 500MiB start condition from 2GiB RAM and an additional 1GiB swap ceiling", () => {
+    stubRequiredEnvironment();
+    vi.stubEnv("RENDERER_MIN_AVAILABLE_MEMORY_BYTES", String(500 * 1024 ** 2));
+    vi.stubEnv("RENDERER_MEMORY_MAX_BYTES", String(2 * 1024 ** 3));
+    vi.stubEnv("RENDERER_SWAP_MAX_BYTES", String(1024 ** 3));
+    const config = loadWorkerConfig();
+    expect(config.minimumAvailableMemoryBytes).toBe(500 * 1024 ** 2);
+    const args = rendererRunArguments(config, "job_test", "/input", "/output");
+    expect(args[args.indexOf("--memory") + 1]).toBe(String(2 * 1024 ** 3));
+    expect(args[args.indexOf("--memory-swap") + 1]).toBe(String(3 * 1024 ** 3));
+    expect(args).not.toContain("--oom-kill-disable");
+  });
+  it("keeps a preview's RAM ceiling bounded while allowing its configured additional swap", () => {
+    stubRequiredEnvironment();
+    vi.stubEnv("RENDERER_MEMORY_MAX_BYTES", String(2 * 1024 ** 3));
+    vi.stubEnv("RENDERER_SWAP_MAX_BYTES", String(512 * 1024 ** 2));
+    const args = rendererRunArguments(
+      loadWorkerConfig(),
+      "job_test",
+      "/input",
+      "/output",
+      "main.tex",
+      ["pdf"],
+      1,
+      { mode: "preview", pdfDirectory: "/pdf", page: 1 },
+    );
+    expect(args[args.indexOf("--memory") + 1]).toBe("256m");
+    expect(args[args.indexOf("--memory-swap") + 1]).toBe(
+      String(768 * 1024 ** 2),
+    );
+  });
+  it.each([
+    ["RENDERER_MEMORY_MAX_BYTES", "0"],
+    ["RENDERER_MEMORY_MAX_BYTES", String(64 * 1024 ** 2)],
+    ["RENDERER_MEMORY_MAX_BYTES", String(129 * 1024 ** 2)],
+    ["RENDERER_SWAP_MAX_BYTES", "-1"],
+    ["RENDERER_SWAP_MAX_BYTES", "1"],
+    ["RENDERER_SWAP_MAX_BYTES", String(2 ** 53 - 64 * 1024 ** 2)],
+  ])("rejects an invalid or unbounded budget %s=%s", (key, value) => {
+    stubRequiredEnvironment();
+    vi.stubEnv(key, value);
+    expect(() => loadWorkerConfig()).toThrow();
+  });
   it("requires actual daemon memory and swap-limit support instead of trusting CLI flags alone", () => {
     expect(() => validateDockerMemoryLimits("true true\n")).not.toThrow();
     for (const value of ["", "false true", "true false", "false false"])

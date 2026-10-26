@@ -6,7 +6,7 @@ export const setupHtml = `<!doctype html>
 <details><summary>変更範囲と注意</summary><p>OS・Docker・ユーザー・ディスク構成は変更しません。通常設定では秘密情報・管理者・保存場所・公開URL・HTTPSを維持します。処理時間はサービスの停止猶予に合わせ840秒以下にしてください。</p></details>
 <p id="status" role="status" aria-live="polite">接続中…</p>
 <form id="settings"><fieldset disabled id="fields"><legend>容量・時間・認証の確認</legend>
-<p id="origin"></p><div id="configuration"></div><h2>容量・時間の上限</h2><div id="limits"></div>
+<p id="origin"></p><div id="configuration"></div><h2>容量・時間の上限</h2><p>開始条件は空きRAMの確認値です。実行RAMは必要に応じて上限まで使用します。swapは既存のものを使う追加枠で、0は無効です。1GiB = 1024MiB。</p><div id="limits"></div>
 <details><summary>上級設定（JSON）</summary><label>秘密情報は入力しないでください<textarea id="review" rows="8" spellcheck="false"></textarea></label></details>
 <section id="initial" hidden><h2 id="credentials-heading">管理者と認証情報</h2>
 <p>秘密情報は確認表示・ブラウザー保存・ログには出しません。HTTPSはPEM証明書と秘密鍵を使用します。</p>
@@ -62,7 +62,8 @@ export const setupScript = `"use strict";
   const bootstrap = location.hash.slice(1); history.replaceState(null, "", "/");
   const el = (id) => document.getElementById(id);
   let token, csrf, confirmation, model, baseline, initial = false, ingress = false;
-  const limitLabels = { maxUploadBytes:"アップロード上限（バイト）", maxExtractedBytes:"展開後の上限（バイト）", maxFileCount:"入力ファイル数", maxZipEntries:"ZIP内の項目数", maxOutputBytes:"成果物の上限（バイト）", maxOutputFileCount:"成果物のファイル数", maxOutputDirectoryCount:"成果物のフォルダー数", maxLogBytes:"ログの上限（バイト）", maxSvgObjects:"SVGの個数", maxSvgBytes:"SVG 1個の上限（バイト）", maxSvgTotalBytes:"SVG合計の上限（バイト）", svgConversionTimeoutSeconds:"SVG変換の制限時間（秒）", maxQueueLength:"待機ジョブ数", maxUserStorageBytes:"利用者ごとの保存容量（バイト）", minFreeStorageBytes:"確保する空き容量（バイト）", jobTimeoutSeconds:"変換の制限時間（秒・840以下）", minimumAvailableMemoryBytes:"開始時に必要な空きメモリ（バイト）", admissionWaitSeconds:"長時間待機の案内まで（秒・超過だけでは失敗しません）" };
+  const limitLabels = { maxUploadBytes:"アップロード上限（バイト）", maxExtractedBytes:"展開後の上限（バイト）", maxFileCount:"入力ファイル数", maxZipEntries:"ZIP内の項目数", maxOutputBytes:"成果物の上限（バイト）", maxOutputFileCount:"成果物のファイル数", maxOutputDirectoryCount:"成果物のフォルダー数", maxLogBytes:"ログの上限（バイト）", maxSvgObjects:"SVGの個数", maxSvgBytes:"SVG 1個の上限（バイト）", maxSvgTotalBytes:"SVG合計の上限（バイト）", svgConversionTimeoutSeconds:"SVG変換の制限時間（秒）", maxQueueLength:"待機ジョブ数", maxUserStorageBytes:"利用者ごとの保存容量（バイト）", minFreeStorageBytes:"確保する空き容量（バイト）", jobTimeoutSeconds:"変換の制限時間（秒・840以下）", minimumAvailableMemoryBytes:"開始に必要な空きRAM（MiB）", maximumMemoryBytes:"実行RAMの上限（MiB）", maximumSwapBytes:"追加swapの上限（MiB・0は無効）", admissionWaitSeconds:"長時間待機の案内まで（秒・超過だけでは失敗しません）" };
+  const memoryFields = ["minimumAvailableMemoryBytes", "maximumMemoryBytes", "maximumSwapBytes"];
   const fieldLabels = { publicOrigin:"公開URL", rendererPublicUrl:"結果取得用URL", mode:"公開方式", backend:"認証方式", passwordEnabled:"パスワード認証", oidcEnabled:"OIDC認証", issuer:"認証先URL", clientId:"認証クライアントID", displayName:"表示名", adminAudience:"管理画面の認証対象", remoteMcpAudience:"MCPの認証対象", allowedAlgorithms:"署名方式", accessScope:"公開範囲", tlsProvider:"HTTPS方式", listenAddress:"待受アドレス", allowedNetworks:"許可するネットワーク", databasePath:"データベースの場所", storageRoot:"保存先", rendererImage:"固定されたTeXイメージ" };
   const flatten = (value, prefix = [], result = []) => { for (const [key, item] of Object.entries(value || {})) { const path = [...prefix,key]; if (key === "format") continue; if (item && typeof item === "object" && !Array.isArray(item)) flatten(item,path,result); else result.push({ path, key, value:item }); } return result; };
   const invalidate = () => { confirmation = null; el("confirmation").hidden = true; };
@@ -101,8 +102,9 @@ export const setupScript = `"use strict";
     el("limits").replaceChildren();
     for (const [name, value] of Object.entries(model.runtime.limits)) {
       const label = document.createElement("label"); label.textContent = limitLabels[name] || name;
-      const input = document.createElement("input"); input.type = "number"; input.min = "1"; input.step = "1"; input.value = String(value); input.required = true; input.setAttribute("aria-label", name);
-      input.addEventListener("input", () => { model.runtime.limits[name] = Number(input.value); saveModel(); });
+      const scale = memoryFields.includes(name) ? 1024 ** 2 : 1;
+      const input = document.createElement("input"); input.type = "number"; input.min = name === "maximumSwapBytes" ? "0" : name === "maximumMemoryBytes" ? "128" : String(1 / scale); input.step = name === "maximumMemoryBytes" || name === "maximumSwapBytes" ? "64" : scale > 1 ? "any" : "1"; input.value = String(value / scale); input.required = true; input.setAttribute("aria-label", name);
+      input.addEventListener("input", () => { model.runtime.limits[name] = Number(input.value) * scale; saveModel(); });
       label.append(input); el("limits").append(label);
     }
   };
@@ -117,7 +119,7 @@ export const setupScript = `"use strict";
       const before = new Map(flatten(baseline).map(field => [field.path.join("."),JSON.stringify(field.value)]));
       const changes = flatten(model).filter(field => before.get(field.path.join(".")) !== JSON.stringify(field.value));
       const list = document.createElement("dl");
-      for (const field of changes) { const title=document.createElement("dt"),description=document.createElement("dd"); title.textContent=limitLabels[field.key]||fieldLabels[field.key]||field.key; description.textContent=JSON.stringify(field.value); list.append(title,description); }
+      for (const field of changes) { const title=document.createElement("dt"),description=document.createElement("dd"); title.textContent=limitLabels[field.key]||fieldLabels[field.key]||field.key; description.textContent=memoryFields.includes(field.key) ? String(field.value / 1024 ** 2) + " MiB" : JSON.stringify(field.value); list.append(title,description); }
       if(changes.length) el("summary").append(list); else el("summary").textContent="設定値の変更はありません。初期導入・証明書の設定はこの確認後に適用します。";
       el("confirmation").hidden = false; status("確認済み。適用には下のボタンが必要です。");
     }

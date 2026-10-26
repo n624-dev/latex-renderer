@@ -70,6 +70,35 @@ async function fixture(mobile = false, supplied?: ServerSetupSessionHost) {
 }
 
 describe("real server-settings Web flow", () => {
+  it("reviews MiB memory values as distinct admission, RAM and additional swap limits", async () => {
+    const f = await fixture();
+    await f.page
+      .getByRole("spinbutton", {
+        name: "minimumAvailableMemoryBytes",
+        exact: true,
+      })
+      .fill("500");
+    await f.page
+      .getByRole("spinbutton", { name: "maximumMemoryBytes", exact: true })
+      .fill("2048");
+    await f.page
+      .getByRole("spinbutton", { name: "maximumSwapBytes", exact: true })
+      .fill("1024");
+    await f.page
+      .getByRole("button", { name: "変更内容を確認", exact: true })
+      .click();
+    await f.page.locator("#confirmation").waitFor({ state: "visible" });
+    expect(f.preview.mock.calls[0]?.[0].runtime.limits).toMatchObject({
+      minimumAvailableMemoryBytes: 500 * 1024 ** 2,
+      maximumMemoryBytes: 2 * 1024 ** 3,
+      maximumSwapBytes: 1024 ** 3,
+    });
+    expect(await f.page.locator("#summary").textContent()).toContain(
+      "2048 MiB",
+    );
+    expect(f.apply).not.toHaveBeenCalled();
+    expect(f.errors).toEqual([]);
+  });
   it.each(["oidc", "cloudflare-access"] as const)(
     "shows only applicable initial credentials for %s",
     async (auth) => {

@@ -233,6 +233,30 @@ describe("common server setup session", () => {
 });
 
 describe("CUI adapter", () => {
+  it("accepts memory settings in MiB and permits disabling additional swap", async () => {
+    const f = fixture();
+    await runServerSetupCui(f.host, {
+      ask: (prompt) =>
+        Promise.resolve(
+          prompt.startsWith("開始に必要な空きRAM")
+            ? "500"
+            : prompt.startsWith("実行RAMの上限")
+              ? "2048"
+              : prompt.startsWith("追加swapの上限")
+                ? "0"
+                : prompt.startsWith("Type APPLY")
+                  ? "APPLY"
+                  : "",
+        ),
+      print: () => {},
+    });
+    expect(f.preview.mock.calls[0]?.[0].runtime.limits).toMatchObject({
+      minimumAvailableMemoryBytes: 500 * 1024 ** 2,
+      maximumMemoryBytes: 2 * 1024 ** 3,
+      maximumSwapBytes: 0,
+    });
+    expect(f.apply).toHaveBeenCalledOnce();
+  });
   it("accepts the same complete advanced review as Web without a file/editor/terminal switch", async () => {
     const f = fixture(),
       changed = model();

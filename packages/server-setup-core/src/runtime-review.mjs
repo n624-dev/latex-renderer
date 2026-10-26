@@ -38,6 +38,13 @@ export const SERVER_RUNTIME_LIMITS = Object.freeze({
     "RENDERER_MIN_AVAILABLE_MEMORY_BYTES",
     1152 * 1024 ** 2,
   ]),
+  maximumMemoryBytes: Object.freeze(["RENDERER_MEMORY_MAX_BYTES", 1024 ** 3]),
+  maximumSwapBytes: Object.freeze([
+    "RENDERER_SWAP_MAX_BYTES",
+    0,
+    Number.MAX_SAFE_INTEGER,
+    0,
+  ]),
   admissionWaitSeconds: Object.freeze([
     "RENDERER_ADMISSION_WAIT_SECONDS",
     900,
@@ -89,16 +96,20 @@ export function validateServerRuntimeReview(input) {
   const limits = {};
   for (const [
     name,
-    [, fallback, maximum = Number.MAX_SAFE_INTEGER],
+    [, fallback, maximum = Number.MAX_SAFE_INTEGER, minimum = 1],
   ] of Object.entries(SERVER_RUNTIME_LIMITS)) {
     const compatibleDefault =
-      ["minimumAvailableMemoryBytes", "admissionWaitSeconds"].includes(name) &&
-      !Object.hasOwn(source, name);
+      [
+        "minimumAvailableMemoryBytes",
+        "admissionWaitSeconds",
+        "maximumMemoryBytes",
+        "maximumSwapBytes",
+      ].includes(name) && !Object.hasOwn(source, name);
     const value = compatibleDefault ? fallback : source[name];
     if (
       (!Object.hasOwn(source, name) && !compatibleDefault) ||
       !Number.isSafeInteger(value) ||
-      value < 1 ||
+      value < minimum ||
       value > maximum
     )
       throw new Error(
@@ -108,6 +119,15 @@ export function validateServerRuntimeReview(input) {
   }
   if (limits.maxExtractedBytes < limits.maxUploadBytes)
     throw new Error("MAX_EXTRACTED_BYTES must be at least MAX_UPLOAD_BYTES");
+  if (
+    limits.maximumMemoryBytes < 128 * 1024 ** 2 ||
+    limits.maximumMemoryBytes % (64 * 1024 ** 2) !== 0 ||
+    limits.maximumSwapBytes % (64 * 1024 ** 2) !== 0 ||
+    !Number.isSafeInteger(limits.maximumMemoryBytes + limits.maximumSwapBytes)
+  )
+    throw new Error(
+      "Renderer RAM/swap limits must use 64MiB units; RAM must be at least 128MiB and the total must be a safe integer",
+    );
   if (limits.maxZipEntries < limits.maxFileCount)
     throw new Error("MAX_ZIP_ENTRIES must be at least MAX_FILE_COUNT");
   return Object.freeze({
