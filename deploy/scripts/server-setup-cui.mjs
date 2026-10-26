@@ -17,15 +17,34 @@ export async function runServerSetupCui(host, io) {
     io.print(
       `Public origin: ${candidate.deployment.authentication.deployment.publicOrigin}`,
     );
-    for (const [name, [, , maximum]] of Object.entries(SERVER_RUNTIME_LIMITS)) {
+    const memoryFields = [
+      "minimumAvailableMemoryBytes",
+      "maximumMemoryBytes",
+      "maximumSwapBytes",
+    ];
+    /** @type {Record<string,string>} */
+    const memoryLabels = {
+      minimumAvailableMemoryBytes: "開始に必要な空きRAM",
+      maximumMemoryBytes: "実行RAMの上限",
+      maximumSwapBytes: "追加swapの上限（0は無効）",
+    };
+    for (const [name, [, , maximum, minimum = 1]] of Object.entries(
+      SERVER_RUNTIME_LIMITS,
+    )) {
       const activeMaximum = name === "jobTimeoutSeconds" ? 840 : maximum;
+      const scale = memoryFields.includes(name) ? 1024 ** 2 : 1;
       const value = await io.ask(
-        `${name} [${candidate.runtime.limits[name]}${activeMaximum ? `; max ${activeMaximum}` : ""}]: `,
+        `${memoryLabels[name] ?? name}${scale > 1 ? " (MiB)" : ""} [${candidate.runtime.limits[name] / scale}${activeMaximum && activeMaximum < Number.MAX_SAFE_INTEGER ? `; max ${activeMaximum / scale}` : ""}]: `,
       );
       if (value.trim()) {
-        if (!/^[1-9][0-9]*$/.test(value.trim()))
-          throw new Error("Invalid positive integer");
-        candidate.runtime.limits[name] = Number(value.trim());
+        const parsed = Number(value.trim()) * scale;
+        if (
+          !/^[0-9]+(?:\.[0-9]+)?$/.test(value.trim()) ||
+          !Number.isSafeInteger(parsed) ||
+          parsed < minimum
+        )
+          throw new Error("Invalid bounded integer");
+        candidate.runtime.limits[name] = parsed;
       }
     }
     const authentication = candidate.deployment.authentication.authentication;
@@ -85,6 +104,10 @@ export async function runServerSetupCui(host, io) {
     );
     if (advanced.trim()) candidate = JSON.parse(advanced);
     const checked = await session.preview(candidate);
+    for (const name of memoryFields)
+      io.print(
+        `${memoryLabels[name]}: ${checked.review.runtime.limits[name] / 1024 ** 2} MiB`,
+      );
     io.print(JSON.stringify(checked.review, null, 2));
     io.print(
       "Apply stops the fixed service set, validates existing credentials/owner and recovers failures. No credentials are collected here.",

@@ -51,9 +51,9 @@ function diagnostics(expression: string) {
        interface Candidate {id:string;queued_at:string}
        declare const candidates: Candidate[];
        declare const resources: HostResources;
-       declare const config: {image:string;minimumAvailableMemoryBytes?:number;admissionWaitTimeoutMs?:number};
+       declare const config: {image:string;minimumAvailableMemoryBytes?:number;admissionWaitTimeoutMs?:number;maximumMemoryBytes?:number};
        declare const database: {worker:{setAdmissionReason(blocked:boolean,time:string,id:string,message:string):void}};
-       declare function planRenderMemory(db:unknown,candidate:Candidate|undefined,image:string,minimum:number|undefined): {limit:number;minimum?:number};
+       declare function planRenderMemory(db:unknown,candidate:Candidate|undefined,image:string,minimum:number|undefined,now?:number,maximum?:number): {limit:number;minimum?:number};
        declare function nowIso():string;
        declare function resourceWaitMessage(state:ReturnType<typeof assessHostResources>,resources:HostResources,minimum:number,longWait:boolean):string;
        let admissionAfter: Candidate|undefined;

@@ -40,30 +40,42 @@ describe("bounded, owner/input/Runtime-specific memory planning", () => {
       2048 * MIB,
     );
   });
-  it("preserves an operator's larger reserve when selecting a smaller sandbox", () => {
+  it("preserves an operator's threshold and ceiling despite a small historical observation", () => {
     const { db, key } = fixture();
     rememberRenderMemory(db, key, 191 * MIB, true);
     expect(planRenderMemory(db, candidate, image, 2048 * MIB)).toMatchObject({
-      limit: 320 * MIB,
-      minimum: 1344 * MIB,
+      limit: 1024 * MIB,
+      minimum: 2048 * MIB,
     });
   });
-  it.each([
-    [191, 320, 448],
-    [407, 576, 704],
-    [936, 1024, 1152],
-  ])(
-    "bounds an observed %iMiB run with a %iMiB cap and %iMiB admission budget",
-    (peak, cap, minimum) => {
+  it.each([191, 407, 936])(
+    "does not turn an observed %iMiB run into a smaller execution ceiling",
+    (peak) => {
       const { db, key } = fixture();
       rememberRenderMemory(db, key, peak * MIB, true);
       expect(planRenderMemory(db, candidate, image, 1152 * MIB)).toMatchObject({
-        limit: cap * MIB,
-        minimum: minimum * MIB,
+        limit: 1024 * MIB,
+        minimum: 1152 * MIB,
         estimatedPeak: peak * MIB,
       });
     },
   );
+  it("keeps a 500MiB admission floor separate from a 2GiB execution ceiling", () => {
+    const { db, key, now } = fixture();
+    rememberRenderMemory(db, key, 342 * MIB, true);
+    expect(
+      planRenderMemory(db, candidate, image, 500 * MIB, now, 2048 * MIB),
+    ).toMatchObject({
+      limit: 2048 * MIB,
+      minimum: 500 * MIB,
+      estimatedPeak: 342 * MIB,
+    });
+    rememberRenderMemory(db, key, 1536 * MIB, true, now, 2048 * MIB);
+    expect(
+      planRenderMemory(db, candidate, image, 500 * MIB, now, 2048 * MIB)
+        .estimatedPeak,
+    ).toBe(1536 * MIB);
+  });
   it("does not reuse another owner, source, entrypoint, output set or Runtime's estimate", () => {
     const { db, key } = fixture();
     rememberRenderMemory(db, key, 191 * MIB, true);

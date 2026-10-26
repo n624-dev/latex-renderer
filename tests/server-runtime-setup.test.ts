@@ -384,6 +384,38 @@ describe("server setup runtime review", () => {
       ),
     ).toEqual(model);
   });
+  it("round-trips memory admission, RAM and extra swap independently through the worker loader", () => {
+    const contents =
+      before +
+      "RENDERER_MIN_AVAILABLE_MEMORY_BYTES=524288000\nRENDERER_MEMORY_MAX_BYTES=2147483648\nRENDERER_SWAP_MAX_BYTES=1073741824\n";
+    const review = importServerSetupReview(contents);
+    expect(review.runtime.limits).toMatchObject({
+      minimumAvailableMemoryBytes: 500 * 1024 ** 2,
+      maximumMemoryBytes: 2 * 1024 ** 3,
+      maximumSwapBytes: 1024 ** 3,
+    });
+    const values = serverSetupReviewEnvironment(review);
+    for (const [key, value] of values) vi.stubEnv(key, value);
+    vi.stubEnv("RENDERER_SECCOMP_PROFILE", "/fixture/seccomp.json");
+    const worker = loadWorkerConfig();
+    expect(worker.maximumMemoryBytes).toBe(
+      review.runtime.limits.maximumMemoryBytes,
+    );
+    expect(worker.maximumSwapBytes).toBe(
+      review.runtime.limits.maximumSwapBytes,
+    );
+    const invalid = {
+      ...review,
+      runtime: {
+        ...review.runtime,
+        limits: { ...review.runtime.limits, maximumSwapBytes: -1 },
+      },
+    };
+    expect(() => validateServerSetupReview(invalid)).toThrow();
+    expect(() =>
+      importServerSetupReview(before + "RENDERER_SWAP_MAX_BYTES=1\n"),
+    ).toThrow();
+  });
   it.each([before, serverSetupChangeReview(before, candidate()).after])(
     "agrees with the actual shared and worker loaders",
     (contents) => {
@@ -452,7 +484,12 @@ describe("server setup runtime review", () => {
     const model = candidate();
     for (const name of Object.keys(SERVER_RUNTIME_LIMITS)) {
       if (
-        ["minimumAvailableMemoryBytes", "admissionWaitSeconds"].includes(name)
+        [
+          "minimumAvailableMemoryBytes",
+          "admissionWaitSeconds",
+          "maximumMemoryBytes",
+          "maximumSwapBytes",
+        ].includes(name)
       )
         continue;
       const limits = Object.fromEntries(
@@ -492,9 +529,12 @@ describe("server setup runtime review", () => {
     const limits = Object.fromEntries(
       Object.entries(model.runtime.limits).filter(
         ([name]) =>
-          !["minimumAvailableMemoryBytes", "admissionWaitSeconds"].includes(
-            name,
-          ),
+          ![
+            "minimumAvailableMemoryBytes",
+            "admissionWaitSeconds",
+            "maximumMemoryBytes",
+            "maximumSwapBytes",
+          ].includes(name),
       ),
     );
     const compatible = validateServerSetupReview({
@@ -505,6 +545,8 @@ describe("server setup runtime review", () => {
       1152 * 1024 ** 2,
     );
     expect(compatible.runtime.limits.admissionWaitSeconds).toBe(900);
+    expect(compatible.runtime.limits.maximumMemoryBytes).toBe(1024 ** 3);
+    expect(compatible.runtime.limits.maximumSwapBytes).toBe(0);
     const configured = importServerSetupReview(
       before +
         "RENDERER_MIN_AVAILABLE_MEMORY_BYTES=939524096\nRENDERER_ADMISSION_WAIT_SECONDS=600\n",

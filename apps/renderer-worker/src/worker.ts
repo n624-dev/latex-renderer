@@ -125,6 +125,8 @@ export async function runWorker(
           candidate,
           config.image,
           config.minimumAvailableMemoryBytes,
+          Date.now(),
+          config.maximumMemoryBytes,
         );
         const state: ReturnType<typeof assessHostResources> =
           plan.minimum === undefined
@@ -156,6 +158,8 @@ export async function runWorker(
           undefined,
           config.image,
           config.minimumAvailableMemoryBytes,
+          Date.now(),
+          config.maximumMemoryBytes,
         );
       const admission: ReturnType<typeof assessHostResources> =
         selected?.state ??
@@ -248,17 +252,32 @@ export async function runWorker(
           terminal.lease_generation === job.lease_generation &&
           completeRun
         )
-          rememberRenderMemory(database, selected?.plan.key, peak, true);
+          rememberRenderMemory(
+            database,
+            selected?.plan.key,
+            peak,
+            true,
+            Date.now(),
+            config.maximumMemoryBytes,
+          );
         else if (
           terminal?.error_code === "RENDERER_MEMORY_LIMIT" ||
           terminal?.error_code === "SVG_MEMORY_LIMIT"
         )
-          rememberRenderMemory(database, selected?.plan.key, undefined, false);
+          rememberRenderMemory(
+            database,
+            selected?.plan.key,
+            undefined,
+            false,
+            Date.now(),
+            config.maximumMemoryBytes,
+          );
         diagnostic({
           event: "renderer_worker.memory_result",
           jobId: job.id,
           memoryPeakBytes: peak ?? null,
           memoryLimitBytes: plan.limit,
+          additionalSwapLimitBytes: config.maximumSwapBytes ?? 0,
           result: terminal?.status ?? "unknown",
         });
         preferPreview = true;
@@ -283,7 +302,14 @@ export async function runWorker(
           error instanceof AppError &&
           ["RENDERER_MEMORY_LIMIT", "SVG_MEMORY_LIMIT"].includes(error.code)
         )
-          rememberRenderMemory(database, selected?.plan.key, undefined, false);
+          rememberRenderMemory(
+            database,
+            selected?.plan.key,
+            undefined,
+            false,
+            Date.now(),
+            config.maximumMemoryBytes,
+          );
         await recordFailure(
           database,
           config,

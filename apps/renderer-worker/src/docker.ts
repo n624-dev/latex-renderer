@@ -84,15 +84,34 @@ export function rendererRunArguments(
   leaseGeneration = 0,
   stage?: RendererStageOptions,
 ): string[] {
-  const memory = config.containerMemoryBytes ?? RENDER_MEMORY_MAX;
+  const maximum = config.maximumMemoryBytes ?? RENDER_MEMORY_MAX;
+  const memory = config.containerMemoryBytes ?? maximum;
+  const swap = config.maximumSwapBytes ?? 0;
   if (
     !Number.isSafeInteger(memory) ||
     memory < 128 * MIB ||
-    memory > RENDER_MEMORY_MAX ||
-    memory % (64 * MIB) !== 0
+    memory > maximum ||
+    memory % (64 * MIB) !== 0 ||
+    !Number.isSafeInteger(maximum) ||
+    maximum < 128 * MIB ||
+    maximum % (64 * MIB) !== 0 ||
+    !Number.isSafeInteger(swap) ||
+    swap < 0 ||
+    swap % (64 * MIB) !== 0 ||
+    !Number.isSafeInteger(maximum + swap)
   )
     throw new Error("Invalid worker-selected renderer memory cap");
   const memoryArgument = memory === RENDER_MEMORY_MAX ? "1g" : String(memory);
+  const stageMemory =
+    stage?.mode === "preview" ? Math.min(memory, 256 * MIB) : memory;
+  const swapArgument =
+    swap === 0
+      ? stage?.mode === "preview"
+        ? stageMemory === 256 * MIB
+          ? "256m"
+          : String(stageMemory)
+        : memoryArgument
+      : String(stageMemory + swap);
   if (
     (stage?.mode === "svg" || stage?.mode === "preview") &&
     stage.pdfDirectory === undefined
@@ -143,9 +162,13 @@ export function rendererRunArguments(
     "--cpus",
     "1.5",
     "--memory",
-    stage?.mode === "preview" ? "256m" : memoryArgument,
+    stage?.mode === "preview"
+      ? stageMemory === 256 * MIB
+        ? "256m"
+        : String(stageMemory)
+      : memoryArgument,
     "--memory-swap",
-    stage?.mode === "preview" ? "256m" : memoryArgument,
+    swapArgument,
     ...(stage?.mode === "preview"
       ? [
           "--ulimit",
