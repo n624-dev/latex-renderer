@@ -15,6 +15,7 @@ on:
       - "tests/client-audit-integration.test.ts"
       - "tests/client-launcher-endpoints.test.ts"
       - "tests/windows-setup-layout.test.ts"
+      - "tests/windows-credentials*.test.ts"
       - "tests/setup-core.test.ts"
       - "tests/mcpb-openssl.test.ts"
       - "tests/vite-dependency.test.ts"
@@ -41,6 +42,7 @@ on:
       - "tests/client-audit-integration.test.ts"
       - "tests/client-launcher-endpoints.test.ts"
       - "tests/windows-setup-layout.test.ts"
+      - "tests/windows-credentials*.test.ts"
       - "tests/setup-core.test.ts"
       - "tests/mcpb-openssl.test.ts"
       - "tests/vite-dependency.test.ts"
@@ -92,6 +94,9 @@ jobs:
         run: node client/select-mcpb-openssl.mjs
       - name: Verify OpenSSL selection safeguards
         run: pnpm exec vitest run tests/mcpb-openssl.test.ts
+      - name: Verify native Windows DPAPI and inherited PowerShell module paths
+        if: runner.os == 'Windows'
+        run: pnpm exec vitest run tests/windows-credentials.test.ts tests/windows-credentials-native.test.ts
       - name: Validate, pack, sign, and verify MCPB
         run: pnpm build:mcpb && pnpm verify:mcpb
       - name: Exercise clean local server install
