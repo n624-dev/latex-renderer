@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.5.4-rc.1 - 2026-10-28
+
 - WindowsのDPAPI処理で、PowerShell 7から継承したモジュール探索パスを子プロセス内で分離し、
   Windows PowerShell自身の標準モジュールを読み込む。既存の暗号化資格情報をそのまま利用し、
   ファイル不在・アクセス失敗・復号失敗・PowerShell初期化失敗を区別する。
