@@ -178,12 +178,11 @@ process.stdout.write('credential-roundtrip-ok');
       });
       const degraded = await doctorSetup(options);
       expect(degraded.status).toBe("degraded");
-      expect(
-        degraded.checks.find((check) => check.id === "credential"),
-      ).toMatchObject({
-        status: "fail",
-        message: expect.stringContaining("CREDENTIAL_DECRYPT_FAILED"),
-      });
+      const credentialCheck = degraded.checks.find(
+        (check) => check.id === "credential",
+      );
+      expect(credentialCheck?.status).toBe("fail");
+      expect(credentialCheck?.message).toContain("CREDENTIAL_DECRYPT_FAILED");
       expect(JSON.stringify(degraded)).not.toContain(secret);
       await rm(paths.credentialPath);
       await expect(loadCredential({ home: root, env })).rejects.toMatchObject({
