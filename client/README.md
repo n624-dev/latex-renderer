@@ -11,6 +11,8 @@ Set `LATEX_RENDER_BASE_URL` only when overriding the production origin. The mana
 
 The API key is stored with Windows DPAPI on Windows and in a user-owned mode `0600` configuration file on Linux/macOS. Never place API keys in project files, MCP arguments, logs, or prompts.
 
+On Windows, DPAPI operations use the standard modules belonging to Windows PowerShell itself, independently of inherited PowerShell 7 module search paths. Existing encrypted credentials remain compatible. `doctor --json` verifies that a stored DPAPI credential can be decrypted by the current Windows account without displaying it. Missing files, file-access failures, decryption failures, and PowerShell initialization failures have distinct diagnostics; a runtime failure does not mean that the API key was deleted or revoked.
+
 Remove only the stored API key with `latex-render auth logout`. Run `uninstall.mjs` on any supported OS or the Windows `uninstall.ps1` wrapper to remove the client, credential, and managed unmodified Codex/Claude skills. Modified skills are preserved.
 
 Add `--json` to any CLI operation to emit one structured result on stdout. Structured output never contains API keys, upload tickets, or job tickets.

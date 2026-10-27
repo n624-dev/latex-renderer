@@ -26,6 +26,7 @@ import {
   manageWindowsLaunchers,
   windowsLauncherContents,
 } from "./windows-launchers.js";
+import { runWindowsCredential } from "./windows-credential.js";
 
 export { clientSetupFailureDiagnostic } from "./failure-diagnostic.js";
 
@@ -825,29 +826,12 @@ export async function saveCredential(
     throw new AppError("INVALID_API_KEY", "Input is not a render API key", 400);
   await mkdir(dirname(paths.credentialPath), { recursive: true, mode: 0o700 });
   if (paths.platform === "win32") {
-    const script =
-      `$ErrorActionPreference='Stop';try{$p=$env:LR_CREDENTIAL_PATH;$d=Split-Path -Parent $p;` +
-      `New-Item -ItemType Directory -Path $d -Force|Out-Null;$s=[Console]::In.ReadToEnd().Trim();if(!$s){throw 'Credential input is empty'};` +
-      `$v=ConvertTo-SecureString -String $s -AsPlainText -Force;$e=ConvertFrom-SecureString -SecureString $v;` +
-      `Set-Content -LiteralPath $p -Value $e -Encoding ASCII -NoNewline -Force;exit 0}catch{[Console]::Error.WriteLine($_.Exception.Message);exit 1}`;
-    const result = spawnSync(
-      "powershell.exe",
-      ["-NoProfile", "-NonInteractive", "-Command", script],
-      {
-        input: secret,
-        encoding: "utf8",
-        windowsHide: true,
-        env: {
-          ...(options.env ?? process.env),
-          LR_CREDENTIAL_PATH: paths.credentialPath,
-        },
-      },
+    runWindowsCredential(
+      "save",
+      paths.credentialPath,
+      options.env ?? process.env,
+      secret,
     );
-    if (result.status !== 0)
-      throw new AppError(
-        "CREDENTIAL_STORE_FAILED",
-        credentialError("Windows DPAPI credential storage failed", result),
-      );
     return;
   }
   const temporary = `${paths.credentialPath}.part-${randomUUID()}`;
@@ -869,27 +853,7 @@ export async function loadCredential(
   if (fromEnvironment !== undefined) return fromEnvironment;
   const paths = resolveSetupPaths({ ...options, env });
   if (paths.platform === "win32") {
-    const script =
-      `$ErrorActionPreference='Stop';try{$p=$env:LR_CREDENTIAL_PATH;$e=(Get-Content -LiteralPath $p -Raw).Trim();` +
-      `$v=ConvertTo-SecureString -String $e;$b=[Runtime.InteropServices.Marshal]::SecureStringToBSTR($v);` +
-      `try{[Console]::Out.Write([Runtime.InteropServices.Marshal]::PtrToStringBSTR($b))}finally{if($b -ne [IntPtr]::Zero){[Runtime.InteropServices.Marshal]::ZeroFreeBSTR($b)}}` +
-      `}catch{[Console]::Error.WriteLine($_.Exception.Message);exit 1}`;
-    const result = spawnSync(
-      "powershell.exe",
-      ["-NoProfile", "-NonInteractive", "-Command", script],
-      {
-        encoding: "utf8",
-        windowsHide: true,
-        env: { ...env, LR_CREDENTIAL_PATH: paths.credentialPath },
-      },
-    );
-    if (result.status !== 0)
-      throw new AppError(
-        "CREDENTIAL_NOT_FOUND",
-        credentialError("No usable DPAPI credential was found", result),
-        401,
-      );
-    return result.stdout;
+    return runWindowsCredential("load", paths.credentialPath, env);
   }
   const info = await lstat(paths.credentialPath);
   if (
@@ -1295,12 +1259,27 @@ async function inspectCredential(
       message: "Credential file permissions must be 0600",
       path: paths.credentialPath,
     };
+  if (paths.platform === "win32") {
+    try {
+      runWindowsCredential("probe", paths.credentialPath, env);
+    } catch (error) {
+      return {
+        id: "credential",
+        status: "fail",
+        message:
+          error instanceof AppError
+            ? `${error.code}: ${error.message}`
+            : "Windows DPAPI credential verification failed",
+        path: paths.credentialPath,
+      };
+    }
+  }
   return {
     id: "credential",
     status: "pass",
     message:
       paths.platform === "win32"
-        ? "DPAPI credential file is present"
+        ? "DPAPI credential can be decrypted by the current Windows account"
         : "Protected credential file is present",
     path: paths.credentialPath,
   };
@@ -1790,24 +1769,4 @@ async function removeIfEmpty(directory: string): Promise<void> {
 
 function timestamp(): string {
   return new Date().toISOString().replaceAll(/[-:.TZ]/g, "");
-}
-
-function credentialError(
-  prefix: string,
-  result: ReturnType<typeof spawnSync>,
-): string {
-  const stderr =
-    typeof result.stderr === "string"
-      ? result.stderr
-      : result.stderr.toString("utf8");
-  const detail = result.error?.message ?? stderr;
-  let normalized = "";
-  for (const character of detail) {
-    const code = character.codePointAt(0) ?? 0;
-    normalized += code < 32 || code === 127 ? " " : character;
-  }
-  const safe = normalized.trim().slice(0, 500);
-  return safe
-    ? `${prefix}: ${safe}`
-    : `${prefix} (PowerShell exit ${result.status ?? "unknown"})`;
 }
