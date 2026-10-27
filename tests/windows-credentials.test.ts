@@ -62,15 +62,15 @@ it.each(["load", "probe"] as const)(
     if (call === undefined)
       throw new Error("PowerShell invocation was not captured");
     const args = call[1];
-    expect(args.at(-1)).toContain(
+    expect(args?.at(-1)).toContain(
       "$PSHOME,'Modules','Microsoft.PowerShell.Security'",
     );
-    expect(args.at(-1)).toContain(
+    expect(args?.at(-1)).toContain(
       "Microsoft.PowerShell.Security\\ConvertTo-SecureString",
     );
-    expect(args.at(-1)).toContain("ZeroFreeBSTR");
+    expect(args?.at(-1)).toContain("ZeroFreeBSTR");
     if (operation === "probe")
-      expect(args.at(-1)).not.toContain("[Console]::Out.Write");
+      expect(args?.at(-1)).not.toContain("[Console]::Out.Write");
   },
 );
 
