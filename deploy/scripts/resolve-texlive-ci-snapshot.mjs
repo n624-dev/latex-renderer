@@ -2,6 +2,8 @@
 import { execFileSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
 import { URL } from "node:url";
+import { performance } from "node:perf_hooks";
+import { setTimeout } from "node:timers/promises";
 
 // Trusted CI selects the VPS's published inventory, not whichever older date
 // happens to answer a network probe. Only tiny metadata is read here. Payload
@@ -25,45 +27,124 @@ function calendarDate(value) {
   return value;
 }
 
-function readSmall(url, label) {
-  try {
-    return execFileSync(
-      "curl",
-      [
-        "--fail",
-        "--silent",
-        "--show-error",
-        "--proto",
-        "=https",
-        "--retry",
-        "3",
-        "--retry-delay",
-        "2",
-        "--connect-timeout",
-        process.env.TEXLIVE_CURL_CONNECT_TIMEOUT_SECONDS ?? "10",
-        "--max-time",
-        process.env.TEXLIVE_CURL_MAX_TIME_SECONDS ?? "60",
-        "--max-filesize",
-        "65536",
-        url,
-      ],
-      {
-        encoding: "utf8",
-        maxBuffer: 65536,
-        stdio: ["ignore", "pipe", "pipe"],
-        timeout: 2_500_000,
-      },
+async function readSmall(url, label) {
+  // One immutable URL, fresh response per attempt. curl's internal retry hides
+  // connection phases and can concatenate partial bodies on a piped output.
+  const budgetMs = 180_000;
+  const started = performance.now();
+  const marker = "\n__TEXLIVE_CURL_METRICS__";
+  let lastCode = "unavailable";
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    const remaining = budgetMs - (performance.now() - started);
+    if (remaining < 1000) break;
+    const maxTime = Math.min(
+      Number(process.env.TEXLIVE_CURL_MAX_TIME_SECONDS ?? "60"),
+      remaining / 1000,
     );
-  } catch (error) {
-    const code =
-      typeof error?.status === "number" ? error.status : "unavailable";
-    // Do not echo a private hostname, request arguments, service credentials,
-    // curl's untrusted body, or an entire child_process exception.
-    throw new Error(
-      `${label} request failed (curl ${code}); refusing to select another date`,
-      { cause: error },
-    );
+    let output, code;
+    try {
+      output = execFileSync(
+        "curl",
+        [
+          "--disable",
+          "--fail",
+          "--silent",
+          "--show-error",
+          "--proto",
+          "=https",
+          "--connect-timeout",
+          String(
+            Math.min(
+              Number(process.env.TEXLIVE_CURL_CONNECT_TIMEOUT_SECONDS ?? "30"),
+              maxTime,
+            ),
+          ),
+          "--max-time",
+          String(maxTime),
+          "--max-filesize",
+          "65536",
+          "--write-out",
+          `${marker}%{json}`,
+          url,
+        ],
+        {
+          encoding: "utf8",
+          maxBuffer: 80 * 1024,
+          stdio: ["ignore", "pipe", "pipe"],
+          timeout: Math.ceil(maxTime * 1000),
+          killSignal: "SIGKILL",
+        },
+      );
+      code = 0;
+    } catch (error) {
+      code =
+        typeof error?.status === "number"
+          ? error.status
+          : error?.code === "ETIMEDOUT"
+            ? 28
+            : "unavailable";
+      output = typeof error?.stdout === "string" ? error.stdout : "";
+    }
+    lastCode = code;
+    const boundary = output.lastIndexOf(marker);
+    let metrics;
+    try {
+      metrics =
+        boundary < 0
+          ? null
+          : JSON.parse(output.slice(boundary + marker.length));
+    } catch {
+      // Keep the original transport failure if curl was killed before write-out.
+      metrics = null;
+    }
+    const http =
+      Number.isInteger(metrics?.http_code) &&
+      metrics.http_code >= 0 &&
+      metrics.http_code <= 599
+        ? metrics.http_code
+        : null;
+    const record = {
+      kind: "texlive_metadata_request",
+      stage: label,
+      attempt,
+      curlExit: code,
+      httpStatus: http,
+    };
+    for (const key of [
+      "time_namelookup",
+      "time_connect",
+      "time_appconnect",
+      "time_starttransfer",
+      "time_total",
+    ]) {
+      const value = metrics?.[key];
+      if (
+        typeof value === "number" &&
+        Number.isFinite(value) &&
+        value >= 0 &&
+        value <= 1000
+      )
+        record[key] = value;
+    }
+    // Whitelist only phase timings and status. Never log curl's full JSON,
+    // URL, response, stderr or child_process exception (which contain URLs).
+    console.error(JSON.stringify(record));
+    if (code === 0) {
+      if (boundary < 0 || http !== 200)
+        throw new Error(`${label} returned invalid transport metadata`);
+      return output.slice(0, boundary);
+    }
+    const transient =
+      [5, 6, 7, 28, 52, 55, 56].includes(code) ||
+      (code === 22 && [408, 429, 500, 502, 503, 504].includes(http));
+    if (!transient || attempt === 4) break;
+    const delay = 2000 * 2 ** (attempt - 1);
+    if (performance.now() - started + delay + 1000 >= budgetMs) break;
+    await setTimeout(delay);
   }
+  throw new Error(
+    `${label} request failed (curl ${lastCode}); refusing to select another date`,
+  );
 }
 
 function checksum(text, filename) {
@@ -80,7 +161,7 @@ function checksum(text, filename) {
   return fields[0].toLowerCase();
 }
 
-function main() {
+async function main() {
   const host = process.env.TEXLIVE_CI_MIRROR_HOST;
   if (
     !host ||
@@ -104,7 +185,7 @@ function main() {
     if (new Date().getUTCFullYear() !== supportedYear)
       throw new Error("Explicit TeX Live annual migration is required");
     let pointer;
-    const pointerText = readSmall(
+    const pointerText = await readSmall(
       new URL("/latest.json", origin).href,
       "Published mirror metadata",
     );
@@ -170,14 +251,14 @@ function main() {
     );
   const repository = `${archive.href.replace(/\/$/, "")}/${date.replaceAll("-", "/")}/tlnet`;
   const installer = checksum(
-    readSmall(
+    await readSmall(
       `${repository}/install-tl-unx.tar.gz.sha512`,
       "Canonical installer identity",
     ),
     "install-tl-unx.tar.gz",
   );
   const database = checksum(
-    readSmall(
+    await readSmall(
       `${repository}/tlpkg/texlive.tlpdb.sha512`,
       "Canonical database identity",
     ),
@@ -196,7 +277,7 @@ function main() {
   process.stdout.write(output);
 }
 try {
-  main();
+  await main();
 } catch (error) {
   console.error(
     `texlive-snapshot: ${error instanceof Error ? error.message : "Invalid snapshot metadata"}`,
