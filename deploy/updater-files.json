@@ -1,6 +1,7 @@
 [
   "package.json",
   "deploy/scripts/update-manager.mjs",
+  "deploy/scripts/updater-activation.mjs",
   "deploy/scripts/privileged-process-output.mjs",
   "deploy/scripts/update-manager-helper.mjs",
   "deploy/scripts/is-main-module.mjs",

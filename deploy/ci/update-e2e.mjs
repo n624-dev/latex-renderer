@@ -17,6 +17,7 @@ import {
   verifyCiValidationArtifact,
 } from "../scripts/ci-release-artifact.mjs";
 import { acquireUpdateBaseline } from "./update-baseline.mjs";
+import { verifyActivationCommitBarrier } from "./updater-activation-barrier.mjs";
 import {
   brokenUpdaterSource,
   assertStartupRecovery,
@@ -314,14 +315,11 @@ try {
         "OS tmpfiles pass reverted controller directory ownership/mode",
       );
   }
-  run("/usr/local/bin/node", [
-    "/opt/latex-renderer/updater/bootstrap-v1/updater-bootstrap.mjs",
-    "activate",
-  ]);
   const { UpdaterSlots, updaterEnvelope } = await import(
     pathToFileURL(join(candidate, "deploy/scripts/updater-slots.mjs"))
   );
   const slots = new UpdaterSlots("/opt/latex-renderer/updater", 0);
+  await verifyActivationCommitBarrier(slots);
   const active = await slots.state(),
     installed = await slots.verify(active.current);
   if (
@@ -654,6 +652,7 @@ try {
       storagePreserved: true,
       pdfPng: true,
       updaterRecovery: true,
+      updaterActivationCommitBarrier: true,
       updaterStartupFailureRecovery: true,
       tmpfilesMigration: true,
       fullRecoveryPoint: true,

@@ -130,7 +130,16 @@ claim success or repeat the POST.
 The initial migration captures the installed old controller into a sealed slot
 before changing service paths. The new controller is staged separately. A
 delayed systemd service activates it after application deployment succeeds and
-the original operation releases the mutation lock. Busy/failed activation is
+the original controller has committed its final operation record. Releasing the
+helper's mutation lock alone does not mean that record has been saved: helper
+cleanup and controller log processing can still be running. The root-owned
+activation gate waits up to two hours without stopping a busy controller. It
+checks the authenticated controller state and sealed candidate identity under
+the shared mutation lock, stops the idle controller while still holding that
+lock, and then lets the unchanged frozen bootstrap acquire the lock to perform
+its journaled activation. A failed or unreadable operation blocks activation;
+its history is not rewritten. Interruption invokes bootstrap recovery before
+restarting management. Busy/failed activation is
 retried at most three times, 30 seconds apart. Application operation success and
 Updater activation success are distinct: inspect both results.
 
@@ -373,9 +382,13 @@ server-release runs on explicit RC/stable release dispatch, not ordinary PRs:
 The historical baseline is explicit in deploy/ci/update-e2e.mjs; review it when
 changing the migration floor and never rewrite it during RC-to-stable promotion.
 On the disposable CI host, a runtime-only systemd condition skips automatic
-activation while the CI host marker exists. E2E invokes the unchanged bootstrap
-synchronously, retaining its normal mutation lock, so delayed cutover jobs cannot
-race negative fixtures. Startup-failure recovery requires a per-attempt marker
+activation while the CI host marker exists. The positive cutover test temporarily
+uses the real installed activation service with an authenticated controller
+fixture that delays completion for longer than the original ten-second timer.
+The controller process and selected slot must remain unchanged until the fixture
+commits, then the signed candidate must become healthy. The condition is restored
+before negative fixtures, which invoke the unchanged bootstrap synchronously,
+retaining its normal mutation lock. Startup-failure recovery requires a per-attempt marker
 written by the broken controller in its actual slot, the expected health failure,
 and fully restored current/previous state with no candidate or pending journal.
 A lock conflict is not evidence of recovery. Production units are unchanged.
