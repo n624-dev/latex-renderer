@@ -571,6 +571,17 @@ ignore prereleases; RC installation requires its exact version and an audited
 owner action. The updater rejects older mutable releases, including v1.0.0;
 v1.1.0 is the first updater-compatible server release.
 
+The disposable update hosts acquire and verify their historical baseline before
+activating local HTTPS. Host preparation creates the fixture certificate and
+configuration but leaves nginx stopped and does not add the fixture hostname or
+install its CA into the system store. Baseline acquisition retains immutable
+release identity, checksum, publisher/workflow/tag/commit attestation, and archive
+validation. Only successful acquisition enables fixture DNS, CA trust and nginx;
+the same real HTTPS update/recovery tests then run. A failed acquisition stops
+without a retry or fixture activation. Its bounded DNS/TLS diagnostic event
+omits credentials, headers, response bodies and raw certificate dumps. Any later
+diagnostic probe is distinguished from the original failed connection.
+
 The previous runtime is retained for rollback, including the legacy runtime that
 was active before the first managed switch. Managed rollback re-derives the
 previous Base/language selection using the current renderer code; the initial
