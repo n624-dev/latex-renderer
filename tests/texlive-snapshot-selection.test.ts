@@ -35,12 +35,27 @@ async function fixture() {
   await mkdir(bin);
   await writeFile(
     join(bin, "curl"),
-    `#!${process.execPath}\nconst fs=require('node:fs');const args=process.argv.slice(2),url=args.at(-1);fs.appendFileSync(process.env.FIXTURE_TRACE,JSON.stringify({args,url})+'\\n');const value=JSON.parse(fs.readFileSync(process.env.FIXTURE_RESPONSES,'utf8'))[url];if(value===undefined)process.exit(99);if(typeof value==='number')process.exit(value);process.stdout.write(typeof value==='string'?value:JSON.stringify(value));\n`,
+    `#!${process.execPath}
+const fs=require('node:fs');
+const args=process.argv.slice(2),url=args.at(-1);
+fs.appendFileSync(process.env.FIXTURE_TRACE,JSON.stringify({args,url})+'\\n');
+let value=JSON.parse(fs.readFileSync(process.env.FIXTURE_RESPONSES,'utf8'))[url];
+if(value===undefined)process.exit(99);
+if(Array.isArray(value)) {
+  const n=fs.readFileSync(process.env.FIXTURE_TRACE,'utf8').trim().split('\\n').map(JSON.parse).filter(x=>x.url===url).length;
+  value=value[Math.min(n-1,value.length-1)];
+}
+const response=value && typeof value==='object' && 'curlExit' in value ? value : null;
+const code=typeof value==='number'?value:response?.curlExit??0;
+const body=response?.body??(typeof value==='number'?'':typeof value==='string'?value:JSON.stringify(value));
+process.stdout.write(body+'\\n__TEXLIVE_CURL_METRICS__'+JSON.stringify({http_code:response?.httpStatus??(code?0:200),time_namelookup:0.01,time_connect:2.3,time_appconnect:23.8,time_starttransfer:24,time_total:24,url_effective:url,errormsg:'private-sentinel'}));
+process.exit(code);
+`,
     { mode: 0o700 },
   );
   await writeFile(
     preload,
-    `const ActualDate=Date;globalThis.Date=class extends ActualDate {constructor(...args){if(args.length===0)super('2026-09-09T00:00:00.000Z');else super(...args);}static now(){return ActualDate.parse('2026-09-09T00:00:00.000Z');}};\n`,
+    `const ActualDate=Date;globalThis.Date=class extends ActualDate {constructor(...args){if(args.length===0)super('2026-09-09T00:00:00.000Z');else super(...args);}static now(){return ActualDate.parse('2026-09-09T00:00:00.000Z');}};\nif(process.env.FIXTURE_CLOCK){const steps=JSON.parse(process.env.FIXTURE_CLOCK);let i=0;Object.defineProperty(performance,'now',{value:()=>steps[Math.min(i++,steps.length-1)]});}\n`,
   );
   await writeFile(output, "unrelated=preserve\n");
   const defaults: Record<string, unknown> = {
@@ -51,6 +66,7 @@ async function fixture() {
   const run = async (
     overrides: Record<string, unknown> = {},
     requested = "latest",
+    env: Record<string, string> = {},
   ) => {
     await writeFile(responses, JSON.stringify({ ...defaults, ...overrides }));
     const result = spawnSync(
@@ -58,7 +74,7 @@ async function fixture() {
       ["deploy/scripts/resolve-texlive-snapshot.sh", requested],
       {
         encoding: "utf8",
-        timeout: 10000,
+        timeout: 20000,
         env: {
           ...process.env,
           PATH: `${bin}:${process.env.PATH ?? "/usr/bin:/bin"}`,
@@ -68,6 +84,9 @@ async function fixture() {
           TEXLIVE_CI_MIRROR_HOST: host,
           TEXLIVE_ARCHIVE_ROOT: archive,
           GITHUB_OUTPUT: output,
+          TEXLIVE_CURL_CONNECT_TIMEOUT_SECONDS: "30",
+          TEXLIVE_CURL_MAX_TIME_SECONDS: "60",
+          ...env,
         },
       },
     );
@@ -91,11 +110,17 @@ describe.skipIf(process.platform === "win32")(
         `${repository}/install-tl-unx.tar.gz.sha512`,
         `${repository}/tlpkg/texlive.tlpdb.sha512`,
       ]);
+      expect(result.stderr).not.toContain("private-sentinel");
+      expect(result.stderr).not.toContain(host);
+      expect(result.stderr).toContain('"time_appconnect":23.8');
       expect(output).toContain(`snapshot_id=${snapshotId}\n`);
       expect(output).toContain(`date=2026-09-08\n`);
       expect(output).toContain(`database_sha512=${pointer.databaseSha512}\n`);
       expect(output).toContain(`repository=${repository}\n`);
       for (const { args } of calls) {
+        expect(args[0]).toBe("--disable");
+        expect(args[args.indexOf("--connect-timeout") + 1]).toBe("30");
+        expect(args).not.toContain("--retry");
         expect(args).toContain("--max-filesize");
         expect(args).toContain("65536");
         expect(args).not.toContain("--location");
@@ -158,6 +183,97 @@ describe.skipIf(process.platform === "win32")(
         ).toBe(true);
       },
     );
+    it.each([6, 7, 28, 56, 503, 429])(
+      "retries transient %s on the exact URL and discards partial bodies",
+      async (failure) => {
+        const f = await fixture();
+        const url = `${repository}/install-tl-unx.tar.gz.sha512`;
+        const { result, calls, output } = await f.run({
+          [url]: [
+            {
+              curlExit: failure > 100 ? 22 : failure,
+              httpStatus: failure > 100 ? failure : 0,
+              body: "discard-private-sentinel",
+            },
+            `${pointer.installerSha512}  install-tl-unx.tar.gz\n`,
+          ],
+        });
+        expect(result.status, result.stderr).toBe(0);
+        expect(calls.map((call) => call.url)).toEqual([
+          `${origin}/latest.json`,
+          url,
+          url,
+          `${repository}/tlpkg/texlive.tlpdb.sha512`,
+        ]);
+        expect(output).toContain(
+          `installer_sha512=${pointer.installerSha512}\n`,
+        );
+        expect(result.stderr).not.toContain("private-sentinel");
+        expect(result.stderr).not.toContain(archive);
+        expect(result.stderr).toContain('"attempt":2');
+      },
+    );
+    it.each([60, 63, 401, 403, 404, 302])(
+      "does not retry certificate, size, authentication or unavailable response %s",
+      async (failure) => {
+        const f = await fixture();
+        const url = `${repository}/install-tl-unx.tar.gz.sha512`;
+        const { result, calls, output } = await f.run({
+          [url]: {
+            curlExit: failure >= 400 ? 22 : failure === 302 ? 0 : failure,
+            httpStatus: failure > 100 ? failure : 0,
+          },
+        });
+        expect(result.status).not.toBe(0);
+        expect(calls.map((call) => call.url)).toEqual([
+          `${origin}/latest.json`,
+          url,
+        ]);
+        expect(output).toBe("unrelated=preserve\n");
+      },
+    );
+    it("bounds exhausted retries without appending output or selecting another date", async () => {
+      const f = await fixture();
+      const url = `${repository}/tlpkg/texlive.tlpdb.sha512`;
+      const { result, calls, output } = await f.run({ [url]: 28 });
+      expect(result.status).not.toBe(0);
+      expect(calls.filter((call) => call.url === url)).toHaveLength(4);
+      expect(new Set(calls.map((call) => call.url))).toEqual(
+        new Set([
+          `${origin}/latest.json`,
+          `${repository}/install-tl-unx.tar.gz.sha512`,
+          url,
+        ]),
+      );
+      expect(output).toBe("unrelated=preserve\n");
+      expect(result.stderr).toContain("curl 28");
+    });
+    it("caps the final attempt and stops at the per-URL deadline", async () => {
+      const f = await fixture();
+      const url = `${repository}/install-tl-unx.tar.gz.sha512`;
+      const { result, calls, output } = await f.run(
+        { [url]: 28 },
+        "2026-09-08",
+        { FIXTURE_CLOCK: "[0,170000,180001]" },
+      );
+      expect(result.status).not.toBe(0);
+      expect(calls).toHaveLength(1);
+      const first = calls[0];
+      if (!first) throw new Error("Expected one bounded request");
+      const args = first.args;
+      expect(args[args.indexOf("--max-time") + 1]).toBe("10");
+      expect(args[args.indexOf("--connect-timeout") + 1]).toBe("10");
+      expect(output).toBe("unrelated=preserve\n");
+    });
+    it("honors an explicit connection timeout", async () => {
+      const f = await fixture();
+      const { result, calls } = await f.run({}, "2026-09-08", {
+        TEXLIVE_CURL_CONNECT_TIMEOUT_SECONDS: "15",
+      });
+      expect(result.status, result.stderr).toBe(0);
+      for (const { args } of calls)
+        expect(args[args.indexOf("--connect-timeout") + 1]).toBe("15");
+    });
     it("keeps an explicit date explicit and verifies the database as well as installer", async () => {
       const f = await fixture(),
         { result, calls, output } = await f.run({}, "2026-09-08");

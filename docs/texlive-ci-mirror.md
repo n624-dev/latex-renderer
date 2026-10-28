@@ -45,6 +45,23 @@ Timeouts, identity differences and unavailable snapshots fail the job; they do
 not silently choose an older date or another download origin. Explicit dates
 remain explicit. Payload signature/checksum verification is unchanged.
 
+CI metadata reads allow 30 seconds for DNS, TCP and TLS connection establishment
+and 60 seconds per transfer by default. `TEXLIVE_CURL_CONNECT_TIMEOUT_SECONDS`
+and `TEXLIVE_CURL_MAX_TIME_SECONDS` can override these values within the shell
+selector's validated ranges. Each mirror selector URL has a 180-second total
+budget, including at most four attempts with 2/4/8-second retry delays. The
+remaining budget caps both connection and transfer deadlines. Only transient
+transport failures and HTTP 408/429/500/502/503/504 are retried, using the exact
+same URL with a fresh response buffer. Certificate, size, authentication,
+redirect, malformed metadata and identity failures do not trigger fallback.
+
+Each attempt logs only its stage, attempt number, curl exit status, HTTP status
+and DNS/TCP/TLS/first-byte/total timing fields. It never logs the URL, mirror
+hostname, response body or raw curl error. A connection timeout therefore
+remains distinguishable from a completed TLS connection followed by a slow
+HTTP response. An upstream outage can still exhaust the budget and correctly
+block publication; increasing a deadline does not guarantee availability.
+
 For an existing deployment, install the updated manager and restricted SSH
 wrapper before enabling the updated CI selector. Then run, as the mirror's
 dedicated user, `texlive-mirror --config /etc/texlive-ci/config.json refresh-metadata`.

@@ -4,7 +4,7 @@ set -eu
 archive_root=${TEXLIVE_ARCHIVE_ROOT:-https://texlive.info/tlnet-archive}
 requested=${1:-latest}
 max_lookback=${TEXLIVE_SNAPSHOT_LOOKBACK_DAYS:-14}
-curl_connect_timeout=${TEXLIVE_CURL_CONNECT_TIMEOUT_SECONDS:-10}
+curl_connect_timeout=${TEXLIVE_CURL_CONNECT_TIMEOUT_SECONDS:-30}
 curl_max_time=${TEXLIVE_CURL_MAX_TIME_SECONDS:-60}
 # The image layout, profile paths, and runtime inventory are intentionally tied
 # to TeX Live 2026 in this release. Do not silently consume a future annual
