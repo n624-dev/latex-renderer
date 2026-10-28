@@ -26,6 +26,7 @@ function fixture() {
       .fn()
       .mockResolvedValue({ activeOperationId: null, lastError: null }),
     stopController: vi.fn().mockResolvedValue(undefined),
+    recover: vi.fn().mockResolvedValue(undefined),
     startController: vi.fn().mockResolvedValue(undefined),
     activate: vi.fn().mockResolvedValue(undefined),
     wait: vi.fn(() => {
@@ -127,8 +128,35 @@ it.each(["stopController", "activate"] as const)(
     await expect(activateAfterOperation(f)).rejects.toThrow("failed");
     expect(f.release).toHaveBeenCalledOnce();
     expect(f.startController).toHaveBeenCalledOnce();
+    expect(f.recover).toHaveBeenCalledOnce();
   },
 );
+it("does not start an uncommitted candidate when bootstrap recovery fails", async () => {
+  const f = fixture();
+  f.activate.mockRejectedValue(
+    new Error("activation and automatic restoration failed"),
+  );
+  f.recover.mockRejectedValue(new Error("recovery still blocked"));
+  await expect(activateAfterOperation(f)).rejects.toThrow(
+    "recovery still blocked",
+  );
+  expect(f.release).toHaveBeenCalledOnce();
+  expect(f.startController).not.toHaveBeenCalled();
+});
+it("finishes pending-slot recovery before starting management", async () => {
+  const f = fixture();
+  let recovered = false;
+  f.recover.mockImplementation(() => {
+    expect(f.startController).not.toHaveBeenCalled();
+    recovered = true;
+    return Promise.resolve();
+  });
+  f.startController.mockImplementation(() => {
+    expect(recovered).toBe(true);
+    return Promise.resolve();
+  });
+  expect(await activateAfterOperation(f)).toBe(true);
+});
 it("does not restart a controller when there is no nominated candidate", async () => {
   const f = fixture();
   f.hasCandidate.mockResolvedValue(false);

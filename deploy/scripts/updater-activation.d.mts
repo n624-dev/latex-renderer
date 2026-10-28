@@ -5,6 +5,7 @@ export function activateAfterOperation(options: {
   verifyCandidate?: () => Promise<unknown>;
   readController: () => Promise<unknown>;
   stopController: () => Promise<unknown>;
+  recover: () => Promise<unknown>;
   startController: () => Promise<unknown>;
   activate: () => Promise<unknown>;
   wait?: () => Promise<unknown>;

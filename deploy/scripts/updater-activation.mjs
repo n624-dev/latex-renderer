@@ -33,6 +33,7 @@ export async function activateAfterOperation({
   verifyCandidate = async () => {},
   readController,
   stopController,
+  recover,
   startController,
   activate,
   wait = () => setTimeout(3000),
@@ -72,7 +73,12 @@ export async function activateAfterOperation({
       await activate();
       return true;
     } finally {
-      if (stopped) await startController();
+      if (stopped) {
+        // A failed bootstrap may leave a pending journal when recovery itself
+        // failed (for example ENOSPC). Never start that uncommitted candidate.
+        await recover();
+        await startController();
+      }
     }
   }
   throw new Error("Timed out waiting for the application operation to commit");
@@ -170,6 +176,16 @@ async function main() {
     readController: controllerState,
     stopController: () =>
       systemctl("stop", "latex-renderer-update-manager.service"),
+    recover: () =>
+      execute(
+        "/usr/local/bin/node",
+        [
+          "--max-old-space-size=64",
+          join(bootstrapRoot, "updater-bootstrap.mjs"),
+          "recover",
+        ],
+        { timeout: 120_000 },
+      ),
     startController: () =>
       systemctl("start", "latex-renderer-update-manager.service"),
     activate: () =>
