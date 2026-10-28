@@ -592,8 +592,10 @@ it("separates native validation, immutable publication, anonymous pulls and late
     expect(workflow).toContain("ubuntu-24.04-arm");
   }
   const host = readFileSync("deploy/ci/update-e2e.mjs", "utf8");
-  expect(host).toContain('"native-arm64": `v${[1, 5, 0].join(".")}-rc.1`');
-  expect(host).toContain(
+  expect(host).toContain('from "./update-baseline.mjs"');
+  const baseline = readFileSync("deploy/ci/update-baseline.mjs", "utf8");
+  expect(baseline).toContain('"native-arm64": `v${[1, 5, 0].join(".")}-rc.1`');
+  expect(baseline).toContain(
     "Update baseline does not match the native host architecture",
   );
   const provision = readFileSync("deploy/ci/provision-update-host.mjs", "utf8");
