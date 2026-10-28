@@ -10,9 +10,9 @@ since: "v1.2.0"
 
 ## 現在の提供状況
 
-このページは[`v1.5.4`](https://github.com/n624-dev/latex-renderer/releases/tag/v1.5.4)のサーバーbundleを対象にします。バージョンが`-rc.N`のReleaseは指定された検証hostだけへ明示適用し、一般利用者はStableを使用してください。Cloudflare構成に加えて、通常のTLSリバースプロキシとOIDC／ローカルパスワード認証を選択できます。このReleaseは公開後にタグや配布ファイルを差し替えできない設定で固定され、次を含みます。
+このページは[`v1.5.5`](https://github.com/n624-dev/latex-renderer/releases/tag/v1.5.5)のサーバーbundleを対象にします。バージョンが`-rc.N`のReleaseは指定された検証hostだけへ明示適用し、一般利用者はStableを使用してください。Cloudflare構成に加えて、通常のTLSリバースプロキシとOIDC／ローカルパスワード認証を選択できます。このReleaseは公開後にタグや配布ファイルを差し替えできない設定で固定され、次を含みます。
 
-- `latex-renderer-server-1.5.4.tar.gz`
+- `latex-renderer-server-1.5.5.tar.gz`
 - クライアントZIPとClaude Desktop用MCPB
 - 3つの配布ファイルを検証する`SHA256SUMS`
 - commit、バージョン、Renderer fingerprint、Node.js／pnpm要件を記録したbundle内metadata
@@ -24,7 +24,7 @@ since: "v1.2.0"
 
 ## 対応する構成
 
-v1.5.4ではPassword＋OIDCの同時利用と、確認済み認証設定の切替・中断復旧を利用できます。
+v1.5.5ではPassword＋OIDCの同時利用と、確認済み認証設定の切替・中断復旧を利用できます。
 併用時は`AUTH_BACKEND=native`、`AUTH_PASSWORD_ENABLED=true`、`AUTH_OIDC_ENABLED=true`を設定します。
 従来の`AUTH_MODE`は単一方式の互換設定です。初回セットアップと認証設定画面で方式を明示し、`main`を本番へ直接反映しないでください。
 
@@ -93,14 +93,14 @@ v1.5.4ではPassword＋OIDCの同時利用と、確認済み認証設定の切�
 
 公開リポジトリの`*.example`ファイルは項目確認のための雛形です。設定済みファイルを雛形へ上書きしてcommitする運用はしません。
 
-## v1.5.4をダウンロードして検証
+## v1.5.5をダウンロードして検証
 
 初回導入には以下の固定版の検証手順を使います。過去RCから更新する場合だけ、[RC固有の互換性情報](/docs/reference/#過去rcのrenderer識別情報)を先に確認してください。
 
 次のコマンドは、固定されたReleaseであることをGitHub APIで確認し、APIが返すdigestとダウンロードしたbundleを照合します。通常の非rootユーザーで実行します。
 
 ```bash
-version=1.5.4
+version=1.5.5
 repository=n624-dev/latex-renderer
 asset="latex-renderer-server-$version.tar.gz"
 work_dir=$(mktemp -d)
