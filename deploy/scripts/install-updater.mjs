@@ -110,6 +110,29 @@ for (const name of [
 // Syntax check all entry points before service configuration is changed.
 for (const script of ["updater-entry.mjs", "updater-bootstrap.mjs"])
   execFileSync("/usr/local/bin/node", ["--check", join(bootstrap, script)]);
+// This gate can evolve without rewriting the immutable bootstrap protocol.
+// The old controller must also use it when applying this release for the first
+// time, so install it outside the selected slot, from the sealed release.
+const gate = "updater-activation.mjs";
+const gateInput = join(source, "deploy/scripts", gate);
+const gateInfo = await lstat(gateInput);
+if (!gateInfo.isFile() || gateInfo.uid !== 0 || gateInfo.mode & 0o022)
+  throw new Error("Unsealed Updater activation gate");
+execFileSync("/usr/local/bin/node", ["--check", gateInput]);
+const gateDirectory = "/usr/local/libexec";
+await mkdir(gateDirectory, { recursive: true, mode: 0o755 });
+const gateDirectoryInfo = await lstat(gateDirectory);
+if (
+  !gateDirectoryInfo.isDirectory() ||
+  gateDirectoryInfo.uid !== 0 ||
+  gateDirectoryInfo.mode & 0o022 ||
+  (await realpath(gateDirectory)) !== gateDirectory
+)
+  throw new Error("Unsafe Updater activation directory");
+await slots.atomic(
+  join(gateDirectory, "latex-renderer-updater-activation.mjs"),
+  await readFile(gateInput),
+);
 await slots.nominate(id);
 await slots.collect();
 console.log(`Prepared independent Updater ${envelope.version}`);

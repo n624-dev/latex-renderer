@@ -10,7 +10,14 @@ Type=oneshot
 User=root
 Group=latex-renderer
 UMask=0007
-ExecStart=/usr/local/bin/node /opt/latex-renderer/updater/bootstrap-v1/updater-bootstrap.mjs activate
-TimeoutStartSec=5min
+ExecStart=/usr/local/bin/node --max-old-space-size=64 /usr/local/libexec/latex-renderer-updater-activation.mjs
+# A free helper lock is not proof that the controller saved operation success.
+# Wait without stopping the controller; no RAM/disk thresholds are changed.
+TimeoutStartSec=2h10min
+KillMode=control-group
+# Restore a pending slot transition after interruption, then keep management
+# available. These also run if the activation process is killed mid-cutover.
+ExecStopPost=/usr/local/bin/node /opt/latex-renderer/updater/bootstrap-v1/updater-bootstrap.mjs recover
+ExecStopPost=/usr/bin/systemctl start latex-renderer-update-manager.service
 Restart=on-failure
 RestartSec=30s
