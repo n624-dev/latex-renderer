@@ -85,6 +85,9 @@ run("/bin/sh", ["-c", "command -v dockerd-rootless-setuptool.sh >/dev/null"]);
 run("/bin/sh", [
   resolve(source, "deploy/scripts/configure-rootless-docker.sh"),
 ]);
+// Do not expose a local HTTPS peer while acquiring the external baseline.
+// E2E activates the fixture only after immutable download verification finishes.
+run("/usr/bin/systemctl", ["stop", "nginx"]);
 await mkdir("/etc/latex-renderer/ci", { mode: 0o700 });
 const cert = ciCertificate;
 run("/usr/bin/openssl", [
@@ -104,11 +107,6 @@ run("/usr/bin/openssl", [
   "-out",
   cert,
 ]);
-run("/usr/sbin/update-ca-certificates", []);
-await writeFile(
-  "/etc/hosts",
-  (await readFile("/etc/hosts", "utf8")) + `\n127.0.0.1 ${ciHostname}\n`,
-);
 const proxy = standaloneProxy(
   await readFile(
     resolve(source, "deploy/reverse-proxy/nginx.conf.example"),
@@ -117,7 +115,6 @@ const proxy = standaloneProxy(
 );
 await writeFile("/etc/nginx/conf.d/latex-renderer-ci.conf", proxy);
 run("/usr/sbin/nginx", ["-t"]);
-run("/usr/bin/systemctl", ["restart", "nginx"]);
 await writeFile("/etc/latex-renderer/renderer.env", environment, {
   mode: 0o640,
 });
@@ -140,5 +137,5 @@ await writeFile(
   { mode: 0o640 },
 );
 console.log(
-  "Disposable standalone/password/TLS host provisioned; no Cloudflare credentials used.",
+  "Disposable standalone/password host provisioned; HTTPS activation awaits verified baseline acquisition.",
 );

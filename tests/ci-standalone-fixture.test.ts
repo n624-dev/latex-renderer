@@ -54,7 +54,13 @@ it("derives certificate identity and hosts entry from the shared fixture hostnam
   const script = readFileSync("deploy/ci/provision-update-host.mjs", "utf8");
   expect(script).toContain("`/CN=${ciHostname}`");
   expect(script).toContain("`subjectAltName=DNS:${ciHostname}`");
-  expect(script).toContain("`\\n127.0.0.1 ${ciHostname}\\n`");
+  const activation = readFileSync("deploy/ci/standalone-https.mjs", "utf8");
+  expect(activation).toContain("`\\n127.0.0.1 ${ciHostname}\\n`");
+  expect(script).not.toContain('"/etc/hosts"');
+  expect(script).not.toContain('run("/usr/sbin/update-ca-certificates"');
+  expect(script).toContain('["stop", "nginx"]');
+  expect(script).not.toContain('["restart", "nginx"]');
+  expect(script).not.toContain('["start", "nginx"]');
   expect(
     script.indexOf("const environment = standaloneEnvironment"),
   ).toBeLessThan(script.indexOf('run("/bin/sh"'));

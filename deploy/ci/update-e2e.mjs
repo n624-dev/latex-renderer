@@ -16,7 +16,7 @@ import {
   verifyCiReleaseArtifact,
   verifyCiValidationArtifact,
 } from "../scripts/ci-release-artifact.mjs";
-import { downloadPublishedRelease } from "./published-release.mjs";
+import { acquireUpdateBaseline } from "./update-baseline.mjs";
 import {
   brokenUpdaterSource,
   assertStartupRecovery,
@@ -140,30 +140,14 @@ try {
       await rm(stage, { recursive: true, force: true });
     }
   };
-  // Test both the legacy transition and a host with bootstrap-v1 already frozen.
-  // Numeric pieces avoid RC -> stable text promotion changing baseline identity.
-  const baselines = {
-    legacy: `v${[1, 3, 4].join(".")}-rc.5`,
-    installed: `v${[1, 3, 5].join(".")}-rc.1`,
-    // Start ARM from a signed native-capable release, never the amd64-only
-    // historical baselines. It still uses the complete real host/render path.
-    "native-arm64": `v${[1, 5, 0].join(".")}-rc.1`,
-  };
-  const baselineTag = baselines[process.env.CI_UPDATE_BASELINE];
-  if (!baselineTag) throw new Error("Unknown CI update baseline");
-  if (
-    (process.env.CI_UPDATE_BASELINE === "native-arm64" ? "arm64" : "x64") !==
-    process.arch
-  )
-    throw new Error(
-      "Update baseline does not match the native host architecture",
-    );
   const oldStage = join(root, "baseline");
   await mkdir(oldStage);
-  if (!apiToken)
-    throw new Error("CI baseline download requires its read-only API token");
-  const baseline = await downloadPublishedRelease(baselineTag, oldStage, {
+  const { baseline, baselineTag } = await acquireUpdateBaseline({
+    variant: process.env.CI_UPDATE_BASELINE,
+    architecture: process.arch,
+    stage: oldStage,
     apiToken,
+    run,
   });
   await deploy(baseline.source, { ...baseline, tag: baselineTag }, true);
   if (["installed", "native-arm64"].includes(process.env.CI_UPDATE_BASELINE)) {
@@ -660,6 +644,7 @@ try {
       validationOnly: Boolean(validationSourceRef),
       sourceRef: validationSourceRef ?? `refs/tags/${tag}`,
       baselineTag,
+      baselineBeforeHttps: true,
       architecture: process.arch,
       tag,
       commit,

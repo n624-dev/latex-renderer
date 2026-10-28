@@ -47,8 +47,10 @@ it("keeps CI download verification identical after its transport boundary", () =
     production.slice(production.indexOf(marker)),
   );
   const entry = readFileSync("deploy/ci/update-e2e.mjs", "utf8");
-  expect(entry).toContain('from "./published-release.mjs"');
-  expect(entry).toContain('installed: `v${[1, 3, 5].join(".")}-rc.1`');
+  expect(entry).toContain('from "./update-baseline.mjs"');
+  const baseline = readFileSync("deploy/ci/update-baseline.mjs", "utf8");
+  expect(baseline).toContain('from "./published-release.mjs"');
+  expect(baseline).toContain('installed: `v${[1, 3, 5].join(".")}-rc.1`');
   for (const name of ["server-release", "server-update-validation"]) {
     const workflow = readFileSync(`.github/workflows/${name}.yml`, "utf8");
     expect(workflow).toContain("baseline: [legacy, installed]");

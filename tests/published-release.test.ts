@@ -163,7 +163,9 @@ it("both E2E workflows pass only the named environment variable across sudo, con
   expect(
     entry.indexOf("delete process.env.CI_RELEASE_GITHUB_TOKEN;"),
   ).toBeLessThan(entry.indexOf("const run ="));
-  expect(entry).toMatch(
-    /downloadPublishedRelease\(baselineTag, oldStage,\s*\{\s*apiToken/,
+  expect(entry).toMatch(/acquireUpdateBaseline\(\{[\s\S]*?apiToken,/);
+  const acquisition = await readFile("deploy/ci/update-baseline.mjs", "utf8");
+  expect(acquisition).toContain(
+    "await download(baselineTag, stage, { apiToken })",
   );
 });
