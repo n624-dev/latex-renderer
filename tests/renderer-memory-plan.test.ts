@@ -62,7 +62,7 @@ describe("bounded, owner/input/Runtime-specific memory planning", () => {
   );
   it("keeps a 500MiB admission floor separate from a 2GiB execution ceiling", () => {
     const { db, key, now } = fixture();
-    rememberRenderMemory(db, key, 342 * MIB, true);
+    rememberRenderMemory(db, key, 342 * MIB, true, now);
     expect(
       planRenderMemory(db, candidate, image, 500 * MIB, now, 2048 * MIB),
     ).toMatchObject({
