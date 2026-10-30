@@ -66,7 +66,7 @@ export async function verifyCredentialStartup(candidate, root) {
         [
           "show",
           service,
-          "--property=Type,LoadCredential,ProtectSystem,RestrictSUIDSGID,ExecStartPost,ActiveState,SubState,NRestarts,InvocationID",
+          "--property=Type,ProtectSystem,RestrictSUIDSGID,ExecStartPost,ActiveState,SubState,NRestarts,InvocationID",
         ],
         { encoding: "utf8", timeout: 10_000 },
       )
@@ -79,7 +79,26 @@ export async function verifyCredentialStartup(candidate, root) {
     );
   const before = show();
   assert.equal(before.Type, "exec");
-  assert.match(before.LoadCredential, /^image-manager-token:/);
+  // systemctl show prints this structured D-Bus property as [unprintable]
+  // on systemd 255. Read the typed property instead of its human rendering.
+  const credentials = JSON.parse(
+    execFileSync(
+      "/usr/bin/busctl",
+      [
+        "--json=short",
+        "get-property",
+        "org.freedesktop.systemd1",
+        "/org/freedesktop/systemd1/unit/latex_2drenderer_2dimage_2dmanager_2eservice",
+        "org.freedesktop.systemd1.Service",
+        "LoadCredential",
+      ],
+      { encoding: "utf8", timeout: 10_000 },
+    ),
+  );
+  assert.equal(credentials.type, "a(ss)");
+  assert.deepEqual(credentials.data, [
+    ["image-manager-token", "/etc/latex-renderer/secrets/image-manager-token"],
+  ]);
   assert.equal(before.ProtectSystem, "strict");
   assert.equal(before.RestrictSUIDSGID, "yes");
   assert.match(before.ExecStartPost, /wait-image-manager-http\.sh/);
