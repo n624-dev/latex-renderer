@@ -70,6 +70,7 @@ export async function verifyCredentialStartup(candidate, root) {
     }),
   );
   for (let attempt = 0; attempt < 5; attempt++) {
+    const unit = `latex-renderer-ci-credentials-${suffix}-${attempt}.service`;
     execFileSync(
       "/usr/bin/systemd-run",
       [
@@ -77,7 +78,7 @@ export async function verifyCredentialStartup(candidate, root) {
         "--wait",
         "--pipe",
         "--collect",
-        `--unit=latex-renderer-ci-credentials-${suffix}-${attempt}`,
+        `--unit=${unit}`,
         "--service-type=exec",
         "--property=User=root",
         "--property=Group=latex-renderer",
@@ -86,11 +87,12 @@ export async function verifyCredentialStartup(candidate, root) {
         "--property=TimeoutStopSec=5s",
         `--property=LoadCredential=fixture:${credential}`,
         "--property=ExecStartPre=/bin/sleep 0.05",
-        "--property=ExecStartPost=/usr/bin/test -s %d/fixture",
+        // Transient ExecStartPost properties retain %d literally (unlike unit files).
+        `--property=ExecStartPost=/usr/bin/test -s /run/credentials/${unit}/fixture`,
         ...protections.map((line) => `--property=${line}`),
         "/bin/sh",
         "-c",
-        'test -s "$CREDENTIALS_DIRECTORY/fixture" && sleep 0.2',
+        'test -s "$CREDENTIALS_DIRECTORY/fixture" && sleep 2',
       ],
       { stdio: "pipe", timeout: 30_000 },
     );
