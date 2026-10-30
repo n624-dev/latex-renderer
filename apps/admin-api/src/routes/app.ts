@@ -18,7 +18,7 @@ import {
 import { AdminJobsService } from "../services/jobs.js";
 import { AppProjectsService } from "../services/app-projects.js";
 import type { AdminDependencies, AppActor } from "../types.js";
-import { parse } from "./helpers.js";
+import { parse, readJson } from "./helpers.js";
 
 const jobId = z.string().regex(/^job_[a-f0-9]{32}$/),
   sourceId = z.string().regex(/^source_[a-f0-9]{32}$/),
@@ -151,7 +151,7 @@ export function createAppV1Router(deps: AdminDependencies): Hono {
             sha256: z.string().regex(/^[a-f0-9]{64}$/),
           })
           .strict(),
-        await c.req.json<unknown>(),
+        await readJson(c),
       ),
       principal = ensureWebPrincipal(deps, actor);
     const result = await jobs.createSource(
@@ -175,7 +175,7 @@ export function createAppV1Router(deps: AdminDependencies): Hono {
             outputs: renderOutputsSchema,
           })
           .strict(),
-        await c.req.json<unknown>(),
+        await readJson(c),
       );
     const principal = ensureWebPrincipal(deps, actor),
       entrypoint = validateEntrypointPath(input.entrypoint),
@@ -228,7 +228,7 @@ export function createAppV1Router(deps: AdminDependencies): Hono {
     const actor = await requireAppActor(deps, c),
       input = parse(
         z.object({ displayName }).strict(),
-        await c.req.json<unknown>(),
+        await readJson(c),
       );
     return c.json(projects.create(actor, input.displayName), 201);
   });
@@ -260,7 +260,7 @@ export function createAppV1Router(deps: AdminDependencies): Hono {
       id = parse(projectId, c.req.param("id")),
       input = parse(
         z.object({ displayName }).strict(),
-        await c.req.json<unknown>(),
+        await readJson(c),
       );
     projects.rename(actor, id, input.displayName);
     return c.json({ id, displayName: input.displayName });
@@ -280,10 +280,9 @@ export function createAppV1Router(deps: AdminDependencies): Hono {
       ),
       key = idempotencyKey(c.req.header("Idempotency-Key")),
       selected = projects.revision(actor, id, revisionId),
-      body = await c.req.text(),
       input = parse(
         z.object({ outputs: renderOutputsSchema.unwrap().optional() }).strict(),
-        body === "" ? {} : (JSON.parse(body) as unknown),
+        await readJson(c, true),
       ),
       principal = ensureWebPrincipal(deps, actor),
       result = await jobs.createRender(
@@ -319,7 +318,7 @@ export function createAppV1Router(deps: AdminDependencies): Hono {
   });
   router.post("/environment/packages/check", async (c) => {
     const actor = await requireAppActor(deps, c),
-      input = parse(namesSchema, await c.req.json<unknown>());
+      input = parse(namesSchema, await readJson(c));
     return c.json({
       items: await environmentService(deps).checkPackages(
         environmentIdentity(actor),
@@ -343,7 +342,7 @@ export function createAppV1Router(deps: AdminDependencies): Hono {
   });
   router.post("/environment/fonts/check", async (c) => {
     const actor = await requireAppActor(deps, c),
-      input = parse(namesSchema, await c.req.json<unknown>());
+      input = parse(namesSchema, await readJson(c));
     return c.json({
       items: await environmentService(deps).checkFonts(
         environmentIdentity(actor),

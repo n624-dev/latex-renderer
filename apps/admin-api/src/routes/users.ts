@@ -5,7 +5,7 @@ import { pageSize } from "@latex-renderer/shared";
 import { requireActor } from "../auth/actor.js";
 import { UsersService } from "../services/users.js";
 import type { AdminDependencies } from "../types.js";
-import { parse } from "./helpers.js";
+import { parse, readJson } from "./helpers.js";
 
 export function createUsersRouter(deps: AdminDependencies): Hono {
   const router = new Hono();
@@ -29,7 +29,7 @@ export function createUsersRouter(deps: AdminDependencies): Hono {
 
   router.post("/", async (c) => {
     const actor = await requireActor(deps, c, "admin:users:write");
-    const input = parse(createUserSchema, await c.req.json<unknown>());
+    const input = parse(createUserSchema, await readJson(c));
     return c.json({ id: await service.create(actor, input) }, 201);
   });
 
@@ -47,7 +47,7 @@ export function createUsersRouter(deps: AdminDependencies): Hono {
     const actor = await requireActor(deps, c, "admin:users:write");
     const input = parse(
       z.object({ reason: z.string().trim().min(1).max(500) }).strict(),
-      await c.req.json<unknown>(),
+      await readJson(c),
     );
     return c.json(
       service.unlinkIdentity(
@@ -69,7 +69,7 @@ export function createUsersRouter(deps: AdminDependencies): Hono {
           reason: z.string().trim().min(1).max(500),
         })
         .strict(),
-      await c.req.json<unknown>(),
+      await readJson(c),
     );
     return c.json(await service.resetPassword(actor, c.req.param("id"), input));
   });
@@ -87,7 +87,7 @@ export function createUsersRouter(deps: AdminDependencies): Hono {
           value.displayName !== undefined ||
           value.role !== undefined,
       ),
-      await c.req.json<unknown>(),
+      await readJson(c),
     );
     service.update(actor, c.req.param("id"), input);
     return c.json({ id: c.req.param("id"), updated: true });

@@ -12,7 +12,18 @@ environment_root=${RENDERER_ENVIRONMENT_ROOT:-/var/lib/latex-renderer/environmen
 worker_user=${RENDERER_WORKER_USER:-latex-render-worker}
 repo_root=${IMAGE_MANAGER_REPO_ROOT:-/opt/latex-renderer/current}
 tmp_root=${TMPDIR:-/var/lib/latex-renderer/image-manager/tmp}
-install -d -o root -g latex-renderer -m 0750 "$tmp_root"
+# mkdir may inherit setgid from the required 2770 shared parent. GNU install
+# tries to retain that bit, which RestrictSUIDSGID correctly rejects. Clear it
+# explicitly before setting ownership, including after an interrupted first run.
+prepare_root_directory() {
+  case "$1" in /|''|[!/]*) echo "Managed directory must be an absolute non-root path" >&2; exit 64 ;; esac
+  [ ! -L "$1" ] || { echo "Managed directory must not be a symlink" >&2; exit 78; }
+  mkdir -p -- "$1"
+  [ -d "$1" ] && [ ! -L "$1" ] || exit 78
+  chmod 00750 "$1"
+  chown root:latex-renderer "$1"
+}
+prepare_root_directory "$tmp_root"
 
 state_values=$(/usr/local/bin/node - "$state_file" <<'NODE'
 const fs = require('node:fs');
@@ -269,7 +280,7 @@ if [ ! -s "$inventory_tmp/packages.txt" ] || [ ! -s "$inventory_tmp/fonts.txt" ]
   echo "Managed TeX runtime inventory generation failed" >&2
   exit 76
 fi
-install -d -o root -g latex-renderer -m 0750 "$environment_root"
+prepare_root_directory "$environment_root"
 install -o root -g latex-renderer -m 0640 \
   "$inventory_tmp/packages.txt" "$inventory_tmp/fonts.txt" "$environment_root/"
 printf '%s\n' "$runtime_image" > "$inventory_tmp/runtime-image.txt"

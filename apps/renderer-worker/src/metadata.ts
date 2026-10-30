@@ -13,6 +13,18 @@ export async function generateMetadata(
   if (!/\.[tT][eE][xX]$/.test(filename))
     throw new Error("Renderer entrypoint is invalid for metadata");
   const recorderName = filename.replace(/\.[tT][eE][xX]$/, ".fls");
+  // An externally stopped container may never execute its EXIT log publisher.
+  // Preserve host-classified failure diagnostics without replacing a real log.
+  if (fallbackMessage !== undefined) {
+    try {
+      await writeFile(join(directory, "compile.log"), `${fallbackMessage}\n`, {
+        flag: "wx",
+        mode: 0o660,
+      });
+    } catch (error) {
+      if (errorCode(error) !== "EEXIST") throw error;
+    }
+  }
   const log = await readBoundedText(
     join(directory, "compile.log"),
     maxInputBytes,

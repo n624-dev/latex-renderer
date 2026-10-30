@@ -7,7 +7,7 @@ Wants=network-online.target latex-renderer-image-log-cleanup.timer
 Before=latex-renderer-worker.service latex-renderer-internal-api.service latex-renderer-admin-api.service latex-renderer-remote-mcp.service
 
 [Service]
-Type=simple
+Type=exec
 User=root
 Group=latex-renderer
 WorkingDirectory=/opt/latex-renderer/current

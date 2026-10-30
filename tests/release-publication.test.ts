@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   cp,
@@ -20,6 +20,8 @@ import {
   publishRelease,
   collectReleasePublications,
 } from "../deploy/scripts/release-publication.mjs";
+
+import { githubCliEnvironment } from "../deploy/scripts/github-cli-environment.mjs";
 
 const roots: string[] = [];
 // Fixture identities must not become the application's active RC on a bump.
@@ -114,6 +116,35 @@ async function fixture() {
     releaseId: `v${fixtureVersion}-aaaaaaaaaaaa`,
   };
 }
+it.skipIf(process.platform !== "linux")(
+  "retries the same immutable source after gh creates changing state outside the assembly",
+  async () => {
+    const f = await fixture();
+    const state = join(f.source, "..", "gh-private");
+    await mkdir(state, { recursive: true, mode: 0o700 });
+    for (let n = 0; n < 2; n++) {
+      const env = await githubCliEnvironment(state);
+      execFileSync(
+        process.execPath,
+        [
+          "-e",
+          "const fs=require('node:fs'),p=require('node:path');fs.mkdirSync(p.join(process.env.XDG_STATE_HOME,'gh'),{recursive:true});fs.writeFileSync(p.join(process.env.XDG_STATE_HOME,'gh/device-id'),require('node:crypto').randomUUID());",
+        ],
+        { env, cwd: f.source, timeout: 5000 },
+      );
+      const published = await publishRelease({ ...f, copy });
+      expect(published.reused).toBe(n === 1);
+    }
+    await mkdir(join(f.source, ".local/state/gh"), { recursive: true });
+    await writeFile(
+      join(f.source, ".local/state/gh/device-id"),
+      "unexpected state",
+    );
+    await expect(publishRelease({ ...f, copy })).rejects.toThrow(
+      "identity differs",
+    );
+  },
+);
 const copy = async (source: string, destination: string) => {
   await cp(source, destination, {
     recursive: true,

@@ -1,3 +1,4 @@
+import { artifactStoragePath } from "@latex-renderer/database";
 import { defined } from "./helpers/assert-defined.js";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
@@ -21,6 +22,67 @@ import {
 } from "../apps/renderer-worker/src/memory-plan.js";
 
 describe(`Source pipeline HTTP/DB/Worker E2E (${realPipelineImage === undefined ? "deterministic renderer, NOT TeX" : "real TeX container"})`, () => {
+  it.skipIf(realPipelineImage === undefined).each([5000, 10000])(
+    "keeps an actual Docker outer timeout at %ims and renders normally afterward",
+    async (timeout) => {
+      const f = await sourcePipelineFixture();
+      try {
+        const source = await f.renders.createSource(
+          { userId: "pipeline_user", scopes: ["mcp:render", "mcp:read"] },
+          [
+            {
+              path: "main.tex",
+              text: pipelineDocument(1, "\\directlua{while true do end}"),
+            },
+          ],
+        );
+        f.config.jobTimeoutMs = timeout;
+        const ticket = await f.client.createSourceJob(
+          source.id,
+          "main.tex",
+          `pipeline-outer-timeout-${timeout}`,
+          ["pdf"],
+        );
+        await f.runNext();
+        const job = await f.client.job(ticket.jobId, ticket.jobTicket);
+        expect(job).toMatchObject({
+          status: "timeout",
+          errorCode: "JOB_TIMEOUT",
+        });
+        const log = defined(
+          f.database.artifacts.getDownloadable(ticket.jobId, "compile.log"),
+        );
+        const errors = defined(
+          f.database.artifacts.getDownloadable(ticket.jobId, "errors.json"),
+        );
+        expect(
+          (await readFile(artifactStoragePath(f.storage, log))).length,
+        ).toBeGreaterThan(0);
+        expect(job.errorMessage).toContain("overall job timeout");
+        expect(
+          JSON.parse(
+            await readFile(artifactStoragePath(f.storage, errors), "utf8"),
+          ) as unknown,
+        ).toMatchObject({ success: false });
+        f.config.jobTimeoutMs = 90000;
+        const project = join(f.root, `after-timeout-${timeout}`);
+        await mkdir(project);
+        await writeFile(
+          join(project, "main.tex"),
+          pipelineDocument(1, "After external timeout."),
+        );
+        const normal = await renderProject(f.client, project, {
+          outputs: ["pdf"],
+          outputDirectory: join(f.root, "normal-result"),
+          pollTimeoutMs: 120000,
+          sleep: f.runNext,
+        });
+        expect(normal.job.status).toBe("succeeded");
+      } finally {
+        await f.close();
+      }
+    },
+  );
   it.skipIf(realPipelineImage === undefined)(
     "observes a real sandbox outside TeX and rerenders the same Source with a bounded learned cap",
     async () => {

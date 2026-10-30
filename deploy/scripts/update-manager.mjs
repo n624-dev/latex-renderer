@@ -41,6 +41,7 @@ import {
   prepareReleaseExtraction,
 } from "./release-extraction.mjs";
 import { releaseAttestationArgs } from "./release-attestation.mjs";
+import { githubCliEnvironment } from "./github-cli-environment.mjs";
 import { validatedReleaseRendererFingerprint } from "./runtime-image-identity.mjs";
 import {
   assertValidatedCandidateTag,
@@ -711,13 +712,7 @@ async function downloadBundle(operation, release, path) {
         commit: release.commit,
       }),
       {
-        env: {
-          PATH: "/usr/local/bin:/usr/bin:/bin",
-          HOME: join(ghRoot, "gh-home"),
-          GH_CONFIG_DIR: join(ghRoot, "gh-config"),
-          GH_PROMPT_DISABLED: "1",
-          XDG_CACHE_HOME: join(ghRoot, "gh-cache"),
-        },
+        env: await githubCliEnvironment(ghRoot),
       },
     );
   }

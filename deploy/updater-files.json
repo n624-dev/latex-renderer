@@ -28,5 +28,6 @@
   "deploy/scripts/prune-production-artifacts.sh",
   "deploy/scripts/deploy-production-release.sh",
   "deploy/scripts/deployment-checks.sh",
-  "deploy/scripts/deployment-json-check.mjs"
+  "deploy/scripts/deployment-json-check.mjs",
+  "deploy/scripts/github-cli-environment.mjs"
 ]
