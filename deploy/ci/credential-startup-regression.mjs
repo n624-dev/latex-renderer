@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { lstat, readFile, writeFile, mkdir, readdir } from "node:fs/promises";
+import { lstat, readFile, mkdir, readdir } from "node:fs/promises";
 import { join } from "node:path";
 
 export async function verifyCredentialStartup(candidate, root) {
@@ -24,19 +24,6 @@ export async function verifyCredentialStartup(candidate, root) {
   assert.match(unit, /^Type=exec$/m);
   assert.match(unit, /^LoadCredential=image-manager-token:/m);
   assert.match(unit, /^ExecStartPost=.*wait-image-manager-http.sh$/m);
-  const credential = join(root, "startup-credential");
-  await writeFile(credential, "synthetic-ci-credential\n", {
-    mode: 0o400,
-    flag: "wx",
-  });
-  const protections = unit
-    .split("\n")
-    .filter((line) =>
-      /^(ProtectSystem|ProtectHome|PrivateDevices|ProtectKernelTunables|ProtectKernelModules|ProtectControlGroups|RestrictSUIDSGID|LockPersonality|RestrictAddressFamilies)=/.test(
-        line,
-      ),
-    );
-  assert(protections.includes("RestrictSUIDSGID=true"));
   const suffix = randomBytes(6).toString("hex");
   const cliCwd = join(root, "cli-empty-cwd");
   await mkdir(cliCwd, { mode: 0o700 });
@@ -69,33 +56,51 @@ export async function verifyCredentialStartup(candidate, root) {
       sourceUnchanged: true,
     }),
   );
-  for (let attempt = 0; attempt < 5; attempt++) {
-    const unit = `latex-renderer-ci-credentials-${suffix}-${attempt}.service`;
-    execFileSync(
-      "/usr/bin/systemd-run",
-      [
-        "--quiet",
-        "--wait",
-        "--pipe",
-        "--collect",
-        `--unit=${unit}`,
-        "--service-type=exec",
-        "--property=User=root",
-        "--property=Group=latex-renderer",
-        "--property=RuntimeMaxSec=10s",
-        "--property=TimeoutStartSec=15s",
-        "--property=TimeoutStopSec=5s",
-        `--property=LoadCredential=fixture:${credential}`,
-        "--property=ExecStartPre=/bin/sleep 0.05",
-        // Transient ExecStartPost properties retain %d literally (unlike unit files).
-        `--property=ExecStartPost=/usr/bin/test -s /run/credentials/${unit}/fixture`,
-        ...protections.map((line) => `--property=${line}`),
-        "/bin/sh",
-        "-c",
-        'test -s "$CREDENTIALS_DIRECTORY/fixture" && sleep 2',
-      ],
-      { stdio: "pipe", timeout: 30_000 },
+  // Test the installed unit with its real credentials and pre/post commands.
+  // A transient imitation has different command/property expansion semantics.
+  const service = "latex-renderer-image-manager.service";
+  const show = () =>
+    Object.fromEntries(
+      execFileSync(
+        "/usr/bin/systemctl",
+        [
+          "show",
+          service,
+          "--property=Type,LoadCredential,ProtectSystem,RestrictSUIDSGID,ExecStartPost,ActiveState,SubState,NRestarts,InvocationID",
+        ],
+        { encoding: "utf8", timeout: 10_000 },
+      )
+        .trim()
+        .split("\n")
+        .map((line) => {
+          const equal = line.indexOf("=");
+          return [line.slice(0, equal), line.slice(equal + 1)];
+        }),
     );
+  const before = show();
+  assert.equal(before.Type, "exec");
+  assert.match(before.LoadCredential, /^image-manager-token:/);
+  assert.equal(before.ProtectSystem, "strict");
+  assert.equal(before.RestrictSUIDSGID, "yes");
+  assert.match(before.ExecStartPost, /wait-image-manager-http\.sh/);
+  const invocations = new Set([before.InvocationID]);
+  for (let attempt = 0; attempt < 5; attempt++) {
+    execFileSync("/usr/bin/systemctl", ["restart", service], {
+      stdio: "pipe",
+      timeout: 120_000,
+    });
+    execFileSync(
+      "/bin/sh",
+      [join(candidate, "deploy/scripts/wait-image-manager-http.sh")],
+      { stdio: "pipe", timeout: 90_000 },
+    );
+    const current = show();
+    assert.equal(current.ActiveState, "active");
+    assert.equal(current.SubState, "running");
+    assert.equal(current.NRestarts, "0", "An automatic retry masked a startup failure");
+    assert.match(current.InvocationID, /^[a-f0-9]{32}$/);
+    assert(!invocations.has(current.InvocationID), "A fresh process must start");
+    invocations.add(current.InvocationID);
   }
   console.log(
     JSON.stringify({

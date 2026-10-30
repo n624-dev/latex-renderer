@@ -141,9 +141,10 @@ Inventory normalization must not require disabling the service sandbox or
 creating the initial owner again.
 
 Image Manager uses `Type=exec` with credential loading and its existing HTTP
-readiness check. A disposable systemd regression repeats credential loading,
-pre/post commands and the unit's protection settings five times. The normal
-signed update path still verifies the actual installed service. The same host
+readiness check. After the signed update, the disposable host restarts the
+actual installed service five times with its credentials, pre/post commands and
+protection settings. Each attempt must produce a fresh invocation, pass HTTP
+readiness and report no automatic startup retry. The same host
 also runs the setup GitHub CLI probes with no inherited HOME and checks that the
 working tree remains empty. These checks complement the full frontend/provider
 acceptance scenarios above; they do not establish external IdP or Cloudflare
