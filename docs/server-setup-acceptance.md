@@ -132,3 +132,20 @@ Remaining external/device gates:
 No failure injection, initial provisioning, credential rotation or restoration
 is authorized on a production host by these instructions. Use read-only
 production checks and the normal isolated smoke's cleanup for its own test data.
+
+The signed update/recovery CI also tests inventory creation below a `2770`
+shared parent in an actual `RestrictSUIDSGID=true` systemd service. It repeats the
+operation after simulating an interrupted `2700` destination, verifies the
+resulting `0750` directory and preserves the parent's required setgid mode.
+Inventory normalization must not require disabling the service sandbox or
+creating the initial owner again.
+
+Image Manager uses `Type=exec` with credential loading and its existing HTTP
+readiness check. After the signed update, the disposable host restarts the
+actual installed service five times with its credentials, pre/post commands and
+protection settings. Each attempt must produce a fresh invocation, pass HTTP
+readiness and report no automatic startup retry. The same host
+also runs the setup GitHub CLI probes with no inherited HOME and checks that the
+working tree remains empty. These checks complement the full frontend/provider
+acceptance scenarios above; they do not establish external IdP or Cloudflare
+coverage.

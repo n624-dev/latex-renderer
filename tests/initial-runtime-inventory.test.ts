@@ -38,6 +38,7 @@ async function fixture(legacy = false) {
   );
   const mocks = `
 id(){ if [ "$#" = 1 ]; then echo 0; else echo 10000; fi; }
+chown(){ :; }
 getent(){ printf 'fixture:x:10000:10000::%s:/bin/sh\\n' "$FIXTURE_ROOT"; }
 install(){ if [ "$1" = -d ]; then for target; do :; done; command install -d -m 0750 "$target"; else shift 6; command install -m 0640 "$@"; fi; }
 runuser(){
@@ -92,6 +93,23 @@ describe.skipIf(process.platform === "win32")(
         await expect(
           requireInitialRuntimeInventory(f.inventory, image, identity),
         ).resolves.toBeUndefined();
+      },
+    );
+    it.each([false, true])(
+      "clears inherited setgid on first creation and interrupted directories (interrupted=%s)",
+      async (interrupted) => {
+        const f = await fixture();
+        await chmod(f.root, 0o2770);
+        if (interrupted) {
+          await mkdir(f.inventory);
+          await chmod(f.inventory, 0o2700);
+        }
+        const result = f.run();
+        expect(result.status, result.stderr).toBe(0);
+        const { stat } = await import("node:fs/promises");
+        for (const path of [f.inventory, join(f.root, "tmp")])
+          expect((await stat(path)).mode & 0o7777).toBe(0o750);
+        await requireInitialRuntimeInventory(f.inventory, image, identity);
       },
     );
     it("preserves prior inventory on generation failure and retries cleanly", async () => {

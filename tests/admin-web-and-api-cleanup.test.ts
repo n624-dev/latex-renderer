@@ -3,6 +3,7 @@ import { Script } from "node:vm";
 import { ApiKeyService, type AccessJwtVerifier } from "@latex-renderer/auth";
 import { RendererDatabase } from "@latex-renderer/database";
 import { createApiKeySchema } from "../packages/contracts/src/index.js";
+import { AppProjectsService } from "../apps/admin-api/src/services/app-projects.js";
 import { createAdminApp } from "../apps/admin-api/src/app.js";
 import { createWebApp } from "../apps/admin-web/src/app.js";
 import { adminScript } from "../apps/admin-web/src/assets/admin-script.js";
@@ -18,6 +19,66 @@ afterEach(() => {
 });
 
 describe("admin API cleanup", () => {
+  it.each([
+    "/app/api/v1/projects",
+    "/app/api/v1/environment/packages/check",
+    "/admin/api/v1/service-accounts",
+  ])(
+    "returns input errors for malformed and empty JSON at %s after authorization",
+    async (path) => {
+      const { app } = adminApp();
+      const headers = {
+        "Cf-Access-Jwt-Assertion": "test",
+        "X-CSRF-Token": "1",
+        "Content-Type": "application/json",
+      };
+      for (const body of ['{"private-body-sentinel":', "", "{}"]) {
+        const response = await app.request(path, {
+          method: "POST",
+          headers,
+          body,
+        });
+        expect(response.status).toBe(400);
+        expect(await response.text()).not.toContain("private-body-sentinel");
+      }
+      const unauthenticated = await app.request(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{",
+      });
+      expect(unauthenticated.status).toBe(401);
+      const csrf = await app.request(path, {
+        method: "POST",
+        headers: { ...headers, "X-CSRF-Token": "wrong" },
+        body: "{",
+      });
+      expect(csrf.status).toBe(403);
+    },
+  );
+
+  it("preserves an internal SyntaxError as 500 after valid request parsing", async () => {
+    const { app } = adminApp();
+    const spy = vi
+      .spyOn(AppProjectsService.prototype, "create")
+      .mockImplementation(() => {
+        throw new SyntaxError("private-internal-sentinel");
+      });
+    try {
+      const response = await app.request("/app/api/v1/projects", {
+        method: "POST",
+        headers: {
+          "Cf-Access-Jwt-Assertion": "test",
+          "X-CSRF-Token": "1",
+          "Content-Type": "application/json",
+        },
+        body: '{"displayName":"Valid"}',
+      });
+      expect(response.status).toBe(500);
+      expect(await response.text()).not.toContain("private-internal-sentinel");
+    } finally {
+      spy.mockRestore();
+    }
+  });
   it("accepts only known, non-mixed API key scopes", () => {
     expect(
       createApiKeySchema.safeParse({

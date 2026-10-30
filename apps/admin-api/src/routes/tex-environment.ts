@@ -4,7 +4,7 @@ import { adminMutationReasonSchema } from "@latex-renderer/contracts";
 import { AppError } from "@latex-renderer/shared";
 import { requireActor, requireOwnerActor } from "../auth/actor.js";
 import type { AdminActor, AdminDependencies } from "../types.js";
-import { parse } from "./helpers.js";
+import { parse, readJson } from "./helpers.js";
 
 const countrySchema = z.string().regex(/^[A-Z]{2}$/);
 const languageSchema = z.string().regex(/^collection-lang[A-Za-z0-9._-]+$/);
@@ -312,7 +312,7 @@ export function createTexEnvironmentRouter(deps: AdminDependencies): Hono {
     const actor = await requireActor(deps, c, "admin:tex-environment:write");
     const input = parse(
       z.object({ country: countrySchema.nullable() }).strict(),
-      await c.req.json<unknown>(),
+      await readJson(c),
     );
     const imageManager = manager();
     const result = await serializeMutation(async () => {
@@ -351,7 +351,7 @@ export function createTexEnvironmentRouter(deps: AdminDependencies): Hono {
       c,
       "admin:tex-environment:write",
     );
-    const input = parse(applySchema, await c.req.json<unknown>());
+    const input = parse(applySchema, await readJson(c));
     // The exact selected TeX Live snapshot is authoritative for collection existence.
     const { reason, ...managerInput } = input;
     const result = (await serializeMutation(() =>
@@ -385,7 +385,7 @@ export function createTexEnvironmentRouter(deps: AdminDependencies): Hono {
         c,
         "admin:tex-environment:write",
       );
-      const input = parse(reasonRequestSchema, await c.req.json<unknown>());
+      const input = parse(reasonRequestSchema, await readJson(c));
       const result = (await serializeMutation(() =>
         manager()[action](),
       )) as OperationResponse;

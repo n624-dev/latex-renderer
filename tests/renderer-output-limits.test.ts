@@ -49,6 +49,40 @@ describe("renderer output resource limits", () => {
     ).rejects.toMatchObject({ code: "OUTPUT_LIMIT" });
   });
 
+  it("publishes bounded host timeout diagnostics when the stopped container emitted no log", async () => {
+    const root = await temporaryRoot();
+    await generateMetadata(
+      root,
+      143,
+      1024,
+      "main.tex",
+      "The renderer exceeded the overall job timeout",
+    );
+    expect(await readFile(join(root, "compile.log"), "utf8")).toContain(
+      "overall job timeout",
+    );
+    const artifacts = await validateArtifacts(config(root), root, false);
+    expect(artifacts.map((a) => a.path)).toContain("compile.log");
+    expect(await readFile(join(root, "errors.json"), "utf8")).toContain(
+      "overall job timeout",
+    );
+  });
+  it("preserves an existing compile log and keeps successful artifacts strict", async () => {
+    const root = await temporaryRoot();
+    await writeFile(join(root, "compile.log"), "original diagnostic\n");
+    await generateMetadata(root, 143, 1024, "main.tex", "overall timeout");
+    expect(await readFile(join(root, "compile.log"), "utf8")).toBe(
+      "original diagnostic\n",
+    );
+    const empty = await temporaryRoot();
+    await generateMetadata(empty, 0, 1024);
+    await expect(
+      validateArtifacts(config(empty), empty, true),
+    ).rejects.toBeDefined();
+    await expect(readFile(join(empty, "compile.log"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
   it("reads compile logs and recorder metadata through an explicit byte cap", async () => {
     const root = await temporaryRoot();
     await writeFile(join(root, "compile.log"), "x".repeat(11));

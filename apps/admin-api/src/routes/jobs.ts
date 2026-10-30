@@ -16,7 +16,7 @@ import {
   adminPreviewResponse,
 } from "../services/artifacts.js";
 import type { AdminDependencies } from "../types.js";
-import { parse } from "./helpers.js";
+import { parse, readJson } from "./helpers.js";
 
 export function createJobsRouter(deps: AdminDependencies): Hono {
   const r = new Hono(),
@@ -59,7 +59,7 @@ export function createJobsRouter(deps: AdminDependencies): Hono {
             apiKeyId: z.string().min(1).max(128),
           }),
         ]),
-        await c.req.json<unknown>(),
+        await readJson(c),
       ),
       result = await service.createRender(actor, input, key);
     return c.json(result.value, result.status);
@@ -77,7 +77,7 @@ export function createJobsRouter(deps: AdminDependencies): Hono {
         createSourceTicketRequestSchema(deps.maxUploadBytes).extend({
           apiKeyId: z.string().min(1).max(128),
         }),
-        await c.req.json<unknown>(),
+        await readJson(c),
       ),
       result = await service.createSource(actor, input, key);
     return c.json(result.value, result.status);
@@ -91,7 +91,7 @@ export function createJobsRouter(deps: AdminDependencies): Hono {
             sourceId: z.string().regex(/^source_[a-f0-9]{32}$/),
           })
           .strict(),
-        await c.req.json<unknown>(),
+        await readJson(c),
       );
     return c.json(service.createSourceRef(actor, input), 201);
   });
@@ -106,7 +106,7 @@ export function createJobsRouter(deps: AdminDependencies): Hono {
               .max(100),
           })
           .strict(),
-        await c.req.json<unknown>(),
+        await readJson(c),
       );
     return c.json({ accepted: service.bulkDelete(actor, input.ids) }, 202);
   });

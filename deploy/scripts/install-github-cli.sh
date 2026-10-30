@@ -8,6 +8,29 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 77
 fi
 
+temporary_root=$(mktemp -d /tmp/latex-renderer-gh.XXXXXX)
+cleanup() {
+  status=$?
+  rm -rf -- "$temporary_root"
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+
+# version/help probes can create state too. Never let HOME-unset fall back to cwd.
+HOME="$temporary_root/home"
+GH_CONFIG_DIR="$temporary_root/config"
+XDG_CONFIG_HOME="$temporary_root/config"
+XDG_CACHE_HOME="$temporary_root/cache"
+XDG_STATE_HOME="$temporary_root/state"
+XDG_DATA_HOME="$temporary_root/data"
+GH_TELEMETRY=disabled
+GH_PROMPT_DISABLED=1
+export HOME GH_CONFIG_DIR XDG_CONFIG_HOME XDG_CACHE_HOME XDG_STATE_HOME XDG_DATA_HOME GH_TELEMETRY GH_PROMPT_DISABLED
+mkdir -m 0700 "$HOME" "$GH_CONFIG_DIR" "$XDG_CACHE_HOME" "$XDG_STATE_HOME" "$XDG_DATA_HOME"
+
 required_version=2.98.0
 gh_bin=/usr/local/bin/gh
 
@@ -49,13 +72,6 @@ case "$(uname -m)" in
     ;;
 esac
 
-temporary_root=$(mktemp -d /tmp/latex-renderer-gh.XXXXXX)
-cleanup() {
-  status=$?
-  rm -rf -- "$temporary_root"
-  exit "$status"
-}
-trap cleanup EXIT INT TERM HUP
 
 asset_path="$temporary_root/$asset"
 curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error \

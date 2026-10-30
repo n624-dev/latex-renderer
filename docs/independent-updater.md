@@ -65,6 +65,13 @@ release. Controller and root helper independently verify archive digest,
 publisher workflow, tag, source commit and Sigstore provenance. Renderer identity,
 encrypted backup and production validation remain mandatory.
 
+GitHub CLI version/help probes and attestation verification use private HOME,
+config, cache, data and state directories outside the release tree. Setup probes
+use a disposable temporary directory, and update operations use their existing
+bounded staging lifecycle. CLI telemetry is disabled. Random machine state must
+not become part of a release's immutable content identity: unexpected files in
+that tree still cause verification to fail, including files below `.local`.
+
 Deployment diagnostic/validation CLIs must work through the application's
 `/opt/latex-renderer/current` symlink as well as a resolved release path. Node
 resolves `import.meta.url` but normally preserves the invoked `process.argv[1]`;

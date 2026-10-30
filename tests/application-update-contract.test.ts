@@ -362,7 +362,10 @@ describe("release-based application updates", () => {
         '"--bundle"',
       );
       expect(source).toContain("attestationBundle");
-      expect(source).toContain('GH_PROMPT_DISABLED: "1"');
+      expect(source).toContain("githubCliEnvironment(");
+      expect(read("deploy/scripts/github-cli-environment.mjs")).toContain(
+        'GH_PROMPT_DISABLED: "1"',
+      );
       expect(source).not.toContain("GH_TOKEN");
     }
   });

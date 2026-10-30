@@ -226,8 +226,13 @@ describe("application updater privilege boundary", () => {
     expect(helper).toContain(
       "Root-owned release bundle digest does not match GitHub",
     );
-    expect(helper).toContain("GH_CONFIG_DIR");
-    expect(helper).toContain('GH_PROMPT_DISABLED: "1"');
+    expect(helper).toContain("githubCliEnvironment(rootStage)");
+    expect(read("deploy/scripts/github-cli-environment.mjs")).toContain(
+      "GH_CONFIG_DIR",
+    );
+    expect(read("deploy/scripts/github-cli-environment.mjs")).toContain(
+      'GH_PROMPT_DISABLED: "1"',
+    );
     expect(helper).toContain(
       'const githubCliCandidates = ["/usr/local/bin/gh", "/usr/bin/gh"]',
     );

@@ -51,6 +51,61 @@ afterEach(async () => {
 });
 
 describe("renderer transient workspace cleanup", () => {
+  it.each(['["pdf"]', '["pdf","svg"]'])(
+    "keeps outer Job timeout without container-published diagnostics (%s)",
+    async (outputs) => {
+      const { database, config, root, jobId } = await fixture("validating");
+      database.raw
+        .prepare("UPDATE jobs SET outputs_json=? WHERE id=?")
+        .run(outputs, jobId);
+      const input = join(root, "jobs", jobId, "input");
+      await mkdir(input, { recursive: true });
+      const archive = new yazl.ZipFile();
+      const writing = pipeline(
+        archive.outputStream,
+        createWriteStream(join(input, "source.zip")),
+      );
+      archive.addBuffer(Buffer.from("timeout fixture"), "main.tex");
+      archive.end();
+      await writing;
+      let child: ReturnType<typeof spawn> | undefined;
+      vi.spyOn(docker, "spawnRenderer").mockImplementation(() => {
+        child = spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], {
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+        return {
+          containerName: "fixture",
+          process: child as ReturnType<typeof docker.spawnRenderer>["process"],
+        };
+      });
+      vi.spyOn(docker, "dockerStop").mockImplementation(() => {
+        child?.kill("SIGTERM");
+        return Promise.resolve();
+      });
+      try {
+        await processJob(
+          database,
+          { ...config, jobTimeoutMs: 100 },
+          {
+            ...(await verifiedWorkerJob(database, root, jobId)),
+            outputs_json: outputs,
+          },
+        );
+        expect(database.jobs.get(jobId)).toMatchObject({
+          status: "timeout",
+          error_code: "JOB_TIMEOUT",
+        });
+        const log = database.artifacts.getDownloadable(jobId, "compile.log");
+        expect(log).toBeDefined();
+        if (!log) throw new Error("Timeout diagnostics were not published");
+        expect(
+          await fs.readFile(artifactStoragePath(root, log), "utf8"),
+        ).toContain("overall job timeout");
+      } finally {
+        child?.kill("SIGKILL");
+      }
+    },
+  );
   it("preserves the lease and attempt when an orphaned daemon container cannot be verified stopped", async () => {
     const { database, config, root, jobId } = await fixture("validating");
     const input = join(root, "jobs", jobId, "input");

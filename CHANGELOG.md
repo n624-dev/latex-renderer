@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 1.5.6-rc.1 - 2026-10-30
+
+- Fix initial Runtime inventory creation and retry under `RestrictSUIDSGID` when the shared parent directory has setgid enabled (#267).
+- Return HTTP 400 for malformed Web and admin JSON requests after authentication and CSRF checks, while preserving genuine server errors (#268).
+- Preserve an overall Job timeout when a stopped container has not published its compile log; retain existing diagnostics and strict successful-output validation (#269).
+- Start Image Manager with `Type=exec` so credential initialization finishes before post-start readiness checks (#270).
+- Isolate GitHub CLI probe and verification state outside immutable release trees, including setup probes with no inherited HOME; preserve same-version retry identity checks (#271).
+- Add disposable-host systemd credential/restricted-inventory regressions and real-Docker outer-timeout coverage on both native renderer architectures.
+
 ## 1.5.5 - 2026-10-28
 
 - 検証済みの1.5.5-rc.3をStableへ昇格する。実行コード・依存関係・設定の既定値は

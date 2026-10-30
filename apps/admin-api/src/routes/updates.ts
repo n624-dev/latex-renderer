@@ -4,7 +4,7 @@ import { adminMutationReasonSchema } from "@latex-renderer/contracts";
 import { AppError } from "@latex-renderer/shared";
 import { requireActor, requireOwnerActor } from "../auth/actor.js";
 import type { AdminActor, AdminDependencies } from "../types.js";
-import { parse } from "./helpers.js";
+import { parse, readJson } from "./helpers.js";
 
 const versionSchema = z
   .string()
@@ -48,7 +48,7 @@ export function createUpdatesRouter(deps: AdminDependencies): Hono {
   });
   router.post("/check", async (context) => {
     const actor = await requireActor(deps, context, "admin:update:read");
-    const input = parse(requestSchema, await context.req.json<unknown>());
+    const input = parse(requestSchema, await readJson(context));
     const result = await manager().check(input.version);
     audit(
       deps,
@@ -61,7 +61,7 @@ export function createUpdatesRouter(deps: AdminDependencies): Hono {
   });
   router.post("/policy", async (context) => {
     const actor = await requireOwnerActor(deps, context, "admin:update:write");
-    const input = parse(policySchema, await context.req.json<unknown>());
+    const input = parse(policySchema, await readJson(context));
     const result = await manager().policy(input.mode);
     audit(
       deps,
@@ -75,7 +75,7 @@ export function createUpdatesRouter(deps: AdminDependencies): Hono {
   });
   router.post("/refresh", async (context) => {
     const actor = await requireOwnerActor(deps, context, "admin:update:write");
-    const input = parse(reasonRequestSchema, await context.req.json<unknown>());
+    const input = parse(reasonRequestSchema, await readJson(context));
     const result = await manager().refresh();
     audit(
       deps,
@@ -91,7 +91,7 @@ export function createUpdatesRouter(deps: AdminDependencies): Hono {
     const actor = await requireOwnerActor(deps, context, "admin:update:write");
     const input = parse(
       mutationRequestSchema,
-      await context.req.json<unknown>(),
+      await readJson(context),
     );
     if (
       deps.database.settings.value<unknown>("maintenance_mode", "normal") !==
@@ -115,7 +115,7 @@ export function createUpdatesRouter(deps: AdminDependencies): Hono {
   });
   router.post("/rollback", async (context) => {
     const actor = await requireOwnerActor(deps, context, "admin:update:write");
-    const input = parse(reasonRequestSchema, await context.req.json<unknown>());
+    const input = parse(reasonRequestSchema, await readJson(context));
     const result = (await manager().rollback()) as OperationResponse;
     audit(
       deps,

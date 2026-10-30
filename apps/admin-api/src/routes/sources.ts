@@ -5,7 +5,7 @@ import { AppError, pageSize } from "@latex-renderer/shared";
 import { requireActor } from "../auth/actor.js";
 import { AdminSourcesService } from "../services/sources.js";
 import type { AdminDependencies } from "../types.js";
-import { parse } from "./helpers.js";
+import { parse, readJson } from "./helpers.js";
 
 export function createSourcesRouter(deps: AdminDependencies): Hono {
   const router = new Hono(),
@@ -47,7 +47,7 @@ export function createSourcesRouter(deps: AdminDependencies): Hono {
             outputs: renderOutputsSchema,
           })
           .strict(),
-        await c.req.json<unknown>(),
+        await readJson(c),
       ),
       result = await service.render(actor, c.req.param("id"), input, key);
     return c.json(result.value, result.status);
@@ -56,7 +56,7 @@ export function createSourcesRouter(deps: AdminDependencies): Hono {
     const actor = await requireActor(deps, c, "admin:jobs:write"),
       input = parse(
         z.object({ apiKeyId: z.string().min(1).max(128) }).strict(),
-        await c.req.json<unknown>(),
+        await readJson(c),
       );
     return c.json(
       service.createRef(actor, c.req.param("id"), input.apiKeyId),

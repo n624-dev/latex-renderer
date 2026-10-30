@@ -3,6 +3,8 @@ import { randomBytes } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import {
   copyFile,
+  chmod,
+  chown,
   lstat,
   mkdir,
   mkdtemp,
@@ -403,6 +405,12 @@ try {
   run("/usr/local/bin/node", [
     join(candidate, "deploy/ci/mutation-worker-lifecycle-e2e.mjs"),
   ]);
+  const { verifyCredentialStartup } = await import(
+    pathToFileURL(
+      join(candidate, "deploy/ci/credential-startup-regression.mjs"),
+    )
+  );
+  await verifyCredentialStartup(candidate, root);
   // Real systemd regression: stopping Internal API propagates to its required
   // Standalone Gateway. Exercise the installed settings CLI, not only mocks or
   // auth endpoints, and restore the reviewed limits before the rendering smoke.
@@ -508,7 +516,17 @@ try {
   ]);
   // Exercise the first-install branch with real rootless Docker and the
   // candidate's exact immutable Runtime, without touching live manager state.
-  const inventoryRoot = join(root, "initial-inventory");
+  const inventoryParent = join(root, "inventory-parent");
+  const inventoryGid = Number(
+    execFileSync("/usr/bin/id", ["-g", "latex-renderer"], {
+      encoding: "utf8",
+      timeout: 5000,
+    }).trim(),
+  );
+  await mkdir(inventoryParent, { mode: 0o2770 });
+  await chown(inventoryParent, 0, inventoryGid);
+  await chmod(inventoryParent, 0o2770);
+  const inventoryRoot = join(inventoryParent, "environment");
   const initialEnvironment = await readFile(environmentPath, "utf8");
   const initialImage = /^RENDERER_IMAGE=(sha256:[a-f0-9]{64})$/m.exec(
     initialEnvironment,
@@ -517,34 +535,51 @@ try {
     throw new Error(
       "Missing immutable Runtime for initial inventory acceptance",
     );
-  run(
-    "/bin/sh",
-    [join(candidate, "deploy/scripts/restore-managed-runtime.sh")],
-    {
-      env: {
-        ...process.env,
-        IMAGE_MANAGER_STATE_FILE: join(root, "absent-manager-state.json"),
-        RENDERER_ENV_FILE: environmentPath,
-        RENDERER_ENVIRONMENT_ROOT: inventoryRoot,
-        TMPDIR: join(root, "inventory-tmp"),
-      },
-    },
-  );
+  const runRestrictedInventory = () =>
+    run("/usr/bin/systemd-run", [
+      "--quiet",
+      "--wait",
+      "--pipe",
+      "--collect",
+      "--service-type=exec",
+      `--unit=latex-renderer-ci-inventory-${randomBytes(6).toString("hex")}`,
+      "--property=RestrictSUIDSGID=true",
+      "--property=ProtectSystem=strict",
+      `--property=ReadWritePaths=${inventoryParent}`,
+      "--property=TimeoutStartSec=10min",
+      "--property=RuntimeMaxSec=10min",
+      "--property=TimeoutStopSec=30s",
+      `--setenv=IMAGE_MANAGER_STATE_FILE=${join(root, "absent-manager-state.json")}`,
+      `--setenv=RENDERER_ENV_FILE=${environmentPath}`,
+      `--setenv=RENDERER_ENVIRONMENT_ROOT=${inventoryRoot}`,
+      `--setenv=TMPDIR=${join(inventoryParent, "tmp")}`,
+      "/bin/sh",
+      join(candidate, "deploy/scripts/restore-managed-runtime.sh"),
+    ]);
+  runRestrictedInventory();
   const { requireInitialRuntimeInventory } = await import(
     pathToFileURL(
       join(candidate, "deploy/scripts/server-setup-initial-host.mjs"),
     )
   );
-  const inventoryGid = Number(
-    execFileSync("/usr/bin/id", ["-g", "latex-renderer"], {
-      encoding: "utf8",
-      timeout: 5000,
-    }).trim(),
-  );
   await requireInitialRuntimeInventory(inventoryRoot, initialImage, {
     uid: 0,
     gid: inventoryGid,
   });
+  for (const path of [inventoryRoot, join(inventoryParent, "tmp")]) {
+    if (((await lstat(path)).mode & 0o7777) !== 0o750)
+      throw new Error("Initial inventory retained inherited setgid");
+  }
+  // Same interrupted 2700 directory observed on affected hosts; retry through
+  // the actual restricted service without re-bootstrap or changing parent SGID.
+  await chmod(inventoryRoot, 0o2700);
+  runRestrictedInventory();
+  await requireInitialRuntimeInventory(inventoryRoot, initialImage, {
+    uid: 0,
+    gid: inventoryGid,
+  });
+  if (((await lstat(inventoryParent)).mode & 0o7777) !== 0o2770)
+    throw new Error("Inventory fixture altered required shared parent mode");
   const packageNames = new Set(
     (await readFile(join(inventoryRoot, "packages.txt"), "utf8"))
       .trim()
@@ -659,6 +694,9 @@ try {
       settingsCutover: true,
       gatewayReady: true,
       initialRuntimeInventory: true,
+      restrictedInitialInventory: true,
+      interruptedInventoryRecovery: true,
+      credentialStartup: true,
     }),
   );
 } finally {

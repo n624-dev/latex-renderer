@@ -42,6 +42,7 @@ import {
   prepareReleaseExtraction,
 } from "./release-extraction.mjs";
 import { releaseAttestationArgs } from "./release-attestation.mjs";
+import { githubCliEnvironment } from "./github-cli-environment.mjs";
 import { validatedReleaseRendererFingerprint } from "./runtime-image-identity.mjs";
 import { acquireMutationLockForPath } from "./mutation-lock.mjs";
 import {
@@ -107,6 +108,7 @@ const helperRoot = resolve(dirname(helperSource), "../..");
 const bootstrapControlFiles = [
   "deploy/scripts/update-manager-helper.mjs",
   "deploy/scripts/github-json.mjs",
+  "deploy/scripts/github-cli-environment.mjs",
   "deploy/scripts/application-database-file.mjs",
   "deploy/scripts/update-recovery.mjs",
   "deploy/scripts/update-recovery-host.mjs",
@@ -245,7 +247,7 @@ function runCapture(command, args, options = {}) {
   });
 }
 
-async function resolveGitHubCli() {
+async function resolveGitHubCli(githubEnvironment) {
   for (const candidate of githubCliCandidates) {
     let info;
     try {
@@ -261,10 +263,14 @@ async function resolveGitHubCli() {
     }
     let version;
     try {
-      const output = await runCapture(candidate, ["--version"]);
+      const output = await runCapture(candidate, ["--version"], {
+        env: githubEnvironment,
+      });
       version = /^gh version v?(\d+\.\d+\.\d+)\b/m.exec(output)?.[1];
       if (!version || compareVersions(version, "2.98.0") < 0) continue;
-      await runCapture(candidate, ["attestation", "verify", "--help"]);
+      await runCapture(candidate, ["attestation", "verify", "--help"], {
+        env: githubEnvironment,
+      });
     } catch {
       continue;
     }
@@ -532,10 +538,9 @@ async function verifyAndExtractTrustedBundle(
   await writeOutput(
     "Verifying the Sigstore release attestation in the root helper.\n",
   );
-  const githubCli = await resolveGitHubCli();
+  const githubEnvironment = await githubCliEnvironment(rootStage);
+  const githubCli = await resolveGitHubCli(githubEnvironment);
   const attestationBundle = await publicAttestationBundle(release, rootStage);
-  for (const directory of ["gh-home", "gh-config", "gh-cache"])
-    await mkdir(join(rootStage, directory), { mode: 0o700 });
   await runLogged(
     githubCli,
     releaseAttestationArgs({
@@ -545,13 +550,7 @@ async function verifyAndExtractTrustedBundle(
       commit: release.commit,
     }),
     {
-      env: {
-        PATH: "/usr/local/bin:/usr/bin:/bin",
-        HOME: join(rootStage, "gh-home"),
-        GH_CONFIG_DIR: join(rootStage, "gh-config"),
-        GH_PROMPT_DISABLED: "1",
-        XDG_CACHE_HOME: join(rootStage, "gh-cache"),
-      },
+      env: githubEnvironment,
     },
   );
   const topLevel = `latex-renderer-server-${release.version}`;
