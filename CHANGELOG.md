@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 1.5.6 - 2026-10-31
+
+- 検証済みの1.5.6-rc.1をStableへ昇格する。実行コード・依存関係・設定の既定値は
+  候補版と同じとし、バージョン表記と導入ガイドの対象版を更新する。
+- 初回Runtime一覧の権限、Image Managerの資格情報を使う起動、更新再試行、
+  不正JSONとジョブ全体タイムアウトの扱いを修正する。詳細は以下の候補版の項を参照。
+
 ## 1.5.6-rc.1 - 2026-10-30
 
 - Fix initial Runtime inventory creation and retry under `RestrictSUIDSGID` when the shared parent directory has setgid enabled (#267).
