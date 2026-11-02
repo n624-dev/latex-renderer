@@ -136,10 +136,10 @@ describe("post-review TeX environment regressions", () => {
     }
     const acquisition = read("renderer/install-debian-packages.sh");
     expect(acquisition).toContain(
-      "http://snapshot.debian.org/archive/debian/${snapshot}/",
+      "${scheme}://${mirror}/archive/debian/${snapshot}/",
     );
     expect(acquisition).toContain(
-      "sed -i 's|http://snapshot.debian.org/|https://snapshot.debian.org/|g'",
+      "scheme=https",
     );
     expect(acquisition).toContain('"Acquire::Retries=$retries"');
     expect(acquisition).toContain("update --error-on=any");

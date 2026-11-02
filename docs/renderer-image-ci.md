@@ -76,15 +76,23 @@ HTTP bootstrap of CA certificates and subsequent verified HTTPS. No floating
 Debian mirror, unverified data or permanent download cache is introduced.
 
 Every request has an explicit 30-second connect/inactivity timeout and three
-retries. HTTP pipelining is disabled for proxy/CDN compatibility, and unneeded
+retries. Each index/download operation also has a 180-second wall-clock
+deadline. A transient transport failure gets at most one retry through the
+other official snapshot endpoint (`snapshot.debian.org` or
+`snapshot-cloudflare.debian.org`), always with the same timestamp and suites.
+Index signatures are verified again after changing hosts. Downloads use
+`--download-only`; dpkg installation uses `--no-download` and is never retried.
+Signature, checksum, certificate and local-state failures stop immediately.
+HTTP pipelining is disabled for proxy/CDN compatibility, and unneeded
 APT description translations are not fetched. Both index updates use
 `--error-on=any`, so a transient index failure cannot produce a successful build
 with incomplete package lists. The entire bootstrap and package installation
 has a separate 20-minute deadline with a 15-second forced-termination grace;
 request timeouts alone would not bound slow responses or retry delays.
 The supervising shell waits for the actual APT process even after TERM, so
-the force-kill timer still applies to a request ignoring TERM. Normal failures
-and timeouts remain fatal. The small inventory is collected before sorting,
+the force-kill timer still applies to a request ignoring TERM. Exhausted
+acquisition attempts and installation failures remain fatal. The small
+inventory is collected before sorting,
 so a failed `dpkg-query` is not hidden by a successful `sort`.
 
 Build arguments (validated by the helper):
@@ -92,6 +100,7 @@ Build arguments (validated by the helper):
 - `DEBIAN_INSTALL_TIMEOUT_SECONDS=1200`, range 1..3600.
 - `DEBIAN_ACQUIRE_TIMEOUT_SECONDS=30`, range 1..120.
 - `DEBIAN_ACQUIRE_RETRIES=3`, range 0..5 (additional attempts).
+- `DEBIAN_ACQUIRE_STAGE_TIMEOUT_SECONDS=180`, range 1..600.
 
 `DEBIAN_INSTALL_PHASE` identifies the active operation, and `DEBIAN_APT_STAGE`
 records its wall time and exit status. A timeout may terminate before a stage's
@@ -101,6 +110,14 @@ These limits concern Debian only, not the VPS mirror sync's three-hour limit.
 See the Debian [transport](https://manpages.debian.org/bookworm/apt/apt-transport-http.1.en.html),
 [retry configuration](https://manpages.debian.org/bookworm/apt/apt.conf.5.en.html)
 and [strict-update](https://manpages.debian.org/bookworm/apt/apt-get.8.en.html) references.
+
+The manual `debian-snapshot-diagnostics` workflow compares HTTP/HTTPS and
+curl/APT user agents on native amd64 and arm64 runners. It only downloads
+bounded signed metadata, logs status/timing/hash, and makes no package or
+registry changes. Response bodies, runner IPs, proxy settings and credentials
+are not printed. Success is a diagnostic observation, not a substitute for
+signed APT installation and the full renderer validation. A later successful
+runner cannot establish whether an earlier, retired runner was rate limited.
 
 The PR168 old-head run stalled at the first HTTP Packages index, before any
 TeX installation or image export. VPS HEAD probes returned HTTP 200 for both
@@ -122,7 +139,7 @@ For an optional real Debian-only check, on a disposable machine with Docker:
 docker run --rm --user 0 \
   --mount "type=bind,src=$PWD/renderer/install-debian-packages.sh,dst=/tmp/install-debian-packages.sh,readonly" \
   --env DEBIAN_FRONTEND=noninteractive \
-  debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251 \
+  debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3 \
   sh /tmp/install-debian-packages.sh 20260812T235959Z curl
 ```
 
