@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 1.5.7 - 2026-11-02
+
+- 検証済みの1.5.7-rc.2をStableへ昇格する。実行コード・依存関係・設定の既定値は候補版と同じとし、バージョン表記と導入ガイドの対象版を更新する。
+- Debian snapshot取得の時間制限と代替エンドポイント、固定イメージとAPT日付の整合、および依存関係の更新を含む。詳細は以下の候補版の項を参照。
+
 ## 1.5.7-rc.2 - 2026-11-02
 
 - Update transitive node-forge to 1.4.2 and minimatch to 11.0.3, replacing the local RSA parser patch with the upstream fix. Keep RSA rejection, MCPB signing and lint file-selection regressions.
