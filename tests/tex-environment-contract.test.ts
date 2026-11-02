@@ -40,9 +40,9 @@ describe("managed TeX Live image pipeline", () => {
     expect(baseDockerfile).toContain(
       'jp.n624.latex-renderer.base-kind="texlive-only-v1"',
     );
-    expect(baseDockerfile).toContain("ARG DEBIAN_SNAPSHOT=20260812T235959Z");
+    expect(baseDockerfile).toContain("ARG DEBIAN_SNAPSHOT=20261101T235959Z");
     expect(read("renderer/install-debian-packages.sh")).toContain(
-      "snapshot.debian.org/archive/debian/${snapshot}",
+      "${mirror}/archive/debian/${snapshot}",
     );
     expect(baseDockerfile).toContain(
       "TEXLIVE_SIGNING_FINGERPRINT=C78B82D8C79512F79CC0D7C80D5E5D9106BAB6BC",
@@ -163,7 +163,7 @@ describe("managed TeX Live image pipeline", () => {
     expect(manager).toMatch(
       /["']--file["'],\s*join\(context,\s*["']Dockerfile\.base["']\)/,
     );
-    expect(legacyDockerfile).toContain("ARG DEBIAN_SNAPSHOT=20260812T235959Z");
+    expect(legacyDockerfile).toContain("ARG DEBIAN_SNAPSHOT=20261101T235959Z");
     expect(legacyDockerfile).toContain("gpgv --keyring /tmp/texlive.gpg");
     expect(legacyDockerfile).toContain(
       'if [ "${TEXLIVE_PROFILE_KIND}" = "language-neutral-maximal" ]',

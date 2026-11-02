@@ -1,6 +1,6 @@
 {
   "name": "@latex-renderer/ticket",
-  "version": "1.5.6",
+  "version": "1.5.7-rc.1",
   "private": true,
   "license": "Apache-2.0",
   "type": "module",
@@ -19,6 +19,6 @@
   "dependencies": {
     "@latex-renderer/database": "workspace:*",
     "@latex-renderer/shared": "workspace:*",
-    "jose": "^6.2.13"
+    "jose": "^6.2.14"
   }
 }

@@ -69,8 +69,8 @@ function fixture(timeoutExecutable = timeoutCommand) {
     .replaceAll("/opt/renderer", '"$TEST_ROOT/opt/renderer"')
     .replaceAll("/var/lib/apt/lists", '"$TEST_ROOT/var/lib/apt/lists"')
     .replace(
-      "shift 3\n",
-      'shift 3\nprintf "%s\\n" "$PPID" > "$TEST_ROOT/process-group"\n',
+      "shift 4\n",
+      'shift 4\nprintf "%s\\n" "$PPID" > "$TEST_ROOT/process-group"\n',
     );
   const script = join(root, "install.sh");
   writeFileSync(script, body);
@@ -88,7 +88,14 @@ count=$((count + 1))
 printf '%s\\n' "$count" > "$TEST_ROOT/count"
 printf '%s\\n' "$*" >> "$TEST_TRACE"
 sed -n '1p' "$TEST_ROOT/etc/apt/sources.list" >> "$TEST_TRACE"
-[ "$count" != "\${TEST_FAIL:-}" ] || exit 42
+if [ "$count" = "\${TEST_FAIL:-}" ] || [ "\${TEST_FAIL_ALL:-}" = true ]; then
+  printf '%s\\n' "\${TEST_ERROR:-}"
+  exit "\${TEST_STATUS:-42}"
+fi
+if [ "$count" = "\${TEST_SECOND_FAIL:-}" ]; then
+  printf '%s\\n' "\${TEST_SECOND_ERROR:-}"
+  exit 100
+fi
 if [ "$count" = "\${TEST_HANG:-}" ]; then
   if [ "\${TEST_IGNORE_TERM:-}" = true ]; then
     trap '' TERM
@@ -110,7 +117,7 @@ printf 'z-package\\t2\\na-package\\t1\\n'
   );
   const run = (
     env: Record<string, string> = {},
-    snapshot = "20260812T235959Z",
+    snapshot = "20261101T235959Z",
   ) =>
     spawnSync("sh", [script, snapshot, "curl", "fontconfig"], {
       encoding: "utf8",
@@ -119,10 +126,12 @@ printf 'z-package\\t2\\na-package\\t1\\n'
         ...process.env,
         PATH: `${root}/bin:${process.env.PATH}`,
         TEST_ROOT: root,
+        TMPDIR: root,
         TEST_TRACE: trace,
         DEBIAN_INSTALL_TIMEOUT_SECONDS: "1200",
         DEBIAN_ACQUIRE_TIMEOUT_SECONDS: "30",
         DEBIAN_ACQUIRE_RETRIES: "3",
+        DEBIAN_ACQUIRE_STAGE_TIMEOUT_SECONDS: "180",
         ...env,
       },
     });
@@ -150,7 +159,7 @@ describe.skipIf(process.platform === "win32")(
       expect(result.error, result.stderr).toBeUndefined();
       expect(result.status, result.stderr).toBe(0);
       const expired = f.run({
-        TEST_HANG: "5",
+        TEST_HANG: "7",
         DEBIAN_INSTALL_TIMEOUT_SECONDS: "1",
       });
       expect(expired.error, expired.stderr).toBeUndefined();
@@ -175,7 +184,7 @@ describe.skipIf(process.platform === "win32")(
       const commands = trace
         .split("\n")
         .filter((line) => line.startsWith("-o "));
-      expect(commands).toHaveLength(4);
+      expect(commands).toHaveLength(6);
       for (const command of commands) {
         expect(command).toContain("Acquire::http::Timeout=30");
         expect(command).toContain("Acquire::https::Timeout=30");
@@ -185,14 +194,16 @@ describe.skipIf(process.platform === "win32")(
       }
       expect(commands[0]).toContain("update --error-on=any");
       expect(commands[1]).toContain(
-        "install -y --no-install-recommends ca-certificates",
+        "install -y --download-only --no-install-recommends ca-certificates",
       );
-      expect(commands[2]).toContain("update --error-on=any");
-      expect(commands[3]).toContain(
-        "install -y --no-install-recommends curl fontconfig",
+      expect(commands[2]).toContain("install -y --no-download --no-install-recommends ca-certificates");
+      expect(commands[3]).toContain("update --error-on=any");
+      expect(commands[4]).toContain("install -y --download-only --no-install-recommends curl fontconfig");
+      expect(commands[5]).toContain(
+        "install -y --no-download --no-install-recommends curl fontconfig",
       );
-      expect(trace.match(/http:\/\/snapshot\.debian\.org/g)).toHaveLength(2);
-      expect(trace.match(/https:\/\/snapshot\.debian\.org/g)).toHaveLength(2);
+      expect(trace.match(/http:\/\/snapshot\.debian\.org/g)).toHaveLength(3);
+      expect(trace.match(/https:\/\/snapshot\.debian\.org/g)).toHaveLength(3);
       expect(trace).not.toContain("deb.debian.org");
       expect(
         readFileSync(join(f.root, "opt/renderer/debian-packages.txt"), "utf8"),
@@ -202,15 +213,17 @@ describe.skipIf(process.platform === "win32")(
       ).toBe(false);
       for (const phase of [
         "bootstrap-update",
+        "bootstrap-ca-download",
         "bootstrap-ca",
         "https-update",
+        "packages-download",
         "packages",
       ])
         expect(result.stdout).toMatch(
           new RegExp(`DEBIAN_APT_STAGE phase=${phase} seconds=\\d+ exit=0`),
         );
     });
-    it.each([1, 2, 3, 4])(
+    it.each([1, 2, 3, 4, 5, 6])(
       "never continues past failed APT call %s",
       (stage) => {
         const f = fixture(),
@@ -226,6 +239,48 @@ describe.skipIf(process.platform === "win32")(
         expect(readFileSync(f.trace, "utf8")).not.toContain("dpkg-query");
       },
     );
+    it.each([1, 2, 4, 5])("retries transient acquisition %s on the other same-date endpoint", (stage) => {
+      const f = fixture(), result = f.run({ TEST_FAIL: String(stage), TEST_STATUS: "100", TEST_ERROR: "503 No healthy backends" });
+      expect(result.error, result.stderr).toBeUndefined();
+      expect(result.status, result.stderr).toBe(0);
+      const trace = readFileSync(f.trace, "utf8");
+      expect(trace).toContain("snapshot-cloudflare.debian.org/archive/debian/20261101T235959Z/");
+      expect(trace).not.toContain("deb.debian.org");
+      expect(result.stdout.match(/DEBIAN_APT_RETRY/g)).toHaveLength(1);
+      const commands=trace.split("\n").filter(line=>line.startsWith("-o "));
+      if ([2,5].includes(stage)) expect(commands[stage]).toContain("update --error-on=any");
+    });
+    it.each(["NO_PUBKEY test", "BADSIG test", "Hash Sum mismatch", "Certificate verification failed", "No space left on device"])("does not retry a trust or local-state failure: %s", (error) => {
+      const f=fixture(), result=f.run({TEST_FAIL:"1", TEST_STATUS:"100", TEST_ERROR:error+"; 503 elsewhere"});
+      expect(result.status).toBe(100);
+      expect(readFileSync(f.root+"/count","utf8").trim()).toBe("1");
+      expect(result.stdout).not.toContain("DEBIAN_APT_RETRY");
+    });
+    it("never retries a failed dpkg installation even when its output mentions a network failure", () => {
+      const f=fixture(), result=f.run({TEST_FAIL:"3", TEST_STATUS:"100", TEST_ERROR:"503 while running a package trigger"});
+      expect(result.status).toBe(100);
+      expect(readFileSync(f.root+"/count","utf8").trim()).toBe("3");
+      expect(result.stdout).not.toContain("DEBIAN_APT_RETRY");
+    });
+    it("bounds retries when both endpoints fail", () => {
+      const f=fixture(),result=f.run({TEST_FAIL_ALL:"true", TEST_STATUS:"100", TEST_ERROR:"429 Too Many Requests"});
+      expect(result.status).toBe(100);
+      expect(readFileSync(f.root+"/count","utf8").trim()).toBe("2");
+      expect(result.stdout.match(/DEBIAN_APT_RETRY/g)).toHaveLength(1);
+    });
+    it("stops if the replacement endpoint's signed indexes fail verification", () => {
+      const f=fixture(),result=f.run({TEST_FAIL:"2",TEST_STATUS:"100",TEST_ERROR:"503 No healthy backends",TEST_SECOND_FAIL:"3",TEST_SECOND_ERROR:"BADSIG test"});
+      expect(result.status).toBe(100);
+      expect(readFileSync(f.root+"/count","utf8").trim()).toBe("3");
+      expect(result.stdout).not.toContain("DEBIAN_INSTALL_PHASE=bootstrap-ca\n");
+    });
+    it("switches endpoint after a per-acquisition deadline without waiting for the whole build limit", () => {
+      const f=fixture(),result=f.run({TEST_HANG:"1",DEBIAN_ACQUIRE_STAGE_TIMEOUT_SECONDS:"1",DEBIAN_INSTALL_TIMEOUT_SECONDS:"10"});
+      expect(result.error,result.stderr).toBeUndefined();
+      expect(result.status,result.stderr).toBe(0);
+      expect(result.stdout).toContain("exit=124");
+      expect(result.stdout).toContain("DEBIAN_APT_RETRY");
+    });
     it("does not hide failed inventory collection behind a successful sort", () => {
       const f = fixture(),
         result = f.run({ TEST_DPKG_FAIL: "true" });
@@ -270,6 +325,8 @@ describe.skipIf(process.platform === "win32")(
       expect(readFileSync(join(f.root, "count"), "utf8").trim()).toBe("1");
     });
     it.each([
+      { DEBIAN_ACQUIRE_STAGE_TIMEOUT_SECONDS: "0" },
+      { DEBIAN_ACQUIRE_STAGE_TIMEOUT_SECONDS: "601" },
       { DEBIAN_INSTALL_TIMEOUT_SECONDS: "0" },
       { DEBIAN_INSTALL_TIMEOUT_SECONDS: "3601" },
       { DEBIAN_ACQUIRE_TIMEOUT_SECONDS: "0" },

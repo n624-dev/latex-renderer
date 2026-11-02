@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 1.5.7-rc.1 - 2026-11-02
+
+- Retry transient Debian snapshot downloads through a second official endpoint with the same pinned timestamp, signed indexes and package checks. Bound each acquisition separately; keep dpkg installation local and non-retryable.
+- Add bounded HTTP/HTTPS transport diagnostics for native amd64 and arm64 CI runners without logging response bodies or IPs.
+- Update the pinned Debian base image and its APT snapshot together, plus jose, Hono, marked, MCP SDK, ignore, Node types and typescript-eslint from the grouped dependency updates (#274–#276).
+
 ## 1.5.6 - 2026-10-31
 
 - 検証済みの1.5.6-rc.1をStableへ昇格する。実行コード・依存関係・設定の既定値は

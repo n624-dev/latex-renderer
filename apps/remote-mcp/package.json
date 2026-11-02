@@ -1,6 +1,6 @@
 {
   "name": "@latex-renderer/remote-mcp",
-  "version": "1.5.6",
+  "version": "1.5.7-rc.1",
   "private": true,
   "license": "Apache-2.0",
   "type": "module",
@@ -15,8 +15,8 @@
     "@latex-renderer/database": "workspace:*",
     "@latex-renderer/remote-mcp-core": "workspace:*",
     "@latex-renderer/shared": "workspace:*",
-    "@modelcontextprotocol/server": "^2.3.1",
-    "hono": "^4.13.13",
+    "@modelcontextprotocol/server": "^2.4.0",
+    "hono": "^4.13.14",
     "zod": "^4.6.7"
   }
 }
