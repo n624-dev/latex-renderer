@@ -10,6 +10,7 @@ import { join, isAbsolute } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { httpIdleConfiguration } from "./http-idle-server.mjs";
 import { isMainModule } from "./is-main-module.mjs";
+import { acquireMutationLock } from "./mutation-lock.mjs";
 
 export const HTTP_SERVICE_PORTS = Object.freeze({
   "latex-renderer-api.service": 3100,
@@ -26,7 +27,7 @@ const root = "/opt/latex-renderer/current";
 const systemctl = (...args) =>
   execFileSync("/usr/bin/systemctl", args, {
     encoding: "utf8",
-    timeout: 15 * 60_000,
+    timeout: args[0] === "show" ? 5000 : 15 * 60_000,
     stdio: ["ignore", "pipe", "pipe"],
   });
 export function httpSocketUnit(unit) {
@@ -305,6 +306,102 @@ export function prepareHttpActivation(
   return { enabled };
 }
 
+// Environment-only idle settings are intentionally separate from the wizard's
+// auth/runtime review. An unchanged wizard review does not restart consumers.
+// This explicit operation takes the same lock as deployment and image changes.
+export async function reconcileHttpServices({
+  source = root,
+  run = systemctl,
+  unitRoot = "/etc/systemd/system",
+  values,
+  acquire = acquireMutationLock,
+} = {}) {
+  const lock = await acquire();
+  try {
+    const enabled = httpActivationEnabled({ source, values });
+    const units = ["api", "web", "admin-api", "internal-api", "remote-mcp"].map(
+      (name) => httpServiceStatus(`latex-renderer-${name}.service`, { run }),
+    );
+    if (units.some((entry) => !entry.managed))
+      throw new Error("Managed HTTP service definitions required");
+    if (
+      enabled &&
+      units.some(
+        (entry) =>
+          properties(httpSocketUnit(entry.service), run).LoadState !== "loaded",
+      )
+    )
+      throw new Error(
+        "HTTP activation sockets must be installed before reconciliation",
+      );
+    const gateway = "latex-renderer-standalone-gateway.service";
+    const gatewayActive = ["active", "activating"].includes(
+      properties(gateway, run).ActiveState,
+    );
+    let stopping = false;
+    try {
+      // Stop listeners first, so quiescing one backend cannot wake another.
+      stopping = true;
+      for (const { service } of units) {
+        const socket = httpSocketUnit(service);
+        if (properties(socket, run).LoadState === "loaded") run("stop", socket);
+      }
+      for (const { service } of units)
+        controlService("stop", service, { run, enabled });
+      // Install the new boot link before preparation removes the previous
+      // mode's link. A crash can leave both enabled temporarily, but never
+      // deliberately leaves a previously managed role without a boot path.
+      // Current entrypoints support both inherited and ordinary listeners.
+      for (const { service } of units)
+        run("enable", enabled ? httpSocketUnit(service) : service);
+      prepareHttpActivation(source, { run, unitRoot, values });
+      const failures = [];
+      for (const { service } of units) {
+        try {
+          controlService("enable", service, { run, enabled });
+          controlService("start", service, { run, enabled });
+        } catch {
+          failures.push(service);
+        }
+      }
+      if (gatewayActive) {
+        try {
+          run("start", gateway);
+        } catch {
+          failures.push(gateway);
+        }
+      }
+      if (failures.length)
+        throw new Error(
+          "HTTP settings reconciliation could not resume every consumer",
+        );
+      return { enabled };
+    } catch (error) {
+      // No database or user data is changed. Resume every previously active
+      // role where possible; a retry reconciles partially changed boot links.
+      if (stopping) {
+        for (const { service, active } of units)
+          if (active) {
+            try {
+              controlService("start", service, { run, enabled });
+            } catch {
+              /* retain primary failure */
+            }
+          }
+        if (gatewayActive)
+          try {
+            run("start", gateway);
+          } catch {
+            /* retain primary failure */
+          }
+      }
+      throw error;
+    }
+  } finally {
+    await lock.release();
+  }
+}
+
 async function main() {
   const [action, ...args] = process.argv.slice(2);
   if (["status", "ready", "active"].includes(action)) {
@@ -331,6 +428,10 @@ async function main() {
   }
   if (process.getuid() !== 0)
     throw new Error("Privileged HTTP service operation required");
+  if (action === "reconcile" && args.length === 0) {
+    console.log(JSON.stringify(await reconcileHttpServices()));
+    return;
+  }
   if (action === "prepare" && args.length === 1) {
     console.log(JSON.stringify(prepareHttpActivation(args[0])));
     return;

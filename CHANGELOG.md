@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 1.5.8-rc.2 - 2026-11-02
+
+- Add an explicit, mutation-locked HTTP settings reload for environment-only changes. Reconcile all five listeners, service boot links and the active standalone gateway without restarting Worker or the managers.
+- Correct reload instructions and exercise both disabled and enabled modes through the actual privileged command in signed update validation. Unchanged authentication/runtime wizard reviews continue to avoid an unnecessary outage.
+
 ## 1.5.8-rc.1 - 2026-11-02
 
 - Add loopback systemd socket activation and configurable idle exit for Web, Remote MCP and the three HTTP APIs. Preserve in-flight uploads/streams and OAuth retry/rate-limit state.
