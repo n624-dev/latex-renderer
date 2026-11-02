@@ -281,6 +281,7 @@ describe("public and administrative Web", () => {
         statusProbeTimeoutMs: 100,
       },
       distribution,
+      { services: () => ({ managed: false, services: [] }) },
     )();
     expect(snapshot).toMatchObject({
       api: true,

@@ -19,6 +19,10 @@ export class AdminSystemService {
       worker: rendering.mode,
       rendering,
       jobs: this.deps.database.jobs.statusCounts(),
+      httpServices: this.deps.httpServices?.() ?? {
+        managed: false,
+        services: [],
+      },
     };
   }
   config() {

@@ -40,7 +40,9 @@ if ! command -v unzip >/dev/null 2>&1; then
 fi
 web_service=latex-renderer-admin-web.service
 if systemctl is-enabled --quiet latex-renderer-web.service || \
-   systemctl is-active --quiet latex-renderer-web.service; then
+   systemctl is-active --quiet latex-renderer-web.service || \
+   systemctl is-enabled --quiet latex-renderer-web.socket || \
+   systemctl is-active --quiet latex-renderer-web.socket; then
   web_service=latex-renderer-web.service
 fi
 cd "$source_root"
@@ -90,18 +92,20 @@ require_normal_maintenance_for_smoke() {
   fi
 }
 
+http_control() {
+  /usr/local/bin/node "$source_root/deploy/scripts/http-services.mjs" "$@"
+}
+
 restore_services_after_failure() {
   recovery_failed=false
   echo "Deployment did not finish; restoring local services on the active release." >&2
   systemctl start latex-renderer-update-manager.service >/dev/null 2>&1 || recovery_failed=true
   systemctl start latex-renderer-image-manager.service >/dev/null 2>&1 || recovery_failed=true
-  systemctl restart \
-    latex-renderer-api.service \
-    latex-renderer-internal-api.service \
-    latex-renderer-admin-api.service \
-    "$web_service" \
-    latex-renderer-remote-mcp.service \
-    latex-renderer-worker.service >/dev/null 2>&1 || recovery_failed=true
+  http_control prepare /opt/latex-renderer/current >/dev/null 2>&1 || recovery_failed=true
+  http_control restart latex-renderer-api.service latex-renderer-internal-api.service \
+    latex-renderer-admin-api.service "$web_service" latex-renderer-remote-mcp.service \
+    >/dev/null 2>&1 || recovery_failed=true
+  systemctl restart latex-renderer-worker.service >/dev/null 2>&1 || recovery_failed=true
   if [ "${deployment_mode:-}" = standalone ]; then
     systemctl start latex-renderer-standalone-gateway.service >/dev/null 2>&1 || recovery_failed=true
     systemctl is-active --quiet latex-renderer-standalone-gateway.service || recovery_failed=true
@@ -326,20 +330,17 @@ if [ "$parent_mutation_lock" = application-update ]; then
 else
   /usr/local/bin/node /opt/latex-renderer/current/deploy/scripts/reconcile-managed-runtime.mjs
 fi
-systemctl restart \
-  latex-renderer-api \
-  latex-renderer-internal-api \
-  latex-renderer-admin-api \
-  "$web_service" \
-  latex-renderer-remote-mcp \
-  latex-renderer-worker
+http_control enable latex-renderer-api.service latex-renderer-internal-api.service \
+  latex-renderer-admin-api.service "$web_service" latex-renderer-remote-mcp.service
+http_control restart latex-renderer-api.service latex-renderer-internal-api.service \
+  latex-renderer-admin-api.service "$web_service" latex-renderer-remote-mcp.service
+systemctl restart latex-renderer-worker.service
 if [ "$deployment_mode" = standalone ]; then
   systemctl enable --now latex-renderer-standalone-gateway.service
 else
   systemctl disable --now latex-renderer-standalone-gateway.service >/dev/null 2>&1 || true
 fi
 systemctl enable --now \
-  latex-renderer-remote-mcp.service \
   latex-renderer-update-recovery-gc.timer \
   latex-renderer-update-refresh.timer \
   latex-renderer-image-refresh.timer \
@@ -347,7 +348,9 @@ systemctl enable --now \
   latex-renderer-image-log-cleanup.timer
 
 deployment_checkpoint local-service-readiness
-for unit in latex-renderer-update-manager latex-renderer-image-manager latex-renderer-api latex-renderer-internal-api latex-renderer-admin-api "$web_service" latex-renderer-remote-mcp latex-renderer-worker; do
+http_control ready latex-renderer-api.service latex-renderer-internal-api.service \
+  latex-renderer-admin-api.service "$web_service" latex-renderer-remote-mcp.service
+for unit in latex-renderer-update-manager latex-renderer-image-manager latex-renderer-worker; do
   systemctl is-active --quiet "$unit"
 done
 if [ "$deployment_mode" = standalone ]; then

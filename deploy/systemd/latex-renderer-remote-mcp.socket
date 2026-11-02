@@ -1,0 +1,15 @@
+[Unit]
+Description=Loopback activation socket for LaTeX Renderer remote-mcp
+
+After=latex-renderer-authentication-recovery.service
+Requires=latex-renderer-authentication-recovery.service
+
+[Socket]
+ListenStream=127.0.0.1:3104
+Accept=no
+Service=latex-renderer-remote-mcp.service
+FileDescriptorName=http
+Backlog=128
+
+[Install]
+WantedBy=sockets.target

@@ -119,7 +119,8 @@ describe("post-review TeX environment regressions", () => {
     expect(quiesce).toContain(
       'systemctl stop "$refresh_timer" "$watchdog_timer"',
     );
-    expect(quiesce).toContain('systemctl stop "$admin_unit"');
+    expect(quiesce).toContain('http_control stop "$admin_unit"');
+    expect(quiesce).toContain('if http_control active "$admin_unit"');
     expect(quiesce).toContain("POST /v1/quiesce");
     expect(quiesce).toContain(".activeOperationId == null");
     expect(quiesce).toContain('systemctl stop "$manager_unit"');
@@ -138,9 +139,7 @@ describe("post-review TeX environment regressions", () => {
     expect(acquisition).toContain(
       "${scheme}://${mirror}/archive/debian/${snapshot}/",
     );
-    expect(acquisition).toContain(
-      "scheme=https",
-    );
+    expect(acquisition).toContain("scheme=https");
     expect(acquisition).toContain('"Acquire::Retries=$retries"');
     expect(acquisition).toContain("update --error-on=any");
     expect(acquisition).toContain(

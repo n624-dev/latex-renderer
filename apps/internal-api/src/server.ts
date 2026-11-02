@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { serve } from "@hono/node-server";
+import { createAdaptorServer } from "@hono/node-server";
+import { startHttpService } from "../../../deploy/scripts/http-idle-server.mjs";
 import { ApiKeyService } from "@latex-renderer/auth";
 import { RendererDatabase } from "@latex-renderer/database";
 import { loadSigningKeyRing, TicketService } from "@latex-renderer/ticket";
@@ -68,12 +69,20 @@ const app = createInternalApp({
 });
 
 const port = validPortEnvironment(process.env, "PORT", 3103);
-serve({ fetch: app.fetch, hostname: "127.0.0.1", port }, (info) => {
-  console.log(
-    JSON.stringify({
-      event: "internal_api.started",
-      address: info.address,
-      port: info.port,
-    }),
-  );
-});
+startHttpService(
+  createAdaptorServer({ fetch: app.fetch, hostname: "127.0.0.1" }),
+  {
+    port,
+    name: "internal_api",
+    onIdle: () => database.close(),
+    onListening: (info) => {
+      console.log(
+        JSON.stringify({
+          event: "internal_api.started",
+          address: info.address,
+          port: info.port,
+        }),
+      );
+    },
+  },
+);

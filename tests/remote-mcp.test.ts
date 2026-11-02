@@ -23,7 +23,10 @@ import {
   RemoteRenderService,
 } from "../packages/remote-mcp-core/src/index.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createRemoteMcpApp } from "../apps/remote-mcp/src/app.js";
+import {
+  createRemoteMcpApp,
+  AnonymousRegistrationLimiter,
+} from "../apps/remote-mcp/src/app.js";
 import { createRemoteMcpHandler } from "../apps/remote-mcp/src/mcp.js";
 import yazl from "yazl";
 import { legacyTestBrowserAuth } from "./helpers/browser-auth.js";
@@ -56,6 +59,19 @@ afterEach(async () => {
 });
 
 describe("Remote MCP HTTP server", () => {
+  it("keeps registration windows until expiry without extending them on repeated calls", () => {
+    const now = Date.now(),
+      clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    const limiter = new AnonymousRegistrationLimiter();
+    expect(limiter.idleBlockedUntil()).toBe(0);
+    limiter.consume("192.0.2.1");
+    expect(limiter.idleBlockedUntil()).toBe(now + 900_000);
+    clock.mockReturnValue(now + 60_000);
+    limiter.consume("192.0.2.1");
+    expect(limiter.idleBlockedUntil()).toBe(now + 900_000);
+    clock.mockReturnValue(now + 900_000);
+    expect(limiter.idleBlockedUntil()).toBe(0);
+  });
   it("keeps profile identity stable across reconnection and declares tool scopes", async () => {
     const f = await createFixture();
     const first = issueAccessToken(f.oauth, "user_test");

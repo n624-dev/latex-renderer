@@ -8,6 +8,11 @@ firewalls, Cloudflare, partitions or quotas.
 
 ## Select scope and one frontend
 
+Managed HTTP services can wait without a Node process and restart on access.
+`HTTP_IDLE_ENABLED=true` and `HTTP_IDLE_TIMEOUT_SECONDS=900` are the defaults
+in `renderer.env`; see [HTTP idle settings and lifecycle](http-service-idle.md).
+The reviewed existing-settings apply reconciles all five listeners together.
+
 Run from a trusted root terminal. Replace `--web` with `--cui` to finish entirely
 in the terminal; no frontend handoff is required.
 

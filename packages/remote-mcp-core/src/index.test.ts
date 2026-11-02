@@ -48,11 +48,14 @@ describe("Remote MCP core", () => {
   it("discards retained replies at the deadline even without another request", () => {
     vi.useFakeTimers();
     const f = refreshFixture();
+    expect(f.oauth.idleBlockedUntil()).toBe(0);
     f.refresh(f.tokens.refresh_token);
+    expect(f.oauth.idleBlockedUntil()).toBe(f.now.value + 30_000);
     expect(vi.getTimerCount()).toBe(1);
     f.now.value += 30_000;
     vi.advanceTimersByTime(30_000);
     expect(vi.getTimerCount()).toBe(0);
+    expect(f.oauth.idleBlockedUntil()).toBe(0);
   });
   it("does not replay an explicitly revoked family", () => {
     const f = refreshFixture(),

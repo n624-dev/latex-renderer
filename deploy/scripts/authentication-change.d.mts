@@ -69,6 +69,7 @@ export class AuthenticationChangeStore {
   clear(): Promise<void>;
 }
 export interface AuthenticationChangeHost {
+  prepareServices?(this: void, units: readonly string[]): void | Promise<void>;
   active(this: void, unit: string): boolean | Promise<boolean>;
   run(this: void, action: string, unit: string): void | Promise<void>;
   health(this: void, contents: string): void | Promise<void>;

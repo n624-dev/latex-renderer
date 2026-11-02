@@ -1,4 +1,5 @@
-import { serve } from "@hono/node-server";
+import { createAdaptorServer } from "@hono/node-server";
+import { startHttpService } from "../../../deploy/scripts/http-idle-server.mjs";
 import { createBrowserAuthenticationFromEnvironment } from "@latex-renderer/auth";
 import { RendererDatabase } from "@latex-renderer/database";
 import {
@@ -13,7 +14,7 @@ import {
   positiveIntegerEnvironment,
   validPortEnvironment,
 } from "@latex-renderer/shared";
-import { createRemoteMcpApp } from "./app.js";
+import { createRemoteMcpApp, AnonymousRegistrationLimiter } from "./app.js";
 import { createRemoteMcpHandler } from "./mcp.js";
 import { oauthDiagnostics } from "./diagnostics.js";
 
@@ -58,7 +59,9 @@ const oauth = new RemoteOAuthService(
     ),
     positiveIntegerEnvironment(process.env, "ARTIFACT_RETENTION_HOURS", 24),
   ),
+  registrationLimiter = new AnonymousRegistrationLimiter(),
   app = createRemoteMcpApp({
+    registrationLimiter,
     database,
     browserAuth: authentication.browserAuth,
     oauth,
@@ -67,13 +70,26 @@ const oauth = new RemoteOAuthService(
   }),
   port = validPortEnvironment(process.env, "PORT", 3104);
 
-serve({ fetch: app.fetch, hostname: "127.0.0.1", port }, (info) => {
-  console.log(
-    JSON.stringify({
-      event: "remote_mcp.started",
-      address: info.address,
-      port: info.port,
-      resource: oauth.resource,
-    }),
-  );
-});
+startHttpService(
+  createAdaptorServer({ fetch: app.fetch, hostname: "127.0.0.1" }),
+  {
+    port,
+    name: "remote_mcp",
+    onIdle: () => database.close(),
+    busyUntil: () =>
+      Math.max(
+        oauth.idleBlockedUntil(),
+        registrationLimiter.idleBlockedUntil(),
+      ),
+    onListening: (info) => {
+      console.log(
+        JSON.stringify({
+          event: "remote_mcp.started",
+          address: info.address,
+          port: info.port,
+          resource: oauth.resource,
+        }),
+      );
+    },
+  },
+);

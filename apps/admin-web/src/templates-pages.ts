@@ -29,11 +29,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File $env:TEMP\\install-latex-ren
 }
 
 export function statusPage(status: StatusSnapshot): string {
-  const item = (label: string, available: boolean) =>
-    `<p><span class="status ${available ? "active" : "failed"}">${label}：${available ? "応答中" : "停止または確認不可"}</span></p>`;
+  const item = (label: string, available: boolean, idle = false) =>
+    `<p><span class="status ${available ? "active" : "failed"}">${label}：${idle ? "待機中（アクセス時に起動）" : available ? "応答中" : "停止または確認不可"}</span></p>`;
   return shell(
     "稼働状況",
-    `<div class="page-heading"><h1>稼働状況</h1></div><section>${item("Webサイト", true)}${item("API", status.api)}${item("レンダリング処理", status.rendering)}${item("ダウンロード", status.downloads)}<p class="muted">最終更新：<time datetime="${escapeHtml(status.checkedAt)}">${escapeHtml(new Date(status.checkedAt).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" }))}</time></p></section><p>変換できない場合は<a href="/docs/troubleshooting/">問題解決の手順</a>を確認してください。</p>`,
+    `<div class="page-heading"><h1>稼働状況</h1></div><section>${item("Webサイト", true)}${item("API", status.api, status.apiIdle)}${item("レンダリング処理", status.rendering)}${item("ダウンロード", status.downloads)}<p class="muted">最終更新：<time datetime="${escapeHtml(status.checkedAt)}">${escapeHtml(new Date(status.checkedAt).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" }))}</time></p></section><p>変換できない場合は<a href="/docs/troubleshooting/">問題解決の手順</a>を確認してください。</p>`,
   );
 }
 

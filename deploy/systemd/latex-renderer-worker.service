@@ -11,6 +11,9 @@ User=latex-render-worker
 Group=latex-renderer
 WorkingDirectory=/opt/latex-renderer/current
 EnvironmentFile=/etc/latex-renderer/renderer.env
+RuntimeDirectory=latex-renderer-worker-health
+RuntimeDirectoryMode=0750
+Environment=WORKER_HEALTH_FILE=/run/latex-renderer-worker-health/state.json
 ExecStart=/usr/local/bin/node apps/renderer-worker/dist/index.js
 Restart=on-failure
 RestartSec=5

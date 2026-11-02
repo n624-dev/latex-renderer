@@ -3,6 +3,11 @@ import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { boundedIntegerEnvironment } from "./environment.mjs";
+import {
+  controlService,
+  httpServiceStatus,
+  httpSocketUnit,
+} from "./http-services.mjs";
 
 const baseUrl = process.env.IMAGE_MANAGER_URL ?? "http://127.0.0.1:3110";
 const credentialsDirectory = process.env.CREDENTIALS_DIRECTORY;
@@ -111,6 +116,7 @@ if (ageMs <= maxAgeMs) {
 
 const previouslyActiveConsumers = rendererConsumers.filter(
   (unit) =>
+    (httpSocketUnit(unit) && httpServiceStatus(unit).active) ||
     systemctl(["is-active", "--quiet", unit]).status === 0 ||
     (unit === "latex-renderer-standalone-gateway.service" &&
       systemctl(["is-enabled", "--quiet", unit]).status === 0),
@@ -141,6 +147,10 @@ restoreRendererConsumers(previouslyActiveConsumers);
 
 function restoreRendererConsumers(units) {
   for (const unit of units) {
+    if (httpSocketUnit(unit)) {
+      controlService("start", unit);
+      continue;
+    }
     const start = systemctl(["start", unit], { stdio: "inherit" });
     if (start.status !== 0)
       throw new Error(
@@ -148,6 +158,13 @@ function restoreRendererConsumers(units) {
       );
   }
   for (const unit of units) {
+    if (httpSocketUnit(unit)) {
+      if (!httpServiceStatus(unit).operational)
+        throw new Error(
+          `Renderer consumer is unavailable after watchdog recovery: ${unit}`,
+        );
+      continue;
+    }
     if (systemctl(["is-active", "--quiet", unit]).status !== 0)
       throw new Error(
         `Renderer consumer is still inactive after watchdog recovery: ${unit}`,

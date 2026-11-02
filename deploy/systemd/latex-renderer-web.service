@@ -1,10 +1,14 @@
 [Unit]
 Description=LaTeX Renderer Unified Web
 After=network-online.target
+After=latex-renderer-authentication-recovery.service
+Requires=latex-renderer-authentication-recovery.service
 Wants=network-online.target
 
 [Service]
-Type=simple
+Type=notify
+NotifyAccess=all
+TimeoutStartSec=30
 User=latex-renderer-web
 Group=latex-renderer
 WorkingDirectory=/opt/latex-renderer/current

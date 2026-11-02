@@ -6,6 +6,8 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 77
 fi
 
+script_root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+http_control() { /usr/local/bin/node "$script_root/http-services.mjs" "$@"; }
 manager_unit=latex-renderer-image-manager.service
 admin_unit=latex-renderer-admin-api.service
 refresh_timer=latex-renderer-image-refresh.timer
@@ -20,12 +22,12 @@ is_active() {
 admin_was_active=false
 refresh_was_active=false
 watchdog_was_active=false
-is_active "$admin_unit" && admin_was_active=true
+http_control active "$admin_unit" && admin_was_active=true
 is_active "$refresh_timer" && refresh_was_active=true
 is_active "$watchdog_timer" && watchdog_was_active=true
 
 restore_preflight_services() {
-  [ "$admin_was_active" = true ] && systemctl start "$admin_unit" >/dev/null 2>&1 || true
+  [ "$admin_was_active" = true ] && http_control start "$admin_unit" >/dev/null 2>&1 || true
   [ "$refresh_was_active" = true ] && systemctl start "$refresh_timer" >/dev/null 2>&1 || true
   [ "$watchdog_was_active" = true ] && systemctl start "$watchdog_timer" >/dev/null 2>&1 || true
 }
@@ -34,7 +36,12 @@ restore_preflight_services() {
 # checking the operation lock. This also makes the one-time upgrade from the
 # pre-quiesce Image Manager safe.
 systemctl stop "$refresh_timer" "$watchdog_timer" >/dev/null 2>&1 || true
-systemctl stop "$admin_unit" >/dev/null 2>&1 || true
+http_control stop "$admin_unit" >/dev/null 2>&1 || true
+if http_control active "$admin_unit"; then
+  restore_preflight_services
+  echo "Admin API listener or writer did not stop; deployment is postponed." >&2
+  exit 70
+fi
 
 if ! is_active "$manager_unit"; then
   echo "Image Manager is not active; deployment preflight has nothing to quiesce."

@@ -53,7 +53,11 @@ export async function runWorker(
       workerId: config.workerId,
     }),
   );
-  const stopHeartbeat = startWorkerHeartbeat(database, config.workerId),
+  const stopHeartbeat = startWorkerHeartbeat(
+      database,
+      config.workerId,
+      config.healthFile,
+    ),
     recoverExpiredLeases = createPeriodicLeaseRecovery(database, config);
   const isShuttingDown = () => signal.aborted;
   const diagnostic = diagnosticWriter(config.storageRoot, "renderer-worker");

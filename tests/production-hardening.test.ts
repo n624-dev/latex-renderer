@@ -314,14 +314,18 @@ describe("production hardening", () => {
     const deploy = read("deploy/scripts/deploy-production-release.sh"),
       managerRestart = "systemctl restart latex-renderer-image-manager",
       reconcile = "reconcile-managed-runtime.mjs",
-      consumers = "systemctl restart \\\n  latex-renderer-api";
+      consumers = "http_control restart latex-renderer-api.service";
     expect(deploy).not.toContain(
       'docker build --tag latex-renderer:texlive-2026 "$source_root/renderer"',
     );
     expect(deploy.indexOf(managerRestart)).toBeLessThan(
       deploy.indexOf(reconcile),
     );
-    expect(deploy.indexOf(reconcile)).toBeLessThan(deploy.indexOf(consumers));
+    const resume = deploy.indexOf(
+      consumers,
+      deploy.indexOf("http_control enable"),
+    );
+    expect(resume).toBeGreaterThan(deploy.indexOf(reconcile));
     expect(deploy).toContain(
       'if [ "$parent_mutation_lock" = application-update ]',
     );
@@ -345,8 +349,18 @@ describe("production hardening", () => {
   });
   it("enables Remote MCP so it returns after a production host reboot", () => {
     const deploy = read("deploy/scripts/deploy-production-release.sh");
-    expect(deploy).toMatch(
-      /systemctl enable --now \\\n\s+latex-renderer-remote-mcp\.service/,
+    const enable = deploy.slice(
+      deploy.indexOf("http_control enable"),
+      deploy.indexOf(
+        "systemctl restart latex-renderer-worker.service",
+        deploy.indexOf("http_control enable"),
+      ),
+    );
+    expect(enable).toContain("latex-renderer-remote-mcp.service");
+    const lifecycle = read("deploy/scripts/http-services.mjs");
+    expect(lifecycle).toContain('run("enable", socket)');
+    expect(read("deploy/systemd/latex-renderer-remote-mcp.socket")).toContain(
+      "WantedBy=sockets.target",
     );
   });
   it("clears inherited setgid bits before rootless Docker reads temporary build trees", () => {

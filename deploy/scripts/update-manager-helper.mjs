@@ -1,4 +1,8 @@
 #!/usr/bin/env node
+import {
+  prepareHttpActivation,
+  supportsHttpActivation,
+} from "./http-services.mjs";
 import { isMainModule } from "./is-main-module.mjs";
 
 /*
@@ -767,6 +771,11 @@ async function deployFromAssembly(
   releaseId,
   { ownsParentMutationLock = true } = {},
 ) {
+  // Legacy entry points cannot inherit activation sockets or notify-only units.
+  // This runs under the same full-data quiescence as the deployment itself.
+  const prepareLegacy = () => {
+    if (!supportsHttpActivation(assembly)) prepareHttpActivation(assembly);
+  };
   const environment = {
     ...process.env,
     SUDO_USER: deployment.deployUser,
@@ -786,15 +795,17 @@ async function deployFromAssembly(
   }
   await withInheritedMutationLock(helperMutationLock, () =>
     withHostRecovery(
-      () =>
-        runLogged(
+      () => {
+        prepareLegacy();
+        return runLogged(
           "sh",
           [
             join(assembly, "deploy/scripts/deploy-production-release.sh"),
             releaseId,
           ],
           { env: environment },
-        ),
+        );
+      },
       { requireNormalMaintenance: true },
     ),
   );

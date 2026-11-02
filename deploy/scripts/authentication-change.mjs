@@ -20,6 +20,7 @@ export const authenticationUnits = Object.freeze([
 // Image/Update managers, Nginx, Cloudflare and unrelated services are untouched.
 export const serverSetupUnits = Object.freeze([
   "latex-renderer-api.service",
+  "latex-renderer-web.service",
   ...authenticationUnits,
   "latex-renderer-standalone-gateway.service",
   "latex-renderer-internal-api.service",
@@ -380,6 +381,7 @@ async function stopConsumers(host, units = authenticationUnits) {
       throw new Error("Authentication consumers did not stop");
 }
 async function startConsumers(host, contents, units = authenticationUnits) {
+  await host.prepareServices?.(units);
   // Attempt every consumer; one failed service must not hide the others.
   let failed = false;
   for (const unit of units) {
@@ -431,6 +433,7 @@ export async function recoverAuthenticationChange(
   await store.replaceEnvironment(journal.before);
   // Do NOT restore a DB backup: retired cookies must remain permanently revoked.
   if (!beforeStart) await startConsumers(host, journal.before, units);
+  else await host.prepareServices?.(units);
   await store.clear();
   return true;
 }

@@ -20,6 +20,10 @@ export interface AdminActor extends AppActor {
 }
 
 export interface AdminDependencies {
+  httpServices?: () => {
+    managed: boolean;
+    services: { service: string; state: string; operational: boolean }[];
+  };
   database: RendererDatabase;
   apiKeys: ApiKeyService;
   browserAuth: BrowserAuthenticationService;
