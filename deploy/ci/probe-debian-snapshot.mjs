@@ -24,7 +24,8 @@ for (const host of ["snapshot.debian.org", "snapshot-cloudflare.debian.org"])
           "\n%{http_code} %{time_starttransfer} %{time_total} %{size_download}",
         ];
         if (agent === "apt") args.push("--user-agent", "Debian APT-HTTP/1.3 (2.6.1)");
-        let output = "", status = 0;
+        let output;
+        let status = 0;
         try {
           output = execFileSync("curl", [...args, "--", url], {
             encoding: "utf8", timeout: 15_000, maxBuffer: 512 * 1024,
