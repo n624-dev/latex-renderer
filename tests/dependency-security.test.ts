@@ -45,14 +45,12 @@ const forgeSetup = `
   }
 `;
 
-it("pins the RSA parser patch and removes every locked sprintf-js copy", () => {
+it("uses the upstream RSA fixes and removes every locked sprintf-js copy", () => {
   const workspace = readFileSync("pnpm-workspace.yaml", "utf8");
   const lock = readFileSync("pnpm-lock.yaml", "utf8");
-  expect(workspace).toContain(
-    "node-forge@1.4.0: patches/node-forge@1.4.0.patch",
-  );
-  expect(lock).toMatch(/node-forge@1\.4\.0\(patch_hash=[a-f0-9]+\):/);
-  expect(lock).not.toMatch(/^ {2}node-forge@1\.4\.0: \{\}/m);
+  expect(workspace).toContain("node-forge: 1.4.2");
+  expect(lock).toContain("node-forge@1.4.2:");
+  expect(lock).not.toContain("node-forge@1.4.0");
   expect(lock).not.toMatch(/^ {2}sprintf-js@/m);
   expect(readFileSync(".gitattributes", "utf8")).toContain(
     "patches/*.patch text eol=lf",
@@ -152,6 +150,49 @@ it("keeps the real MCPB signer interoperable with independent OpenSSL CMS verifi
       writeFileSync(content, "modified payload");
       assert.throws(() => execFileSync("openssl", args, { timeout: 5000, stdio: "pipe" }));
     } finally { rmSync(directory, { recursive: true, force: true }); }
+  `);
+});
+
+it("rejects invalid first OID arcs and preserves PEM Buffer decoding", () => {
+  run(`${forgeSetup}
+    for (const invalid of ["0.42.840.113549.1.1.1", "4294977127.18.840.113549.1.1.1"]) {
+      assert.throws(() => a.oidToDer(invalid));
+    }
+    assert.deepEqual(forge.pem.decode(Buffer.from(pem)), forge.pem.decode(pem));
+  `);
+});
+
+it("uses bounded glob preprocessing through all real lint consumers", () => {
+  run(`
+    import assert from "node:assert/strict";
+    import { createRequire } from "node:module";
+    const root = createRequire(process.cwd() + "/package.json");
+    const eslint = createRequire(root.resolve("eslint"));
+    const array = createRequire(eslint.resolve("@eslint/config-array"));
+    const tseslint = createRequire(root.resolve("typescript-eslint"));
+    const parser = createRequire(tseslint.resolve("@typescript-eslint/parser"));
+    const estree = createRequire(parser.resolve("@typescript-eslint/typescript-estree"));
+    for (const consumer of [eslint, array, estree]) {
+      assert.equal(consumer("minimatch/package.json").version, "11.0.3");
+      const { minimatch, Minimatch } = consumer("minimatch");
+      assert(minimatch("apps/web/src/page.ts", "apps/**/*.ts"));
+      assert(!minimatch("apps/web/dist/page.js", "apps/**/*.ts"));
+      assert(minimatch("日本語/数式.tex", "**/*.tex"));
+      assert(minimatch(".config/test.ts", "**/*.ts", { dot: true }));
+      assert(new Minimatch("apps/**/*.ts").match("apps/web/src", true));
+      // Repeated **/.. branches previously grew without respecting this cap.
+      const bounded = new Minimatch("**/../a/b/".repeat(12) + "file", {
+        optimizationLevel: 2, braceExpandMax: 32
+      });
+      assert(bounded.set.length > 1 && bounded.set.length <= 32);
+    }
+    const { ESLint } = root("eslint");
+    const engine = new ESLint();
+    assert.equal(await engine.isPathIgnored("apps/web/dist/page.ts"), true);
+    const config = await engine.calculateConfigForFile("tests/dependency-security.test.ts");
+    assert(config.rules["@typescript-eslint/no-floating-promises"]);
+    const result = await engine.lintText("const unused = 1;", { filePath: "deploy/scripts/glob-fixture.mjs" });
+    assert(result[0].messages.some(m => m.ruleId === "no-unused-vars"));
   `);
 });
 

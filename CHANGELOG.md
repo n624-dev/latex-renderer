@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.5.7-rc.2 - 2026-11-02
+
+- Update transitive node-forge to 1.4.2 and minimatch to 11.0.3, replacing the local RSA parser patch with the upstream fix. Keep RSA rejection, MCPB signing and lint file-selection regressions.
+
 ## 1.5.7-rc.1 - 2026-11-02
 
 - Retry transient Debian snapshot downloads through a second official endpoint with the same pinned timestamp, signed indexes and package checks. Bound each acquisition separately; keep dpkg installation local and non-retryable.
