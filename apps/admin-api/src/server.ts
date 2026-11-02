@@ -1,6 +1,11 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { serve } from "@hono/node-server";
+import { createAdaptorServer } from "@hono/node-server";
+import { httpServicesSnapshot } from "../../../deploy/scripts/http-services.mjs";
+import {
+  startHttpService,
+  createHttpActivity,
+} from "../../../deploy/scripts/http-idle-server.mjs";
 import {
   ApiKeyService,
   createBrowserAuthenticationFromEnvironment,
@@ -59,10 +64,15 @@ const updateManagerTokenPath = updateManagerSocket
     ? join(process.env.CREDENTIALS_DIRECTORY, "update-manager-token")
     : required("UPDATE_MANAGER_TOKEN_FILE")
   : undefined;
-const updateManager = updateManagerSocket && updateManagerTokenPath
-  ? new UpdateManagerClient(updateManagerSocket, readFileSync(updateManagerTokenPath, "utf8").trim())
-  : undefined;
+const updateManager =
+  updateManagerSocket && updateManagerTokenPath
+    ? new UpdateManagerClient(
+        updateManagerSocket,
+        readFileSync(updateManagerTokenPath, "utf8").trim(),
+      )
+    : undefined;
 const app = createAdminApp({
+  httpServices: httpServicesSnapshot,
   database,
   apiKeys: new ApiKeyService(
     database,
@@ -79,11 +89,31 @@ const app = createAdminApp({
   ...(imageManager ? { imageManager } : {}),
   ...(updateManager ? { updateManager } : {}),
   maxUploadBytes: loadResourceLimits(process.env).maxUploadBytes,
-  maxOutputBytes: positiveBytesEnvironment(process.env, "MAX_OUTPUT_BYTES", 200 * 1024 * 1024),
-  maxQueueLength: positiveIntegerEnvironment(process.env, "MAX_QUEUE_LENGTH", 100),
-  maxUserStorageBytes: positiveBytesEnvironment(process.env, "MAX_USER_STORAGE_BYTES", 1024 * 1024 * 1024),
-  minFreeStorageBytes: positiveBytesEnvironment(process.env, "MIN_FREE_STORAGE_BYTES", 5 * 1024 * 1024 * 1024),
-  artifactRetentionHours: positiveIntegerEnvironment(process.env, "ARTIFACT_RETENTION_HOURS", 24),
+  maxOutputBytes: positiveBytesEnvironment(
+    process.env,
+    "MAX_OUTPUT_BYTES",
+    200 * 1024 * 1024,
+  ),
+  maxQueueLength: positiveIntegerEnvironment(
+    process.env,
+    "MAX_QUEUE_LENGTH",
+    100,
+  ),
+  maxUserStorageBytes: positiveBytesEnvironment(
+    process.env,
+    "MAX_USER_STORAGE_BYTES",
+    1024 * 1024 * 1024,
+  ),
+  minFreeStorageBytes: positiveBytesEnvironment(
+    process.env,
+    "MIN_FREE_STORAGE_BYTES",
+    5 * 1024 * 1024 * 1024,
+  ),
+  artifactRetentionHours: positiveIntegerEnvironment(
+    process.env,
+    "ARTIFACT_RETENTION_HOURS",
+    24,
+  ),
   environmentRoot:
     process.env.RENDERER_ENVIRONMENT_ROOT ??
     "/var/lib/latex-renderer/environment",
@@ -101,19 +131,26 @@ const app = createAdminApp({
       process.env.RENDERER_PUBLIC_URL ?? authentication.publicOrigin,
   },
 });
-serve(
-  {
-    fetch: app.fetch,
+const activity = createHttpActivity();
+startHttpService(
+  createAdaptorServer({
+    fetch: activity.track(app.fetch),
     hostname: "127.0.0.1",
+  }),
+  {
+    activity,
     port: validPortEnvironment(process.env, "PORT", 3102),
-  },
-  (info) => {
-    console.log(
-      JSON.stringify({
-        event: "admin_api.started",
-        address: info.address,
-        port: info.port,
-      }),
-    );
+    name: "admin_api",
+    busyUntil: () => authentication.browserAuth.idleBlockedUntil(),
+    onIdle: () => database.close(),
+    onListening: (info) => {
+      console.log(
+        JSON.stringify({
+          event: "admin_api.started",
+          address: info.address,
+          port: info.port,
+        }),
+      );
+    },
   },
 );

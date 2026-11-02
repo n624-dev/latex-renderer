@@ -69,21 +69,29 @@ describe("browser authentication audit remediations", () => {
 
   it("limits pending OIDC starts per client address", async () => {
     const issuer = "https://id.example.test/tenant";
+    let now = Date.now();
     const client = new OidcClient({
       issuer,
       clientId: "latex-renderer",
       clientSecret: "strict-test-client-secret",
       publicOrigin: "https://latex.example.com",
       fetchImpl: () => Promise.resolve(Response.json(oidcMetadata(issuer))),
+      now: () => new Date(now),
     });
+    expect(client.idleBlockedUntil()).toBe(0);
     for (let index = 0; index < 20; index += 1)
       await client.begin("/app/", "192.0.2.20");
+    expect(client.idleBlockedUntil()).toBe(now + 900_000);
+    now += 60_000;
     await expect(client.begin("/app/", "192.0.2.20")).rejects.toMatchObject({
       code: "OIDC_LOGIN_RATE_LIMITED",
       status: 429,
     });
     const other = await client.begin("/app/", "192.0.2.21");
     expect(other.state).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(client.idleBlockedUntil()).toBe(now + 900_000);
+    now += 900_000;
+    expect(client.idleBlockedUntil()).toBe(0);
   });
 
   it("recovers OIDC discovery after a transient failure", async () => {

@@ -1,3 +1,9 @@
+import {
+  controlService,
+  httpServiceStatus,
+  httpSocketUnit,
+  prepareHttpActivation,
+} from "./http-services.mjs";
 import { execFileSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import { lstat, mkdir, realpath, open } from "node:fs/promises";
@@ -629,15 +635,20 @@ export async function createInitialServerSetupHost(kind = "initial") {
     finalize: (units) => {
       // Persistent activation happens only AFTER health and durable commit.
       // A crash here keeps a committed journal and retries enable, not owner DB.
-      if (kind === "initial") systemctl("enable", ...units);
+      if (kind === "initial")
+        for (const unit of units)
+          controlService("enable", unit, { run: systemctl });
     },
+    prepareServices: () => prepareHttpActivation("/opt/latex-renderer/current"),
     active(unit) {
+      if (httpSocketUnit(unit))
+        return httpServiceStatus(unit, { run: systemctl }).active;
       return installationUnitActive(
         systemctl("show", "--property=LoadState", "--value", unit).trim(),
         systemctl("show", "--property=ActiveState", "--value", unit).trim(),
       );
     },
-    stop: (unit) => systemctl("stop", unit),
+    stop: (unit) => controlService("stop", unit, { run: systemctl }),
     start: async (unit) => {
       if (
         kind === "initial" &&
@@ -646,7 +657,7 @@ export async function createInitialServerSetupHost(kind = "initial") {
         ))
       )
         systemctl("start", "latex-renderer-authentication-recovery.service");
-      return systemctl("start", unit);
+      return controlService("start", unit, { run: systemctl });
     },
     ownerState: async (id) => {
       if (kind === "initial") return pendingOwner(id);

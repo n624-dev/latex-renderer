@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { controlService } from "./http-services.mjs";
 import { timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
@@ -1057,12 +1058,12 @@ async function restartRendererConsumers() {
     () => false,
   );
   await runCapture("systemctl", ["restart", "latex-renderer-worker.service"]);
-  await runCapture("systemctl", [
-    "try-restart",
+  for (const unit of [
     "latex-renderer-internal-api.service",
     "latex-renderer-admin-api.service",
     "latex-renderer-remote-mcp.service",
-  ]);
+  ])
+    controlService("try-restart", unit);
   // Requires=Internal API stops this dependent during a restart; try-restart
   // cannot bring back a unit already stopped by that dependency transition.
   if (restoreGateway) {

@@ -42,6 +42,7 @@ export interface InstallationHost {
   active(this: void, unit: string): boolean | Promise<boolean>;
   stop(this: void, unit: string): unknown | Promise<unknown>;
   start(this: void, unit: string): unknown | Promise<unknown>;
+  prepareServices?(this: void): unknown | Promise<unknown>;
   ownerState(
     this: void,
     id: string,

@@ -125,6 +125,7 @@ async function finish(store, host, journal) {
   await store.saveJournal({ ...journal, phase: "owner-ready" });
   await store.replace(journal.after);
   await host.validatePublished(journal.after);
+  await host.prepareServices?.();
   for (const unit of journal.units) await host.start(unit);
   for (const unit of journal.units)
     if (!(await host.active(unit))) throw new Error("Consumer did not start");
@@ -192,6 +193,7 @@ export async function recoverInstallation(store, host, beforeStart = false) {
     } else await stop(host, journal.units);
     await store.replace(journal.before);
     await host.validatePublished(journal.before, beforeStart);
+    await host.prepareServices?.();
     if (!beforeStart) {
       for (const unit of journal.units) await host.start(unit);
       for (const unit of journal.units)
@@ -219,6 +221,7 @@ export async function recoverInstallation(store, host, beforeStart = false) {
           throw new Error("Boot recovery requires stopped services");
       await store.replace(journal.after);
       await host.validatePublished(journal.after, true);
+      await host.prepareServices?.();
       // Keep the journal until an explicit foreground recovery proves health.
       return { recovered: true, pendingHealth: true };
     }

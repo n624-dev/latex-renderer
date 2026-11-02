@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 1.5.8-rc.1 - 2026-11-02
+
+- Add loopback systemd socket activation and configurable idle exit for Web, Remote MCP and the three HTTP APIs. Preserve in-flight uploads/streams and OAuth retry/rate-limit state.
+- Reconcile listener and service lifecycle across setup, configuration, updates, image operations and legacy recovery. Report healthy sleep separately from startup and failures, with passive status checks.
+- Add native AMD64/ARM64 systemd regression coverage and operator documentation. Worker processing remains continuously available.
+
 ## 1.5.7 - 2026-11-02
 
 - 検証済みの1.5.7-rc.2をStableへ昇格する。実行コード・依存関係・設定の既定値は候補版と同じとし、バージョン表記と導入ガイドの対象版を更新する。

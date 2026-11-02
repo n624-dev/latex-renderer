@@ -61,6 +61,12 @@ export class OidcClient {
   private readonly now: () => Date;
   private readonly flows = new Map<string, OidcFlow>();
   private readonly flowStartWindows = new Map<string, OidcFlowStartWindow>();
+  private activityDeadline = 0;
+  idleBlockedUntil(): number {
+    return this.activityDeadline > this.now().getTime()
+      ? this.activityDeadline
+      : 0;
+  }
   private metadataPromise: Promise<OidcMetadata> | undefined;
   private jwks?: ReturnType<typeof createRemoteJWKSet>;
 
@@ -105,6 +111,7 @@ export class OidcClient {
     const nonce = randomBytes(32).toString("base64url");
     const verifier = randomBytes(48).toString("base64url");
     const expiresAt = this.now().getTime() + FLOW_LIFETIME_MS;
+    this.activityDeadline = Math.max(this.activityDeadline, expiresAt);
     this.flows.set(hash(state), {
       nonce,
       verifier,
@@ -299,6 +306,10 @@ export class OidcClient {
       }
       window = { windowStartedAt: now, count: 0 };
       this.flowStartWindows.set(key, window);
+      this.activityDeadline = Math.max(
+        this.activityDeadline,
+        now + FLOW_START_WINDOW_MS,
+      );
     }
     if (window.count >= MAXIMUM_FLOW_STARTS_PER_CLIENT)
       throw new AppError(

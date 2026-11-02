@@ -1,4 +1,10 @@
 #!/usr/bin/env node
+import {
+  controlService,
+  httpServiceStatus,
+  httpSocketUnit,
+  prepareHttpActivation,
+} from "./http-services.mjs";
 import { isMainModule } from "./is-main-module.mjs";
 import { execFileSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
@@ -263,8 +269,14 @@ async function main() {
       return;
     }
     const host = {
+      prepareServices: (units) => {
+        if (units.includes("latex-renderer-web.service"))
+          prepareHttpActivation("/opt/latex-renderer/current");
+      },
       active: (unit) => {
         failurePhase = "service-active";
+        if (httpSocketUnit(unit))
+          return httpServiceStatus(unit, { run: systemctl }).active;
         const state = systemctl(
           "show",
           "--property=ActiveState",
@@ -277,7 +289,9 @@ async function main() {
       },
       run: (action, unit) => {
         failurePhase = action === "stop" ? "service-stop" : "service-start";
-        systemctl(action, unit);
+        if (action === "start" && httpSocketUnit(unit))
+          controlService("enable", unit, { run: systemctl });
+        controlService(action, unit, { run: systemctl });
       },
       health: (contents) => {
         failurePhase = "readiness";

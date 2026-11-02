@@ -1,3 +1,8 @@
+import {
+  controlService,
+  httpServiceStatus,
+  httpSocketUnit,
+} from "./http-services.mjs";
 import { isMainModule } from "./is-main-module.mjs";
 import { execFileSync } from "node:child_process";
 import { lstat, readFile, realpath, rm } from "node:fs/promises";
@@ -61,13 +66,21 @@ function validateJournal(value) {
   return value;
 }
 
-const systemctl = (...args) =>
+const rawSystemctl = (...args) =>
   execFileSync("/usr/bin/systemctl", args, {
     encoding: "utf8",
     timeout: 15 * 60_000,
     stdio: inheritedMutationStdio(["pipe", "pipe", "pipe"]),
   });
+const systemctl = (...args) => {
+  if (["stop", "start"].includes(args[0]) && args.length === 2)
+    return controlService(args[0], args[1], { run: rawSystemctl });
+  return rawSystemctl(...args);
+};
 const active = (unit) => {
+  if (httpSocketUnit(unit))
+    return httpServiceStatus(unit, { run: rawSystemctl, aliases: false })
+      .active;
   const state = systemctl(
     "show",
     "--property=ActiveState",
@@ -197,7 +210,8 @@ export async function withQuiescedRecovery(
       throw new Error(
         "Recovery waits for active backup/cleanup/export to finish",
       );
-    for (const unit of writers) if (original.includes(unit)) run("stop", unit);
+    for (const unit of writers)
+      if (original.includes(unit) || inspect(unit)) run("stop", unit);
     if (writers.some(inspect))
       throw new Error("Recovery writers did not quiesce");
     point = await create();

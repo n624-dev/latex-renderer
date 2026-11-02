@@ -486,6 +486,10 @@ export class BrowserAuthenticationService {
     );
   }
 
+  idleBlockedUntil(): number {
+    return this.oidc?.idleBlockedUntil() ?? 0;
+  }
+
   async beginOidc(returnTo?: string, clientAddress = "unavailable") {
     if (!this.isMethodEnabled("oidc") || this.oidc === undefined)
       throw new AppError(

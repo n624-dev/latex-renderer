@@ -6,7 +6,9 @@ Requires=latex-renderer-authentication-recovery.service
 Wants=network-online.target latex-renderer-image-manager.service latex-renderer-update-manager.service
 
 [Service]
-Type=simple
+Type=notify
+NotifyAccess=all
+TimeoutStartSec=30
 User=latex-renderer
 Group=latex-renderer
 WorkingDirectory=/opt/latex-renderer/current

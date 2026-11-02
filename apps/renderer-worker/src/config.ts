@@ -13,6 +13,7 @@ export interface WorkerConfig extends ResourceLimits {
   storageRoot: string;
   image: string;
   workerId: string;
+  healthFile?: string;
   seccompProfile: string;
   apparmorProfile: string | undefined;
   maxOutputBytes: number;
@@ -50,6 +51,9 @@ export function loadWorkerConfig(): WorkerConfig {
     databasePath: required("DATABASE_PATH"),
     storageRoot: required("STORAGE_ROOT"),
     image: required("RENDERER_IMAGE"),
+    ...(process.env.WORKER_HEALTH_FILE
+      ? { healthFile: process.env.WORKER_HEALTH_FILE }
+      : {}),
     workerId: process.env.WORKER_ID ?? `worker_${randomUUID()}`,
     seccompProfile: required("RENDERER_SECCOMP_PROFILE"),
     apparmorProfile: optional("RENDERER_APPARMOR_PROFILE"),

@@ -294,7 +294,11 @@ IFS= read -r -p 'Owner user ID: ' owner_id
 IFS= read -r -p 'Target auth mode: ' target_mode
 IFS= read -r -p 'Exact issuer: ' target_issuer
 IFS= read -r -p 'Stable subject: ' target_subject
-sudo systemctl stop latex-renderer-admin-api.service
+if [ -f /opt/latex-renderer/current/deploy/scripts/http-services.mjs ]; then
+  sudo node /opt/latex-renderer/current/deploy/scripts/http-services.mjs stop latex-renderer-admin-api.service
+else
+  sudo systemctl stop latex-renderer-admin-api.service
+fi
 sudo env \
   DATABASE_PATH=/var/lib/latex-renderer/renderer.sqlite3 \
   API_KEY_PEPPER_ID=v1 \

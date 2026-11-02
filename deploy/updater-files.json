@@ -29,5 +29,7 @@
   "deploy/scripts/deploy-production-release.sh",
   "deploy/scripts/deployment-checks.sh",
   "deploy/scripts/deployment-json-check.mjs",
-  "deploy/scripts/github-cli-environment.mjs"
+  "deploy/scripts/github-cli-environment.mjs",
+  "deploy/scripts/http-services.mjs",
+  "deploy/scripts/http-idle-server.mjs"
 ]

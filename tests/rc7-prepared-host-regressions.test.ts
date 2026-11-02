@@ -92,7 +92,11 @@ describe("prepared-host deployment wiring regressions", () => {
       );
       expect(result.status, result.stderr).toBe(0);
       expect(result.stdout).toBe(expected);
-      expect(source.match(/"\$web_service"/g)).toHaveLength(3);
+      expect(selection).toContain("latex-renderer-web.socket");
+      expect(source).toContain(
+        "http_control restart latex-renderer-api.service",
+      );
+      expect(source).toContain("http_control ready latex-renderer-api.service");
     },
   );
   it("rejects missing prerequisites and wrong build ownership before tooling creation or service mutation", () => {

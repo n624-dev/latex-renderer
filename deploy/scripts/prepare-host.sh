@@ -188,7 +188,7 @@ chmod 0640 /etc/latex-renderer/backup.env
 
 install -o root -g latex-renderer -m 0644 "$source_root/deploy/security/seccomp.json" /etc/latex-renderer/seccomp.json
 install -o root -g root -m 0644 "$source_root/deploy/security/latex-renderer.apparmor" /etc/apparmor.d/latex-renderer
-install -o root -g root -m 0644 "$source_root"/deploy/systemd/*.service "$source_root"/deploy/systemd/*.timer /etc/systemd/system/
+install -o root -g root -m 0644 "$source_root"/deploy/systemd/*.service "$source_root"/deploy/systemd/*.timer "$source_root"/deploy/systemd/*.socket /etc/systemd/system/
 if ! command -v sudo >/dev/null 2>&1; then
   echo "sudo is required for the non-root Update Manager controller" >&2
   exit 69
@@ -199,6 +199,7 @@ install -o root -g root -m 0440 "$source_root/deploy/sudoers.d/latex-renderer-up
 visudo -cf /etc/sudoers.d/latex-renderer-update >/dev/null
 apparmor_parser -r /etc/apparmor.d/latex-renderer
 systemctl daemon-reload
+/usr/local/bin/node "$source_root/deploy/scripts/http-services.mjs" prepare "$source_root"
 
 sh "$source_root/deploy/scripts/configure-rootless-docker.sh"
 

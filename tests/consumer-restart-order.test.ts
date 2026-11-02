@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
+import { httpSocketUnit } from "../deploy/scripts/http-services.mjs";
 
 describe("consumer dependency restart boundaries (no systemd mutation)", () => {
   it.each([false, true])(
@@ -22,6 +23,11 @@ describe("consumer dependency restart boundaries (no systemd mutation)", () => {
       expect(units).toContain("latex-renderer-admin-api.service");
       expect(units.at(-1)).toBe("latex-renderer-standalone-gateway.service");
       const execute = runInNewContext(`(${body})`, {
+        httpSocketUnit,
+        controlService: (action: string, unit: string) => {
+          calls.push([action, httpSocketUnit(unit) ?? unit]);
+        },
+        httpServiceStatus: () => ({ operational: true }),
         systemctl: (args: string[]) => {
           calls.push(args);
           return {
@@ -38,12 +44,12 @@ describe("consumer dependency restart boundaries (no systemd mutation)", () => {
       else execute(units);
       expect(
         calls.filter((args) => args[0] === "start").map((args) => args[1]),
-      ).toEqual(units);
+      ).toEqual(units.map((unit) => httpSocketUnit(unit) ?? unit));
       expect(
         calls
           .filter((args) => args[0] === "is-active")
           .map((args) => args.at(-1)),
-      ).toEqual(units);
+      ).toEqual(units.filter((unit) => !httpSocketUnit(unit)));
     },
   );
   it.each([true, false])(
@@ -82,6 +88,9 @@ describe("consumer dependency restart boundaries (no systemd mutation)", () => {
       };
       const execute = runInNewContext(`(${body})`, {
         runCapture,
+        controlService: (action: string, unit: string) => {
+          void runCapture("systemctl", [action, unit]);
+        },
       }) as () => Promise<void>;
       await execute();
       expect(gateway).toBe(enabled);
@@ -111,6 +120,7 @@ describe("consumer dependency restart boundaries (no systemd mutation)", () => {
           "-c",
           `
       gateway=active; deployment_mode=${mode}; web_service=fixture-web
+      http_control() { case "$1" in restart) gateway=inactive ;; esac; return 0; }
       systemctl() {
         case "$1" in
           restart) gateway=inactive ;;

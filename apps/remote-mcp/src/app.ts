@@ -35,6 +35,7 @@ import {
 import { observeMcpResponse } from "./response-diagnostics.js";
 
 export interface RemoteMcpAppDependencies {
+  registrationLimiter?: AnonymousRegistrationLimiter;
   database: RendererDatabase;
   browserAuth: BrowserAuthenticationService;
   oauth: RemoteOAuthService;
@@ -78,7 +79,8 @@ export function createRemoteMcpApp(dependencies: RemoteMcpAppDependencies) {
         mcpStage: McpStage | undefined;
       };
     }>(),
-    registrationLimiter = new AnonymousRegistrationLimiter(),
+    registrationLimiter =
+      deps.registrationLimiter ?? new AnonymousRegistrationLimiter(),
     loginContinuations = new RemoteMcpLoginContinuations(deps.database);
   app.use("*", requestId());
   app.use("*", (c, next) =>
@@ -501,7 +503,11 @@ class RegistrationError extends AppError {
   }
 }
 
-class AnonymousRegistrationLimiter {
+export class AnonymousRegistrationLimiter {
+  private activityDeadline = 0;
+  idleBlockedUntil(): number {
+    return this.activityDeadline > Date.now() ? this.activityDeadline : 0;
+  }
   private readonly secret = randomBytes(32);
   private readonly entries = new Map<
     string,
@@ -524,6 +530,10 @@ class AnonymousRegistrationLimiter {
           60,
         );
       this.entries.set(key, { count: 1, windowStartedAt: timestamp });
+      this.activityDeadline = Math.max(
+        this.activityDeadline,
+        timestamp + windowMs,
+      );
       return;
     }
     if (previous.count >= 10)

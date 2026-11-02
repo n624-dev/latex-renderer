@@ -146,6 +146,12 @@ export class RemoteOAuthService {
   // still contains hashes only. A restart/eviction fails retryably, not open.
   private readonly refreshReplies = new Map<string, RefreshReply>();
   private refreshReplyTimer: ReturnType<typeof setTimeout> | undefined;
+  private activityDeadline = 0;
+  idleBlockedUntil(): number {
+    return this.refreshReplies.size && this.activityDeadline > this.clock()
+      ? this.activityDeadline
+      : 0;
+  }
   constructor(
     private readonly database: RendererDatabase,
     readonly issuer: string,
@@ -512,6 +518,7 @@ export class RemoteOAuthService {
         accessExpiresAt: Date.parse(timestamp) + ACCESS_TOKEN_MS,
       };
       this.refreshReplies.set(result.familyId, reply);
+      this.activityDeadline = Math.max(this.activityDeadline, reply.expiresAt);
       this.scheduleReplyExpiry();
     }
     this.reportOAuth({

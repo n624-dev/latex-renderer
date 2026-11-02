@@ -1,0 +1,20 @@
+[Unit]
+Description=Loopback activation socket for LaTeX Renderer api
+
+# Recovery is a normal service ordered after basic.target. These listeners
+# start after it, rather than participating in the early sockets.target order.
+DefaultDependencies=no
+Before=shutdown.target
+Conflicts=shutdown.target
+After=latex-renderer-authentication-recovery.service
+Requires=latex-renderer-authentication-recovery.service
+
+[Socket]
+ListenStream=127.0.0.1:3100
+Accept=no
+Service=latex-renderer-api.service
+FileDescriptorName=http
+Backlog=128
+
+[Install]
+WantedBy=sockets.target

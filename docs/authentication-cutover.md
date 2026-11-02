@@ -203,13 +203,17 @@ before journaling/stopping anything. The renderer API, Admin, Remote MCP and
 Internal API stop before the worker, whose active render drains normally. The
 Standalone Gateway stops before its required Internal API so systemd's propagated
 stop cannot leave it behind. Only after all are stopped is one env published.
-All selected services restart and must be active;
+All selected HTTP listeners resume and must be operational; an idle backend is
+healthy when its listener is available. Other selected services must be active;
 both `/auth/config` policies and the renderer `3100`/Internal API `3103` health
 responses must match, including Gateway `3105` health on Standalone. An active
 service without a reachable healthy Gateway does not certify successful apply.
 No root shell, caller-selected unit list, new sudo permission,
 automatic disk expansion, provider fallback, credential generation, DB restore
-or Image Manager operation is introduced. Nginx/Cloudflare/Web are not restarted.
+or Image Manager operation is introduced. Nginx and Cloudflare are not restarted.
+Full server settings also quiesce Web so HTTP idle settings apply consistently;
+auth-only changes retain their narrower consumer set. See
+[HTTP service lifecycle](http-service-idle.md).
 
 Failure uses the same durable recovery command and journal as auth-only changes.
 Format-2 recovery selects consumers from the durable journal's before profile
