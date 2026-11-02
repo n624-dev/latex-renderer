@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.5.8-rc.3 - 2026-11-03
+
+- Install HTTP activation sockets from the verified application release even when the running Updater uses older host preparation tools. Add signed update validation using the actual installed 1.5.7 Updater.
+
 ## 1.5.8-rc.2 - 2026-11-02
 
 - Add an explicit, mutation-locked HTTP settings reload for environment-only changes. Reconcile all five listeners, service boot links and the active standalone gateway without restarting Worker or the managers.

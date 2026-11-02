@@ -290,6 +290,14 @@ deployment_quiesced=true
 require_normal_maintenance_for_smoke
 LATEX_RENDERER_PREPARE_SOURCE="$source_root" \
   sh "$tools_root/deploy/scripts/prepare-host.sh" "$release_id"
+# The running Updater supplies the trusted publication tools, which can predate
+# socket activation. Install this verified release's listener definitions before
+# reconciling or starting its consumers, even when those older tools omit them.
+if [ -f "$source_root/deploy/scripts/http-idle-server.mjs" ]; then
+  install -o root -g root -m 0644 "$source_root"/deploy/systemd/*.socket /etc/systemd/system/
+  systemctl daemon-reload
+  http_control prepare "$source_root"
+fi
 if [ "$deployment_mode" = cloudflare ]; then
   /opt/latex-renderer/current/deploy/scripts/configure-host-access.sh
 fi

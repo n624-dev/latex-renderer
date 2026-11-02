@@ -98,6 +98,19 @@ so a new request cannot reactivate a writer during recovery. Resume starts the
 listener without requiring a sleeping process to run. Boot authentication
 recovery completes before listeners become available.
 
+The running Updater can supply host-preparation tools from an older release.
+The application deployment therefore installs its own verified socket units
+and reconciles their service definitions before enabling consumers. Signed
+update validation includes the actual 1.5.7 Updater, in addition to historical
+installation and native ARM64 baselines.
+
+RC1/RC2 did not complete this older-tools migration. If a failed update already
+moved `current`, the same-version apply guard can reject a retry. Inspect the
+protected recovery point, actual application/Updater identities, data and
+services first; use a fixed newer candidate through the standard update path.
+Do not rewrite an immutable release, force a database rollback, or discard an
+unreviewed recovery journal to bypass the failure.
+
 These listeners deliberately start after normal boot recovery. Their units
 disable the default early socket ordering and explicitly retain shutdown
 ordering; otherwise `sockets.target`, `basic.target`, and recovery would form an

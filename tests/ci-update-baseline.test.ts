@@ -28,12 +28,14 @@ it.each([
   ["legacy", "x64", "v1.3.4-rc.5"],
   ["installed", "x64", "v1.3.5-rc.1"],
   ["native-arm64", "arm64", "v1.5.0-rc.1"],
+  ["previous-stable", "x64", "v1.5.7"],
 ])("retains the verified historical baseline for %s", (variant, arch, tag) => {
   expect(updateBaselineTag(variant, arch)).toBe(tag);
 });
 it.each([
   ["legacy", "arm64"],
   ["native-arm64", "x64"],
+  ["previous-stable", "arm64"],
   ["__proto__", "x64"],
 ])(
   "rejects unsupported identity before acquisition or activation (%s/%s)",
