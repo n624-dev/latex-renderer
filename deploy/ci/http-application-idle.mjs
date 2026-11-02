@@ -5,11 +5,7 @@ import { readFile, writeFile, lstat } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { performance } from "node:perf_hooks";
 import { URL, URLSearchParams } from "node:url";
-import {
-  controlService,
-  httpServiceStatus,
-  prepareHttpActivation,
-} from "../scripts/http-services.mjs";
+import { httpServiceStatus } from "../scripts/http-services.mjs";
 
 // Only called after signed candidate installation on a disposable update-CI
 // host. Production acceptance uses the real configured timeout instead.
@@ -32,15 +28,12 @@ export async function verifyHttpApplicationIdle() {
   assert(origin, "Missing fixture origin");
   const names = ["api", "web", "admin-api", "internal-api", "remote-mcp"],
     units = names.map((name) => `latex-renderer-${name}.service`);
-  const run = (...args) =>
+  const systemctl = (...args) =>
     execFileSync("/usr/bin/systemctl", args, {
       encoding: "utf8",
       timeout: 30000,
       stdio: ["ignore", "pipe", "pipe"],
     });
-  const gateway = "latex-renderer-standalone-gateway.service";
-  const gatewayActive =
-    run("show", "-p", "ActiveState", "--value", gateway).trim() === "active";
   const cookies = (response) =>
     response.headers
       .getSetCookie()
@@ -90,17 +83,29 @@ export async function verifyHttpApplicationIdle() {
   );
   const client = await registered.json();
   assert(typeof client.client_id === "string", "Missing fixture OAuth client");
-  const restart = () => {
-    for (const unit of units) controlService("stop", unit);
-    prepareHttpActivation("/opt/latex-renderer/current");
-    for (const unit of units) {
-      controlService("enable", unit);
-      controlService("start", unit);
-    }
-    if (gatewayActive) run("start", gateway);
-  };
+  const restart = () =>
+    execFileSync(
+      "/usr/local/bin/node",
+      [
+        "/opt/latex-renderer/current/deploy/scripts/http-services.mjs",
+        "reconcile",
+      ],
+      { encoding: "utf8", timeout: 60000, stdio: ["ignore", "pipe", "pipe"] },
+    );
   let results;
   try {
+    // Exercise the documented environment-only operation in both directions.
+    // An unchanged settings-wizard review intentionally does not reload env.
+    await writeFile(
+      envPath,
+      before.replace(/^HTTP_IDLE_(?:ENABLED|TIMEOUT_SECONDS)=.*\n?/gm, "") +
+        "\nHTTP_IDLE_ENABLED=false\nHTTP_IDLE_TIMEOUT_SECONDS=30\n",
+    );
+    restart();
+    for (const unit of units)
+      assert.equal(httpServiceStatus(unit).state, "running");
+    for (const port of [3100, 3101, 3102, 3103])
+      await (await request(port, "/health")).text();
     await writeFile(
       envPath,
       before.replace(/^HTTP_IDLE_(?:ENABLED|TIMEOUT_SECONDS)=.*\n?/gm, "") +
@@ -148,7 +153,7 @@ export async function verifyHttpApplicationIdle() {
       for (const unit of units) {
         const actual = httpServiceStatus(unit).service;
         const pid = Number(
-          run("show", "-p", "MainPID", "--value", actual).trim(),
+          systemctl("show", "-p", "MainPID", "--value", actual).trim(),
         );
         if (pid) {
           const text = await readFile(`/proc/${pid}/smaps_rollup`, "utf8");
@@ -165,7 +170,7 @@ export async function verifyHttpApplicationIdle() {
     }
     for (const unit of units)
       assert.equal(
-        run(
+        systemctl(
           "show",
           "-p",
           "MainPID",
@@ -278,6 +283,7 @@ export async function verifyHttpApplicationIdle() {
       pendingConsentPreserved: true,
       mcpAfterWake: true,
       passiveStatus: true,
+      idleSettingsReconciled: true,
     };
   } finally {
     await writeFile(envPath, before);

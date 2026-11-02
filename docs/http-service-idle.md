@@ -27,11 +27,27 @@ use the defaults; invalid values fail preparation/startup. With `false`, managed
 services use ordinary service startup and stay running. Local development
 without inherited systemd descriptors also stays running.
 
-Change settings through the existing reviewed server settings procedure after
-editing the host environment file. It quiesces consumers and reconciles the
-listener, service boot links, and standalone gateway dependency together. Do not
-change only one boot link or manually restart a backend against its active
-listener. See [server settings](server-settings-wizard.md).
+For an idle-setting change alone, edit the host environment file and explicitly
+reload the HTTP lifecycle configuration:
+
+```bash
+sudoedit /etc/latex-renderer/renderer.env
+sudo node /opt/latex-renderer/current/deploy/scripts/http-services.mjs reconcile
+```
+
+This command takes the existing deployment/image mutation lock, validates idle
+values before stopping anything, quiesces the five HTTP roles, and reconciles
+listeners, service boot links and the standalone gateway dependency together.
+It preserves the selected Web alias and restores an active standalone gateway.
+Worker and the managers continue running. A busy mutation lock rejects the
+operation before stopping anything; retry after the active operation finishes.
+If interrupted, rerun the same command to finish reconciling the
+managed boot links; no database or user data is restored or rewritten.
+
+An unchanged [server settings](server-settings-wizard.md) review intentionally
+does not restart consumers. It is not an environment-only reload. Do not change
+only one boot link or restart a backend against its active listener. Check the
+read-only status command below after applying a change.
 
 The timeout starts after the last real response and request body have finished.
 An active upload, download, or stream prevents sleep. An idle keep-alive

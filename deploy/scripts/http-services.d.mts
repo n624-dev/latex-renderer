@@ -34,3 +34,10 @@ export function prepareHttpActivation(
     values?: NodeJS.ProcessEnv;
   },
 ): { enabled: boolean };
+export function reconcileHttpServices(options?: {
+  source?: string;
+  run?: (...args: string[]) => string;
+  unitRoot?: string;
+  values?: NodeJS.ProcessEnv;
+  acquire?: () => Promise<{ release(): Promise<void> }>;
+}): Promise<{ enabled: boolean }>;
