@@ -18,6 +18,10 @@ overrides:
   # Remove sprintf-js (GHSA-hp3w-g68c-fv3c); the accompanying js-yaml patch
   # adapts its CLI to argparse's current API without changing YAML parsing.
   "js-yaml@3.15.2>argparse": 3.0.3
+  # Patched releases for transitive build/signing dependencies.
+  # The v11 matcher is tested through ESLint and typescript-eslint consumers.
+  minimatch: 11.0.3
+  node-forge: 1.4.2
   nanoid: 3.3.18
   tmp: 0.2.7
 patchedDependencies:
@@ -25,8 +29,3 @@ patchedDependencies:
   # Backport nodejs/undici@07ded4941b1e72afec862958c3b8ddf468f3b429.
   wrangler@4.152.0: patches/wrangler@4.152.0.patch
   js-yaml@3.15.2: patches/js-yaml@3.15.2.patch
-  # No upstream release fixes GHSA-86w9-cpqp-85rv yet. Validate the nested
-  # DigestAlgorithm as well as DigestInfo; keep ordinary RSA signatures valid.
-  # Upstream proposal: https://github.com/digitalbazaar/forge/pull/1152
-  # Also reject nonempty NULL parameters, which can hide the same garbage.
-  node-forge@1.4.0: patches/node-forge@1.4.0.patch
