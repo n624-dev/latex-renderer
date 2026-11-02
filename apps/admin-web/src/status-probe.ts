@@ -37,20 +37,18 @@ export function createStatusProbe(
         (entry) => entry.service === "latex-renderer-admin-api.service",
       );
       const [apiHealthy, rendering] = await Promise.all([
-        api?.state === "idle"
-          ? true
-          : api?.state === "running" &&
-            (await healthy(
-              "http://127.0.0.1:3100/health",
-              config.statusProbeTimeoutMs,
-            )),
+        api?.state === "running"
+          ? healthy("http://127.0.0.1:3100/health", config.statusProbeTimeoutMs)
+          : Promise.resolve(api?.state === "idle"),
         admin?.state === "running"
           ? healthy(config.renderingHealthUrl, config.statusProbeTimeoutMs)
-          : admin?.state === "idle" &&
-            (dependencies.worker ?? readWorkerHealth)().operational,
+          : Promise.resolve(
+              admin?.state === "idle" &&
+                (dependencies.worker ?? readWorkerHealth)().operational,
+            ),
       ]);
       return {
-        api: apiHealthy === true,
+        api: apiHealthy,
         rendering,
         downloads,
         checkedAt: new Date().toISOString(),

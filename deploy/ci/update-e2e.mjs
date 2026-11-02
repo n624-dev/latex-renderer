@@ -669,6 +669,13 @@ try {
   ]);
   if ((await readFile(sentinel, "utf8")) !== data)
     throw new Error("Recovery touched application data");
+  const { verifyHttpApplicationIdle } = await import(
+    pathToFileURL(join(candidate, "deploy/ci/http-application-idle.mjs"))
+  );
+  await verifyHttpApplicationIdle();
+  run("/bin/sh", [
+    "/opt/latex-renderer/current/deploy/scripts/smoke-test-production.sh",
+  ]);
   console.log(
     JSON.stringify({
       event: "release.update_e2e.passed",
@@ -697,6 +704,7 @@ try {
       restrictedInitialInventory: true,
       interruptedInventoryRecovery: true,
       credentialStartup: true,
+      httpApplicationIdle: true,
     }),
   );
 } finally {

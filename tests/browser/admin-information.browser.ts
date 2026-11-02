@@ -220,6 +220,36 @@ async function fixture(kind: string, query = "", pagedOwners = false) {
         maintenance: "normal",
         worker: "running",
         writeEnabled: true,
+        httpServices: {
+          managed: true,
+          services: [
+            {
+              service: "latex-renderer-web.service",
+              state: "running",
+              operational: true,
+            },
+            {
+              service: "latex-renderer-api.service",
+              state: "idle",
+              operational: true,
+            },
+            {
+              service: "latex-renderer-internal-api.service",
+              state: "starting",
+              operational: false,
+            },
+            {
+              service: "latex-renderer-admin-api.service",
+              state: "running",
+              operational: true,
+            },
+            {
+              service: "latex-renderer-remote-mcp.service",
+              state: "unavailable",
+              operational: false,
+            },
+          ],
+        },
       },
       "/system/config": { items: [] },
       "/system/ticket-keys": { activeKid: "fixture", verificationKids: [] },
@@ -316,6 +346,14 @@ it.each([
       await page.waitForFunction(() =>
         Boolean(document.querySelector("#updated")?.textContent),
       );
+    if (kind === "system") {
+      expect(
+        await page
+          .getByText("待機中（アクセス時に起動）", { exact: true })
+          .count(),
+      ).toBe(1);
+      expect(await page.getByText("利用不可", { exact: true }).count()).toBe(1);
+    }
     for (const width of [390, 768, 960, 1200]) {
       await page.setViewportSize({ width, height: 900 });
       expect(

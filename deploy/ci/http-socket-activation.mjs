@@ -198,7 +198,8 @@ try {
     `[Unit]\nStartLimitIntervalSec=10\nStartLimitBurst=2\n[Service]\nUser=${user}\nExecStart=${node} ${broken}\nRestart=on-failure\nRestartSec=100ms\n`,
   );
   run("daemon-reload");
-  run("reset-failed", unit);
+  // The previous fixture exited successfully. systemd may garbage-collect
+  // an inactive unit; reset-failed does not load it and would fail needlessly.
   run("start", socket);
   await get().catch(() => {});
   await until(() => property("ActiveState") === "failed");
