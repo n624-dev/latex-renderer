@@ -120,19 +120,19 @@ try {
     uid: execFileSync("id", ["-u", deployUser], { encoding: "utf8" }).trim(),
     gid: execFileSync("id", ["-g", deployUser], { encoding: "utf8" }).trim(),
   };
-  const deploy = async (source, release, initialInstall) => {
-    const manifest = await helper.verifyExtractedRelease(release, source);
+  const deploy = async (source, release, initialInstall, deployer = helper) => {
+    const manifest = await deployer.verifyExtractedRelease(release, source);
     const stage = await mkdtemp(
       "/opt/latex-renderer/update-staging/ci-deploy-",
     );
     try {
-      const assembly = await helper.buildBootstrapRelease(
+      const assembly = await deployer.buildBootstrapRelease(
         stage,
         source,
         manifest.packageManager,
         identity,
       );
-      await helper.deploySealedAssembly(
+      await deployer.deploySealedAssembly(
         assembly,
         stage,
         release,
@@ -153,7 +153,12 @@ try {
     run,
   });
   await deploy(baseline.source, { ...baseline, tag: baselineTag }, true);
-  if (["installed", "native-arm64"].includes(process.env.CI_UPDATE_BASELINE)) {
+  let candidateDeployer = helper;
+  if (
+    ["installed", "native-arm64", "previous-stable"].includes(
+      process.env.CI_UPDATE_BASELINE,
+    )
+  ) {
     const { UpdaterSlots } = await import(
       pathToFileURL(join(candidate, "deploy/scripts/updater-slots.mjs"))
     );
@@ -165,6 +170,18 @@ try {
       baselineState.pending
     )
       throw new Error("Installed baseline Updater was not established");
+    if (process.env.CI_UPDATE_BASELINE === "previous-stable") {
+      // Exercise the actual installed Updater and its older prepare-host tools,
+      // rather than importing the candidate helper for both sides of migration.
+      candidateDeployer = await import(
+        pathToFileURL(
+          join(
+            baselineUpdater.root,
+            "deploy/scripts/update-manager-helper.mjs",
+          ),
+        )
+      );
+    }
     const installedBootstrap = await readFile(
       "/opt/latex-renderer/updater/bootstrap-v1/published-release.mjs",
     );
@@ -256,7 +273,12 @@ try {
   } finally {
     baselineDatabase.close();
   }
-  await deploy(candidate, { version: tag.slice(1), tag, commit }, false);
+  await deploy(
+    candidate,
+    { version: tag.slice(1), tag, commit },
+    false,
+    candidateDeployer,
+  );
   // Imports and resolved source paths cannot expose a silent CLI no-op.
   // Exercise the actual current alias used by configure-host-access and both
   // checked hosting modes, without changing this standalone host's config.
@@ -684,6 +706,8 @@ try {
       validationOnly: Boolean(validationSourceRef),
       sourceRef: validationSourceRef ?? `refs/tags/${tag}`,
       baselineTag,
+      installedBaselineUpdater:
+        process.env.CI_UPDATE_BASELINE === "previous-stable",
       baselineBeforeHttps: true,
       architecture: process.arch,
       tag,
