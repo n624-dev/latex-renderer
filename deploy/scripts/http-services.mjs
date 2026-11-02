@@ -320,17 +320,19 @@ export async function reconcileHttpServices({
   try {
     const enabled = httpActivationEnabled({ source, values });
     const units = ["api", "web", "admin-api", "internal-api", "remote-mcp"].map(
-      (name) => httpServiceStatus(`latex-renderer-${name}.service`, { run }),
+      (name) => {
+        const entry = httpServiceStatus(`latex-renderer-${name}.service`, {
+          run,
+        });
+        return {
+          ...entry,
+          listener: properties(httpSocketUnit(entry.service), run),
+        };
+      },
     );
     if (units.some((entry) => !entry.managed))
       throw new Error("Managed HTTP service definitions required");
-    if (
-      enabled &&
-      units.some(
-        (entry) =>
-          properties(httpSocketUnit(entry.service), run).LoadState !== "loaded",
-      )
-    )
+    if (enabled && units.some((entry) => entry.listener.LoadState !== "loaded"))
       throw new Error(
         "HTTP activation sockets must be installed before reconciliation",
       );
@@ -338,7 +340,8 @@ export async function reconcileHttpServices({
     const gatewayActive = ["active", "activating"].includes(
       properties(gateway, run).ActiveState,
     );
-    let stopping = false;
+    let stopping = false,
+      prepared = false;
     try {
       // Stop listeners first, so quiescing one backend cannot wake another.
       stopping = true;
@@ -355,6 +358,7 @@ export async function reconcileHttpServices({
       for (const { service } of units)
         run("enable", enabled ? httpSocketUnit(service) : service);
       prepareHttpActivation(source, { run, unitRoot, values });
+      prepared = true;
       const failures = [];
       for (const { service } of units) {
         try {
@@ -380,10 +384,16 @@ export async function reconcileHttpServices({
       // No database or user data is changed. Resume every previously active
       // role where possible; a retry reconciles partially changed boot links.
       if (stopping) {
-        for (const { service, active } of units)
+        for (const { service, active, listener } of units)
           if (active) {
             try {
-              controlService("start", service, { run, enabled });
+              // Until daemon-reload completes, the gateway's live dependency
+              // still expects the original listener mode. Current entrypoints
+              // support either mode even when the env has already changed.
+              controlService("start", service, {
+                run,
+                enabled: prepared ? enabled : listener.ActiveState === "active",
+              });
             } catch {
               /* retain primary failure */
             }

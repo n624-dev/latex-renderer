@@ -29,7 +29,12 @@ function fixture() {
   for (const name of [...HTTP_SERVICE_UNITS, gateway]) {
     const text = `[Unit]\nRequires=latex-renderer-internal-api.service\n[Service]\nType=notify\n`;
     writeFileSync(join(source, "deploy/systemd", name), text);
-    writeFileSync(join(unitRoot, name), text);
+    writeFileSync(
+      join(unitRoot, name),
+      name === gateway
+        ? text.replace("internal-api.service", "internal-api.socket")
+        : text,
+    );
   }
   const states = new Map<
     string,
@@ -48,7 +53,8 @@ function fixture() {
   let locked = false,
     released = 0,
     failNextStart = false,
-    interruptPreparation = false;
+    interruptPreparation = false,
+    gatewayRequiresSocket = true;
   const calls: string[][] = [];
   const run = (...args: string[]) => {
     expect(locked).toBe(true);
@@ -69,14 +75,35 @@ function fixture() {
         interruptPreparation = false;
         throw new Error("interrupted preparation");
       }
+      gatewayRequiresSocket = readFileSync(
+        join(unitRoot, gateway),
+        "utf8",
+      ).includes("internal-api.socket");
       return "";
     }
     if (!state) throw new Error("Unmanaged service operation");
-    if (args[0] === "stop") state.active = false;
+    if (args[0] === "stop") {
+      state.active = false;
+      if (
+        name ===
+        `latex-renderer-internal-api.${gatewayRequiresSocket ? "socket" : "service"}`
+      ) {
+        const dependent = states.get(gateway);
+        if (dependent) dependent.active = false;
+      }
+    }
     if (args[0] === "start") {
       if (failNextStart && name === "latex-renderer-api.service") {
         failNextStart = false;
         throw new Error("fixture start failure");
+      }
+      if (name === gateway) {
+        const listener = states.get("latex-renderer-internal-api.socket"),
+          service = states.get("latex-renderer-internal-api.service");
+        if (gatewayRequiresSocket && !listener?.active && service?.active)
+          throw new Error("Listener port still held by ordinary service");
+        const dependency = gatewayRequiresSocket ? listener : service;
+        if (dependency) dependency.active = true;
       }
       state.active = true;
     }
@@ -166,6 +193,9 @@ it.skipIf(process.platform === "win32")(
             values: { HTTP_IDLE_ENABLED: String(enabled) },
           }),
         ).rejects.toThrow("interrupted preparation");
+        expect(
+          f.states.get("latex-renderer-standalone-gateway.service")?.active,
+        ).toBe(true);
         for (const service of HTTP_SERVICE_UNITS.filter(
           (name) => !name.includes("admin-web"),
         ))

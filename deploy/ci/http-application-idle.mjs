@@ -28,7 +28,7 @@ export async function verifyHttpApplicationIdle() {
   assert(origin, "Missing fixture origin");
   const names = ["api", "web", "admin-api", "internal-api", "remote-mcp"],
     units = names.map((name) => `latex-renderer-${name}.service`);
-  const run = (...args) =>
+  const systemctl = (...args) =>
     execFileSync("/usr/bin/systemctl", args, {
       encoding: "utf8",
       timeout: 30000,
@@ -84,10 +84,14 @@ export async function verifyHttpApplicationIdle() {
   const client = await registered.json();
   assert(typeof client.client_id === "string", "Missing fixture OAuth client");
   const restart = () =>
-    run("/usr/local/bin/node", [
-      "/opt/latex-renderer/current/deploy/scripts/http-services.mjs",
-      "reconcile",
-    ]);
+    execFileSync(
+      "/usr/local/bin/node",
+      [
+        "/opt/latex-renderer/current/deploy/scripts/http-services.mjs",
+        "reconcile",
+      ],
+      { encoding: "utf8", timeout: 60000, stdio: ["ignore", "pipe", "pipe"] },
+    );
   let results;
   try {
     // Exercise the documented environment-only operation in both directions.
@@ -149,7 +153,7 @@ export async function verifyHttpApplicationIdle() {
       for (const unit of units) {
         const actual = httpServiceStatus(unit).service;
         const pid = Number(
-          run("show", "-p", "MainPID", "--value", actual).trim(),
+          systemctl("show", "-p", "MainPID", "--value", actual).trim(),
         );
         if (pid) {
           const text = await readFile(`/proc/${pid}/smaps_rollup`, "utf8");
@@ -166,7 +170,7 @@ export async function verifyHttpApplicationIdle() {
     }
     for (const unit of units)
       assert.equal(
-        run(
+        systemctl(
           "show",
           "-p",
           "MainPID",
