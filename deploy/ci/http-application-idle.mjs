@@ -241,8 +241,23 @@ export async function verifyHttpApplicationIdle() {
           Authorization: `Bearer ${tokens.access_token}`,
         },
       });
-      const value = await response.json();
-      assert(value.result && !value.error, "MCP failed after wake");
+      const text = await response.text();
+      // Streamable HTTP permits both JSON and SSE. Exercise the shipped SDK
+      // transport rather than requiring one negotiated representation.
+      const data = response.headers
+        .get("Content-Type")
+        ?.includes("text/event-stream")
+        ? text
+            .split(/\r?\n/)
+            .find((line) => line.startsWith("data: "))
+            ?.slice(6)
+        : text;
+      assert(data, "MCP response has no data event");
+      const value = JSON.parse(data);
+      assert(
+        value.id === id && value.result && !value.error,
+        "MCP failed after wake",
+      );
     };
     await rpc(1, "initialize", {
       protocolVersion: "2025-11-25",
