@@ -128,7 +128,7 @@ describe("post-review TeX environment regressions", () => {
   it("pins the Debian substrate, bounds external TeX requests, and refuses an unprepared annual rollover", () => {
     for (const path of ["renderer/Dockerfile.base", "renderer/Dockerfile"]) {
       const dockerfile = read(path);
-      expect(dockerfile).toContain("ARG DEBIAN_SNAPSHOT=20260812T235959Z");
+      expect(dockerfile).toContain("ARG DEBIAN_SNAPSHOT=20261101T235959Z");
       expect(dockerfile).toContain("sh /tmp/install-debian-packages.sh");
       expect(dockerfile).toContain("ARG DEBIAN_ACQUIRE_RETRIES=3");
       expect(dockerfile).toContain("--connect-timeout 15");

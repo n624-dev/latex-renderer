@@ -26,4 +26,4 @@ jobs:
         with:
           node-version: "24"
       - name: Compare signed metadata over HTTP and HTTPS without installation
-        run: node deploy/ci/probe-debian-snapshot.mjs 20260812T235959Z
+        run: node deploy/ci/probe-debian-snapshot.mjs 20261101T235959Z

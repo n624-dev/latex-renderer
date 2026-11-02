@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 
 // Read-only, bounded transport diagnostics. Never prints response bodies, IPs,
 // credentials or proxy settings; downloaded bytes are not used for installation.
-const snapshot = process.argv[2] ?? "20260812T235959Z";
+const snapshot = process.argv[2] ?? "20261101T235959Z";
 if (!/^\d{8}T\d{6}Z$/.test(snapshot))
   throw new Error("Invalid Debian snapshot timestamp");
 const deadline = Date.now() + 150_000;

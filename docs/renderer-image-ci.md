@@ -71,7 +71,11 @@ performance or disk improvement. See [measurement and comparison](actions-effici
 ### Bounded Debian bootstrap
 
 Both Dockerfiles bind-mount `renderer/install-debian-packages.sh` only for their
-APT phase. It keeps the exact Debian snapshot, signed Release/package checks,
+APT phase. The Debian snapshot is pinned to `20261101T235959Z`, separately
+from the TeX Live archive date. Update this pin together with the Debian image
+digest: an older archive may lack the exact package versions already present
+in a newer slim image. Do not silently downgrade essential packages.
+The helper keeps the exact configured Debian snapshot, signed Release/package checks,
 HTTP bootstrap of CA certificates and subsequent verified HTTPS. No floating
 Debian mirror, unverified data or permanent download cache is introduced.
 
@@ -140,7 +144,7 @@ docker run --rm --user 0 \
   --mount "type=bind,src=$PWD/renderer/install-debian-packages.sh,dst=/tmp/install-debian-packages.sh,readonly" \
   --env DEBIAN_FRONTEND=noninteractive \
   debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3 \
-  sh /tmp/install-debian-packages.sh 20260812T235959Z curl
+  sh /tmp/install-debian-packages.sh 20261101T235959Z curl
 ```
 
 This installs only inside the disposable container, requires network access,

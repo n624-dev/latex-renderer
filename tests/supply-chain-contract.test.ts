@@ -70,7 +70,7 @@ describe("public supply-chain controls", () => {
     for (const path of ["renderer/Dockerfile", "renderer/Dockerfile.base"]) {
       const dockerfile = read(path);
       expect(dockerfile).toContain("FROM debian:bookworm-slim@sha256:");
-      expect(dockerfile).toContain("ARG DEBIAN_SNAPSHOT=20260812T235959Z");
+      expect(dockerfile).toContain("ARG DEBIAN_SNAPSHOT=20261101T235959Z");
       expect(dockerfile).toContain("sh /tmp/install-debian-packages.sh");
     }
     const acquisition = read("renderer/install-debian-packages.sh");

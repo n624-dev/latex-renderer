@@ -117,7 +117,7 @@ printf 'z-package\\t2\\na-package\\t1\\n'
   );
   const run = (
     env: Record<string, string> = {},
-    snapshot = "20260812T235959Z",
+    snapshot = "20261101T235959Z",
   ) =>
     spawnSync("sh", [script, snapshot, "curl", "fontconfig"], {
       encoding: "utf8",
@@ -244,7 +244,7 @@ describe.skipIf(process.platform === "win32")(
       expect(result.error, result.stderr).toBeUndefined();
       expect(result.status, result.stderr).toBe(0);
       const trace = readFileSync(f.trace, "utf8");
-      expect(trace).toContain("snapshot-cloudflare.debian.org/archive/debian/20260812T235959Z/");
+      expect(trace).toContain("snapshot-cloudflare.debian.org/archive/debian/20261101T235959Z/");
       expect(trace).not.toContain("deb.debian.org");
       expect(result.stdout.match(/DEBIAN_APT_RETRY/g)).toHaveLength(1);
       const commands=trace.split("\n").filter(line=>line.startsWith("-o "));
