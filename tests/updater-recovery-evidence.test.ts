@@ -72,9 +72,11 @@ it("the real generated fixture records startup before exiting with failure", () 
 });
 it("disables automatic CI activation before candidate deployment, without changing production units", () => {
   const source = readFileSync("deploy/ci/update-e2e.mjs", "utf8");
-  expect(source.indexOf("90-ci-explicit-activation.conf")).toBeLessThan(
-    source.indexOf("await deploy(candidate"),
-  );
+  const activation = source.indexOf("90-ci-explicit-activation.conf");
+  const deployment = source.search(/await deploy\(\s*candidate,/);
+  expect(activation).toBeGreaterThanOrEqual(0);
+  expect(deployment).toBeGreaterThanOrEqual(0);
+  expect(activation).toBeLessThan(deployment);
   expect(source).toContain(
     "ConditionPathExists=!/etc/latex-renderer-ci-host.json",
   );
