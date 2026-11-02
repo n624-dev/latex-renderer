@@ -175,6 +175,13 @@ it("prepares matching service definitions and releases sockets for legacy rollba
         `[Service]\nType=${root === current ? "notify" : "simple"}\n`,
       );
     }
+    expect(
+      prepareHttpActivation(legacy, {
+        ...model({}, { LoadState: "not-found" }),
+        unitRoot: units,
+        values: {},
+      }).enabled,
+    ).toBe(false);
     for (const name of [gateway, unit])
       writeFileSync(join(units, name), "previous\n");
     const m = model();

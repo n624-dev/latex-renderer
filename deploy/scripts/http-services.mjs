@@ -274,8 +274,16 @@ export function prepareHttpActivation(
   ]) {
     const sourceUnit = join(source, "deploy/systemd", filename);
     if (!existsSync(sourceUnit)) continue;
-    const path = join(unitRoot, filename),
+    const path = join(unitRoot, filename);
+    let info;
+    try {
       info = lstatSync(path);
+    } catch (error) {
+      // A first installation of a pre-activation baseline has no managed
+      // service definitions yet. Its own host preparation installs them.
+      if (error.code === "ENOENT") continue;
+      throw error;
+    }
     if (
       !info.isFile() ||
       info.isSymbolicLink() ||

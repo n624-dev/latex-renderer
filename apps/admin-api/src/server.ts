@@ -2,7 +2,10 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createAdaptorServer } from "@hono/node-server";
 import { httpServicesSnapshot } from "../../../deploy/scripts/http-services.mjs";
-import { startHttpService } from "../../../deploy/scripts/http-idle-server.mjs";
+import {
+  startHttpService,
+  createHttpActivity,
+} from "../../../deploy/scripts/http-idle-server.mjs";
 import {
   ApiKeyService,
   createBrowserAuthenticationFromEnvironment,
@@ -128,11 +131,17 @@ const app = createAdminApp({
       process.env.RENDERER_PUBLIC_URL ?? authentication.publicOrigin,
   },
 });
+const activity = createHttpActivity();
 startHttpService(
-  createAdaptorServer({ fetch: app.fetch, hostname: "127.0.0.1" }),
+  createAdaptorServer({
+    fetch: activity.track(app.fetch),
+    hostname: "127.0.0.1",
+  }),
   {
+    activity,
     port: validPortEnvironment(process.env, "PORT", 3102),
     name: "admin_api",
+    busyUntil: () => authentication.browserAuth.idleBlockedUntil(),
     onIdle: () => database.close(),
     onListening: (info) => {
       console.log(

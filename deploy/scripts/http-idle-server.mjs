@@ -2,8 +2,51 @@ import { fstatSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { Server } from "node:http";
 import { performance } from "node:perf_hooks";
+import { URL } from "node:url";
 import { clearTimeout, setTimeout } from "node:timers";
 import { boundedIntegerEnvironment } from "./environment.mjs";
+
+function passiveRequest(method, url) {
+  if (!["GET", "HEAD"].includes(method)) return false;
+  try {
+    return ["/health", "/health/rendering"].includes(
+      new URL(url ?? "/", "http://localhost").pathname,
+    );
+  } catch {
+    return false;
+  }
+}
+
+// Response closure can precede completion of an asynchronous handler when a
+// client disconnects. Keep those handlers alive through their finally blocks.
+export function createHttpActivity() {
+  let pending = 0,
+    listener = () => {};
+  return {
+    get pending() {
+      return pending;
+    },
+    subscribe(callback) {
+      listener = callback;
+      return () => {
+        listener = () => {};
+      };
+    },
+    track(handler) {
+      return async (...args) => {
+        const passive = passiveRequest(args[0]?.method, args[0]?.url);
+        pending++;
+        listener(false);
+        try {
+          return await handler(...args);
+        } finally {
+          pending--;
+          listener(!passive);
+        }
+      };
+    },
+  };
+}
 
 export function httpIdleConfiguration(environment = process.env) {
   const enabled = environment.HTTP_IDLE_ENABLED ?? "true";
@@ -53,6 +96,7 @@ export function startHttpService(
     environment = process.env,
     onListening = () => {},
     onIdle = () => {},
+    activity = createHttpActivity(),
     busyUntil = () => 0,
     now = () => performance.now(),
     configuration = httpIdleConfiguration(environment),
@@ -94,7 +138,7 @@ export function startHttpService(
   const sockets = new Map();
   function arm() {
     clearTimeout(timer);
-    if (!idle || closing || active || pending) return;
+    if (!idle || closing || active || pending || activity.pending) return;
     const lease = busyUntil();
     if (!Number.isFinite(lease) || lease < 0)
       throw new Error("Invalid HTTP activity lease");
@@ -104,7 +148,7 @@ export function startHttpService(
     );
     timer = setTimeout(
       () => {
-        if (active || pending || closing) return;
+        if (active || pending || activity.pending || closing) return;
         if (
           now() - lastCompleted < configuration.timeoutMs ||
           busyUntil() > Date.now()
@@ -152,11 +196,7 @@ export function startHttpService(
     });
   });
   server.prependListener("request", (request, response) => {
-    const passive =
-      ["GET", "HEAD"].includes(request.method) &&
-      ["/health", "/health/rendering"].includes(
-        (request.url ?? "").split("?")[0],
-      );
+    const passive = passiveRequest(request.method, request.url);
     // Readiness polling must not postpone sleep. Such responses explicitly
     // close their connection, avoiding a keep-alive reuse race at shutdown.
     if (passive) response.shouldKeepAlive = false;
@@ -194,7 +234,15 @@ export function startHttpService(
     request.once("end", finishRequest);
     request.once("close", finishRequest);
   });
-  server.once("close", () => clearTimeout(timer));
+  const unsubscribe = activity.subscribe((completed) => {
+    if (completed) lastCompleted = now();
+    clearTimeout(timer);
+    arm();
+  });
+  server.once("close", () => {
+    clearTimeout(timer);
+    unsubscribe();
+  });
   const listening = () => {
     const address = server.address();
     if (

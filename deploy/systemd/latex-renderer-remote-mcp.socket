@@ -1,6 +1,11 @@
 [Unit]
 Description=Loopback activation socket for LaTeX Renderer remote-mcp
 
+# Recovery is a normal service ordered after basic.target. These listeners
+# start after it, rather than participating in the early sockets.target order.
+DefaultDependencies=no
+Before=shutdown.target
+Conflicts=shutdown.target
 After=latex-renderer-authentication-recovery.service
 Requires=latex-renderer-authentication-recovery.service
 

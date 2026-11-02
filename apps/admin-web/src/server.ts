@@ -1,5 +1,8 @@
 import { createAdaptorServer } from "@hono/node-server";
-import { startHttpService } from "../../../deploy/scripts/http-idle-server.mjs";
+import {
+  startHttpService,
+  createHttpActivity,
+} from "../../../deploy/scripts/http-idle-server.mjs";
 import { createWebApp } from "./app.js";
 import { loadClientDistribution } from "./client-distribution.js";
 import { loadWebConfig } from "./config.js";
@@ -10,9 +13,14 @@ if (process.env.ADMIN_UI_ENABLED === "false")
 const config = loadWebConfig(),
   distribution = loadClientDistribution(config.clientDistRoot),
   app = createWebApp(distribution, createStatusProbe(config, distribution));
+const activity = createHttpActivity();
 startHttpService(
-  createAdaptorServer({ fetch: app.fetch, hostname: "127.0.0.1" }),
+  createAdaptorServer({
+    fetch: activity.track(app.fetch),
+    hostname: "127.0.0.1",
+  }),
   {
+    activity,
     port: config.port,
     name: "web",
     onListening: (info) => {

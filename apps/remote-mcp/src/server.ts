@@ -1,5 +1,8 @@
 import { createAdaptorServer } from "@hono/node-server";
-import { startHttpService } from "../../../deploy/scripts/http-idle-server.mjs";
+import {
+  startHttpService,
+  createHttpActivity,
+} from "../../../deploy/scripts/http-idle-server.mjs";
 import { createBrowserAuthenticationFromEnvironment } from "@latex-renderer/auth";
 import { RendererDatabase } from "@latex-renderer/database";
 import {
@@ -70,9 +73,14 @@ const oauth = new RemoteOAuthService(
   }),
   port = validPortEnvironment(process.env, "PORT", 3104);
 
+const activity = createHttpActivity();
 startHttpService(
-  createAdaptorServer({ fetch: app.fetch, hostname: "127.0.0.1" }),
+  createAdaptorServer({
+    fetch: activity.track(app.fetch),
+    hostname: "127.0.0.1",
+  }),
   {
+    activity,
     port,
     name: "remote_mcp",
     onIdle: () => database.close(),
@@ -80,6 +88,7 @@ startHttpService(
       Math.max(
         oauth.idleBlockedUntil(),
         registrationLimiter.idleBlockedUntil(),
+        authentication.browserAuth.idleBlockedUntil(),
       ),
     onListening: (info) => {
       console.log(

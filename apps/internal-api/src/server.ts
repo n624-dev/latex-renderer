@@ -1,7 +1,10 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createAdaptorServer } from "@hono/node-server";
-import { startHttpService } from "../../../deploy/scripts/http-idle-server.mjs";
+import {
+  startHttpService,
+  createHttpActivity,
+} from "../../../deploy/scripts/http-idle-server.mjs";
 import { ApiKeyService } from "@latex-renderer/auth";
 import { RendererDatabase } from "@latex-renderer/database";
 import { loadSigningKeyRing, TicketService } from "@latex-renderer/ticket";
@@ -69,9 +72,14 @@ const app = createInternalApp({
 });
 
 const port = validPortEnvironment(process.env, "PORT", 3103);
+const activity = createHttpActivity();
 startHttpService(
-  createAdaptorServer({ fetch: app.fetch, hostname: "127.0.0.1" }),
+  createAdaptorServer({
+    fetch: activity.track(app.fetch),
+    hostname: "127.0.0.1",
+  }),
   {
+    activity,
     port,
     name: "internal_api",
     onIdle: () => database.close(),

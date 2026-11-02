@@ -83,6 +83,10 @@ try:
   body+=b
  c.close();assert body.endswith(b'uploaded');p.wait(timeout=5);assert p.returncode==0
  p=start('lease');assert request()==b'ok';time.sleep(.3);assert p.poll()is None;p.wait(timeout=5)
+ # Disconnecting a client must not close the listener while its handler is
+ # still completing asynchronous work and finally blocks.
+ p=start();c=socket.create_connection(('127.0.0.1',port));c.sendall(b'GET /abandoned HTTP/1.1\r\nHost: localhost\r\n\r\n');time.sleep(.1);c.close();time.sleep(.3)
+ assert request('/health')==b'ok';p.wait(timeout=5);assert p.returncode==0
  # Readiness polls do not extend the real-request idle deadline.
  p=start();assert request()==b'ok';began=time.monotonic()
  while p.poll()is None and time.monotonic()-began<.12:

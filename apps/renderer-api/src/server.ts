@@ -1,6 +1,9 @@
 import { mkdir } from "node:fs/promises";
 import { createAdaptorServer } from "@hono/node-server";
-import { startHttpService } from "../../../deploy/scripts/http-idle-server.mjs";
+import {
+  startHttpService,
+  createHttpActivity,
+} from "../../../deploy/scripts/http-idle-server.mjs";
 import { RendererDatabase } from "@latex-renderer/database";
 import { loadSigningKeyRing, TicketService } from "@latex-renderer/ticket";
 import {
@@ -52,9 +55,14 @@ const app = createRendererApp({
   ),
 });
 const port = validPortEnvironment(process.env, "PORT", 3100);
+const activity = createHttpActivity();
 startHttpService(
-  createAdaptorServer({ fetch: app.fetch, hostname: "127.0.0.1" }),
+  createAdaptorServer({
+    fetch: activity.track(app.fetch),
+    hostname: "127.0.0.1",
+  }),
   {
+    activity,
     port,
     name: "renderer_api",
     onIdle: () => database.close(),

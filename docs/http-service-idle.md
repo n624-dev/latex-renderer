@@ -37,7 +37,9 @@ The timeout starts after the last real response and request body have finished.
 An active upload, download, or stream prevents sleep. An idle keep-alive
 connection does not. OAuth authorization state remains in SQLite; short-lived
 refresh retry replies and anonymous registration rate-limit windows also hold
-the process awake until their existing expiry. Sleep does not revoke sessions
+the process awake until their existing expiry. Pending OIDC login state and
+its 15-minute start-rate windows keep the owning authentication service awake,
+including when a shorter HTTP timeout is configured. Sleep does not revoke sessions
 or add an authentication requirement.
 
 ## Status and monitoring
@@ -79,6 +81,12 @@ stopped together with their listeners before database/configuration cutover,
 so a new request cannot reactivate a writer during recovery. Resume starts the
 listener without requiring a sleeping process to run. Boot authentication
 recovery completes before listeners become available.
+
+These listeners deliberately start after normal boot recovery. Their units
+disable the default early socket ordering and explicitly retain shutdown
+ordering; otherwise `sockets.target`, `basic.target`, and recovery would form an
+ordering cycle. An offline boot-graph regression test verifies both the working
+graph and detection of that cycle.
 
 The historic `latex-renderer-admin-web` name remains supported. Only one of
 that listener and `latex-renderer-web.socket` owns port 3101. Existing hosts
