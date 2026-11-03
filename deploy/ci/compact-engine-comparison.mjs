@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { pipeline } from "node:stream/promises";
-import { readFile, writeFile, lstat, statfs } from "node:fs/promises";
+import { readFile, writeFile, lstat, statfs, mkdir, copyFile, chmod } from "node:fs/promises";
+import { setTimeout as delay } from "node:timers/promises";
 import { resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import { setTimeout, clearTimeout } from "node:timers";
 import { workerEngineCommand } from "../scripts/on-demand-engine.mjs";
+import { quiesceProbeAccount } from "./compact-probe-cleanup.mjs";
 
 assert.equal(process.getuid(), 0);
 assert.equal(process.env.GITHUB_ACTIONS, "true");
@@ -44,6 +46,7 @@ const run = (command, args, options = {}) =>
   });
 const results = {
   schemaVersion: 1,
+  sourceCommit: release.commit,
   image,
   architecture: process.arch,
   docker: [],
@@ -73,7 +76,8 @@ assert.notEqual(process.env.USER, user);
 const cleanupFailures = [];
 let created = false,
   podman,
-  podmanReady = false;
+  podmanReady = false,
+  probeUid;
 try {
   // Capacity is checked before installing a second disposable image store.
   const imageBytes = Number(
@@ -119,8 +123,21 @@ try {
   created = true;
   const uid = Number(run("/usr/bin/id", ["-u", user]).trim());
   assert(uid > 0);
+  probeUid = uid;
   run("/usr/bin/loginctl", ["enable-linger", user]);
   run("/usr/bin/systemctl", ["start", `user@${uid}.service`]);
+  // A separate account cannot traverse the application's sealed release.
+  // Copy only the fixed probe and its policy, never credentials or app state.
+  const fixture = `/home/${user}/fixture`;
+  for (const path of [fixture, `${fixture}/experiments`, `${fixture}/experiments/compact-runtime`, `${fixture}/deploy`, `${fixture}/deploy/security`]) {
+    await mkdir(path, { recursive: true, mode: 0o755 });
+    await chmod(path, 0o755);
+  }
+  const podmanProbe = `${fixture}/experiments/compact-runtime/probe.sh`;
+  await copyFile(probe, podmanProbe);
+  await copyFile("/opt/latex-renderer/current/deploy/security/seccomp.json", `${fixture}/deploy/security/seccomp.json`);
+  await chmod(podmanProbe, 0o444);
+  await chmod(`${fixture}/deploy/security/seccomp.json`, 0o444);
   const env = [
     "PATH=/usr/local/bin:/usr/bin:/bin",
     `HOME=/home/${user}`,
@@ -204,7 +221,7 @@ try {
   const samples = [];
   for (let n = 0; n < 2; n++) {
     const started = performance.now();
-    const text = run("/usr/sbin/runuser", [...prefix, "/bin/sh", probe, image]);
+    const text = run("/usr/sbin/runuser", [...prefix, "/bin/sh", podmanProbe, image]);
     const containerPeakBytes = Number(
       /container_memory_peak_bytes=(\d+)/.exec(text)?.[1],
     );
@@ -229,16 +246,19 @@ try {
   if (created) {
     for (const cleanup of [
       () => { if (podmanReady) podman("system", "reset", "--force"); },
-      () => run("/usr/bin/loginctl", ["terminate-user", user]),
-      () => run("/usr/bin/loginctl", ["disable-linger", user]),
+      () => quiesceProbeAccount({ uid: probeUid,
+        workerUid: Number(run("/usr/bin/id", ["-u", "latex-render-worker"]).trim()), run,
+        alive: (uid) => {
+          try { return run("/usr/bin/pgrep", ["--uid", String(uid)]).trim().length > 0; }
+          catch (error) { if (error.status === 1) return false; throw error; }
+        }, wait: delay }),
       () => run("/usr/sbin/userdel", ["--remove", user]),
     ]) {
-      try { cleanup(); } catch (error) { cleanupFailures.push(error); }
+      try { await cleanup(); } catch (error) { cleanupFailures.push(error); }
     }
   }
 }
-if (cleanupFailures.length)
-  throw new AggregateError(cleanupFailures, "Disposable engine probe cleanup failed");
+results.cleanup = { passed: cleanupFailures.length === 0 };
 const output = resolve(
   process.env.RUNNER_TEMP,
   "compact-engine-comparison.json",
@@ -247,3 +267,5 @@ await writeFile(output, JSON.stringify(results, null, 2) + "\n", { mode: 0o644 }
 console.log(
   JSON.stringify({ event: "compact_engine_comparison.completed", ...results }),
 );
+if (cleanupFailures.length)
+  throw new AggregateError(cleanupFailures, "Disposable engine probe cleanup failed");
