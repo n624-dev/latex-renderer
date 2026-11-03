@@ -28,8 +28,9 @@ def relay_and_identify(source, destination, expected, architecture, system):
         for count, entry in enumerate(archive):
             if count >= 10000:
                 raise ValueError("Image export member budget exceeded")
-            match = MEMBER.fullmatch(entry.name)
-            if not match or not entry.isfile():
+            name = entry.name.removeprefix("./")
+            match = MEMBER.fullmatch(name)
+            if (not match and name != "index.json") or not entry.isfile():
                 continue
             stream = archive.extractfile(entry)
             checksum = hashlib.sha256()
@@ -38,7 +39,8 @@ def relay_and_identify(source, destination, expected, architecture, system):
                 checksum.update(chunk)
                 if chunks is not None:
                     chunks.append(chunk)
-            if checksum.hexdigest() != match[1]:
+            actual_digest = checksum.hexdigest()
+            if match and actual_digest != match[1]:
                 raise ValueError("Image export metadata/blob checksum mismatch")
             if chunks is None:
                 continue
@@ -49,7 +51,7 @@ def relay_and_identify(source, destination, expected, architecture, system):
                 continue  # Small binary layers are not OCI metadata.
             if not isinstance(value, dict):
                 continue
-            digest = "sha256:" + match[1]
+            digest = "sha256:" + actual_digest
             metadata_bytes += len(data)
             if metadata_bytes > 8 * 1024 * 1024:
                 raise ValueError("Image export metadata budget exceeded")

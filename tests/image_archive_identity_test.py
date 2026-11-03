@@ -60,6 +60,13 @@ class ImageArchiveIdentity(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "missing"):
             identity.relay_and_identify(io.BytesIO(archive(entries)), io.BytesIO(), image, "amd64", "linux")
 
+    def test_supports_an_oci_root_index_and_dot_prefixed_paths(self):
+        image, config, entries = fixture()
+        entries["index.json"] = entries.pop("blobs/sha256/" + image[7:])
+        entries = {"./" + name: data for name, data in entries.items()}
+        value = identity.relay_and_identify(io.BytesIO(archive(entries)), io.BytesIO(), image, "amd64", "linux")
+        self.assertEqual(value["configDigest"], config)
+
     def test_rejects_unrelated_digest_and_wrong_platform(self):
         image, _, entries = fixture()
         raw = archive(entries)
