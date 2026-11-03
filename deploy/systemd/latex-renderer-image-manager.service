@@ -48,7 +48,7 @@ ProtectControlGroups=true
 RestrictSUIDSGID=true
 LockPersonality=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-ReadWritePaths=/etc/latex-renderer /var/lib/latex-renderer /run/latex-renderer
+ReadWritePaths=/etc/latex-renderer /var/lib/latex-renderer /run/latex-renderer /var/lib/latex-render-worker/.docker
 UMask=0007
 
 [Install]

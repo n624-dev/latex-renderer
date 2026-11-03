@@ -9,6 +9,14 @@ import {
 } from "../deploy/scripts/image-cleanup-policy.mjs";
 
 describe("managed image cleanup", () => {
+  it("allows the dedicated client metadata path inside the manager sandbox", () => {
+    const unit = readFileSync("deploy/systemd/latex-renderer-image-manager.service", "utf8");
+    const paths = /^ReadWritePaths=(.*)$/m.exec(unit)?.[1]?.split(/\s+/) ?? [];
+    expect(paths).toContain("/var/lib/latex-render-worker/.docker");
+    expect(paths).not.toContain("/var/lib/latex-render-worker");
+    expect(paths).not.toContain("/var/lib");
+    expect(unit).toContain("ProtectSystem=strict");
+  });
   it("checks due cleanup before a short idle exit and preserves the ordinary cadence", () => {
     expect(imageCleanupProbeInterval({ enabled: false, timeoutMs: 30000 })).toBe(300000);
     expect(imageCleanupProbeInterval({ enabled: true, timeoutMs: 900000 })).toBe(300000);

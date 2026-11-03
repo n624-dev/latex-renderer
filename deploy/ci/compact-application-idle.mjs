@@ -280,7 +280,7 @@ export async function verifyCompactApplicationIdle() {
     );
     await until(
       () => units.every((unit) => httpServiceStatus(unit).state === "idle"),
-      "Compact application process did not become idle",
+      () => `Compact application process did not become idle: ${JSON.stringify(units.map((unit) => httpServiceStatus(unit)))}`,
     );
     const asleep = await processSnapshot();
     assert(asleep.every((row) => row.pid === 0));

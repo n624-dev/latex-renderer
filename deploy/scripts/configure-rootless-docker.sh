@@ -26,6 +26,7 @@ run_worker() {
 }
 loginctl enable-linger "$worker_user"
 systemctl start "user@$worker_uid.service"
+run_worker install -d -m 0700 "$worker_home/.docker"
 if [ ! -f "$worker_home/.config/systemd/user/docker.service" ]; then
   run_worker dockerd-rootless-setuptool.sh install --force
 fi
