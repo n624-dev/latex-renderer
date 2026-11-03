@@ -108,6 +108,11 @@ Standalone Nginx uses the same public-static generator as the existing
 Cloudflare static site for the home page, documentation and public downloads.
 Authenticated pages, sources and Job artifacts continue through their APIs.
 Legacy deployments without those generated files fall back to Web.
+The managed standalone ingress uses the prepared API identity to read sealed
+public assets. An external proxy under another identity must have narrowly
+scoped read/traverse access to the public asset tree; otherwise static requests
+fall back to Web and wake it. Do not add an unrelated web server to the
+application group or change permissions on private application data.
 
 `latex-renderer-status.socket` accepts bounded, read-only health requests and
 starts one short-lived Python responder per connection. It exposes only

@@ -1,5 +1,8 @@
 # This file is included from nginx's http context. Replace the hostname and
 # certificate paths. Keep every application service on loopback.
+# Direct static serving requires a reader allowed to traverse sealed releases.
+# The managed standalone ingress uses the prepared latex-renderer identity.
+# A separate external proxy without that access falls back to the Web service.
 limit_conn_zone $binary_remote_addr zone=latex_renderer_connections:10m;
 limit_req_zone $binary_remote_addr zone=latex_renderer_login:10m rate=5r/m;
 limit_req_zone $binary_remote_addr zone=latex_renderer_api:10m rate=120r/m;

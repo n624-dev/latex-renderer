@@ -281,6 +281,9 @@ export async function verifyCompactApplicationIdle() {
       );
       assert.equal(response.status, 200, "Passive/static request failed");
       await response.arrayBuffer();
+      const after = await processSnapshot();
+      assert(after.every((row) => row.pid === 0),
+        `Passive/static request ${path} woke: ${JSON.stringify(after.filter((row) => row.pid !== 0))}`);
     }
     assert(
       (await processSnapshot()).every((row) => row.pid === 0),
