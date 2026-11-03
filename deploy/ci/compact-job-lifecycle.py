@@ -129,6 +129,24 @@ class Fixture:
             time.sleep(1)
         raise RuntimeError("Worker did not return to idle")
 
+    def wait_cleanup(self, ticket):
+        # A terminal Job can still own a cleanup lease. Do not classify that
+        # legitimate interval as a recovery failure or start another attempt.
+        deadline = time.monotonic() + 180
+        while time.monotonic() < deadline:
+            result = json.loads(run(["/usr/sbin/runuser", "-u", "latex-renderer", "--", "/usr/bin/python3", "-B", "-c", """
+import sqlite3,sys,json
+with sqlite3.connect('file:/var/lib/latex-renderer/renderer.sqlite3?mode=ro',uri=True) as db:
+    lease=db.execute('SELECT lease_owner FROM jobs WHERE id=?',(sys.argv[1],)).fetchone()
+    assert lease is not None
+    readers=db.execute('SELECT COUNT(*) FROM source_tree_readers WHERE job_id=?',(sys.argv[1],)).fetchone()[0]
+    print(json.dumps([lease[0],readers]))
+""", ticket["jobId"]]))
+            if result == [None, 0]:
+                return
+            time.sleep(1)
+        raise RuntimeError("Interrupted Job cleanup did not settle")
+
     def close(self):
         failures = []
         if self.key:
@@ -199,12 +217,7 @@ with sqlite3.connect('/var/lib/latex-renderer/renderer.sqlite3') as db:
         run(["/usr/bin/systemctl", "kill", "--signal=KILL", "--kill-whom=all", "latex-renderer-worker.service"])
         recovered = fixture.wait(interrupted, timeout=360)
         assert recovered["status"] in ("succeeded", "failed")
-        run(["/usr/sbin/runuser", "-u", "latex-renderer", "--", "/usr/bin/python3", "-B", "-c", """
-import sqlite3,sys
-with sqlite3.connect('file:/var/lib/latex-renderer/renderer.sqlite3?mode=ro',uri=True) as db:
-    assert db.execute('SELECT lease_owner FROM jobs WHERE id=?',(sys.argv[1],)).fetchone()==(None,)
-    assert db.execute('SELECT COUNT(*) FROM source_tree_readers WHERE job_id=?',(sys.argv[1],)).fetchone()==(0,)
-""", interrupted["jobId"]])
+        fixture.wait_cleanup(interrupted)
         worker_uid = int(run(["id", "-u", "latex-render-worker"]).strip())
         remaining = run(["/usr/sbin/runuser", "-u", "latex-render-worker", "--", "/usr/bin/env", "-i",
                          "PATH=/usr/bin:/bin", "HOME=/var/lib/latex-render-worker",
