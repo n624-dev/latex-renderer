@@ -124,6 +124,9 @@ preparation and verifies its final activation.
 The independent activation gate stops supervision before the controller, under
 the shared lock after operation commit. Its systemd unit has no socket conflict
 edge, so resuming supervision during final cleanup cannot cancel activation.
+Settings preparation also preserves an active compatible Image Manager listener:
+compact MCP/Internal API consumers require that socket, and cannot reopen it
+while its existing Manager still owns the inherited descriptor.
 
 ## Static pages and passive health
 

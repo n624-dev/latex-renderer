@@ -340,17 +340,17 @@ export function prepareHttpActivation(
     } catch {
       /* disabled */
     }
-    // A self-update is still served by this controller. Closing its inherited
-    // listener here makes systemd refuse to reopen the socket while the service
-    // remains active. Keep a compatible, already-listening Updater until the
-    // independent cutover has persisted the operation and can restart it safely.
-    const preserveUpdater =
+    // Compact backends depend on these listeners. Closing one while its Manager
+    // is serving the inherited FD makes systemd refuse to reopen it, so even an
+    // unrelated settings cutover cannot restart dependent backends. Preserve
+    // compatible Manager supervision until an explicit restart/cutover owns it.
+    const preserveManager =
       compact &&
-      unit === "latex-renderer-update-manager.service" &&
+      managerUnits.includes(unit) &&
+      activationEnabledFor(unit, { source, values }) &&
       properties(socket, run).ActiveState === "active" &&
-      ["listening", "running"].includes(properties(socket, run).SubState) &&
-      properties(unit, run).ActiveState === "active";
-    if (!preserveUpdater) run("stop", socket);
+      ["listening", "running"].includes(properties(socket, run).SubState);
+    if (!preserveManager) run("stop", socket);
     if (activationEnabledFor(unit, { source, values })) run("disable", unit);
     else {
       run("disable", socket);

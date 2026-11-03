@@ -208,12 +208,17 @@ it("prepares matching service definitions and releases sockets for legacy rollba
   }
 });
 
-it.each(["listening", "running"])(
-  "keeps the live Updater usable with a %s listener throughout self-update preparation",
-  (substate) => {
+it.each([
+  ["image-manager", "listening"],
+  ["image-manager", "running"],
+  ["update-manager", "listening"],
+  ["update-manager", "running"],
+])(
+  "keeps %s usable with a %s listener throughout host/settings preparation",
+  (manager, substate) => {
     const directory = mkdtempSync(join(tmpdir(), "updater-self-update-"));
-    const service = "latex-renderer-update-manager.service";
-    const listener = "latex-renderer-update-manager.socket";
+    const service = `latex-renderer-${manager}.service`;
+    const listener = `latex-renderer-${manager}.socket`;
     try {
       const source = join(directory, "source"),
         units = join(directory, "units");
@@ -276,7 +281,10 @@ it("keeps a published helper's live inherited controller until the independent c
   try {
     mkdirSync(join(directory, "deploy/scripts"), { recursive: true });
     mkdirSync(join(directory, "deploy/systemd"), { recursive: true });
-    writeFileSync(join(directory, "deploy/systemd/latex-renderer-update-manager.socket"), "[Socket]\n");
+    writeFileSync(
+      join(directory, "deploy/systemd/latex-renderer-update-manager.socket"),
+      "[Socket]\n",
+    );
     writeFileSync(
       join(directory, "deploy/scripts/updater-socket-v1.mjs"),
       "// supported\n",
