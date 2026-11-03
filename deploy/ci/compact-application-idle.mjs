@@ -11,6 +11,7 @@ import {
 } from "../scripts/on-demand-engine.mjs";
 import { idleContainerEngine } from "../scripts/idle-container-engine.mjs";
 import { runtimeEnvironment } from "../scripts/runtime-mode.mjs";
+import { retryCiMutation } from "./retry-ci-mutation.mjs";
 
 const run = (command, args, timeout = 180000) =>
   execFileSync(command, args, {
@@ -259,8 +260,8 @@ export async function verifyCompactApplicationIdle() {
   assert(origin);
   const executable =
     "/opt/latex-renderer/current/deploy/scripts/http-services.mjs";
-  const reconcile = () =>
-    run("/usr/local/bin/node", [executable, "reconcile"], 16 * 60_000);
+  const reconcile = () => retryCiMutation(() =>
+    run("/usr/local/bin/node", [executable, "reconcile"], 16 * 60_000));
   const configured =
     before.replace(
       /^(?:HTTP_IDLE_ENABLED|HTTP_IDLE_TIMEOUT_SECONDS|WORKER_IDLE_ENABLED|WORKER_IDLE_TIMEOUT_SECONDS|RENDERER_RUNTIME_MODE|MANAGER_IDLE_TIMEOUT_SECONDS)=.*\n?/gm,
@@ -270,7 +271,7 @@ export async function verifyCompactApplicationIdle() {
   let results;
   try {
     await writeFile(envPath, configured);
-    reconcile();
+    await reconcile();
     await warmManagers();
     const warm = await processSnapshot();
     run(
@@ -413,7 +414,7 @@ export async function verifyCompactApplicationIdle() {
     };
   } finally {
     await writeFile(envPath, before);
-    reconcile();
+    await reconcile();
   }
   console.log(
     JSON.stringify({

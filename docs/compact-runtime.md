@@ -109,6 +109,28 @@ This safety fallback can retain an idle Node process until a socket-capable
 Updater is selected again. A stopped/failed manager is not reported as healthy
 merely because its slot exists.
 
+During a self-update, host preparation preserves an already-active compatible
+Updater listener while the old controller persists its operation. The later
+independent cutover owns its restart. Stopping and reopening this socket while
+its controller is still active is rejected by systemd. The signed acceptance
+matrix includes an upgrade originating from a published compact installation
+with both the real controller and its inherited listener active.
+For a published helper that has already stopped systemd's socket, the deployment
+keeps the same live controller serving its inherited descriptor and checks that
+its PID survives preparation. Socket supervision is restored by the independent
+cutover after operation commit; this temporary handoff is not reported as a
+healthy idle listener. The signed test also requests the controller after host
+preparation and verifies its final activation.
+The independent activation gate stops supervision before the controller, under
+the shared lock after operation commit. Its systemd unit has no socket conflict
+edge, so resuming supervision during final cleanup cannot cancel activation.
+Settings preparation also preserves an active compatible Image Manager listener:
+compact MCP/Internal API consumers require that socket, and cannot reopen it
+while its existing Manager still owns the inherited descriptor.
+The supported passive-health listener also stays available through settings
+preparation; its responder reads current state for each request. Legacy targets
+without that responder still close and disable the listener.
+
 ## Static pages and passive health
 
 Standalone Nginx uses the same public-static generator as the existing

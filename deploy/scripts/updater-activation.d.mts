@@ -1,4 +1,7 @@
 export function controllerIdle(state: unknown): boolean;
+export function stopUpdaterForActivation(
+  run: (...args: string[]) => Promise<unknown>,
+): Promise<void>;
 export function activateAfterOperation(options: {
   acquireLock: () => Promise<{ release: () => Promise<void> }>;
   hasCandidate: () => Promise<boolean>;

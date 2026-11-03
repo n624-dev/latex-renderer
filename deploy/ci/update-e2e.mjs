@@ -20,6 +20,7 @@ import {
 } from "../scripts/ci-release-artifact.mjs";
 import { acquireUpdateBaseline } from "./update-baseline.mjs";
 import { verifyActivationCommitBarrier } from "./updater-activation-barrier.mjs";
+import { retryCiMutation } from "./retry-ci-mutation.mjs";
 import {
   brokenUpdaterSource,
   assertStartupRecovery,
@@ -168,7 +169,7 @@ try {
   await deploy(baseline.source, { ...baseline, tag: baselineTag }, true);
   let candidateDeployer = helper;
   if (
-    ["installed", "native-arm64", "previous-stable"].includes(
+    ["installed", "native-arm64", "previous-stable", "compact-origin"].includes(
       process.env.CI_UPDATE_BASELINE,
     )
   ) {
@@ -183,7 +184,11 @@ try {
       baselineState.pending
     )
       throw new Error("Installed baseline Updater was not established");
-    if (process.env.CI_UPDATE_BASELINE === "previous-stable") {
+    if (
+      ["previous-stable", "compact-origin"].includes(
+        process.env.CI_UPDATE_BASELINE,
+      )
+    ) {
       // Exercise the actual installed Updater and its older prepare-host tools,
       // rather than importing the candidate helper for both sides of migration.
       candidateDeployer = await import(
@@ -277,12 +282,123 @@ try {
   } finally {
     baselineDatabase.close();
   }
+  const compactOrigin = process.env.CI_UPDATE_BASELINE === "compact-origin";
+  let compactControllerPid;
+  let compactControllerReady;
+  let originalIdleLines = [];
+  if (compactOrigin) {
+    const path = "/etc/latex-renderer/renderer.env";
+    const settings = {
+      HTTP_IDLE_ENABLED: "true",
+      HTTP_IDLE_TIMEOUT_SECONDS: "900",
+      WORKER_IDLE_ENABLED: "true",
+      WORKER_IDLE_TIMEOUT_SECONDS: "900",
+      RENDERER_RUNTIME_MODE: "compact",
+      MANAGER_IDLE_TIMEOUT_SECONDS: "900",
+    };
+    const before = await readFile(path, "utf8");
+    originalIdleLines = before
+      .split("\n")
+      .filter((line) => Object.hasOwn(settings, line.split("=", 1)[0]));
+    await writeFile(
+      path,
+      before
+        .split("\n")
+        .filter((line) => !Object.hasOwn(settings, line.split("=", 1)[0]))
+        .join("\n") +
+        "\n" +
+        Object.entries(settings)
+          .map(([key, value]) => `${key}=${value}`)
+          .join("\n") +
+        "\n",
+    );
+    await retryCiMutation(() =>
+      run(
+        "/usr/local/bin/node",
+        [
+          "/opt/latex-renderer/current/deploy/scripts/http-services.mjs",
+          "reconcile",
+        ],
+        { stdio: "pipe" },
+      ),
+    );
+    // The real installed controller must own an inherited listener before the
+    // upgrade. Its live service is deliberately not stopped by the CI driver.
+    const token = (
+      await readFile("/etc/latex-renderer/secrets/update-manager-token", "utf8")
+    ).trim();
+    const { request } = await import("node:http");
+    compactControllerReady = () =>
+      new Promise((resolve, reject) => {
+        const req = request(
+          {
+            socketPath: "/run/latex-renderer/update-manager.sock",
+            path: "/v1/state",
+            headers: { Authorization: `Bearer ${token}` },
+          },
+          (response) => {
+            response.resume();
+            response.once("end", () =>
+              response.statusCode === 200
+                ? resolve()
+                : reject(new Error("Compact baseline controller is not ready")),
+            );
+          },
+        );
+        req.once("error", reject);
+        req.setTimeout(30000, () =>
+          req.destroy(new Error("Compact baseline controller timed out")),
+        );
+        req.end();
+      });
+    await compactControllerReady();
+    for (const unit of [
+      "latex-renderer-update-manager.service",
+      "latex-renderer-update-manager.socket",
+    ])
+      if (
+        run("/usr/bin/systemctl", ["is-active", unit], {
+          encoding: "utf8",
+          stdio: "pipe",
+        }).trim() !== "active"
+      )
+        throw new Error(
+          "Compact baseline must retain both the live controller and listener",
+        );
+    compactControllerPid = run(
+      "/usr/bin/systemctl",
+      [
+        "show",
+        "--property=MainPID",
+        "--value",
+        "latex-renderer-update-manager.service",
+      ],
+      { encoding: "utf8", stdio: "pipe" },
+    ).trim();
+    if (!/^[1-9]\d*$/.test(compactControllerPid))
+      throw new Error("Missing compact baseline controller PID");
+  }
   await deploy(
     candidate,
     { version: tag.slice(1), tag, commit },
     false,
     candidateDeployer,
   );
+  if (
+    compactOrigin &&
+    run(
+      "/usr/bin/systemctl",
+      [
+        "show",
+        "--property=MainPID",
+        "--value",
+        "latex-renderer-update-manager.service",
+      ],
+      { encoding: "utf8", stdio: "pipe" },
+    ).trim() !== compactControllerPid
+  )
+    throw new Error("Host preparation stopped the live self-update controller");
+  if (compactOrigin) await compactControllerReady();
   // Imports and resolved source paths cannot expose a silent CLI no-op.
   // Exercise the actual current alias used by configure-host-access and both
   // checked hosting modes, without changing this standalone host's config.
@@ -530,6 +646,24 @@ try {
       throw new Error(
         "Settings cutover left the Standalone Gateway unavailable",
       );
+    const passive = JSON.parse(
+      run(
+        "/usr/bin/curl",
+        [
+          "--fail",
+          "--silent",
+          "--show-error",
+          "--max-time",
+          "10",
+          "--unix-socket",
+          "/run/latex-renderer-status/status.sock",
+          "http://localhost/health/status",
+        ],
+        { encoding: "utf8", stdio: "pipe" },
+      ),
+    );
+    if (passive.api !== true || passive.rendering !== true)
+      throw new Error("Settings cutover left passive health unavailable");
   }
   if (
     JSON.stringify(
@@ -695,6 +829,41 @@ try {
   ]);
   if ((await readFile(sentinel, "utf8")) !== data)
     throw new Error("Recovery touched application data");
+  if (compactOrigin) {
+    // The compact-origin update and independent cutover were exercised above.
+    // The separate HTTP off/on acceptance starts from classic mode; preserve
+    // the candidate Runtime/configuration and restore only these idle keys.
+    const keys = new Set([
+      "HTTP_IDLE_ENABLED",
+      "HTTP_IDLE_TIMEOUT_SECONDS",
+      "WORKER_IDLE_ENABLED",
+      "WORKER_IDLE_TIMEOUT_SECONDS",
+      "RENDERER_RUNTIME_MODE",
+      "MANAGER_IDLE_TIMEOUT_SECONDS",
+    ]);
+    const path = "/etc/latex-renderer/renderer.env";
+    const current = await readFile(path, "utf8");
+    await writeFile(
+      path,
+      current
+        .split("\n")
+        .filter((line) => !keys.has(line.split("=", 1)[0]))
+        .join("\n") +
+        "\n" +
+        originalIdleLines.join("\n") +
+        "\n",
+    );
+    await retryCiMutation(() =>
+      run(
+        "/usr/local/bin/node",
+        [
+          "/opt/latex-renderer/current/deploy/scripts/http-services.mjs",
+          "reconcile",
+        ],
+        { stdio: "pipe" },
+      ),
+    );
+  }
   const { verifyHttpApplicationIdle } = await import(
     pathToFileURL(join(candidate, "deploy/ci/http-application-idle.mjs"))
   );
@@ -714,8 +883,10 @@ try {
       validationOnly: Boolean(validationSourceRef),
       sourceRef: validationSourceRef ?? `refs/tags/${tag}`,
       baselineTag,
-      installedBaselineUpdater:
-        process.env.CI_UPDATE_BASELINE === "previous-stable",
+      installedBaselineUpdater: ["previous-stable", "compact-origin"].includes(
+        process.env.CI_UPDATE_BASELINE,
+      ),
+      compactOriginUpdate: compactOrigin,
       baselineBeforeHttps: true,
       architecture: process.arch,
       tag,

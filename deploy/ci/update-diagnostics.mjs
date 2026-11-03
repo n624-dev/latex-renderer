@@ -23,6 +23,8 @@ let log = execFileSync(
     "-u",
     "latex-renderer-update-manager",
     "-u",
+    "latex-renderer-update-manager.socket",
+    "-u",
     "latex-renderer-image-manager",
     "-u",
     "latex-renderer-worker",

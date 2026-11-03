@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 1.5.9-rc.1 - 2026-11-04
+
+- Preserve the active independent Updater listener during compact self-update preparation. Let the verified independent cutover restart the controller after operation persistence (#288).
+- Keep the live inherited controller reachable when an older published helper has already stopped socket supervision; defer its supervised listener restart to the verified independent cutover.
+- Quiesce the Updater listener explicitly after operation commit, avoiding a systemd conflict that cancels activation when final cleanup resumes supervision.
+- Preserve compatible Image Manager listeners during settings preparation so compact MCP/Internal API dependencies can restart without reopening a live Manager's socket.
+- Retain the supported passive-health listener during settings preparation and check its response immediately after cutover.
+- Download the unchanged Trivy version from its official Release asset with a pinned checksum and bounded retries, avoiding the mutable installer's additional download host.
+- Add signed update coverage originating from a published compact-capable installation with its actual live controller, alongside the existing historical and native ARM64 baselines.
+- Bound retries for the specific transient mutation-lock conflict in disposable CI reconciliation; retain immediate failures for every other error.
+
 ## 1.5.8 - 2026-11-04
 
 - Promote validated 1.5.8-rc.4 to Stable. Executable behavior, dependencies and configuration defaults match the candidate; update version metadata and installation guidance.

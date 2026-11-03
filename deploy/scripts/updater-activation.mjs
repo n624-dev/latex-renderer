@@ -27,6 +27,11 @@ export function controllerIdle(state) {
   return true;
 }
 
+export async function stopUpdaterForActivation(run) {
+  await run("stop", "latex-renderer-update-manager.socket");
+  await run("stop", "latex-renderer-update-manager.service");
+}
+
 export async function activateAfterOperation({
   acquireLock,
   hasCandidate,
@@ -174,8 +179,7 @@ async function main() {
         );
     },
     readController: controllerState,
-    stopController: () =>
-      systemctl("stop", "latex-renderer-update-manager.service"),
+    stopController: () => stopUpdaterForActivation(systemctl),
     recover: () =>
       execute(
         "/usr/local/bin/node",

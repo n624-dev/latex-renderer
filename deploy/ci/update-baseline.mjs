@@ -9,6 +9,7 @@ export function updateBaselineTag(variant, architecture) {
     installed: `v${[1, 3, 5].join(".")}-rc.1`,
     "native-arm64": `v${[1, 5, 0].join(".")}-rc.1`,
     "previous-stable": `v${[1, 5, 7].join(".")}`,
+    "compact-origin": `v${[1, 5, 8].join(".")}`,
   };
   if (!Object.hasOwn(tags, variant))
     throw new Error("Unknown CI update baseline");

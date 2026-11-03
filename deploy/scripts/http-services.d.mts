@@ -40,6 +40,16 @@ export function prepareHttpActivation(
     validateCompact?: () => unknown;
   },
 ): { enabled: boolean };
+export function deploymentUpdater(
+  action: string,
+  expectedPid?: string,
+  options?: {
+    run?: (...args: string[]) => string;
+    source?: string;
+    values?: NodeJS.ProcessEnv;
+    parentMutationLock?: string;
+  },
+): string;
 export function reconcileHttpServices(options?: {
   source?: string;
   run?: (...args: string[]) => string;

@@ -2,7 +2,9 @@
 Description=Activate and health-check the independent Updater
 After=latex-renderer-updater-recovery.service
 Requires=latex-renderer-updater-recovery.service
-Conflicts=latex-renderer-update-manager.socket
+# The activation gate stops the listener under the shared lock after operation
+# commit. A Conflicts edge would close it before that gate and cancel this start
+# job when ExecStopPost restores socket supervision.
 StartLimitIntervalSec=5min
 StartLimitBurst=3
 

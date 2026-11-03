@@ -93,7 +93,8 @@ require_normal_maintenance_for_smoke() {
 }
 
 http_control() {
-  /usr/local/bin/node "$source_root/deploy/scripts/http-services.mjs" "$@"
+  LATEX_RENDERER_PARENT_MUTATION_LOCK="$parent_mutation_lock" \
+    /usr/local/bin/node "$source_root/deploy/scripts/http-services.mjs" "$@"
 }
 
 restore_services_after_failure() {
@@ -341,7 +342,10 @@ runuser -u latex-renderer -- env \
 
 systemctl daemon-reload
 http_control enable latex-renderer-update-manager.service
-http_control start latex-renderer-update-manager.service
+updater_handoff_pid=$(http_control deployment-updater start)
+if [ -n "$updater_handoff_pid" ]; then
+  echo "Keeping the live legacy Updater until operation commit; independent activation will restore its supervised listener."
+fi
 /opt/latex-renderer/current/deploy/scripts/wait-update-manager-socket.sh
 runtime_mode=$(/usr/local/bin/node "$source_root/deploy/scripts/runtime-mode.mjs")
 if [ "$runtime_mode" = compact ]; then
@@ -387,7 +391,8 @@ fi
 deployment_checkpoint local-service-readiness
 http_control ready latex-renderer-api.service latex-renderer-internal-api.service \
   latex-renderer-admin-api.service "$web_service" latex-renderer-remote-mcp.service latex-renderer-worker.service
-http_control ready latex-renderer-update-manager.service latex-renderer-image-manager.service
+http_control deployment-updater ready "$updater_handoff_pid"
+http_control ready latex-renderer-image-manager.service
 systemctl enable --now latex-renderer-status.socket
 if [ "$deployment_mode" = standalone ]; then
   http_control ready latex-renderer-standalone-gateway.service

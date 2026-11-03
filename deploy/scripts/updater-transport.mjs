@@ -42,8 +42,8 @@ export async function prepareUpdaterTransport({
     if (capable && compact) {
       run("disable", "latex-renderer-update-manager.service");
       run("enable", "latex-renderer-update-manager.socket");
-      // The activation unit conflicts with this listener. Queue its start for
-      // after ExecStopPost returns instead of waiting on our own stop job.
+      // Queue the listener without waiting inside ExecStopPost. The activation
+      // gate, rather than a Conflicts edge, owns its post-commit stop boundary.
       run("start", "--no-block", "latex-renderer-update-manager.socket");
       return { activated: true };
     }
