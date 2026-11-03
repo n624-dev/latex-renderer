@@ -326,6 +326,11 @@ export async function verifyCompactApplicationIdle() {
       "idle",
       "Rendering woke update management",
     );
+    const jobLifecycle = JSON.parse(run(
+      "/usr/bin/python3",
+      ["-B", "/opt/latex-renderer/current/deploy/ci/compact-job-lifecycle.py"],
+      15 * 60_000,
+    ));
     const probeStart = performance.now();
     const probe = workerEngineCommand("/usr/bin/env", [
       "COMPACT_PROBE_ENGINE=docker",
@@ -347,6 +352,7 @@ export async function verifyCompactApplicationIdle() {
       managerIndependentRender: true,
       rootlessSandbox: true,
       buildProtection,
+      jobLifecycle,
     };
   } finally {
     await writeFile(envPath, before);

@@ -70,6 +70,7 @@ for (let n = 0; n < 2; n++) {
 
 const user = "latex-render-probe";
 assert.notEqual(process.env.USER, user);
+const cleanupFailures = [];
 let created = false,
   podman,
   podmanReady = false;
@@ -226,19 +227,18 @@ try {
   };
 } finally {
   if (created) {
-    const failures = [];
     for (const cleanup of [
       () => { if (podmanReady) podman("system", "reset", "--force"); },
       () => run("/usr/bin/loginctl", ["terminate-user", user]),
       () => run("/usr/bin/loginctl", ["disable-linger", user]),
       () => run("/usr/sbin/userdel", ["--remove", user]),
     ]) {
-      try { cleanup(); } catch (error) { failures.push(error); }
+      try { cleanup(); } catch (error) { cleanupFailures.push(error); }
     }
-    if (failures.length)
-      throw new AggregateError(failures, "Disposable engine probe cleanup failed");
   }
 }
+if (cleanupFailures.length)
+  throw new AggregateError(cleanupFailures, "Disposable engine probe cleanup failed");
 const output = resolve(
   process.env.RUNNER_TEMP,
   "compact-engine-comparison.json",

@@ -136,6 +136,7 @@ def reconcile():
 
 
 def warm():
+    timings = {}
     for port, path in [(3100, "/health"), (3101, "/health"), (3102, "/health"), (3103, "/health"),
                        (3104, "/.well-known/oauth-authorization-server"), (3105, "/api/v1/health")]:
         connection = http.client.HTTPConnection("127.0.0.1", port, timeout=30)
@@ -148,16 +149,19 @@ def warm():
             connection.close()
     token = Path("/etc/latex-renderer/secrets/image-manager-token").read_text().strip()
     connection = http.client.HTTPConnection("127.0.0.1", 3110, timeout=30)
+    started = time.monotonic()
     try:
         connection.request("GET", "/v1/state", headers={"Authorization": f"Bearer {token}"})
         response = connection.getresponse()
         assert response.status == 200
         response.read()
+        timings["imageManagerSeconds"] = time.monotonic() - started
     finally:
         connection.close()
     token = Path("/etc/latex-renderer/secrets/update-manager-token").read_text().strip()
     socket_connection = socket.socket(socket.AF_UNIX)
     socket_connection.settimeout(30)
+    started = time.monotonic()
     socket_connection.connect("/run/latex-renderer/update-manager.sock")
     try:
         socket_connection.sendall(f"GET /v1/state HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {token}\r\nConnection: close\r\n\r\n".encode())
@@ -165,8 +169,10 @@ def warm():
         response.begin()
         assert response.status == 200
         response.read()
+        timings["updateManagerSeconds"] = time.monotonic() - started
     finally:
         socket_connection.close()
+    return timings
 
 
 def cpu_sample():
@@ -285,8 +291,11 @@ try:
         if mode == "compact":
             assert node_zero > 0, "Compact never reached zero application processes and an inactive dedicated engine"
         scenario["firstRequestsAfterQuiet"] = first_requests()
+        scenario["managementAfterQuiet"] = warm()
         scenario["firstPdfPngAfterQuiet"] = smoke()
         scenario["warmPdfPng"] = smoke()
+        scenario["jobLifecycle"] = json.loads(command(["/usr/bin/python3", "-B", str(current / "deploy/ci/compact-job-lifecycle.py")], 20 * 60))
+        scenario["afterJobLifecycle"] = snapshot()
         save()
         print(f"Idle measurement: {mode}, one hour and cold/warm rendering complete", flush=True)
     report["complete"] = True
