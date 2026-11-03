@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 1.5.9 - 2026-11-04
+
+- Promote validated 1.5.9-rc.1 to Stable with matching executable behavior, dependencies and configuration defaults.
+- Correct compact-mode Updater and Image Manager listener handoff during updates and settings changes; retain passive health responses.
+- Validate updates from the published compact-mode baseline alongside historical AMD64 and native ARM64 installations.
+
 ## 1.5.9-rc.1 - 2026-11-04
 
 - Preserve the active independent Updater listener during compact self-update preparation. Let the verified independent cutover restart the controller after operation persistence (#288).
