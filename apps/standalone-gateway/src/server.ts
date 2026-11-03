@@ -65,11 +65,17 @@ app.all("*", async (c) => {
 });
 
 const activity = createHttpActivity();
-startHttpService(createServer(getRequestListener(activity.track(app.fetch))), {
-  activity,
-  name: "standalone-gateway",
-  port: validPortEnvironment(process.env, "PORT", 3105),
-});
+const listener = getRequestListener(activity.track(app.fetch));
+startHttpService(
+  createServer((request, response) => {
+    void listener(request, response);
+  }),
+  {
+    activity,
+    name: "standalone-gateway",
+    port: validPortEnvironment(process.env, "PORT", 3105),
+  },
+);
 
 function exactInternalOrigin(value: string): URL {
   const url = new URL(value);

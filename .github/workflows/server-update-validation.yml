@@ -147,6 +147,14 @@ jobs:
             /usr/local/bin/node deploy/ci/update-e2e.mjs \
             "$artifact" "$VERSION_TAG" "$SOURCE_COMMIT" "$digest" \
             "$RUNNER_TEMP/validation-assets/PROVENANCE.jsonl" "$GITHUB_REF"
+      - name: Compare the verified image with isolated rootless engines
+        if: matrix.baseline == 'installed'
+        env:
+          SOURCE_COMMIT: ${{ needs.build.outputs.commit }}
+        run: |
+          sudo env RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" GITHUB_ACTIONS="$GITHUB_ACTIONS" \
+            GITHUB_RUN_ID="$GITHUB_RUN_ID" SOURCE_COMMIT="$SOURCE_COMMIT" RUNNER_TEMP="$RUNNER_TEMP" \
+            /usr/local/bin/node deploy/ci/compact-engine-comparison.mjs
       - name: Bounded, redacted disposable-host diagnostics
         if: failure()
         run: |

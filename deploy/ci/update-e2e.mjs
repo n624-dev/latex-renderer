@@ -695,6 +695,10 @@ try {
     pathToFileURL(join(candidate, "deploy/ci/http-application-idle.mjs"))
   );
   await verifyHttpApplicationIdle();
+  const { verifyCompactApplicationIdle } = await import(
+    pathToFileURL(join(candidate, "deploy/ci/compact-application-idle.mjs"))
+  );
+  await verifyCompactApplicationIdle();
   run("/bin/sh", [
     "/opt/latex-renderer/current/deploy/scripts/smoke-test-production.sh",
   ]);
@@ -729,6 +733,7 @@ try {
       interruptedInventoryRecovery: true,
       credentialStartup: true,
       httpApplicationIdle: true,
+      compactApplicationIdle: true,
     }),
   );
 } finally {

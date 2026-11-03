@@ -113,7 +113,7 @@ it("notifies after commit, observes committed state, and never notifies on rollb
 
 it("reconciles lost notifications and maintenance without starting stopped listeners", async () => {
   const f = fixture(),
-    notify = vi.fn(async () => true),
+    notify = vi.fn(() => Promise.resolve(true)),
     run = vi.fn(() => "ActiveState=active\nSubState=listening\n");
   const environment = { WORKER_IDLE_ENABLED: "true", DATABASE_PATH: f.path };
   expect(await reconcileWorker({ environment, notify, run })).toMatchObject({

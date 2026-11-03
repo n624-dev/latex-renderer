@@ -158,9 +158,9 @@ export function readWorkerHealth({
     let database;
     try {
       if (
+        !databasePath ||
         httpServiceStatus("latex-renderer-worker.service", { run }).state !==
-          "idle" ||
-        !databasePath
+          "idle"
       )
         return { operational: false, state: "unavailable" };
       database = new DatabaseSync(databasePath, { readOnly: true });

@@ -87,9 +87,10 @@ describe("worker stop and orphan-recovery lifecycle", () => {
     let elapsed = 0;
     await runWorker(f.database, f.config, f.abort.signal, {
       idle: { timeoutMs: 30000, now: () => elapsed },
-      idleDelay: async () => {
+      idleDelay: () => {
         elapsed += 10000;
         if (elapsed > 50000) throw new Error("Worker did not idle");
+        return Promise.resolve();
       },
     });
     expect(elapsed).toBe(30000);
@@ -106,9 +107,10 @@ describe("worker stop and orphan-recovery lifecycle", () => {
     let elapsed = 0;
     await runWorker(f.database, f.config, f.abort.signal, {
       idle: { timeoutMs: 30000, now: () => elapsed },
-      idleDelay: async () => {
+      idleDelay: () => {
         elapsed += 20000;
         if (elapsed >= 60000) f.abort.abort();
+        return Promise.resolve();
       },
     });
     expect(elapsed).toBe(60000);

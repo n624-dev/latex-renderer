@@ -87,7 +87,7 @@ it("leaves running, queued, failed and unknown container work untouched and rech
     "CREATE TABLE jobs(status TEXT,lease_owner TEXT); CREATE TABLE job_preview_requests(status TEXT,lease_owner TEXT); CREATE TABLE source_tree_readers(id TEXT); CREATE TABLE source_trees(status TEXT)",
   );
   const release = vi.fn(async () => {}),
-    acquire = async () => ({ release });
+    acquire = () => Promise.resolve({ release });
   let engineState = "active",
     containers = "";
   const command = vi.fn((_cmd: string, args: string[]) => {
@@ -177,8 +177,8 @@ it("keeps independent legacy Updater rollback usable and queues activation after
   const path = root();
   mkdirSync(join(path, "deploy/scripts"), { recursive: true });
   const slots = {
-    state: async () => ({ current: "verified-id" }),
-    verify: vi.fn(async () => ({ root: path })),
+    state: () => Promise.resolve({ current: "verified-id" }),
+    verify: vi.fn(() => Promise.resolve({ root: path })),
   };
   const run = vi.fn();
   await expect(
