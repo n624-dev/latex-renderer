@@ -54,6 +54,7 @@ jobs:
           echo "version-tag=v$version" >> "$GITHUB_OUTPUT"
           pnpm install --frozen-lockfile
           pnpm check
+          python3 -B tests/image_archive_identity_test.py
           # Same job/commit fresh outputs, not a cache or another job's assets.
           pnpm verify:mcpb
           pnpm test:client:deployment

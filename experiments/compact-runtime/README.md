@@ -4,7 +4,7 @@ This opt-in experiment for #282 exercises a fixed synthetic document with the lo
 
 ## Run
 
-Prerequisites: local rootless Podman, cgroup v2 with delegated CPU/memory/PID limits, GNU `timeout`, and an already-imported **trusted final renderer image** containing `/opt/renderer/compile.sh` (not the language-neutral base). Use the full `sha256:` local **image ID**, not a tag or a registry manifest digest. Podman must be able to read the checked-out `deploy/security/seccomp.json`. Do not weaken confinement to make the test pass.
+Prerequisites: local rootless Podman with its init helper (such as `catatonit`), cgroup v2 with delegated CPU/memory/PID limits, GNU `timeout`, and an already-imported **trusted final renderer image** containing `/opt/renderer/compile.sh` (not the language-neutral base). Use the full `sha256:` local **image ID**, not a tag or a registry manifest digest. The test account must be able to traverse its working directory and read the checked-out `deploy/security/seccomp.json`. Do not weaken confinement to make the test pass.
 
 ```sh
 # From the repository root; substitute the verified full local image ID.
@@ -12,7 +12,15 @@ sh experiments/compact-runtime/probe.sh 'sha256:<64 lowercase hex digits>'
 
 # Host control-flow tests with a fake engine; not an integration test.
 python3 experiments/compact-runtime/test_probe.py -v
+python3 -B tests/image_archive_identity_test.py
 ```
+
+The disposable CI comparison streams the Docker export directly into Podman.
+Its relay verifies the export's SHA-256 blobs and follows the original image's
+descriptor chain to the requested platform's exact config digest. Podman's
+imported image ID must equal that digest before the probe runs. This handles
+the [containerd store's index/manifest IDs](https://github.com/containerd/nerdctl/blob/main/docs/command-reference.md)
+without choosing an unrelated image or retaining a full temporary archive.
 
 The probe forbids pulling, uses a single read-only synthetic input mount and a bounded tmpfs for output, and checks effective UID/GID, capability masks, seccomp filter mode, no-new-privileges, loopback-only interfaces, read-only mounts and cgroup limits before invoking the image's compile script. The final PDF must pass `qpdf --check` and contain the expected text. The probe uses a bounded runtime and verifies that its named container no longer exists. A cleanup error is not a successful run. No archive, source or PDF is retained.
 

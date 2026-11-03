@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { pipeline } from "node:stream/promises";
-import { readFile, writeFile, lstat, statfs, mkdir, copyFile, chmod } from "node:fs/promises";
+import { readFile, writeFile, lstat, statfs, mkdir, copyFile, chmod, unlink } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { resolve } from "node:path";
 import { performance } from "node:perf_hooks";
@@ -49,6 +49,7 @@ const results = {
   sourceCommit: release.commit,
   image,
   architecture: process.arch,
+  dockerVersion: workerEngineCommand("/usr/bin/docker", ["version", "--format", "{{.Server.Version}}"]).trim(),
   docker: [],
   podman: { eligible: false },
 };
@@ -165,6 +166,7 @@ try {
     "true v2",
   );
   podmanReady = true;
+  results.podmanVersion = podman("--version").trim();
   const worker = Number(
     run("/usr/bin/id", ["-u", "latex-render-worker"]).trim(),
   );
@@ -191,6 +193,14 @@ try {
     [...prefix, "/usr/bin/podman", "--remote=false", "load"],
     { stdio: ["pipe", "ignore", "ignore"], cwd: `/home/${user}` },
   );
+  const identityPath = resolve(process.env.RUNNER_TEMP, `compact-image-identity-${process.pid}.json`);
+  const inspectArchive = spawn("/usr/bin/python3", [
+    "-B", "/opt/latex-renderer/current/deploy/ci/image_archive_identity.py",
+    identityPath, image, process.arch === "x64" ? "amd64" : "arm64", "linux",
+  ], { stdio: ["pipe", "pipe", "pipe"] });
+  let identityDiagnostic = "";
+  inspectArchive.stderr.setEncoding("utf8");
+  inspectArchive.stderr.on("data", (chunk) => { identityDiagnostic = (identityDiagnostic + chunk).slice(-4096); });
   const saved = new Promise((resolve, reject) => {
     save.once("error", reject);
     save.once("close", resolve);
@@ -199,30 +209,49 @@ try {
     load.once("error", reject);
     load.once("close", resolve);
   });
+  const inspected = new Promise((resolve, reject) => {
+    inspectArchive.once("error", reject);
+    inspectArchive.once("close", resolve);
+  });
   const timeout = setTimeout(() => {
     save.kill("SIGKILL");
     load.kill("SIGKILL");
+    inspectArchive.kill("SIGKILL");
   }, 300000);
+  let identity;
   try {
-    await pipeline(save.stdout, load.stdin);
+    await Promise.all([pipeline(save.stdout, inspectArchive.stdin), pipeline(inspectArchive.stdout, load.stdin)]);
     assert.equal(await saved, 0);
     assert.equal(await loaded, 0);
+    assert.equal(await inspected, 0, identityDiagnostic);
+    const file = await lstat(identityPath);
+    assert(file.isFile() && file.uid === 0 && file.nlink === 1 && !(file.mode & 0o077) && file.size < 2048);
+    identity = JSON.parse(await readFile(identityPath, "utf8"));
+    assert.equal(identity.sourceImageId, image);
+    assert.equal(identity.descriptorChainVerified, true);
+    assert(/^sha256:[a-f0-9]{64}$/.test(identity.configDigest));
+  } catch (error) {
+    if (identityDiagnostic) throw new Error(`Image identity verification failed: ${identityDiagnostic}`, { cause: error });
+    throw error;
   } finally {
     clearTimeout(timeout);
     if (save.exitCode === null) save.kill("SIGKILL");
     if (load.exitCode === null) load.kill("SIGKILL");
-    await Promise.allSettled([saved, loaded]);
+    if (inspectArchive.exitCode === null) inspectArchive.kill("SIGKILL");
+    await Promise.allSettled([saved, loaded, inspected]);
+    try { await unlink(identityPath); } catch (error) { if (error.code !== "ENOENT") cleanupFailures.push(error); }
   }
+  results.imageIdentity = identity;
   assert.equal(
-    podman("image", "inspect", image, "--format", "{{.Id}}")
+    podman("image", "inspect", identity.configDigest, "--format", "{{.Id}}")
       .trim()
       .replace(/^sha256:/, ""),
-    image.slice(7),
+    identity.configDigest.slice(7),
   );
   const samples = [];
   for (let n = 0; n < 2; n++) {
     const started = performance.now();
-    const text = run("/usr/sbin/runuser", [...prefix, "/bin/sh", podmanProbe, image], { cwd: `/home/${user}` });
+    const text = run("/usr/sbin/runuser", [...prefix, "/bin/sh", podmanProbe, identity.configDigest], { cwd: `/home/${user}` });
     const containerPeakBytes = Number(
       /container_memory_peak_bytes=(\d+)/.exec(text)?.[1],
     );
