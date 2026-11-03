@@ -64,6 +64,22 @@ export async function idleContainerEngine({
       command("/usr/bin/docker", ["container", "ls", "--all", "--quiet"]).trim()
     )
       return { state: "containers" };
+    // Integrated BuildKit work is not listed by `docker container ls`.
+    // Unknown history status also prevents shutdown.
+    const builds = command("/usr/bin/docker", [
+      "buildx",
+      "--builder",
+      "default",
+      "history",
+      "ls",
+      "--format",
+      "{{.Status}}",
+    ])
+      .trim()
+      .split("\n")
+      .filter(Boolean);
+    if (builds.some((status) => !["Completed", "Error"].includes(status)))
+      return { state: "builds" };
     command("/usr/bin/systemctl", ["--user", "stop", "docker.service"]);
     if (
       command("/usr/bin/systemctl", [

@@ -89,9 +89,11 @@ it("leaves running, queued, failed and unknown container work untouched and rech
   const release = vi.fn(async () => {}),
     acquire = () => Promise.resolve({ release });
   let engineState = "active",
-    containers = "";
+    containers = "",
+    builds = "";
   const command = vi.fn((_cmd: string, args: string[]) => {
     if (args.includes("show")) return engineState;
+    if (args.includes("history")) return builds;
     if (args.includes("ls")) return containers;
     if (args.includes("stop")) {
       engineState = "inactive";
@@ -125,20 +127,25 @@ it("leaves running, queued, failed and unknown container work untouched and rech
       false,
     );
     containers = "";
+    builds = "Running";
+    expect(await idleContainerEngine(options)).toEqual({ state: "builds" });
+    builds = "Unknown";
+    expect(await idleContainerEngine(options)).toEqual({ state: "builds" });
+    builds = "Completed\nError";
     expect(await idleContainerEngine(options)).toEqual({
       state: "idle",
       stopped: true,
     });
     expect(
       command.mock.calls.filter(([, args]) => args.includes("show")),
-    ).toHaveLength(3);
+    ).toHaveLength(5);
     engineState = "failed";
     await expect(idleContainerEngine(options)).rejects.toThrow("unavailable");
     command.mockImplementation(() => {
       throw new Error("unreachable");
     });
     await expect(idleContainerEngine(options)).rejects.toThrow("unreachable");
-    expect(release).toHaveBeenCalledTimes(12);
+    expect(release).toHaveBeenCalledTimes(16);
   } finally {
     db.close();
   }

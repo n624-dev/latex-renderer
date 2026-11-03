@@ -1,6 +1,7 @@
 [Unit]
 Description=Release the dedicated container engine after compact consumers sleep
 After=latex-renderer-authentication-recovery.service
+Requires=latex-renderer-authentication-recovery.service
 
 [Service]
 Type=oneshot
@@ -16,5 +17,5 @@ ProtectHome=read-only
 PrivateTmp=true
 PrivateDevices=true
 RestrictAddressFamilies=AF_UNIX
-ReadWritePaths=/run/latex-renderer /run/latex-renderer-engine
+ReadWritePaths=/run/latex-renderer /run/latex-renderer-engine /var/lib/latex-renderer /var/lib/latex-render-worker/.docker
 UMask=0007

@@ -12,6 +12,7 @@ ExecStart=/usr/local/bin/node deploy/scripts/reconcile-worker.mjs
 TimeoutStartSec=15s
 NoNewPrivileges=true
 ProtectSystem=strict
+ReadWritePaths=/var/lib/latex-renderer
 ProtectHome=true
 PrivateTmp=true
 PrivateDevices=true

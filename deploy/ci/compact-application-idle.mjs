@@ -1,11 +1,16 @@
 import assert from "node:assert/strict";
 import { readFile, writeFile, lstat } from "node:fs/promises";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { request } from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
 import { performance } from "node:perf_hooks";
 import { httpServiceStatus } from "../scripts/http-services.mjs";
-import { workerEngineCommand } from "../scripts/on-demand-engine.mjs";
+import {
+  workerEngineCommand,
+  acquireEngineLock,
+} from "../scripts/on-demand-engine.mjs";
+import { idleContainerEngine } from "../scripts/idle-container-engine.mjs";
+import { runtimeEnvironment } from "../scripts/runtime-mode.mjs";
 
 const run = (command, args, timeout = 180000) =>
   execFileSync(command, args, {
@@ -95,6 +100,127 @@ async function warmManagers() {
   });
 }
 
+async function verifyBuildProtection(image, environment) {
+  let startLock;
+  await until(async () => {
+    try {
+      startLock = await acquireEngineLock();
+      return true;
+    } catch (error) {
+      if (error.code === "ENGINE_BUSY") return false;
+      throw error;
+    }
+  }, "Engine initialization remained busy");
+  workerEngineCommand("/usr/bin/systemctl", [
+    "--user",
+    "start",
+    "docker.service",
+  ]);
+  const uid = Number(run("/usr/bin/id", ["-u", "latex-render-worker"]).trim());
+  const tag = `latex-compact-build-fixture:${process.pid}`;
+  const child = spawn(
+    "/usr/sbin/runuser",
+    [
+      "-u",
+      "latex-render-worker",
+      "--",
+      "/usr/bin/env",
+      "-i",
+      "PATH=/usr/local/bin:/usr/bin:/bin",
+      "HOME=/var/lib/latex-render-worker",
+      `DOCKER_HOST=unix:///run/user/${uid}/docker.sock`,
+      "/usr/bin/docker",
+      "buildx",
+      "--builder",
+      "default",
+      "build",
+      "--pull=false",
+      "--network=none",
+      "--no-cache",
+      "--tag",
+      tag,
+      "-",
+    ],
+    { detached: true, stdio: ["pipe", "ignore", "ignore"] },
+  );
+  const completed = new Promise((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", resolve);
+  });
+  void completed.catch(() => {});
+  child.stdin.on("error", () => {});
+  child.stdin.end(`FROM ${image}\nRUN sleep 45\n`);
+  const running = () =>
+    workerEngineCommand("/usr/bin/docker", [
+      "buildx",
+      "--builder",
+      "default",
+      "history",
+      "ls",
+      "--format",
+      "{{.Status}}",
+    ])
+      .trim()
+      .split("\n")
+      .includes("Running");
+  const kill = () => {
+    if (!child.pid || child.exitCode !== null || child.signalCode !== null)
+      return;
+    try {
+      process.kill(-child.pid, "SIGKILL");
+    } catch (error) {
+      if (error.code !== "ESRCH") throw error;
+    }
+  };
+  try {
+    await until(
+      running,
+      "Known build did not appear in BuildKit history",
+      30000,
+    );
+    await startLock.release();
+    startLock = undefined;
+    await until(
+      async () => {
+        const blocked = await idleContainerEngine({ environment });
+        return ["builds", "containers"].includes(blocked.state);
+      },
+      "Engine collector did not protect an independent active build",
+      15000,
+    );
+    assert.equal(
+      workerEngineCommand("/usr/bin/systemctl", [
+        "--user",
+        "show",
+        "--property=ActiveState",
+        "--value",
+        "docker.service",
+      ]).trim(),
+      "active",
+    );
+    kill();
+    await completed;
+    await until(
+      () => !running(),
+      "Interrupted BuildKit work did not settle",
+      90000,
+    );
+    return { protected: true, interruptedBuildSettled: true };
+  } finally {
+    await startLock?.release();
+    kill();
+    await completed.catch(() => {});
+    const retained = workerEngineCommand("/usr/bin/docker", [
+      "image",
+      "ls",
+      "--filter",
+      `reference=${tag}`,
+      "--quiet",
+    ]).trim();
+    if (retained) workerEngineCommand("/usr/bin/docker", ["image", "rm", tag]);
+  }
+}
+
 export async function verifyCompactApplicationIdle() {
   assert.equal(process.getuid(), 0);
   assert.equal(process.env.GITHUB_ACTIONS, "true");
@@ -160,6 +286,18 @@ export async function verifyCompactApplicationIdle() {
       (await processSnapshot()).every((row) => row.pid === 0),
       "Passive/static request woke an application process",
     );
+    const imageState = JSON.parse(
+      await readFile(
+        "/var/lib/latex-renderer/image-manager/state.json",
+        "utf8",
+      ),
+    );
+    const image = imageState.current?.runtimeImageId;
+    assert(/^sha256:[a-f0-9]{64}$/.test(image));
+    const buildProtection = await verifyBuildProtection(image, {
+      ...runtimeEnvironment(configured),
+      DATABASE_PATH: "/var/lib/latex-renderer/renderer.sqlite3",
+    });
     await until(
       () =>
         workerEngineCommand("/usr/bin/systemctl", [
@@ -188,14 +326,6 @@ export async function verifyCompactApplicationIdle() {
       "idle",
       "Rendering woke update management",
     );
-    const imageState = JSON.parse(
-      await readFile(
-        "/var/lib/latex-renderer/image-manager/state.json",
-        "utf8",
-      ),
-    );
-    const image = imageState.current?.runtimeImageId;
-    assert(/^sha256:[a-f0-9]{64}$/.test(image));
     const probeStart = performance.now();
     const probe = workerEngineCommand("/usr/bin/env", [
       "COMPACT_PROBE_ENGINE=docker",
@@ -216,6 +346,7 @@ export async function verifyCompactApplicationIdle() {
       staticServing: true,
       managerIndependentRender: true,
       rootlessSandbox: true,
+      buildProtection,
     };
   } finally {
     await writeFile(envPath, before);

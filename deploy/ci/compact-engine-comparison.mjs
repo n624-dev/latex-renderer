@@ -4,6 +4,7 @@ import { pipeline } from "node:stream/promises";
 import { readFile, writeFile, lstat, statfs } from "node:fs/promises";
 import { resolve } from "node:path";
 import { performance } from "node:perf_hooks";
+import { setTimeout, clearTimeout } from "node:timers";
 import { workerEngineCommand } from "../scripts/on-demand-engine.mjs";
 
 assert.equal(process.getuid(), 0);
