@@ -35,7 +35,7 @@ const units = roles.map((name) => `latex-renderer-${name}.service`);
 async function until(check, message, timeout = 120000) {
   const deadline = Date.now() + timeout;
   while (!(await check())) {
-    assert(Date.now() < deadline, message);
+    assert(Date.now() < deadline, typeof message === "function" ? message() : message);
     await delay(1000);
   }
 }
@@ -143,8 +143,13 @@ async function verifyBuildProtection(image, environment) {
       tag,
       "-",
     ],
-    { detached: true, stdio: ["pipe", "ignore", "ignore"] },
+    { detached: true, stdio: ["pipe", "ignore", "pipe"] },
   );
+  let buildDiagnostic = "";
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk) => {
+    buildDiagnostic = (buildDiagnostic + chunk).slice(-8192);
+  });
   const completed = new Promise((resolve, reject) => {
     child.once("error", reject);
     child.once("close", resolve);
@@ -176,8 +181,12 @@ async function verifyBuildProtection(image, environment) {
   };
   try {
     await until(
-      running,
-      "Known build did not appear in BuildKit history",
+      () => {
+        if (child.exitCode !== null)
+          throw new Error(`Build protection fixture exited ${child.exitCode}: ${buildDiagnostic}`);
+        return running();
+      },
+      () => `Known build did not appear in BuildKit history: ${buildDiagnostic}`,
       30000,
     );
     await startLock.release();
