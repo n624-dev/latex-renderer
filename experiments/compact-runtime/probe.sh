@@ -71,12 +71,15 @@ run_engine --rm --init --pull=never \
   --read-only --user=10000:10000 --cap-drop=ALL \
   --security-opt=no-new-privileges --security-opt="seccomp=$profile" \
   --pids-limit=128 --cpus=1.5 --memory=1g --memory-swap=1g \
-  --tmpfs=/tmp:rw,noexec,nosuid,nodev,size=256m,uid=10000,gid=10000 \
-  --tmpfs=/work/output:rw,noexec,nosuid,nodev,size=64m,uid=10000,gid=10000 \
+  --tmpfs=/tmp:rw,noexec,nosuid,nodev,size=256m,mode=1777 \
+  --tmpfs=/work/output:rw,noexec,nosuid,nodev,size=64m,mode=1777 \
   --mount="type=bind,src=$work/input,dst=/work/input,ro" \
   --env=LATEX_RENDER_STAGE=pdf --env=LATEX_OUTPUTS=pdf --env=LATEX_ENTRYPOINT=main.tex \
   --entrypoint=/bin/sh "$image" -ec '
     test "$(id -u):$(id -g)" = 10000:10000
+    test "$(stat -c %a /tmp)" = 1777
+    test "$(stat -c %a /work/output)" = 1777
+    test -w /tmp && test -w /work/output
     awk "/^NoNewPrivs:/ && \$2==1 {n=1} /^Seccomp:/ && \$2==2 {s=1} /^CapEff:/ && \$2~/^0+$/ {e=1} /^CapBnd:/ && \$2~/^0+$/ {b=1} END {exit !(n&&s&&e&&b)}" /proc/self/status
     awk "\$5==\"/\" && \$6~/^ro(,|$)/ {r=1} \$5==\"/work/input\" && \$6~/^ro(,|$)/ {i=1} END {exit !(r&&i)}" /proc/self/mountinfo
     test -e /sys/class/net/lo

@@ -65,6 +65,8 @@ class ProbeTests(unittest.TestCase):
                      '--security-opt=no-new-privileges', '--timeout=180', '--cpus=1.5']:
             self.assertIn(flag, args)
         mounts = [a for a in args if a.startswith('--mount=')]
+        self.assertIn('--tmpfs=/tmp:rw,noexec,nosuid,nodev,size=256m,mode=1777', args)
+        self.assertIn('--tmpfs=/work/output:rw,noexec,nosuid,nodev,size=64m,mode=1777', args)
         self.assertEqual(len(mounts), 1); self.assertTrue(mounts[0].endswith('dst=/work/input,ro'))
         self.assertFalse(Path(mounts[0].split(',')[1][4:]).exists())
         self.assertIn(IMAGE[7:], args); self.assertEqual(calls[-1][:2], ['container', 'exists'])
