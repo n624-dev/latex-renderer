@@ -206,3 +206,63 @@ it("prepares matching service definitions and releases sockets for legacy rollba
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+it("keeps the live socket-activated Updater usable throughout self-update preparation", () => {
+  const directory = mkdtempSync(join(tmpdir(), "updater-self-update-"));
+  const service = "latex-renderer-update-manager.service";
+  const listener = "latex-renderer-update-manager.socket";
+  try {
+    const source = join(directory, "source"),
+      units = join(directory, "units");
+    mkdirSync(join(source, "deploy/scripts"), { recursive: true });
+    mkdirSync(join(source, "deploy/systemd"), { recursive: true });
+    mkdirSync(units);
+    for (const marker of ["http-idle-server.mjs", "updater-socket-v1.mjs"])
+      writeFileSync(join(source, "deploy/scripts", marker), "// supported\n");
+    writeFileSync(join(source, "deploy/systemd", listener), "[Socket]\n");
+    writeFileSync(
+      join(source, "deploy/systemd", service),
+      "[Service]\nType=simple\n",
+    );
+    writeFileSync(join(units, service), "[Service]\nType=simple\n");
+    for (const mode of ["compact", "classic"]) {
+      let listening = true;
+      const calls: string[][] = [];
+      const run = (...args: string[]) => {
+        calls.push(args);
+        const name = args.at(-1);
+        if (args[0] === "show") {
+          if (name === listener)
+            return `LoadState=loaded\nActiveState=${listening ? "active" : "inactive"}\nSubState=${listening ? "listening" : "dead"}\nUnitFileState=enabled\n`;
+          if (name === service)
+            return "LoadState=loaded\nActiveState=active\nResult=success\n";
+          return "LoadState=not-found\nActiveState=inactive\n";
+        }
+        if (args[0] === "is-enabled") return "enabled\n";
+        if (name === listener && args[0] === "stop") listening = false;
+        if (name === listener && args[0] === "start" && !listening)
+          throw new Error("Socket service already active, refusing");
+        return "";
+      };
+      prepareHttpActivation(source, {
+        run,
+        unitRoot: units,
+        validateCompact: () => {},
+        values: { RENDERER_RUNTIME_MODE: mode, WORKER_IDLE_ENABLED: "true" },
+      });
+      if (mode === "compact") {
+        expect(() =>
+          controlService("start", service, { run, enabled: true }),
+        ).not.toThrow();
+        expect(listening).toBe(true);
+        expect(calls).not.toContainEqual(["stop", listener]);
+        expect(calls).not.toContainEqual(["stop", service]);
+      } else {
+        expect(calls).toContainEqual(["stop", listener]);
+        expect(calls).toContainEqual(["disable", listener]);
+      }
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

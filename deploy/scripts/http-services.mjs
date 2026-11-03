@@ -340,7 +340,17 @@ export function prepareHttpActivation(
     } catch {
       /* disabled */
     }
-    run("stop", socket);
+    // A self-update is still served by this controller. Closing its inherited
+    // listener here makes systemd refuse to reopen the socket while the service
+    // remains active. Keep a compatible, already-listening Updater until the
+    // independent cutover has persisted the operation and can restart it safely.
+    const preserveUpdater =
+      compact &&
+      unit === "latex-renderer-update-manager.service" &&
+      properties(socket, run).ActiveState === "active" &&
+      properties(socket, run).SubState === "listening" &&
+      properties(unit, run).ActiveState === "active";
+    if (!preserveUpdater) run("stop", socket);
     if (activationEnabledFor(unit, { source, values })) run("disable", unit);
     else {
       run("disable", socket);
@@ -382,7 +392,10 @@ export function prepareHttpActivation(
         "latex-renderer-internal-api.socket",
       );
     if (compact && !managerUnits.includes(filename))
-      text = text.replaceAll("latex-renderer-image-manager.service", "latex-renderer-image-manager.socket");
+      text = text.replaceAll(
+        "latex-renderer-image-manager.service",
+        "latex-renderer-image-manager.socket",
+      );
     if (compact && filename === "latex-renderer-worker.service")
       text = text
         .replaceAll(

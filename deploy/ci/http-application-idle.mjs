@@ -6,6 +6,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { performance } from "node:perf_hooks";
 import { URL, URLSearchParams } from "node:url";
 import { httpServiceStatus } from "../scripts/http-services.mjs";
+import { retryCiMutation } from "./retry-ci-mutation.mjs";
 
 // Only called after signed candidate installation on a disposable update-CI
 // host. Production acceptance uses the real configured timeout instead.
@@ -84,13 +85,15 @@ export async function verifyHttpApplicationIdle() {
   const client = await registered.json();
   assert(typeof client.client_id === "string", "Missing fixture OAuth client");
   const restart = () =>
-    execFileSync(
-      "/usr/local/bin/node",
-      [
-        "/opt/latex-renderer/current/deploy/scripts/http-services.mjs",
-        "reconcile",
-      ],
-      { encoding: "utf8", timeout: 60000, stdio: ["ignore", "pipe", "pipe"] },
+    retryCiMutation(() =>
+      execFileSync(
+        "/usr/local/bin/node",
+        [
+          "/opt/latex-renderer/current/deploy/scripts/http-services.mjs",
+          "reconcile",
+        ],
+        { encoding: "utf8", timeout: 60000, stdio: ["ignore", "pipe", "pipe"] },
+      ),
     );
   let results;
   try {
@@ -101,7 +104,7 @@ export async function verifyHttpApplicationIdle() {
       before.replace(/^HTTP_IDLE_(?:ENABLED|TIMEOUT_SECONDS)=.*\n?/gm, "") +
         "\nHTTP_IDLE_ENABLED=false\nHTTP_IDLE_TIMEOUT_SECONDS=30\n",
     );
-    restart();
+    await restart();
     for (const unit of units)
       assert.equal(httpServiceStatus(unit).state, "running");
     for (const port of [3100, 3101, 3102, 3103])
@@ -111,7 +114,7 @@ export async function verifyHttpApplicationIdle() {
       before.replace(/^HTTP_IDLE_(?:ENABLED|TIMEOUT_SECONDS)=.*\n?/gm, "") +
         "\nHTTP_IDLE_ENABLED=true\nHTTP_IDLE_TIMEOUT_SECONDS=30\n",
     );
-    restart();
+    await restart();
     const login = await request(
       3102,
       "/auth/password/login",
@@ -287,7 +290,7 @@ export async function verifyHttpApplicationIdle() {
     };
   } finally {
     await writeFile(envPath, before);
-    restart();
+    await restart();
   }
   console.log(
     JSON.stringify({

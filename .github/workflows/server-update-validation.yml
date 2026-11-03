@@ -104,6 +104,8 @@ jobs:
             architecture: arm64
           - baseline: previous-stable
             architecture: amd64
+          - baseline: compact-origin
+            architecture: amd64
     runs-on: ${{ matrix.architecture == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     timeout-minutes: ${{ matrix.baseline == 'installed' && inputs.measure_idle && 240 || 90 }}
     permissions:

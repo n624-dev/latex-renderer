@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 1.5.9-rc.1 - 2026-11-04
+
+- Preserve the active independent Updater listener during compact self-update preparation. Let the verified independent cutover restart the controller after operation persistence (#288).
+- Add signed update coverage originating from a published compact-capable installation with its actual live controller, alongside the existing historical and native ARM64 baselines.
+- Bound retries for the specific transient mutation-lock conflict in disposable CI reconciliation; retain immediate failures for every other error.
+
 ## 1.5.8 - 2026-11-04
 
 - Promote validated 1.5.8-rc.4 to Stable. Executable behavior, dependencies and configuration defaults match the candidate; update version metadata and installation guidance.

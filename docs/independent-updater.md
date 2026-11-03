@@ -36,11 +36,17 @@ English/Japanese rendering, independent Updater activation, startup-failure and
 interruption recovery path; it is not an updater-only mock or a QEMU job.
 It requires a published two-platform Base. Publish and anonymously verify a new
 Base date via the [daily pipeline](texlive-ci-mirror.md#multi-platform-base-publication)
-before dispatching the three-host signed acceptance gate. Existing amd64-only
+before dispatching the full signed acceptance gate. Existing amd64-only
 dates and historical signed baselines are never rewritten to fake ARM support.
 Before provisioning, each host checks native availability and pins the public
 Base digest for its entire baseline-to-candidate test, so a concurrent daily
 promotion cannot silently change the tested renderer underneath it.
+
+The compact-origin baseline uses published `v1.5.8`, enables compact mode and
+wakes its actual installed controller through the inherited listener before
+deployment. Acceptance requires that controller's PID to survive host
+preparation until the independent cutover. This supplements the historical
+ordinary-startup baselines and catches self-update listener disruptions.
 
 ## Layout and authority
 

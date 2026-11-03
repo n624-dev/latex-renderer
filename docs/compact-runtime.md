@@ -109,6 +109,13 @@ This safety fallback can retain an idle Node process until a socket-capable
 Updater is selected again. A stopped/failed manager is not reported as healthy
 merely because its slot exists.
 
+During a self-update, host preparation preserves an already-active compatible
+Updater listener while the old controller persists its operation. The later
+independent cutover owns its restart. Stopping and reopening this socket while
+its controller is still active is rejected by systemd. The signed acceptance
+matrix includes an upgrade originating from a published compact installation
+with both the real controller and its inherited listener active.
+
 ## Static pages and passive health
 
 Standalone Nginx uses the same public-static generator as the existing
