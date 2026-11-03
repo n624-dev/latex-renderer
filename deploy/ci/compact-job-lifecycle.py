@@ -161,6 +161,7 @@ def verify():
         ticket = batch[0]
         pdf = next(item for item in completed[0]["artifacts"] if item["type"] == "pdf")
         assert any(item["type"] == "svg" for item in completed[0]["artifacts"])
+        assert not any(item["relativePath"] == "previews/page-2.png" for item in completed[0]["previews"])
         fixture.idle()
         started = time.monotonic()
         for _ in range(6):

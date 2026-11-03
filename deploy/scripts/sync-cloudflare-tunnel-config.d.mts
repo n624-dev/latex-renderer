@@ -7,8 +7,8 @@ export interface TunnelIngressRule {
 }
 
 export function hostnameFromOrigin(origin: string): string;
-export function desiredLatexRoutes(hostname: string): TunnelIngressRule[];
+export function desiredLatexRoutes(hostname: string, options?: { passiveHealth?: boolean }): TunnelIngressRule[];
 export function reconcileLatexRoutes(
   ingress: TunnelIngressRule[],
-  options: { hostname: string; legacyHostnames?: string[] },
+  options: { hostname: string; legacyHostnames?: string[]; passiveHealth?: boolean },
 ): TunnelIngressRule[];

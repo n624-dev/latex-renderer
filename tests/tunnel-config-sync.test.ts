@@ -46,4 +46,18 @@ describe("remote Cloudflare Tunnel reconciliation", () => {
       reconcileLatexRoutes([{ service: "http_status:404" }], options),
     ).toThrow(`no ${hostname} route`);
   });
+
+  it("routes only bounded public health paths to the passive listener and supports rollback", () => {
+    const routes = desiredLatexRoutes(hostname, { passiveHealth: true });
+    expect(routes.slice(1)).toEqual(desiredLatexRoutes(hostname));
+    expect(routes[0]?.service).toBe("unix:/run/latex-renderer-status/status.sock");
+    const path = new RegExp(routes[0]?.path ?? "^$");
+    for (const target of ["/health", "/health/rendering", "/health/status", "/api/v1/health"])
+      expect(path.test(target)).toBe(true);
+    for (const target of ["/health/secrets", "/api/v1/jobs", "/sources", "/mcp", "/admin", "/"])
+      expect(path.test(target)).toBe(false);
+    const ingress = [...routes, { service: "http_status:404" }];
+    expect(reconcileLatexRoutes(ingress, { ...options, passiveHealth: true })).toEqual(ingress);
+    expect(reconcileLatexRoutes(ingress, options)).toEqual([...desiredLatexRoutes(hostname), { service: "http_status:404" }]);
+  });
 });

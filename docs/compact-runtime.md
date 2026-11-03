@@ -116,7 +116,9 @@ starts application services or Docker. SQLite is opened read-only; creating its
 WAL/SHM bookkeeping after the last writer closes uses the existing API identity.
 The response contains no users, credentials, Jobs or filesystem paths.
 
-Standalone ingress routes these paths to the local Unix socket. For Cloudflare,
+Standalone ingress routes these paths to the local Unix socket. The managed
+Cloudflare route synchronizer selects it only when that listener is running;
+compact routing refuses to apply without it. For locally managed Cloudflare,
 add the optional specific ingress rule in
 [`config.example.yml`](../deploy/cloudflared/config.example.yml) before the Web
 fallback, after enabling the status socket. Keep existing static Worker routes.
