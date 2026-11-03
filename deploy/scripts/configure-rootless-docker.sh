@@ -30,7 +30,13 @@ if [ ! -f "$worker_home/.config/systemd/user/docker.service" ]; then
   run_worker dockerd-rootless-setuptool.sh install --force
 fi
 source_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
-runtime_mode=$(/usr/local/bin/node "$source_root/deploy/scripts/runtime-mode.mjs")
+if [ -f /etc/latex-renderer/renderer.env ]; then
+  runtime_mode=$(/usr/local/bin/node "$source_root/deploy/scripts/runtime-mode.mjs")
+else
+  # Account/engine preparation precedes profile creation on a fresh host.
+  # Compact can be selected only after the verified profile is installed.
+  runtime_mode=classic
+fi
 if [ "$runtime_mode" = compact ]; then
   # Preparation still validates the engine. Idle collection later stops this
   # dedicated user's service after every consumer and container has drained.
