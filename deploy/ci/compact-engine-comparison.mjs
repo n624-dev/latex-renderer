@@ -103,6 +103,7 @@ try {
     "--yes",
     "--no-install-recommends",
     "podman",
+    "catatonit",
     "uidmap",
     "dbus-user-session",
     "fuse-overlayfs",
@@ -154,7 +155,7 @@ try {
       "/usr/bin/podman",
       "--remote=false",
       ...args,
-    ]);
+    ], { cwd: `/home/${user}` });
   assert.equal(
     podman(
       "info",
@@ -188,7 +189,7 @@ try {
   const load = spawn(
     "/usr/sbin/runuser",
     [...prefix, "/usr/bin/podman", "--remote=false", "load"],
-    { stdio: ["pipe", "ignore", "ignore"] },
+    { stdio: ["pipe", "ignore", "ignore"], cwd: `/home/${user}` },
   );
   const saved = new Promise((resolve, reject) => {
     save.once("error", reject);
@@ -221,7 +222,7 @@ try {
   const samples = [];
   for (let n = 0; n < 2; n++) {
     const started = performance.now();
-    const text = run("/usr/sbin/runuser", [...prefix, "/bin/sh", podmanProbe, image]);
+    const text = run("/usr/sbin/runuser", [...prefix, "/bin/sh", podmanProbe, image], { cwd: `/home/${user}` });
     const containerPeakBytes = Number(
       /container_memory_peak_bytes=(\d+)/.exec(text)?.[1],
     );
