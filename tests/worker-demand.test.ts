@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import { createServer } from "node:net";
+import { setTimeout } from "node:timers";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -167,7 +168,10 @@ it.skipIf(process.platform === "win32")(
     const f = fixture(),
       path = join(f.root, "wake.sock"),
       server = createServer((socket) =>
-        socket.once("data", () => socket.end("ok")),
+        socket.once("data", () => {
+          socket.write("o");
+          setTimeout(() => socket.end("k"), 10);
+        }),
       );
     await new Promise<void>((resolve) => server.listen(path, resolve));
     try {

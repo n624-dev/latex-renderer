@@ -139,6 +139,29 @@ python3 -B tests/passive_health_test.py
 python3 -B experiments/compact-runtime/test_probe.py
 ```
 
+The signed `server-update-validation` workflow also exercises the installed
+services on disposable hosts: cold Japanese PDF/PNG, a three-Job burst, SVG
+retry with the original PDF retained, lazy page-two preview, cancellation and
+Worker crash/lease cleanup. Its synthetic SVG-stage fault is scoped to its own
+completed test Job. The engine collector must leave an independent active
+BuildKit build alone. These checks use the existing Runtime without an image
+pull or a persistent cache.
+
+Enable the workflow's `measure_idle` input for the longer comparison. It retains
+the real 900-second deadlines and observes each of always-running, HTTP/Worker
+activation and compact for a full hour. It records 15-minute/one-hour process
+snapshots, PSS/RSS, service cgroup memory, maintenance invocations and dedicated
+user auxiliary processes, then measures first API, management, cold/warm
+PDF/PNG, SVG retry and lazy preview. Missing process samples are reported as
+unmeasured. Run on a disposable GitHub-hosted runner only; allow roughly four
+hours including provisioning and functional checks. Sanitized JSON artifacts
+expire after one day. A failed or incomplete report is not measurement success.
+
+The separate engine comparison imports the same immutable image into a new
+disposable Podman account and checks the same sandbox/PDF probe twice per
+engine. Unsupported or failed experimental isolation excludes Podman; it does
+not enable a production backend. Account/container cleanup failure fails CI.
+
 Real systemd/Docker/Podman tests belong on disposable hosts. Preserve sandbox
 checks, signed release verification, existing PDF/PNG/SVG validation and native
 architecture tests. Compare identical images and input across ordinary,

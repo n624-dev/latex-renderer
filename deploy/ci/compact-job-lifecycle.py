@@ -119,7 +119,7 @@ class Fixture:
         raise RuntimeError("CI Job lifecycle did not settle within its bounded wait")
 
     def idle(self):
-        if "WORKER_IDLE_ENABLED=false" in Path("/etc/latex-renderer/renderer.env").read_text().splitlines():
+        if os.environ.get("CI_COMPACT_JOB_WAIT_IDLE") == "false" or "WORKER_IDLE_ENABLED=false" in Path("/etc/latex-renderer/renderer.env").read_text().splitlines():
             return
         deadline = time.monotonic() + 130
         while time.monotonic() < deadline:
@@ -148,7 +148,7 @@ class Fixture:
 
 def verify():
     guard()
-    result = {}
+    result = {"idleBoundaryVerified": os.environ.get("CI_COMPACT_JOB_WAIT_IDLE") != "false"}
     fixture = Fixture()
     try:
         fixture.start()
@@ -169,7 +169,7 @@ def verify():
                 break
             time.sleep(1)
         assert status == 200 and png.startswith(b"\x89PNG\r\n\x1a\n")
-        result["lazyPageTwoAfterIdleSeconds"] = time.monotonic() - started
+        result["lazyPageTwoSeconds"] = time.monotonic() - started
         fixture.idle()
         # Explicit synthetic SVG-stage failure, scoped to this completed CI Job.
         # Retry still uses the public authenticated path and the real renderer.
@@ -186,7 +186,7 @@ with sqlite3.connect('/var/lib/latex-renderer/renderer.sqlite3') as db:
         after = fixture.wait(retried)
         assert after["status"] == "succeeded"
         assert next(item["sha256"] for item in after["artifacts"] if item["type"] == "pdf") == pdf["sha256"]
-        result["svgRetryAfterIdleSeconds"] = time.monotonic() - started
+        result["svgRetrySeconds"] = time.monotonic() - started
         slow = fixture.upload(slow=True)
         canceled = fixture.queue(slow)
         fixture.wait(canceled, "running")

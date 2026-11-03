@@ -331,6 +331,7 @@ export async function verifyCompactApplicationIdle() {
       ["-B", "/opt/latex-renderer/current/deploy/ci/compact-job-lifecycle.py"],
       15 * 60_000,
     ));
+    assert.equal(jobLifecycle.idleBoundaryVerified, true);
     const probeStart = performance.now();
     const probe = workerEngineCommand("/usr/bin/env", [
       "COMPACT_PROBE_ENGINE=docker",

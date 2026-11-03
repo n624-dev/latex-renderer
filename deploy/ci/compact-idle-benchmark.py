@@ -294,7 +294,9 @@ try:
         scenario["managementAfterQuiet"] = warm()
         scenario["firstPdfPngAfterQuiet"] = smoke()
         scenario["warmPdfPng"] = smoke()
-        scenario["jobLifecycle"] = json.loads(command(["/usr/bin/python3", "-B", str(current / "deploy/ci/compact-job-lifecycle.py")], 20 * 60))
+        # The full 900-second deadline was measured above. The fast functional
+        # acceptance separately verifies each idle boundary with a 30s setting.
+        scenario["jobLifecycle"] = json.loads(command(["/usr/bin/env", "CI_COMPACT_JOB_WAIT_IDLE=false", "/usr/bin/python3", "-B", str(current / "deploy/ci/compact-job-lifecycle.py")], 20 * 60))
         scenario["afterJobLifecycle"] = snapshot()
         save()
         print(f"Idle measurement: {mode}, one hour and cold/warm rendering complete", flush=True)

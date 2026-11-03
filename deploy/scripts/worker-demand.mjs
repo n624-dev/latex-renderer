@@ -45,7 +45,8 @@ export function notifyWorker({
 } = {}) {
   return new Promise((resolve) => {
     const socket = createConnection({ path });
-    let settled = false;
+    let settled = false,
+      acknowledgement = "";
     const finish = (success) => {
       if (settled) return;
       settled = true;
@@ -55,7 +56,11 @@ export function notifyWorker({
     socket.setTimeout(timeoutMs, () => finish(false));
     socket.on("error", () => finish(false));
     socket.on("connect", () => socket.write("w"));
-    socket.on("data", (data) => finish(data.toString() === "ok"));
+    socket.on("data", (data) => {
+      acknowledgement += data.toString();
+      if (acknowledgement === "ok") finish(true);
+      else if (!"ok".startsWith(acknowledgement)) finish(false);
+    });
     socket.on("end", () => finish(false));
   });
 }
