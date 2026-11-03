@@ -313,7 +313,9 @@ export function prepareHttpActivation(
   if (compact) validateCompact();
   const passive = existsSync(join(source, "deploy/scripts/passive-health.py"));
   if (properties("latex-renderer-status.socket", run).LoadState === "loaded") {
-    run("stop", "latex-renderer-status.socket");
+    // The passive responder reads current state per request. Settings cutover
+    // does not restart it, so retain its listener whenever the target supports it.
+    if (!passive) run("stop", "latex-renderer-status.socket");
     run(passive ? "enable" : "disable", "latex-renderer-status.socket");
   }
   if (

@@ -208,6 +208,38 @@ it("prepares matching service definitions and releases sockets for legacy rollba
   }
 });
 
+it("keeps supported passive health available through settings preparation and closes it for legacy targets", () => {
+  const directory = mkdtempSync(join(tmpdir(), "passive-preparation-"));
+  try {
+    const current = join(directory, "current"),
+      legacy = join(directory, "legacy"),
+      units = join(directory, "units");
+    for (const path of [current, legacy])
+      mkdirSync(join(path, "deploy/scripts"), { recursive: true });
+    mkdirSync(units);
+    writeFileSync(
+      join(current, "deploy/scripts/passive-health.py"),
+      "# supported\n",
+    );
+    let listening = true;
+    const run = (...args: string[]) => {
+      if (args[0] === "show")
+        return args.at(-1) === "latex-renderer-status.socket"
+          ? `LoadState=loaded\nActiveState=${listening ? "active" : "inactive"}\n`
+          : "LoadState=not-found\n";
+      if (args[0] === "stop" && args.at(-1) === "latex-renderer-status.socket")
+        listening = false;
+      return "";
+    };
+    prepareHttpActivation(current, { run, unitRoot: units, values: {} });
+    expect(listening).toBe(true);
+    prepareHttpActivation(legacy, { run, unitRoot: units, values: {} });
+    expect(listening).toBe(false);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 it.each([
   ["image-manager", "listening"],
   ["image-manager", "running"],

@@ -8,6 +8,7 @@
 - Keep the live inherited controller reachable when an older published helper has already stopped socket supervision; defer its supervised listener restart to the verified independent cutover.
 - Quiesce the Updater listener explicitly after operation commit, avoiding a systemd conflict that cancels activation when final cleanup resumes supervision.
 - Preserve compatible Image Manager listeners during settings preparation so compact MCP/Internal API dependencies can restart without reopening a live Manager's socket.
+- Retain the supported passive-health listener during settings preparation and check its response immediately after cutover.
 - Add signed update coverage originating from a published compact-capable installation with its actual live controller, alongside the existing historical and native ARM64 baselines.
 - Bound retries for the specific transient mutation-lock conflict in disposable CI reconciliation; retain immediate failures for every other error.
 

@@ -646,6 +646,24 @@ try {
       throw new Error(
         "Settings cutover left the Standalone Gateway unavailable",
       );
+    const passive = JSON.parse(
+      run(
+        "/usr/bin/curl",
+        [
+          "--fail",
+          "--silent",
+          "--show-error",
+          "--max-time",
+          "10",
+          "--unix-socket",
+          "/run/latex-renderer-status/status.sock",
+          "http://localhost/health/status",
+        ],
+        { encoding: "utf8", stdio: "pipe" },
+      ),
+    );
+    if (passive.api !== true || passive.rendering !== true)
+      throw new Error("Settings cutover left passive health unavailable");
   }
   if (
     JSON.stringify(

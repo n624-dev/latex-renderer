@@ -127,6 +127,9 @@ edge, so resuming supervision during final cleanup cannot cancel activation.
 Settings preparation also preserves an active compatible Image Manager listener:
 compact MCP/Internal API consumers require that socket, and cannot reopen it
 while its existing Manager still owns the inherited descriptor.
+The supported passive-health listener also stays available through settings
+preparation; its responder reads current state for each request. Legacy targets
+without that responder still close and disable the listener.
 
 ## Static pages and passive health
 
