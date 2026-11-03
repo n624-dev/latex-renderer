@@ -118,6 +118,8 @@ async function verifyBuildProtection(image, environment) {
   ]);
   const uid = Number(run("/usr/bin/id", ["-u", "latex-render-worker"]).trim());
   const tag = `latex-compact-build-fixture:${process.pid}`;
+  const baseTag = `latex-compact-build-base:${process.pid}`;
+  workerEngineCommand("/usr/bin/docker", ["image", "tag", image, baseTag]);
   const child = spawn(
     "/usr/sbin/runuser",
     [
@@ -149,7 +151,7 @@ async function verifyBuildProtection(image, environment) {
   });
   void completed.catch(() => {});
   child.stdin.on("error", () => {});
-  child.stdin.end(`FROM ${image}\nRUN sleep 45\n`);
+  child.stdin.end(`FROM ${baseTag}\nRUN sleep 45\n`);
   const running = () =>
     workerEngineCommand("/usr/bin/docker", [
       "buildx",
@@ -207,17 +209,25 @@ async function verifyBuildProtection(image, environment) {
     );
     return { protected: true, interruptedBuildSettled: true };
   } finally {
-    await startLock?.release();
     kill();
     await completed.catch(() => {});
-    const retained = workerEngineCommand("/usr/bin/docker", [
-      "image",
-      "ls",
-      "--filter",
-      `reference=${tag}`,
-      "--quiet",
-    ]).trim();
-    if (retained) workerEngineCommand("/usr/bin/docker", ["image", "rm", tag]);
+    // Tag removal is an engine operation too. Exclude idle collection during
+    // cleanup instead of racing the real timer after the build has settled.
+    if (!startLock) await until(async () => {
+      try { startLock = await acquireEngineLock(); return true; }
+      catch (error) { if (error.code === "ENGINE_BUSY") return false; throw error; }
+    }, "Engine fixture cleanup remained busy");
+    try {
+      workerEngineCommand("/usr/bin/systemctl", ["--user", "start", "docker.service"]);
+      for (const reference of [tag, baseTag]) {
+        const retained = workerEngineCommand("/usr/bin/docker", [
+          "image", "ls", "--filter", `reference=${reference}`, "--quiet",
+        ]).trim();
+        if (retained) workerEngineCommand("/usr/bin/docker", ["image", "rm", reference]);
+      }
+    } finally {
+      await startLock?.release();
+    }
   }
 }
 
