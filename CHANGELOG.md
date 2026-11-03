@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 1.5.8 - 2026-11-04
+
+- Promote validated 1.5.8-rc.4 to Stable. Executable behavior, dependencies and configuration defaults match the candidate; update version metadata and installation guidance.
+- Add opt-in HTTP and Worker socket activation, durable post-commit wake notifications and queue reconciliation, plus compact management-service and dedicated Docker lifecycles. Preserve ordinary startup, verified updates and recovery.
+- Reuse public-static serving and add bounded passive health checks. Keep authenticated content behind its APIs and protect active rendering, builds, leases and cleanup.
+- Correct short-idle image cleanup and owned validation-job SVG retries, with native AMD64/ARM64 update and recovery coverage. See [compact runtime operations](docs/compact-runtime.md) for configuration and rollback.
+
+## 1.5.8-rc.4 - 2026-11-03
+
+- Complete Worker activation and the opt-in compact runtime, including independent Updater transport compatibility and conservative on-demand engine shutdown.
+- Add isolated Docker/Podman sandbox probes and real 900-second, one-hour-per-mode comparisons. Docker remains the supported production backend; Podman is experimental.
+
 ## 1.5.8-rc.3 - 2026-11-03
 
 - Install HTTP activation sockets from the verified application release even when the running Updater uses older host preparation tools. Add signed update validation using the actual installed 1.5.7 Updater.
