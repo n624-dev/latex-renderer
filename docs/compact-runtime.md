@@ -121,6 +121,9 @@ its PID survives preparation. Socket supervision is restored by the independent
 cutover after operation commit; this temporary handoff is not reported as a
 healthy idle listener. The signed test also requests the controller after host
 preparation and verifies its final activation.
+The independent activation gate stops supervision before the controller, under
+the shared lock after operation commit. Its systemd unit has no socket conflict
+edge, so resuming supervision during final cleanup cannot cancel activation.
 
 ## Static pages and passive health
 

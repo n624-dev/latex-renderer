@@ -1,10 +1,11 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   activateAfterOperation,
   controllerIdle,
+  stopUpdaterForActivation,
 } from "../deploy/scripts/updater-activation.mjs";
 import { acquireMutationLockForPath } from "../deploy/scripts/mutation-lock.mjs";
 
@@ -37,6 +38,41 @@ function fixture() {
     timeoutMs: 60_000,
   };
 }
+it("stops socket supervision before the controller only after the operation commits", async () => {
+  const f = fixture(),
+    calls: string[][] = [];
+  f.readController.mockImplementation(async () => ({
+    activeOperationId: f.now() < 2000 ? "updop_running" : null,
+    lastError: null,
+  }));
+  await activateAfterOperation({
+    ...f,
+    stopController: () =>
+      stopUpdaterForActivation(async (...args) => {
+        expect(f.now()).toBeGreaterThanOrEqual(2000);
+        calls.push(args);
+      }),
+  });
+  expect(calls).toEqual([
+    ["stop", "latex-renderer-update-manager.socket"],
+    ["stop", "latex-renderer-update-manager.service"],
+  ]);
+  const unit = await readFile(
+    "deploy/systemd/latex-renderer-updater-activate.service",
+    "utf8",
+  );
+  expect(unit).not.toMatch(
+    /^Conflicts=.*latex-renderer-update-manager\.socket/m,
+  );
+});
+
+it("does not stop the controller when listener quiescence fails", async () => {
+  const run = vi.fn().mockRejectedValue(new Error("listener busy"));
+  await expect(stopUpdaterForActivation(run)).rejects.toThrow("listener busy");
+  expect(run.mock.calls).toEqual([
+    ["stop", "latex-renderer-update-manager.socket"],
+  ]);
+});
 it("waits beyond the old 10-second timer after helper unlock, without stopping the controller", async () => {
   const f = fixture();
   f.readController.mockImplementation(() =>
