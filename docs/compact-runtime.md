@@ -115,6 +115,12 @@ independent cutover owns its restart. Stopping and reopening this socket while
 its controller is still active is rejected by systemd. The signed acceptance
 matrix includes an upgrade originating from a published compact installation
 with both the real controller and its inherited listener active.
+For a published helper that has already stopped systemd's socket, the deployment
+keeps the same live controller serving its inherited descriptor and checks that
+its PID survives preparation. Socket supervision is restored by the independent
+cutover after operation commit; this temporary handoff is not reported as a
+healthy idle listener. The signed test also requests the controller after host
+preparation and verifies its final activation.
 
 ## Static pages and passive health
 

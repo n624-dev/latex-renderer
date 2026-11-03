@@ -49,7 +49,7 @@ function properties(unit, run) {
   const text = run(
     "show",
     "--no-pager",
-    "--property=LoadState,ActiveState,SubState,Result,UnitFileState",
+    "--property=LoadState,ActiveState,SubState,Result,UnitFileState,MainPID",
     unit,
   );
   return Object.fromEntries(
@@ -348,7 +348,7 @@ export function prepareHttpActivation(
       compact &&
       unit === "latex-renderer-update-manager.service" &&
       properties(socket, run).ActiveState === "active" &&
-      properties(socket, run).SubState === "listening" &&
+      ["listening", "running"].includes(properties(socket, run).SubState) &&
       properties(unit, run).ActiveState === "active";
     if (!preserveUpdater) run("stop", socket);
     if (activationEnabledFor(unit, { source, values })) run("disable", unit);
@@ -420,6 +420,62 @@ export function prepareHttpActivation(
   }
   run("daemon-reload");
   return { enabled };
+}
+
+// Published compact helpers can close the systemd listener before invoking
+// this release. Its inherited FD and pathname remain served by the controller.
+// Reopening the systemd socket is impossible until that controller stops. Keep
+// its PID alive until it commits the operation; independent activation restores
+// socket supervision and health-checks the selected slot after that boundary.
+export function deploymentUpdater(
+  action,
+  expectedPid = "",
+  {
+    run = systemctl,
+    source = root,
+    values,
+    parentMutationLock = process.env.LATEX_RENDERER_PARENT_MUTATION_LOCK,
+  } = {},
+) {
+  const unit = "latex-renderer-update-manager.service";
+  if (
+    !["start", "ready"].includes(action) ||
+    (expectedPid !== "" && !/^[1-9]\d*$/.test(expectedPid))
+  )
+    throw new Error("Invalid deployment Updater handoff");
+  const compact = activationEnabledFor(unit, { source, values });
+  const service = properties(unit, run);
+  const listener = properties(httpSocketUnit(unit), run);
+  const live =
+    service.LoadState === "loaded" &&
+    service.ActiveState === "active" &&
+    service.Result === "success" &&
+    /^[1-9]\d*$/.test(service.MainPID ?? "");
+  if (expectedPid !== "") {
+    if (
+      action !== "ready" ||
+      parentMutationLock !== "application-update" ||
+      !compact ||
+      !live ||
+      !["active", "inactive"].includes(listener.ActiveState) ||
+      service.MainPID !== expectedPid
+    )
+      throw new Error("Live legacy Updater changed before operation commit");
+    return expectedPid;
+  }
+  if (action === "start") {
+    if (
+      parentMutationLock === "application-update" &&
+      compact &&
+      live &&
+      listener.LoadState === "loaded" &&
+      listener.ActiveState === "inactive"
+    )
+      return service.MainPID;
+    controlService("start", unit, { run, enabled: compact });
+  } else if (!httpServiceStatus(unit, { run }).operational)
+    throw new Error("Deployment Updater is not ready");
+  return "";
 }
 
 // Environment-only idle settings are intentionally separate from the wizard's
@@ -609,6 +665,10 @@ async function main() {
   }
   if (action === "prepare" && args.length === 1) {
     console.log(JSON.stringify(prepareHttpActivation(args[0])));
+    return;
+  }
+  if (action === "deployment-updater" && args.length >= 1 && args.length <= 2) {
+    console.log(deploymentUpdater(args[0], args[1] ?? ""));
     return;
   }
   if (

@@ -284,6 +284,7 @@ try {
   }
   const compactOrigin = process.env.CI_UPDATE_BASELINE === "compact-origin";
   let compactControllerPid;
+  let compactControllerReady;
   let originalIdleLines = [];
   if (compactOrigin) {
     const path = "/etc/latex-renderer/renderer.env";
@@ -327,28 +328,30 @@ try {
       await readFile("/etc/latex-renderer/secrets/update-manager-token", "utf8")
     ).trim();
     const { request } = await import("node:http");
-    await new Promise((resolve, reject) => {
-      const req = request(
-        {
-          socketPath: "/run/latex-renderer/update-manager.sock",
-          path: "/v1/state",
-          headers: { Authorization: `Bearer ${token}` },
-        },
-        (response) => {
-          response.resume();
-          response.once("end", () =>
-            response.statusCode === 200
-              ? resolve()
-              : reject(new Error("Compact baseline controller is not ready")),
-          );
-        },
-      );
-      req.once("error", reject);
-      req.setTimeout(30000, () =>
-        req.destroy(new Error("Compact baseline controller timed out")),
-      );
-      req.end();
-    });
+    compactControllerReady = () =>
+      new Promise((resolve, reject) => {
+        const req = request(
+          {
+            socketPath: "/run/latex-renderer/update-manager.sock",
+            path: "/v1/state",
+            headers: { Authorization: `Bearer ${token}` },
+          },
+          (response) => {
+            response.resume();
+            response.once("end", () =>
+              response.statusCode === 200
+                ? resolve()
+                : reject(new Error("Compact baseline controller is not ready")),
+            );
+          },
+        );
+        req.once("error", reject);
+        req.setTimeout(30000, () =>
+          req.destroy(new Error("Compact baseline controller timed out")),
+        );
+        req.end();
+      });
+    await compactControllerReady();
     for (const unit of [
       "latex-renderer-update-manager.service",
       "latex-renderer-update-manager.socket",
@@ -395,6 +398,7 @@ try {
     ).trim() !== compactControllerPid
   )
     throw new Error("Host preparation stopped the live self-update controller");
+  if (compactOrigin) await compactControllerReady();
   // Imports and resolved source paths cannot expose a silent CLI no-op.
   // Exercise the actual current alias used by configure-host-access and both
   // checked hosting modes, without changing this standalone host's config.

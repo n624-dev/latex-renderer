@@ -5,6 +5,7 @@
 ## 1.5.9-rc.1 - 2026-11-04
 
 - Preserve the active independent Updater listener during compact self-update preparation. Let the verified independent cutover restart the controller after operation persistence (#288).
+- Keep the live inherited controller reachable when an older published helper has already stopped socket supervision; defer its supervised listener restart to the verified independent cutover.
 - Add signed update coverage originating from a published compact-capable installation with its actual live controller, alongside the existing historical and native ARM64 baselines.
 - Bound retries for the specific transient mutation-lock conflict in disposable CI reconciliation; retain immediate failures for every other error.
 
