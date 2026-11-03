@@ -41,16 +41,19 @@ function fixture() {
 it("stops socket supervision before the controller only after the operation commits", async () => {
   const f = fixture(),
     calls: string[][] = [];
-  f.readController.mockImplementation(async () => ({
-    activeOperationId: f.now() < 2000 ? "updop_running" : null,
-    lastError: null,
-  }));
+  f.readController.mockImplementation(() =>
+    Promise.resolve({
+      activeOperationId: f.now() < 2000 ? "updop_running" : null,
+      lastError: null,
+    }),
+  );
   await activateAfterOperation({
     ...f,
     stopController: () =>
-      stopUpdaterForActivation(async (...args) => {
+      stopUpdaterForActivation((...args) => {
         expect(f.now()).toBeGreaterThanOrEqual(2000);
         calls.push(args);
+        return Promise.resolve();
       }),
   });
   expect(calls).toEqual([
