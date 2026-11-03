@@ -5,9 +5,19 @@ import { runInNewContext } from "node:vm";
 import {
   eligibleManagedImage,
   imageCleanupPolicy,
+  imageCleanupProbeInterval,
 } from "../deploy/scripts/image-cleanup-policy.mjs";
 
 describe("managed image cleanup", () => {
+  it("checks due cleanup before a short idle exit and preserves the ordinary cadence", () => {
+    expect(imageCleanupProbeInterval({ enabled: false, timeoutMs: 30000 })).toBe(300000);
+    expect(imageCleanupProbeInterval({ enabled: true, timeoutMs: 900000 })).toBe(300000);
+    for (const timeoutMs of [30000, 60000, 120000]) {
+      const interval = imageCleanupProbeInterval({ enabled: true, timeoutMs });
+      expect(interval).toBeGreaterThanOrEqual(1000);
+      expect(interval).toBeLessThan(timeoutMs);
+    }
+  });
   it("isolates non-root Docker client metadata from root-run builds", () => {
     const source = readFileSync(
       new URL("../deploy/scripts/image-manager.mjs", import.meta.url),

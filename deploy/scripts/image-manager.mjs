@@ -29,6 +29,7 @@ import { acquireMutationLock } from "./mutation-lock.mjs";
 import {
   eligibleManagedImage,
   imageCleanupPolicy,
+  imageCleanupProbeInterval,
   retainedPreviewRuntimeIds,
 } from "./image-cleanup-policy.mjs";
 import {
@@ -1890,6 +1891,6 @@ if (cleanupPolicy.intervalHours > 0) {
         }),
       );
     });
-  }, 5 * 60_000);
+  }, imageCleanupProbeInterval(idleConfiguration));
   timer.unref();
 }

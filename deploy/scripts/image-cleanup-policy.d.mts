@@ -1,4 +1,5 @@
 export function retainedPreviewRuntimeIds(databasePath: string): Set<string>;
+export function imageCleanupProbeInterval(idle: { enabled: boolean; timeoutMs: number }): number;
 export function imageCleanupPolicy(
   environment: Record<string, string | undefined>,
 ): {

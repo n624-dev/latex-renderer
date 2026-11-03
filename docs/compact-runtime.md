@@ -85,6 +85,10 @@ Compact Image Manager startup omits automatic Runtime restoration for a read;
 normal application deployment explicitly restores and verifies the Runtime.
 The watchdog reads durable operation state before waking a manager. Corrupt
 state is an error, never proof that there is no operation.
+The manager checks due image cleanup before a shortened idle deadline, using
+the existing retention policy and image/PDF protections. Unchanged default
+timeouts retain the ordinary five-minute probe cadence; an entirely sleeping
+manager is not woken just to probe image state.
 
 ## Independent Updater compatibility
 

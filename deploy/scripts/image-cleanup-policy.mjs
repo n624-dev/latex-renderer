@@ -80,6 +80,14 @@ export function imageCleanupPolicy(environment) {
   };
 }
 
+// A short-lived manager must check due housekeeping before its idle deadline.
+// Keep the original five-minute probe cadence for ordinary/15-minute use.
+export function imageCleanupProbeInterval(idle) {
+  return idle.enabled
+    ? Math.min(5 * 60_000, Math.max(1000, Math.floor(idle.timeoutMs / 2)))
+    : 5 * 60_000;
+}
+
 export function eligibleManagedImage(
   info,
   protectedIds,
