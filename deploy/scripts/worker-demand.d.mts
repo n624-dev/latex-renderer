@@ -16,4 +16,4 @@ export function notifyWorkerAfterCommit(
 export function workerWakeListener(
   environment?: NodeJS.ProcessEnv,
   options?: { path?: string },
-): Promise<{ close(): Promise<void> } | undefined>;
+): Promise<{ drain(): Promise<void>; close(): Promise<void> } | undefined>;

@@ -194,7 +194,7 @@ it.skipIf(process.platform === "win32")(
 );
 
 it.skipIf(process.platform === "win32")(
-  "retains Unix notifications queued across process exit and rejects the wrong descriptor",
+  "drains queued maintenance hints before immediate exit and rejects the wrong descriptor",
   () => {
     execFileSync(
       "python3",
@@ -207,11 +207,25 @@ with tempfile.TemporaryDirectory(prefix='worker-wake-') as root:
  script="""import {workerWakeListener} from './deploy/scripts/worker-demand.mjs';
 process.env.LISTEN_PID=String(process.pid);process.env.LISTEN_FDS='1';process.env.LISTEN_FDNAMES='worker';
 const listener=await workerWakeListener(process.env,{path:process.argv[1]});
-await new Promise(r=>setTimeout(r,150));await listener.close();"""
+if(listener.drain)await listener.drain();await listener.close();"""
  def start(path):return subprocess.Popen([os.environ['TEST_NODE'],'--input-type=module','-e',script,path],pass_fds=(3,),stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
  for i in range(3):
-  c=socket.socket(socket.AF_UNIX);c.settimeout(5);c.connect(path);c.sendall(b'w')
-  p=start(path);assert c.recv(2)==b'ok';c.close();p.wait(timeout=5);assert p.returncode==0,p.stderr.read()
+  clients=[]
+  for j in range(16):
+   c=socket.socket(socket.AF_UNIX);c.settimeout(3);c.connect(path);c.sendall(b'w');clients.append(c)
+  for j in range(8):
+   c=socket.socket(socket.AF_UNIX);c.connect(path);c.sendall(b'w');c.close()
+  p=start(path)
+  try:
+   for j,c in enumerate(clients):
+    assert c.recv(2)==b'ok'
+    if i!=0 or j!=0:c.close()
+   p.wait(timeout=5);assert p.returncode==0,p.stderr.read()
+   import select
+   assert not select.select([s],[],[],0)[0], 'Queued hints would reactivate an empty Worker'
+  finally:
+   for c in clients:c.close()
+   if p.poll() is None:p.kill();p.wait(timeout=5)
  p=start(path+'-wrong');p.wait(timeout=5);assert p.returncode!=0
  s.close()
 `,

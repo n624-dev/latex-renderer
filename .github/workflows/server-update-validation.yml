@@ -161,6 +161,14 @@ jobs:
           sudo env RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" GITHUB_ACTIONS="$GITHUB_ACTIONS" \
             GITHUB_RUN_ID="$GITHUB_RUN_ID" SOURCE_COMMIT="$SOURCE_COMMIT" RUNNER_TEMP="$RUNNER_TEMP" \
             /usr/local/bin/node deploy/ci/compact-engine-comparison.mjs
+      - name: Keep isolated engine evidence before the long observation
+        if: always() && matrix.baseline == 'installed'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: compact-engine-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/compact-engine-comparison.json
+          retention-days: 1
+          if-no-files-found: ignore
       - name: Compare real 15-minute and one-hour idle intervals
         if: matrix.baseline == 'installed' && inputs.measure_idle
         env:

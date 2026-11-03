@@ -266,6 +266,11 @@ try:
         captured15 = False
         while True:
             value = snapshot()
+            failed = [unit for unit, row in value["roles"].items()
+                      if unit in roles and row["state"] == "failed"]
+            if failed:
+                scenario["failureSnapshot"] = value
+                raise RuntimeError("Idle application service failed: " + ", ".join(failed))
             samples += 1
             node_zero += value["applicationProcesses"] == 0 and value["dedicatedEngine"] == "inactive"
             minimum = value["applicationPssBytes"] if minimum is None else min(minimum, value["applicationPssBytes"])

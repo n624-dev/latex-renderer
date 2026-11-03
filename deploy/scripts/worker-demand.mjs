@@ -2,6 +2,9 @@ import { createConnection, createServer } from "node:net";
 import { fstatSync } from "node:fs";
 import { assertUnixListener } from "./activation-socket.mjs";
 import { boundedIntegerEnvironment } from "./environment.mjs";
+import { setImmediate as nextIoTurn } from "node:timers/promises";
+import { performance } from "node:perf_hooks";
+import { setTimeout, clearTimeout } from "node:timers";
 
 export const WORKER_WAKE_PATH = "/run/latex-renderer-worker/wake.sock";
 
@@ -120,8 +123,18 @@ export async function workerWakeListener(
     ])
       delete environment[key];
   }
+  const connections = new Set();
+  let accepted = 0;
   const server = createServer((socket) => {
-    socket.setTimeout(1000, () => socket.destroy());
+    accepted += 1;
+    connections.add(socket);
+    // A hint has a bounded total lifetime, including a peer that keeps its
+    // readable half open after receiving our acknowledgement.
+    const deadline = setTimeout(() => socket.destroy(), 1000);
+    socket.once("close", () => {
+      clearTimeout(deadline);
+      connections.delete(socket);
+    });
     socket.once("error", () => socket.destroy());
     socket.once("data", (data) =>
       data.toString() === "w" ? socket.end("ok") : socket.destroy(),
@@ -135,6 +148,26 @@ export async function workerWakeListener(
     });
   });
   return {
+    async drain() {
+      // Maintenance can finish entirely in microtasks before the first poll
+      // accepts systemd's queued hint. Give pending accepts and their replies
+      // I/O turns before closing; otherwise the same unread hint repeatedly
+      // reactivates an empty Worker until systemd's start limit is exhausted.
+      const deadline = performance.now() + 2000;
+      do {
+        const previous = accepted;
+        await nextIoTurn();
+        await Promise.all(
+          [...connections].map((socket) =>
+            socket.destroyed
+              ? Promise.resolve()
+              : new Promise((resolve) => socket.once("close", resolve)),
+          ),
+        );
+        await nextIoTurn();
+        if (accepted === previous && connections.size === 0) return;
+      } while (performance.now() < deadline);
+    },
     close() {
       // Initiate closure synchronously: no accepted notification can race an
       // await between the final database check and releasing our listener FD.

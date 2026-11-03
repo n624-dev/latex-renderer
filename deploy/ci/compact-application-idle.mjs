@@ -331,6 +331,39 @@ export async function verifyCompactApplicationIdle() {
         ]).trim() === "inactive",
       "Compact engine did not stop",
     );
+    // Exercise a maintenance-only activation without waiting 15 minutes. It
+    // must consume the queued socket hint, exit successfully and leave Docker
+    // asleep. An unread hint used to exhaust systemd's start limit here.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      run("/usr/sbin/runuser", ["-u", "latex-renderer", "--", "/usr/local/bin/node", "--input-type=module", "-e", `
+        import assert from 'node:assert/strict';
+        import {DatabaseSync} from 'node:sqlite';
+        process.umask(0o007);
+        const db=new DatabaseSync('/var/lib/latex-renderer/renderer.sqlite3');
+        try { db.exec('PRAGMA busy_timeout=5000');
+          assert.equal(db.prepare("UPDATE system_settings SET value_json=? WHERE key='worker_maintenance'").run(JSON.stringify({completedAt:'1970-01-01T00:00:00.000Z'})).changes,1);
+        } finally { db.close(); }
+      `]);
+      // A concurrent timer may already be finishing a no-work invocation.
+      // The second start runs after it, so the forced demand is rechecked.
+      for (let n = 0; n < 2; n++)
+        run("/usr/bin/systemctl", ["start", "latex-renderer-worker-reconcile.service"]);
+      await until(
+        () => httpServiceStatus("latex-renderer-worker.service").state === "idle",
+        "Maintenance-only Worker did not exit successfully",
+        15000,
+      );
+      run("/usr/sbin/runuser", ["-u", "latex-renderer", "--", "/usr/local/bin/node", "--input-type=module", "-e", `
+        import assert from 'node:assert/strict';
+        import {DatabaseSync} from 'node:sqlite';
+        process.umask(0o007);
+        const db=new DatabaseSync('/var/lib/latex-renderer/renderer.sqlite3',{readOnly:true});
+        try { const value=JSON.parse(db.prepare("SELECT value_json FROM system_settings WHERE key='worker_maintenance'").get().value_json);
+          assert(Date.now()-Date.parse(value.completedAt)<30000);
+        } finally { db.close(); }
+      `]);
+      assert.equal(workerEngineCommand("/usr/bin/systemctl", ["--user", "show", "--property=ActiveState", "--value", "docker.service"]).trim(), "inactive", "Maintenance-only activation started Docker");
+    }
     const coldStart = performance.now();
     run(
       "/bin/sh",
@@ -374,6 +407,7 @@ export async function verifyCompactApplicationIdle() {
       staticServing: true,
       managerIndependentRender: true,
       rootlessSandbox: true,
+      maintenanceWake: { attempts: 2, acknowledged: true, withoutEngine: true },
       buildProtection,
       jobLifecycle,
     };

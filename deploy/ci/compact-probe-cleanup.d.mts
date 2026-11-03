@@ -1,3 +1,4 @@
+export function probeFailureReason(error: unknown): string;
 export function quiesceProbeAccount(options: {
   uid: number;
   workerUid: number;

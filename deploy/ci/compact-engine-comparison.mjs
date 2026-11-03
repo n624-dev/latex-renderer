@@ -7,7 +7,7 @@ import { resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import { setTimeout, clearTimeout } from "node:timers";
 import { workerEngineCommand } from "../scripts/on-demand-engine.mjs";
-import { quiesceProbeAccount } from "./compact-probe-cleanup.mjs";
+import { quiesceProbeAccount, probeFailureReason } from "./compact-probe-cleanup.mjs";
 
 assert.equal(process.getuid(), 0);
 assert.equal(process.env.GITHUB_ACTIONS, "true");
@@ -239,8 +239,7 @@ try {
   results.podman = {
     eligible: false,
     classification: "probe-failed-or-unsupported",
-    reason:
-      error instanceof Error ? error.message.slice(0, 300) : "Probe failed",
+    reason: probeFailureReason(error),
   };
 } finally {
   if (created) {

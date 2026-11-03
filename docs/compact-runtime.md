@@ -63,6 +63,9 @@ after committing work; a failed notification does not roll back a committed
 Job. The socket is writable by the existing application group and exposes no
 shell, service-control or rendering arguments. A timer rechecks durable work
 once per minute, including after a crash, missed notification or reboot.
+Before an idle exit, Worker consumes queued wake hints and finishes their
+bounded acknowledgements. Maintenance-only activation follows the same path,
+so a stale hint cannot repeatedly restart an empty Worker.
 
 Queued/running Jobs, active leases, previews, canceled-container cleanup and
 Source Tree readers prevent idle exit. Source Tree maintenance continues every

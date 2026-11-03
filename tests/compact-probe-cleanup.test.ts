@@ -1,5 +1,13 @@
 import { expect, it, vi } from "vitest";
-import { quiesceProbeAccount } from "../deploy/ci/compact-probe-cleanup.mjs";
+import { quiesceProbeAccount, probeFailureReason } from "../deploy/ci/compact-probe-cleanup.mjs";
+
+it("retains bounded engine stderr rather than a truncated command prefix", () => {
+  const error = Object.assign(new Error("Command failed: " + "argument ".repeat(100)), { stderr: Buffer.from("rootless sandbox could not apply the required seccomp policy\n") });
+  expect(probeFailureReason(error)).toBe("rootless sandbox could not apply the required seccomp policy");
+  expect(probeFailureReason(Object.assign(new Error("command"), { stderr: "x".repeat(2000) }))).toHaveLength(1500);
+  expect(probeFailureReason(new Error("Command failed: large command\nactual probe error"))).toBe("actual probe error");
+  expect(probeFailureReason(null)).toBe("Probe failed");
+});
 
 it("disables linger before stopping the fresh account and waits for asynchronous process exit", async () => {
   let active = true;

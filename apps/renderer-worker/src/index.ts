@@ -31,6 +31,7 @@ try {
         }
       : {},
   );
+  if (listener && !shutdown.signal.aborted) await listener.drain();
 } finally {
   const closed = listener?.close();
   // A commit racing the last loop check must be queued on systemd's retained
