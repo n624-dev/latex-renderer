@@ -14,6 +14,10 @@ import {
 import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
+import { DatabaseSync } from "node:sqlite";
+import { httpServiceStatus } from "./http-services.mjs";
+import { workerHasDemand } from "./worker-demand.mjs";
+import { request } from "node:http";
 
 // Volatile, non-secret liveness only. The dedicated RuntimeDirectory is owned
 // by the worker and readable, never writable, by the Web service's group.
@@ -46,9 +50,56 @@ export function writeWorkerHealth(path, { at, mode, stopping }) {
     }
   }
 }
+
+export async function readPassiveWorkerHealth() {
+  const current = readWorkerHealth();
+  if (current.state !== "unavailable") return current;
+  return new Promise((resolve) => {
+    const fallback = () => resolve(current);
+    const call = request(
+      {
+        socketPath: "/run/latex-renderer-status/status.sock",
+        path: "/health/rendering",
+        timeout: 4000,
+      },
+      (response) => {
+        let text = "";
+        response.on("data", (data) => {
+          text += String(data);
+          if (text.length > 4096) response.destroy();
+        });
+        response.once("error", fallback);
+        response.once("end", () => {
+          try {
+            const value = JSON.parse(text);
+            if (
+              ![200, 503].includes(response.statusCode) ||
+              typeof value.rendering !== "boolean" ||
+              ![
+                "running",
+                "idle",
+                "paused",
+                "draining",
+                "unavailable",
+              ].includes(value.worker)
+            )
+              return fallback();
+            resolve({ operational: value.rendering, state: value.worker });
+          } catch {
+            fallback();
+          }
+        });
+      },
+    );
+    call.once("error", fallback);
+    call.once("timeout", () => call.destroy());
+    call.end();
+  });
+}
 export function readWorkerHealth({
   path = "/run/latex-renderer-worker-health/state.json",
   now = Date.now(),
+  databasePath = process.env.DATABASE_PATH,
   run = (...args) =>
     execFileSync("/usr/bin/systemctl", args, {
       encoding: "utf8",
@@ -97,13 +148,39 @@ export function readWorkerHealth({
       value.pid > 1 &&
       String(value.pid) === values.MainPID &&
       values.ActiveState === "active";
+    if (!fresh) throw new Error("Worker heartbeat is not active");
     return {
       operational:
         fresh && value.mode === "running" && value.stopping === false,
       state: fresh ? value.mode : "unavailable",
     };
   } catch {
-    return { operational: false, state: "unavailable" };
+    let database;
+    try {
+      if (
+        httpServiceStatus("latex-renderer-worker.service", { run }).state !==
+          "idle" ||
+        !databasePath
+      )
+        return { operational: false, state: "unavailable" };
+      database = new DatabaseSync(databasePath, { readOnly: true });
+      database.exec("PRAGMA busy_timeout=100");
+      const row = database
+        .prepare(
+          "SELECT value_json FROM system_settings WHERE key='worker_mode'",
+        )
+        .get();
+      const mode = row ? JSON.parse(row.value_json) : "running";
+      const demand = workerHasDemand(database);
+      return {
+        operational: mode === "running" && !demand,
+        state: demand ? "unavailable" : mode === "running" ? "idle" : mode,
+      };
+    } catch {
+      return { operational: false, state: "unavailable" };
+    } finally {
+      database?.close();
+    }
   } finally {
     if (descriptor !== undefined) closeSync(descriptor);
   }

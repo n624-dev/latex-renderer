@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { serve } from "@hono/node-server";
+import { getRequestListener } from "@hono/node-server";
+import { createServer } from "node:http";
+import {
+  createHttpActivity,
+  startHttpService,
+} from "../../../deploy/scripts/http-idle-server.mjs";
 import { Hono } from "hono";
 import { secureHeaders } from "hono/secure-headers";
 import {
@@ -59,9 +64,10 @@ app.all("*", async (c) => {
   }
 });
 
-serve({
-  fetch: app.fetch,
-  hostname: "127.0.0.1",
+const activity = createHttpActivity();
+startHttpService(createServer(getRequestListener(activity.track(app.fetch))), {
+  activity,
+  name: "standalone-gateway",
   port: validPortEnvironment(process.env, "PORT", 3105),
 });
 

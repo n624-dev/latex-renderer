@@ -1,0 +1,27 @@
+[Unit]
+Description=Single passive LaTeX Renderer health response
+PartOf=latex-renderer-status.socket
+CollectMode=inactive-or-failed
+
+[Service]
+Type=exec
+User=latex-renderer
+Group=latex-renderer
+StandardInput=socket
+StandardOutput=socket
+ExecStart=/usr/bin/python3 /opt/latex-renderer/current/deploy/scripts/passive-health.py
+RuntimeMaxSec=8
+MemoryMax=32M
+TasksMax=8
+LogRateLimitIntervalSec=60s
+LogRateLimitBurst=20
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+RestrictAddressFamilies=AF_UNIX
+# Only SQLite's WAL/SHM bookkeeping can be created by this fixed read-only
+# responder. This is the existing API identity, with no new account authority.
+ReadWritePaths=/var/lib/latex-renderer
+UMask=0007

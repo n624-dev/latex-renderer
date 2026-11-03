@@ -3,6 +3,8 @@ import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { boundedIntegerEnvironment } from "./environment.mjs";
+import { runtimeMode } from "./runtime-mode.mjs";
+import { imageManagerNeedsRecovery } from "./manager-demand.mjs";
 import {
   controlService,
   httpServiceStatus,
@@ -43,6 +45,10 @@ if (
   );
 if (!tokenFile) throw new Error("Image manager credential path is unavailable");
 
+if (runtimeMode() === "compact" && !(await imageManagerNeedsRecovery())) {
+  console.log(JSON.stringify({ event: "image_operation_watchdog.idle" }));
+  process.exit(0);
+}
 const token = (await readFile(tokenFile, "utf8")).trim();
 if (token.length < 32) throw new Error("Image manager token is too short");
 

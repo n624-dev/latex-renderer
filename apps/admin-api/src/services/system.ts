@@ -52,8 +52,10 @@ export class AdminSystemService {
         heartbeat === null ? Infinity : Date.now() - Date.parse(heartbeat.at),
       fresh =
         Number.isFinite(age) && age <= 30_000 && heartbeat?.stopping !== true;
+    const status = this.deps.workerStatus?.();
     return {
-      operational: fresh && mode === "running",
+      operational: (status?.operational ?? fresh) && mode === "running",
+      state: status?.state ?? (fresh ? mode : "unavailable"),
       mode,
       fresh,
       lastHeartbeatAt: heartbeat?.at ?? null,

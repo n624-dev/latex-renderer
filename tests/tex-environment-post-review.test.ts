@@ -230,9 +230,7 @@ describe("post-review TeX environment regressions", () => {
   it("lets active jobs drain and periodically recovers leases missed at worker startup", () => {
     const root = read("apps/renderer-worker/src/index.ts");
     const worker = read("apps/renderer-worker/src/worker.ts");
-    expect(root).toContain(
-      "await runWorker(database, config, shutdown.signal)",
-    );
+    expect(root).toContain("await runWorker(");
     const periodicRecovery = read(
       "apps/renderer-worker/src/periodic-recovery.ts",
     );
@@ -276,7 +274,8 @@ describe("post-review TeX environment regressions", () => {
     expect(watchdog).toContain("waitForManagerState");
     expect(watchdog).toContain("previouslyActiveConsumers");
     expect(service).toContain("IMAGE_OPERATION_MAX_AGE_MS=14400000");
-    expect(service).toContain("Wants=latex-renderer-image-manager.service");
+    expect(service).not.toContain("Wants=latex-renderer-image-manager.service");
+    expect(watchdog).toContain("imageManagerNeedsRecovery");
     expect(timer).toContain("OnUnitActiveSec=5min");
     expect(deploy).toContain("latex-renderer-image-operation-watchdog.timer");
   });

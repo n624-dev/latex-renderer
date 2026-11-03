@@ -1,5 +1,8 @@
 #!/usr/bin/env node
 import { controlService } from "./http-services.mjs";
+import { withContainerEngine } from "./on-demand-engine.mjs";
+import { startHttpService, createHttpActivity } from "./http-idle-server.mjs";
+import { managerIdleConfiguration } from "./runtime-mode.mjs";
 import { timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
@@ -34,6 +37,9 @@ import {
 } from "./environment.mjs";
 
 const host = process.env.IMAGE_MANAGER_HOST ?? "127.0.0.1";
+const idleConfiguration = managerIdleConfiguration();
+const activity = createHttpActivity();
+let lastOperationCompleted = Date.now();
 const cleanupPolicy = imageCleanupPolicy(process.env);
 const port = validPortEnvironment(process.env, "IMAGE_MANAGER_PORT", 3110);
 const tokenFile =
@@ -291,11 +297,15 @@ function dockerRunuserArgs(args) {
 }
 
 async function dockerCapture(args) {
-  return runCapture("runuser", dockerRunuserArgs(args));
+  return withContainerEngine(() =>
+    runCapture("runuser", dockerRunuserArgs(args)),
+  );
 }
 
 async function dockerLogged(op, args) {
-  return runLogged(op, "runuser", dockerRunuserArgs(args));
+  return withContainerEngine(() =>
+    runLogged(op, "runuser", dockerRunuserArgs(args)),
+  );
 }
 
 function redactLog(text) {
@@ -547,14 +557,17 @@ async function startOperation(type, task) {
       throw error;
     }
 
-    void Promise.resolve()
-      .then(() => task(op))
-      .then(() => finishOperationSucceeded(op))
-      .catch((error) => finishOperationFailed(op, error))
-      .finally(async () => {
-        operations.delete(id);
-        await mutationLock.release().catch(() => {});
-      });
+    void activity.track(() =>
+      Promise.resolve()
+        .then(() => task(op))
+        .then(() => finishOperationSucceeded(op))
+        .catch((error) => finishOperationFailed(op, error))
+        .finally(async () => {
+          operations.delete(id);
+          await mutationLock.release().catch(() => {});
+          lastOperationCompleted = Date.now();
+        }),
+    )();
     return operationView(op);
   });
 }
@@ -1700,131 +1713,156 @@ function send(res, status, value) {
   res.end(body);
 }
 
-const server = createServer(async (req, res) => {
-  try {
-    const auth = req.headers.authorization;
-    if (!auth?.startsWith("Bearer ") || !safeToken(auth.slice(7))) {
-      throw httpError(401, "UNAUTHORIZED", "Invalid image manager credential");
-    }
-    const url = new globalThis.URL(
-      req.url ?? "/",
-      `http://${host === "::1" ? "[::1]" : host}:${port}`,
-    );
-
-    if (req.method === "GET" && url.pathname === "/v1/state") {
-      return send(res, 200, { ...state, activeOperationId, quiescing });
-    }
-    if (req.method === "GET" && url.pathname === "/v1/images") {
-      return send(res, 200, await listImages());
-    }
-    if (req.method === "GET" && url.pathname === "/v1/languages") {
-      return send(res, 200, { items: await languageCatalog() });
-    }
-    if (req.method === "GET" && url.pathname === "/v1/inventory/packages") {
-      return send(
-        res,
-        200,
-        await inventory("packages", url.searchParams.get("q")),
-      );
-    }
-    if (req.method === "GET" && url.pathname === "/v1/inventory/fonts") {
-      return send(
-        res,
-        200,
-        await inventory("fonts", url.searchParams.get("q")),
-      );
-    }
-
-    const operationMatch = /^\/v1\/operations\/([A-Za-z0-9_-]+)$/.exec(
-      url.pathname,
-    );
-    if (req.method === "GET" && operationMatch) {
-      const op = await loadOperation(operationMatch[1]);
-      if (!op)
+const server = createServer(
+  activity.track(async (req, res) => {
+    try {
+      const auth = req.headers.authorization;
+      if (!auth?.startsWith("Bearer ") || !safeToken(auth.slice(7))) {
         throw httpError(
-          404,
-          "OPERATION_NOT_FOUND",
-          "Image operation was not found",
-        );
-      return send(res, 200, await operationWithLog(op));
-    }
-
-    if (req.method === "POST" && url.pathname === "/v1/quiesce") {
-      return send(res, 200, await quiesceManager());
-    }
-    if (req.method === "POST" && url.pathname === "/v1/country") {
-      const body = await readJson(req);
-      await setCountryOverride(
-        body.country == null || body.country === ""
-          ? null
-          : String(body.country).toUpperCase(),
-      );
-      return send(res, 200, { countryOverride: state.desired.countryOverride });
-    }
-
-    if (req.method === "POST" && url.pathname === "/v1/apply") {
-      const body = await readJson(req);
-      const selector = validateSelector(body.selector);
-      const languages = validateLanguages(body.languages ?? []);
-      const autoUpdate = Boolean(body.autoUpdate);
-      if (autoUpdate && selector.mode !== "latest") {
-        throw httpError(
-          400,
-          "INVALID_AUTO_UPDATE",
-          "autoUpdate is only available with the latest selector",
+          401,
+          "UNAUTHORIZED",
+          "Invalid image manager credential",
         );
       }
-      const operation = await startOperation("apply", async (op) => {
-        await applyRuntime(op, { ...body, selector, languages, autoUpdate });
+      const url = new globalThis.URL(
+        req.url ?? "/",
+        `http://${host === "::1" ? "[::1]" : host}:${port}`,
+      );
+
+      if (req.method === "GET" && url.pathname === "/v1/state") {
+        return send(res, 200, { ...state, activeOperationId, quiescing });
+      }
+      if (req.method === "GET" && url.pathname === "/v1/images") {
+        return send(res, 200, await listImages());
+      }
+      if (req.method === "GET" && url.pathname === "/v1/languages") {
+        return send(res, 200, { items: await languageCatalog() });
+      }
+      if (req.method === "GET" && url.pathname === "/v1/inventory/packages") {
+        return send(
+          res,
+          200,
+          await inventory("packages", url.searchParams.get("q")),
+        );
+      }
+      if (req.method === "GET" && url.pathname === "/v1/inventory/fonts") {
+        return send(
+          res,
+          200,
+          await inventory("fonts", url.searchParams.get("q")),
+        );
+      }
+
+      const operationMatch = /^\/v1\/operations\/([A-Za-z0-9_-]+)$/.exec(
+        url.pathname,
+      );
+      if (req.method === "GET" && operationMatch) {
+        const op = await loadOperation(operationMatch[1]);
+        if (!op)
+          throw httpError(
+            404,
+            "OPERATION_NOT_FOUND",
+            "Image operation was not found",
+          );
+        return send(res, 200, await operationWithLog(op));
+      }
+
+      if (req.method === "POST" && url.pathname === "/v1/quiesce") {
+        return send(res, 200, await quiesceManager());
+      }
+      if (req.method === "POST" && url.pathname === "/v1/country") {
+        const body = await readJson(req);
+        await setCountryOverride(
+          body.country == null || body.country === ""
+            ? null
+            : String(body.country).toUpperCase(),
+        );
+        return send(res, 200, {
+          countryOverride: state.desired.countryOverride,
+        });
+      }
+
+      if (req.method === "POST" && url.pathname === "/v1/apply") {
+        const body = await readJson(req);
+        const selector = validateSelector(body.selector);
+        const languages = validateLanguages(body.languages ?? []);
+        const autoUpdate = Boolean(body.autoUpdate);
+        if (autoUpdate && selector.mode !== "latest") {
+          throw httpError(
+            400,
+            "INVALID_AUTO_UPDATE",
+            "autoUpdate is only available with the latest selector",
+          );
+        }
+        const operation = await startOperation("apply", async (op) => {
+          await applyRuntime(op, { ...body, selector, languages, autoUpdate });
+        });
+        return send(res, 202, operation);
+      }
+
+      if (req.method === "POST" && url.pathname === "/v1/reconcile") {
+        return send(
+          res,
+          202,
+          await startOperation("reconcile", reconcileDesired),
+        );
+      }
+
+      if (req.method === "POST" && url.pathname === "/v1/rollback") {
+        return send(res, 202, await startOperation("rollback", rollback));
+      }
+      if (req.method === "POST" && url.pathname === "/v1/revalidate") {
+        return send(res, 202, await startOperation("revalidate", revalidate));
+      }
+      if (req.method === "POST" && url.pathname === "/v1/cleanup") {
+        return send(res, 202, await startOperation("cleanup", cleanup));
+      }
+      if (req.method === "POST" && url.pathname === "/v1/refresh") {
+        return send(res, 202, await startOperation("refresh", refreshLatest));
+      }
+
+      throw httpError(404, "NOT_FOUND", "Route not found");
+    } catch (error) {
+      const status = Number(error?.status ?? 500);
+      if (status >= 500) {
+        console.error(
+          JSON.stringify({
+            event: "image_manager.error",
+            message: error instanceof Error ? error.message : String(error),
+          }),
+        );
+      }
+      send(res, status, {
+        error: {
+          code: error?.code ?? "IMAGE_MANAGER_ERROR",
+          message:
+            error instanceof Error ? error.message : "Image manager error",
+        },
       });
-      return send(res, 202, operation);
     }
+  }),
+);
 
-    if (req.method === "POST" && url.pathname === "/v1/reconcile") {
-      return send(
-        res,
-        202,
-        await startOperation("reconcile", reconcileDesired),
-      );
-    }
-
-    if (req.method === "POST" && url.pathname === "/v1/rollback") {
-      return send(res, 202, await startOperation("rollback", rollback));
-    }
-    if (req.method === "POST" && url.pathname === "/v1/revalidate") {
-      return send(res, 202, await startOperation("revalidate", revalidate));
-    }
-    if (req.method === "POST" && url.pathname === "/v1/cleanup") {
-      return send(res, 202, await startOperation("cleanup", cleanup));
-    }
-    if (req.method === "POST" && url.pathname === "/v1/refresh") {
-      return send(res, 202, await startOperation("refresh", refreshLatest));
-    }
-
-    throw httpError(404, "NOT_FOUND", "Route not found");
-  } catch (error) {
-    const status = Number(error?.status ?? 500);
-    if (status >= 500) {
-      console.error(
-        JSON.stringify({
-          event: "image_manager.error",
-          message: error instanceof Error ? error.message : String(error),
-        }),
-      );
-    }
-    send(res, status, {
-      error: {
-        code: error?.code ?? "IMAGE_MANAGER_ERROR",
-        message: error instanceof Error ? error.message : "Image manager error",
-      },
-    });
-  }
-});
-
-server.listen(port, host, () => {
-  console.log(
-    JSON.stringify({ event: "image_manager.started", host, port, dockerHost }),
-  );
+startHttpService(server, {
+  port,
+  host,
+  name: "image-manager",
+  activity,
+  configuration: idleConfiguration,
+  busyUntil: () =>
+    activeOperationId || quiescing
+      ? Date.now() + 1000
+      : lastOperationCompleted + idleConfiguration.timeoutMs,
+  onListening: () => {
+    console.log(
+      JSON.stringify({
+        event: "image_manager.started",
+        host,
+        port,
+        dockerHost,
+      }),
+    );
+  },
 });
 
 if (cleanupPolicy.intervalHours > 0) {

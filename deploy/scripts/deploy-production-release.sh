@@ -105,7 +105,7 @@ restore_services_after_failure() {
   http_control restart latex-renderer-api.service latex-renderer-internal-api.service \
     latex-renderer-admin-api.service "$web_service" latex-renderer-remote-mcp.service \
     >/dev/null 2>&1 || recovery_failed=true
-  systemctl restart latex-renderer-worker.service >/dev/null 2>&1 || recovery_failed=true
+  http_control restart latex-renderer-worker.service >/dev/null 2>&1 || recovery_failed=true
   if [ "${deployment_mode:-}" = standalone ]; then
     systemctl start latex-renderer-standalone-gateway.service >/dev/null 2>&1 || recovery_failed=true
     systemctl is-active --quiet latex-renderer-standalone-gateway.service || recovery_failed=true
@@ -295,6 +295,17 @@ LATEX_RENDERER_PREPARE_SOURCE="$source_root" \
 # reconciling or starting its consumers, even when those older tools omit them.
 if [ -f "$source_root/deploy/scripts/http-idle-server.mjs" ]; then
   install -o root -g root -m 0644 "$source_root"/deploy/systemd/*.socket /etc/systemd/system/
+  if [ -f "$source_root/deploy/systemd/latex-renderer-worker-reconcile.service" ]; then
+    install -o root -g root -m 0644 \
+      "$source_root/deploy/systemd/latex-renderer-worker-reconcile.service" \
+      "$source_root/deploy/systemd/latex-renderer-worker-reconcile.timer" /etc/systemd/system/
+    install -o root -g root -m 0644 \
+      "$source_root/deploy/systemd/latex-renderer-engine-idle.service" \
+      "$source_root/deploy/systemd/latex-renderer-engine-idle.timer" \
+      "$source_root/deploy/systemd/latex-renderer-image-operation-watchdog.service" /etc/systemd/system/
+    install -o root -g root -m 0644 "$source_root/deploy/systemd/latex-renderer-status@.service" /etc/systemd/system/
+    /usr/local/bin/node "$source_root/deploy/scripts/install-manager-tmpfiles.mjs"
+  fi
   systemctl daemon-reload
   http_control prepare "$source_root"
 fi
@@ -329,24 +340,34 @@ runuser -u latex-renderer -- env \
   web-principals ensure --yes
 
 systemctl daemon-reload
-systemctl enable --now latex-renderer-update-manager.service
+http_control enable latex-renderer-update-manager.service
+http_control start latex-renderer-update-manager.service
 /opt/latex-renderer/current/deploy/scripts/wait-update-manager-socket.sh
-systemctl restart latex-renderer-image-manager
-systemctl is-active --quiet latex-renderer-image-manager
+runtime_mode=$(/usr/local/bin/node "$source_root/deploy/scripts/runtime-mode.mjs")
+if [ "$runtime_mode" = compact ]; then
+  sh "$source_root/deploy/scripts/configure-rootless-docker.sh"
+  sh "$source_root/deploy/scripts/wait-rootless-docker.sh"
+  sh "$source_root/deploy/scripts/restore-managed-runtime.sh"
+fi
+http_control enable latex-renderer-image-manager.service
+http_control restart latex-renderer-image-manager.service
+http_control ready latex-renderer-image-manager.service
 if [ "$parent_mutation_lock" = application-update ]; then
   echo "Application update owns the shared mutation lock; Image Manager startup restored the saved TeX Runtime."
 else
   /usr/local/bin/node /opt/latex-renderer/current/deploy/scripts/reconcile-managed-runtime.mjs
 fi
 http_control enable latex-renderer-api.service latex-renderer-internal-api.service \
-  latex-renderer-admin-api.service "$web_service" latex-renderer-remote-mcp.service
+  latex-renderer-admin-api.service "$web_service" latex-renderer-remote-mcp.service latex-renderer-worker.service
 http_control restart latex-renderer-api.service latex-renderer-internal-api.service \
   latex-renderer-admin-api.service "$web_service" latex-renderer-remote-mcp.service
-systemctl restart latex-renderer-worker.service
+http_control restart latex-renderer-worker.service
 if [ "$deployment_mode" = standalone ]; then
-  systemctl enable --now latex-renderer-standalone-gateway.service
+  http_control enable latex-renderer-standalone-gateway.service
+  http_control start latex-renderer-standalone-gateway.service
 else
-  systemctl disable --now latex-renderer-standalone-gateway.service >/dev/null 2>&1 || true
+  http_control stop latex-renderer-standalone-gateway.service
+  systemctl disable latex-renderer-standalone-gateway.service latex-renderer-standalone-gateway.socket >/dev/null 2>&1 || true
 fi
 systemctl enable --now \
   latex-renderer-update-recovery-gc.timer \
@@ -354,15 +375,22 @@ systemctl enable --now \
   latex-renderer-image-refresh.timer \
   latex-renderer-image-operation-watchdog.timer \
   latex-renderer-image-log-cleanup.timer
+if systemctl is-enabled --quiet latex-renderer-worker.socket; then
+  systemctl enable --now latex-renderer-worker-reconcile.timer
+fi
+if [ "$runtime_mode" = compact ]; then
+  systemctl enable --now latex-renderer-engine-idle.timer
+else
+  systemctl disable --now latex-renderer-engine-idle.timer
+fi
 
 deployment_checkpoint local-service-readiness
 http_control ready latex-renderer-api.service latex-renderer-internal-api.service \
-  latex-renderer-admin-api.service "$web_service" latex-renderer-remote-mcp.service
-for unit in latex-renderer-update-manager latex-renderer-image-manager latex-renderer-worker; do
-  systemctl is-active --quiet "$unit"
-done
+  latex-renderer-admin-api.service "$web_service" latex-renderer-remote-mcp.service latex-renderer-worker.service
+http_control ready latex-renderer-update-manager.service latex-renderer-image-manager.service
+systemctl enable --now latex-renderer-status.socket
 if [ "$deployment_mode" = standalone ]; then
-  systemctl is-active --quiet latex-renderer-standalone-gateway
+  http_control ready latex-renderer-standalone-gateway.service
 fi
 for timer in latex-renderer-update-refresh.timer latex-renderer-image-refresh.timer latex-renderer-image-operation-watchdog.timer latex-renderer-image-log-cleanup.timer; do
   systemctl is-active --quiet "$timer"

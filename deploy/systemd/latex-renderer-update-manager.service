@@ -19,6 +19,7 @@ Environment=GH_CONFIG_DIR=/var/lib/latex-renderer/update-manager/gh-config
 Environment=GH_PROMPT_DISABLED=1
 Environment=XDG_CACHE_HOME=/var/lib/latex-renderer/update-manager/gh-cache
 EnvironmentFile=-/etc/latex-renderer/update-manager.env
+EnvironmentFile=/etc/latex-renderer/renderer.env
 LoadCredential=update-manager-token:/etc/latex-renderer/secrets/update-manager-token
 RuntimeDirectory=latex-renderer
 RuntimeDirectoryMode=0770
@@ -26,7 +27,8 @@ RuntimeDirectoryMode=0770
 # lock. Keep the directory while either unit restarts so one manager cannot
 # unlink the other manager's live Unix socket.
 RuntimeDirectoryPreserve=yes
-ExecStart=/usr/local/bin/node /opt/latex-renderer/updater/bootstrap-v1/updater-entry.mjs controller
+ExecStartPre=+/usr/local/bin/node /usr/local/libexec/latex-renderer-updater-transport.mjs
+ExecStart=/usr/local/bin/node /usr/local/libexec/latex-renderer-updater-controller.mjs
 Restart=on-failure
 RestartSec=5
 TimeoutStartSec=2min

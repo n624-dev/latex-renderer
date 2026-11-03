@@ -2,7 +2,7 @@ import {
   httpServicesSnapshot,
   type HttpServiceState,
 } from "../../../deploy/scripts/http-services.mjs";
-import { readWorkerHealth } from "../../../deploy/scripts/worker-health.mjs";
+import { readPassiveWorkerHealth } from "../../../deploy/scripts/worker-health.mjs";
 import type { ClientDistribution } from "./client-distribution.js";
 import type { WebConfig } from "./config.js";
 
@@ -16,7 +16,9 @@ export interface StatusSnapshot {
 export type StatusProbe = () => Promise<StatusSnapshot>;
 interface ProbeDependencies {
   services?: () => { managed: boolean; services: HttpServiceState[] };
-  worker?: () => { operational: boolean; state: string };
+  worker?: () =>
+    | { operational: boolean; state: string }
+    | Promise<{ operational: boolean; state: string }>;
 }
 export function createStatusProbe(
   config: WebConfig,
@@ -42,10 +44,11 @@ export function createStatusProbe(
           : Promise.resolve(api?.state === "idle"),
         admin?.state === "running"
           ? healthy(config.renderingHealthUrl, config.statusProbeTimeoutMs)
-          : Promise.resolve(
-              admin?.state === "idle" &&
-                (dependencies.worker ?? readWorkerHealth)().operational,
-            ),
+          : admin?.state === "idle"
+            ? Promise.resolve(
+                (dependencies.worker ?? readPassiveWorkerHealth)(),
+              ).then((state) => state.operational)
+            : Promise.resolve(false),
       ]);
       return {
         api: apiHealthy,

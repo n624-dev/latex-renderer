@@ -27,7 +27,11 @@ describe("consumer dependency restart boundaries (no systemd mutation)", () => {
         controlService: (action: string, unit: string) => {
           calls.push([action, httpSocketUnit(unit) ?? unit]);
         },
-        httpServiceStatus: () => ({ operational: true }),
+        httpServiceStatus: (unit: string) => ({
+          operational: !(
+            stuck && unit === "latex-renderer-standalone-gateway.service"
+          ),
+        }),
         systemctl: (args: string[]) => {
           calls.push(args);
           return {
@@ -40,7 +44,7 @@ describe("consumer dependency restart boundaries (no systemd mutation)", () => {
           };
         },
       }) as (units: string[]) => void;
-      if (stuck) expect(() => execute(units)).toThrow("still inactive");
+      if (stuck) expect(() => execute(units)).toThrow("unavailable");
       else execute(units);
       expect(
         calls.filter((args) => args[0] === "start").map((args) => args[1]),

@@ -133,6 +133,20 @@ await slots.atomic(
   join(gateDirectory, "latex-renderer-updater-activation.mjs"),
   await readFile(gateInput),
 );
+// Evolving transport adapters remain outside application releases and slots.
+// They verify the selected slot through bootstrap-v1 and can start either a
+// historical plain controller or a controller accepting the inherited socket.
+for (const [name, target] of [
+  ["updater-controller-entry.mjs", "latex-renderer-updater-controller.mjs"],
+  ["updater-transport.mjs", "latex-renderer-updater-transport.mjs"],
+]) {
+  const path = join(source, "deploy/scripts", name),
+    info = await lstat(path);
+  if (!info.isFile() || info.uid !== 0 || info.mode & 0o022 || info.nlink !== 1)
+    throw new Error("Unsealed Updater transport adapter");
+  execFileSync("/usr/local/bin/node", ["--check", path]);
+  await slots.atomic(join(gateDirectory, target), await readFile(path));
+}
 await slots.nominate(id);
 await slots.collect();
 console.log(`Prepared independent Updater ${envelope.version}`);

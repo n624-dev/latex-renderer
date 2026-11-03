@@ -159,7 +159,7 @@ baseIt.skipIf(process.platform !== "linux")(
       // systemd resolves the special name "root" to UID 0 regardless of the
       // isolated passwd file. Remap only that user field for this non-root test.
       const input = (await readFile(target, "utf8")).replace(
-        /^(d \S+ \S+) root /gm,
+        /^([df] \S+ \S+) root /gm,
         "$1 fixture-root ",
       );
       const result = spawnSync(

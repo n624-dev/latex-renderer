@@ -1,6 +1,6 @@
 {
   "name": "latex-renderer",
-  "version": "1.5.8-rc.3",
+  "version": "1.5.8-rc.4",
   "private": true,
   "license": "Apache-2.0",
   "type": "module",
@@ -12,7 +12,7 @@
     "build": "pnpm build:workspaces && pnpm build:client",
     "build:workspaces": "pnpm -r build",
     "build:production-services": "pnpm --filter @latex-renderer/admin-api... --filter @latex-renderer/admin-local... --filter @latex-renderer/web... --filter @latex-renderer/internal-api... --filter @latex-renderer/remote-mcp... --filter @latex-renderer/renderer-api... --filter @latex-renderer/renderer-worker... --filter @latex-renderer/standalone-gateway... build",
-    "build:client": "node client/build-client.mjs && node client/build-mcpb.mjs",
+    "build:client": "node client/build-client.mjs && node client/build-mcpb.mjs && node deploy/scripts/build-public-static.mjs",
     "build:mcpb": "node client/build-mcpb.mjs",
     "verify:mcpb": "node client/verify-mcpb.mjs",
     "test:mcpb:clean": "node client/test-mcpb-clean-install.mjs",

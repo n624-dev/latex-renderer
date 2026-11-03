@@ -31,5 +31,12 @@
   "deploy/scripts/deployment-json-check.mjs",
   "deploy/scripts/github-cli-environment.mjs",
   "deploy/scripts/http-services.mjs",
-  "deploy/scripts/http-idle-server.mjs"
+  "deploy/scripts/http-idle-server.mjs",
+  "deploy/scripts/runtime-mode.mjs",
+  "deploy/scripts/on-demand-engine.mjs",
+  "deploy/scripts/worker-demand.mjs",
+  "deploy/scripts/activation-socket.mjs",
+  "deploy/scripts/updater-socket-v1.mjs",
+  "deploy/scripts/updater-transport.mjs",
+  "deploy/scripts/updater-controller-entry.mjs"
 ]

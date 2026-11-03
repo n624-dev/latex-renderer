@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { createHash, timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
+import { startHttpService, createHttpActivity } from "./http-idle-server.mjs";
+import { managerIdleConfiguration } from "./runtime-mode.mjs";
 import { spawn } from "node:child_process";
 import {
   chmod,
@@ -53,6 +55,9 @@ import {
 
 if (process.getuid?.() === 0)
   throw new Error("Update Manager controller must not run as root");
+const idleConfiguration = managerIdleConfiguration();
+const activity = createHttpActivity();
+let lastOperationCompleted = Date.now();
 
 const repository = process.env.UPDATE_REPOSITORY ?? "n624-dev/latex-renderer";
 if (repository !== "n624-dev/latex-renderer") {
@@ -1135,46 +1140,50 @@ async function startOperation(type, requestedVersion, task) {
     await mutationLock.release().catch(() => {});
     throw error;
   }
-  void task(operation)
-    .then(async () => {
-      operation.status = "succeeded";
-      operation.finishedAt = new Date().toISOString();
-      state.lastError = null;
-      await saveOperation(operation);
-      await persistState();
-    })
-    .catch(async (error) => {
-      operation.status = "failed";
-      operation.error = error instanceof Error ? error.message : String(error);
-      operation.finishedAt = new Date().toISOString();
-      state.lastError = operation.error;
-      await appendLog(operation, `\nERROR: ${operation.error}\n`).catch(
-        () => {},
-      );
-      await saveOperation(operation).catch(() => {});
-      await persistState().catch(() => {});
-    })
-    .finally(async () => {
-      const restartForNewCode =
-        operation.status === "succeeded" &&
-        ["apply", "automatic-apply", "rollback"].includes(operation.type);
-      if (restartForNewCode) {
-        try {
-          await runPrivileged(operation, {
-            verb: "schedule-manager-restart",
-          });
-        } catch (error) {
-          await appendLog(
-            operation,
-            `Could not schedule Update Manager restart: ${error instanceof Error ? error.message : String(error)}\n`,
-          ).catch(() => {});
+  void activity.track(() =>
+    task(operation)
+      .then(async () => {
+        operation.status = "succeeded";
+        operation.finishedAt = new Date().toISOString();
+        state.lastError = null;
+        await saveOperation(operation);
+        await persistState();
+      })
+      .catch(async (error) => {
+        operation.status = "failed";
+        operation.error =
+          error instanceof Error ? error.message : String(error);
+        operation.finishedAt = new Date().toISOString();
+        state.lastError = operation.error;
+        await appendLog(operation, `\nERROR: ${operation.error}\n`).catch(
+          () => {},
+        );
+        await saveOperation(operation).catch(() => {});
+        await persistState().catch(() => {});
+      })
+      .finally(async () => {
+        const restartForNewCode =
+          operation.status === "succeeded" &&
+          ["apply", "automatic-apply", "rollback"].includes(operation.type);
+        if (restartForNewCode) {
+          try {
+            await runPrivileged(operation, {
+              verb: "schedule-manager-restart",
+            });
+          } catch (error) {
+            await appendLog(
+              operation,
+              `Could not schedule Update Manager restart: ${error instanceof Error ? error.message : String(error)}\n`,
+            ).catch(() => {});
+          }
         }
-      }
-      await operation.logWrite?.catch(() => {});
-      await mutationLock.release().catch(() => {});
-      activeOperation = null;
-      await cleanupOperationLogs().catch(() => {});
-    });
+        await operation.logWrite?.catch(() => {});
+        await mutationLock.release().catch(() => {});
+        activeOperation = null;
+        await cleanupOperationLogs().catch(() => {});
+        lastOperationCompleted = Date.now();
+      }),
+  )();
   return operationView(operation);
 }
 
@@ -1213,100 +1222,118 @@ function send(response, status, value) {
   response.end(body);
 }
 
-const server = createServer(async (request, response) => {
-  try {
-    const authorization = request.headers.authorization;
-    if (
-      !authorization?.startsWith("Bearer ") ||
-      !safeToken(authorization.slice(7))
-    ) {
-      throw httpError(401, "UNAUTHORIZED", "Invalid Update Manager credential");
-    }
-    const url = new globalThis.URL(request.url ?? "/", "http://localhost");
-    if (request.method === "GET" && url.pathname === "/v1/state") {
-      return send(response, 200, {
-        ...state,
-        installed: await installedRelease(),
-        updater: await updaterStatus(),
-        activeOperationId: activeOperation?.id ?? recoveringOperationId,
+const server = createServer(
+  activity.track(async (request, response) => {
+    try {
+      const authorization = request.headers.authorization;
+      if (
+        !authorization?.startsWith("Bearer ") ||
+        !safeToken(authorization.slice(7))
+      ) {
+        throw httpError(
+          401,
+          "UNAUTHORIZED",
+          "Invalid Update Manager credential",
+        );
+      }
+      const url = new globalThis.URL(request.url ?? "/", "http://localhost");
+      if (request.method === "GET" && url.pathname === "/v1/state") {
+        return send(response, 200, {
+          ...state,
+          installed: await installedRelease(),
+          updater: await updaterStatus(),
+          activeOperationId: activeOperation?.id ?? recoveringOperationId,
+        });
+      }
+      const operationMatch = /^\/v1\/operations\/(updop_[A-Za-z0-9_-]+)$/.exec(
+        url.pathname,
+      );
+      if (request.method === "GET" && operationMatch) {
+        const operation = await operationWithLog(operationMatch[1]);
+        if (!operation)
+          throw httpError(
+            404,
+            "UPDATE_OPERATION_NOT_FOUND",
+            "Update operation was not found",
+          );
+        return send(response, 200, operation);
+      }
+      if (request.method === "POST" && url.pathname === "/v1/check") {
+        const body = await readJson(request);
+        const version =
+          body.version == null || body.version === ""
+            ? null
+            : String(body.version);
+        return send(response, 200, await checkRelease(version));
+      }
+      if (request.method === "POST" && url.pathname === "/v1/policy") {
+        return send(response, 200, await setPolicy(await readJson(request)));
+      }
+      if (request.method === "POST" && url.pathname === "/v1/refresh") {
+        await readJson(request);
+        return send(response, 200, await refreshPolicy());
+      }
+      if (request.method === "POST" && url.pathname === "/v1/apply") {
+        const body = await readJson(request);
+        const version =
+          body.version == null || body.version === ""
+            ? null
+            : String(body.version);
+        if (version !== null) validReleaseVersion(version.replace(/^v/, ""));
+        return send(
+          response,
+          202,
+          await startOperation("apply", version, (operation) =>
+            applyRelease(operation, version),
+          ),
+        );
+      }
+      if (request.method === "POST" && url.pathname === "/v1/rollback") {
+        await readJson(request);
+        return send(
+          response,
+          202,
+          await startOperation("rollback", null, rollbackRelease),
+        );
+      }
+      throw httpError(404, "NOT_FOUND", "Update Manager route not found");
+    } catch (error) {
+      send(response, Number.isInteger(error?.status) ? error.status : 500, {
+        error: {
+          code: error?.code ?? "UPDATE_MANAGER_ERROR",
+          message: error instanceof Error ? error.message : String(error),
+        },
       });
     }
-    const operationMatch = /^\/v1\/operations\/(updop_[A-Za-z0-9_-]+)$/.exec(
-      url.pathname,
-    );
-    if (request.method === "GET" && operationMatch) {
-      const operation = await operationWithLog(operationMatch[1]);
-      if (!operation)
-        throw httpError(
-          404,
-          "UPDATE_OPERATION_NOT_FOUND",
-          "Update operation was not found",
-        );
-      return send(response, 200, operation);
-    }
-    if (request.method === "POST" && url.pathname === "/v1/check") {
-      const body = await readJson(request);
-      const version =
-        body.version == null || body.version === ""
-          ? null
-          : String(body.version);
-      return send(response, 200, await checkRelease(version));
-    }
-    if (request.method === "POST" && url.pathname === "/v1/policy") {
-      return send(response, 200, await setPolicy(await readJson(request)));
-    }
-    if (request.method === "POST" && url.pathname === "/v1/refresh") {
-      await readJson(request);
-      return send(response, 200, await refreshPolicy());
-    }
-    if (request.method === "POST" && url.pathname === "/v1/apply") {
-      const body = await readJson(request);
-      const version =
-        body.version == null || body.version === ""
-          ? null
-          : String(body.version);
-      if (version !== null) validReleaseVersion(version.replace(/^v/, ""));
-      return send(
-        response,
-        202,
-        await startOperation("apply", version, (operation) =>
-          applyRelease(operation, version),
-        ),
-      );
-    }
-    if (request.method === "POST" && url.pathname === "/v1/rollback") {
-      await readJson(request);
-      return send(
-        response,
-        202,
-        await startOperation("rollback", null, rollbackRelease),
-      );
-    }
-    throw httpError(404, "NOT_FOUND", "Update Manager route not found");
-  } catch (error) {
-    send(response, Number.isInteger(error?.status) ? error.status : 500, {
-      error: {
-        code: error?.code ?? "UPDATE_MANAGER_ERROR",
-        message: error instanceof Error ? error.message : String(error),
-      },
-    });
-  }
-});
+  }),
+);
 
-try {
-  const existing = await lstat(socketPath);
-  if (!existing.isSocket())
-    throw new Error("Refusing to replace a non-socket Update Manager path");
-  await rm(socketPath);
-} catch (error) {
-  if (error?.code !== "ENOENT") throw error;
-}
+const inheritedSocket = process.env.LISTEN_FDS !== undefined;
+if (!inheritedSocket)
+  try {
+    const existing = await lstat(socketPath);
+    if (!existing.isSocket())
+      throw new Error("Refusing to replace a non-socket Update Manager path");
+    await rm(socketPath);
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
 await mkdir(dirname(socketPath), { recursive: true, mode: 0o750 });
 await new Promise((resolvePromise, reject) => {
   server.once("error", reject);
-  server.listen(socketPath, resolvePromise);
+  startHttpService(server, {
+    path: socketPath,
+    name: "update-manager",
+    activity,
+    configuration: idleConfiguration,
+    busyUntil: () =>
+      activeOperation || recoveringOperationId
+        ? Date.now() + 1000
+        : lastOperationCompleted + idleConfiguration.timeoutMs,
+    onListening: resolvePromise,
+  });
 });
-await chmod(socketPath, 0o660);
+if (!inheritedSocket) await chmod(socketPath, 0o660);
 // A long-lived idle controller still expires diagnostics; no Actions callback
 // or subsequent update is required. Startup also collects after interruption.
 setInterval(() => {

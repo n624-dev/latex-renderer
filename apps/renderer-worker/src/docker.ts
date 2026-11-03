@@ -3,6 +3,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import type { WorkerConfig } from "./config.js";
 import { containerMemoryProbe } from "./container-memory.js";
 import { MIB, RENDER_MEMORY_MAX } from "./memory-plan.js";
+import { withContainerEngine } from "../../../deploy/scripts/on-demand-engine.mjs";
 
 export interface RendererStageOptions {
   mode: "pdf" | "svg" | "preview";
@@ -327,41 +328,44 @@ export function runDocker(
 ): Promise<string> {
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 60_000)
     throw new Error("Invalid Docker command timeout");
-  return new Promise((resolve, reject) => {
-    const child = spawn("docker", [...args], {
-      stdio: ["ignore", "pipe", "pipe"],
-      env: dockerEnvironment(),
-    });
-    let stdout = "",
-      stderr = "";
-    let failure: Error | undefined;
-    const timer = setTimeout(() => {
-      failure = new Error("Docker command timed out");
-      child.kill("SIGKILL");
-    }, timeoutMs);
-    timer.unref();
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => {
-      if (stdout.length + chunk.length > 1024 * 1024) {
-        failure = new Error("Docker response exceeds limit");
-        child.kill("SIGKILL");
-      } else stdout += chunk;
-    });
-    child.stderr.on("data", (chunk: string) => {
-      stderr = (stderr + chunk).slice(-8192);
-    });
-    child.once("error", (error) => {
-      clearTimeout(timer);
-      reject(error);
-    });
-    child.once("close", (code) => {
-      clearTimeout(timer);
-      if (failure) reject(failure);
-      else if (code === 0) resolve(stdout);
-      else reject(new Error(stderr));
-    });
-  });
+  return withContainerEngine(
+    () =>
+      new Promise<string>((resolve, reject) => {
+        const child = spawn("docker", [...args], {
+          stdio: ["ignore", "pipe", "pipe"],
+          env: dockerEnvironment(),
+        });
+        let stdout = "",
+          stderr = "";
+        let failure: Error | undefined;
+        const timer = setTimeout(() => {
+          failure = new Error("Docker command timed out");
+          child.kill("SIGKILL");
+        }, timeoutMs);
+        timer.unref();
+        child.stdout.setEncoding("utf8");
+        child.stderr.setEncoding("utf8");
+        child.stdout.on("data", (chunk: string) => {
+          if (stdout.length + chunk.length > 1024 * 1024) {
+            failure = new Error("Docker response exceeds limit");
+            child.kill("SIGKILL");
+          } else stdout += chunk;
+        });
+        child.stderr.on("data", (chunk: string) => {
+          stderr = (stderr + chunk).slice(-8192);
+        });
+        child.once("error", (error) => {
+          clearTimeout(timer);
+          reject(error);
+        });
+        child.once("close", (code) => {
+          clearTimeout(timer);
+          if (failure) reject(failure);
+          else if (code === 0) resolve(stdout);
+          else reject(new Error(stderr));
+        });
+      }),
+  );
 }
 
 export class RendererCleanupDeferred extends Error {}

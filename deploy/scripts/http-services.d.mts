@@ -17,6 +17,11 @@ export function httpServiceStatus(
   options?: { run?: (...args: string[]) => string; aliases?: boolean },
 ): HttpServiceState;
 export function supportsHttpActivation(source?: string): boolean;
+export function supportsWorkerActivation(source?: string): boolean;
+export function workerActivationEnabled(options?: {
+  source?: string;
+  values?: NodeJS.ProcessEnv;
+}): boolean;
 export function httpActivationEnabled(options?: {
   source?: string;
   values?: NodeJS.ProcessEnv;
@@ -32,6 +37,7 @@ export function prepareHttpActivation(
     run?: (...args: string[]) => string;
     unitRoot?: string;
     values?: NodeJS.ProcessEnv;
+    validateCompact?: () => unknown;
   },
 ): { enabled: boolean };
 export function reconcileHttpServices(options?: {
@@ -40,4 +46,5 @@ export function reconcileHttpServices(options?: {
   unitRoot?: string;
   values?: NodeJS.ProcessEnv;
   acquire?: () => Promise<{ release(): Promise<void> }>;
+  configureEngine?: (compact: boolean) => void;
 }): Promise<{ enabled: boolean }>;

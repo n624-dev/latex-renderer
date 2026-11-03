@@ -74,16 +74,21 @@ ${GATEWAY_ROUTES.map((route) => `  location ${route} { limit_req zone=latex_rend
   location = /auth/password/login { limit_req zone=latex_renderer_login burst=5 nodelay; proxy_pass http://127.0.0.1:3102; }
   location ~ ^/(auth|admin/api|admin/v1|app/api)(/|$) { proxy_pass http://127.0.0.1:3102; }
   location ^~ /api/ { proxy_pass http://127.0.0.1:3100; }
+${publicHealthNginx}
+${publicStaticNginx}
   location / { proxy_pass http://127.0.0.1:3101; }
 }
 `;
 }
 
 const GATEWAY_ROUTES = [
-  "= /api/v1/health",
   "= /api/v1/render-tickets",
   "= /api/v1/source-tickets",
   "^~ /api/v1/job-tickets/",
   "= /api/v1/projects",
   "^~ /api/v1/projects/",
 ];
+import {
+  publicStaticNginx,
+  publicHealthNginx,
+} from "./public-static-nginx.mjs";

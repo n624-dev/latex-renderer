@@ -8,9 +8,10 @@ Public URLs, credentials, permission boundaries, and rendering results do not
 change. First access after sleep includes the cost of starting Node and opening
 the database.
 
-Worker, rootless Docker, Image Manager, Update Manager, and the standalone
-gateway remain running. Worker still processes leases, previews, and Source
-cleanup. This change does not implement Worker sleep.
+Worker activation and the opt-in compact manager/engine lifecycle are described
+in [compact runtime](compact-runtime.md). The standalone gateway also supports
+the shared HTTP activation lifecycle. Classic Worker/manager startup remains
+available.
 
 ## Settings
 
@@ -39,7 +40,8 @@ This command takes the existing deployment/image mutation lock, validates idle
 values before stopping anything, quiesces the five HTTP roles, and reconciles
 listeners, service boot links and the standalone gateway dependency together.
 It preserves the selected Web alias and restores an active standalone gateway.
-Worker and the managers continue running. A busy mutation lock rejects the
+Worker and manager boot links follow their independently selected runtime mode.
+A busy mutation lock rejects the
 operation before stopping anything; retry after the active operation finishes.
 If interrupted, rerun the same command to finish reconciling the
 managed boot links; no database or user data is restored or rewritten.

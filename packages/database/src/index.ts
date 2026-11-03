@@ -3,6 +3,7 @@ import type { JobStatus } from "@latex-renderer/contracts";
 import { AppError, newId, nowIso } from "@latex-renderer/shared";
 import { schemaSql } from "./schema.js";
 import { applyDatabaseMigrations } from "./migrations.js";
+import { notifyWorkerAfterCommit } from "../../../deploy/scripts/worker-demand.mjs";
 export { ProjectOperations, type ProjectActor } from "./project-operations.js";
 export {
   SvgRetryOperations,
@@ -45,6 +46,7 @@ export interface DatabaseOptions {
 }
 
 export class RendererDatabase {
+  private inTransaction = false;
   /** Direct SQL is retained for local recovery and migrations only. Runtime code should use repositories. */
   public readonly raw: DatabaseSync;
   public readonly users: UsersRepository;
@@ -100,14 +102,19 @@ export class RendererDatabase {
 
   transaction<T>(operation: () => T): T {
     this.raw.exec("BEGIN IMMEDIATE");
+    this.inTransaction = true;
+    let result: T;
     try {
-      const result = operation();
+      result = operation();
       this.raw.exec("COMMIT");
-      return result;
     } catch (error) {
       this.raw.exec("ROLLBACK");
       throw error;
+    } finally {
+      this.inTransaction = false;
     }
+    notifyWorkerAfterCommit(this.raw);
+    return result;
   }
 
   audit(input: {
@@ -188,6 +195,8 @@ export class RendererDatabase {
         "Job state changed concurrently",
         409,
       );
+    if (to === "queued" && !this.inTransaction)
+      notifyWorkerAfterCommit(this.raw);
   }
 
   claimNonce(

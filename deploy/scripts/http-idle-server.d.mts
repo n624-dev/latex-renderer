@@ -19,7 +19,9 @@ export function activationDescriptor(
 export function startHttpService(
   server: unknown,
   options: {
-    port: number;
+    port?: number;
+    path?: string;
+    host?: "127.0.0.1" | "::1";
     name: string;
     environment?: NodeJS.ProcessEnv;
     onListening?: (info: AddressInfo) => void;
