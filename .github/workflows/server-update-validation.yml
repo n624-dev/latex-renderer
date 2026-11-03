@@ -2,6 +2,12 @@ name: server-update-validation
 
 on:
   workflow_dispatch:
+    inputs:
+      measure_idle:
+        description: Compare three runtime modes over real one-hour quiet intervals
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -98,7 +104,7 @@ jobs:
           - baseline: previous-stable
             architecture: amd64
     runs-on: ${{ matrix.architecture == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
-    timeout-minutes: 90
+    timeout-minutes: ${{ matrix.baseline == 'installed' && inputs.measure_idle && 240 || 90 }}
     permissions:
       contents: read
       attestations: read
@@ -155,7 +161,25 @@ jobs:
           sudo env RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" GITHUB_ACTIONS="$GITHUB_ACTIONS" \
             GITHUB_RUN_ID="$GITHUB_RUN_ID" SOURCE_COMMIT="$SOURCE_COMMIT" RUNNER_TEMP="$RUNNER_TEMP" \
             /usr/local/bin/node deploy/ci/compact-engine-comparison.mjs
-      - name: Bounded, redacted disposable-host diagnostics
+      - name: Compare real 15-minute and one-hour idle intervals
+        if: matrix.baseline == 'installed' && inputs.measure_idle
+        env:
+          SOURCE_COMMIT: ${{ needs.build.outputs.commit }}
+        run: |
+          sudo env RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" GITHUB_ACTIONS="$GITHUB_ACTIONS" \
+            GITHUB_RUN_ID="$GITHUB_RUN_ID" SOURCE_COMMIT="$SOURCE_COMMIT" RUNNER_TEMP="$RUNNER_TEMP" \
+            CI_COMPACT_MEASURE_IDLE=1 /usr/bin/python3 -B deploy/ci/compact-idle-benchmark.py
+      - name: Keep bounded, sanitized measurement evidence
+        if: always() && matrix.baseline == 'installed'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: compact-measurements-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/compact-engine-comparison.json
+            ${{ runner.temp }}/compact-idle-measurement.json
+          retention-days: 1
+          if-no-files-found: ignore
+      - name: Diagnose measurement failure without retaining raw application data
         if: failure()
         run: |
           sudo env RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" GITHUB_RUN_ID="$GITHUB_RUN_ID" \

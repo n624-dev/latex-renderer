@@ -6,14 +6,40 @@ import { adminScript } from "../apps/admin-web/src/assets/admin-script.js";
 
 describe("admin system status and dashboard contract", () => {
   it.each([
-    [undefined, undefined, true, "正常", "通常運転", "稼働中"],
-    ["normal", undefined, true, "正常", "通常運転", "稼働中"],
-    ["normal", "running", true, "正常", "通常運転", "稼働中"],
-    ["read-only", "running", true, "要確認", "読み取り専用", "稼働中"],
-    ["lockdown", "running", true, "要確認", "緊急停止", "稼働中"],
-    ["normal", "paused", true, "要確認", "通常運転", "停止中"],
-    ["normal", "draining", true, "要確認", "通常運転", "ドレイン中"],
-    ["normal", "running", false, "要確認", "通常運転", "稼働中"],
+    [undefined, undefined, true, "正常", "通常運転", "稼働中", undefined],
+    ["normal", undefined, true, "正常", "通常運転", "稼働中", undefined],
+    ["normal", "running", true, "正常", "通常運転", "稼働中", undefined],
+    [
+      "read-only",
+      "running",
+      true,
+      "要確認",
+      "読み取り専用",
+      "稼働中",
+      undefined,
+    ],
+    ["lockdown", "running", true, "要確認", "緊急停止", "稼働中", undefined],
+    ["normal", "paused", true, "要確認", "通常運転", "停止中", undefined],
+    ["normal", "draining", true, "要確認", "通常運転", "ドレイン中", undefined],
+    ["normal", "running", false, "要確認", "通常運転", "稼働中", undefined],
+    [
+      "normal",
+      "running",
+      true,
+      "正常",
+      "通常運転",
+      "待機中（必要時に起動）",
+      "idle",
+    ],
+    [
+      "normal",
+      "running",
+      true,
+      "要確認",
+      "通常運転",
+      "利用不可",
+      "unavailable",
+    ],
   ] as const)(
     "renders maintenance=%s worker=%s writes=%s correctly",
     async (
@@ -23,6 +49,7 @@ describe("admin system status and dashboard contract", () => {
       expected,
       maintenanceLabel,
       workerLabel,
+      workerState,
     ) => {
       const database = new RendererDatabase(":memory:");
       database.migrate();
@@ -55,6 +82,13 @@ describe("admin system status and dashboard contract", () => {
         const service = new AdminSystemService({
           database,
           writeEnabled,
+          workerStatus:
+            workerState === undefined
+              ? undefined
+              : () => ({
+                  state: workerState,
+                  operational: workerState === "idle",
+                }),
         } as never);
         const status = JSON.parse(
           JSON.stringify(service.status()),

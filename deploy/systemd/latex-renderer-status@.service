@@ -7,6 +7,7 @@ CollectMode=inactive-or-failed
 Type=exec
 User=latex-renderer
 Group=latex-renderer
+EnvironmentFile=/etc/latex-renderer/renderer.env
 StandardInput=socket
 StandardOutput=socket
 ExecStart=/usr/bin/python3 /opt/latex-renderer/current/deploy/scripts/passive-health.py

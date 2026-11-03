@@ -6,6 +6,7 @@ import sqlite3
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location("passive_health", Path(__file__).resolve().parents[1] / "deploy/scripts/passive-health.py")
 health = importlib.util.module_from_spec(spec)
@@ -45,6 +46,15 @@ class PassiveHealthTests(unittest.TestCase):
                 self.assertFalse(self.snapshot()["rendering"])
                 self.db.execute("DELETE FROM jobs")
                 self.db.commit()
+
+    def test_standalone_health_requires_gateway_listener_or_process(self):
+        with patch.dict("os.environ", {"DEPLOYMENT_MODE": "standalone"}):
+            self.assertFalse(self.snapshot()["api"])
+            self.states["latex-renderer-standalone-gateway.service"] = {"LoadState": "loaded", "ActiveState": "inactive", "Result": "success"}
+            self.states["latex-renderer-standalone-gateway.socket"] = {"ActiveState": "active", "SubState": "listening"}
+            self.assertTrue(self.snapshot()["api"])
+            self.states["latex-renderer-standalone-gateway.socket"]["ActiveState"] = "failed"
+            self.assertFalse(self.snapshot()["api"])
 
     def test_failed_missing_and_stopped_listener_are_unavailable(self):
         for state in ("failed", "inactive"):

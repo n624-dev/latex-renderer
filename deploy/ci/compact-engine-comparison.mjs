@@ -71,7 +71,8 @@ for (let n = 0; n < 2; n++) {
 const user = "latex-render-probe";
 assert.notEqual(process.env.USER, user);
 let created = false,
-  podman;
+  podman,
+  podmanReady = false;
 try {
   // Capacity is checked before installing a second disposable image store.
   const imageBytes = Number(
@@ -144,6 +145,7 @@ try {
     ).trim(),
     "true v2",
   );
+  podmanReady = true;
   const worker = Number(
     run("/usr/bin/id", ["-u", "latex-render-worker"]).trim(),
   );
@@ -224,17 +226,24 @@ try {
   };
 } finally {
   if (created) {
-    if (podman) podman("system", "reset", "--force");
-    run("/usr/bin/loginctl", ["terminate-user", user]);
-    run("/usr/bin/loginctl", ["disable-linger", user]);
-    run("/usr/sbin/userdel", ["--remove", user]);
+    const failures = [];
+    for (const cleanup of [
+      () => { if (podmanReady) podman("system", "reset", "--force"); },
+      () => run("/usr/bin/loginctl", ["terminate-user", user]),
+      () => run("/usr/bin/loginctl", ["disable-linger", user]),
+      () => run("/usr/sbin/userdel", ["--remove", user]),
+    ]) {
+      try { cleanup(); } catch (error) { failures.push(error); }
+    }
+    if (failures.length)
+      throw new AggregateError(failures, "Disposable engine probe cleanup failed");
   }
 }
 const output = resolve(
   process.env.RUNNER_TEMP,
   "compact-engine-comparison.json",
 );
-await writeFile(output, JSON.stringify(results, null, 2) + "\n");
+await writeFile(output, JSON.stringify(results, null, 2) + "\n", { mode: 0o644 });
 console.log(
   JSON.stringify({ event: "compact_engine_comparison.completed", ...results }),
 );

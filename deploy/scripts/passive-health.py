@@ -12,7 +12,10 @@ DB = "/var/lib/latex-renderer/renderer.sqlite3"
 
 
 def service_states():
-    units = [f"latex-renderer-{name}.{kind}" for name in ("api", "worker")
+    names = ["api", "worker"]
+    if os.environ.get("DEPLOYMENT_MODE") == "standalone":
+        names.append("standalone-gateway")
+    units = [f"latex-renderer-{name}.{kind}" for name in names
              for kind in ("service", "socket")]
     result = subprocess.run(["/usr/bin/systemctl", "show", "--no-pager",
                              "--property=Id,LoadState,ActiveState,SubState,Result,MainPID", *units],
@@ -64,7 +67,10 @@ def snapshot(database=DB, states=service_states, health=read_worker_health):
              "checkedAt": now.isoformat().replace("+00:00", "Z")}
     try:
         records = states()
-        value["api"] = role_state(records, "api") in ("running", "idle")
+        api = role_state(records, "api") in ("running", "idle")
+        if os.environ.get("DEPLOYMENT_MODE") == "standalone":
+            api = api and role_state(records, "standalone-gateway") in ("running", "idle")
+        value["api"] = api
         worker = role_state(records, "worker")
         # SQLite is opened read-only. Its legitimate WAL/SHM bookkeeping may
         # need creation after the last writer checkpoints and closes.
