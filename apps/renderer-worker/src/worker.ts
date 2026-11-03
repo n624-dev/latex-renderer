@@ -14,6 +14,8 @@ import {
 } from "./admission.js";
 import { planRenderMemory, rememberRenderMemory } from "./memory-plan.js";
 import { diagnosticWriter } from "../../../deploy/scripts/service-diagnostics.mjs";
+import { workerHasDemand } from "../../../deploy/scripts/worker-demand.mjs";
+import { performance } from "node:perf_hooks";
 import { recoverStaleLeases } from "./recovery.js";
 import { processPreview, recoverPreviewRequests } from "./preview-processor.js";
 import {
@@ -27,8 +29,20 @@ export async function runWorker(
   signal: AbortSignal,
   {
     idleDelay = () => new Promise<void>((resolve) => setTimeout(resolve, 1000)),
-  }: { idleDelay?: () => Promise<void> } = {},
+    idle,
+  }: {
+    idleDelay?: () => Promise<void>;
+    idle?: {
+      timeoutMs: number;
+      now?: () => number;
+      initialMaintenance?: boolean;
+    };
+  } = {},
 ): Promise<void> {
+  const clock = idle?.now ?? (() => performance.now());
+  let lastWork = clock(),
+    maintenanceHealthy = true,
+    maintenanceOnly = idle?.initialMaintenance === true;
   const previousHeartbeat = database.settings.value<{
     workerId?: unknown;
   } | null>("worker_heartbeat", null);
@@ -44,7 +58,11 @@ export async function runWorker(
       ? []
       : database.worker.ownedActiveJobIds(previousHeartbeat.workerId as string),
   );
-  await assertDockerIsolation(config.apparmorProfile);
+  let isolationReady = false;
+  if (!maintenanceOnly || workerHasDemand(database.raw)) {
+    await assertDockerIsolation(config.apparmorProfile);
+    isolationReady = true;
+  }
   await recoverStaleLeases(database, config);
   await recoverPreviewRequests(database, config);
   console.log(
@@ -83,7 +101,15 @@ export async function runWorker(
             config.sourceTreeMaxBytes ?? 64 * 1024 ** 2,
             config.sourceTreeUserMaxBytes ?? 32 * 1024 ** 2,
           );
+          maintenanceHealthy = true;
+          database.settings.upsert(
+            "worker_maintenance",
+            { completedAt: nowIso() },
+            "system",
+            nowIso(),
+          );
         } catch {
+          maintenanceHealthy = false;
           diagnostic({ event: "renderer_worker.source_tree_gc_failed" });
         }
         nextSourceTreeCollection = Date.now() + 15 * 60_000;
@@ -93,6 +119,21 @@ export async function runWorker(
         nextPreviewRecovery = Date.now() + 10_000;
       }
       if (isShuttingDown()) break;
+      if (idle && workerHasDemand(database.raw)) {
+        lastWork = clock();
+        maintenanceOnly = false;
+        if (!isolationReady) {
+          await assertDockerIsolation(config.apparmorProfile);
+          isolationReady = true;
+        }
+      } else if (
+        idle &&
+        maintenanceHealthy &&
+        clock() - lastWork >= (maintenanceOnly ? 0 : idle.timeoutMs)
+      ) {
+        console.log(JSON.stringify({ event: "renderer_worker.idle_exit" }));
+        return;
+      }
       for (const id of awaitingRecovery) {
         const row = database.worker.runtimeState(id);
         if (
@@ -212,6 +253,7 @@ export async function runWorker(
               page: preview.page,
             });
           }
+          lastWork = clock();
           continue;
         }
       }
@@ -335,6 +377,7 @@ export async function runWorker(
           }),
         );
       }
+      lastWork = clock();
     }
   } finally {
     stopHeartbeat();

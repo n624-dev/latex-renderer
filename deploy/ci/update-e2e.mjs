@@ -152,6 +152,19 @@ try {
     apiToken,
     run,
   });
+  // Install the gate before either deployment can schedule its delayed job.
+  // Historical releases schedule the bootstrap directly after ten seconds;
+  // creating this drop-in only after owner/render smoke leaves a live job
+  // able to consume the candidate while the next assembly is being prepared.
+  const activationDropIn =
+    "/run/systemd/system/latex-renderer-updater-activate.service.d";
+  await mkdir(activationDropIn, { recursive: true });
+  await writeFile(
+    join(activationDropIn, "90-ci-explicit-activation.conf"),
+    "[Unit]\nConditionPathExists=!/etc/latex-renderer-ci-host.json\n",
+    { mode: 0o644 },
+  );
+  run("/usr/bin/systemctl", ["daemon-reload"]);
   await deploy(baseline.source, { ...baseline, tag: baselineTag }, true);
   let candidateDeployer = helper;
   if (
@@ -234,15 +247,6 @@ try {
   // This disposable host drives activation synchronously. Prevent the signed
   // driver's delayed systemd job from racing our positive/negative fixtures.
   // The bootstrap itself remains unchanged and still takes the normal lock.
-  const activationDropIn =
-    "/run/systemd/system/latex-renderer-updater-activate.service.d";
-  await mkdir(activationDropIn, { recursive: true });
-  await writeFile(
-    join(activationDropIn, "90-ci-explicit-activation.conf"),
-    "[Unit]\nConditionPathExists=!/etc/latex-renderer-ci-host.json\n",
-    { mode: 0o644 },
-  );
-  run("/usr/bin/systemctl", ["daemon-reload"]);
   // Model a genuinely upgraded host, not just a fresh host provisioned using
   // candidate install-host.sh. Old OS policy can survive multiple releases and
   // undo the controller ownership when tmpfiles runs again after deployment.
@@ -695,6 +699,10 @@ try {
     pathToFileURL(join(candidate, "deploy/ci/http-application-idle.mjs"))
   );
   await verifyHttpApplicationIdle();
+  const { verifyCompactApplicationIdle } = await import(
+    pathToFileURL(join(candidate, "deploy/ci/compact-application-idle.mjs"))
+  );
+  await verifyCompactApplicationIdle();
   run("/bin/sh", [
     "/opt/latex-renderer/current/deploy/scripts/smoke-test-production.sh",
   ]);
@@ -729,6 +737,7 @@ try {
       interruptedInventoryRecovery: true,
       credentialStartup: true,
       httpApplicationIdle: true,
+      compactApplicationIdle: true,
     }),
   );
 } finally {

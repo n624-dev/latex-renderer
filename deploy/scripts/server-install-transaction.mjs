@@ -32,6 +32,7 @@ const allowedUnits = new Set(
     "update-manager",
   ].map((name) => `latex-renderer-${name}.service`),
 );
+allowedUnits.add("latex-renderer-status.socket");
 for (const name of [
   "backup",
   "audit-export",
@@ -40,6 +41,8 @@ for (const name of [
   "image-operation-watchdog",
   "update-refresh",
   "update-recovery-gc",
+  "worker-reconcile",
+  "engine-idle",
 ])
   allowedUnits.add(`latex-renderer-${name}.timer`);
 export function validateInstallationJournal(value) {

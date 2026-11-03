@@ -13,6 +13,7 @@ export const requiredProductionBuildOutputs = [
   "apps/renderer-worker/dist/index.js",
   "apps/standalone-gateway/dist/server.js",
   "client-dist/manifest.json",
+  "apps/public-web/dist/index.html",
 ];
 
 export async function assembleBuildArtifacts({
@@ -40,6 +41,16 @@ export async function assembleBuildArtifacts({
     `${assembly}/`,
   ]);
   for (const requiredPath of requiredProductionBuildOutputs) {
+    if (requiredPath === "apps/public-web/dist/index.html") {
+      try {
+        await lstat(
+          join(verifiedSource, "deploy/scripts/build-public-static.mjs"),
+        );
+      } catch (error) {
+        if (error.code === "ENOENT") continue;
+        throw error;
+      }
+    }
     // This helper also rebuilds independently verified historical Releases for
     // update/recovery. Do not require a module those sources never contained.
     // Any release containing the owner primitive or its setup consumer must

@@ -25,8 +25,13 @@ export function hostnameFromOrigin(origin) {
   return url.hostname;
 }
 
-export function desiredLatexRoutes(hostname) {
+export function desiredLatexRoutes(hostname, { passiveHealth = false } = {}) {
   return [
+    ...(passiveHealth ? [{
+      hostname,
+      path: "^/(health(/rendering|/status)?|api/v1/health)$",
+      service: "unix:/run/latex-renderer-status/status.sock",
+    }] : []),
     {
       hostname,
       path: "^/\\.well-known/oauth-(authorization-server|protected-resource)(/.*)?$",
@@ -73,14 +78,14 @@ export function desiredLatexRoutes(hostname) {
 
 export function reconcileLatexRoutes(
   ingress,
-  { hostname, legacyHostnames = [] },
+  { hostname, legacyHostnames = [], passiveHealth = false },
 ) {
   if (!Array.isArray(ingress))
     throw new Error("Tunnel configuration has no ingress array");
   if (!ingress.some((rule) => rule?.hostname === hostname))
     throw new Error(`Tunnel configuration has no ${hostname} route`);
 
-  const desired = desiredLatexRoutes(hostname);
+  const desired = desiredLatexRoutes(hostname, { passiveHealth });
   const legacy = new Set(legacyHostnames);
   const reconciled = [];
   let inserted = false;
@@ -109,7 +114,7 @@ function sameLatexRoutes(ingress, options) {
     }));
   return (
     JSON.stringify(actual) ===
-    JSON.stringify(desiredLatexRoutes(options.hostname))
+    JSON.stringify(desiredLatexRoutes(options.hostname, options))
   );
 }
 
@@ -165,7 +170,16 @@ async function main() {
     .split(",")
     .map((value) => value.trim())
     .filter(Boolean);
-  const options = { hostname, legacyHostnames };
+  let passiveHealth = false;
+  try {
+    const state = execFileSync("/usr/bin/systemctl", ["show", "latex-renderer-status.socket", "--property=ActiveState,SubState"], {
+      encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"],
+    });
+    passiveHealth = /^ActiveState=active$/m.test(state) && /^SubState=listening$/m.test(state);
+  } catch { /* Historical hosts retain their ordinary HTTP health route. */ }
+  if (process.env.RENDERER_RUNTIME_MODE === "compact" && !passiveHealth)
+    throw new Error("Compact Tunnel routing requires the passive health listener");
+  const options = { hostname, legacyHostnames, passiveHealth };
   const configurationUrl =
     `https://api.cloudflare.com/client/v4/accounts/${accountId}` +
     `/cfd_tunnel/${tunnelId}/configurations`;

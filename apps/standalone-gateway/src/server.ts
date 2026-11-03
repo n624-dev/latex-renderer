@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { serve } from "@hono/node-server";
+import { getRequestListener } from "@hono/node-server";
+import { createServer } from "node:http";
+import {
+  createHttpActivity,
+  startHttpService,
+} from "../../../deploy/scripts/http-idle-server.mjs";
 import { Hono } from "hono";
 import { secureHeaders } from "hono/secure-headers";
 import {
@@ -59,11 +64,18 @@ app.all("*", async (c) => {
   }
 });
 
-serve({
-  fetch: app.fetch,
-  hostname: "127.0.0.1",
-  port: validPortEnvironment(process.env, "PORT", 3105),
-});
+const activity = createHttpActivity();
+const listener = getRequestListener(activity.track(app.fetch));
+startHttpService(
+  createServer((request, response) => {
+    void listener(request, response);
+  }),
+  {
+    activity,
+    name: "standalone-gateway",
+    port: validPortEnvironment(process.env, "PORT", 3105),
+  },
+);
 
 function exactInternalOrigin(value: string): URL {
   const url = new URL(value);

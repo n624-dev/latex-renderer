@@ -36,7 +36,9 @@ export async function verifyActivationCommitBarrier(slots) {
   const script = join(root, "controller.mjs");
   const before = await slots.state();
   if (!before.candidate || before.pending)
-    throw new Error("Activation barrier requires a clean candidate");
+    throw new Error(
+      `Activation barrier requires a clean candidate: ${JSON.stringify(before)}`,
+    );
   await writeFile(
     script,
     `

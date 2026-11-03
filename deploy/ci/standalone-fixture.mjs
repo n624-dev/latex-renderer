@@ -30,3 +30,12 @@ export function standaloneProxy(template) {
     )
     .replaceAll("latex.example.com", ciHostname);
 }
+
+// The production dedicated ingress runs as the prepared API identity. The
+// disposable historical-baseline proxy must use that same read boundary; a
+// stock www-data worker cannot traverse sealed application release trees.
+export function standaloneNginxIdentity(template) {
+  if (!/^user\s+www-data\s*;$/m.test(template))
+    throw new Error("Unexpected disposable Nginx worker identity");
+  return template.replace(/^user\s+www-data\s*;$/m, "user latex-renderer;");
+}

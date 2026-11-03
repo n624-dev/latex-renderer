@@ -21,7 +21,8 @@ export async function verifyCredentialStartup(candidate, root) {
     join(candidate, "deploy/systemd/latex-renderer-image-manager.service"),
     "utf8",
   );
-  assert.match(unit, /^Type=exec$/m);
+  assert.match(unit, /^Type=notify$/m);
+  assert.match(unit, /^NotifyAccess=all$/m);
   assert.match(unit, /^LoadCredential=image-manager-token:/m);
   assert.match(unit, /^ExecStartPost=.*wait-image-manager-http.sh$/m);
   const suffix = randomBytes(6).toString("hex");
@@ -78,7 +79,7 @@ export async function verifyCredentialStartup(candidate, root) {
         }),
     );
   const before = show();
-  assert.equal(before.Type, "exec");
+  assert.equal(before.Type, "notify");
   // systemctl show prints this structured D-Bus property as [unprintable]
   // on systemd 255. Read the typed property instead of its human rendering.
   const credentials = JSON.parse(

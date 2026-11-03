@@ -13,6 +13,7 @@ import {
   ciPrivateKey,
   standaloneEnvironment,
   standaloneProxy,
+  standaloneNginxIdentity,
 } from "./standalone-fixture.mjs";
 
 if (
@@ -88,6 +89,12 @@ run("/bin/sh", [
 // Do not expose a local HTTPS peer while acquiring the external baseline.
 // E2E activates the fixture only after immutable download verification finishes.
 run("/usr/bin/systemctl", ["stop", "nginx"]);
+await writeFile("/etc/nginx/nginx.conf", standaloneNginxIdentity(
+  await readFile("/etc/nginx/nginx.conf", "utf8"),
+));
+// This is the disposable proxy's own temporary-body area, not application
+// storage. No production user/group, ACL or co-hosted Nginx is changed.
+run("/bin/chown", ["-R", "latex-renderer:latex-renderer", "/var/lib/nginx"]);
 await mkdir("/etc/latex-renderer/ci", { mode: 0o700 });
 const cert = ciCertificate;
 run("/usr/bin/openssl", [

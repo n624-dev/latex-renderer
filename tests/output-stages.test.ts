@@ -78,6 +78,46 @@ function pdf(db: RendererDatabase) {
   });
 }
 describe("independent output checkpoints", () => {
+  it("lets an internal check account retry its own SVG without exposing the Job to users or other accounts", () => {
+    const db = fixture();
+    pdf(db);
+    db.worker.transitionOwned(id, "worker", 1, ["running"], "failed", now, {
+      completed_at: now,
+      lease_owner: null,
+      lease_expires_at: null,
+      output_size: 30,
+    });
+    db.raw.exec(
+      "UPDATE service_accounts SET purpose='production-smoke' WHERE id='sa'",
+    );
+    const retry = new SvgRetryOperations(db, { maxOutputBytes: 100 });
+    const actor = {
+      type: "service_account",
+      id: "sa",
+      userId: "user",
+      serviceAccountId: "sa",
+    };
+    expect(db.jobs.getVisible(id)).toBeUndefined();
+    expect(() =>
+      retry.retry(
+        { type: "user", id: "user", userId: "user" },
+        id,
+        "user-retry-123456789",
+      ),
+    ).toThrow(/Job does not exist/);
+    expect(() =>
+      retry.retry(
+        { ...actor, serviceAccountId: "other" },
+        id,
+        "other-retry-123456789",
+      ),
+    ).toThrow(/Job does not exist/);
+    expect(retry.retry(actor, id, "owner-retry-123456789")).toEqual({
+      id,
+      reused: false,
+    });
+    expect(db.jobs.getVisible(id)).toBeUndefined();
+  });
   it("keeps deployment SQL identical to the application migration", () => {
     const sql = readFileSync(
       "deploy/migrations/021_independent_output_stages.sql",

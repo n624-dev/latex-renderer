@@ -1,8 +1,5 @@
 #!/usr/bin/env node
-import {
-  prepareHttpActivation,
-  supportsHttpActivation,
-} from "./http-services.mjs";
+import { prepareHttpActivation } from "./http-services.mjs";
 import { isMainModule } from "./is-main-module.mjs";
 
 /*
@@ -774,7 +771,7 @@ async function deployFromAssembly(
   // Legacy entry points cannot inherit activation sockets or notify-only units.
   // This runs under the same full-data quiescence as the deployment itself.
   const prepareLegacy = () => {
-    if (!supportsHttpActivation(assembly)) prepareHttpActivation(assembly);
+    prepareHttpActivation(assembly);
   };
   const environment = {
     ...process.env,

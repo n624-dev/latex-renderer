@@ -11,6 +11,9 @@ import { setTimeout as delay } from "node:timers/promises";
 import { httpIdleConfiguration } from "./http-idle-server.mjs";
 import { isMainModule } from "./is-main-module.mjs";
 import { acquireMutationLock } from "./mutation-lock.mjs";
+import { workerIdleConfiguration } from "./worker-demand.mjs";
+import { runtimeMode } from "./runtime-mode.mjs";
+import { workerEngineCommand } from "./on-demand-engine.mjs";
 
 export const HTTP_SERVICE_PORTS = Object.freeze({
   "latex-renderer-api.service": 3100,
@@ -19,11 +22,16 @@ export const HTTP_SERVICE_PORTS = Object.freeze({
   "latex-renderer-admin-api.service": 3102,
   "latex-renderer-internal-api.service": 3103,
   "latex-renderer-remote-mcp.service": 3104,
+  "latex-renderer-standalone-gateway.service": 3105,
 });
 export const HTTP_SERVICE_UNITS = Object.freeze(
   Object.keys(HTTP_SERVICE_PORTS),
 );
 const root = "/opt/latex-renderer/current";
+const managerUnits = [
+  "latex-renderer-image-manager.service",
+  "latex-renderer-update-manager.service",
+];
 const systemctl = (...args) =>
   execFileSync("/usr/bin/systemctl", args, {
     encoding: "utf8",
@@ -31,7 +39,9 @@ const systemctl = (...args) =>
     stdio: ["ignore", "pipe", "pipe"],
   });
 export function httpSocketUnit(unit) {
-  return Object.hasOwn(HTTP_SERVICE_PORTS, unit)
+  return Object.hasOwn(HTTP_SERVICE_PORTS, unit) ||
+    unit === "latex-renderer-worker.service" ||
+    managerUnits.includes(unit)
     ? unit.replace(/\.service$/, ".socket")
     : undefined;
 }
@@ -169,9 +179,10 @@ function environment(path) {
     throw error;
   }
   for (const line of contents.split("\n")) {
-    const match = /^(HTTP_IDLE_ENABLED|HTTP_IDLE_TIMEOUT_SECONDS)=(.*)$/.exec(
-      line,
-    );
+    const match =
+      /^(HTTP_IDLE_ENABLED|HTTP_IDLE_TIMEOUT_SECONDS|WORKER_IDLE_ENABLED|WORKER_IDLE_TIMEOUT_SECONDS|RENDERER_RUNTIME_MODE|MANAGER_IDLE_TIMEOUT_SECONDS)=(.*)$/.exec(
+        line,
+      );
     if (!match) continue;
     const [, name, raw] = match;
     if (Object.hasOwn(result, name))
@@ -183,6 +194,17 @@ function environment(path) {
 export function supportsHttpActivation(source = root) {
   return existsSync(join(source, "deploy/scripts/http-idle-server.mjs"));
 }
+export function supportsWorkerActivation(source = root) {
+  return existsSync(join(source, "deploy/scripts/worker-demand.mjs"));
+}
+export function workerActivationEnabled({ source = root, values } = {}) {
+  return (
+    supportsWorkerActivation(source) &&
+    workerIdleConfiguration(
+      values ?? environment("/etc/latex-renderer/renderer.env"),
+    ).enabled
+  );
+}
 export function httpActivationEnabled({ source = root, values } = {}) {
   return (
     supportsHttpActivation(source) &&
@@ -191,13 +213,33 @@ export function httpActivationEnabled({ source = root, values } = {}) {
     ).enabled
   );
 }
+function activationEnabledFor(unit, options = {}) {
+  if (unit === "latex-renderer-worker.service")
+    return workerActivationEnabled(options);
+  const source = options.source ?? root;
+  if (managerUnits.includes(unit))
+    return (
+      existsSync(join(source, "deploy/systemd", httpSocketUnit(unit))) &&
+      runtimeMode(
+        options.values ?? environment("/etc/latex-renderer/renderer.env"),
+      ) === "compact"
+    );
+  if (
+    unit === "latex-renderer-standalone-gateway.service" &&
+    !existsSync(
+      join(source, "deploy/systemd/latex-renderer-standalone-gateway.socket"),
+    )
+  )
+    return false;
+  return httpActivationEnabled(options);
+}
 
 // Logical service operations include the listener. In particular a stopped
 // writer cannot be restarted by a new request during configuration/DB cutover.
 export function controlService(
   action,
   unit,
-  { run = systemctl, enabled = httpActivationEnabled() } = {},
+  { run = systemctl, enabled = activationEnabledFor(unit) } = {},
 ) {
   if (action === "stop" && unit === "latex-renderer-web.service") {
     for (const name of [unit, "latex-renderer-admin-web.service"]) {
@@ -248,12 +290,48 @@ export function controlService(
 // dependency or a port held by this release's activation units.
 export function prepareHttpActivation(
   source,
-  { run = systemctl, unitRoot = "/etc/systemd/system", values } = {},
+  {
+    run = systemctl,
+    unitRoot = "/etc/systemd/system",
+    values,
+    validateCompact = () =>
+      execFileSync(
+        "/usr/local/bin/node",
+        [join(source, "deploy/scripts/updater-transport.mjs"), "check"],
+        { timeout: 30000, stdio: ["ignore", "pipe", "pipe"] },
+      ),
+  } = {},
 ) {
   if (!isAbsolute(source))
     throw new Error("HTTP activation source must be absolute");
   const enabled = httpActivationEnabled({ source, values });
-  for (const unit of HTTP_SERVICE_UNITS) {
+  const workerEnabled = workerActivationEnabled({ source, values });
+  const compact =
+    existsSync(join(source, "deploy/scripts/updater-socket-v1.mjs")) &&
+    runtimeMode(values ?? environment("/etc/latex-renderer/renderer.env")) ===
+      "compact";
+  if (compact) validateCompact();
+  const passive = existsSync(join(source, "deploy/scripts/passive-health.py"));
+  if (properties("latex-renderer-status.socket", run).LoadState === "loaded") {
+    run("stop", "latex-renderer-status.socket");
+    run(passive ? "enable" : "disable", "latex-renderer-status.socket");
+  }
+  if (
+    !compact &&
+    properties("latex-renderer-engine-idle.timer", run).LoadState === "loaded"
+  )
+    run("disable", "--now", "latex-renderer-engine-idle.timer");
+  if (
+    !workerEnabled &&
+    properties("latex-renderer-worker-reconcile.timer", run).LoadState ===
+      "loaded"
+  )
+    run("disable", "--now", "latex-renderer-worker-reconcile.timer");
+  for (const unit of [
+    ...HTTP_SERVICE_UNITS,
+    "latex-renderer-worker.service",
+    ...managerUnits,
+  ]) {
     const socket = httpSocketUnit(unit);
     if (properties(socket, run).LoadState !== "loaded") continue;
     let wasEnabled = false;
@@ -263,16 +341,21 @@ export function prepareHttpActivation(
       /* disabled */
     }
     run("stop", socket);
-    if (enabled) run("disable", unit);
+    if (activationEnabledFor(unit, { source, values })) run("disable", unit);
     else {
       run("disable", socket);
       if (wasEnabled) run("enable", unit);
     }
   }
-  for (const filename of [
+  for (const filename of new Set([
     ...HTTP_SERVICE_UNITS,
+    "latex-renderer-worker.service",
+    ...managerUnits,
+    "latex-renderer-updater-activate.service",
+    "latex-renderer-image-refresh.service",
+    "latex-renderer-update-refresh.service",
     "latex-renderer-standalone-gateway.service",
-  ]) {
+  ])) {
     const sourceUnit = join(source, "deploy/systemd", filename);
     if (!existsSync(sourceUnit)) continue;
     const path = join(unitRoot, filename);
@@ -298,6 +381,26 @@ export function prepareHttpActivation(
         "latex-renderer-internal-api.service",
         "latex-renderer-internal-api.socket",
       );
+    if (compact && !managerUnits.includes(filename))
+      text = text.replaceAll("latex-renderer-image-manager.service", "latex-renderer-image-manager.socket");
+    if (compact && filename === "latex-renderer-worker.service")
+      text = text
+        .replaceAll(
+          "latex-renderer-image-manager.service",
+          "latex-renderer-image-manager.socket",
+        )
+        .replace(/^PartOf=.*\n/gm, "");
+    if (compact && filename === "latex-renderer-image-manager.service")
+      text = text.replace(/^ExecStartPre=.*\n/gm, "");
+    if (
+      compact &&
+      [
+        "latex-renderer-image-refresh.service",
+        "latex-renderer-update-refresh.service",
+      ].includes(filename)
+    )
+      for (const manager of managerUnits)
+        text = text.replaceAll(manager, httpSocketUnit(manager));
     const temporary = `${path}.http-${process.pid}`;
     writeFileSync(temporary, text, { mode: 0o644, flag: "wx" });
     renameSync(temporary, path);
@@ -315,31 +418,70 @@ export async function reconcileHttpServices({
   unitRoot = "/etc/systemd/system",
   values,
   acquire = acquireMutationLock,
+  configureEngine = (compact) => {
+    workerEngineCommand("/usr/bin/systemctl", [
+      "--user",
+      compact ? "disable" : "enable",
+      "docker.service",
+    ]);
+    workerEngineCommand("/usr/bin/systemctl", [
+      "--user",
+      "start",
+      "docker.service",
+    ]);
+  },
 } = {}) {
   const lock = await acquire();
   try {
     const enabled = httpActivationEnabled({ source, values });
-    const units = ["api", "web", "admin-api", "internal-api", "remote-mcp"].map(
-      (name) => {
-        const entry = httpServiceStatus(`latex-renderer-${name}.service`, {
-          run,
-        });
-        return {
-          ...entry,
-          listener: properties(httpSocketUnit(entry.service), run),
-        };
-      },
+    const compactCapable = existsSync(
+      join(source, "deploy/scripts/updater-socket-v1.mjs"),
     );
+    const compact =
+      compactCapable &&
+      runtimeMode(values ?? environment("/etc/latex-renderer/renderer.env")) ===
+        "compact";
+    if (compact)
+      execFileSync(
+        "/usr/local/bin/node",
+        [join(source, "deploy/scripts/updater-transport.mjs"), "check"],
+        { timeout: 30000, stdio: ["ignore", "pipe", "pipe"] },
+      );
+    const names = ["api", "web", "admin-api", "internal-api", "remote-mcp"];
+    if (
+      supportsWorkerActivation(source) &&
+      properties("latex-renderer-worker.service", run).LoadState === "loaded"
+    )
+      names.push("worker");
+    for (const unit of managerUnits)
+      if (
+        existsSync(join(source, "deploy/systemd", httpSocketUnit(unit))) &&
+        properties(unit, run).LoadState === "loaded"
+      )
+        names.push(unit.slice("latex-renderer-".length, -".service".length));
+    const units = names.map((name) => {
+      const entry = httpServiceStatus(`latex-renderer-${name}.service`, {
+        run,
+      });
+      return {
+        ...entry,
+        enabled: activationEnabledFor(entry.service, { source, values }),
+        listener: properties(httpSocketUnit(entry.service), run),
+      };
+    });
     if (units.some((entry) => !entry.managed))
       throw new Error("Managed HTTP service definitions required");
-    if (enabled && units.some((entry) => entry.listener.LoadState !== "loaded"))
+    if (
+      units.some(
+        (entry) => entry.enabled && entry.listener.LoadState !== "loaded",
+      )
+    )
       throw new Error(
         "HTTP activation sockets must be installed before reconciliation",
       );
     const gateway = "latex-renderer-standalone-gateway.service";
-    const gatewayActive = ["active", "activating"].includes(
-      properties(gateway, run).ActiveState,
-    );
+    const gatewayActive = httpServiceStatus(gateway, { run }).active;
+    const gatewayEnabled = activationEnabledFor(gateway, { source, values });
     let stopping = false,
       prepared = false;
     try {
@@ -349,18 +491,19 @@ export async function reconcileHttpServices({
         const socket = httpSocketUnit(service);
         if (properties(socket, run).LoadState === "loaded") run("stop", socket);
       }
-      for (const { service } of units)
+      for (const { service, enabled } of units)
         controlService("stop", service, { run, enabled });
       // Install the new boot link before preparation removes the previous
       // mode's link. A crash can leave both enabled temporarily, but never
       // deliberately leaves a previously managed role without a boot path.
       // Current entrypoints support both inherited and ordinary listeners.
-      for (const { service } of units)
+      for (const { service, enabled } of units)
         run("enable", enabled ? httpSocketUnit(service) : service);
       prepareHttpActivation(source, { run, unitRoot, values });
       prepared = true;
+      if (compactCapable) configureEngine(compact);
       const failures = [];
-      for (const { service } of units) {
+      for (const { service, enabled } of units) {
         try {
           controlService("enable", service, { run, enabled });
           controlService("start", service, { run, enabled });
@@ -368,9 +511,18 @@ export async function reconcileHttpServices({
           failures.push(service);
         }
       }
+      const worker = units.find(
+        (entry) => entry.service === "latex-renderer-worker.service",
+      );
+      if (worker?.enabled)
+        run("enable", "--now", "latex-renderer-worker-reconcile.timer");
+      if (compact) run("enable", "--now", "latex-renderer-engine-idle.timer");
+      if (existsSync(join(source, "deploy/scripts/passive-health.py")))
+        run("start", "latex-renderer-status.socket");
       if (gatewayActive) {
         try {
-          run("start", gateway);
+          controlService("enable", gateway, { run, enabled: gatewayEnabled });
+          controlService("start", gateway, { run, enabled: gatewayEnabled });
         } catch {
           failures.push(gateway);
         }
@@ -384,7 +536,7 @@ export async function reconcileHttpServices({
       // No database or user data is changed. Resume every previously active
       // role where possible; a retry reconciles partially changed boot links.
       if (stopping) {
-        for (const { service, active, listener } of units)
+        for (const { service, active, listener, enabled } of units)
           if (active) {
             try {
               // Until daemon-reload completes, the gateway's live dependency
@@ -400,7 +552,7 @@ export async function reconcileHttpServices({
           }
         if (gatewayActive)
           try {
-            run("start", gateway);
+            controlService("start", gateway, { run, enabled: gatewayEnabled });
           } catch {
             /* retain primary failure */
           }

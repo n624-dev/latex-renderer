@@ -1,0 +1,20 @@
+[Unit]
+Description=Reconcile durable LaTeX Renderer queue and maintenance work
+After=latex-renderer-authentication-recovery.service
+
+[Service]
+Type=oneshot
+User=latex-render-worker
+Group=latex-renderer
+WorkingDirectory=/opt/latex-renderer/current
+EnvironmentFile=/etc/latex-renderer/renderer.env
+ExecStart=/usr/local/bin/node deploy/scripts/reconcile-worker.mjs
+TimeoutStartSec=15s
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/latex-renderer
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+RestrictAddressFamilies=AF_UNIX
+UMask=0007

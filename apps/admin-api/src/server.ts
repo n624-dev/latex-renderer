@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createAdaptorServer } from "@hono/node-server";
 import { httpServicesSnapshot } from "../../../deploy/scripts/http-services.mjs";
+import { readWorkerHealth } from "../../../deploy/scripts/worker-health.mjs";
 import {
   startHttpService,
   createHttpActivity,
@@ -73,6 +74,7 @@ const updateManager =
     : undefined;
 const app = createAdminApp({
   httpServices: httpServicesSnapshot,
+  workerStatus: readWorkerHealth,
   database,
   apiKeys: new ApiKeyService(
     database,

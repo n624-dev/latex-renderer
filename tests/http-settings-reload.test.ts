@@ -171,6 +171,7 @@ it.skipIf(process.platform === "win32")(
       expect(f.released()).toBe(3);
       expect(
         f.calls
+          .filter(([action]) => action !== "show")
           .flat()
           .some((value) => /worker|image-manager|update-manager/.test(value)),
       ).toBe(false);

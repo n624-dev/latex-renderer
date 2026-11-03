@@ -2,6 +2,7 @@
 Description=Activate and health-check the independent Updater
 After=latex-renderer-updater-recovery.service
 Requires=latex-renderer-updater-recovery.service
+Conflicts=latex-renderer-update-manager.socket
 StartLimitIntervalSec=5min
 StartLimitBurst=3
 
@@ -18,6 +19,6 @@ KillMode=control-group
 # Restore a pending slot transition after interruption, then keep management
 # available. These also run if the activation process is killed mid-cutover.
 ExecStopPost=/usr/local/bin/node /opt/latex-renderer/updater/bootstrap-v1/updater-bootstrap.mjs recover
-ExecStopPost=/usr/bin/systemctl start latex-renderer-update-manager.service
+ExecStopPost=/usr/local/bin/node /usr/local/libexec/latex-renderer-updater-transport.mjs resume
 Restart=on-failure
 RestartSec=30s

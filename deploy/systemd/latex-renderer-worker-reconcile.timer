@@ -1,0 +1,11 @@
+[Unit]
+Description=Bounded recovery of missed Worker queue notifications
+
+[Timer]
+OnBootSec=1min
+OnUnitInactiveSec=1min
+AccuracySec=5s
+Unit=latex-renderer-worker-reconcile.service
+
+[Install]
+WantedBy=timers.target

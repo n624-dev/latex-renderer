@@ -31,6 +31,27 @@ let log = execFileSync(
   ],
   { encoding: "utf8", maxBuffer: 1024 * 1024 },
 ).slice(-32 * 1024);
+try {
+  const root = "/var/lib/latex-renderer/image-manager";
+  const statePath = `${root}/state.json`;
+  const info = lstatSync(statePath);
+  if (!info.isFile() || info.nlink !== 1 || info.size > 1024 * 1024)
+    throw new Error("Invalid bounded manager diagnostic state");
+  const state = JSON.parse(readFileSync(statePath, "utf8"));
+  let operation = null;
+  if (/^imgop_[0-9]{13}_[a-z0-9]{1,16}$/.test(state.lastOperationId ?? "")) {
+    const path = `${root}/operations/${state.lastOperationId}.json`;
+    const entry = lstatSync(path);
+    if (!entry.isFile() || entry.nlink !== 1 || entry.size > 1024 * 1024)
+      throw new Error("Invalid bounded manager diagnostic operation");
+    const value = JSON.parse(readFileSync(path, "utf8"));
+    operation = { type: value.type, status: value.status, error: value.error };
+  }
+  log += "\n" + JSON.stringify({ event: "ci.manager_diagnostic", lastApplyError: state.lastApplyError,
+    lastCleanupAt: state.lastCleanupAt, operation }).slice(-8192);
+} catch {
+  log += '\n{"event":"ci.manager_diagnostic_unavailable"}';
+}
 for (const name of readdirSync("/etc/latex-renderer/secrets")) {
   const path = `/etc/latex-renderer/secrets/${name}`,
     info = lstatSync(path);

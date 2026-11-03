@@ -6,6 +6,7 @@ import {
   ciPrivateKey,
   standaloneEnvironment,
   standaloneProxy,
+  standaloneNginxIdentity,
 } from "../deploy/ci/standalone-fixture.mjs";
 import {
   parseEnvironmentFile,
@@ -13,6 +14,12 @@ import {
 } from "../deploy/scripts/validate-production-profile.mjs";
 
 const template = readFileSync(".env.example", "utf8");
+it("uses the production static-reader identity only in the guarded disposable proxy", () => {
+  expect(standaloneNginxIdentity("user www-data;\nworker_processes auto;\n")).toBe("user latex-renderer;\nworker_processes auto;\n");
+  expect(() => standaloneNginxIdentity("user root;\n")).toThrow("Unexpected");
+  const provision = readFileSync("deploy/ci/provision-update-host.mjs", "utf8");
+  expect(provision.indexOf("Provisioning is restricted")).toBeLessThan(provision.indexOf("standaloneNginxIdentity("));
+});
 it("rejects the original example but accepts the actual generated CI profile", () => {
   expect(() => validateProfileValues(parseEnvironmentFile(template))).toThrow(
     "example placeholder",

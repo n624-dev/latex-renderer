@@ -47,7 +47,13 @@ export class SvgRetryOperations {
       if (!Number.isSafeInteger(value) || value <= 0)
         throw new Error("Invalid SVG retry limits");
     return this.db.transaction(() => {
-      const row = this.db.jobs.getVisible(jobId);
+      // UI visibility and an authenticated account's exact Job capability are
+      // distinct. Internal smoke Jobs stay hidden from user listings, while
+      // their creating account retains the same retry path as other Jobs.
+      const row =
+        actor.serviceAccountId === undefined
+          ? this.db.jobs.getVisible(jobId)
+          : this.db.jobs.getOwned(jobId, actor.userId, actor.serviceAccountId);
       if (
         !row ||
         row.user_id !== actor.userId ||

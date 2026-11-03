@@ -1,0 +1,22 @@
+[Unit]
+Description=Local queue notification socket for LaTeX Renderer Worker
+DefaultDependencies=no
+Before=shutdown.target
+Conflicts=shutdown.target
+After=latex-renderer-authentication-recovery.service
+Requires=latex-renderer-authentication-recovery.service
+
+[Socket]
+ListenStream=/run/latex-renderer-worker/wake.sock
+SocketUser=latex-render-worker
+SocketGroup=latex-renderer
+SocketMode=0660
+DirectoryMode=0755
+Accept=no
+Service=latex-renderer-worker.service
+FileDescriptorName=worker
+Backlog=128
+RemoveOnStop=true
+
+[Install]
+WantedBy=sockets.target

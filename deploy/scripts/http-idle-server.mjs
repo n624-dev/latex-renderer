@@ -5,6 +5,7 @@ import { performance } from "node:perf_hooks";
 import { URL } from "node:url";
 import { clearTimeout, setTimeout } from "node:timers";
 import { boundedIntegerEnvironment } from "./environment.mjs";
+import { assertUnixListener } from "./activation-socket.mjs";
 
 function passiveRequest(method, url) {
   if (!["GET", "HEAD"].includes(method)) return false;
@@ -92,6 +93,8 @@ export function startHttpService(
   server,
   {
     port,
+    path,
+    host = "127.0.0.1",
     name,
     environment = process.env,
     onListening = () => {},
@@ -123,12 +126,18 @@ export function startHttpService(
       delete environment[key];
   }
   if (
-    !Number.isInteger(port) ||
-    port < 1 ||
-    port > 65535 ||
+    (path === undefined
+      ? !Number.isInteger(port) || port < 1 || port > 65535
+      : typeof path !== "string" ||
+        !path.startsWith("/") ||
+        path.includes("\0") ||
+        port !== undefined) ||
+    !["127.0.0.1", "::1"].includes(host) ||
     !/^[a-z][a-z0-9_-]{0,63}$/.test(name)
   )
     throw new Error("Invalid HTTP service identity");
+  if (descriptor !== undefined && path !== undefined)
+    assertUnixListener(descriptor, path);
   const idle = descriptor !== undefined && configuration.enabled;
   let timer,
     active = 0,
@@ -246,10 +255,12 @@ export function startHttpService(
   const listening = () => {
     const address = server.address();
     if (
-      !address ||
-      typeof address === "string" ||
-      address.address !== "127.0.0.1" ||
-      address.port !== port
+      path === undefined
+        ? !address ||
+          typeof address === "string" ||
+          address.address !== host ||
+          address.port !== port
+        : descriptor === undefined && address !== path
     ) {
       server.close();
       throw new Error("HTTP listener must match its loopback service endpoint");
@@ -289,7 +300,9 @@ export function startHttpService(
       }),
     );
   };
-  if (descriptor === undefined) server.listen(port, "127.0.0.1", listening);
+  if (descriptor === undefined && path !== undefined)
+    server.listen(path, listening);
+  else if (descriptor === undefined) server.listen(port, host, listening);
   else server.listen({ fd: descriptor }, listening);
   return server;
 }

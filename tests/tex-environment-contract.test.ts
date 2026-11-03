@@ -368,7 +368,9 @@ describe("managed TeX Live image pipeline", () => {
     expect(deploy).toContain(
       'sh "$source_root/deploy/scripts/quiesce-image-manager.sh"',
     );
-    expect(deploy).toContain("systemctl restart latex-renderer-image-manager");
+    expect(deploy).toContain(
+      "http_control restart latex-renderer-image-manager.service",
+    );
     expect(deploy).toContain("latex-renderer-image-operation-watchdog.timer");
     expect(prune).toContain(
       "managed TeX runtime or rollback image is protected",

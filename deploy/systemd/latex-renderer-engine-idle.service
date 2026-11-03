@@ -1,0 +1,21 @@
+[Unit]
+Description=Release the dedicated container engine after compact consumers sleep
+After=latex-renderer-authentication-recovery.service
+Requires=latex-renderer-authentication-recovery.service
+
+[Service]
+Type=oneshot
+User=root
+Group=latex-renderer
+WorkingDirectory=/opt/latex-renderer/current
+EnvironmentFile=/etc/latex-renderer/renderer.env
+ExecStart=/usr/local/bin/node deploy/scripts/idle-container-engine.mjs
+TimeoutStartSec=3min
+NoNewPrivileges=false
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+RestrictAddressFamilies=AF_UNIX
+ReadWritePaths=/run/latex-renderer /run/latex-renderer-engine /var/lib/latex-renderer /var/lib/latex-render-worker/.docker
+UMask=0007

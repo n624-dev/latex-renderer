@@ -1,5 +1,8 @@
 # This file is included from nginx's http context. Replace the hostname and
 # certificate paths. Keep every application service on loopback.
+# Direct static serving requires a reader allowed to traverse sealed releases.
+# The managed standalone ingress uses the prepared latex-renderer identity.
+# A separate external proxy without that access falls back to the Web service.
 limit_conn_zone $binary_remote_addr zone=latex_renderer_connections:10m;
 limit_req_zone $binary_remote_addr zone=latex_renderer_login:10m rate=5r/m;
 limit_req_zone $binary_remote_addr zone=latex_renderer_api:10m rate=120r/m;
@@ -33,7 +36,7 @@ server {
   proxy_send_timeout 120s;
   proxy_read_timeout 360s;
 
-  location = /api/v1/health { limit_req zone=latex_renderer_api burst=20 nodelay; proxy_pass http://127.0.0.1:3105; }
+
   location = /api/v1/render-tickets { limit_req zone=latex_renderer_api burst=20 nodelay; proxy_pass http://127.0.0.1:3105; }
   location = /api/v1/source-tickets { limit_req zone=latex_renderer_api burst=20 nodelay; proxy_pass http://127.0.0.1:3105; }
   location ^~ /api/v1/job-tickets/ { limit_req zone=latex_renderer_api burst=20 nodelay; proxy_pass http://127.0.0.1:3105; }
@@ -45,6 +48,42 @@ server {
   location = /auth/password/login { limit_req zone=latex_renderer_login burst=5 nodelay; proxy_pass http://127.0.0.1:3102; }
   location ~ ^/(auth|admin/api|admin/v1|app/api)(/|$) { proxy_pass http://127.0.0.1:3102; }
   location ^~ /api/ { proxy_pass http://127.0.0.1:3100; }
+
+  location @latex_renderer_legacy_api_health { proxy_pass http://127.0.0.1:3105; }
+  location = /api/v1/health {
+    proxy_pass http://unix:/run/latex-renderer-status/status.sock;
+    proxy_intercept_errors on;
+    error_page 502 504 = @latex_renderer_legacy_api_health;
+  }
+  location = /health {
+    proxy_pass http://unix:/run/latex-renderer-status/status.sock;
+    proxy_intercept_errors on;
+    error_page 502 504 = @latex_renderer_web;
+  }
+  location = /health/rendering { proxy_pass http://unix:/run/latex-renderer-status/status.sock; }
+  location = /health/status { proxy_pass http://unix:/run/latex-renderer-status/status.sock; }
+
+  location @latex_renderer_web { proxy_pass http://127.0.0.1:3101; }
+  location = / {
+    root /opt/latex-renderer/current/apps/public-web/dist;
+    try_files /index.html @latex_renderer_web;
+    add_header Strict-Transport-Security "max-age=63072000" always;
+    add_header Cache-Control "public, max-age=0, must-revalidate, no-transform" always;
+    add_header X-Content-Type-Options nosniff always;
+    add_header X-Frame-Options DENY always;
+    add_header Referrer-Policy no-referrer always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data: blob:; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" always;
+  }
+  location ~ ^/(?:docs(?:/|$)|downloads(?:/|$)|assets/(?:styles\.css|site\.js|login\.js|docs-search\.json)$|openapi/(?:gateway|renderer)\.openapi\.yaml$) {
+    root /opt/latex-renderer/current/apps/public-web/dist;
+    try_files $uri $uri/index.html @latex_renderer_web;
+    add_header Strict-Transport-Security "max-age=63072000" always;
+    add_header Cache-Control "public, max-age=0, must-revalidate, no-transform" always;
+    add_header X-Content-Type-Options nosniff always;
+    add_header X-Frame-Options DENY always;
+    add_header Referrer-Policy no-referrer always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data: blob:; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" always;
+  }
   location / { proxy_pass http://127.0.0.1:3101; }
 }
 

@@ -9,6 +9,7 @@ import * as processor from "../apps/renderer-worker/src/job-processor.js";
 import * as failure from "../apps/renderer-worker/src/failure.js";
 import * as queue from "../apps/renderer-worker/src/queue.js";
 import * as admission from "../apps/renderer-worker/src/admission.js";
+import * as sourceTrees from "../apps/renderer-worker/src/source-tree-cache.js";
 import { runWorker } from "../apps/renderer-worker/src/worker.js";
 import {
   MIB,
@@ -78,6 +79,43 @@ function fixture() {
   };
 }
 describe("worker stop and orphan-recovery lifecycle", () => {
+  it("exits only after the full empty-queue deadline and successful maintenance", async () => {
+    const f = fixture();
+    f.claimed.mockReturnValue(undefined);
+    vi.spyOn(sourceTrees, "collectSourceTrees").mockResolvedValue();
+    vi.spyOn(sourceTrees, "recoverSourceTreeReaders").mockResolvedValue();
+    let elapsed = 0;
+    await runWorker(f.database, f.config, f.abort.signal, {
+      idle: { timeoutMs: 30000, now: () => elapsed },
+      idleDelay: () => {
+        elapsed += 10000;
+        if (elapsed > 50000) throw new Error("Worker did not idle");
+        return Promise.resolve();
+      },
+    });
+    expect(elapsed).toBe(30000);
+    expect(f.stopped).toHaveBeenCalledOnce();
+    expect(f.processed).not.toHaveBeenCalled();
+  });
+  it("keeps the Worker alive when maintenance could not finish safely", async () => {
+    const f = fixture();
+    f.claimed.mockReturnValue(undefined);
+    vi.spyOn(sourceTrees, "collectSourceTrees").mockRejectedValue(
+      new Error("I/O unavailable"),
+    );
+    vi.spyOn(sourceTrees, "recoverSourceTreeReaders").mockResolvedValue();
+    let elapsed = 0;
+    await runWorker(f.database, f.config, f.abort.signal, {
+      idle: { timeoutMs: 30000, now: () => elapsed },
+      idleDelay: () => {
+        elapsed += 20000;
+        if (elapsed >= 60000) f.abort.abort();
+        return Promise.resolve();
+      },
+    });
+    expect(elapsed).toBe(60000);
+    expect(f.database.settings.value("worker_maintenance", null)).toBeNull();
+  });
   it("invalidates a lightweight prediction after actual memory exhaustion without retrying it in a loop", async () => {
     const f = fixture();
     f.config.minimumAvailableMemoryBytes = 500 * MIB;

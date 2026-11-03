@@ -55,6 +55,7 @@ const environmentPath = "/etc/latex-renderer/renderer.env";
 const journalRoot = "/etc/latex-renderer/installation-transaction";
 const secretRoot = "/etc/latex-renderer/secrets";
 const runtimeUnits = [
+  "latex-renderer-status.socket",
   "latex-renderer-api.service",
   "latex-renderer-admin-api.service",
   "latex-renderer-remote-mcp.service",
@@ -72,6 +73,8 @@ const maintenanceUnits = [
   "image-operation-watchdog",
   "update-refresh",
   "update-recovery-gc",
+  "worker-reconcile",
+  "engine-idle",
 ].map((name) => `latex-renderer-${name}.timer`);
 const managers = [
   "latex-renderer-image-manager.service",

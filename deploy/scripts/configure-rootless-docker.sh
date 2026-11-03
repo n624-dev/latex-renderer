@@ -26,10 +26,26 @@ run_worker() {
 }
 loginctl enable-linger "$worker_user"
 systemctl start "user@$worker_uid.service"
+run_worker install -d -m 0700 "$worker_home/.docker"
 if [ ! -f "$worker_home/.config/systemd/user/docker.service" ]; then
   run_worker dockerd-rootless-setuptool.sh install --force
 fi
-run_worker systemctl --user enable --now docker
+source_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
+if [ -f /etc/latex-renderer/renderer.env ]; then
+  runtime_mode=$(/usr/local/bin/node "$source_root/deploy/scripts/runtime-mode.mjs")
+else
+  # Account/engine preparation precedes profile creation on a fresh host.
+  # Compact can be selected only after the verified profile is installed.
+  runtime_mode=classic
+fi
+if [ "$runtime_mode" = compact ]; then
+  # Preparation still validates the engine. Idle collection later stops this
+  # dedicated user's service after every consumer and container has drained.
+  run_worker systemctl --user disable docker.service
+  run_worker systemctl --user start docker.service
+else
+  run_worker systemctl --user enable --now docker.service
+fi
 attempt=0
 # A socket alone is not readiness, nor proof that the intended daemon is used.
 until [ -S "$runtime_dir/docker.sock" ] && \

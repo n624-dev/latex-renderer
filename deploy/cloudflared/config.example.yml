@@ -5,6 +5,11 @@ credentials-file: /etc/cloudflared/REPLACE_WITH_TUNNEL_ID.json
 
 ingress:
   # Keep specific application routes before the web fallback.
+  # Optional passive health: enable latex-renderer-status.socket first.
+  # These read-only paths do not wake application/management Node processes.
+  # - hostname: latex.example.com
+  #   path: ^/(health(/rendering|/status)?|api/v1/health)$
+  #   service: unix:/run/latex-renderer-status/status.sock
   - hostname: latex.example.com
     path: ^/\.well-known/oauth-(authorization-server|protected-resource)(/.*)?$
     service: http://127.0.0.1:3104

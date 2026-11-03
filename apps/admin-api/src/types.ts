@@ -20,6 +20,7 @@ export interface AdminActor extends AppActor {
 }
 
 export interface AdminDependencies {
+  workerStatus?: () => { operational: boolean; state: string };
   httpServices?: () => {
     managed: boolean;
     services: { service: string; state: string; operational: boolean }[];

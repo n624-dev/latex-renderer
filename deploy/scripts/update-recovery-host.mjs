@@ -28,6 +28,8 @@ const timers = [
   "update-refresh",
   "image-refresh",
   "image-operation-watchdog",
+  "worker-reconcile",
+  "engine-idle",
   "image-log-cleanup",
 ].map((name) => `latex-renderer-${name}.timer`);
 const writers = [
@@ -43,7 +45,7 @@ const writers = [
 const maintenance = ["backup", "cleanup", "audit-export"].map(
   (name) => `latex-renderer-${name}.service`,
 );
-const units = [...timers, ...writers];
+const units = [...timers, ...writers, "latex-renderer-status.socket"];
 function validateJournal(value) {
   if (
     value?.format !== 1 ||

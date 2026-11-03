@@ -1,0 +1,24 @@
+[Unit]
+Description=Loopback activation socket for LaTeX Renderer Update Manager
+
+# Recovery is a normal service ordered after basic.target. These listeners
+# start after it, rather than participating in the early sockets.target order.
+DefaultDependencies=no
+Before=shutdown.target
+Conflicts=shutdown.target
+After=latex-renderer-updater-recovery.service latex-renderer-authentication-recovery.service
+Requires=latex-renderer-updater-recovery.service latex-renderer-authentication-recovery.service
+
+[Socket]
+SocketUser=latex-renderer-update
+SocketGroup=latex-renderer
+SocketMode=0660
+DirectoryMode=0770
+ListenStream=/run/latex-renderer/update-manager.sock
+Accept=no
+Service=latex-renderer-update-manager.service
+FileDescriptorName=http
+Backlog=128
+
+[Install]
+WantedBy=sockets.target
