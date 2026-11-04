@@ -48,6 +48,19 @@ deployment. Acceptance requires that controller's PID to survive host
 preparation until the independent cutover. This supplements the historical
 ordinary-startup baselines and catches self-update listener disruptions.
 
+Disposable update hosts measure free space on `/var/lib` before provisioning.
+Some GitHub-hosted images start with only about 14 GiB free, which is insufficient
+for the frozen baseline and target Runtime builds. On an empty GitHub-hosted
+runner only, preparation removes an explicit list of unused optional SDK
+directories toward 48 GiB of measured free space, with a 32 GiB provisioning guard. It
+preserves Node, the tool cache, container images and application data, skips
+symlinks and mount roots, and does not cross nested filesystem boundaries.
+An existing application host or persistent runner is rejected before cleanup.
+If actual free space remains insufficient, provisioning stops with
+`RUNNER_CAPACITY_BLOCKED`; apparent SDK sizes are never counted as reclaimed
+space. This CI preparation does not change production storage or memory limits.
+The guard is a provisioning threshold, not a guarantee of every workload's peak.
+
 ## Layout and authority
 
 The application continues to use /opt/latex-renderer/current. Separately,

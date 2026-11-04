@@ -3,6 +3,7 @@ import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { configureDockerRepository } from "./docker-repository.mjs";
 import { nativeBaseDigest } from "../scripts/ghcr-base-publication.mjs";
+import { prepareUpdateHostDisk } from "./update-host-disk.mjs";
 import {
   userEnvironmentKeys,
   withoutUserEnvironmentDefaults,
@@ -39,6 +40,9 @@ for (const path of [
     if (error.code !== "ENOENT") throw error;
   }
 }
+// Reclaim only optional SDKs on an empty disposable runner, before installing
+// the baseline or creating any application state. Measure the actual target FS.
+prepareUpdateHostDisk();
 const source = resolve(process.argv[1], "../../..");
 // Validate the generated fixture before installing packages or building releases.
 const environment = standaloneEnvironment(
@@ -89,9 +93,10 @@ run("/bin/sh", [
 // Do not expose a local HTTPS peer while acquiring the external baseline.
 // E2E activates the fixture only after immutable download verification finishes.
 run("/usr/bin/systemctl", ["stop", "nginx"]);
-await writeFile("/etc/nginx/nginx.conf", standaloneNginxIdentity(
-  await readFile("/etc/nginx/nginx.conf", "utf8"),
-));
+await writeFile(
+  "/etc/nginx/nginx.conf",
+  standaloneNginxIdentity(await readFile("/etc/nginx/nginx.conf", "utf8")),
+);
 // This is the disposable proxy's own temporary-body area, not application
 // storage. No production user/group, ACL or co-hosted Nginx is changed.
 run("/bin/chown", ["-R", "latex-renderer:latex-renderer", "/var/lib/nginx"]);
