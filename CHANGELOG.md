@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 1.6.0 - 2026-11-04
+
+- Promote validated 1.6.0-rc.2 to Stable with matching executable behavior, dependencies and configuration defaults.
+- Add Web and terminal LAN HTTPS setup with deterministic IP-derived URLs, locally held TLS keys, persisted ACME certificates and optional authenticated Keyless operation.
+- Support shared and self-hosted authorities, open or invitation-based registration, automatic renewal, bounded state, replay protection and certificate recovery. Document DNS delegation and certificate self-hosting.
+- Include signed native amd64/arm64 TLS helpers and isolated authority deployment, update and recovery handling.
+- Use Node.js 26 LTS in development and CI while retaining Node.js 24 LTS compatibility and a validated migration path from earlier Stable installations.
+- Preserve Worker availability during Image Manager and Node runtime restarts, with dependency-aware service ordering and update/recovery validation on five historical host configurations.
+
 ## 1.5.10 - 2026-11-04
 
 - Promote validated 1.5.10-rc.1 to Stable with matching executable behavior, dependencies and configuration defaults.
