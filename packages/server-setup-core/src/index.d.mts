@@ -27,6 +27,7 @@ export interface ServerSetupSessionHost {
 }
 export interface ServerInitialCredentials {
   deploymentUser?: string;
+  lanInvitation?: string;
   owner: {
     displayName: string;
     email?: string;
@@ -42,7 +43,8 @@ export function validateServerInitialInput(
   credentials: unknown,
 ): ServerInitialCredentials;
 export interface ServerIngressCredentials {
-  tls: { certificate: string; privateKey: string };
+  lanInvitation?: string;
+  tls?: { certificate: string; privateKey: string };
 }
 export function validateServerIngressInput(
   review: unknown,
@@ -140,6 +142,12 @@ export type ServerIngressReview =
       publicOrigin: string;
       accessScope: "local" | "lan" | "internet";
       tlsProvider: "custom" | "automatic";
+      lanHttps?: Readonly<{
+        format: 1;
+        provider: import("./lan-https.mjs").LanHttpsProvider;
+        issuerId: string;
+        termsAccepted: boolean;
+      }>;
       listenAddress: string;
       allowedNetworks?: readonly string[];
     }>;
@@ -173,7 +181,10 @@ export const SERVER_INGRESS_TLS_PATHS: Readonly<{
   privateKey: string;
 }>;
 export function renderServerIngressNginx(input: unknown): string;
-export function renderLanHttpsBackendNginx(input: unknown, provider: unknown): string;
+export function renderLanHttpsBackendNginx(
+  input: unknown,
+  provider: unknown,
+): string;
 export const LAN_HTTPS_BACKEND_PORT: 3180;
 export interface ServerSetupDeploymentReview {
   readonly format: 3;
@@ -355,7 +366,7 @@ export interface ServerSetupReadiness {
     path: string;
   }>[];
   readonly oidcDiscoveryRequired: boolean;
-  readonly ingressStatus: "unreviewed" | "unsupported-automatic" | "reviewed";
+  readonly ingressStatus: "unreviewed" | "reviewed";
   readonly readyForApply: false;
 }
 export function reviewServerSetupReadiness(
@@ -373,6 +384,8 @@ export function checkServerSetupOidc(
 export {
   normalizeLanHttpsDomain,
   lanHttpsHostname,
+  LAN_HTTPS_COMMON,
+  lanHttpsInterfaceChoices,
   lanHttpsAddress,
   lanHttpsOrigin,
   validateLanHttpsServerOrigin,

@@ -1,15 +1,6 @@
 import { isIP } from "node:net";
 import { URL } from "node:url";
 import { profileRecord } from "./profile-shape.mjs";
-import { serverIngressContainsAddress } from "./ingress-review.mjs";
-
-const privateNetworks = [
-  "10.0.0.0/8",
-  "172.16.0.0/12",
-  "192.168.0.0/16",
-  "fc00::/7",
-];
-
 // These functions only review data. They perform no discovery, DNS, TLS,
 // certificate issuance, credential reads or changes to a running ingress.
 export function normalizeLanHttpsDomain(value) {
@@ -36,9 +27,16 @@ function privateAddress(value) {
     typeof value !== "string" ||
     value.includes("%") ||
     !isIP(value) ||
-    !privateNetworks.some((network) =>
-      serverIngressContainsAddress(network, value),
-    )
+    !(isIP(value) === 4
+      ? (() => {
+          const [a, b] = value.split(".").map(Number);
+          return (
+            a === 10 ||
+            (a === 172 && b >= 16 && b <= 31) ||
+            (a === 192 && b === 168)
+          );
+        })()
+      : /^(fc|fd)/i.test(value))
   )
     throw new Error("LAN HTTPS requires a private IPv4 or IPv6 ULA address");
   if (isIP(value) === 4)
@@ -138,6 +136,11 @@ export function validateLanHttpsProvider(input) {
     );
   const serverOrigin = validateLanHttpsServerOrigin(model.serverOrigin);
   const lanDomain = normalizeLanHttpsDomain(model.lanDomain);
+  const apiHost = new URL(serverOrigin).hostname;
+  if (apiHost === lanDomain || apiHost.endsWith("." + lanDomain))
+    throw new Error(
+      "Authority API must be outside the shared LAN certificate namespace",
+    );
   const address = privateAddress(model.address).address;
   const port = model.port === undefined ? 443 : model.port;
   const publicOrigin = lanHttpsOrigin(address, lanDomain, port);
@@ -208,4 +211,83 @@ export function validateLanHttpsAuthorityPolicy(input) {
     registration: model.registration,
     limits: Object.freeze(checked),
   });
+}
+
+export const LAN_HTTPS_COMMON = Object.freeze({
+  serverOrigin: "https://akebi.n624.net",
+  lanDomain: "lan.n624.net",
+  issuerId: "zerossl",
+});
+
+// Interface inventory is supplied by a host adapter; this function itself does
+// no discovery. Names are display text, never shell commands or bind targets.
+export function lanHttpsInterfaceChoices(interfaces) {
+  const result = [];
+  for (const [name, entries] of Object.entries(interfaces ?? {}).slice(0, 64)) {
+    if (!Array.isArray(entries)) continue;
+    for (const entry of entries.slice(0, 64)) {
+      if (
+        !entry ||
+        entry.internal ||
+        typeof name !== "string" ||
+        name.length > 64
+      )
+        continue;
+      try {
+        const checked = privateAddress(entry.address);
+        const family = isIP(checked.address);
+        const bits = family === 4 ? 32 : 128;
+        const prefix = Number(String(entry.cidr ?? "").split("/")[1]);
+        if (!Number.isSafeInteger(prefix) || prefix < 1 || prefix > bits)
+          continue;
+        let value =
+          family === 4
+            ? checked.address
+                .split(".")
+                .reduce((n, v) => (n << 8n) | BigInt(v), 0n)
+            : BigInt("0x" + checked.label.replaceAll("-", ""));
+        value = (value >> BigInt(bits - prefix)) << BigInt(bits - prefix);
+        let address;
+        if (family === 4)
+          address = [24n, 16n, 8n, 0n]
+            .map((shift) => Number((value >> shift) & 255n))
+            .join(".");
+        else {
+          const words = value
+            .toString(16)
+            .padStart(32, "0")
+            .match(/.{4}/g)
+            .map((word) => parseInt(word, 16).toString(16));
+          address = new URL(`http://[${words.join(":")}]/`).hostname.slice(
+            1,
+            -1,
+          );
+        }
+        // Reject an interface mask that reaches outside private address space.
+        if (
+          (family === 4 &&
+            prefix <
+              (checked.address.startsWith("10.")
+                ? 8
+                : checked.address.startsWith("172.")
+                  ? 12
+                  : 16)) ||
+          (family === 6 && prefix < 7)
+        )
+          continue;
+        if (!result.some((v) => v.address === checked.address))
+          result.push(
+            Object.freeze({
+              interfaceName: name,
+              address: checked.address,
+              network: `${address}/${prefix}`,
+            }),
+          );
+        if (result.length >= 32) return Object.freeze(result);
+      } catch {
+        /* Not an eligible unicast LAN interface. */
+      }
+    }
+  }
+  return Object.freeze(result);
 }

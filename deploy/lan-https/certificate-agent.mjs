@@ -44,6 +44,8 @@ export async function runLanHttpsCertificateAgent({
   return withLanHttpsClientLock(root, async (state) => {
     state.recoverTemporaryFiles();
     const keys = state.ensureKeys();
+    const pendingTlsKey = state.read("tls-next.pem", 16384);
+    const issuanceTlsKey = pendingTlsKey ?? keys.tlsKey;
     const jwk = createPublicKey(keys.identityKey).export({ format: "jwk" });
     const { installationId } = lanHttpsPublicIdentity({
       kty: jwk.kty,
@@ -57,15 +59,9 @@ export async function runLanHttpsCertificateAgent({
     const context = createHash("sha256")
       .update(
         JSON.stringify([
-          checked,
+          [checked.serverOrigin, checked.lanDomain, checked.publicOrigin],
           installationId,
           issuerId,
-          createPublicKey(keys.accountKey)
-            .export({ type: "spki", format: "der" })
-            .toString("base64"),
-          createPublicKey(keys.tlsKey)
-            .export({ type: "spki", format: "der" })
-            .toString("base64"),
         ]),
       )
       .digest("hex");
@@ -73,6 +69,7 @@ export async function runLanHttpsCertificateAgent({
     let record = schedule.read();
     const bundle = state.read("bundle.pem");
     let leaf = null,
+      certificate = null,
       certificateAvailable = false;
     if (bundle) {
       const blocks = bundle
@@ -82,12 +79,17 @@ export async function runLanHttpsCertificateAgent({
         throw new Error(
           "Stored LAN HTTPS bundle is invalid; state was retained",
         );
-      const certificate = blocks.join("\n") + "\n";
+      certificate = blocks.join("\n") + "\n";
       leaf = new X509Certificate(certificate);
       if (Date.parse(leaf.validTo) > now()) {
         await validateLanHttpsIssuedCertificate({
           certificate,
-          privateKey: keys.tlsKey,
+          privateKey:
+            bundle
+              .toString()
+              .match(
+                /-----BEGIN PRIVATE KEY-----[\s\S]*?-----END PRIVATE KEY-----/,
+              )?.[0] ?? keys.tlsKey,
           hostnames,
           now: now(),
           ...(trustedCertificates ? { trustedCertificates } : {}),
@@ -125,7 +127,7 @@ export async function runLanHttpsCertificateAgent({
         issuerId,
         ...account,
         accountKey: keys.accountKey,
-        tlsKey: keys.tlsKey,
+        tlsKey: issuanceTlsKey,
       });
       const pending = journal.load();
       if (pending && record.nextAttemptAt === null && record.renewAt > now()) {
@@ -136,6 +138,29 @@ export async function runLanHttpsCertificateAgent({
       // not permission to register a replacement account automatically.
       throw new Error(
         "Stored ACME order has no account mapping; restore the saved state",
+      );
+    }
+    if (
+      pendingTlsKey &&
+      record.nextAttemptAt === null &&
+      record.renewAt > now()
+    )
+      record = schedule.plan({ fingerprint256, renewAt: now(), now: now() });
+    if (certificateAvailable && account && record.ariCheckAt <= now()) {
+      const plan = await renewalPlanner({
+        certificate,
+        directoryUrl: account.directoryUrl,
+        now: now(),
+        previousRenewAt: record.ari ? record.renewAt : undefined,
+      });
+      record = schedule.updatePlan(
+        {
+          renewAt: plan.renewAt,
+          ari: plan.ari,
+          certificateId: plan.certificateId,
+          ariCheckAt: plan.checkAt ?? now() + 86400000,
+        },
+        now(),
       );
     }
     if (!schedule.due(now()))
@@ -174,7 +199,7 @@ export async function runLanHttpsCertificateAgent({
           directoryUrl: issuer.directoryUrl,
           accountUrl: client.getAccountUrl(),
           accountKey: keys.accountKey,
-          tlsKey: keys.tlsKey,
+          tlsKey: issuanceTlsKey,
         });
         return journal;
       };
@@ -184,7 +209,7 @@ export async function runLanHttpsCertificateAgent({
         client,
         issuerId,
         accountKey: keys.accountKey,
-        tlsKey: keys.tlsKey,
+        tlsKey: issuanceTlsKey,
         termsAccepted: true,
         saveAccount: (accountUrl) => {
           state.saveAccount(issuerId, issuer.directoryUrl, accountUrl);
@@ -207,6 +232,7 @@ export async function runLanHttpsCertificateAgent({
       });
       // Publication repeats full certificate validation before atomic replacement.
       await state.installCertificate(result.certificate, {
+        privateKey: issuanceTlsKey,
         hostnames,
         now: now(),
         ...(trustedCertificates ? { trustedCertificates } : {}),
@@ -221,6 +247,7 @@ export async function runLanHttpsCertificateAgent({
       record = schedule.plan({
         fingerprint256: result.fingerprint256,
         ...plan,
+        ariCheckAt: plan.checkAt ?? now() + 86400000,
         now: now(),
       });
       return Object.freeze({

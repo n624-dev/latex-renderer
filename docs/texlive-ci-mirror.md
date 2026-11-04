@@ -124,7 +124,7 @@ Before expensive native builds, CI also runs a tiny, isolated registry protocol
 probe using the exact index constructor and synthetic amd64/ARM64 image configs.
 It checks OCI-index/Docker-v2-component interoperability with Docker pulls for
 both platform selections, not ARM execution or real TeX. To reproduce on a
-Linux development host with Node 24 and Docker, explicitly opt in:
+Linux development host with Node 26 LTS and Docker, explicitly opt in:
 
 ```sh
 CI_BASE_INDEX_PROBE=1 node deploy/ci/check-base-index.mjs

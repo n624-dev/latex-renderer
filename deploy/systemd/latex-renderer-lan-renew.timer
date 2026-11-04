@@ -1,0 +1,14 @@
+[Unit]
+Description=Check LaTeX Renderer LAN renewal schedule
+ConditionPathExists=/etc/latex-renderer/lan-https-client.json
+
+[Timer]
+OnBootSec=2min
+OnCalendar=*-*-* *:00/15:00
+RandomizedDelaySec=30s
+AccuracySec=30s
+Persistent=true
+Unit=latex-renderer-lan-renew.service
+
+[Install]
+WantedBy=timers.target

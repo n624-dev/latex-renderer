@@ -10,6 +10,8 @@ import {
   ServerSetupSessionError,
   serverIngressContainsAddress,
   validateServerIngressReview,
+  lanHttpsInterfaceChoices,
+  LAN_HTTPS_COMMON,
 } from "../../packages/server-setup-core/src/index.mjs";
 import { setupHtml, setupScript, setupStyle } from "./server-setup-assets.mjs";
 
@@ -198,6 +200,7 @@ export async function startServerSetupWeb(host, options = {}) {
         ![
           "/api/session",
           "/api/status",
+          "/api/network",
           "/api/preview",
           "/api/apply",
           "/api/close",
@@ -244,6 +247,14 @@ export async function startServerSetupWeb(host, options = {}) {
       if (url.pathname === "/api/status") {
         record(body, []);
         send(response, 200, await session.status());
+      } else if (url.pathname === "/api/network") {
+        record(body, []);
+        send(response, 200, {
+          interfaces: lanHttpsInterfaceChoices(
+            options.interfaces ?? networkInterfaces(),
+          ),
+          common: LAN_HTTPS_COMMON,
+        });
       } else if (url.pathname === "/api/preview") {
         record(body, ["review"]);
         send(response, 200, await session.preview(body.review));

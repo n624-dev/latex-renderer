@@ -17,6 +17,8 @@ import {
   serverSetupReviewEnvironment,
   SERVER_RUNTIME_LIMITS,
   renderServerIngressNginx,
+  renderLanHttpsBackendNginx,
+  INGRESS_PROFILE_KEYS,
   checkServerSetupOidc,
   importServerSetupReview,
 } from "../../packages/server-setup-core/src/index.mjs";
@@ -65,6 +67,11 @@ const runtimeUnits = [
   "latex-renderer-standalone-gateway.service",
 ];
 const ingressUnit = "latex-renderer-ingress.service";
+const lanUnit = "latex-renderer-lan-https.service";
+const lanTimer = "latex-renderer-lan-renew.timer";
+const lanRenew = "latex-renderer-lan-renew.service";
+const lanConfigPath = "/etc/latex-renderer/lan-https-client.json";
+const lanStateRoot = "/var/lib/latex-renderer-lan";
 const maintenanceUnits = [
   "backup",
   "audit-export",
@@ -151,6 +158,7 @@ export function serverSetupEnvironmentFile(kind, contents, review, workerUid) {
       // not retained alongside the mutually exclusive AUTH_BACKEND syntax.
       return !(
         env.has(key) ||
+        INGRESS_PROFILE_KEYS.includes(key) ||
         (key === "AUTH_MODE" && env.has("AUTH_BACKEND"))
       );
     },
@@ -425,6 +433,8 @@ export async function createInitialServerSetupHost(kind = "initial") {
     nginx: file(nginxPath, 0o640, 64 * 1024),
     oidcSecret: file(`${secretRoot}/oidc-client-secret`, 0o440, 16 * 1024),
     updateEnv: file("/etc/latex-renderer/update-manager.env", 0o600, 4096, 0),
+    lanConfig: file(lanConfigPath, 0o640, 65536),
+    lanInvitation: file(`${secretRoot}/lan-registration.json`, 0o600, 4096, 0),
   });
   const existingJournal = await store.journal();
   if (kind === "auto") kind = existingJournal?.kind ?? "initial";
@@ -484,7 +494,6 @@ export async function createInitialServerSetupHost(kind = "initial") {
         if (
           current.deployment.authentication.deployment.mode !== "standalone" ||
           current.deployment.ingress?.mode !== "standalone" ||
-          current.deployment.ingress.tlsProvider !== "custom" ||
           review.deployment.ingress.mode !== "standalone" ||
           current.runtime.rendererImage !== review.runtime.rendererImage ||
           JSON.stringify(current.deployment.authentication.authentication) !==
@@ -567,6 +576,18 @@ export async function createInitialServerSetupHost(kind = "initial") {
       ]);
       if (!/^sha256:[a-f0-9]{64}\s*$/.test(inspected))
         throw new Error("Prepared immutable runtime image required");
+      if (review.deployment.ingress.tlsProvider === "automatic") {
+        for (const unit of [lanUnit, lanTimer, lanRenew])
+          if (
+            systemctl(
+              "show",
+              "--property=LoadState",
+              "--value",
+              unit,
+            ).trim() !== "loaded"
+          )
+            throw new Error("LAN HTTPS units are not prepared");
+      }
       verifyIngressInterface(review.deployment.ingress);
       assertServerSetupSockets(
         command("/usr/bin/ss", ["-H", "-ltn"]),
@@ -575,6 +596,11 @@ export async function createInitialServerSetupHost(kind = "initial") {
           fresh: kind === "initial",
           requireInternal: kind === "ingress",
           checkIngressPort: kind === "initial",
+          checkLanBackendPort:
+            review.deployment.ingress.tlsProvider === "automatic" &&
+            (kind === "initial" ||
+              importServerSetupReview(env).deployment.ingress.tlsProvider !==
+                "automatic"),
         },
       );
       if (review.deployment.ingress.mode === "standalone") {
@@ -635,15 +661,43 @@ export async function createInitialServerSetupHost(kind = "initial") {
         : runtimeUnits.filter((unit) => !unit.includes("standalone-gateway"))),
       ...(kind === "initial" ? maintenanceUnits : []),
     ],
-    finalize: (units) => {
+    finalize: async (units) => {
       // Persistent activation happens only AFTER health and durable commit.
       // A crash here keeps a committed journal and retries enable, not owner DB.
       if (kind === "initial")
         for (const unit of units)
           controlService("enable", unit, { run: systemctl });
+      const current = importServerSetupReview(
+        await store.read(store.slot("environment")),
+      );
+      for (const unit of [lanUnit, lanTimer])
+        if (
+          systemctl("show", "--property=LoadState", "--value", unit).trim() ===
+          "loaded"
+        )
+          controlService(
+            current.deployment.ingress?.tlsProvider === "automatic"
+              ? "enable"
+              : "disable",
+            unit,
+            { run: systemctl },
+          );
     },
     prepareServices: () => prepareHttpActivation("/opt/latex-renderer/current"),
     active(unit) {
+      if (
+        unit === ingressUnit &&
+        [lanUnit, lanTimer, lanRenew].some(
+          (auxiliary) =>
+            systemctl(
+              "show",
+              "--property=LoadState",
+              "--value",
+              auxiliary,
+            ).trim() === "loaded" && adapter.active(auxiliary),
+        )
+      )
+        return true;
       if (httpSocketUnit(unit))
         return httpServiceStatus(unit, { run: systemctl }).active;
       return installationUnitActive(
@@ -651,7 +705,21 @@ export async function createInitialServerSetupHost(kind = "initial") {
         systemctl("show", "--property=ActiveState", "--value", unit).trim(),
       );
     },
-    stop: (unit) => controlService("stop", unit, { run: systemctl }),
+    stop: (unit) => {
+      if (unit === ingressUnit)
+        for (const auxiliary of [lanTimer, lanRenew, lanUnit]) {
+          if (
+            systemctl(
+              "show",
+              "--property=LoadState",
+              "--value",
+              auxiliary,
+            ).trim() === "loaded"
+          )
+            controlService("stop", auxiliary, { run: systemctl });
+        }
+      return controlService("stop", unit, { run: systemctl });
+    },
     start: async (unit) => {
       if (
         kind === "initial" &&
@@ -660,7 +728,15 @@ export async function createInitialServerSetupHost(kind = "initial") {
         ))
       )
         systemctl("start", "latex-renderer-authentication-recovery.service");
-      return controlService("start", unit, { run: systemctl });
+      const result = controlService("start", unit, { run: systemctl });
+      if (unit === ingressUnit) {
+        const bytes = await store.read(store.slot("environment"));
+        const current = importServerSetupReview(bytes);
+        if (current.deployment.ingress.tlsProvider === "automatic")
+          for (const auxiliary of [lanUnit, lanTimer])
+            controlService("start", auxiliary, { run: systemctl });
+      }
+      return result;
     },
     ownerState: async (id) => {
       if (kind === "initial") return pendingOwner(id);
@@ -759,12 +835,37 @@ export async function createInitialServerSetupHost(kind = "initial") {
             ? `UPDATE_DEPLOY_USER=${credentials.deploymentUser}\n`
             : await store.read(store.slot("updateEnv")),
       };
-      if (review.deployment.ingress.mode === "standalone")
+      const ingress = review.deployment.ingress;
+      const automatic = ingress.tlsProvider === "automatic";
+      if (ingress.mode === "standalone")
         Object.assign(result, {
-          certificate: credentials.tls.certificate,
-          privateKey: credentials.tls.privateKey,
-          nginx: `# Managed LaTeX Renderer HTTPS; independent of co-hosted nginx.service.\n# systemd sets the same non-root master/worker identity.\nworker_processes 1;\npid /run/latex-renderer-ingress/nginx.pid;\nerror_log stderr warn;\nevents { worker_connections 256; }\nhttp {\naccess_log off;\ninclude /etc/nginx/mime.types;\nclient_body_temp_path /var/lib/latex-renderer/ingress/client;\nproxy_temp_path /var/lib/latex-renderer/ingress/proxy;\n${renderServerIngressNginx(review.deployment.ingress)}\n}\n`,
+          certificate: automatic
+            ? await store.read(store.slot("certificate"))
+            : credentials.tls.certificate,
+          privateKey: automatic
+            ? await store.read(store.slot("privateKey"))
+            : credentials.tls.privateKey,
+          nginx: `# Managed LaTeX Renderer HTTPS; independent of co-hosted nginx.service.\n# systemd sets the same non-root master/worker identity.\nworker_processes 1;\npid /run/latex-renderer-ingress/nginx.pid;\nerror_log stderr warn;\nevents { worker_connections 256; }\nhttp {\naccess_log off;\ninclude /etc/nginx/mime.types;\nclient_body_temp_path /var/lib/latex-renderer/ingress/client;\nproxy_temp_path /var/lib/latex-renderer/ingress/proxy;\n${automatic ? renderLanHttpsBackendNginx(ingress, ingress.lanHttps.provider) : renderServerIngressNginx(ingress)}\n}\n`,
         });
+      if (automatic) {
+        result.lanConfig =
+          JSON.stringify({
+            format: 1,
+            role: "client",
+            stateDirectory: lanStateRoot,
+            provider: ingress.lanHttps.provider,
+            issuerId: ingress.lanHttps.issuerId,
+            termsAccepted: ingress.lanHttps.termsAccepted,
+            allowedNetworks: ingress.allowedNetworks,
+            invitationFile: lanStateRoot + "/invitation.json",
+          }) + "\n";
+        result.lanInvitation =
+          JSON.stringify({ invitationCode: credentials.lanInvitation ?? "" }) +
+          "\n";
+      } else if ((await store.read(store.slot("lanConfig"))) !== null) {
+        result.lanConfig = null;
+        result.lanInvitation = null;
+      }
       return result;
     },
     async validatePublished(files, beforeStart = false) {
@@ -782,6 +883,41 @@ export async function createInitialServerSetupHost(kind = "initial") {
           "/var/lib/latex-renderer/storage",
           "/etc/latex-renderer/renderer.env",
         ]);
+      }
+      if (review.deployment.ingress.tlsProvider === "automatic") {
+        await prepareServerSetupDirectory(
+          lanStateRoot,
+          gid,
+          0o700,
+          rendererUid,
+        );
+        const cli = [
+          "-u",
+          "latex-renderer",
+          "--",
+          "/usr/local/bin/node",
+          `${release}/deploy/lan-https/cli.mjs`,
+          "client",
+        ];
+        await runServerSetupChild(
+          "/usr/sbin/runuser",
+          [...cli, "init", "--config", lanConfigPath],
+          "",
+          { timeoutMs: 60000 },
+        );
+        await runServerSetupChild(
+          "/usr/sbin/runuser",
+          [...cli, "set-invitation", "--config", lanConfigPath],
+          files.lanInvitation ?? JSON.stringify({ invitationCode: "" }),
+          { timeoutMs: 60000 },
+        );
+        if (!beforeStart)
+          await runServerSetupChild(
+            "/usr/bin/systemctl",
+            ["start", lanRenew],
+            "",
+            { timeoutMs: 660000 },
+          );
       }
       if (review.deployment.ingress.mode === "standalone") {
         verifyProductionIngressTls(review.deployment.ingress, gid);
@@ -807,6 +943,22 @@ export async function createInitialServerSetupHost(kind = "initial") {
           review.runtime.rendererImage,
           { uid: 0, gid },
         );
+      if (review.deployment.ingress.tlsProvider === "automatic")
+        for (const unit of [lanUnit, lanTimer])
+          if (!(await adapter.active(unit)))
+            throw new Error("LAN HTTPS lifecycle service is not active");
+      if (review.deployment.ingress.tlsProvider !== "automatic")
+        for (const unit of [lanUnit, lanTimer])
+          if (
+            systemctl(
+              "show",
+              "--property=LoadState",
+              "--value",
+              unit,
+            ).trim() === "loaded" &&
+            (await adapter.active(unit))
+          )
+            throw new Error("Unexpected LAN HTTPS service remains active");
       await checkIngressHttpsHealth(
         review.deployment.authentication.deployment.publicOrigin,
       );

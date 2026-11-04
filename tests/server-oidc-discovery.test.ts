@@ -468,7 +468,7 @@ describe("shared non-secret setup readiness and CUI diagnostic", () => {
     expect(Object.isFrozen(plan.requiredCredentialFiles[0])).toBe(true);
   });
 
-  it("marks unsupported automatic TLS instead of claiming readiness", () => {
+  it("rejects incomplete automatic TLS and retains custom-certificate requirements", () => {
     const ingress = {
       format: 1,
       mode: "standalone",
@@ -478,10 +478,9 @@ describe("shared non-secret setup readiness and CUI diagnostic", () => {
       listenAddress: "127.0.0.1",
     };
     const input = { ...review(), ingress };
-    expect(reviewServerSetupReadiness(input)).toMatchObject({
-      ingressStatus: "unsupported-automatic",
-      readyForApply: false,
-    });
+    expect(() => reviewServerSetupReadiness(input)).toThrow(
+      /automatic LAN HTTPS/,
+    );
     expect(
       reviewServerSetupReadiness({
         ...input,
@@ -548,4 +547,48 @@ describe("shared non-secret setup readiness and CUI diagnostic", () => {
     expect(result.stdout).toBe("");
     expect(result.stderr).not.toContain("fixture-secret-marker");
   });
+});
+
+it("reviews an explicit local-ACME LAN policy without requesting operator TLS PEM files", () => {
+  const original = review(),
+    origin = "https://192-168-1-50.lan.example.test";
+  const input = {
+    ...original,
+    authentication: {
+      ...original.authentication,
+      deployment: {
+        ...original.authentication.deployment,
+        publicOrigin: origin,
+        rendererPublicUrl: origin,
+      },
+    },
+    ingress: {
+      format: 1,
+      mode: "standalone",
+      accessScope: "lan",
+      publicOrigin: origin,
+      tlsProvider: "automatic",
+      listenAddress: "192.168.1.50",
+      allowedNetworks: ["192.168.1.0/24"],
+      lanHttps: {
+        format: 1,
+        provider: {
+          format: 1,
+          provider: "akebi-local-acme",
+          serverOrigin: "https://akebi.example.test",
+          lanDomain: "lan.example.test",
+          address: "192.168.1.50",
+          keylessFallback: false,
+        },
+        issuerId: "ca",
+        termsAccepted: true,
+      },
+    },
+  };
+  const result = reviewServerSetupReadiness(input);
+  expect(result.ingressStatus).toBe("reviewed");
+  expect(result.readyForApply).toBe(false);
+  expect(result.requiredCredentialFiles.map((file) => file.id)).toEqual([
+    "password-pepper",
+  ]);
 });

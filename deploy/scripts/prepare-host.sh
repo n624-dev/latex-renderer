@@ -198,6 +198,11 @@ install -o root -g root -m 0755 "$source_root/deploy/scripts/update-manager-help
 install -o root -g root -m 0440 "$source_root/deploy/sudoers.d/latex-renderer-update" /etc/sudoers.d/latex-renderer-update
 visudo -cf /etc/sudoers.d/latex-renderer-update >/dev/null
 apparmor_parser -r /etc/apparmor.d/latex-renderer
+# Bound this optional feature's journal without changing the host/default journal.
+if [ -f "$source_root/deploy/systemd/journald@latex-renderer-lan.conf" ]; then
+  install -o root -g root -m 0644 "$source_root/deploy/systemd/journald@latex-renderer-lan.conf" /etc/systemd/journald@latex-renderer-lan.conf
+fi
+
 systemctl daemon-reload
 /usr/local/bin/node "$source_root/deploy/scripts/http-services.mjs" prepare "$source_root"
 

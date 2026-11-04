@@ -9,6 +9,7 @@ export interface LanHttpsRenewalRecord {
   readonly attempt: number;
   readonly nextAttemptAt: number | null;
   readonly updatedAt: number;
+  readonly ariCheckAt: number;
 }
 export class LanHttpsRenewalJournal {
   constructor(options: {
@@ -23,7 +24,17 @@ export class LanHttpsRenewalJournal {
     ari?: boolean;
     certificateId?: string | null;
     now: number;
+    ariCheckAt?: number;
   }): Readonly<LanHttpsRenewalRecord>;
+  updatePlan(
+    plan: {
+      renewAt: number;
+      ari: boolean;
+      certificateId: string | null;
+      ariCheckAt: number;
+    },
+    now: number,
+  ): Readonly<LanHttpsRenewalRecord>;
   due(now: number): boolean;
   begin(now: number): Readonly<LanHttpsRenewalRecord>;
   failed(now: number, retryAt?: number | null): Readonly<LanHttpsRenewalRecord>;

@@ -119,6 +119,8 @@ async function verifyCiArtifact(
     manifest?.repository !== "n624-dev/latex-renderer" ||
     manifest?.provenance !== "github-artifact-attestation" ||
     manifest?.requiredNodeMajor !== 24 ||
+    (manifest.supportedNodeMajors !== undefined &&
+      JSON.stringify(manifest.supportedNodeMajors) !== "[24,26]") ||
     pkg?.version !== version ||
     !/^pnpm@\d+\.\d+\.\d+$/.test(manifest?.packageManager ?? "") ||
     manifest.packageManager !== pkg?.packageManager

@@ -1,3 +1,4 @@
+import { validateLanHttpsProvider } from "./lan-https.mjs";
 import { isIP } from "node:net";
 import { URL } from "node:url";
 import {
@@ -10,6 +11,12 @@ export const INGRESS_PROFILE_KEYS = Object.freeze([
   "INGRESS_TLS_PROVIDER",
   "INGRESS_LISTEN_ADDRESS",
   "INGRESS_LAN_NETWORKS",
+  "INGRESS_LAN_PROVIDER",
+  "INGRESS_LAN_SERVER_ORIGIN",
+  "INGRESS_LAN_DOMAIN",
+  "INGRESS_LAN_ISSUER",
+  "INGRESS_LAN_KEYLESS_FALLBACK",
+  "INGRESS_LAN_CA_TERMS_ACCEPTED",
 ]);
 
 // No interface discovery, certificate reads, provider calls or inferred scope.
@@ -25,15 +32,45 @@ export function serverIngressFromEnvironment(values) {
     ...(values.has("INGRESS_LISTEN_ADDRESS")
       ? { listenAddress: values.get("INGRESS_LISTEN_ADDRESS") }
       : {}),
+    ...(values.get("INGRESS_TLS_PROVIDER") === "automatic"
+      ? {
+          lanHttps: {
+            format: 1,
+            provider: {
+              format: 1,
+              provider: values.get("INGRESS_LAN_PROVIDER"),
+              serverOrigin: values.get("INGRESS_LAN_SERVER_ORIGIN"),
+              lanDomain: values.get("INGRESS_LAN_DOMAIN"),
+              address: values.get("INGRESS_LISTEN_ADDRESS"),
+              port: Number(new URL(values.get("PUBLIC_ORIGIN")).port || 443),
+              keylessFallback:
+                values.get("INGRESS_LAN_KEYLESS_FALLBACK") === "true",
+            },
+            issuerId: values.get("INGRESS_LAN_ISSUER"),
+            termsAccepted:
+              values.get("INGRESS_LAN_CA_TERMS_ACCEPTED") === "true",
+          },
+        }
+      : {}),
     ...(values.has("INGRESS_LAN_NETWORKS")
       ? { allowedNetworks: values.get("INGRESS_LAN_NETWORKS").split(",") }
       : {}),
   };
   const review = validateServerIngressReview(input);
-  if (review.tlsProvider === "automatic")
-    throw new Error(
-      "Automatic HTTPS is not implemented; select custom TLS or existing Cloudflare ingress",
-    );
+  if (
+    review.tlsProvider !== "automatic" &&
+    INGRESS_PROFILE_KEYS.slice(4).some((key) => values.has(key))
+  )
+    throw new Error("LAN certificate settings require automatic LAN HTTPS");
+  for (const key of [
+    "INGRESS_LAN_KEYLESS_FALLBACK",
+    "INGRESS_LAN_CA_TERMS_ACCEPTED",
+  ])
+    if (
+      review.tlsProvider === "automatic" &&
+      !["true", "false"].includes(values.get(key))
+    )
+      throw new Error("LAN certificate booleans must be explicit true/false");
   return review;
 }
 
@@ -46,6 +83,7 @@ export function validateServerIngressReview(input) {
     "tlsProvider",
     "listenAddress",
     "allowedNetworks",
+    "lanHttps",
   ]);
   if (model.format !== 1) throw new Error("Ingress review format must be 1");
   const mode = text(model, "mode", "ingress.mode");
@@ -78,7 +116,8 @@ export function validateServerIngressReview(input) {
       scope !== "internet" ||
       provider !== "cloudflare" ||
       Object.hasOwn(model, "listenAddress") ||
-      Object.hasOwn(model, "allowedNetworks")
+      Object.hasOwn(model, "allowedNetworks") ||
+      Object.hasOwn(model, "lanHttps")
     )
       throw new Error(
         "Cloudflare ingress preserves its external configuration; do not add standalone listener settings",
@@ -172,6 +211,41 @@ export function validateServerIngressReview(input) {
       );
   } else if (Object.hasOwn(model, "allowedNetworks"))
     throw new Error("Client networks are only supported for LAN ingress");
+  let lanHttps;
+  if (provider === "automatic") {
+    const lan = record(model.lanHttps, "automatic LAN HTTPS", [
+      "format",
+      "provider",
+      "issuerId",
+      "termsAccepted",
+    ]);
+    if (
+      scope !== "lan" ||
+      lan.format !== 1 ||
+      typeof lan.termsAccepted !== "boolean" ||
+      typeof lan.issuerId !== "string" ||
+      !/^[a-z][a-z0-9-]{0,31}$/.test(lan.issuerId)
+    )
+      throw new Error(
+        "Automatic HTTPS requires explicit LAN certificate settings",
+      );
+    const checked = validateLanHttpsProvider(lan.provider);
+    if (
+      checked.publicOrigin !== origin.origin ||
+      checked.address !== address ||
+      (checked.provider === "akebi-local-acme" && !lan.termsAccepted)
+    )
+      throw new Error(
+        "LAN certificate origin/address and explicit CA terms must match ingress",
+      );
+    lanHttps = Object.freeze({
+      format: 1,
+      provider: checked,
+      issuerId: lan.issuerId,
+      termsAccepted: lan.termsAccepted,
+    });
+  } else if (Object.hasOwn(model, "lanHttps"))
+    throw new Error("LAN certificate policy requires automatic HTTPS");
   return Object.freeze({
     format: 1,
     mode,
@@ -179,6 +253,7 @@ export function validateServerIngressReview(input) {
     accessScope: scope,
     tlsProvider: provider,
     listenAddress: address,
+    ...(lanHttps ? { lanHttps } : {}),
     ...(networks ? { allowedNetworks: Object.freeze(networks) } : {}),
   });
 }
@@ -190,6 +265,22 @@ export function serverIngressReviewEnvironment(input) {
     ["INGRESS_TLS_PROVIDER", review.tlsProvider],
     ...(review.mode === "standalone"
       ? [["INGRESS_LISTEN_ADDRESS", review.listenAddress]]
+      : []),
+    ...(review.lanHttps
+      ? [
+          ["INGRESS_LAN_PROVIDER", review.lanHttps.provider.provider],
+          ["INGRESS_LAN_SERVER_ORIGIN", review.lanHttps.provider.serverOrigin],
+          ["INGRESS_LAN_DOMAIN", review.lanHttps.provider.lanDomain],
+          ["INGRESS_LAN_ISSUER", review.lanHttps.issuerId],
+          [
+            "INGRESS_LAN_KEYLESS_FALLBACK",
+            String(review.lanHttps.provider.keylessFallback),
+          ],
+          [
+            "INGRESS_LAN_CA_TERMS_ACCEPTED",
+            String(review.lanHttps.termsAccepted),
+          ],
+        ]
       : []),
     ...(review.allowedNetworks
       ? [["INGRESS_LAN_NETWORKS", review.allowedNetworks.join(",")]]

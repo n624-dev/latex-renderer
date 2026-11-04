@@ -1,0 +1,28 @@
+{
+  "format": 1,
+  "role": "authority",
+  "stateDirectory": "/var/lib/latex-renderer-lan-authority",
+  "policy": {
+    "format": 1,
+    "registration": "open",
+    "serverOrigin": "https://akebi.example.org",
+    "lanDomain": "lan.example.org"
+  },
+  "http": { "address": "127.0.0.1", "port": 3181, "trustLoopbackProxy": true },
+  "dns": {
+    "listeners": [{ "address": "0.0.0.0", "port": 53 }],
+    "nameserver": "ns1.example.org",
+    "caaIssuers": ["comodoca.com"]
+  },
+  "issuers": [
+    {
+      "id": "zerossl",
+      "directoryUrl": "https://acme.zerossl.com/v2/DV90",
+      "newAccountUrl": "https://acme.zerossl.com/v2/DV90/newAccount",
+      "eabFile": "/etc/latex-renderer-lan-authority/eab.json"
+    }
+  ],
+  "keyless": {
+    "bundleFile": "/var/lib/latex-renderer-lan-authority/keyless/bundle.pem"
+  }
+}

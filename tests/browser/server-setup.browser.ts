@@ -48,11 +48,16 @@ const model = () =>
       "",
     ].join("\n"),
   );
-async function fixture(mobile = false, supplied?: ServerSetupSessionHost) {
+async function fixture(
+  mobile = false,
+  supplied?: ServerSetupSessionHost,
+  options?: Parameters<typeof startServerSetupWeb>[1],
+) {
   const apply = vi.fn(),
     preview = vi.fn((review: ServerSetupReview) => ({ review }));
   const web = await startServerSetupWeb(
     supplied ?? { current: model, preview, apply },
+    options,
   );
   const page = await newTestPage(browser, {
     viewport: mobile
@@ -368,4 +373,63 @@ describe("real server-settings Web flow", () => {
     expect(recover).toHaveBeenCalledOnce();
     expect(f.errors).toEqual([]);
   });
+});
+
+it("reviews a mobile LAN interface and custom local-ACME provider without PEM or secret leakage", async () => {
+  let checked: ServerSetupReview | undefined;
+  const f = await fixture(
+    true,
+    {
+      scope: "ingress-prepared-host",
+      current: model,
+      preview: (review) => {
+        checked = review;
+        return { review };
+      },
+      apply: () => {},
+    },
+    {
+      interfaces: {
+        eth0: [
+          {
+            address: "192.168.1.50",
+            netmask: "255.255.255.0",
+            family: "IPv4",
+            mac: "00:00:00:00:00:00",
+            internal: false,
+            cidr: "192.168.1.50/24",
+          },
+        ],
+      },
+    },
+  );
+  await f.page.locator("#network-scope").selectOption("lan");
+  await f.page.locator("#lan-interface").selectOption("192.168.1.50");
+  await f.page.locator("#lan-provider").selectOption("akebi-local-acme");
+  await f.page.locator("#lan-authority").selectOption("custom");
+  await f.page.locator("#lan-server").fill("https://akebi.example.test");
+  await f.page.locator("#lan-server").dispatchEvent("change");
+  await f.page.locator("#lan-domain").fill("lan.example.test");
+  await f.page.locator("#lan-domain").dispatchEvent("change");
+  await f.page.locator("#lan-issuer").fill("ca");
+  await f.page.locator("#lan-issuer").dispatchEvent("change");
+  await f.page.locator("#lan-terms").check();
+  expect(await f.page.locator("#tls-key").isVisible()).toBe(false);
+  await f.page
+    .getByRole("button", { name: "変更内容を確認", exact: true })
+    .click();
+  await f.page.locator("#confirmation").waitFor({ state: "visible" });
+  expect(checked?.deployment.ingress).toMatchObject({
+    accessScope: "lan",
+    tlsProvider: "automatic",
+    listenAddress: "192.168.1.50",
+    publicOrigin: "https://192-168-1-50.lan.example.test",
+    lanHttps: { issuerId: "ca", termsAccepted: true },
+  });
+  expect(f.errors).toEqual([]);
+  expect(
+    await f.page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
 });

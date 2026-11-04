@@ -204,6 +204,13 @@ export class ServerInstallStore {
             "oidcSecret",
             ...(Object.hasOwn(this.slots, "updateEnv") ? ["updateEnv"] : []),
           ];
+    if (
+      Object.hasOwn(this.slots, "lanConfig") &&
+      (candidate.deployment.ingress?.tlsProvider === "automatic" ||
+        (await this.read(this.slot("lanConfig"))) !== null)
+    ) {
+      names.push("lanConfig", "lanInvitation");
+    }
     return this.snapshotFiles(
       Object.fromEntries(names.map((name) => [name, null])),
     );

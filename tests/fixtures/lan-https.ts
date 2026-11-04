@@ -9,7 +9,7 @@ import type { Authorization, Order } from "acme-client";
 import { createLanHttpsCertificateRequest } from "../../deploy/lan-https/acme.mjs";
 
 export async function lanCertificateFixture(
-  options: { installationId?: string } = {},
+  options: { installationId?: string; tlsKey?: string; address?: string } = {},
 ) {
   const root = ingressTlsFixture({ ca: true });
   try {
@@ -18,7 +18,7 @@ export async function lanCertificateFixture(
       provider: "akebi-local-acme",
       serverOrigin: "https://akebi.example.test",
       lanDomain: "lan.example.test",
-      address: "192.168.1.50",
+      address: options.address ?? "192.168.1.50",
       keylessFallback: true,
     };
     const id = options.installationId ?? "a".repeat(64);
@@ -27,11 +27,13 @@ export async function lanCertificateFixture(
       privateKeyEncoding: { format: "pem", type: "pkcs8" },
       publicKeyEncoding: { format: "pem", type: "spki" },
     }).privateKey;
-    const tlsKey = generateKeyPairSync("ec", {
-      namedCurve: "prime256v1",
-      privateKeyEncoding: { format: "pem", type: "pkcs8" },
-      publicKeyEncoding: { format: "pem", type: "spki" },
-    }).privateKey;
+    const tlsKey =
+      options.tlsKey ??
+      generateKeyPairSync("ec", {
+        namedCurve: "prime256v1",
+        privateKeyEncoding: { format: "pem", type: "pkcs8" },
+        publicKeyEncoding: { format: "pem", type: "spki" },
+      }).privateKey;
     const request = await createLanHttpsCertificateRequest({
       provider,
       installationId: id,

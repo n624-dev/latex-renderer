@@ -52,7 +52,7 @@ Docker daemon or TeX Live download is required.
 `ci-validate-texlive-base.sh` runs the same scenarios against the exact temporary
 English/Japanese Runtime after the existing PDF/PNG/SVG/compatibility checks and
 before deleting that Runtime. `ci-source-pipeline-e2e.sh` resolves its immutable
-local image ID, requires Node 24 and checks additional disk headroom before
+local image ID, requires Node 26 LTS and checks additional disk headroom before
 installing fixed workspace dependencies. Both renderer-image workflows use
 this path. Installation, build or integration-test failures propagate to the
 validation step and therefore prevent publication. The cleanup trap still

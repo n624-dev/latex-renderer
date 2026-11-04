@@ -772,8 +772,12 @@ async function prepareRelease(operation, release) {
       typeof manifest?.minimumSourceVersion !== "string" ||
       !/^\d+\.\d+\.\d+$/.test(manifest.minimumSourceVersion) ||
       manifest?.requiredNodeMajor !== 24 ||
-      Number(process.versions.node.split(".")[0]) !==
-        manifest.requiredNodeMajor ||
+      !(manifest.supportedNodeMajors === undefined
+        ? Number(process.versions.node.split(".")[0]) === 24
+        : JSON.stringify(manifest.supportedNodeMajors) === "[24,26]" &&
+          manifest.supportedNodeMajors.includes(
+            Number(process.versions.node.split(".")[0]),
+          )) ||
       manifest?.packageManager !== packageJson?.packageManager ||
       !/^pnpm@\d+\.\d+\.\d+$/.test(manifest.packageManager ?? "") ||
       manifest?.rendererRuntimeFingerprint !== stagedRendererFingerprint ||

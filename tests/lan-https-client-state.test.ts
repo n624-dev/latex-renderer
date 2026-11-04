@@ -38,6 +38,7 @@ describe("private bounded installation state", () => {
     expect(restarted).toEqual(first);
     expect(readdirSync(f.root).sort()).toEqual([
       "account.pem",
+      "identity.json",
       "identity.pem",
       "tls-key.pem",
     ]);
@@ -202,4 +203,35 @@ describe("private bounded installation state", () => {
       withLanHttpsClientLock(f.root, () => Promise.resolve("recovered")),
     ).resolves.toBe("recovered");
   });
+});
+
+it("stages TLS rotation without altering the served bundle and recovers publication-before-key-commit", async () => {
+  const f = fixture(),
+    old = await lanCertificateFixture();
+  cleanups.push(old.cleanup);
+  f.state.ensureKeys();
+  writeFileSync(join(f.root, "tls-key.pem"), old.tlsKey, { mode: 0o600 });
+  await f.state.installCertificate(old.certificate, {
+    hostnames: old.request.hostnames,
+    trustedCertificates: [old.root.certificate.toString()],
+  });
+  const original = f.state.read("bundle.pem"),
+    pending = f.state.prepareTlsRotation();
+  expect(f.state.read("bundle.pem")).toEqual(original);
+  expect(f.state.prepareTlsRotation()).toEqual(pending);
+  const next = await lanCertificateFixture({ tlsKey: pending.toString() });
+  cleanups.push(next.cleanup);
+  await f.state.installCertificate(next.certificate, {
+    privateKey: pending,
+    hostnames: next.request.hostnames,
+    trustedCertificates: [next.root.certificate.toString()],
+  });
+  expect(f.state.ensureKeys().tlsKey).toEqual(pending);
+  expect(f.state.read("tls-next.pem")).toBeNull();
+  expect(f.state.read("previous.pem")).toEqual(original);
+  // Model a crash at the precise point after atomic publication, before key promotion.
+  writeFileSync(join(f.root, "tls-key.pem"), old.tlsKey, { mode: 0o600 });
+  writeFileSync(join(f.root, "tls-next.pem"), pending, { mode: 0o600 });
+  expect(new LanHttpsClientState(f.root).ensureKeys().tlsKey).toEqual(pending);
+  expect(f.state.read("tls-next.pem")).toBeNull();
 });

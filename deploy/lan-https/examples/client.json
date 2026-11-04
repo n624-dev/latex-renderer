@@ -1,0 +1,17 @@
+{
+  "format": 1,
+  "role": "client",
+  "stateDirectory": "/var/lib/latex-renderer-lan",
+  "provider": {
+    "format": 1,
+    "provider": "akebi-local-acme",
+    "serverOrigin": "https://akebi.example.org",
+    "lanDomain": "lan.example.org",
+    "address": "192.168.1.50",
+    "keylessFallback": false
+  },
+  "issuerId": "zerossl",
+  "termsAccepted": true,
+  "allowedNetworks": ["192.168.1.0/24"],
+  "invitationFile": "/var/lib/latex-renderer-lan/invitation.json"
+}

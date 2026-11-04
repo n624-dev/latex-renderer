@@ -106,3 +106,23 @@ describe("durable bounded renewal scheduling", () => {
     expect(readFileSync(join(f.root, "renewal.json"))).toEqual(original);
   });
 });
+
+it("refreshes ARI without releasing a longer CA backoff or delaying an earlier renewal", () => {
+  const f = fixture();
+  f.journal.plan({ fingerprint256: null, renewAt: now, now });
+  const next = now + 14 * 86400000;
+  f.journal.failed(now, next);
+  const refreshed = f.journal.updatePlan(
+    {
+      renewAt: now + 86400000,
+      ari: true,
+      certificateId: "AKI.SERIAL",
+      ariCheckAt: now + 3600000,
+    },
+    now + 1000,
+  );
+  expect(refreshed.nextAttemptAt).toBe(next);
+  expect(refreshed.renewAt).toBe(now);
+  expect(refreshed.attempt).toBe(1);
+  expect(f.journal.due(next - 1)).toBe(false);
+});

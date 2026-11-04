@@ -172,3 +172,7 @@ transactional apply/recovery and all relevant live readiness checks are finished
 Reference semantics: [Node 24 X509](https://nodejs.org/docs/latest-v24.x/api/crypto.html#class-x509certificate),
 [Nginx geo](https://nginx.org/en/docs/http/ngx_http_geo_module.html) and
 [original client address](https://nginx.org/en/docs/http/ngx_http_realip_module.html#var_realip_remote_addr).
+
+## Automatic LAN certificates
+
+See [Akebi LAN HTTPS](akebi-lan-https.md) for shared and self-hosted authorities, local ACME, optional Keyless, DNS delegation, certificate renewal and recovery. Automatic TLS is available only with an explicit LAN policy and private interface; existing custom TLS and Cloudflare profiles retain their existing configuration.

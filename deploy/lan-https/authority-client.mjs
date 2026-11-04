@@ -64,6 +64,10 @@ export function requestLanHttpsAuthorityJson(
             finish(null, {
               status: response.statusCode,
               body: JSON.parse(Buffer.concat(chunks).toString("utf8")),
+              ...(typeof response.headers["retry-after"] === "string" &&
+              response.headers["retry-after"].length <= 256
+                ? { retryAfter: response.headers["retry-after"] }
+                : {}),
             });
           } catch {
             finish(new Error());
@@ -161,6 +165,7 @@ export function createLanHttpsAuthorityClient({
         "id",
         "directoryUrl",
         "newAccountUrl",
+        "externalAccountRequired",
       ]);
       const directory = new URL(issuer.directoryUrl),
         account = new URL(issuer.newAccountUrl);
@@ -168,6 +173,8 @@ export function createLanHttpsAuthorityClient({
         typeof issuer.id !== "string" ||
         !/^[a-z][a-z0-9-]{0,31}$/.test(issuer.id) ||
         ids.has(issuer.id) ||
+        (issuer.externalAccountRequired !== undefined &&
+          typeof issuer.externalAccountRequired !== "boolean") ||
         directory.origin !== account.origin ||
         [directory, account].some(
           (url) =>
@@ -184,6 +191,9 @@ export function createLanHttpsAuthorityClient({
         id: issuer.id,
         directoryUrl: directory.href,
         newAccountUrl: account.href,
+        ...(issuer.externalAccountRequired === false
+          ? { externalAccountRequired: false }
+          : {}),
       });
     });
     return Object.freeze({
@@ -230,6 +240,12 @@ export function createLanHttpsAuthorityClient({
         issuer: issuerId,
         publicKey: key,
       });
+      if (
+        value.issuer === issuerId &&
+        value.externalAccountBinding === null &&
+        issuer.externalAccountRequired === false
+      )
+        return null;
       const binding = profileRecord(
         value.externalAccountBinding,
         "external account binding",

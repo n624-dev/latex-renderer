@@ -17,9 +17,12 @@ import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import {
   createPrivateKey,
+  createPublicKey,
   generateKeyPairSync,
   randomBytes,
+  X509Certificate,
 } from "node:crypto";
+import { lanHttpsPublicIdentity } from "./proof.mjs";
 import { URL } from "node:url";
 import { validateLanHttpsIssuedCertificate } from "./acme.mjs";
 import { profileRecord } from "../../packages/server-setup-core/src/profile-shape.mjs";
@@ -32,12 +35,25 @@ const files = new Set([
   "previous.pem",
   "order.json",
   "renewal.json",
+  "identity.json",
+  "invitation.json",
+  "profiles.json",
+  "tls-next.pem",
+  "account-next.pem",
+  "account-previous.pem",
+  "account-rotation.json",
 ]);
 
-export async function withLanHttpsClientLock(root, action) {
+export async function withLanHttpsClientLock(
+  root,
+  action,
+  { lockFile = "client.lock" } = {},
+) {
+  if (!["client.lock", "operator.lock", "serve.lock"].includes(lockFile))
+    throw new Error("Invalid LAN HTTPS lock name");
   const state = new LanHttpsClientState(root);
   const fd = openSync(
-    join(root, "client.lock"),
+    join(root, lockFile),
     constants.O_RDWR |
       constants.O_CREAT |
       constants.O_NOFOLLOW |
@@ -79,8 +95,10 @@ export class LanHttpsClientState {
   #root;
   #uid;
   #write;
+  #initialKeys;
 
-  constructor(root, { writeBytes = writeSync } = {}) {
+  constructor(root, { writeBytes = writeSync, initialKeys = {} } = {}) {
+    this.#initialKeys = initialKeys;
     if (
       typeof root !== "string" ||
       root !== resolve(root) ||
@@ -248,13 +266,102 @@ export class LanHttpsClientState {
     if (failure) throw failure;
   }
 
+  ensureIdentityKey() {
+    let key = this.read("identity.pem", 16384);
+    const metadata = this.read("identity.json", 4096);
+    if (!key) {
+      if (
+        metadata ||
+        this.read("accounts.json", 16384) ||
+        this.read("bundle.pem")
+      )
+        throw new Error(
+          "Referenced installation identity is missing; restore state",
+        );
+      key = this.#initialKeys["identity.pem"]
+        ? Buffer.from(this.#initialKeys["identity.pem"])
+        : Buffer.from(
+            generateKeyPairSync("ed25519").privateKey.export({
+              format: "pem",
+              type: "pkcs8",
+            }),
+          );
+      this.#atomic("identity.pem", key);
+    }
+    if (createPrivateKey(key).asymmetricKeyType !== "ed25519")
+      throw new Error("Invalid installation identity");
+    const publicKey = createPublicKey(key).export({ format: "jwk" });
+    const identity = lanHttpsPublicIdentity({
+      kty: publicKey.kty,
+      crv: publicKey.crv,
+      x: publicKey.x,
+    });
+    if (metadata) {
+      try {
+        const value = JSON.parse(metadata.toString());
+        if (
+          value.format !== 1 ||
+          value.installationId !== identity.installationId ||
+          Object.keys(value).length !== 2
+        )
+          throw new Error();
+      } catch {
+        throw new Error(
+          "Saved installation identity is inconsistent; restore state",
+        );
+      }
+    } else
+      this.#atomic(
+        "identity.json",
+        Buffer.from(
+          JSON.stringify({
+            format: 1,
+            installationId: identity.installationId,
+          }),
+        ),
+      );
+    if (
+      this.#initialKeys["identity.pem"] &&
+      !Buffer.from(this.#initialKeys["identity.pem"]).equals(key)
+    )
+      throw new Error(
+        "Installation identity differs from its authority profile",
+      );
+    return key;
+  }
+
+  ensureAccountKey() {
+    let key = this.read("account.pem", 16384);
+    if (!key) {
+      if (this.read("accounts.json", 16384) || this.read("order.json", 32768))
+        throw new Error(
+          "Referenced ACME account key is missing; restore state",
+        );
+      key = Buffer.from(
+        generateKeyPairSync("ec", {
+          namedCurve: "prime256v1",
+        }).privateKey.export({ format: "pem", type: "pkcs8" }),
+      );
+      this.#atomic("account.pem", key);
+    }
+    const parsed = createPrivateKey(key);
+    if (
+      parsed.asymmetricKeyType !== "ec" ||
+      parsed.asymmetricKeyDetails.namedCurve !== "prime256v1"
+    )
+      throw new Error("Invalid ACME account key");
+    return key;
+  }
+
   ensureKeys() {
+    this.recoverTlsRotation();
     const existing = keyFiles.map((name) => this.read(name, 16384));
     const referenced =
       this.read("accounts.json", 16384) ||
       this.read("bundle.pem") ||
       this.read("order.json", 32768) ||
-      this.read("renewal.json", 32768);
+      this.read("renewal.json", 32768) ||
+      this.read("identity.json", 4096);
     if (
       (!existing[0] && (existing[1] || existing[2] || referenced)) ||
       (!existing[1] && referenced) ||
@@ -269,12 +376,21 @@ export class LanHttpsClientState {
           i === 0
             ? generateKeyPairSync("ed25519")
             : generateKeyPairSync("ec", { namedCurve: "prime256v1" });
-        const pem = Buffer.from(
-          generated.privateKey.export({ type: "pkcs8", format: "pem" }),
-        );
+        const pem = this.#initialKeys[keyFiles[i]]
+          ? Buffer.from(this.#initialKeys[keyFiles[i]])
+          : Buffer.from(
+              generated.privateKey.export({ type: "pkcs8", format: "pem" }),
+            );
         this.#atomic(keyFiles[i], pem);
         existing[i] = pem;
       }
+      if (
+        this.#initialKeys[keyFiles[i]] &&
+        !Buffer.from(this.#initialKeys[keyFiles[i]]).equals(existing[i])
+      )
+        throw new Error(
+          "Saved profile key differs from its installation authority; restore state",
+        );
       const key = createPrivateKey(existing[i]);
       if (
         (i === 0 && key.asymmetricKeyType !== "ed25519") ||
@@ -284,11 +400,50 @@ export class LanHttpsClientState {
       )
         throw new Error("LAN HTTPS state contains an unsupported private key");
     }
+    const publicKey = createPublicKey(existing[0]).export({ format: "jwk" });
+    const identity = lanHttpsPublicIdentity({
+      kty: publicKey.kty,
+      crv: publicKey.crv,
+      x: publicKey.x,
+    });
+    const savedIdentity = this.read("identity.json", 4096);
+    if (savedIdentity) {
+      const value = JSON.parse(savedIdentity.toString());
+      if (
+        value.format !== 1 ||
+        value.installationId !== identity.installationId ||
+        Object.keys(value).length !== 2
+      )
+        throw new Error(
+          "Saved installation identity is inconsistent; restore the saved state",
+        );
+    } else
+      this.#atomic(
+        "identity.json",
+        Buffer.from(
+          JSON.stringify({
+            format: 1,
+            installationId: identity.installationId,
+          }),
+        ),
+      );
     return Object.freeze({
       identityKey: existing[0],
       accountKey: existing[1],
       tlsKey: existing[2],
     });
+  }
+
+  saveInvitation(code) {
+    if (
+      typeof code !== "string" ||
+      (code !== "" && !/^[A-Za-z0-9_-]{43}$/.test(code))
+    )
+      throw new Error("Invalid LAN invitation");
+    this.#atomic(
+      "invitation.json",
+      Buffer.from(JSON.stringify({ invitationCode: code })),
+    );
   }
 
   // Call only while holding the same OS flock as renewal. No mtime/PID guess:
@@ -402,7 +557,14 @@ export class LanHttpsClientState {
   // Only the schema-validating journal may write these bounded protocol records.
   // This intentionally cannot overwrite a key, bundle or account mapping.
   saveProtocolRecord(name, value) {
-    if (!["order.json", "renewal.json"].includes(name))
+    if (
+      ![
+        "order.json",
+        "renewal.json",
+        "profiles.json",
+        "account-rotation.json",
+      ].includes(name)
+    )
       throw new Error("Unsupported LAN HTTPS protocol record");
     const bytes = Buffer.from(JSON.stringify(value));
     if (bytes.length > 32768)
@@ -412,9 +574,11 @@ export class LanHttpsClientState {
 
   async installCertificate(
     certificate,
-    { hostnames, now, trustedCertificates } = {},
+    { hostnames, now, trustedCertificates, privateKey: selectedKey } = {},
   ) {
-    const privateKey = this.read("tls-key.pem", 16384);
+    const privateKey = selectedKey
+      ? Buffer.from(selectedKey)
+      : this.read("tls-key.pem", 16384);
     if (!privateKey) throw new Error("Persisted TLS private key is missing");
     const verified = await validateLanHttpsIssuedCertificate({
       certificate,
@@ -432,6 +596,107 @@ export class LanHttpsClientState {
     // Retain one previous verified generation; never accumulate dated copies.
     if (previous) this.#atomic("previous.pem", previous);
     this.#atomic("bundle.pem", bundle);
+    this.recoverTlsRotation();
     return Object.freeze(verified);
+  }
+
+  #sameKey(a, b) {
+    return createPublicKey(a)
+      .export({ type: "spki", format: "der" })
+      .equals(createPublicKey(b).export({ type: "spki", format: "der" }));
+  }
+
+  prepareTlsRotation() {
+    this.ensureKeys();
+    const order = this.read("order.json", 32768);
+    if (order && JSON.parse(order.toString()).pending !== null)
+      throw new Error(
+        "Finish the pending certificate order before rotating its TLS key",
+      );
+    if (!this.read("bundle.pem"))
+      throw new Error(
+        "A published certificate is required before TLS key rotation",
+      );
+    return this.#prepareRotationKey("tls-next.pem");
+  }
+
+  #prepareRotationKey(name) {
+    let key = this.read(name, 16384);
+    if (!key) {
+      key = Buffer.from(
+        generateKeyPairSync("ec", {
+          namedCurve: "prime256v1",
+        }).privateKey.export({ type: "pkcs8", format: "pem" }),
+      );
+      this.#atomic(name, key);
+    }
+    const parsed = createPrivateKey(key);
+    if (
+      parsed.asymmetricKeyType !== "ec" ||
+      parsed.asymmetricKeyDetails.namedCurve !== "prime256v1"
+    )
+      throw new Error("Invalid pending rotation key; restore state");
+    return key;
+  }
+
+  recoverTlsRotation() {
+    const next = this.read("tls-next.pem", 16384),
+      bundle = this.read("bundle.pem");
+    if (!next || !bundle) return;
+    const active = bundle
+      .toString()
+      .match(
+        /-----BEGIN PRIVATE KEY-----[\s\S]*?-----END PRIVATE KEY-----/,
+      )?.[0];
+    if (!active) throw new Error("Saved TLS bundle is missing its private key");
+    if (!this.#sameKey(active, next)) return;
+    const certificate = bundle
+      .toString()
+      .match(
+        /-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/,
+      )?.[0];
+    if (
+      !certificate ||
+      !new X509Certificate(certificate).checkPrivateKey(createPrivateKey(next))
+    )
+      throw new Error("Saved rotation bundle is inconsistent");
+    this.#atomic("tls-key.pem", next);
+    unlinkSync(this.#path("tls-next.pem"));
+  }
+
+  prepareAccountRotation() {
+    return this.#prepareRotationKey("account-next.pem");
+  }
+
+  commitAccountRotation() {
+    const next = this.read("account-next.pem", 16384),
+      current = this.ensureAccountKey();
+    if (!next) throw new Error("Missing pending ACME account key");
+    if (!this.#sameKey(current, next)) {
+      this.#atomic("account-previous.pem", current);
+      this.#atomic("account.pem", next);
+    }
+  }
+
+  synchronizeAccountRotation(previous, next) {
+    const current = this.ensureAccountKey();
+    if (this.#sameKey(current, next)) return;
+    if (!previous || !this.#sameKey(current, previous))
+      throw new Error(
+        "Profile ACME account key does not match its rotation journal",
+      );
+    const order = this.read("order.json", 32768);
+    if (order && JSON.parse(order.toString()).pending !== null)
+      throw new Error("Pending profile order blocks account key rotation");
+    this.#atomic("account.pem", Buffer.from(next));
+  }
+
+  finishAccountRotation() {
+    this.read("account-next.pem", 16384);
+    try {
+      unlinkSync(this.#path("account-next.pem"));
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
   }
 }

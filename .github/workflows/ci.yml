@@ -25,7 +25,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: "24"
+          node-version: "26.13.0"
       - name: Install and build Web test dependencies without a cache
         run: |
           corepack enable
@@ -52,7 +52,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: "24"
+          node-version: "26.13.0"
       - name: Verify native ARM64 and install test prerequisites
         run: |
           test "$(uname -m)" = aarch64
@@ -68,7 +68,9 @@ jobs:
         working-directory: deploy/lan-https/bridge
         env:
           GOTOOLCHAIN: local
-        run: go test -race -count=1 -timeout 2m ./...
+        run: |
+          echo "CI_LAN_HTTPS_NATIVE=1" >> "$GITHUB_ENV"
+          go test -race -count=1 -timeout 2m ./...
       - name: Install without an Actions dependency cache
         run: pnpm install --frozen-lockfile
       - name: Build native services and client
@@ -93,7 +95,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: "24"
+          node-version: "26.13.0"
       - name: Scan repository history for secrets
         uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3
         env:
@@ -108,7 +110,9 @@ jobs:
         working-directory: deploy/lan-https/bridge
         env:
           GOTOOLCHAIN: local
-        run: go test -race -count=1 -timeout 2m ./...
+        run: |
+          echo "CI_LAN_HTTPS_NATIVE=1" >> "$GITHUB_ENV"
+          go test -race -count=1 -timeout 2m ./...
       - name: Enable Corepack
         run: corepack enable
       - name: Install backup integration-test dependency

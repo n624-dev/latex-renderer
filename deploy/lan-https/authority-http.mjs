@@ -15,6 +15,7 @@ function configuredIssuer(input) {
   ]);
   const directory = new URL(model.directoryUrl),
     account = new URL(model.newAccountUrl);
+  const noEab = model.kid === null && model.hmacKey === null;
   if (
     typeof model.id !== "string" ||
     !/^[a-z][a-z0-9-]{0,31}$/.test(model.id) ||
@@ -29,16 +30,17 @@ function configuredIssuer(input) {
     directory.origin !== account.origin ||
     directory.href !== model.directoryUrl ||
     account.href !== model.newAccountUrl ||
-    typeof model.kid !== "string" ||
-    model.kid.length < 1 ||
-    model.kid.length > 512 ||
-    /[^\x21-\x7e]/.test(model.kid) ||
-    typeof model.hmacKey !== "string" ||
-    !/^[A-Za-z0-9_-]{43,171}$/.test(model.hmacKey) ||
-    Buffer.from(model.hmacKey, "base64url").length < 32 ||
-    Buffer.from(model.hmacKey, "base64url").length > 128 ||
-    Buffer.from(model.hmacKey, "base64url").toString("base64url") !==
-      model.hmacKey
+    (!noEab &&
+      (typeof model.kid !== "string" ||
+        model.kid.length < 1 ||
+        model.kid.length > 512 ||
+        /[^\x21-\x7e]/.test(model.kid) ||
+        typeof model.hmacKey !== "string" ||
+        !/^[A-Za-z0-9_-]{43,171}$/.test(model.hmacKey) ||
+        Buffer.from(model.hmacKey, "base64url").length < 32 ||
+        Buffer.from(model.hmacKey, "base64url").length > 128 ||
+        Buffer.from(model.hmacKey, "base64url").toString("base64url") !==
+          model.hmacKey))
   )
     throw new Error("Invalid authority-owned ACME issuer configuration");
   return Object.freeze({ ...model });
@@ -138,6 +140,12 @@ export function createLanHttpsAuthorityHandler({
     windowMs: 3_600_000,
   }),
   maxConcurrentRequests = 8,
+  signer,
+  signingLimit = createLanHttpsRateLimit({
+    requestsPerKey: 60,
+    requestsTotal: 600,
+    windowMs: 60000,
+  }),
 }) {
   if (
     !Array.isArray(issuers) ||
@@ -164,10 +172,11 @@ export function createLanHttpsAuthorityHandler({
     proofAlgorithm: "Ed25519",
     nonceTtlMs: store.policy.limits.nonceTtlMs,
     issuers: [...byIssuer.values()].map(
-      ({ id, directoryUrl, newAccountUrl }) => ({
+      ({ id, directoryUrl, newAccountUrl, kid }) => ({
         id,
         directoryUrl,
         newAccountUrl,
+        ...(kid === null ? { externalAccountRequired: false } : {}),
       }),
     ),
   });
@@ -175,6 +184,8 @@ export function createLanHttpsAuthorityHandler({
     "/v1/nonce",
     "/v1/enroll",
     "/v1/acme/bind",
+    "/v1/keyless/certificate",
+    "/v1/keyless/sign",
     "/v1/challenge/present",
     "/v1/challenge/remove",
   ]);
@@ -226,6 +237,23 @@ export function createLanHttpsAuthorityHandler({
     const body = await readBody(request);
     let result;
     switch (request.url) {
+      case "/v1/keyless/certificate":
+      case "/v1/keyless/sign": {
+        if (!signer)
+          throw new LanHttpsAuthorityError("keyless_unavailable", 503);
+        const signing = request.url === "/v1/keyless/sign";
+        const approved = store.authorizeKeyless(body, proof, signing);
+        if (!signingLimit.allow(proof.installationId))
+          throw new LanHttpsAuthorityError("keyless_rate_limit", 429);
+        try {
+          result = signing
+            ? await signer.sign(approved.keyId, approved.digest)
+            : await signer.certificate();
+        } catch {
+          throw new LanHttpsAuthorityError("keyless_unavailable", 503);
+        }
+        break;
+      }
       case "/v1/nonce": {
         const input = profileRecord(jsonObject(body), "nonce request", [
           "publicKey",

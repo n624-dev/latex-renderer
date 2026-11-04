@@ -124,6 +124,7 @@ describe("consumer dependency restart boundaries (no systemd mutation)", () => {
           "-c",
           `
       gateway=active; deployment_mode=${mode}; web_service=fixture-web
+      restore_lan_services() { return 0; } # LAN lifecycle has separate cases below.
       http_control() { case "$1" in restart) gateway=inactive ;; esac; return 0; }
       systemctl() {
         case "$1" in
@@ -155,3 +156,43 @@ describe("consumer dependency restart boundaries (no systemd mutation)", () => {
     expect(runInNewContext(expression, { action: "--inspect" })).toBe(30_000);
   });
 });
+
+it.skipIf(process.platform === "win32").each([false, true])(
+  "LAN restoration propagates a failed listener even when the caller handles errors: %s",
+  async (stuck) => {
+    const source = await readFile(
+      "deploy/scripts/deploy-production-release.sh",
+      "utf8",
+    );
+    const original = /^restore_lan_services\(\) \{[\s\S]*?^\}/m.exec(
+      source,
+    )?.[0];
+    if (!original) throw new Error("Missing LAN restore function");
+    // Substitute only external boundaries: no production path is read/executed.
+    const body = original
+      .replace(
+        "[ -f /etc/latex-renderer/lan-https-client.json ]",
+        "[ true = true ]",
+      )
+      .replace(
+        "/usr/local/bin/node /opt/latex-renderer/current/deploy/lan-https/cli.mjs",
+        "node_fixture",
+      );
+    const result = spawnSync(
+      "/bin/sh",
+      [
+        "-c",
+        `set -eu
+ lan_authority_active=false
+ node_fixture(){ return 0; }
+ systemctl(){ if [ "$1" = is-active ] && [ "$3" = latex-renderer-lan-https.service ] && [ ${stuck} = true ]; then return 1; fi; return 0; }
+ ${body}
+ if restore_lan_services; then echo restored; else echo failed; fi
+ `,
+      ],
+      { encoding: "utf8", timeout: 2000 },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim()).toBe(stuck ? "failed" : "restored");
+  },
+);

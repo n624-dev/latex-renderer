@@ -84,3 +84,37 @@ it("falls back to early renewal on missing, failed, unsafe or malformed ARI with
     expect(plan.certificateId).toBeNull();
   }
 });
+
+it("honors ARI Retry-After and retains the chosen renewal time within the current window", async () => {
+  const f = await lanCertificateFixture();
+  cleanups.push(f.cleanup);
+  const now = Date.now();
+  let calls = 0;
+  const plan = await planLanHttpsRenewal({
+    certificate: f.certificate,
+    directoryUrl: "https://acme.example.test/directory",
+    now,
+    previousRenewAt: now + 2000,
+    random: () => 0,
+    transport: () =>
+      Promise.resolve(
+        ++calls === 1
+          ? {
+              status: 200,
+              body: { renewalInfo: "https://ari.example.test/info" },
+            }
+          : {
+              status: 200,
+              retryAfter: "7200",
+              body: {
+                suggestedWindow: {
+                  start: new Date(now + 1000).toISOString(),
+                  end: new Date(now + 5000).toISOString(),
+                },
+              },
+            },
+      ),
+  });
+  expect(plan.renewAt).toBe(now + 2000);
+  expect(plan.checkAt).toBe(now + 7200000);
+});

@@ -8,6 +8,7 @@ export interface LanHttpsCertificateValidationInput {
   hostnames: readonly string[];
   now?: number;
   trustedCertificates?: readonly string[];
+  purpose?: "installation" | "keyless-operator";
 }
 export function createLanHttpsAcmeSession(options: {
   directoryUrl: string;

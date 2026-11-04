@@ -74,6 +74,8 @@ export {
 export {
   normalizeLanHttpsDomain,
   lanHttpsHostname,
+  LAN_HTTPS_COMMON,
+  lanHttpsInterfaceChoices,
   lanHttpsAddress,
   lanHttpsOrigin,
   validateLanHttpsServerOrigin,

@@ -27,6 +27,7 @@ export function validateServerInitialInput(reviewInput, input) {
     "oidcClientSecret",
     "tls",
     "deploymentUser",
+    "lanInvitation",
   ]);
   const owner = profileRecord(model.owner, "initial owner", [
     "displayName",
@@ -72,9 +73,22 @@ export function validateServerInitialInput(reviewInput, input) {
   const ingress = review.deployment.ingress;
   if (!ingress)
     throw new Error("Initial installation requires explicit ingress");
+  if (ingress.mode === "standalone" && ingress.tlsProvider === "automatic") {
+    if (Object.hasOwn(model, "tls"))
+      throw new Error(
+        "Automatic LAN HTTPS does not accept shared TLS private keys",
+      );
+    if (Object.hasOwn(model, "lanInvitation")) {
+      const code = text(model.lanInvitation, 43, 43);
+      if (!/^[A-Za-z0-9_-]{43}$/.test(code))
+        throw new Error("Invalid LAN invitation");
+      result.lanInvitation = code;
+    }
+    return result;
+  }
+  if (Object.hasOwn(model, "lanInvitation"))
+    throw new Error("LAN invitation requires automatic LAN HTTPS");
   if (ingress.mode === "standalone") {
-    if (ingress.tlsProvider !== "custom")
-      throw new Error("Automatic HTTPS is not implemented");
     const tls = profileRecord(model.tls, "initial TLS", [
       "certificate",
       "privateKey",
@@ -102,7 +116,26 @@ export function validateServerInitialInput(reviewInput, input) {
 }
 export function validateServerIngressInput(reviewInput, input) {
   const review = validateServerSetupReview(reviewInput);
-  const credentials = profileRecord(input, "ingress credentials", ["tls"]);
+  const credentials = profileRecord(input, "ingress credentials", [
+    "tls",
+    "lanInvitation",
+  ]);
+  if (
+    review.deployment.ingress?.mode === "standalone" &&
+    review.deployment.ingress.tlsProvider === "automatic"
+  ) {
+    if (Object.hasOwn(credentials, "tls"))
+      throw new Error(
+        "Automatic LAN HTTPS does not accept shared TLS private keys",
+      );
+    if (!Object.hasOwn(credentials, "lanInvitation")) return {};
+    const code = text(credentials.lanInvitation, 43, 43);
+    if (!/^[A-Za-z0-9_-]{43}$/.test(code))
+      throw new Error("Invalid LAN invitation");
+    return { lanInvitation: code };
+  }
+  if (Object.hasOwn(credentials, "lanInvitation"))
+    throw new Error("LAN invitation requires automatic LAN HTTPS");
   const tls = profileRecord(credentials.tls, "TLS", [
     "certificate",
     "privateKey",

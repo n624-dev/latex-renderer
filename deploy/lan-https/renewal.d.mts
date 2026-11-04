@@ -6,11 +6,13 @@ export interface LanHttpsRenewalPlan {
   readonly ari: boolean;
   readonly renewAt: number;
   readonly certificateId: string | null;
+  readonly checkAt?: number;
 }
 export function planLanHttpsRenewal(options: {
   certificate: string;
   directoryUrl: string;
   now?: number;
+  previousRenewAt?: number;
   random?: (maximum: number) => number;
   transport?: LanHttpsAuthorityTransport;
 }): Promise<Readonly<LanHttpsRenewalPlan>>;

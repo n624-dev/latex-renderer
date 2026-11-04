@@ -28,3 +28,7 @@ secrets/
 *.key
 *.credential
 __pycache__/
+
+# Native LAN helpers are generated from immutable release source.
+/deploy/lan-https/bin/
+/deploy/lan-https/binaries.json

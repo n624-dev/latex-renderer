@@ -9,7 +9,7 @@ export interface LanHttpsAuthorityTransportOptions {
 export type LanHttpsAuthorityTransport = (
   url: URL,
   options: LanHttpsAuthorityTransportOptions,
-) => Promise<{ status: number; body: unknown }>;
+) => Promise<{ status: number; body: unknown; retryAfter?: string }>;
 export const requestLanHttpsAuthorityJson: LanHttpsAuthorityTransport;
 export interface LanHttpsAuthorityClient {
   readonly installationId: string;
@@ -25,6 +25,7 @@ export interface LanHttpsAuthorityClient {
         id: string;
         directoryUrl: string;
         newAccountUrl: string;
+        externalAccountRequired?: boolean;
       }[];
     }>
   >;
@@ -34,7 +35,7 @@ export interface LanHttpsAuthorityClient {
   bindAcmeAccount(
     issuerId: string,
     publicKey: unknown,
-  ): Promise<Readonly<LanHttpsExternalAccountBinding>>;
+  ): Promise<Readonly<LanHttpsExternalAccountBinding> | null>;
   presentChallenge(
     hostname: string,
     value: string,

@@ -48,7 +48,17 @@ it.each(["mismatch", "connection-lost", "reply-lost", "success"])(
     );
     const model = {
       ...imported,
-      deployment: { ...imported.deployment, ingress: { mode: "standalone" } },
+      deployment: {
+        ...imported.deployment,
+        ingress: {
+          format: 1,
+          mode: "standalone",
+          tlsProvider: "custom",
+          accessScope: "local",
+          listenAddress: "127.0.0.1",
+          publicOrigin: "https://renderer.example.test",
+        },
+      },
     };
     const elements = new Map(
       [...setupHtml.matchAll(/id="([^"]+)"/g)].map((match) => [
@@ -79,11 +89,20 @@ it.each(["mismatch", "connection-lost", "reply-lost", "success"])(
           ok: true,
           json: () =>
             Promise.resolve(
-              path === "/api/session"
-                ? { token: "fixture-token", csrf: "fixture-csrf" }
-                : path === "/api/preview"
-                  ? { review: model, confirmation: "fixture-confirmation" }
-                  : { scope: "initial-prepared-host", review: model },
+              path === "/api/network"
+                ? {
+                    interfaces: [],
+                    common: {
+                      serverOrigin: "https://akebi.example.test",
+                      lanDomain: "lan.example.test",
+                      issuerId: "zerossl",
+                    },
+                  }
+                : path === "/api/session"
+                  ? { token: "fixture-token", csrf: "fixture-csrf" }
+                  : path === "/api/preview"
+                    ? { review: model, confirmation: "fixture-confirmation" }
+                    : { scope: "initial-prepared-host", review: model },
             ),
         });
       },
@@ -182,14 +201,23 @@ it.each([
           ok: true,
           json: () =>
             Promise.resolve(
-              path === "/api/session"
-                ? { token: "fixture-token", csrf: "fixture-csrf" }
-                : {
-                    scope: ingress
-                      ? "ingress-prepared-host"
-                      : "initial-prepared-host",
-                    review: model,
-                  },
+              path === "/api/network"
+                ? {
+                    interfaces: [],
+                    common: {
+                      serverOrigin: "https://akebi.example.test",
+                      lanDomain: "lan.example.test",
+                      issuerId: "zerossl",
+                    },
+                  }
+                : path === "/api/session"
+                  ? { token: "fixture-token", csrf: "fixture-csrf" }
+                  : {
+                      scope: ingress
+                        ? "ingress-prepared-host"
+                        : "initial-prepared-host",
+                      review: model,
+                    },
             ),
         }),
     });

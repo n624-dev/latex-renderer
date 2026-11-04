@@ -65,12 +65,7 @@ export function reviewServerSetupReadiness(input) {
     requiredCredentialFiles: Object.freeze(credentials),
     oidcDiscoveryRequired:
       authentication.backend === "native" && authentication.oidcEnabled,
-    ingressStatus:
-      deployment.ingress === null
-        ? "unreviewed"
-        : deployment.ingress.tlsProvider === "automatic"
-          ? "unsupported-automatic"
-          : "reviewed",
+    ingressStatus: deployment.ingress === null ? "unreviewed" : "reviewed",
     readyForApply: false,
   });
 }

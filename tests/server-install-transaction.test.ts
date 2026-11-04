@@ -888,7 +888,7 @@ describe("initial input and shared frontends", () => {
       tls.cleanup();
     }
   });
-  it("never evaluates a credentials getter and rejects oversized PEM/unsupported automatic HTTPS", () => {
+  it("never evaluates a credentials getter and rejects oversized PEM and incomplete automatic HTTPS", () => {
     let accessed = false;
     const input = {
       get owner() {
@@ -915,7 +915,7 @@ describe("initial input and shared frontends", () => {
         },
         { tls: { certificate: "x", privateKey: "y" } },
       ),
-    ).toThrow("Custom");
+    ).toThrow(/automatic LAN HTTPS/);
   });
   it("supports explicit recovery in the same session and never leaks host errors", async () => {
     const session = createServerSetupSession({
@@ -1027,4 +1027,67 @@ describe("initial input and shared frontends", () => {
     );
     expect((await lstat(databasePath)).isFile()).toBe(true);
   });
+});
+
+it("CUI guided LAN review selects an explicit interface and keeps automatic credentials out of its review", async () => {
+  const answers = [
+    "",
+    "LAN",
+    "1",
+    "2",
+    "https://akebi.example.test",
+    "lan.example.test",
+    "ca",
+    "1",
+    "no",
+    "",
+    "AGREE",
+    "password",
+    "",
+    "Owner",
+    "",
+    "owner",
+    "ubuntu",
+    "CANCEL",
+  ];
+  const readFile = vi.fn(),
+    apply = vi.fn(),
+    print = vi.fn();
+  const ask = vi.fn(() => Promise.resolve(answers.shift() ?? "CANCEL"));
+  expect(
+    await runServerInitialCui(
+      {
+        scope: "initial-prepared-host",
+        current: model,
+        preview: (candidate) => ({ candidate }),
+        apply,
+      },
+      {
+        interfaces: {
+          eth0: [
+            {
+              address: "192.168.1.50",
+              netmask: "255.255.255.0",
+              family: "IPv4",
+              mac: "00:00:00:00:00:00",
+              internal: false,
+              cidr: "192.168.1.50/24",
+            },
+          ],
+        },
+        ask,
+        askSecret: () => Promise.resolve("long-not-common-passphrase"),
+        print,
+        readFile,
+      },
+    ),
+  ).toEqual({ applied: false });
+  expect(apply).not.toHaveBeenCalled();
+  expect(readFile).not.toHaveBeenCalled();
+  expect(JSON.stringify(print.mock.calls)).toContain(
+    "https://192-168-1-50.lan.example.test",
+  );
+  expect(JSON.stringify(print.mock.calls)).not.toContain(
+    "long-not-common-passphrase",
+  );
 });

@@ -87,6 +87,7 @@ export async function planLanHttpsRenewal({
   now = Date.now(),
   random = randomInt,
   transport = requestLanHttpsAuthorityJson,
+  previousRenewAt,
 }) {
   const leaf = new X509Certificate(certificate);
   const from = Date.parse(leaf.validFrom),
@@ -102,6 +103,7 @@ export async function planLanHttpsRenewal({
     ari: false,
     renewAt: Math.max(now, Math.floor(from + ((expires - from) * 2) / 3)),
     certificateId: null,
+    checkAt: now + 86400000,
   });
   const identifier = lanHttpsAcmeCertificateId(certificate);
   if (!identifier) return fallback;
@@ -119,6 +121,14 @@ export async function planLanHttpsRenewal({
     // transport sends no ACME signature, EAB, private key or account credential.
     endpoint.pathname = endpoint.pathname.replace(/\/$/, "") + "/" + identifier;
     const result = await transport(endpoint, { method: "GET" });
+    const retry =
+      typeof result.retryAfter === "string"
+        ? /^\d{1,9}$/.test(result.retryAfter)
+          ? now + Number(result.retryAfter) * 1000
+          : Date.parse(result.retryAfter)
+        : NaN;
+    const checkAt =
+      Number.isSafeInteger(retry) && retry > now ? retry : now + 86400000;
     const start = Date.parse(result.body?.suggestedWindow?.start),
       end = Date.parse(result.body?.suggestedWindow?.end);
     if (
@@ -129,7 +139,10 @@ export async function planLanHttpsRenewal({
       end - start > 365 * 86400000 ||
       start >= expires
     )
-      return fallback;
+      return Object.freeze({
+        ...fallback,
+        checkAt: Math.max(now + 3600000, checkAt),
+      });
     const earliest = Math.max(now, start),
       latest = Math.min(end, expires);
     const width = Math.max(1, latest - earliest);
@@ -138,10 +151,16 @@ export async function planLanHttpsRenewal({
       return fallback;
     return Object.freeze({
       ari: true,
-      renewAt: earliest + offset,
+      renewAt:
+        Number.isSafeInteger(previousRenewAt) &&
+        previousRenewAt >= earliest &&
+        previousRenewAt < latest
+          ? previousRenewAt
+          : earliest + offset,
+      checkAt,
       certificateId: identifier,
     });
   } catch {
-    return fallback;
+    return Object.freeze({ ...fallback, checkAt: now + 3600000 });
   }
 }

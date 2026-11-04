@@ -182,7 +182,10 @@ export function createLanHttpsDnsResponder(input) {
           ),
         );
     } else if (name.startsWith("_acme-challenge.")) {
-      if (!eligibleName(name.slice(16))) {
+      if (
+        !eligibleName(name.slice(16)) &&
+        ![domain, "authority-control." + domain].includes(name.slice(16))
+      ) {
         authorities = [soa];
         return reply(3);
       }

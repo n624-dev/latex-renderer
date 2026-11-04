@@ -27,8 +27,12 @@ export function assertServerSetupSockets(output, ingress, options = {}) {
           };
         })
     : [];
+  const ports =
+    ingress.tlsProvider === "automatic"
+      ? [...internalPorts, 3180]
+      : internalPorts;
   for (const listener of listeners.filter((entry) =>
-    internalPorts.includes(entry.port),
+    ports.includes(entry.port),
   )) {
     if (
       options.fresh ||
@@ -39,7 +43,7 @@ export function assertServerSetupSockets(output, ingress, options = {}) {
       );
   }
   if (options.requireInternal) {
-    const required = internalPorts.filter(
+    const required = ports.filter(
       (port) => port !== 3105 || ingress.mode === "standalone",
     );
     if (
@@ -47,6 +51,12 @@ export function assertServerSetupSockets(output, ingress, options = {}) {
     )
       throw new Error("Internal application listener is unavailable");
   }
+  if (
+    options.checkLanBackendPort &&
+    ingress.tlsProvider === "automatic" &&
+    listeners.some((entry) => entry.port === 3180)
+  )
+    throw new Error("LAN HTTPS loopback backend port 3180 is occupied");
   if (options.checkIngressPort && ingress.mode === "standalone") {
     const port = Number(new URL(ingress.publicOrigin).port || 443);
     const wild = (address) => ["*", "0.0.0.0", "::"].includes(address);

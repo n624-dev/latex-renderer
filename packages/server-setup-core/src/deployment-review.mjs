@@ -64,7 +64,7 @@ export function serverSetupDeploymentReviewEnvironment(input) {
   if (review.ingress)
     for (const [key, value] of serverIngressReviewEnvironment(review.ingress))
       values.set(key, value);
-  // Automatic HTTPS may be reviewed, but cannot become active configuration.
+  // Validate authentication and the selected custom/automatic ingress together.
   validateProfileValues(values);
   return values;
 }

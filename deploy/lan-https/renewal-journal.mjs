@@ -15,8 +15,11 @@ function checked(value, context) {
     "attempt",
     "nextAttemptAt",
     "updatedAt",
+    "ariCheckAt",
   ]);
+  const ariCheckAt = value.ariCheckAt ?? value.updatedAt + 86400000;
   if (
+    !time(ariCheckAt) ||
     value.format !== 1 ||
     value.context !== context ||
     !(
@@ -40,7 +43,7 @@ function checked(value, context) {
     !time(value.updatedAt)
   )
     throw new Error("Invalid saved LAN HTTPS renewal schedule");
-  return Object.freeze({ ...value });
+  return Object.freeze({ ...value, ariCheckAt });
 }
 
 export class LanHttpsRenewalJournal {
@@ -70,10 +73,18 @@ export class LanHttpsRenewalJournal {
     this.#state.saveProtocolRecord("renewal.json", record);
     return record;
   }
-  plan({ fingerprint256, renewAt, ari = false, certificateId = null, now }) {
+  plan({
+    fingerprint256,
+    renewAt,
+    ari = false,
+    certificateId = null,
+    now,
+    ariCheckAt = now + 86400000,
+  }) {
     this.read();
     return this.#save({
       format: 1,
+      ariCheckAt,
       context: this.#context,
       fingerprint256,
       renewAt,
@@ -81,6 +92,18 @@ export class LanHttpsRenewalJournal {
       certificateId,
       attempt: 0,
       nextAttemptAt: null,
+      updatedAt: now,
+    });
+  }
+  updatePlan({ renewAt, ari, certificateId, ariCheckAt }, now) {
+    const current = this.read();
+    if (!current) throw new Error("Missing renewal plan");
+    return this.#save({
+      ...current,
+      renewAt: Math.min(current.renewAt, renewAt),
+      ari: current.ari || ari,
+      certificateId: ari ? certificateId : current.certificateId,
+      ariCheckAt,
       updatedAt: now,
     });
   }

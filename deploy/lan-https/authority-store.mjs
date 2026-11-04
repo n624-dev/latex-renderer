@@ -1,3 +1,4 @@
+import { URL } from "node:url";
 import { createHash, randomBytes } from "node:crypto";
 import {
   lanHttpsAddress,
@@ -116,9 +117,13 @@ export class LanHttpsAuthorityStore {
         PRAGMA application_id=1279348273;
         PRAGMA user_version=1;
         COMMIT;`);
-    } else if (application !== 1279348273 || version !== 1) {
+    } else if (application !== 1279348273 || ![1, 2].includes(version)) {
       fail("authority_schema_unsupported", 503);
     }
+    if (version !== 2)
+      this.#db.exec(`BEGIN IMMEDIATE;
+      CREATE TABLE authority_operator_challenges (name TEXT NOT NULL, value TEXT NOT NULL, expires_at INTEGER NOT NULL, PRIMARY KEY(name,value));
+      PRAGMA user_version=2; COMMIT;`);
     // Bound the database itself as well as logical records; no growing WAL.
     if (this.#db.prepare("PRAGMA page_size").get()?.page_size !== 4096)
       fail("authority_page_size_unsupported", 503);
@@ -163,6 +168,9 @@ export class LanHttpsAuthorityStore {
   }
 
   #prune(now) {
+    this.#db
+      .prepare("DELETE FROM authority_operator_challenges WHERE expires_at<=?")
+      .run(now);
     this.#db
       .prepare("DELETE FROM authority_nonces WHERE expires_at<=?")
       .run(now);
@@ -358,12 +366,41 @@ export class LanHttpsAuthorityStore {
       }
       return Object.freeze({
         issuer: issuer.id,
-        externalAccountBinding: createLanHttpsExternalAccountBinding(
-          key,
-          issuer,
-        ),
+        externalAccountBinding:
+          issuer.kid === null && issuer.hmacKey === null
+            ? null
+            : createLanHttpsExternalAccountBinding(key, issuer),
       });
     });
+  }
+
+  authorizeKeyless(body, proof, signing = false) {
+    const input = objectBody(
+      body,
+      signing ? ["hostname", "keyId", "digest"] : ["hostname"],
+    );
+    try {
+      lanHttpsAddress(input.hostname, this.#policy.lanDomain);
+    } catch {
+      fail("keyless_hostname_rejected", 403);
+    }
+    if (
+      signing &&
+      (typeof input.keyId !== "string" ||
+        !/^[a-f0-9]{64}$/.test(input.keyId) ||
+        typeof input.digest !== "string" ||
+        !/^[A-Za-z0-9_-]{43}$/.test(input.digest) ||
+        Buffer.from(input.digest, "base64url").length !== 32 ||
+        Buffer.from(input.digest, "base64url").toString("base64url") !==
+          input.digest)
+    )
+      fail("invalid_keyless_request");
+    return this.#authenticated(
+      proof,
+      signing ? "/v1/keyless/sign" : "/v1/keyless/certificate",
+      body,
+      () => Object.freeze({ ...input }),
+    );
   }
 
   #authenticated(proof, path, body, action) {
@@ -461,6 +498,58 @@ export class LanHttpsAuthorityStore {
     });
   }
 
+  // Local administration only. These reserved names cannot be reached through
+  // installation APIs, so public registration cannot request the shared wildcard
+  // or the authority control-plane certificate.
+  operatorChallenge(hostname, value, remove = false) {
+    const apiHostname = new URL(this.#policy.serverOrigin).hostname;
+    const target =
+      hostname === this.#policy.lanDomain
+        ? this.#policy.lanDomain
+        : hostname === apiHostname
+          ? "authority-control." + this.#policy.lanDomain
+          : null;
+    if (
+      !target ||
+      typeof value !== "string" ||
+      !/^[A-Za-z0-9_-]{43}$/.test(value) ||
+      Buffer.from(value, "base64url").toString("base64url") !== value
+    )
+      fail("operator_challenge_rejected");
+    return this.#transaction((now) => {
+      const name = "_acme-challenge." + target;
+      if (remove) {
+        this.#db
+          .prepare(
+            "DELETE FROM authority_operator_challenges WHERE name=? AND value=?",
+          )
+          .run(name, value);
+        return { removed: true };
+      }
+      const existing = this.#db
+        .prepare(
+          "SELECT expires_at AS expiresAt FROM authority_operator_challenges WHERE name=? AND value=?",
+        )
+        .get(name, value);
+      if (existing) return { name, ...existing };
+      if (
+        Number(
+          this.#db
+            .prepare(
+              "SELECT count(*) AS count FROM authority_operator_challenges",
+            )
+            .get().count,
+        ) >= 4
+      )
+        fail("operator_challenge_capacity", 429);
+      const expiresAt = now + this.#policy.limits.challengeTtlMs;
+      this.#db
+        .prepare("INSERT INTO authority_operator_challenges VALUES(?,?,?)")
+        .run(name, value, expiresAt);
+      return { name, expiresAt };
+    });
+  }
+
   challengeValues(name) {
     if (
       typeof name !== "string" ||
@@ -471,9 +560,9 @@ export class LanHttpsAuthorityStore {
     return Object.freeze(
       this.#db
         .prepare(
-          "SELECT DISTINCT value FROM authority_challenges WHERE name=? AND expires_at>? ORDER BY value",
+          "SELECT value FROM authority_challenges WHERE name=? AND expires_at>? UNION SELECT value FROM authority_operator_challenges WHERE name=? AND expires_at>? ORDER BY value",
         )
-        .all(name, this.#now())
+        .all(name, this.#now(), name, this.#now())
         .map((row) => row.value),
     );
   }

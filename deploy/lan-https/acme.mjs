@@ -201,12 +201,18 @@ export async function validateLanHttpsIssuedCertificate({
   hostnames,
   now = Date.now(),
   trustedCertificates = getCACertificates("default"),
+  purpose = "installation",
 }) {
   if (
     typeof certificate !== "string" ||
     Buffer.byteLength(certificate) > 512 * 1024 ||
     !Array.isArray(hostnames) ||
-    hostnames.length !== 2 ||
+    !(
+      (purpose === "installation" && hostnames.length === 2) ||
+      (purpose === "keyless-operator" &&
+        hostnames.length === 1 &&
+        /^\*\.[a-z0-9.-]+$/.test(hostnames[0]))
+    ) ||
     !Number.isSafeInteger(now)
   )
     throw new Error("Invalid LAN HTTPS certificate validation input");
@@ -236,7 +242,13 @@ export async function validateLanHttpsIssuedCertificate({
       new Set(names).size !== names.length ||
       names.some((name) => !hostnames.includes(name)) ||
       hostnames.some(
-        (name) => !leaf.checkHost(name, { subject: "never", wildcards: false }),
+        (name) =>
+          !leaf.checkHost(
+            purpose === "keyless-operator"
+              ? name.replace(/^\*\./, "keyless-check.")
+              : name,
+            { subject: "never", wildcards: purpose === "keyless-operator" },
+          ),
       )
     )
       throw new Error();
@@ -260,7 +272,9 @@ export async function validateLanHttpsIssuedCertificate({
     await verifyChainWithTls(
       certificate,
       privateKey,
-      hostnames[0],
+      purpose === "keyless-operator"
+        ? hostnames[0].replace(/^\*\./, "keyless-check.")
+        : hostnames[0],
       trustedCertificates,
     );
     return Object.freeze({
@@ -328,7 +342,7 @@ export async function issueLanHttpsCertificate({
       const binding = await authority.bindAcmeAccount(issuerId, publicKey);
       await client.createAccount({
         termsOfServiceAgreed: true,
-        externalAccountBinding: binding,
+        ...(binding ? { externalAccountBinding: binding } : {}),
       });
       accountUrl = client.getAccountUrl();
       // Do not place orders before the newly registered account can survive a

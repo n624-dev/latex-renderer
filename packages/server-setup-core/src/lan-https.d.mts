@@ -39,3 +39,15 @@ export interface LanHttpsAuthorityPolicy {
 export function validateLanHttpsAuthorityPolicy(
   input: unknown,
 ): LanHttpsAuthorityPolicy;
+export const LAN_HTTPS_COMMON: Readonly<{
+  serverOrigin: string;
+  lanDomain: string;
+  issuerId: string;
+}>;
+export function lanHttpsInterfaceChoices(
+  interfaces: unknown,
+): readonly Readonly<{
+  interfaceName: string;
+  address: string;
+  network: string;
+}>[];

@@ -42,10 +42,13 @@ export class LanHttpsAuthorityStore {
   bindAcmeAccount(
     body: Buffer,
     proof: LanHttpsProof,
-    issuer: LanHttpsEabCredentials & { readonly id: string },
+    issuer: (
+      | LanHttpsEabCredentials
+      | { newAccountUrl: string; kid: null; hmacKey: null }
+    ) & { readonly id: string },
   ): Readonly<{
     issuer: string;
-    externalAccountBinding: Readonly<LanHttpsExternalAccountBinding>;
+    externalAccountBinding: Readonly<LanHttpsExternalAccountBinding> | null;
   }>;
   presentChallenge(
     body: Buffer,
@@ -55,6 +58,16 @@ export class LanHttpsAuthorityStore {
     body: Buffer,
     proof: LanHttpsProof,
   ): Readonly<{ removed: boolean }>;
+  authorizeKeyless(
+    body: Buffer,
+    proof: LanHttpsProof,
+    signing?: boolean,
+  ): Readonly<{ hostname: string; keyId?: string; digest?: string }>;
+  operatorChallenge(
+    hostname: string,
+    value: string,
+    remove?: boolean,
+  ): Readonly<{ removed?: boolean; name?: string; expiresAt?: number }>;
   challengeValues(name: string): readonly string[];
   revokeInstallation(id: string): void;
 }

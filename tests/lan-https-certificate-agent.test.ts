@@ -34,7 +34,6 @@ async function fixture() {
   const root = mkdtempSync(join(tmpdir(), "lan-certificate-agent-"));
   cleanups.push(() => rmSync(root, { recursive: true, force: true }));
   const state = new LanHttpsClientState(root);
-  state.ensureKeys();
   for (const [name, value] of Object.entries({
     "identity.pem": identityKey,
     "account.pem": f.accountKey,

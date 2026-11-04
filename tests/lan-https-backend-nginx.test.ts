@@ -26,6 +26,7 @@ const review = {
   publicOrigin: "https://192-168-1-50.lan.example.test",
   listenAddress: "192.168.1.50",
   allowedNetworks: ["192.168.1.0/24"],
+  lanHttps: { format: 1, provider, issuerId: "zerossl", termsAccepted: true },
 };
 const nginx = spawnSync("nginx", ["-v"], { timeout: 3000 });
 if (process.env.CI === "true" && nginx.status !== 0)
@@ -48,14 +49,21 @@ describe("loopback backend behind LAN TLS bridge", () => {
     );
     expect(config).toContain("proxy_set_header X-Forwarded-Proto https;");
     expect(locations(config)).toEqual(
-      locations(renderServerIngressNginx({ ...review, tlsProvider: "custom" })),
+      locations(
+        renderServerIngressNginx({
+          ...Object.fromEntries(
+            Object.entries(review).filter(([key]) => key !== "lanHttps"),
+          ),
+          tlsProvider: "custom",
+        }),
+      ),
     );
     expect(() =>
       renderLanHttpsBackendNginx(
         { ...review, publicOrigin: "https://other.example.test" },
         provider,
       ),
-    ).toThrow(/matching/);
+    ).toThrow(/match/);
     expect(() =>
       renderLanHttpsBackendNginx(
         { ...review, accessScope: "internet" },
@@ -67,7 +75,7 @@ describe("loopback backend behind LAN TLS bridge", () => {
         { ...review, listenAddress: "192.168.1.51" },
         provider,
       ),
-    ).toThrow(/matching/);
+    ).toThrow(/match/);
     expect(() => renderServerIngressNginx(review)).toThrow();
   });
   it.skipIf(nginx.status !== 0)(

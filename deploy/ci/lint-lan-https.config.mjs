@@ -8,7 +8,7 @@ export default [
   ...base,
   {
     files: [
-      "tests/lan-https-*.test.ts",
+      "tests/**/*.ts",
       "tests/fixtures/lan-https.ts",
       "tests/server-ingress-nginx.test.ts",
     ],
