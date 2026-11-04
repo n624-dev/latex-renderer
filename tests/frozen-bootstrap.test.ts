@@ -53,7 +53,13 @@ it("keeps CI download verification identical after its transport boundary", () =
   expect(baseline).toContain('installed: `v${[1, 3, 5].join(".")}-rc.1`');
   for (const name of ["server-release", "server-update-validation"]) {
     const workflow = readFileSync(`.github/workflows/${name}.yml`, "utf8");
-    expect(workflow).toContain("baseline: [legacy, installed]");
+    if (name === "server-release")
+      expect(workflow).toContain("baseline: [legacy, installed]");
+    else {
+      expect(workflow).toContain('"baseline":"legacy"');
+      expect(workflow).toContain('"baseline":"installed"');
+      expect(workflow).toContain("default: all");
+    }
     expect(workflow).toContain("CI_UPDATE_BASELINE: ${{ matrix.baseline }}");
     expect(workflow).toContain('CI_UPDATE_BASELINE="$CI_UPDATE_BASELINE"');
   }
