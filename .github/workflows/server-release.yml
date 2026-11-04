@@ -254,7 +254,7 @@ jobs:
             /usr/local/bin/node deploy/ci/update-e2e.mjs \
             "$artifact" "$RELEASE_TAG" "$RELEASE_COMMIT" "$digest" "$RUNNER_TEMP/release-assets/PROVENANCE.jsonl"
       - name: Bounded, redacted disposable-host diagnostics
-        if: failure()
+        if: failure() || cancelled()
         run: |
           sudo env RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" GITHUB_RUN_ID="$GITHUB_RUN_ID" \
             /usr/local/bin/node deploy/ci/update-diagnostics.mjs

@@ -879,6 +879,9 @@ try {
   // Historical controllers require Node 24 exactly. Migrate their controller
   // first, then test the same candidate after switching the disposable host to
   // Node 26. This is CI-only, after all historical rollback/recovery checks.
+  console.log(
+    JSON.stringify({ event: "ci.node_migration", stage: "switch-runtime" }),
+  );
   run("/usr/bin/install", [
     "-o",
     "root",
@@ -913,12 +916,17 @@ try {
     "latex-renderer-image-manager.service",
     "latex-renderer-update-manager.service",
   ]);
+  console.log(
+    JSON.stringify({ event: "ci.node_migration", stage: "services-restarted" }),
+  );
   run("/bin/sh", [
     "/opt/latex-renderer/current/deploy/scripts/wait-update-manager-socket.sh",
   ]);
-  run("/bin/sh", [
-    "/opt/latex-renderer/current/deploy/scripts/smoke-test-production.sh",
-  ]);
+  run(
+    "/bin/sh",
+    ["/opt/latex-renderer/current/deploy/scripts/smoke-test-production.sh"],
+    { timeout: 180000, killSignal: "SIGKILL" },
+  );
   console.log(
     JSON.stringify({
       node24To26Migration: true,
