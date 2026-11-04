@@ -273,6 +273,12 @@ export function controlService(
       return "";
     action = "restart";
   }
+  // A native restart propagates PartOf= to dependent services. Splitting it
+  // into stop/start leaves a classic Worker stopped after its manager returns.
+  if (action === "restart" && !enabled) {
+    if (loaded) run("stop", socket);
+    return run("restart", unit);
+  }
   if (action === "restart") controlService("stop", unit, { run, enabled });
   if (action === "start" || action === "restart") {
     if (enabled) {
@@ -283,6 +289,49 @@ export function controlService(
     return run("start", unit);
   }
   throw new Error("Unsupported logical HTTP service operation");
+}
+
+export function controlServices(
+  action,
+  units,
+  { run = systemctl, enabledFor = activationEnabledFor } = {},
+) {
+  if (
+    !["start", "restart", "stop", "enable", "try-restart"].includes(action) ||
+    !units.length ||
+    units.some((unit) => !httpSocketUnit(unit))
+  )
+    throw new Error("Invalid HTTP service operation");
+  let selected = [
+    ...new Set(
+      action === "stop" ? units : units.map((unit) => selectedUnit(unit, run)),
+    ),
+  ];
+  if (action === "try-restart") {
+    // Capture activity before any dependency is restarted.
+    selected = selected.filter((unit) =>
+      ["active", "activating"].includes(properties(unit, run).ActiveState),
+    );
+    action = "restart";
+  }
+  if (action === "restart") {
+    const priority = (unit) =>
+      unit === managerUnits[0]
+        ? 0
+        : unit === managerUnits[1]
+          ? 1
+          : unit === "latex-renderer-worker.service"
+            ? 3
+            : 2;
+    selected.sort((a, b) => priority(a) - priority(b));
+  }
+  if (action === "stop")
+    for (const unit of selected) {
+      const socket = httpSocketUnit(unit);
+      if (properties(socket, run).LoadState === "loaded") run("stop", socket);
+    }
+  for (const unit of selected)
+    controlService(action, unit, { run, enabled: enabledFor(unit) });
 }
 
 // Called only inside the existing privileged, quiesced host preparation. An
@@ -679,14 +728,7 @@ async function main() {
     args.some((unit) => !httpSocketUnit(unit))
   )
     throw new Error("Invalid HTTP service operation");
-  // Stop every listener before stopping any writer. Connections cannot wake a
-  // different API while another writer is already quiesced.
-  if (action === "stop")
-    for (const unit of args) {
-      const socket = httpSocketUnit(unit);
-      if (properties(socket, systemctl).LoadState === "loaded")
-        systemctl("stop", socket);
-    }
-  for (const unit of args) controlService(action, unit);
+  // Bulk operations preserve listener boundaries and dependency restart order.
+  controlServices(action, args);
 }
 if (isMainModule(import.meta.url)) await main();

@@ -79,6 +79,25 @@ controllers required an exact Node 24 runtime. New bundles explicitly declare
 is rejected before activation. When reverting an entire host to a Node-24-only
 controller, restore its supported Node runtime as well. Ordinary application
 updates do not replace the operating system's Node installation. Slots contain no database, credentials or application dependencies.
+After changing the host runtime, restart services through
+`/opt/latex-renderer/current/deploy/scripts/http-services.mjs`. Its bulk restart
+orders managers before their consumers and the Worker last. Classic service
+restarts preserve systemd `PartOf=` propagation; splitting a manager restart
+into a separate stop and start can leave its dependent Worker stopped.
+
+On a prepared host whose controller has already been updated, restart the
+application services after installing the supported Node runtime:
+
+```sh
+sudo /usr/local/bin/node /opt/latex-renderer/current/deploy/scripts/http-services.mjs restart \
+  latex-renderer-image-manager.service latex-renderer-update-manager.service \
+  latex-renderer-api.service latex-renderer-web.service \
+  latex-renderer-admin-api.service latex-renderer-internal-api.service \
+  latex-renderer-remote-mcp.service latex-renderer-standalone-gateway.service \
+  latex-renderer-worker.service
+sudo /bin/sh /opt/latex-renderer/current/deploy/scripts/smoke-test-production.sh
+```
+
 Collection retains active, previous and prepared candidate slots (normally two,
 at most three) and reclaims interrupted staging. Identical payload/envelope data
 reuse a slot. Corrupt state, unsafe paths, symlinks or mount points stop cleanup.

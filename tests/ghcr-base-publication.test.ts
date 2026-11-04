@@ -586,9 +586,18 @@ it("separates native validation, immutable publication, anonymous pulls and late
   );
   for (const name of ["server-release", "server-update-validation"]) {
     const workflow = readFileSync(`.github/workflows/${name}.yml`, "utf8");
-    expect(workflow).toContain("baseline: [legacy, installed]");
-    expect(workflow).toContain("baseline: native-arm64");
-    expect(workflow).toContain("architecture: arm64");
+    if (name === "server-release") {
+      expect(workflow).toContain("baseline: [legacy, installed]");
+      expect(workflow).toContain("baseline: native-arm64");
+      expect(workflow).toContain("architecture: arm64");
+    } else {
+      expect(workflow).toContain('"baseline":"legacy"');
+      expect(workflow).toContain('"baseline":"installed"');
+      expect(workflow).toContain(
+        '"baseline":"native-arm64","architecture":"arm64"',
+      );
+      expect(workflow).toContain("default: all");
+    }
     expect(workflow).toContain("ubuntu-24.04-arm");
   }
   const host = readFileSync("deploy/ci/update-e2e.mjs", "utf8");

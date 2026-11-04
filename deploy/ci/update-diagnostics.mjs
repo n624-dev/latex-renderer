@@ -1,5 +1,6 @@
 import { readFileSync, readdirSync, lstatSync } from "node:fs";
 import { execFileSync } from "node:child_process";
+import { DatabaseSync } from "node:sqlite";
 if (
   process.getuid() !== 0 ||
   process.env.RUNNER_ENVIRONMENT !== "github-hosted"
@@ -34,6 +35,34 @@ let log = execFileSync(
   { encoding: "utf8", maxBuffer: 1024 * 1024 },
 ).slice(-32 * 1024);
 try {
+  const database = new DatabaseSync(
+    "/var/lib/latex-renderer/renderer.sqlite3",
+    { readOnly: true },
+  );
+  try {
+    database.exec("PRAGMA busy_timeout=1000");
+    log +=
+      "\n" +
+      JSON.stringify({
+        event: "ci.job_diagnostic",
+        states: database
+          .prepare("SELECT status,COUNT(*) AS count FROM jobs GROUP BY status")
+          .all(),
+      });
+  } finally {
+    database.close();
+  }
+  log +=
+    "\n" +
+    execFileSync("/usr/bin/ps", ["-eo", "pid,ppid,comm,stat,wchan:28"], {
+      encoding: "utf8",
+      timeout: 5000,
+      maxBuffer: 128 * 1024,
+    }).slice(-16384);
+} catch {
+  log += '\n{"event":"ci.job_diagnostic_unavailable"}';
+}
+try {
   const root = "/var/lib/latex-renderer/image-manager";
   const statePath = `${root}/state.json`;
   const info = lstatSync(statePath);
@@ -49,8 +78,14 @@ try {
     const value = JSON.parse(readFileSync(path, "utf8"));
     operation = { type: value.type, status: value.status, error: value.error };
   }
-  log += "\n" + JSON.stringify({ event: "ci.manager_diagnostic", lastApplyError: state.lastApplyError,
-    lastCleanupAt: state.lastCleanupAt, operation }).slice(-8192);
+  log +=
+    "\n" +
+    JSON.stringify({
+      event: "ci.manager_diagnostic",
+      lastApplyError: state.lastApplyError,
+      lastCleanupAt: state.lastCleanupAt,
+      operation,
+    }).slice(-8192);
 } catch {
   log += '\n{"event":"ci.manager_diagnostic_unavailable"}';
 }

@@ -22,6 +22,7 @@ import {
 import { acquireUpdateBaseline } from "./update-baseline.mjs";
 import { verifyActivationCommitBarrier } from "./updater-activation-barrier.mjs";
 import { retryCiMutation } from "./retry-ci-mutation.mjs";
+import { runCiProcessGroup } from "./process-group.mjs";
 import {
   brokenUpdaterSource,
   assertStartupRecovery,
@@ -879,6 +880,9 @@ try {
   // Historical controllers require Node 24 exactly. Migrate their controller
   // first, then test the same candidate after switching the disposable host to
   // Node 26. This is CI-only, after all historical rollback/recovery checks.
+  console.log(
+    JSON.stringify({ event: "ci.node_migration", stage: "switch-runtime" }),
+  );
   run("/usr/bin/install", [
     "-o",
     "root",
@@ -913,10 +917,20 @@ try {
     "latex-renderer-image-manager.service",
     "latex-renderer-update-manager.service",
   ]);
+  console.log(
+    JSON.stringify({ event: "ci.node_migration", stage: "services-restarted" }),
+  );
   run("/bin/sh", [
     "/opt/latex-renderer/current/deploy/scripts/wait-update-manager-socket.sh",
   ]);
-  run("/bin/sh", [
+  run("/usr/local/bin/node", [
+    "/opt/latex-renderer/current/deploy/scripts/http-services.mjs",
+    "ready",
+    "latex-renderer-worker.service",
+    "latex-renderer-image-manager.service",
+    "latex-renderer-update-manager.service",
+  ]);
+  await runCiProcessGroup("/bin/sh", [
     "/opt/latex-renderer/current/deploy/scripts/smoke-test-production.sh",
   ]);
   console.log(

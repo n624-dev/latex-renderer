@@ -3,6 +3,12 @@ name: server-update-validation
 on:
   workflow_dispatch:
     inputs:
+      baseline:
+        description: Run all historical hosts or diagnose the previous-Stable migration
+        required: false
+        default: all
+        type: choice
+        options: [all, previous-stable]
       measure_idle:
         description: Compare three runtime modes over real one-hour quiet intervals
         required: false
@@ -105,18 +111,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        baseline: [legacy, installed]
-        include:
-          - baseline: legacy
-            architecture: amd64
-          - baseline: installed
-            architecture: amd64
-          - baseline: native-arm64
-            architecture: arm64
-          - baseline: previous-stable
-            architecture: amd64
-          - baseline: compact-origin
-            architecture: amd64
+        include: ${{ fromJSON(inputs.baseline == 'previous-stable' && '[{"baseline":"previous-stable","architecture":"amd64"}]' || '[{"baseline":"legacy","architecture":"amd64"},{"baseline":"installed","architecture":"amd64"},{"baseline":"native-arm64","architecture":"arm64"},{"baseline":"previous-stable","architecture":"amd64"},{"baseline":"compact-origin","architecture":"amd64"}]') }}
     runs-on: ${{ matrix.architecture == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     timeout-minutes: ${{ matrix.baseline == 'installed' && inputs.measure_idle && 240 || 90 }}
     permissions:
@@ -209,7 +204,7 @@ jobs:
           retention-days: 1
           if-no-files-found: ignore
       - name: Diagnose measurement failure without retaining raw application data
-        if: failure()
+        if: failure() || cancelled()
         run: |
           sudo env RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" GITHUB_RUN_ID="$GITHUB_RUN_ID" \
             /usr/local/bin/node deploy/ci/update-diagnostics.mjs
