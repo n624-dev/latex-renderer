@@ -200,6 +200,9 @@ describe("cache-free CI validation", () => {
         workflow.indexOf("uses: aquasecurity/trivy-action"),
       );
       expect(trivy).toMatch(/with:\n\s+cache: false/);
+      expect(trivy).toContain("skip-setup-trivy: true");
+      expect(workflow).toContain("sha256sum --strict --check -");
+      expect(workflow).toContain("--retry 3 --retry-all-errors");
       expect(trivy).toContain("scanners: vuln,misconfig,secret");
       expect(trivy).toContain("severity: HIGH,CRITICAL");
     }

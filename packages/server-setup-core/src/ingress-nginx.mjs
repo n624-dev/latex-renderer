@@ -1,5 +1,8 @@
 import { validateServerIngressReview } from "./ingress-review.mjs";
 import { URL } from "node:url";
+import { validateLanHttpsProvider } from "./lan-https.mjs";
+
+export const LAN_HTTPS_BACKEND_PORT = 3180;
 
 export const SERVER_INGRESS_TLS_PATHS = Object.freeze({
   certificate: "/etc/latex-renderer/secrets/https-cert.pem",
@@ -12,6 +15,28 @@ export function renderServerIngressNginx(input) {
   const review = validateServerIngressReview(input);
   if (review.mode !== "standalone" || review.tlsProvider !== "custom")
     throw new Error("Nginx rendering requires standalone/custom ingress");
+  return renderIngress(review, false);
+}
+
+// The TLS bridge is the only public listener. The existing route policy runs
+// on a fixed loopback-only HTTP backend; it never becomes a public fallback.
+export function renderLanHttpsBackendNginx(input, provider) {
+  const review = validateServerIngressReview(input);
+  const checked = validateLanHttpsProvider(provider);
+  if (
+    review.mode !== "standalone" ||
+    review.accessScope !== "lan" ||
+    review.tlsProvider !== "automatic" ||
+    review.publicOrigin !== checked.publicOrigin ||
+    review.listenAddress !== checked.address
+  )
+    throw new Error(
+      "LAN backend requires matching automatic LAN ingress and provider settings",
+    );
+  return renderIngress(review, true);
+}
+
+function renderIngress(review, lanBackend) {
   const origin = new URL(review.publicOrigin);
   const hostname = origin.hostname;
   // URL allows unusual DNS spellings; restrict the configuration grammar.
@@ -26,24 +51,34 @@ export function renderServerIngressNginx(input) {
       : review.accessScope === "local"
         ? ["127.0.0.0/8", "::1/128"]
         : review.allowedNetworks;
-  // Realip may be enabled in the enclosing http context. ACLs and downstream
-  // identity use the original socket peer, never a caller-supplied header.
+  const peer = lanBackend ? "$remote_addr" : "$realip_remote_addr";
+  const listener = lanBackend
+    ? `127.0.0.1:${LAN_HTTPS_BACKEND_PORT}`
+    : `${address}:${origin.port || 443} ssl http2`;
+  const tls = lanBackend
+    ? `  set_real_ip_from 127.0.0.1;
+  real_ip_header X-Latex-Renderer-Lan-Peer;
+  real_ip_recursive off;`
+    : `  ssl_certificate ${SERVER_INGRESS_TLS_PATHS.certificate};
+  ssl_certificate_key ${SERVER_INGRESS_TLS_PATHS.privateKey};
+  ssl_protocols TLSv1.2 TLSv1.3;`;
+  // Custom ingress uses the original socket peer even if enclosing realip is
+  // enabled. The private LAN backend instead accepts the bridge handoff solely
+  // from its explicit loopback listener and overwrites downstream identity.
   return `# Generated standalone ingress; include ONCE from the http context.
-# Requires ngx_http_realip_module; no HTTP listener or provider calls.
-geo $realip_remote_addr $latex_renderer_ingress_allowed {
+# Requires ngx_http_realip_module; ${lanBackend ? "private TLS-bridge backend only" : "no HTTP listener or provider calls"}.
+geo ${peer} $latex_renderer_ingress_allowed {
   default 0;
 ${networks.map((network) => `  ${network} 1;`).join("\n")}
 }
-limit_conn_zone $realip_remote_addr zone=latex_renderer_connections:10m;
-limit_req_zone $realip_remote_addr zone=latex_renderer_login:10m rate=5r/m;
-limit_req_zone $realip_remote_addr zone=latex_renderer_api:10m rate=120r/m;
+limit_conn_zone ${peer} zone=latex_renderer_connections:10m;
+limit_req_zone ${peer} zone=latex_renderer_login:10m rate=5r/m;
+limit_req_zone ${peer} zone=latex_renderer_api:10m rate=120r/m;
 
 server {
-  listen ${address}:${origin.port || 443} ssl http2;
+  listen ${listener};
   server_name ${hostname};
-  ssl_certificate ${SERVER_INGRESS_TLS_PATHS.certificate};
-  ssl_certificate_key ${SERVER_INGRESS_TLS_PATHS.privateKey};
-  ssl_protocols TLSv1.2 TLSv1.3;
+${tls}
   if ($latex_renderer_ingress_allowed = 0) { return 403; }
   if ($host != ${hostname}) { return 421; }
   add_header Strict-Transport-Security "max-age=63072000" always;
@@ -58,10 +93,10 @@ server {
   proxy_set_header Host ${origin.host};
   proxy_set_header X-Forwarded-Proto https;
   proxy_set_header X-Forwarded-Host ${origin.host};
-  proxy_set_header X-Forwarded-For $realip_remote_addr;
-  proxy_set_header X-Real-IP $realip_remote_addr;
+  proxy_set_header X-Forwarded-For ${peer};
+  proxy_set_header X-Real-IP ${peer};
   proxy_set_header Forwarded "";
-  proxy_set_header X-Latex-Renderer-Client-IP $realip_remote_addr;
+  proxy_set_header X-Latex-Renderer-Client-IP ${peer};
   proxy_set_header CF-Access-Jwt-Assertion "";
   proxy_set_header CF-Connecting-IP "";
   proxy_redirect off;

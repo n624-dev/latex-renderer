@@ -91,6 +91,12 @@ if [ -n "$(find "$stage" -type l -print -quit)" ]; then
   exit 65
 fi
 
+# Build from the exact archived source; include both native host helpers inside
+# the same attested bundle. Production hosts never download a Go toolchain.
+if [ -f "$stage/deploy/lan-https/build.mjs" ]; then
+  node "$stage/deploy/lan-https/build.mjs" "$stage" "$version" "$commit"
+fi
+
 renderer_fingerprint=$(node "$repository_root/deploy/scripts/runtime-image-identity.mjs" --renderer-fingerprint)
 legacy_fingerprint=$(node "$repository_root/deploy/scripts/runtime-image-identity.mjs" --release-legacy-fingerprint)
 node - "$stage/.latex-renderer-release.json" "$stage/deploy/release-policy.json" "$stage/package.json" "$version" "$release_tag" "$commit" "$legacy_fingerprint" "$validated_candidate_tag" "$renderer_fingerprint" "$validation_only" <<'NODE'
@@ -106,6 +112,7 @@ fs.writeFileSync(process.argv[2], `${JSON.stringify({
   minimumSourceVersion: policy.minimumSourceVersion,
   rollbackCompatible: policy.rollbackCompatible,
   requiredNodeMajor: 24,
+  supportedNodeMajors: [24, 26],
   packageManager: packageJson.packageManager,
   rendererRuntimeFingerprint: process.argv[8],
   rendererRuntimeIdentity: { schemaVersion: 2, fingerprint: process.argv[10] },

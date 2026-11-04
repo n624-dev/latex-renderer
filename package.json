@@ -1,6 +1,6 @@
 {
   "name": "latex-renderer",
-  "version": "1.5.10",
+  "version": "1.6.0-rc.1",
   "private": true,
   "license": "Apache-2.0",
   "type": "module",
@@ -52,5 +52,8 @@
     "vitest": "^5.0.5",
     "wrangler": "4.152.0",
     "yazl": "^3.3.1"
+  },
+  "dependencies": {
+    "acme-client": "5.4.0"
   }
 }

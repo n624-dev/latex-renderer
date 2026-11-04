@@ -243,8 +243,8 @@ export async function prepareServerApplication() {
       !(await lstat(executable)).isSymbolicLink()
     )
       throw new Error("Prepared OS tooling required");
-  if (process.versions.node.split(".")[0] !== "24")
-    throw new Error("Prepared Node 24 required");
+  if (!["24", "26"].includes(process.versions.node.split(".")[0]))
+    throw new Error("Prepared Node 26 LTS (or supported Node 24 LTS) required");
   run("/usr/local/bin/gh", ["attestation", "verify", "--help"]);
   const socket = await lstat(`/run/user/${worker}/docker.sock`);
   if (!socket.isSocket() || socket.uid !== worker)

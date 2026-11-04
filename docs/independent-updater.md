@@ -70,8 +70,15 @@ journal), and controller-state-backup.json (root-only controller recovery data).
 
 The controller still runs as latex-renderer-update. Its only sudo permission is
 the fixed argument-free helper. Entry points verify slot hashes/ownership and
-never load executable code through the application current pointer. Node.js 24
-is required. Slots contain no database, credentials or application dependencies.
+never load executable code through the application current pointer. Node.js 26 LTS
+is recommended; Node.js 24 LTS remains supported. The envelope retains Node 24
+as the minimum so existing controllers can stage the migration release. Install
+the updated controller before switching a host from 24 to 26: historical
+controllers required an exact Node 24 runtime. New bundles explicitly declare
+`supportedNodeMajors: [24, 26]`; on Node 26 an older bundle without that declaration
+is rejected before activation. When reverting an entire host to a Node-24-only
+controller, restore its supported Node runtime as well. Ordinary application
+updates do not replace the operating system's Node installation. Slots contain no database, credentials or application dependencies.
 Collection retains active, previous and prepared candidate slots (normally two,
 at most three) and reclaims interrupted staging. Identical payload/envelope data
 reuse a slot. Corrupt state, unsafe paths, symlinks or mount points stop cleanup.
@@ -434,7 +441,7 @@ cover the transition with these separate pieces of evidence.
 
 ### Branch-only update validation (no Release or Git tag)
 
-Before dispatch, run the same portable checks locally with Node.js 24 and the
+Before dispatch, run the same portable checks locally with Node.js 26 LTS and the
 repository's pinned pnpm (the test prerequisites include `age` and `acl`):
 
 ```sh

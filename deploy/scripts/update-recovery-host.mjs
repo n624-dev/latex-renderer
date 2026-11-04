@@ -31,8 +31,13 @@ const timers = [
   "worker-reconcile",
   "engine-idle",
   "image-log-cleanup",
+  "lan-renew",
 ].map((name) => `latex-renderer-${name}.timer`);
 const writers = [
+  "lan-https",
+  "lan-renew",
+  "lan-authority",
+  "ingress",
   "standalone-gateway",
   "api",
   "internal-api",

@@ -39,6 +39,10 @@ if ! command -v unzip >/dev/null 2>&1; then
   exit 69
 fi
 web_service=latex-renderer-admin-web.service
+lan_authority_active=false
+if systemctl is-active --quiet latex-renderer-lan-authority.service; then
+  lan_authority_active=true
+fi
 if systemctl is-enabled --quiet latex-renderer-web.service || \
    systemctl is-active --quiet latex-renderer-web.service || \
    systemctl is-enabled --quiet latex-renderer-web.socket || \
@@ -97,6 +101,25 @@ http_control() {
     /usr/local/bin/node "$source_root/deploy/scripts/http-services.mjs" "$@"
 }
 
+# Configuration and private state live outside the release tree. Restart the
+# native bridge against the new signed binary; never re-enroll or replace keys
+# as a side effect of an application update.
+restore_lan_services() {
+  if [ -f /etc/latex-renderer/lan-https-client.json ]; then
+    /usr/local/bin/node /opt/latex-renderer/current/deploy/lan-https/cli.mjs client check \
+      --config /etc/latex-renderer/lan-https-client.json || return 1
+    systemctl restart latex-renderer-ingress.service latex-renderer-lan-https.service || return 1
+    systemctl start latex-renderer-lan-renew.timer || return 1
+    systemctl is-active --quiet latex-renderer-ingress.service || return 1
+    systemctl is-active --quiet latex-renderer-lan-https.service || return 1
+    systemctl is-active --quiet latex-renderer-lan-renew.timer || return 1
+  fi
+  if [ "$lan_authority_active" = true ]; then
+    systemctl restart latex-renderer-lan-authority.service || return 1
+    systemctl is-active --quiet latex-renderer-lan-authority.service || return 1
+  fi
+}
+
 restore_services_after_failure() {
   recovery_failed=false
   echo "Deployment did not finish; restoring local services on the active release." >&2
@@ -107,6 +130,7 @@ restore_services_after_failure() {
     latex-renderer-admin-api.service "$web_service" latex-renderer-remote-mcp.service \
     >/dev/null 2>&1 || recovery_failed=true
   http_control restart latex-renderer-worker.service >/dev/null 2>&1 || recovery_failed=true
+  restore_lan_services >/dev/null 2>&1 || recovery_failed=true
   if [ "${deployment_mode:-}" = standalone ]; then
     systemctl start latex-renderer-standalone-gateway.service >/dev/null 2>&1 || recovery_failed=true
     systemctl is-active --quiet latex-renderer-standalone-gateway.service || recovery_failed=true
@@ -310,6 +334,19 @@ if [ -f "$source_root/deploy/scripts/http-idle-server.mjs" ]; then
   systemctl daemon-reload
   http_control prepare "$source_root"
 fi
+if [ -f "$source_root/deploy/systemd/latex-renderer-lan-https.service" ]; then
+  install -o root -g root -m 0644 \
+    "$source_root/deploy/systemd/latex-renderer-lan-https.service" \
+    "$source_root/deploy/systemd/latex-renderer-lan-authority.service" \
+    "$source_root/deploy/systemd/latex-renderer-lan-renew.service" \
+    "$source_root/deploy/systemd/latex-renderer-lan-renew.timer" /etc/systemd/system/
+  install -o root -g root -m 0644 "$source_root/deploy/systemd/journald@latex-renderer-lan.conf" /etc/systemd/journald@latex-renderer-lan.conf
+  systemctl daemon-reload
+fi
+if [ -f /etc/latex-renderer-lan-authority/authority.json ] && \
+   [ -L /opt/latex-renderer-lan-authority/current ]; then
+  /usr/local/bin/node "$source_root/deploy/lan-https/install-authority.mjs" "$source_root"
+fi
 if [ "$deployment_mode" = cloudflare ]; then
   /opt/latex-renderer/current/deploy/scripts/configure-host-access.sh
 fi
@@ -366,6 +403,7 @@ http_control enable latex-renderer-api.service latex-renderer-internal-api.servi
 http_control restart latex-renderer-api.service latex-renderer-internal-api.service \
   latex-renderer-admin-api.service "$web_service" latex-renderer-remote-mcp.service
 http_control restart latex-renderer-worker.service
+restore_lan_services
 if [ "$deployment_mode" = standalone ]; then
   http_control enable latex-renderer-standalone-gateway.service
   http_control start latex-renderer-standalone-gateway.service

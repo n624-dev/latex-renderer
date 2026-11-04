@@ -13,6 +13,12 @@ export async function runServerSetupChild(
   input,
   { timeoutMs, maxOutputBytes = 0, killGraceMs = 2000 },
 ) {
+  const managedRenewal =
+    command === "/usr/bin/systemctl" &&
+    Array.isArray(args) &&
+    args.length === 2 &&
+    args[0] === "start" &&
+    args[1] === "latex-renderer-lan-renew.service";
   if (
     process.platform !== "linux" ||
     typeof command !== "string" ||
@@ -23,7 +29,7 @@ export async function runServerSetupChild(
     Buffer.byteLength(input) > 32 * 1024 ||
     !Number.isSafeInteger(timeoutMs) ||
     timeoutMs < 1 ||
-    timeoutMs > 60_000 ||
+    timeoutMs > (managedRenewal ? 660_000 : 60_000) ||
     !Number.isSafeInteger(maxOutputBytes) ||
     maxOutputBytes < 0 ||
     maxOutputBytes > 1024 ||

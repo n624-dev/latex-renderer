@@ -213,23 +213,40 @@ describe("explicit server ingress and complete deployment review", () => {
       expect(() => productionAuthenticationPlan(values)).toThrow();
     },
   );
-  it("keeps automatic HTTPS reviewable but not activatable until implemented", () => {
-    expect(validate({ ...local, tlsProvider: "automatic" }).tlsProvider).toBe(
-      "automatic",
+  it("requires complete explicit automatic LAN policy and preserves it through ENV roundtrips", () => {
+    expect(() => validate({ ...local, tlsProvider: "automatic" })).toThrow(
+      /automatic LAN HTTPS/,
     );
-    expect(() =>
-      serverIngressFromEnvironment(
-        parseEnvironmentFile(
-          (legacy + ingress).replace(
-            "TLS_PROVIDER=custom",
-            "TLS_PROVIDER=automatic",
-          ),
-        ),
-      ),
-    ).toThrow(/not implemented/);
-    expect(() =>
-      renderServerIngressNginx({ ...local, tlsProvider: "automatic" }),
-    ).toThrow();
+    const provider = {
+      format: 1,
+      provider: "akebi-local-acme",
+      serverOrigin: "https://akebi.example.test",
+      lanDomain: "lan.example.test",
+      address: "192.168.1.50",
+      keylessFallback: false,
+    };
+    const automatic = validate({
+      format: 1,
+      mode: "standalone",
+      accessScope: "lan",
+      tlsProvider: "automatic",
+      listenAddress: "192.168.1.50",
+      allowedNetworks: ["192.168.1.0/24"],
+      publicOrigin: "https://192-168-1-50.lan.example.test",
+      lanHttps: {
+        format: 1,
+        provider,
+        issuerId: "zerossl",
+        termsAccepted: true,
+      },
+    });
+    const values = new Map([
+      ...parseEnvironmentFile(legacy),
+      ...serverIngressReviewEnvironment(automatic),
+      ["PUBLIC_ORIGIN", automatic.publicOrigin],
+    ]);
+    expect(serverIngressFromEnvironment(values)).toEqual(automatic);
+    expect(() => renderServerIngressNginx(automatic)).toThrow();
   });
   it("keeps Cloudflare external settings unchanged and never reads custom TLS", () => {
     const checked = validate({

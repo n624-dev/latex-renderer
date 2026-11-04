@@ -19,6 +19,7 @@ import {
   serverIngressFromEnvironment,
   validateServerIngressTls,
   renderServerIngressNginx,
+  renderLanHttpsBackendNginx,
   SERVER_INGRESS_TLS_PATHS,
 } from "../../packages/server-setup-core/src/index.mjs";
 
@@ -72,8 +73,12 @@ export function readSecureIngressFile(path, { uid, gid, mode, maximumBytes }) {
 export function verifyProductionIngressTls(review, rendererGid) {
   // Legacy/Cloudflare never read standalone certificates or call providers.
   if (review === null || review.mode === "cloudflare") return null;
-  if (review.tlsProvider !== "custom")
-    throw new Error("Automatic HTTPS is not implemented");
+  if (review.tlsProvider === "automatic")
+    return Object.freeze({
+      managed: true,
+      provider: review.lanHttps.provider.provider,
+      publicOrigin: review.publicOrigin,
+    });
   for (const path of [
     "/etc",
     "/etc/latex-renderer",
@@ -227,7 +232,11 @@ async function main() {
   const tls = verifyProductionIngressTls(ingress, gid);
   verifyIngressInterface(ingress);
   if (action === "--nginx")
-    process.stdout.write(renderServerIngressNginx(ingress));
+    process.stdout.write(
+      ingress.tlsProvider === "automatic"
+        ? renderLanHttpsBackendNginx(ingress, ingress.lanHttps.provider)
+        : renderServerIngressNginx(ingress),
+    );
   else if (action === "--health")
     process.stdout.write(
       `${JSON.stringify(await checkIngressHttpsHealth(ingress.publicOrigin))}\n`,

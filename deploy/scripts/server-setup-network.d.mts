@@ -6,5 +6,6 @@ export function assertServerSetupSockets(
     fresh?: boolean;
     requireInternal?: boolean;
     checkIngressPort?: boolean;
+    checkLanBackendPort?: boolean;
   },
 ): void;

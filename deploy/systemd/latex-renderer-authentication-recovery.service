@@ -24,3 +24,4 @@ ProtectHome=true
 PrivateTmp=true
 ProtectSystem=strict
 ReadWritePaths=/etc/latex-renderer /run/latex-renderer /var/lib/latex-renderer
+ReadWritePaths=-/var/lib/latex-renderer-lan

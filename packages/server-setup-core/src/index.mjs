@@ -33,6 +33,8 @@ export {
 export { validateServerIngressTls } from "./ingress-tls.mjs";
 export {
   renderServerIngressNginx,
+  renderLanHttpsBackendNginx,
+  LAN_HTTPS_BACKEND_PORT,
   SERVER_INGRESS_TLS_PATHS,
 } from "./ingress-nginx.mjs";
 export {
@@ -69,3 +71,15 @@ export {
   validateServerInitialInput,
   validateServerIngressInput,
 } from "./initial-input.mjs";
+export {
+  normalizeLanHttpsDomain,
+  lanHttpsHostname,
+  LAN_HTTPS_COMMON,
+  lanHttpsInterfaceChoices,
+  lanHttpsAddress,
+  lanHttpsOrigin,
+  validateLanHttpsServerOrigin,
+  validateLanHttpsProvider,
+  LAN_HTTPS_AUTHORITY_DEFAULTS,
+  validateLanHttpsAuthorityPolicy,
+} from "./lan-https.mjs";

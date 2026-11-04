@@ -159,6 +159,8 @@ it.each([
   { repository: "other/repository" },
   { schemaVersion: 2 },
   { requiredNodeMajor: 99 },
+  { supportedNodeMajors: [26] },
+  { supportedNodeMajors: [24, 27] },
   { tag: "v9.3.0-rc.1" },
 ])(
   "rejects mismatched envelope even with mocked valid signature: %j",

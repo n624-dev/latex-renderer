@@ -7,11 +7,14 @@ export function readSecureIngressFile(
 export function verifyProductionIngressTls(
   review: ServerIngressReview | null,
   rendererGid: number,
-): Readonly<{
-  fingerprint256: string;
-  expiresAt: string;
-  publicOrigin: string;
-}> | null;
+):
+  | Readonly<{
+      fingerprint256: string;
+      expiresAt: string;
+      publicOrigin: string;
+    }>
+  | Readonly<{ managed: true; provider: string; publicOrigin: string }>
+  | null;
 export function verifyIngressInterface(
   review: ServerIngressReview | null,
   interfaces?: NodeJS.Dict<NetworkInterfaceInfo[]>,

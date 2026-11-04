@@ -1,0 +1,22 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "tests/application-update-contract.test.ts",
+    "tests/browser/server-setup.browser.ts",
+    "tests/ci-release-artifact.test.ts",
+    "tests/consumer-restart-order.test.ts",
+    "tests/fixtures/lan-https.ts",
+    "tests/lan-https-*.test.ts",
+    "tests/lan-https-backend-nginx.test.ts",
+    "tests/lan-https-certificate-agent.test.ts",
+    "tests/lan-https-client-state.test.ts",
+    "tests/lan-https-renewal-journal.test.ts",
+    "tests/lan-https-renewal.test.ts",
+    "tests/server-ingress-nginx.test.ts",
+    "tests/server-ingress-review.test.ts",
+    "tests/server-install-transaction.test.ts",
+    "tests/server-oidc-discovery.test.ts",
+    "tests/server-setup-ui-state.test.ts"
+  ],
+  "exclude": ["apps/gateway-worker/**"]
+}

@@ -22,6 +22,12 @@ since: "v1.2.0"
 
 ホスト済みサービスを利用する場合は、[はじめに](/docs/)または[クライアントのインストール](/docs/client/)へ進んでください。
 
+## LAN 内の自動 HTTPS
+
+Akebi は v1.6 RC から利用できます。LAN の IP アドレスから決まる HTTPS URL を使用します。CUI/Web のセットアップで LAN と対象インターフェースを選び、共通または独自の証明書サーバーを設定します。既定は導入先の秘密鍵を使う公開 CA 証明書で、Keyless は明示的に選択できます。
+
+独自の DNS・発行支援サーバー、招待制／自動登録、証明書の自動更新、既存証明書と private CA の違いは [Akebi の運用手順](https://github.com/n624-dev/latex-renderer/blob/main/docs/akebi-lan-https.md)を参照してください。異なる LAN で同じ IP を使う場合、ブラウザーの保存領域も共通の origin になります。
+
 ## 対応する構成
 
 v1.5.10ではPassword＋OIDCの同時利用と、確認済み認証設定の切替・中断復旧を利用できます。
@@ -30,15 +36,15 @@ v1.5.10ではPassword＋OIDCの同時利用と、確認済み認証設定の切�
 
 対応するセルフホスト構成は、公開境界とブラウザ認証をそれぞれ明示選択する単一Linuxホストです。未指定や未知の値ではserviceを起動しません。
 
-| 領域             | 対応構成                                                                    |
-| ---------------- | --------------------------------------------------------------------------- |
-| ホスト           | `apt`とsystemdを使用できる専用Debian／Ubuntu系Linuxサーバー                 |
-| 公開経路         | `cloudflare`（Tunnel＋Worker）または`standalone`（TLS reverse proxy）       |
-| ブラウザ認証     | `cloudflare-access`、標準OIDC、またはローカルパスワード（nativeでは併用可） |
-| Renderer         | 専用system userのrootless Docker、networkless／read-only sandbox            |
-| アプリケーション | Node.js 24、pnpm 11、バージョン固定されたRelease                            |
-| TeX              | 公開GHCRの検証済み言語なしBase＋サーバー内Runtime                           |
-| 管理             | `/admin/`、Admin CLI、root所有のImage／Update Manager                       |
+| 領域             | 対応構成                                                                             |
+| ---------------- | ------------------------------------------------------------------------------------ |
+| ホスト           | `apt`とsystemdを使用できる専用Debian／Ubuntu系Linuxサーバー                          |
+| 公開経路         | `cloudflare`（Tunnel＋Worker）または`standalone`（TLS reverse proxy）                |
+| ブラウザ認証     | `cloudflare-access`、標準OIDC、またはローカルパスワード（nativeでは併用可）          |
+| Renderer         | 専用system userのrootless Docker、networkless／read-only sandbox                     |
+| アプリケーション | Node.js 24 LTS（Stable）、26 LTS（1.6 RC推奨）、pnpm 11、バージョン固定されたRelease |
+| TeX              | 公開GHCRの検証済み言語なしBase＋サーバー内Runtime                                    |
+| 管理             | `/admin/`、Admin CLI、root所有のImage／Update Manager                                |
 
 `standalone`ではNginx、Caddy、Apacheの検証可能な設定例を収録しています。Kubernetes、複数ホスト、平文HTTPでの公開、Admin APIや内部serviceの直接公開はサポート対象外です。
 
@@ -153,7 +159,7 @@ command -v unzip
 
 RC.1以前でこの不足により更新が失敗した場合、`current`だけが新版へ切り替わり、新旧のサービス設定が混在している可能性があります。同じ更新コマンドを再実行せず、稼働サービス・DB migration・バックアップの状態を先に確認してください。DBが更新済みならコードだけを旧版へ戻してはいけません。
 
-導入スクリプトの前に、Node.js 24、`/usr/local/bin/node`、`/usr/local/bin/corepack`、Docker Engineのrootless用toolを準備します。`cloudflare` profileだけはcloudflaredも必要です。Update Managerはbundle metadataに記録されたpnpmをCorepackでデプロイ用ユーザーへ導入し、実行前に版を照合します。インストール元はそれぞれの公式ドキュメントを使用し、第三者の非公式スクリプトをrootで実行しません。
+Stable v1.5.10 の導入スクリプトの前に、Node.js 24 LTS、`/usr/local/bin/node`、`/usr/local/bin/corepack`、Docker Engineのrootless用toolを準備します。`cloudflare` profileだけはcloudflaredも必要です。Update Managerはbundle metadataに記録されたpnpmをCorepackでデプロイ用ユーザーへ導入し、実行前に版を照合します。インストール元はそれぞれの公式ドキュメントを使用し、第三者の非公式スクリプトをrootで実行しません。
 
 ```bash
 /usr/local/bin/node --version

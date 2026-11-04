@@ -9,6 +9,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  rename,
   rm,
   writeFile,
 } from "node:fs/promises";
@@ -875,8 +876,52 @@ try {
   run("/bin/sh", [
     "/opt/latex-renderer/current/deploy/scripts/smoke-test-production.sh",
   ]);
+  // Historical controllers require Node 24 exactly. Migrate their controller
+  // first, then test the same candidate after switching the disposable host to
+  // Node 26. This is CI-only, after all historical rollback/recovery checks.
+  run("/usr/bin/install", [
+    "-o",
+    "root",
+    "-g",
+    "root",
+    "-m",
+    "0755",
+    "/usr/local/bin/latex-renderer-ci-node26",
+    "/usr/local/bin/.latex-renderer-ci-node.next",
+  ]);
+  await rename(
+    "/usr/local/bin/.latex-renderer-ci-node.next",
+    "/usr/local/bin/node",
+  );
+  if (
+    run("/usr/local/bin/node", ["-p", 'process.versions.node.split(".")[0]'], {
+      encoding: "utf8",
+      stdio: "pipe",
+    }).trim() !== "26"
+  )
+    throw new Error("Candidate runtime did not switch to Node 26 LTS");
+  run("/usr/local/bin/node", [
+    "/opt/latex-renderer/current/deploy/scripts/http-services.mjs",
+    "restart",
+    "latex-renderer-api.service",
+    "latex-renderer-web.service",
+    "latex-renderer-admin-api.service",
+    "latex-renderer-internal-api.service",
+    "latex-renderer-remote-mcp.service",
+    "latex-renderer-worker.service",
+    "latex-renderer-standalone-gateway.service",
+    "latex-renderer-image-manager.service",
+    "latex-renderer-update-manager.service",
+  ]);
+  run("/bin/sh", [
+    "/opt/latex-renderer/current/deploy/scripts/wait-update-manager-socket.sh",
+  ]);
+  run("/bin/sh", [
+    "/opt/latex-renderer/current/deploy/scripts/smoke-test-production.sh",
+  ]);
   console.log(
     JSON.stringify({
+      node24To26Migration: true,
       event: "release.update_e2e.passed",
       releasePublicationEnospc: true,
       mutationWorkerLifecycle: true,

@@ -11,7 +11,7 @@ Thank you for helping improve LaTeX Renderer.
 
 ## Development workflow
 
-Use Node.js 24 or newer and pnpm 11.
+Use Node.js 26 LTS and pnpm 11 (Node.js 24 LTS remains supported).
 
 ```bash
 corepack enable
@@ -55,3 +55,24 @@ Open a pull request against `main` and describe the user-visible behavior, secur
 ## License
 
 Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in this project is licensed under the Apache License 2.0, without additional terms or conditions.
+
+## LAN HTTPS development
+
+The ordinary unit suite uses temporary state and a test CA. Native integration
+also requires the pinned stable Go 1.27.3 compiler. Enable it explicitly:
+
+```sh
+CI_LAN_HTTPS_NATIVE=1 pnpm exec vitest run tests/lan-https-process.test.ts
+go -C deploy/lan-https/bridge test -race ./...
+go -C deploy/lan-https/bridge vet ./...
+```
+
+Release packaging builds both native architectures from the exact archived
+source and includes their SHA256/ELF identity in the attested bundle. No compiler
+is downloaded on an installed host. Tests must never use real EAB credentials,
+modify public DNS, register public CA accounts or issue real certificates.
+
+CI targets Node 26 LTS. Update/recovery jobs additionally install Node 24.15.0
+solely to reproduce historical controllers, migrate the controller first, then
+switch the disposable host to Node 26 and repeat the candidate health/render
+smoke. This compatibility phase does not downgrade the release runtime policy.

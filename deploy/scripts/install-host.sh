@@ -2,8 +2,8 @@
 set -eu
 source_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
 if [ "$(id -u)" -ne 0 ]; then echo "install-host.sh must run as root" >&2; exit 77; fi
-if [ ! -x /usr/local/bin/node ] || [ "$(/usr/local/bin/node -p 'process.versions.node.split(".")[0]')" != 24 ]; then
-  echo "Node.js 24 must be installed at /usr/local/bin/node before host setup" >&2
+if [ ! -x /usr/local/bin/node ] || ! /usr/local/bin/node -e 'if (![24,26].includes(Number(process.versions.node.split(".")[0]))) process.exit(1)'; then
+  echo "Node.js 26 LTS (or supported Node.js 24 LTS) must be installed at /usr/local/bin/node before host setup" >&2
   exit 69
 fi
 if [ ! -x /usr/local/bin/corepack ] || ! /usr/local/bin/corepack --version >/dev/null 2>&1; then
@@ -74,4 +74,4 @@ fi
 chown root:root /etc/latex-renderer/update-manager.env
 chmod 0600 /etc/latex-renderer/update-manager.env
 /usr/local/bin/node "$source_root/deploy/scripts/install-manager-tmpfiles.mjs"
-echo "Host users and directories created. Install Node.js 24 and rootless Docker for latex-render-worker before enabling services; cloudflared is required only for the cloudflare profile."
+echo "Host users and directories created. Install Node.js 26 LTS and rootless Docker for latex-render-worker before enabling services; cloudflared is required only for the cloudflare profile."

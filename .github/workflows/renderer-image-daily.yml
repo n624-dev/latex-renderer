@@ -70,7 +70,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: "24"
+          node-version: "26.13.0"
       - name: Enable Corepack
         run: corepack enable
       - name: Install integration-test dependencies
@@ -131,7 +131,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: "24"
+          node-version: "26.13.0"
 
       - name: Validate disposable database save settings
         run: sh deploy/scripts/ci-texlive-database-save-settings.sh
@@ -348,7 +348,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: "24"
+          node-version: "26.13.0"
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: native-base-*-${{ github.run_id }}-${{ github.run_attempt }}
@@ -413,7 +413,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: "24"
+          node-version: "26.13.0"
       - name: Promote latest only after both native anonymous pulls
         env:
           IMAGE_DIGEST: ${{ needs.publish-index.outputs.digest }}
@@ -445,7 +445,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: "24"
+          node-version: "26.13.0"
       - name: Validate maintenance request
         env:
           PUBLISH_REQUESTED: ${{ github.event_name == 'schedule' || inputs.publish == true }}

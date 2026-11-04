@@ -3,6 +3,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   symlinkSync,
   chmodSync,
@@ -732,3 +733,25 @@ function writeFixture(root: string, relativePath: string, contents: string) {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, contents);
 }
+
+it("pins Node 26 LTS and the historical migration fixture while preserving existing release minimums", () => {
+  const workflows = readdirSync(".github/workflows").filter((name) =>
+    name.endsWith(".yml"),
+  );
+  for (const name of workflows) {
+    const source = read(`.github/workflows/${name}`);
+    for (const match of source.matchAll(/node-version:\s*"([^"]+)"/g))
+      expect(
+        ["server-release.yml", "server-update-validation.yml"].includes(name)
+          ? ["24.15.0", "26.13.0"]
+          : ["26.13.0"],
+        name,
+      ).toContain(match[1]);
+  }
+  expect(read(".node-version").trim()).toBe("26.13.0");
+  for (const name of ["update-manager.mjs", "update-manager-helper.mjs"]) {
+    expect(read(`deploy/scripts/${name}`)).toContain(
+      'JSON.stringify(manifest.supportedNodeMajors) === "[24,26]"',
+    );
+  }
+});

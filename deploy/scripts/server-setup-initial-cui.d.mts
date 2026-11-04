@@ -2,6 +2,7 @@ import type { ServerSetupSessionHost } from "../../packages/server-setup-core/sr
 export function runServerInitialCui(
   host: ServerSetupSessionHost,
   io: {
+    interfaces?: unknown;
     ask(prompt: string): Promise<string>;
     askSecret(prompt: string): Promise<string>;
     print(message: string): void;

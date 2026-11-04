@@ -1,0 +1,42 @@
+[Unit]
+Description=LaTeX Renderer self-hosted LAN certificate authority helper and DNS
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/latex-renderer-lan-authority/authority.json
+StartLimitIntervalSec=15min
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=latex-renderer-lan-authority
+Group=latex-renderer-lan-authority
+StateDirectory=latex-renderer-lan-authority
+StateDirectoryMode=0700
+ExecStart=/usr/local/bin/node --max-old-space-size=96 /opt/latex-renderer-lan-authority/current/deploy/lan-https/cli.mjs authority serve --config /etc/latex-renderer-lan-authority/authority.json
+Restart=on-failure
+RestartSec=60
+TimeoutStopSec=15
+KillMode=control-group
+UMask=0077
+Nice=10
+CPUQuota=25%
+MemoryHigh=128M
+MemoryMax=192M
+LogNamespace=latex-renderer-lan
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+ReadWritePaths=/var/lib/latex-renderer-lan-authority
+
+[Install]
+WantedBy=multi-user.target

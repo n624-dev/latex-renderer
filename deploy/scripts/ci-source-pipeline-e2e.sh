@@ -4,7 +4,7 @@ set -eu
 # No image pull/build/push, Actions cache, production DB, or host configuration.
 [ "${GITHUB_ACTIONS:-}" = true ] && [ "${RUNNER_ENVIRONMENT:-}" = github-hosted ] || exit 77
 runtime=${1:?temporary validation Runtime required}
-node -e 'if(Number(process.versions.node.split(".")[0])!==24)throw Error("Source E2E requires Node 24")'
+node -e 'if(Number(process.versions.node.split(".")[0])!==26)throw Error("Source E2E requires Node 26 LTS")'
 image=$(docker image inspect "$runtime" --format '{{.Id}}')
 printf '%s\n' "$image" | grep -Eq '^sha256:[0-9a-f]{64}$' || exit 65
 sh deploy/scripts/ci-renderer-disk.sh before-source-pipeline-e2e 1

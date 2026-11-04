@@ -1,0 +1,35 @@
+[Unit]
+Description=Renew LaTeX Renderer installation LAN certificate
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/latex-renderer/lan-https-client.json
+
+[Service]
+Type=oneshot
+User=latex-renderer
+Group=latex-renderer
+StateDirectory=latex-renderer-lan
+StateDirectoryMode=0700
+ExecStart=/usr/local/bin/node --max-old-space-size=96 /opt/latex-renderer/current/deploy/lan-https/cli.mjs client renew --config /etc/latex-renderer/lan-https-client.json
+SuccessExitStatus=75
+TimeoutStartSec=10min
+TimeoutStopSec=10
+UMask=0077
+Nice=15
+IOSchedulingClass=idle
+CPUQuota=20%
+MemoryHigh=128M
+MemoryMax=192M
+LogNamespace=latex-renderer-lan
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/latex-renderer-lan
