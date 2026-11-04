@@ -18,7 +18,6 @@ temporary_root=$(mktemp -d /tmp/latex-renderer-smoke.XXXXXX)
 smoke_pepper="$temporary_root/api-key-pepper"
 key_id=
 service_account_id=
-smoke_stage() { printf 'Production smoke check: %s\n' "$1" >&2; }
 
 run_smoke_admin() {
   runuser -u "$smoke_user" -- env \
@@ -60,10 +59,10 @@ if [ -z "$public_origin" ]; then
   exit 65
 fi
 
-smoke_stage local-credentials-cleanup
+printf 'Production smoke check: local-credentials-cleanup\n' >&2
 run_smoke_admin cleanup-jobs --yes >/dev/null
 
-smoke_stage local-credentials-create
+printf 'Production smoke check: local-credentials-create\n' >&2
 run_smoke_admin create \
   --owner-id "$owner_id" --yes > "$temporary_root/key.json"
 
@@ -87,18 +86,18 @@ printf '%s\n' \
 install -o "$smoke_user" -g "$smoke_group" -m 0400 \
   "$temporary_root/main.tex" "$temporary_root/project/main.tex"
 
-smoke_stage client-login
+printf 'Production smoke check: client-login\n' >&2
 printf '%s' "$token" | runuser -u "$smoke_user" -- env \
   XDG_CONFIG_HOME="$temporary_root/config" \
   /usr/local/bin/node "$render_cli" auth login --api-key-stdin >/dev/null
 token=
 
-smoke_stage render-and-preview
+printf 'Production smoke check: render-and-preview\n' >&2
 runuser -u "$smoke_user" -- env XDG_CONFIG_HOME="$temporary_root/config" \
   LATEX_RENDER_BASE_URL="$public_origin" \
   /usr/local/bin/node "$render_cli" render "$temporary_root/project" --json | tee "$temporary_root/render.json"
 
-smoke_stage artifact-verification
+printf 'Production smoke check: artifact-verification\n' >&2
 job_id=$(/usr/local/bin/node -e '
   const value=require(process.argv[1]);
   const serialized=JSON.stringify(value);
@@ -113,7 +112,7 @@ test -s "$temporary_root/project/.render/previews/page-1.png"
 /usr/local/bin/node -e 'const f=require("node:fs");const b=f.readFileSync(process.argv[1]);if(!b.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])))process.exit(1)' "$temporary_root/project/.render/previews/page-1.png"
 /usr/local/bin/node -e 'const x=require(process.argv[1]);if(x.success!==true)process.exit(1)' "$temporary_root/project/.render/errors.json"
 
-smoke_stage job-cleanup
+printf 'Production smoke check: job-cleanup\n' >&2
 runuser -u "$smoke_user" -- env XDG_CONFIG_HOME="$temporary_root/config" \
   LATEX_RENDER_BASE_URL="$public_origin" \
   /usr/local/bin/node "$render_cli" jobs delete "$job_id" --yes --json > "$temporary_root/delete.json" || {
