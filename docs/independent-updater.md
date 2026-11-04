@@ -79,6 +79,11 @@ controllers required an exact Node 24 runtime. New bundles explicitly declare
 is rejected before activation. When reverting an entire host to a Node-24-only
 controller, restore its supported Node runtime as well. Ordinary application
 updates do not replace the operating system's Node installation. Slots contain no database, credentials or application dependencies.
+After changing the host runtime, restart services through
+`/opt/latex-renderer/current/deploy/scripts/http-services.mjs`. Its bulk restart
+orders managers before their consumers and the Worker last. Classic service
+restarts preserve systemd `PartOf=` propagation; splitting a manager restart
+into a separate stop and start can leave its dependent Worker stopped.
 Collection retains active, previous and prepared candidate slots (normally two,
 at most three) and reclaims interrupted staging. Identical payload/envelope data
 reuse a slot. Corrupt state, unsafe paths, symlinks or mount points stop cleanup.

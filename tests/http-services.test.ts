@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { expect, it } from "vitest";
 import {
   controlService,
+  controlServices,
   httpServiceStatus,
   prepareHttpActivation,
   deploymentUpdater,
@@ -17,6 +18,66 @@ import {
 
 const unit = "latex-renderer-api.service",
   socket = "latex-renderer-api.socket";
+
+it("preserves a classic Worker when its PartOf manager is restarted", () => {
+  const manager = "latex-renderer-image-manager.service";
+  const worker = "latex-renderer-worker.service";
+  const active = new Set([manager, worker]);
+  const calls: string[][] = [];
+  const run = (...args: string[]) => {
+    calls.push(args);
+    const name = args.at(-1) ?? "";
+    if (args[0] === "show")
+      return `LoadState=loaded\nActiveState=${active.has(name) ? "active" : "inactive"}\n`;
+    if (args[0] === "stop") {
+      active.delete(name);
+      if (name === manager) active.delete(worker);
+    }
+    if (["start", "restart"].includes(args[0] ?? "")) active.add(name);
+    return "";
+  };
+  controlService("restart", manager, { run, enabled: false });
+  expect(active.has(worker)).toBe(true);
+  expect(calls).toContainEqual(["restart", manager]);
+  calls.length = 0;
+  controlServices("restart", [worker, unit, manager], {
+    run,
+    enabledFor: () => false,
+  });
+  expect(active.has(worker)).toBe(true);
+  expect(calls.filter((args) => args[0] === "restart")).toEqual([
+    ["restart", manager],
+    ["restart", unit],
+    ["restart", worker],
+  ]);
+});
+
+it("preserves try-restart activity and leaves sleeping services asleep", () => {
+  const manager = "latex-renderer-image-manager.service",
+    worker = "latex-renderer-worker.service";
+  const active = new Set([manager, worker]);
+  const starts: string[] = [];
+  const run = (...args: string[]) => {
+    const name = args.at(-1) ?? "";
+    if (args[0] === "show")
+      return `LoadState=loaded\nActiveState=${active.has(name) ? "active" : "inactive"}\n`;
+    if (args[0] === "stop" && name === manager) active.delete(worker);
+    if (args[0] === "start") {
+      active.add(name);
+      starts.push(name);
+    }
+    return "";
+  };
+  controlServices("try-restart", [worker, unit, manager], {
+    run,
+    enabledFor: () => true,
+  });
+  expect(starts).toEqual([
+    manager.replace(".service", ".socket"),
+    worker.replace(".service", ".socket"),
+  ]);
+  expect(starts).not.toContain(unit.replace(".service", ".socket"));
+});
 function model(
   service: Record<string, string> = {},
   listener: Record<string, string> = {},

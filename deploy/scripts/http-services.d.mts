@@ -31,6 +31,14 @@ export function controlService(
   unit: string,
   options?: { run?: (...args: string[]) => string; enabled?: boolean },
 ): string;
+export function controlServices(
+  action: string,
+  units: readonly string[],
+  options?: {
+    run?: (...args: string[]) => string;
+    enabledFor?: (unit: string) => boolean;
+  },
+): void;
 export function prepareHttpActivation(
   source: string,
   options?: {

@@ -22,6 +22,7 @@ import {
 import { acquireUpdateBaseline } from "./update-baseline.mjs";
 import { verifyActivationCommitBarrier } from "./updater-activation-barrier.mjs";
 import { retryCiMutation } from "./retry-ci-mutation.mjs";
+import { runCiProcessGroup } from "./process-group.mjs";
 import {
   brokenUpdaterSource,
   assertStartupRecovery,
@@ -922,11 +923,16 @@ try {
   run("/bin/sh", [
     "/opt/latex-renderer/current/deploy/scripts/wait-update-manager-socket.sh",
   ]);
-  run(
-    "/bin/sh",
-    ["/opt/latex-renderer/current/deploy/scripts/smoke-test-production.sh"],
-    { timeout: 180000, killSignal: "SIGKILL" },
-  );
+  run("/usr/local/bin/node", [
+    "/opt/latex-renderer/current/deploy/scripts/http-services.mjs",
+    "ready",
+    "latex-renderer-worker.service",
+    "latex-renderer-image-manager.service",
+    "latex-renderer-update-manager.service",
+  ]);
+  await runCiProcessGroup("/bin/sh", [
+    "/opt/latex-renderer/current/deploy/scripts/smoke-test-production.sh",
+  ]);
   console.log(
     JSON.stringify({
       node24To26Migration: true,
