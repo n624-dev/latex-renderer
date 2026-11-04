@@ -2,9 +2,15 @@
 
 ## Unreleased
 
-## 1.5.9 - 2026-11-04
+## 1.5.10-rc.1 - 2026-11-04
 
-- Promote validated 1.5.9-rc.1 to Stable with matching executable behavior, dependencies and configuration defaults.
+- Prepare empty GitHub-hosted update runners for frozen-baseline and target Runtime builds by reclaiming only allowlisted unused SDKs and remeasuring actual free space before provisioning.
+- Reject application hosts, persistent runners, unsafe SDK paths and insufficient remaining capacity before installing services. Keep production defaults, release signatures and all update/recovery tests unchanged.
+- Keep installation guidance on the latest published Stable while the next candidate is validated.
+
+## 1.5.9 (unpublished) - 2026-11-04
+
+- Stable publication was withheld because update-test runners exhausted their disks during frozen-baseline provisioning. The pushed tag is retained without replacement; v1.5.10-rc.1 adds disposable-runner capacity preparation.
 - Correct compact-mode Updater and Image Manager listener handoff during updates and settings changes; retain passive health responses.
 - Validate updates from the published compact-mode baseline alongside historical AMD64 and native ARM64 installations.
 
