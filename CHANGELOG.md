@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 1.5.10 - 2026-11-04
+
+- Promote validated 1.5.10-rc.1 to Stable with matching executable behavior, dependencies and configuration defaults.
+- Prepare empty disposable update runners with measured disk reclamation before frozen-baseline provisioning; retain all update and recovery checks.
+- Include the compact-mode listener handoff and passive health fixes, with published compact-origin and native ARM64 update coverage.
+
 ## 1.5.10-rc.1 - 2026-11-04
 
 - Prepare empty GitHub-hosted update runners for frozen-baseline and target Runtime builds by reclaiming only allowlisted unused SDKs and remeasuring actual free space before provisioning.
