@@ -100,6 +100,8 @@ The authority requires a publicly reachable authoritative DNS endpoint on **both
 UDP and TCP port 53**, an HTTPS API and one or more configured ACME issuers.
 It does not recursively resolve arbitrary DNS requests. Confirm port conflicts
 before binding; the setup does not reconfigure an existing DNS server.
+When a local resolver already occupies loopback port 53, bind the authority to
+its public IP address instead of `0.0.0.0`; keep the existing resolver running.
 
 Use your own parent domain in place of `example.org`:
 
