@@ -26,7 +26,7 @@ export class LanHttpsClientState {
     accountKey: Buffer;
     tlsKey: Buffer;
   }>;
-  saveInvitation(code: string): void;
+  saveInvitation(code: string, serverOrigin: string): void;
   recoverTemporaryFiles(): Readonly<{ removed: number }>;
   readAccounts(): Readonly<
     Record<string, Readonly<{ directoryUrl: string; accountUrl: string }>>

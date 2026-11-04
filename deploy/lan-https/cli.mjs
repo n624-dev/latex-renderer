@@ -7,6 +7,7 @@ export { lanHttpsBinary } from "./binary.mjs";
 import { isMainModule } from "../scripts/is-main-module.mjs";
 import {
   readLanHttpsConfiguration,
+  readLanHttpsInvitation,
   validateLanHttpsAuthorityConfiguration,
   validateLanHttpsClientConfiguration,
 } from "./configuration.mjs";
@@ -150,7 +151,10 @@ export async function runLanHttpsCli(argv = process.argv.slice(2)) {
         throw new Error("Invalid invitation input");
       return withLanHttpsClientLock(config.stateDirectory, async (state) => {
         state.ensureIdentityKey();
-        state.saveInvitation(value.invitationCode);
+        state.saveInvitation(
+          value.invitationCode,
+          config.provider.serverOrigin,
+        );
         output({ saved: true });
       });
     }
@@ -164,20 +168,7 @@ export async function runLanHttpsCli(argv = process.argv.slice(2)) {
     if (action === "renew") {
       if (config.provider.provider === "akebi-keyless")
         return output({ status: "keyless_only" });
-      let invitationCode;
-      if (config.invitationFile) {
-        const value = readLanHttpsConfiguration(config.invitationFile, {
-          secret: true,
-          maximumBytes: 4096,
-        });
-        if (
-          !value ||
-          Object.keys(value).join(",") !== "invitationCode" ||
-          typeof value.invitationCode !== "string"
-        )
-          throw new Error("Invalid invitation file");
-        invitationCode = value.invitationCode || undefined;
-      }
+      const invitationCode = readLanHttpsInvitation(config);
       return withLanHttpsProfile(
         config,
         async ({ profileRoot, state, groupState }) => {

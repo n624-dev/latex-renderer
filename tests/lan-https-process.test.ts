@@ -211,6 +211,7 @@ describe.skipIf(!enabled)(
             format: 1,
             role: "client",
             stateDirectory: stateRoot,
+            invitationFile: join(stateRoot, "invitation.json"),
             provider: {
               format: 1,
               provider: "akebi-keyless",

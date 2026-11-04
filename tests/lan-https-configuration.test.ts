@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   readLanHttpsConfiguration,
+  readLanHttpsInvitation,
   validateLanHttpsAuthorityConfiguration,
   validateLanHttpsClientConfiguration,
 } from "../deploy/lan-https/configuration.mjs";
@@ -126,4 +127,43 @@ describe("LAN HTTPS service configuration", () => {
     chmodSync(root, 0o777);
     expect(() => readLanHttpsConfiguration(path)).toThrow(/directory/);
   });
+});
+
+it("binds stored invitation codes to the selected authority before any network request", async () => {
+  const root = mkdtempSync(join(tmpdir(), "lan-invitation-scope-"));
+  roots.push(root);
+  const { LanHttpsClientState } =
+    await import("../deploy/lan-https/client-state.mjs");
+  const state = new LanHttpsClientState(root);
+  const config = validateLanHttpsClientConfiguration({
+    format: 1,
+    role: "client",
+    stateDirectory: root,
+    provider: {
+      format: 1,
+      provider: "akebi-local-acme",
+      serverOrigin: "https://akebi.example.test",
+      lanDomain: "lan.example.test",
+      address: "192.168.1.50",
+      keylessFallback: false,
+    },
+    issuerId: "ca",
+    termsAccepted: true,
+    allowedNetworks: ["192.168.1.0/24"],
+    invitationFile: join(root, "invitation.json"),
+  });
+  state.saveInvitation("A".repeat(43), config.provider.serverOrigin);
+  expect(readLanHttpsInvitation(config)).toBe("A".repeat(43));
+  const other = {
+    ...config,
+    provider: {
+      ...config.provider,
+      serverOrigin: "https://other.example.test",
+    },
+  };
+  expect(() => readLanHttpsInvitation(other)).toThrow(
+    /does not match this authority/,
+  );
+  state.saveInvitation("", config.provider.serverOrigin);
+  expect(readLanHttpsInvitation(other)).toBeUndefined();
 });

@@ -50,3 +50,7 @@ export interface LanHttpsClientConfiguration {
 export function validateLanHttpsClientConfiguration(
   input: unknown,
 ): Readonly<LanHttpsClientConfiguration>;
+
+export function readLanHttpsInvitation(
+  config: LanHttpsClientConfiguration,
+): string | undefined;

@@ -20,7 +20,8 @@ where required, produces a public-key-bound External Account Binding (EAB).
 Reusable EAB HMAC credentials remain on the authority. This is not a private CA
 that asks users to install a new root certificate. A private CA can be configured
 only after its trust root is deliberately installed on every client/server that
-needs to trust it; the software never disables certificate verification.
+needs to trust it; the software never disables certificate verification. Public CA certificates disclose their
+IP-derived hostname and stable management SAN in Certificate Transparency logs.
 
 A valid local certificate starts and serves without contacting the authority.
 Renewal is a bounded oneshot task, with durable CA backoff. Keyless is explicitly
@@ -250,6 +251,9 @@ copies validated source files through a private temporary directory, atomically
 imports a verified bundle, and removes its temporary files. Signer reload occurs
 within sixty seconds. DNS continues if the signer has no valid bundle; only
 Keyless operations return 503 until it is repaired.
+
+For ZeroSSL, authorize `sectigo.com` in the delegated zone's CAA policy, as
+described in [its CAA guidance](https://help.zerossl.com/hc/en-us/articles/360060119753-Invalid-CAA-Records). Add an explicitly selected replacement CA to CAA before switching issuers.
 
 The CA's independent policies still apply. ZeroSSL currently documents free
 unlimited 90-day ACME certificates, including wildcard certificates, using EAB;

@@ -293,3 +293,27 @@ export function validateLanHttpsClientConfiguration(input) {
       : { invitationFile: absolute(value.invitationFile) }),
   });
 }
+
+export function readLanHttpsInvitation(config) {
+  if (!config.invitationFile) return undefined;
+  const value = readLanHttpsConfiguration(config.invitationFile, {
+    secret: true,
+    maximumBytes: 4096,
+  });
+  if (
+    !value ||
+    Object.keys(value).sort().join(",") !==
+      "format,invitationCode,serverOrigin" ||
+    value.format !== 1 ||
+    typeof value.serverOrigin !== "string" ||
+    (value.invitationCode !== "" &&
+      value.serverOrigin !== config.provider.serverOrigin) ||
+    typeof value.invitationCode !== "string" ||
+    (value.invitationCode !== "" &&
+      !/^[A-Za-z0-9_-]{43}$/.test(value.invitationCode))
+  )
+    throw new Error(
+      "Saved invitation does not match this authority; enter its code again",
+    );
+  return value.invitationCode || undefined;
+}

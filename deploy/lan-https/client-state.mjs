@@ -434,7 +434,10 @@ export class LanHttpsClientState {
     });
   }
 
-  saveInvitation(code) {
+  saveInvitation(code, serverOrigin) {
+    const origin = new URL(serverOrigin);
+    if (origin.protocol !== "https:" || origin.origin !== serverOrigin)
+      throw new Error("Invalid invitation authority");
     if (
       typeof code !== "string" ||
       (code !== "" && !/^[A-Za-z0-9_-]{43}$/.test(code))
@@ -442,7 +445,9 @@ export class LanHttpsClientState {
       throw new Error("Invalid LAN invitation");
     this.#atomic(
       "invitation.json",
-      Buffer.from(JSON.stringify({ invitationCode: code })),
+      Buffer.from(
+        JSON.stringify({ format: 1, serverOrigin, invitationCode: code }),
+      ),
     );
   }
 

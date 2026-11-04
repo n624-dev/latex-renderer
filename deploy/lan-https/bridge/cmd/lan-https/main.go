@@ -275,9 +275,11 @@ func front(ctx context.Context, args []string) error {
 							return nil, e
 						}
 						var invite struct {
-							Code string `json:"invitationCode"`
+							Format int    `json:"format"`
+							Origin string `json:"serverOrigin"`
+							Code   string `json:"invitationCode"`
 						}
-						if decode(raw, &invite) != nil {
+						if decode(raw, &invite) != nil || invite.Format != 1 || (invite.Code != "" && invite.Origin != p.ServerOrigin) {
 							return nil, fail()
 						}
 						invitation = invite.Code
@@ -434,9 +436,11 @@ func keylessCheck(ctx context.Context, args []string) error {
 			return e
 		}
 		var value struct {
-			Code string `json:"invitationCode"`
+			Format int    `json:"format"`
+			Origin string `json:"serverOrigin"`
+			Code   string `json:"invitationCode"`
 		}
-		if decode(data, &value) != nil {
+		if decode(data, &value) != nil || value.Format != 1 || (value.Code != "" && value.Origin != p.ServerOrigin) {
 			return fail()
 		}
 		invitation = value.Code

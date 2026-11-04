@@ -81,7 +81,7 @@ export const setupScript = `"use strict";
 (() => {
   const bootstrap = location.hash.slice(1); history.replaceState(null, "", "/");
   const el = (id) => document.getElementById(id);
-  let token, csrf, confirmation, model, baseline, initial = false, ingress = false;
+  let token, csrf, confirmation, model, baseline, initial = false, ingress = false, invitationOrigin;
   let networkInventory = {interfaces:[],common:{serverOrigin:"",lanDomain:"",issuerId:""}};
   const limitLabels = { maxUploadBytes:"アップロード上限（バイト）", maxExtractedBytes:"展開後の上限（バイト）", maxFileCount:"入力ファイル数", maxZipEntries:"ZIP内の項目数", maxOutputBytes:"成果物の上限（バイト）", maxOutputFileCount:"成果物のファイル数", maxOutputDirectoryCount:"成果物のフォルダー数", maxLogBytes:"ログの上限（バイト）", maxSvgObjects:"SVGの個数", maxSvgBytes:"SVG 1個の上限（バイト）", maxSvgTotalBytes:"SVG合計の上限（バイト）", svgConversionTimeoutSeconds:"SVG変換の制限時間（秒）", maxQueueLength:"待機ジョブ数", maxUserStorageBytes:"利用者ごとの保存容量（バイト）", minFreeStorageBytes:"確保する空き容量（バイト）", jobTimeoutSeconds:"変換の制限時間（秒・840以下）", minimumAvailableMemoryBytes:"開始に必要な空きRAM（MiB）", maximumMemoryBytes:"実行RAMの上限（MiB）", maximumSwapBytes:"追加swapの上限（MiB・0は無効）", admissionWaitSeconds:"長時間待機の案内まで（秒・超過だけでは失敗しません）" };
   const memoryFields = ["minimumAvailableMemoryBytes", "maximumMemoryBytes", "maximumSwapBytes"];
@@ -98,6 +98,9 @@ export const setupScript = `"use strict";
   };
   const refreshNetworkControls = () => {
     const current=model.deployment.ingress, enabled=(initial||ingress)&&model.deployment.authentication.deployment.mode==="standalone";
+    const nextInvitationOrigin=current?.lanHttps?.provider.serverOrigin;
+    if(invitationOrigin!==nextInvitationOrigin)el("lan-invitation").value="";
+    invitationOrigin=nextInvitationOrigin;
     el("network-settings").hidden=!enabled;
     for(const id of ["network-scope","lan-interface","lan-provider","lan-authority","lan-server","lan-domain","lan-issuer","lan-port","lan-fallback","lan-terms","setup-auth"])el(id).disabled=!enabled;
     el("network-scope").required=enabled;
@@ -162,7 +165,9 @@ export const setupScript = `"use strict";
     }catch(error){saveModel();el("lan-options").hidden=el("network-scope").value!=="lan";el("lan-interface").required=el("network-scope").value==="lan";status(error.message);}
   };
   for(const id of ["network-scope","lan-interface","lan-provider","lan-server","lan-domain","lan-issuer","lan-port","lan-fallback","lan-terms"])el(id).addEventListener("change",changeNetwork);
+  el("lan-server").addEventListener("input",()=>{el("lan-invitation").value="";});
   el("lan-authority").addEventListener("change",()=>{
+    el("lan-invitation").value="";
     const custom=el("lan-authority").value==="custom";
     for(const id of ["lan-server","lan-domain","lan-issuer"])el(id).readOnly=!custom;
     if(!custom){el("lan-server").value=networkInventory.common.serverOrigin;el("lan-domain").value=networkInventory.common.lanDomain;el("lan-issuer").value=networkInventory.common.issuerId;changeNetwork();}

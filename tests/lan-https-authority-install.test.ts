@@ -68,7 +68,7 @@ function fixture() {
         schemaVersion: 1,
         repository: "n624-dev/latex-renderer",
         provenance: "github-artifact-attestation",
-        version: "1.6.0-rc.1",
+        version: "9.8.0-rc.1",
         commit,
       }),
       { mode: 0o644 },
@@ -77,7 +77,7 @@ function fixture() {
       join(source, "deploy/lan-https/binaries.json"),
       JSON.stringify({
         format: 1,
-        version: "1.6.0-rc.1",
+        version: "9.8.0-rc.1",
         commit,
         binaries: {
           [architecture]: {

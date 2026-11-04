@@ -12,7 +12,7 @@
   "dns": {
     "listeners": [{ "address": "0.0.0.0", "port": 53 }],
     "nameserver": "ns1.example.org",
-    "caaIssuers": ["comodoca.com"]
+    "caaIssuers": ["sectigo.com"]
   },
   "issuers": [
     {

@@ -426,6 +426,9 @@ it("reviews a mobile LAN interface and custom local-ACME provider without PEM or
     publicOrigin: "https://192-168-1-50.lan.example.test",
     lanHttps: { issuerId: "ca", termsAccepted: true },
   });
+  await f.page.locator("#lan-invitation").fill("A".repeat(43));
+  await f.page.locator("#lan-server").fill("https://other.example.test");
+  expect(await f.page.locator("#lan-invitation").inputValue()).toBe("");
   expect(f.errors).toEqual([]);
   expect(
     await f.page.evaluate(

@@ -165,7 +165,8 @@ export async function withLanHttpsProfile(
 ) {
   return withLanHttpsClientLock(config.stateDirectory, async (rootState) => {
     const identityKey = rootState.ensureIdentityKey();
-    if (!rootState.read("invitation.json", 4096)) rootState.saveInvitation("");
+    if (!rootState.read("invitation.json", 4096))
+      rootState.saveInvitation("", config.provider.serverOrigin);
     const authorities = join(config.stateDirectory, "authorities"),
       profiles = join(config.stateDirectory, "profiles");
     directory(authorities);
