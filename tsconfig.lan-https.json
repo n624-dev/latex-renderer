@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "tests/lan-https-*.test.ts",
+    "tests/fixtures/lan-https.ts",
+    "tests/server-ingress-nginx.test.ts"
+  ],
+  "exclude": ["apps/gateway-worker/**"]
+}

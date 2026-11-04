@@ -173,6 +173,8 @@ export const SERVER_INGRESS_TLS_PATHS: Readonly<{
   privateKey: string;
 }>;
 export function renderServerIngressNginx(input: unknown): string;
+export function renderLanHttpsBackendNginx(input: unknown, provider: unknown): string;
+export const LAN_HTTPS_BACKEND_PORT: 3180;
 export interface ServerSetupDeploymentReview {
   readonly format: 3;
   readonly authentication: ServerSetupAuthenticationReview;
@@ -368,3 +370,18 @@ export function checkServerSetupOidc(
     | { status: "checked"; metadata: Readonly<ServerOidcMetadata> }
   >
 >;
+export {
+  normalizeLanHttpsDomain,
+  lanHttpsHostname,
+  lanHttpsAddress,
+  lanHttpsOrigin,
+  validateLanHttpsServerOrigin,
+  validateLanHttpsProvider,
+  LAN_HTTPS_AUTHORITY_DEFAULTS,
+  validateLanHttpsAuthorityPolicy,
+} from "./lan-https.mjs";
+export type {
+  LanHttpsProvider,
+  LanHttpsAuthorityLimits,
+  LanHttpsAuthorityPolicy,
+} from "./lan-https.mjs";

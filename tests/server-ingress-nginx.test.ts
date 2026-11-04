@@ -78,6 +78,13 @@ describe("standalone Nginx configuration and actual HTTPS proxy", () => {
     async () => {
       const fixture = ingressTlsFixture();
       const root = mkdtempSync(join(tmpdir(), "renderer-ingress-nginx-"));
+      const statusSocket = join(root, "fixture-status.sock");
+      const status = httpServer((_request, response) => {
+        response.setHeader("content-type", "application/json");
+        response.end(JSON.stringify({ status: "ok" }));
+      });
+      status.listen(statusSocket);
+      await once(status, "listening");
       const upstream = httpServer((req, res) => {
         res.setHeader("content-type", "application/json");
         res.end(
@@ -95,6 +102,10 @@ describe("standalone Nginx configuration and actual HTTPS proxy", () => {
           publicOrigin: `https://localhost:${port}`,
         });
         config = config
+          .replaceAll(
+            "http://unix:/run/latex-renderer-status/status.sock",
+            `http://unix:${statusSocket}`,
+          )
           .replaceAll(
             "/etc/latex-renderer/secrets/https-cert.pem",
             fixture.certificatePath,
@@ -121,7 +132,7 @@ describe("standalone Nginx configuration and actual HTTPS proxy", () => {
         child = spawn("nginx", ["-p", root, "-c", path], { stdio: "ignore" });
         const get = (
           headers: Record<string, string> = {},
-          route = "/api/v1/health",
+          route = "/api/v1/ingress-fixture",
         ) =>
           new Promise<{ status: number; body: string }>((resolve, reject) => {
             const call = request(
@@ -183,6 +194,11 @@ describe("standalone Nginx configuration and actual HTTPS proxy", () => {
         expect(headers.forwarded).toBeUndefined();
         expect(headers["cf-access-jwt-assertion"]).toBeUndefined();
         expect(headers["cf-connecting-ip"]).toBeUndefined();
+        // Passive health is a separate local fixture, never an installed host's
+        // socket and never an upstream echo endpoint for header assertions.
+        const health = await get({}, "/api/v1/health");
+        expect(health.status).toBe(200);
+        expect(JSON.parse(health.body)).toEqual({ status: "ok" });
         expect((await get({ Host: "wrong.test" })).status).toBe(421);
         // The host health adapter uses normal CA trust, not rejectUnauthorized=false.
         const code = `import {checkIngressHttpsHealth} from ${JSON.stringify(new URL("../deploy/scripts/server-ingress.mjs", import.meta.url).href)};await checkIngressHttpsHealth(process.argv[1]);`;
@@ -242,6 +258,10 @@ describe("standalone Nginx configuration and actual HTTPS proxy", () => {
           listenAddress: "10.1.2.3",
           allowedNetworks: ["10.0.0.0/8"],
         })
+          .replaceAll(
+            "http://unix:/run/latex-renderer-status/status.sock",
+            `http://unix:${statusSocket}`,
+          )
           .replace(`listen 10.1.2.3:${port}`, `listen 127.0.0.1:${port}`)
           .replaceAll(
             "/etc/latex-renderer/secrets/https-cert.pem",
@@ -276,6 +296,8 @@ describe("standalone Nginx configuration and actual HTTPS proxy", () => {
         }
         upstream.closeAllConnections();
         await new Promise<void>((resolve) => upstream.close(() => resolve()));
+        status.closeAllConnections();
+        await new Promise<void>((resolve) => status.close(() => resolve()));
         fixture.cleanup();
         rmSync(root, { recursive: true, force: true });
       }
