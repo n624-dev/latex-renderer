@@ -18,7 +18,7 @@ export async function verifySetupBootRecovery(release, work, image) {
   const run = (program, args, options = {}) =>
     execFileSync(program, args, {
       encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
       timeout: 120000,
       ...options,
     });
