@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 1.6.2-rc.1 - 2026-11-06
+
+- Preserve the running update controller when a pre-cutover state request times out or activation cleanup runs before operation completion (#307).
+- Add an authenticated lightweight activation-state endpoint, bounded retry of transient listener failures and compatibility with historical controller state APIs.
+- Protect transport restoration with the shared mutation lock and completion barrier; retain strict state validation, independent rollback and frozen bootstrap compatibility.
+- Exercise delayed state responses, interrupted activation and invalid-state cleanup with real systemd in signed update/recovery CI.
+
 ## 1.6.1 - 2026-11-05
 
 - Promote validated 1.6.1-rc.1 to Stable with matching executable behavior, dependencies and configuration defaults.

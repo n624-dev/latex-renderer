@@ -6,5 +6,8 @@ export function prepareUpdaterTransport(options: {
   };
   action?: "prepare" | "check" | "resume";
   compact?: boolean;
+  acquireLock?: () => Promise<{ release(): Promise<void> }>;
+  isControllerActive?: () => boolean | Promise<boolean>;
+  canStopController?: () => Promise<boolean>;
   run?: (...args: string[]) => unknown;
-}): Promise<{ activated: boolean }>;
+}): Promise<{ activated: boolean; deferred?: boolean }>;

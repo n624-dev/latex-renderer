@@ -1241,6 +1241,14 @@ const server = createServer(
         );
       }
       const url = new globalThis.URL(request.url ?? "/", "http://localhost");
+      // Cutover needs only the in-memory operation completion barrier. Avoid
+      // repeatedly hashing complete slots on this latency-sensitive path.
+      if (request.method === "GET" && url.pathname === "/v1/activation-state") {
+        return send(response, 200, {
+          activeOperationId: activeOperation?.id ?? recoveringOperationId,
+          lastError: state.lastError,
+        });
+      }
       if (request.method === "GET" && url.pathname === "/v1/state") {
         return send(response, 200, {
           ...state,

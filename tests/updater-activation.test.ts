@@ -145,6 +145,51 @@ it("leaves a running operation untouched when the bounded wait expires", async (
   expect(f.activate).not.toHaveBeenCalled();
   expect(f.release).toHaveBeenCalledTimes(2);
 });
+it("retries transient controller reads after releasing the lock without stopping management", async () => {
+  const f = fixture();
+  const unavailable = Object.assign(new Error("slow listener"), {
+    code: "UPDATER_CONTROLLER_UNAVAILABLE",
+  });
+  f.readController
+    .mockRejectedValueOnce(unavailable)
+    .mockRejectedValueOnce(unavailable);
+  f.wait.mockImplementation(() => {
+    expect(f.release).toHaveBeenCalled();
+    expect(f.stopController).not.toHaveBeenCalled();
+    return Promise.resolve();
+  });
+  expect(await activateAfterOperation(f)).toBe(true);
+  expect(f.readController).toHaveBeenCalledTimes(3);
+  expect(f.release).toHaveBeenCalledTimes(3);
+  expect(f.wait).toHaveBeenCalledTimes(2);
+  expect(f.activate).toHaveBeenCalledOnce();
+});
+it("bounds repeated transport failures without invoking controller cleanup", async () => {
+  const f = fixture();
+  f.timeoutMs = 2000;
+  f.readController.mockRejectedValue(
+    Object.assign(new Error("unavailable"), {
+      code: "UPDATER_CONTROLLER_UNAVAILABLE",
+    }),
+  );
+  await expect(activateAfterOperation(f)).rejects.toThrow("Timed out");
+  expect(f.stopController).not.toHaveBeenCalled();
+  expect(f.recover).not.toHaveBeenCalled();
+  expect(f.startController).not.toHaveBeenCalled();
+  expect(f.activate).not.toHaveBeenCalled();
+  expect(f.release).toHaveBeenCalledTimes(2);
+});
+it("does not switch after a state read completes beyond the activation deadline", async () => {
+  const f = fixture();
+  f.timeoutMs = 1000;
+  f.readController.mockImplementation(async () => {
+    await f.wait();
+    return { activeOperationId: null, lastError: null };
+  });
+  await expect(activateAfterOperation(f)).rejects.toThrow("Timed out");
+  expect(f.stopController).not.toHaveBeenCalled();
+  expect(f.activate).not.toHaveBeenCalled();
+});
 it.each([
   "readController",
   "hasCandidate",

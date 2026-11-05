@@ -1,4 +1,9 @@
 export function controllerIdle(state: unknown): boolean;
+export function readControllerState(options?: {
+  tokenFile?: string;
+  socketPath?: string;
+  timeoutMs?: number;
+}): Promise<unknown>;
 export function stopUpdaterForActivation(
   run: (...args: string[]) => Promise<unknown>,
 ): Promise<void>;
