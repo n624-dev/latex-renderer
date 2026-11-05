@@ -7,6 +7,7 @@ import {
   lstat,
   mkdir,
   mkdtemp,
+  realpath,
   readFile,
   rm,
   symlink,
@@ -97,6 +98,28 @@ run("/usr/bin/apt-get", [
 ]);
 run("/usr/bin/systemctl", ["stop", "nginx"]);
 run("/bin/sh", [join(source, "deploy/scripts/configure-rootless-docker.sh")]);
+// Hosted images can permit the runner to create entries below /opt. Fresh
+// setup deliberately rejects such ancestors. Seal only these directory inodes
+// on this already-guarded empty disposable host; keep the production check and
+// existing hosted tool-cache contents unchanged.
+for (const path of [
+  "/opt",
+  "/opt/latex-renderer",
+  "/opt/latex-renderer/releases",
+]) {
+  const info = await lstat(path);
+  assert(info.isDirectory() && (await realpath(path)) === path);
+  console.log(
+    JSON.stringify({
+      event: "ci.fresh_setup_parent",
+      path,
+      uid: info.uid,
+      mode: info.mode & 0o7777,
+    }),
+  );
+  run("/usr/bin/chown", ["root:root", path]);
+  run("/usr/bin/chmod", ["0755", path]);
+}
 const work = await mkdtemp("/opt/latex-renderer/update-staging/ci-fresh-");
 const release = join(
   "/opt/latex-renderer/releases",
