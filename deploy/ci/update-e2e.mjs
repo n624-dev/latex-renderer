@@ -408,40 +408,6 @@ try {
   )
     throw new Error("Host preparation stopped the live self-update controller");
   if (compactOrigin) await compactControllerReady();
-  if (process.env.CI_UPDATE_BASELINE === "installed") {
-    // The same signed source is deliberately rebuilt. CMS signing generates
-    // fresh bytes; immutable publication must retain the first copy while the
-    // deployment verifies the bytes actually served from that copy.
-    const publishedRoot = `/opt/latex-renderer/releases/v${tag.slice(1)}-${commit.slice(0, 12)}`;
-    const before = await readFile(
-      join(publishedRoot, "client-dist/mcpb.json"),
-      "utf8",
-    );
-    const publishedMcpb = JSON.parse(before);
-    const rebuiltMcpb = await deploy(
-      candidate,
-      { version: tag.slice(1), tag, commit },
-      false,
-    );
-    if (rebuiltMcpb.sha256 === publishedMcpb.sha256)
-      throw new Error(
-        "Publication reuse must exercise distinct CMS signatures",
-      );
-    if (
-      (await readFile(join(publishedRoot, "client-dist/mcpb.json"), "utf8")) !==
-      before
-    )
-      throw new Error("Rebuilt deployment changed an immutable publication");
-    console.log(
-      JSON.stringify({
-        event: "ci.immutable_publication_reused",
-        tag,
-        commit,
-        digest,
-        distinctSignature: true,
-      }),
-    );
-  }
   // Imports and resolved source paths cannot expose a silent CLI no-op.
   // Exercise the actual current alias used by configure-host-access and both
   // checked hosting modes, without changing this standalone host's config.
@@ -974,6 +940,42 @@ try {
   await runCiProcessGroup("/bin/sh", [
     "/opt/latex-renderer/current/deploy/scripts/smoke-test-production.sh",
   ]);
+  if (process.env.CI_UPDATE_BASELINE === "installed") {
+    // Preserve the original single-update recovery/activation assertions above
+    // before making a second recovery point for the same-source deployment.
+    // The same signed source is deliberately rebuilt. CMS signing generates
+    // fresh bytes; immutable publication must retain the first copy while the
+    // deployment verifies the bytes actually served from that copy.
+    const publishedRoot = `/opt/latex-renderer/releases/v${tag.slice(1)}-${commit.slice(0, 12)}`;
+    const before = await readFile(
+      join(publishedRoot, "client-dist/mcpb.json"),
+      "utf8",
+    );
+    const publishedMcpb = JSON.parse(before);
+    const rebuiltMcpb = await deploy(
+      candidate,
+      { version: tag.slice(1), tag, commit },
+      false,
+    );
+    if (rebuiltMcpb.sha256 === publishedMcpb.sha256)
+      throw new Error(
+        "Publication reuse must exercise distinct CMS signatures",
+      );
+    if (
+      (await readFile(join(publishedRoot, "client-dist/mcpb.json"), "utf8")) !==
+      before
+    )
+      throw new Error("Rebuilt deployment changed an immutable publication");
+    console.log(
+      JSON.stringify({
+        event: "ci.immutable_publication_reused",
+        tag,
+        commit,
+        digest,
+        distinctSignature: true,
+      }),
+    );
+  }
   console.log(
     JSON.stringify({
       node24To26Migration: true,
