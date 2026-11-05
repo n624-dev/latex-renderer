@@ -10,9 +10,9 @@ since: "v1.2.0"
 
 ## 現在の提供状況
 
-このページは[`v1.6.0`](https://github.com/n624-dev/latex-renderer/releases/tag/v1.6.0)のサーバーbundleを対象にします。バージョンが`-rc.N`のReleaseは指定された検証hostだけへ明示適用し、一般利用者はStableを使用してください。Cloudflare構成に加えて、通常のTLSリバースプロキシとOIDC／ローカルパスワード認証を選択できます。このReleaseは公開後にタグや配布ファイルを差し替えできない設定で固定され、次を含みます。
+このページは[`v1.6.1`](https://github.com/n624-dev/latex-renderer/releases/tag/v1.6.1)のサーバーbundleを対象にします。バージョンが`-rc.N`のReleaseは指定された検証hostだけへ明示適用し、一般利用者はStableを使用してください。Cloudflare構成に加えて、通常のTLSリバースプロキシとOIDC／ローカルパスワード認証を選択できます。このReleaseは公開後にタグや配布ファイルを差し替えできない設定で固定され、次を含みます。
 
-- `latex-renderer-server-1.6.0.tar.gz`
+- `latex-renderer-server-1.6.1.tar.gz`
 - クライアントZIPとClaude Desktop用MCPB
 - 3つの配布ファイルを検証する`SHA256SUMS`
 - commit、バージョン、Renderer fingerprint、Node.js／pnpm要件を記録したbundle内metadata
@@ -30,7 +30,7 @@ Akebi は v1.6 RC から利用できます。LAN の IP アドレスから決ま
 
 ## 対応する構成
 
-v1.6.0ではPassword＋OIDCの同時利用と、確認済み認証設定の切替・中断復旧を利用できます。
+v1.6.1ではPassword＋OIDCの同時利用と、確認済み認証設定の切替・中断復旧を利用できます。
 併用時は`AUTH_BACKEND=native`、`AUTH_PASSWORD_ENABLED=true`、`AUTH_OIDC_ENABLED=true`を設定します。
 従来の`AUTH_MODE`は単一方式の互換設定です。初回セットアップと認証設定画面で方式を明示し、`main`を本番へ直接反映しないでください。
 
@@ -99,14 +99,14 @@ v1.6.0ではPassword＋OIDCの同時利用と、確認済み認証設定の切�
 
 公開リポジトリの`*.example`ファイルは項目確認のための雛形です。設定済みファイルを雛形へ上書きしてcommitする運用はしません。
 
-## v1.6.0をダウンロードして検証
+## v1.6.1をダウンロードして検証
 
 初回導入には以下の固定版の検証手順を使います。過去RCから更新する場合だけ、[RC固有の互換性情報](/docs/reference/#過去rcのrenderer識別情報)を先に確認してください。
 
 次のコマンドは、固定されたReleaseであることをGitHub APIで確認し、APIが返すdigestとダウンロードしたbundleを照合します。通常の非rootユーザーで実行します。
 
 ```bash
-version=1.6.0
+version=1.6.1
 repository=n624-dev/latex-renderer
 asset="latex-renderer-server-$version.tar.gz"
 work_dir=$(mktemp -d)
@@ -159,7 +159,7 @@ command -v unzip
 
 RC.1以前でこの不足により更新が失敗した場合、`current`だけが新版へ切り替わり、新旧のサービス設定が混在している可能性があります。同じ更新コマンドを再実行せず、稼働サービス・DB migration・バックアップの状態を先に確認してください。DBが更新済みならコードだけを旧版へ戻してはいけません。
 
-Stable v1.6.0 の導入スクリプトの前に、Node.js 24 LTS、`/usr/local/bin/node`、`/usr/local/bin/corepack`、Docker Engineのrootless用toolを準備します。`cloudflare` profileだけはcloudflaredも必要です。Update Managerはbundle metadataに記録されたpnpmをCorepackでデプロイ用ユーザーへ導入し、実行前に版を照合します。インストール元はそれぞれの公式ドキュメントを使用し、第三者の非公式スクリプトをrootで実行しません。
+Stable v1.6.1 の導入スクリプトの前に、Node.js 24 LTS、`/usr/local/bin/node`、`/usr/local/bin/corepack`、Docker Engineのrootless用toolを準備します。`cloudflare` profileだけはcloudflaredも必要です。Update Managerはbundle metadataに記録されたpnpmをCorepackでデプロイ用ユーザーへ導入し、実行前に版を照合します。インストール元はそれぞれの公式ドキュメントを使用し、第三者の非公式スクリプトをrootで実行しません。
 
 ```bash
 /usr/local/bin/node --version
