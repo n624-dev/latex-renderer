@@ -1,4 +1,7 @@
 export const INITIAL_APPLICATION_UNITS: readonly string[];
+export function requireInitialApplicationStopped(
+  systemctl?: (...args: string[]) => string,
+): void;
 export function prepareServerApplication(): Promise<void>;
 export function prepareServerSetupMutationLock(): Promise<void>;
 export function prepareRuntimeMutationLockForPath(

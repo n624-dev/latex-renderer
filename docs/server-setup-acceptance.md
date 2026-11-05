@@ -5,6 +5,18 @@ Do not run it on the production VPS or reuse real secrets/owners/backups.
 Record exact release commit, OS/Node/Docker versions and observed outcomes.
 Linux fixtures and source/unit contract tests are not substitutes for this run.
 
+Release and branch update-validation builds also run a limited fresh-host
+preflight on an empty Ubuntu 24.04 GitHub-hosted runner. It verifies the pinned
+artifact, assembles the same job's build outputs, installs the actual application
+units and exercises both custom-TLS and automatic-LAN previews with real systemd
+and a private dummy interface. It checks an idled dedicated Docker engine's
+scoped restart and lock release. No owner or configuration is committed, no
+public CA is contacted, and no document rendering is claimed by that preflight.
+The installed-host update job separately rebuilds the same source with a fresh
+MCPB signature and verifies that deployment reuses the original immutable
+publication successfully. Full frontend, authentication, CA and fault-boundary
+acceptance below remains separate.
+
 1. Prepare a disposable host using the documented OS/account/rootless-Docker
    prerequisites. Preparation is outside the wizard. Install normal Updater
    verification tools and operator-selected CA trust. Do not add production

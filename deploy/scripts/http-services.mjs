@@ -385,6 +385,16 @@ export function prepareHttpActivation(
   ]) {
     const socket = httpSocketUnit(unit);
     if (properties(socket, run).LoadState !== "loaded") continue;
+    if (
+      unit === "latex-renderer-admin-web.service" &&
+      properties(unit, run).LoadState !== "loaded"
+    ) {
+      // Fresh hosts install the current Web service, not the legacy alias.
+      // Its compatibility socket must not activate a nonexistent backend.
+      run("stop", socket);
+      run("disable", socket);
+      continue;
+    }
     let wasEnabled = false;
     try {
       wasEnabled = run("is-enabled", socket).trim() === "enabled";

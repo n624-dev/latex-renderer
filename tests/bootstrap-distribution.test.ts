@@ -107,14 +107,15 @@ it.each([
         ...process.env,
         deployment_mode: mode,
         build_root: "/fresh build",
+        published_root: "/verified publication",
       },
       encoding: "utf8",
     },
   );
   expect(result.status, result.stderr).toBe(0);
   expect(result.stdout.trim().split("\n")).toEqual([
-    `/fresh build/${client}`,
-    `/fresh build/${mcpb}`,
+    `${mode === "standalone" ? "/verified publication" : "/fresh build"}/${client}`,
+    `${mode === "standalone" ? "/verified publication" : "/fresh build"}/${mcpb}`,
   ]);
   expect(driver).toContain('"$mcpb_base" "$local_mcpb_manifest_path"');
   expect(driver).toContain(

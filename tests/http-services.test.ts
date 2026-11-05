@@ -269,6 +269,35 @@ it("prepares matching service definitions and releases sockets for legacy rollba
   }
 });
 
+it("disables a compatibility socket without disabling an absent legacy service on fresh hosts", () => {
+  const source = join(process.cwd());
+  const calls: string[][] = [];
+  const run = (...args: string[]) => {
+    calls.push(args);
+    const name = args.at(-1) ?? "";
+    if (args[0] === "show")
+      return `LoadState=${name.endsWith("admin-web.service") ? "not-found" : "loaded"}\nActiveState=inactive\n`;
+    if (args[0] === "disable" && name.endsWith("admin-web.service"))
+      throw new Error("Unit does not exist");
+    return "disabled\n";
+  };
+  const directory = mkdtempSync(join(tmpdir(), "fresh-http-"));
+  try {
+    prepareHttpActivation(source, { run, unitRoot: directory, values: {} });
+    expect(calls).toContainEqual([
+      "disable",
+      "latex-renderer-admin-web.socket",
+    ]);
+    expect(calls).not.toContainEqual([
+      "disable",
+      "latex-renderer-admin-web.service",
+    ]);
+    expect(calls).toContainEqual(["disable", "latex-renderer-web.service"]);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 it("keeps supported passive health available through settings preparation and closes it for legacy targets", () => {
   const directory = mkdtempSync(join(tmpdir(), "passive-preparation-"));
   try {

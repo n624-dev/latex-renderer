@@ -12,6 +12,55 @@ const ingress = validateServerIngressReview({
 const row = (address: string, port: number) =>
   `LISTEN 0 512 ${address}:${port} 0.0.0.0:*`;
 describe("read-only prepared-host network boundary", () => {
+  it("checks a new LAN backend as free rather than requiring it to exist", () => {
+    const automatic = validateServerIngressReview({
+      ...ingress,
+      accessScope: "lan",
+      listenAddress: "192.168.1.50",
+      allowedNetworks: ["192.168.1.0/24"],
+      publicOrigin: "https://192-168-1-50.lan.example.test",
+      tlsProvider: "automatic",
+      lanHttps: {
+        format: 1,
+        issuerId: "zerossl",
+        termsAccepted: true,
+        provider: {
+          format: 1,
+          provider: "akebi-local-acme",
+          serverOrigin: "https://akebi.example.test",
+          lanDomain: "lan.example.test",
+          address: "192.168.1.50",
+          keylessFallback: false,
+        },
+      },
+    });
+    const sockets = [3100, 3101, 3102, 3103, 3104, 3105, 3110]
+      .map((port) => row("127.0.0.1", port))
+      .join("\n");
+    expect(() =>
+      assertServerSetupSockets(sockets, automatic, {
+        requireInternal: true,
+        checkLanBackendPort: true,
+      }),
+    ).not.toThrow();
+    expect(() =>
+      assertServerSetupSockets(
+        sockets + "\n" + row("127.0.0.1", 3180),
+        automatic,
+        { requireInternal: true, checkLanBackendPort: true },
+      ),
+    ).toThrow("3180 is occupied");
+    expect(() =>
+      assertServerSetupSockets(sockets, automatic, { requireInternal: true }),
+    ).toThrow("unavailable");
+    expect(() =>
+      assertServerSetupSockets(
+        sockets + "\n" + row("127.0.0.1", 3180),
+        automatic,
+        { requireInternal: true },
+      ),
+    ).not.toThrow();
+  });
   it("accepts empty fresh ports and ignores unrelated co-hosted listeners", () => {
     expect(() =>
       assertServerSetupSockets(row("127.0.0.1", 19999), ingress, {

@@ -36,6 +36,9 @@ export const INITIAL_APPLICATION_UNITS = Object.freeze([
   "latex-renderer-standalone-gateway.service",
   "latex-renderer-standalone-gateway.socket",
   "latex-renderer-ingress.service",
+  "latex-renderer-lan-https.service",
+  "latex-renderer-lan-renew.service",
+  "latex-renderer-lan-renew.timer",
   "latex-renderer-image-manager.service",
   "latex-renderer-image-manager.socket",
   "latex-renderer-update-manager.socket",
@@ -59,6 +62,29 @@ export const INITIAL_APPLICATION_UNITS = Object.freeze([
   "latex-renderer-update-recovery-gc.service",
   "latex-renderer-update-recovery-gc.timer",
 ]);
+
+// Templates are installed but cannot be queried as live instances by systemd.
+export function requireInitialApplicationStopped(
+  systemctl = (...args) => run("/usr/bin/systemctl", args),
+) {
+  for (const unit of INITIAL_APPLICATION_UNITS) {
+    if (unit.includes("@.")) continue;
+    const state = systemctl(
+      "show",
+      "--property=ActiveState",
+      "--value",
+      unit,
+    ).trim();
+    if (
+      !["inactive", "failed"].includes(state) &&
+      !(
+        unit === "latex-renderer-authentication-recovery.service" &&
+        state === "active"
+      )
+    )
+      throw new Error("Initial application services must be stopped");
+  }
+}
 async function absent(path) {
   const entry = await lstat(path).catch((error) => {
     if (error.code === "ENOENT") return null;
@@ -249,22 +275,7 @@ export async function prepareServerApplication() {
   const socket = await lstat(`/run/user/${worker}/docker.sock`);
   if (!socket.isSocket() || socket.uid !== worker)
     throw new Error("Prepared rootless Docker required");
-  for (const unit of INITIAL_APPLICATION_UNITS) {
-    const state = run("/usr/bin/systemctl", [
-      "show",
-      "--property=ActiveState",
-      "--value",
-      unit,
-    ]).trim();
-    if (
-      !["inactive", "failed"].includes(state) &&
-      !(
-        unit === "latex-renderer-authentication-recovery.service" &&
-        state === "active"
-      )
-    )
-      throw new Error("Initial application services must be stopped");
-  }
+  requireInitialApplicationStopped();
   for (const [path, owner, mode] of [
     ["/etc/latex-renderer", 0, 0o750],
     ["/etc/latex-renderer/secrets", 0, 0o750],
@@ -324,6 +335,12 @@ export async function prepareServerApplication() {
       mode: 0o644,
       maximum: 64 * 1024,
     };
+    files.lanJournal = {
+      path: "/etc/systemd/journald@latex-renderer-lan.conf",
+      gid: 0,
+      mode: 0o644,
+      maximum: 64 * 1024,
+    };
     files.tmpfiles = {
       path: "/etc/tmpfiles.d/latex-renderer-image-manager.conf",
       gid: 0,
@@ -345,11 +362,13 @@ export async function prepareServerApplication() {
       const source =
         name === "seccomp"
           ? `${release}/deploy/security/seccomp.json`
-          : name === "tmpfiles"
-            ? `${release}/deploy/tmpfiles.d/latex-renderer-image-manager.conf`
-            : name === "recoveryEntry"
-              ? `${release}/deploy/scripts/update-recovery-entry.mjs`
-              : `${release}/deploy/systemd/${INITIAL_APPLICATION_UNITS[Number(name.slice(4))]}`;
+          : name === "lanJournal"
+            ? `${release}/deploy/systemd/journald@latex-renderer-lan.conf`
+            : name === "tmpfiles"
+              ? `${release}/deploy/tmpfiles.d/latex-renderer-image-manager.conf`
+              : name === "recoveryEntry"
+                ? `${release}/deploy/scripts/update-recovery-entry.mjs`
+                : `${release}/deploy/systemd/${INITIAL_APPLICATION_UNITS[Number(name.slice(4))]}`;
       const info = await lstat(source);
       if (
         ![0, gid].includes(info.gid) ||

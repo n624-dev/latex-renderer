@@ -6,6 +6,7 @@ Before=latex-renderer-api.service latex-renderer-internal-api.service latex-rend
 Before=latex-renderer-web.service latex-renderer-standalone-gateway.service
 Before=latex-renderer-ingress.service
 Before=latex-renderer-update-manager.service
+Before=latex-renderer-status.socket
 
 [Service]
 Type=oneshot

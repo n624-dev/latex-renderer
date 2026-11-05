@@ -48,16 +48,23 @@ Prepared accounts: `latex-renderer`, `latex-renderer-web`, `latex-render-worker`
 `latex-renderer-backup`, `latex-renderer-update` and group `latex-renderer`.
 Tooling includes Node at `/usr/local/bin/node`, age, Nginx, Docker, ACL tools,
 runuser/flock, systemd, sudo/visudo and normal Updater verification/build tools.
-The worker's rootless Docker must run and the chosen immutable renderer image
-must already exist. Review does not pull/build an image. Choose an existing
+For first installation the worker's rootless Docker must be prepared/running,
+and the chosen immutable renderer image must already exist. On an existing
+compact host, ingress review wakes only the dedicated worker Docker service,
+checks readiness under an engine lease and releases that lease when inspection
+finishes, allowing normal idle collection to resume. Review does not pull/build
+an image. Choose an existing
 non-root deployment user with a non-root primary group for later Updater builds.
 The Docker worker must belong to the application service group. Missing
 prerequisites fail; the wizard never changes group membership to repair them.
 
 Ingress scope requires an existing dedicated managed standalone/custom TLS
 service. Owner/auth/image/keys and unknown environment settings are preserved.
-Legacy global Nginx migration and automatic certificate issuance are not
-supported. Existing Cloudflare connector/Access settings are not rewritten.
+Legacy global Nginx migration is not supported. Managed standalone/custom TLS
+can be changed to automatic LAN HTTPS, including the local ACME and optional
+Keyless choices described in the [LAN HTTPS guide](akebi-lan-https.md).
+Existing Cloudflare connector/Access settings are not rewritten by ingress
+scope; Cloudflare remains a separate deployment choice.
 
 ## Review and secrets
 
@@ -80,6 +87,15 @@ custom TLS are separate transient inputs. Web accepts PEM contents; CUI reads
 bounded regular PEM files without following symlinks. Password confirmation and
 the actual runtime hashing/password policy apply. TLS checks hostname, validity
 and matching certificate/key. Never put secrets in JSON, argv, URLs or logs.
+
+Automatic LAN HTTPS uses a non-secret provider/address/domain review and explicit
+CA terms acceptance for local ACME. It generates the installation's keys locally;
+do not supply a shared certificate/private key. Web and CUI support the same
+provider and fallback settings. Optional invitation codes are separate secret
+inputs bound to the selected authority. Operating a self-hosted authority has
+its own protected CA/EAB configuration; these credentials are never wizard JSON
+or client-side registration secrets. Custom TLS continues to use the separately
+provided certificate/key, and Cloudflare does not require LAN CA enrollment.
 
 Password + OIDC bootstraps with Password; register OIDC identity explicitly
 afterwards. OIDC-only/Access use exact issuer + subject, never email auto-linking.

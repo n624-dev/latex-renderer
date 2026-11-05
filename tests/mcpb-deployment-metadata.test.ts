@@ -30,7 +30,7 @@ describe("MCPB deployment metadata", () => {
     // and the unprivileged signature verifier; branch selection is exercised
     // by bootstrap-distribution.test.ts.
     expect(deploy).toContain(
-      'local_mcpb_manifest_path="$build_root/client-dist/mcpb.json"',
+      'local_mcpb_manifest_path="$published_root/client-dist/mcpb.json"',
     );
     expect(deploy).toContain(
       'local_mcpb_manifest_path="$build_root/apps/public-web/dist/downloads/mcpb/mcpb.json"',

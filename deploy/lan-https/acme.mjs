@@ -10,7 +10,7 @@ import { Agent } from "node:https";
 import { validateLanHttpsProvider } from "../../packages/server-setup-core/src/lan-https.mjs";
 import { canonicalLanHttpsAcmePublicKey } from "./eab.mjs";
 import { lanHttpsManagementHostname } from "./authority-store.mjs";
-import { checkedLanHttpsOrder } from "./order-journal.mjs";
+import { checkedLanHttpsOrder, normalizeLanHttpsOrder } from "./order-journal.mjs";
 
 const caOrigins = new Set();
 let transportConfigured = false;
@@ -367,14 +367,14 @@ export async function issueLanHttpsCertificate({
         request.hostnames,
         accountUrl,
       );
-      order = checkedLanHttpsOrder(
+      order = normalizeLanHttpsOrder(
         await client.getOrder(local),
         request.hostnames,
         accountUrl,
       );
       if (order.url !== local.url) throw new Error("ACME order URL changed");
     } else {
-      order = checkedLanHttpsOrder(
+      order = normalizeLanHttpsOrder(
         await client.createOrder({
           identifiers: request.hostnames.map((value) => ({
             type: "dns",
@@ -453,7 +453,7 @@ export async function issueLanHttpsCertificate({
           }
         }
       }
-      const refreshed = checkedLanHttpsOrder(
+      const refreshed = normalizeLanHttpsOrder(
         await client.getOrder(order),
         request.hostnames,
         accountUrl,
@@ -464,7 +464,7 @@ export async function issueLanHttpsCertificate({
       journal?.save(order, csr);
     }
     if (order.status === "ready") {
-      const finalized = checkedLanHttpsOrder(
+      const finalized = normalizeLanHttpsOrder(
         await client.finalizeOrder(order, csr),
         request.hostnames,
         accountUrl,
