@@ -33,6 +33,8 @@ import {
   installationUnitActive,
 } from "./server-install-transaction.mjs";
 import { acquireMutationLock } from "./mutation-lock.mjs";
+import { withScopedContainerEngine } from "./on-demand-engine.mjs";
+import { runtimeEnvironment } from "./runtime-mode.mjs";
 import {
   prepareApplicationDatabase,
   applicationDatabaseIdentity,
@@ -558,24 +560,29 @@ export async function createInitialServerSetupHost(kind = "initial") {
         throw new Error(
           "Activate the prepared recovery unit before starting setup",
         );
-      const socket = await lstat(`/run/user/${workerUid}/docker.sock`);
-      if (!socket.isSocket() || socket.uid !== workerUid)
-        throw new Error("Rootless Docker is not prepared");
-      const inspected = command("/usr/sbin/runuser", [
-        "-u",
-        "latex-render-worker",
-        "--",
-        "/usr/bin/docker",
-        "--host",
-        `unix:///run/user/${workerUid}/docker.sock`,
-        "image",
-        "inspect",
-        "--format",
-        "{{.Id}}",
-        review.runtime.rendererImage,
-      ]);
-      if (!/^sha256:[a-f0-9]{64}\s*$/.test(inspected))
-        throw new Error("Prepared immutable runtime image required");
+      await withScopedContainerEngine(
+        async () => {
+          const socket = await lstat(`/run/user/${workerUid}/docker.sock`);
+          if (!socket.isSocket() || socket.uid !== workerUid)
+            throw new Error("Rootless Docker is not prepared");
+          const inspected = command("/usr/sbin/runuser", [
+            "-u",
+            "latex-render-worker",
+            "--",
+            "/usr/bin/docker",
+            "--host",
+            `unix:///run/user/${workerUid}/docker.sock`,
+            "image",
+            "inspect",
+            "--format",
+            "{{.Id}}",
+            review.runtime.rendererImage,
+          ]);
+          if (!/^sha256:[a-f0-9]{64}\s*$/.test(inspected))
+            throw new Error("Prepared immutable runtime image required");
+        },
+        kind === "ingress" ? runtimeEnvironment(env) : {},
+      );
       if (review.deployment.ingress.tlsProvider === "automatic") {
         for (const unit of [lanUnit, lanTimer, lanRenew])
           if (

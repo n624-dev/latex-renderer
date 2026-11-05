@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 1.6.1-rc.1 - 2026-11-05
+
+- Fix fresh prepared-host setup: install LAN HTTPS and renewal units, skip bare template state queries, declare passive-status recovery ordering and handle the absent legacy Web service (#296, #298–#300).
+- Allow conversion to automatic LAN HTTPS without requiring its new backend listener to be running; wake the dedicated compact Docker engine only for the scoped configuration inspection (#301, #303).
+- Normalize bounded ACME extension fields before saving strict order journals, preserving identity checks and order reuse across interrupted issuance (#297).
+- Verify client and MCPB downloads against the immutable release actually published when rebuilt signatures differ, while retaining checksum and CMS verification (#304).
+- Cover fresh setup with real systemd/rootless Docker and repeated same-source publication in release validation. Update LAN HTTPS setup documentation (#302).
+
 ## 1.6.0 - 2026-11-04
 
 - Promote validated 1.6.0-rc.2 to Stable with matching executable behavior, dependencies and configuration defaults.

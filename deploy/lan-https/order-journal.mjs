@@ -15,6 +15,44 @@ function publicDigest(key) {
     .digest("hex");
 }
 
+// ACME extensions belong to the wire protocol, not to the private journal.
+// RFC 8555 requires unknown response fields to be ignored. Project only the
+// bounded fields used here, then apply the same name/URL/state validation as
+// persisted records. Never make the on-disk schema permissive.
+export function normalizeLanHttpsOrder(order, hostnames, accountUrl) {
+  if (
+    !order ||
+    typeof order !== "object" ||
+    Array.isArray(order) ||
+    Buffer.byteLength(JSON.stringify(order)) > 512 * 1024
+  )
+    throw new Error("Invalid bounded ACME order response");
+  const normalized = Object.fromEntries(
+    [
+      "url",
+      "status",
+      "expires",
+      "identifiers",
+      "authorizations",
+      "finalize",
+      "certificate",
+    ]
+      .filter((key) => Object.hasOwn(order, key))
+      .map((key) => [key, order[key]]),
+  );
+  if (Array.isArray(normalized.identifiers))
+    normalized.identifiers = normalized.identifiers.map((identifier) => {
+      if (
+        !identifier ||
+        typeof identifier !== "object" ||
+        Array.isArray(identifier)
+      )
+        throw new Error("Invalid ACME order identifier");
+      return { type: identifier.type, value: identifier.value };
+    });
+  return checkedLanHttpsOrder(normalized, hostnames, accountUrl);
+}
+
 export function checkedLanHttpsOrder(order, hostnames, accountUrl) {
   profileRecord(order, "ACME order", [
     "url",

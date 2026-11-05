@@ -9,7 +9,10 @@ import {
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { LanHttpsClientState } from "../deploy/lan-https/client-state.mjs";
-import { LanHttpsOrderJournal } from "../deploy/lan-https/order-journal.mjs";
+import {
+  LanHttpsOrderJournal,
+  normalizeLanHttpsOrder,
+} from "../deploy/lan-https/order-journal.mjs";
 import {
   issueLanHttpsCertificate,
   LanHttpsIssuanceError,
@@ -18,6 +21,41 @@ import { lanCertificateFixture } from "./fixtures/lan-https.js";
 import type { Order } from "acme-client";
 
 const cleanups: (() => void)[] = [];
+it("ignores bounded remote extensions while preserving names, authority URLs and order states", async () => {
+  const f = await fixture();
+  const names = f.order.identifiers.map((item) => item.value);
+  const account = "https://acme.example.test/account";
+  expect(
+    normalizeLanHttpsOrder(
+      {
+        ...f.order,
+        profile: "classic",
+        identifiers: f.order.identifiers.map((item) => ({
+          ...item,
+          futureExtension: true,
+        })),
+      },
+      names,
+      account,
+    ),
+  ).toEqual(f.order);
+  for (const change of [
+    { url: "https://foreign.example.test/order" },
+    { finalize: "https://acme.example.test/finalize?secret=unexpected" },
+    { status: "unknown" },
+    {
+      identifiers: [
+        { type: "dns", value: "other.example.test" },
+        f.order.identifiers[1],
+      ],
+    },
+    { authorizations: ["https://foreign.example.test/authz"] },
+    { futureExtension: "x".repeat(512 * 1024) },
+  ])
+    expect(() =>
+      normalizeLanHttpsOrder({ ...f.order, ...change }, names, account),
+    ).toThrow();
+});
 afterEach(() => {
   while (cleanups.length) cleanups.pop()?.();
 });
@@ -63,6 +101,49 @@ async function fixture() {
 }
 
 describe("bounded durable ACME order journal", () => {
+  it("persists a CA order with extension fields before a failure and resumes it without another newOrder", async () => {
+    const f = await fixture();
+    const create = f.client.createOrder.bind(f.client);
+    f.client.createOrder = async (input) => ({
+      ...(await create(input)),
+      profile: "classic",
+      futureExtension: { enabled: true },
+    });
+    const verify = f.client.verifyChallenge.bind(f.client);
+    f.client.verifyChallenge = () =>
+      Promise.reject(new Error("interrupted after order creation"));
+    await expect(issueLanHttpsCertificate(f.options)).rejects.toThrow(
+      "issuance failed",
+    );
+    expect(f.journal.load()?.order.url).toBe(f.order.url);
+    expect(f.journal.load()?.order).not.toHaveProperty("profile");
+    f.client.verifyChallenge = verify;
+    f.client.getOrder = () =>
+      Promise.resolve({
+        ...f.order,
+        status: "ready",
+        profile: "classic",
+        futureExtension: "ignored",
+      });
+    const finalize = f.client.finalizeOrder.bind(f.client);
+    f.client.finalizeOrder = async (order, csr) => ({
+      ...(await finalize(order, csr)),
+      profile: "classic",
+    });
+    await expect(issueLanHttpsCertificate(f.options)).resolves.toHaveProperty(
+      "certificate",
+      f.certificate,
+    );
+    expect(f.events.filter((event) => event === "order")).toHaveLength(1);
+    const stored = JSON.parse(
+      readFileSync(join(f.root, "order.json"), "utf8"),
+    ) as { pending: { order: Record<string, unknown> } };
+    stored.pending.order.futureExtension = true;
+    writeFileSync(join(f.root, "order.json"), JSON.stringify(stored), {
+      mode: 0o600,
+    });
+    expect(() => f.journal.load()).toThrow("state was retained");
+  });
   it("survives restart, refuses changed keys/settings, and retains one order", async () => {
     const f = await fixture();
     f.journal.save(f.order, f.request.csr);

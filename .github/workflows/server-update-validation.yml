@@ -96,6 +96,22 @@ jobs:
             "$artifact" "$VERSION_TAG" "$GITHUB_SHA" "$digest" "$ATTESTATION_BUNDLE" "$GITHUB_REF"
           node -e 'const fs=require("node:fs");fs.writeFileSync(process.argv[2],JSON.stringify(JSON.parse(fs.readFileSync(process.argv[1],"utf8")))+"\n")' \
             "$ATTESTATION_BUNDLE" "$RUNNER_TEMP/validation-assets/PROVENANCE.jsonl"
+      - name: Check fresh setup with real systemd and an idle rootless engine
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.source.outputs.version-tag }}
+          SOURCE_COMMIT: ${{ steps.source.outputs.commit }}
+        run: |
+          set -euo pipefail
+          sudo install -o root -g root -m 0755 "$(command -v node)" /usr/local/bin/node
+          sudo npm install --global --prefix /usr/local corepack@0.34.6
+          artifact="$RUNNER_TEMP/validation-assets/latex-renderer-server-${RELEASE_TAG#v}.tar.gz"
+          digest="sha256:$(sha256sum "$artifact" | cut -d' ' -f1)"
+          sudo --preserve-env=GH_TOKEN env RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" GITHUB_ACTIONS="$GITHUB_ACTIONS" \
+            GITHUB_RUN_ID="$GITHUB_RUN_ID" \
+            /usr/local/bin/node deploy/ci/fresh-setup-preflight.mjs \
+            "$artifact" "$RELEASE_TAG" "$SOURCE_COMMIT" "$digest" \
+            "$RUNNER_TEMP/validation-assets/PROVENANCE.jsonl" "$GITHUB_REF"
       - name: Transfer bounded validation artifacts (not a build cache)
         id: assets
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

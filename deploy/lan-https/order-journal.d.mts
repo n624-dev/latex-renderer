@@ -5,6 +5,11 @@ export function checkedLanHttpsOrder(
   hostnames: readonly string[],
   accountUrl: string,
 ): Order;
+export function normalizeLanHttpsOrder(
+  order: unknown,
+  hostnames: readonly string[],
+  accountUrl: string,
+): Order;
 export interface LanHttpsIssuanceJournal {
   load(): { order: Order; csr: Buffer } | null;
   save(order: Order, csr: Buffer): void;

@@ -60,7 +60,7 @@ export async function acquireEngineLock({
 export function workerEngineCommand(
   command,
   args,
-  { run = execFileSync } = {},
+  { run = execFileSync, timeout = 120000 } = {},
 ) {
   const uid = Number(
     run("/usr/bin/id", ["-u", "latex-render-worker"], {
@@ -94,20 +94,20 @@ export function workerEngineCommand(
         command,
         ...args,
       ],
-      { encoding: "utf8", timeout: 120000, stdio: ["ignore", "pipe", "pipe"] },
+      { encoding: "utf8", timeout, stdio: ["ignore", "pipe", "pipe"] },
     );
   if (process.getuid() !== uid)
     throw new Error("Only the dedicated worker can control its engine");
   return run(command, args, {
     env,
     encoding: "utf8",
-    timeout: 120000,
+    timeout,
     stdio: ["ignore", "pipe", "pipe"],
   });
 }
 
 let engineReady;
-async function prepareEngine() {
+async function prepareEngineLease() {
   const deadline = Date.now() + 120000;
   let lock;
   while (!lock) {
@@ -124,14 +124,64 @@ async function prepareEngine() {
       "start",
       "docker.service",
     ]);
-    // Retain one shared FD for this short-lived consumer. In particular memory
-    // sampling must not spawn systemctl/flock helpers once per second.
-    process.once("beforeExit", () => {
-      void lock.release();
-    });
+    return lock;
   } catch (error) {
     await lock.release();
     throw error;
+  }
+}
+async function prepareEngine() {
+  const lock = await prepareEngineLease();
+  // Retain one shared FD for short-lived consumers such as memory sampling.
+  process.once("beforeExit", () => {
+    void lock.release();
+  });
+}
+
+async function prepareScopedEngine() {
+  const lock = await prepareEngineLease();
+  try {
+    const deadline = Date.now() + 30000;
+    while (true) {
+      let output;
+      try {
+        output = workerEngineCommand(
+          "/usr/bin/docker",
+          ["info", "--format", "{{json .SecurityOptions}}"],
+          { timeout: Math.max(1, deadline - Date.now()) },
+        );
+      } catch (error) {
+        if (Date.now() >= deadline)
+          throw new Error("Dedicated rootless Docker did not become ready", {
+            cause: error,
+          });
+        await delay(500);
+        continue;
+      }
+      const security = JSON.parse(output);
+      if (!Array.isArray(security) || !security.includes("name=rootless"))
+        throw new Error("Dedicated rootless Docker identity is invalid");
+      return lock;
+    }
+  } catch (error) {
+    await lock.release();
+    throw error;
+  }
+}
+
+// A setup Web session may live for hours. Hold protection only around the
+// review/inspection, so idle collection can resume after that operation ends.
+export async function withScopedContainerEngine(
+  operation,
+  environment = process.env,
+  { prepare = prepareScopedEngine } = {},
+) {
+  if (runtimeMode(environment) !== "compact") return operation();
+  const lock = await prepare();
+  try {
+    return await operation();
+  } finally {
+    await lock.release();
   }
 }
 export async function withContainerEngine(

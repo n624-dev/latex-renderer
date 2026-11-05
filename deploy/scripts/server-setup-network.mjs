@@ -44,7 +44,9 @@ export function assertServerSetupSockets(output, ingress, options = {}) {
   }
   if (options.requireInternal) {
     const required = ports.filter(
-      (port) => port !== 3105 || ingress.mode === "standalone",
+      (port) =>
+        (port !== 3105 || ingress.mode === "standalone") &&
+        (port !== 3180 || !options.checkLanBackendPort),
     );
     if (
       required.some((port) => !listeners.some((entry) => entry.port === port))
