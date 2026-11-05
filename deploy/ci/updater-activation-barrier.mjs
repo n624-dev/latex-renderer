@@ -12,8 +12,30 @@ import {
 import { join } from "node:path";
 import { setTimeout } from "node:timers/promises";
 import { promisify } from "node:util";
+import { performance } from "node:perf_hooks";
 
 const execute = promisify(execFile);
+export async function waitForControllerState(
+  read,
+  {
+    now = () => performance.now(),
+    wait = () => setTimeout(250),
+    timeoutMs = 30_000,
+  } = {},
+) {
+  const deadline = now() + timeoutMs;
+  while (now() < deadline) {
+    try {
+      return await read();
+    } catch (error) {
+      if (error.code !== "UPDATER_CONTROLLER_UNAVAILABLE") throw error;
+    }
+    await wait();
+  }
+  throw new Error(
+    "Installed controller did not become ready before the probe deadline",
+  );
+}
 export function activationBarrierControllerSource({
   socket,
   committed,
@@ -167,7 +189,9 @@ export async function verifyActivationCommitBarrier(slots) {
       throw new Error("Committed application did not activate its Updater");
     const { controllerIdle, readControllerState } =
       await import("/usr/local/libexec/latex-renderer-updater-activation.mjs");
-    const state = await readControllerState();
+    // Type=simple start completes before Node binds its Unix listener. Only
+    // transient readiness errors may be waited out; invalid/auth state fails.
+    const state = await waitForControllerState(readControllerState);
     if (
       !controllerIdle(state) ||
       JSON.stringify(Object.keys(state).sort()) !==

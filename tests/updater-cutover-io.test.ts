@@ -24,7 +24,10 @@ import {
 } from "../deploy/scripts/updater-activation.mjs";
 import { prepareUpdaterTransport } from "../deploy/scripts/updater-transport.mjs";
 import { acquireMutationLockForPath } from "../deploy/scripts/mutation-lock.mjs";
-import { activationBarrierControllerSource } from "../deploy/ci/updater-activation-barrier.mjs";
+import {
+  activationBarrierControllerSource,
+  waitForControllerState,
+} from "../deploy/ci/updater-activation-barrier.mjs";
 
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => {
@@ -72,6 +75,44 @@ async function listener(
   return { tokenFile, socketPath, paths };
 }
 const idle = { activeOperationId: null, lastError: null };
+it("waits for the installed controller's listener rather than treating process startup as API readiness", async () => {
+  const unavailable = Object.assign(new Error("listener not ready"), {
+    code: "UPDATER_CONTROLLER_UNAVAILABLE",
+  });
+  const read = vi
+    .fn()
+    .mockRejectedValueOnce(unavailable)
+    .mockRejectedValueOnce(unavailable)
+    .mockResolvedValue(idle);
+  let clock = 0;
+  const wait = () => {
+    clock += 250;
+    return Promise.resolve();
+  };
+  expect(
+    await waitForControllerState(read, {
+      now: () => clock,
+      wait,
+      timeoutMs: 1000,
+    }),
+  ).toEqual(idle);
+  expect(read).toHaveBeenCalledTimes(3);
+  read.mockRejectedValue(unavailable);
+  clock = 0;
+  read.mockClear();
+  await expect(
+    waitForControllerState(read, { now: () => clock, wait, timeoutMs: 1000 }),
+  ).rejects.toThrow("probe deadline");
+  expect(read).toHaveBeenCalledTimes(4);
+});
+it.each(["invalid JSON", "authentication rejected"])(
+  "does not turn %s into a readiness retry",
+  async (message) => {
+    const read = vi.fn().mockRejectedValue(new Error(message));
+    await expect(waitForControllerState(read)).rejects.toThrow(message);
+    expect(read).toHaveBeenCalledOnce();
+  },
+);
 it("reads the authenticated lightweight completion barrier over a real Unix socket", async () => {
   const f = await listener((_req, res) => res.end(JSON.stringify(idle)));
   expect(await readControllerState(f)).toEqual(idle);
