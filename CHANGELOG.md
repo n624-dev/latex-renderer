@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 1.6.1 - 2026-11-05
+
+- Promote validated 1.6.1-rc.1 to Stable with matching executable behavior, dependencies and configuration defaults.
+- Fix prepared-host setup and LAN HTTPS preflight, preserve ACME orders with extension fields, and verify immutable publication reuse across rebuilt signatures (#296–#304).
+- Include real-systemd fresh setup and repeated-deployment release validation, and update Stable installation guidance.
+
 ## 1.6.1-rc.1 - 2026-11-05
 
 - Fix fresh prepared-host setup: install LAN HTTPS and renewal units, skip bare template state queries, declare passive-status recovery ordering and handle the absent legacy Web service (#296, #298–#300).
