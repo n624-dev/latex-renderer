@@ -62,6 +62,7 @@ const run = (command, args, options = {}) =>
     stdio: "inherit",
     timeout: 600000,
     ...options,
+    shell: false,
   });
 assert.equal(
   run("/usr/bin/git", ["-c", `safe.directory=${source}`, "rev-parse", "HEAD"], {
@@ -87,7 +88,11 @@ await writeFile(
   withoutUserEnvironmentDefaults(await readFile("/etc/environment", "utf8")),
 );
 for (const key of userEnvironmentKeys) delete process.env[key];
-run("/bin/sh", [join(source, "deploy/scripts/install-host.sh")]);
+execFileSync("/bin/sh", [join(source, "deploy/scripts/install-host.sh")], {
+  stdio: "inherit",
+  timeout: 600000,
+  shell: false,
+});
 await configureDockerRepository(run);
 run("/usr/bin/apt-get", [
   "install",
@@ -97,7 +102,15 @@ run("/usr/bin/apt-get", [
   "docker-ce-rootless-extras",
 ]);
 run("/usr/bin/systemctl", ["stop", "nginx"]);
-run("/bin/sh", [join(source, "deploy/scripts/configure-rootless-docker.sh")]);
+execFileSync(
+  "/bin/sh",
+  [join(source, "deploy/scripts/configure-rootless-docker.sh")],
+  {
+    stdio: "inherit",
+    timeout: 600000,
+    shell: false,
+  },
+);
 // Hosted images can permit the runner to create entries below /opt. Fresh
 // setup deliberately rejects such ancestors. Seal only these directory inodes
 // on this already-guarded empty disposable host; keep the production check and
