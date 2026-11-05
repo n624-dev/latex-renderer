@@ -266,7 +266,6 @@ try {
     "--user",
     "stop",
     "docker.service",
-    "docker.socket",
   ]);
   await assert.rejects(lstat(`/run/user/${workerUid}/docker.sock`), {
     code: "ENOENT",
