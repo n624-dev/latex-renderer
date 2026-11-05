@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import {
   copyFile,
@@ -64,6 +64,26 @@ if (
 const root = await mkdtemp("/opt/latex-renderer/update-staging/ci-");
 const run = (cmd, args, options = {}) =>
   execFileSync(cmd, args, { stdio: "inherit", timeout: 5_400_000, ...options });
+function mcpbSignatureDigest(bytes) {
+  const footer = Buffer.from("MCPB_SIG_END"),
+    marker = Buffer.from("MCPB_SIG_V1");
+  const end = bytes.length - footer.length,
+    start = bytes.lastIndexOf(marker, end);
+  if (
+    end < 0 ||
+    !bytes.subarray(end).equals(footer) ||
+    start < 0 ||
+    start + marker.length + 4 > end
+  )
+    throw new Error("Missing bounded MCPB signature in redeployment fixture");
+  const offset = start + marker.length,
+    size = bytes.readUInt32LE(offset);
+  if (size < 1 || offset + 4 + size !== end)
+    throw new Error("Invalid MCPB signature length in redeployment fixture");
+  return createHash("sha256")
+    .update(bytes.subarray(offset + 4, end))
+    .digest("hex");
+}
 let settingsRoot;
 try {
   const artifact = join(root, "candidate.tar.gz");
@@ -141,6 +161,16 @@ try {
               await readFile(join(assembly, "client-dist/mcpb.json"), "utf8"),
             )
           : null;
+      if (builtMcpb)
+        builtMcpb.signatureDigest = mcpbSignatureDigest(
+          await readFile(
+            join(
+              assembly,
+              "client-dist",
+              `latex-renderer-local-${release.version}.mcpb`,
+            ),
+          ),
+        );
       await deployer.deploySealedAssembly(
         assembly,
         stage,
@@ -952,12 +982,24 @@ try {
       "utf8",
     );
     const publishedMcpb = JSON.parse(before);
+    const publishedSignature = mcpbSignatureDigest(
+      await readFile(
+        join(
+          publishedRoot,
+          "client-dist",
+          `latex-renderer-local-${tag.slice(1)}.mcpb`,
+        ),
+      ),
+    );
     const rebuiltMcpb = await deploy(
       candidate,
       { version: tag.slice(1), tag, commit },
       false,
     );
-    if (rebuiltMcpb.sha256 === publishedMcpb.sha256)
+    if (
+      rebuiltMcpb.sha256 === publishedMcpb.sha256 ||
+      rebuiltMcpb.signatureDigest === publishedSignature
+    )
       throw new Error(
         "Publication reuse must exercise distinct CMS signatures",
       );
