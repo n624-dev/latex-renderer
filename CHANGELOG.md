@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 1.6.2 - 2026-11-06
+
+- Promote validated 1.6.2-rc.1 to Stable with matching executable behavior, dependencies and configuration defaults.
+- Preserve application update completion across independent Updater activation timeouts, interruptions and invalid-state cleanup (#307).
+- Include authenticated lightweight completion checks, bounded transient-read retries and real-systemd regression coverage across five historical host configurations.
+
 ## 1.6.2-rc.1 - 2026-11-06
 
 - Preserve the running update controller when a pre-cutover state request times out or activation cleanup runs before operation completion (#307).
