@@ -23,6 +23,7 @@ import { acquireUpdateBaseline } from "./update-baseline.mjs";
 import { verifyActivationCommitBarrier } from "./updater-activation-barrier.mjs";
 import { retryCiMutation } from "./retry-ci-mutation.mjs";
 import { runCiProcessGroup } from "./process-group.mjs";
+import { verifyPrivateMcpbHandoff } from "./mcpb-metadata-handoff.mjs";
 import {
   brokenUpdaterSource,
   assertStartupRecovery,
@@ -143,7 +144,13 @@ try {
     uid: execFileSync("id", ["-u", deployUser], { encoding: "utf8" }).trim(),
     gid: execFileSync("id", ["-g", deployUser], { encoding: "utf8" }).trim(),
   };
-  const deploy = async (source, release, initialInstall, deployer = helper) => {
+  const deploy = async (
+    source,
+    release,
+    initialInstall,
+    deployer = helper,
+    publishedMcpbRoot = null,
+  ) => {
     const manifest = await deployer.verifyExtractedRelease(release, source);
     const stage = await mkdtemp(
       "/opt/latex-renderer/update-staging/ci-deploy-",
@@ -171,6 +178,13 @@ try {
             ),
           ),
         );
+      if (publishedMcpbRoot)
+        builtMcpb.privateHandoff = await verifyPrivateMcpbHandoff({
+          assembly,
+          stage,
+          publishedRoot: publishedMcpbRoot,
+          identity,
+        });
       await deployer.deploySealedAssembly(
         assembly,
         stage,
@@ -981,32 +995,6 @@ try {
     // fresh bytes; immutable publication must retain the first copy while the
     // deployment verifies the bytes actually served from that copy.
     const publishedRoot = `/opt/latex-renderer/releases/v${tag.slice(1)}-${commit.slice(0, 12)}`;
-    // The deployment identity must exercise the public/private handoff, not
-    // accidentally inherit the application's access to the sealed release.
-    const applicationGid = run("/usr/bin/id", ["-g", "latex-renderer"], {
-      encoding: "utf8",
-      stdio: "pipe",
-    }).trim();
-    const deploymentGroups = run("/usr/bin/id", ["-G", deployUser], {
-      encoding: "utf8",
-      stdio: "pipe",
-    })
-      .trim()
-      .split(/\s+/);
-    if (deploymentGroups.includes(applicationGid))
-      throw new Error(
-        "CI deployment identity must be outside the application group",
-      );
-    run("/usr/sbin/runuser", [
-      "-u",
-      deployUser,
-      "--",
-      "/usr/local/bin/node",
-      "--input-type=module",
-      "-e",
-      'import { readFileSync } from "node:fs"; try { readFileSync(process.argv[1]); throw new Error("Published metadata unexpectedly readable"); } catch (error) { if (error.code !== "EACCES") throw error; }',
-      join(publishedRoot, "client-dist/mcpb.json"),
-    ]);
     const before = await readFile(
       join(publishedRoot, "client-dist/mcpb.json"),
       "utf8",
@@ -1025,6 +1013,8 @@ try {
       candidate,
       { version: tag.slice(1), tag, commit },
       false,
+      helper,
+      publishedRoot,
     );
     if (
       rebuiltMcpb.sha256 === publishedMcpb.sha256 ||
@@ -1045,8 +1035,7 @@ try {
         commit,
         digest,
         distinctSignature: true,
-        deploymentUserOutsideApplicationGroup: true,
-        publishedMetadataPrivate: true,
+        ...rebuiltMcpb.privateHandoff,
       }),
     );
   }
