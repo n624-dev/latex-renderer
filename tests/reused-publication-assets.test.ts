@@ -1,7 +1,15 @@
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { createServer } from "node:http";
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  cp,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { expect, it } from "vitest";
@@ -193,6 +201,61 @@ it.skipIf(process.platform === "win32")(
       expect(() =>
         run(process.execPath, [verifier, downloaded, selected]),
       ).not.toThrow();
+      // Execute the driver's actual private handoff as an ordinary user. Only
+      // ownership changes and runuser are substituted here. The disposable
+      // update CI separately enforces the real cross-user EACCES boundary.
+      const handoff = script
+        .slice(
+          script.indexOf("mcpb_verify_root=$(mktemp"),
+          script.indexOf('cache_buster="release='),
+        )
+        .replaceAll("/usr/local/bin/node", '"$node_binary"');
+      const temporary = join(root, "handoff");
+      await mkdir(temporary);
+      await cp(downloaded, join(temporary, "latex-renderer-local.mcpb"));
+      const privateRoot = execFileSync(
+        "bash",
+        [
+          "-eu",
+          "-c",
+          `
+        mktemp() { command mktemp -d "$temporary_root/private.XXXXXX"; }
+        chown() { return 0; }
+        install() { shift 4; command install "$@"; }
+        runuser() { shift 3; "$@"; }
+        ${handoff}
+        printf '\\n%s' "$mcpb_verify_root"
+      `,
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            source_root: root,
+            temporary_root: temporary,
+            local_mcpb_manifest_path: selected,
+            sync_user: "fixture",
+            sync_group: "fixture",
+            node_binary: process.execPath,
+          },
+        },
+      )
+        .trim()
+        .split("\n")
+        .at(-1);
+      if (!privateRoot)
+        throw new Error("Missing private MCPB handoff directory");
+      try {
+        expect(await readFile(join(privateRoot, "mcpb.json"))).toEqual(
+          await readFile(selected),
+        );
+        expect((await lstat(privateRoot)).mode & 0o777).toBe(0o700);
+        expect((await lstat(join(privateRoot, "mcpb.json"))).mode & 0o777).toBe(
+          0o600,
+        );
+      } finally {
+        await rm(privateRoot, { recursive: true, force: true });
+      }
       expect(() =>
         run(process.execPath, [
           verifier,

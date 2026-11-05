@@ -125,7 +125,18 @@ describe("consumer dependency restart boundaries (no systemd mutation)", () => {
           `
       gateway=active; deployment_mode=${mode}; web_service=fixture-web
       restore_lan_services() { return 0; } # LAN lifecycle has separate cases below.
-      http_control() { case "$1" in restart) gateway=inactive ;; esac; return 0; }
+      http_control() {
+        case "$1" in
+          restart) case " $* " in
+            *" latex-renderer-standalone-gateway.service "*) gateway=active ;;
+            *) gateway=inactive ;;
+          esac ;;
+          ready) case " $* " in
+            *" latex-renderer-standalone-gateway.service "*) [ "$gateway" = active ] || return 1 ;;
+          esac ;;
+        esac
+        return 0
+      }
       systemctl() {
         case "$1" in
           restart) gateway=inactive ;;

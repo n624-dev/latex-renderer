@@ -59,6 +59,10 @@ jobs:
           corepack enable
           sudo apt-get update
           sudo apt-get install --no-install-recommends --yes age acl libarchive-tools nginx-light unzip
+      - name: Validate shipped Caddy configuration with legacy and current releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: sh deploy/ci/check-caddy-versions.sh
       - name: Check pinned branch source and build
         id: source
         run: |

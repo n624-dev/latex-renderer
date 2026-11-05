@@ -870,6 +870,10 @@ try {
     throw new Error("Recovery touched application data");
   if (compactOrigin) {
     // The compact-origin update and independent cutover were exercised above.
+    const { verifyGatewayFailureRecovery } = await import(
+      pathToFileURL(join(candidate, "deploy/ci/gateway-failure-recovery.mjs"))
+    );
+    await verifyGatewayFailureRecovery();
     // The separate HTTP off/on acceptance starts from classic mode; preserve
     // the candidate Runtime/configuration and restore only these idle keys.
     const keys = new Set([
@@ -977,6 +981,32 @@ try {
     // fresh bytes; immutable publication must retain the first copy while the
     // deployment verifies the bytes actually served from that copy.
     const publishedRoot = `/opt/latex-renderer/releases/v${tag.slice(1)}-${commit.slice(0, 12)}`;
+    // The deployment identity must exercise the public/private handoff, not
+    // accidentally inherit the application's access to the sealed release.
+    const applicationGid = run("/usr/bin/id", ["-g", "latex-renderer"], {
+      encoding: "utf8",
+      stdio: "pipe",
+    }).trim();
+    const deploymentGroups = run("/usr/bin/id", ["-G", deployUser], {
+      encoding: "utf8",
+      stdio: "pipe",
+    })
+      .trim()
+      .split(/\s+/);
+    if (deploymentGroups.includes(applicationGid))
+      throw new Error(
+        "CI deployment identity must be outside the application group",
+      );
+    run("/usr/sbin/runuser", [
+      "-u",
+      deployUser,
+      "--",
+      "/usr/local/bin/node",
+      "--input-type=module",
+      "-e",
+      'import { readFileSync } from "node:fs"; try { readFileSync(process.argv[1]); throw new Error("Published metadata unexpectedly readable"); } catch (error) { if (error.code !== "EACCES") throw error; }',
+      join(publishedRoot, "client-dist/mcpb.json"),
+    ]);
     const before = await readFile(
       join(publishedRoot, "client-dist/mcpb.json"),
       "utf8",
@@ -1015,6 +1045,8 @@ try {
         commit,
         digest,
         distinctSignature: true,
+        deploymentUserOutsideApplicationGroup: true,
+        publishedMetadataPrivate: true,
       }),
     );
   }

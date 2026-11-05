@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 1.6.3-rc.1 - 2026-11-06
+
+- Verify published MCPB archives as the deployment user using a private, byte-identical metadata handoff (#310).
+- Restore the Standalone Gateway through HTTP activation after a failed update so recovery acknowledgement can restore its listener (#311).
+- Defer maintenance timer activation until initial setup commits and permit managed unit regeneration inside the boot recovery sandbox (#312, #313).
+- Fix the Caddy configuration example and validate it with legacy and current Caddy binaries (#314).
+- Add real-systemd regressions for initial owner-ready recovery, ingress rollback and compact-mode failure acknowledgement.
+
 ## 1.6.2 - 2026-11-06
 
 - Promote validated 1.6.2-rc.1 to Stable with matching executable behavior, dependencies and configuration defaults.

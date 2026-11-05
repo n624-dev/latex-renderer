@@ -815,3 +815,13 @@ The Worker has persistent invocation logs enabled in `apps/public-web/wrangler.j
 is for immediate rollout/incident feedback. Cloudflare logs and VPS journals
 must be checked separately because the public Worker and private services have
 independent failure and recovery paths.
+
+### 起動復旧と外部プロキシの回帰検証
+
+初回セットアップのowner作成後に中断した場合、認証復旧サービスが設定と管理対象のsystemd unitを再構成してからconsumerを起動します。保守timerの永続的な有効化は、初回セットアップの正常性確認とcommit後に行います。復旧サービスの`ProtectSystem=strict`を維持し、unit再生成に必要な`/etc/systemd/system`を明示的な書込先として許可します。
+
+署名付き更新・復旧CIのfresh-host検証では、実際の復旧サービスとsandboxを使い、owner-readyからの起動、mutation lockの再作成、commit後のtimer有効化、保留中のHTTPS設定の巻戻しを確認します。この検証ではconsumerをCI用の無処理サービスに置き換え、owner DBと既存鍵の保持を検査します。描画と更新後の正常性は、別の実サービスによる更新・復旧検証で確認します。
+
+compact構成の更新失敗後は、GatewayをHTTP activation経由で復元します。復旧点の保護は残るため、失敗原因とサービス状態を確認してから、既存の`update-recovery-host.mjs acknowledge`手順を使います。
+
+Caddyの設定例は、ホスト名を実際の公開名に置き換え、適用前に`caddy adapt --config <設定ファイル> --adapter caddyfile`と`caddy validate --config <設定ファイル> --adapter caddyfile`を実行します。CIはディストリビューション版とchecksum固定のCaddy 2.11.9で設定例を検査します。検査用証明書と設定は一時領域に作成し、公開リスナーの起動や証明書発行は行いません。

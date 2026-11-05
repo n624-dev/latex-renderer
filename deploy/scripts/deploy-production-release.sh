@@ -132,8 +132,8 @@ restore_services_after_failure() {
   http_control restart latex-renderer-worker.service >/dev/null 2>&1 || recovery_failed=true
   restore_lan_services >/dev/null 2>&1 || recovery_failed=true
   if [ "${deployment_mode:-}" = standalone ]; then
-    systemctl start latex-renderer-standalone-gateway.service >/dev/null 2>&1 || recovery_failed=true
-    systemctl is-active --quiet latex-renderer-standalone-gateway.service || recovery_failed=true
+    http_control restart latex-renderer-standalone-gateway.service >/dev/null 2>&1 || recovery_failed=true
+    http_control ready latex-renderer-standalone-gateway.service >/dev/null 2>&1 || recovery_failed=true
   fi
   systemctl start \
     latex-renderer-update-refresh.timer \
@@ -475,10 +475,12 @@ chmod 0700 "$mcpb_verify_root"
 install -o "$sync_user" -g "$sync_group" -m 0600 \
   "$temporary_root/latex-renderer-local.mcpb" \
   "$mcpb_verify_root/latex-renderer-local.mcpb"
+install -o "$sync_user" -g "$sync_group" -m 0600 \
+  "$local_mcpb_manifest_path" "$mcpb_verify_root/mcpb.json"
 runuser -u "$sync_user" -- /usr/local/bin/node \
   "$source_root/client/verify-mcpb.mjs" \
   "$mcpb_verify_root/latex-renderer-local.mcpb" \
-  "$local_mcpb_manifest_path"
+  "$mcpb_verify_root/mcpb.json"
 cache_buster="release=$release_id&fresh=$(date +%s)"
 deployment_checkpoint public-installer-content
 deployment_expect_body "$client_base/install.mjs?$cache_buster" 'installDistribution'
