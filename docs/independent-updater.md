@@ -63,6 +63,21 @@ The guard is a provisioning threshold, not a guarantee of every workload's peak.
 
 ## Layout and authority
 
+Activation and its systemd `ExecStopPost` cleanup both respect the controller's
+operation completion barrier under the shared mutation lock. A pre-cutover
+timeout, malformed state response or interrupted activation must not stop a
+controller that is still saving an application update. The authenticated
+`/v1/activation-state` endpoint reports only the active operation and last error;
+historical slots can still use `/v1/state`. Transient listener failures are
+retried within the existing activation deadline, while authentication and state
+validation failures remain errors. Unknown state never authorizes a cutover.
+
+The disposable real-systemd activation test stalls a state response, interrupts
+the waiting gate and rejects a malformed state response. It verifies that the
+controller PID and nominated slot remain unchanged until operation completion,
+then permits the normal independent cutover. These deterministic fault cases do
+not require memory or disk pressure on a host.
+
 The application continues to use /opt/latex-renderer/current. Separately,
 /opt/latex-renderer/updater contains bootstrap-v1 (frozen root-owned modules),
 slots/<sha256> (immutable controller/helper files), state.json (atomic activation

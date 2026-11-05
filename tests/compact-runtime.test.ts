@@ -209,6 +209,9 @@ it("keeps independent legacy Updater rollback usable and queues activation after
       slots,
       action: "resume",
       compact: true,
+      acquireLock: () => Promise.resolve({ release: () => Promise.resolve() }),
+      isControllerActive: () => true,
+      canStopController: () => Promise.resolve(true),
       run,
     }),
   ).toEqual({ activated: true });

@@ -1042,6 +1042,7 @@ try {
       pdfPng: true,
       updaterRecovery: true,
       updaterActivationCommitBarrier: true,
+      updaterActivationCleanup: true,
       updaterStartupFailureRecovery: true,
       tmpfilesMigration: true,
       fullRecoveryPoint: true,

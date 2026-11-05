@@ -60,7 +60,17 @@ export async function activateAfterOperation({
     try {
       try {
         if (!(await hasCandidate())) return false;
-        if (controllerIdle(await readController())) {
+        let state,
+          reachable = true;
+        try {
+          state = await readController();
+        } catch (error) {
+          // A slow or restarting listener does not authorize a cutover and
+          // must not turn a transient read into a service-stop cleanup path.
+          if (error.code !== "UPDATER_CONTROLLER_UNAVAILABLE") throw error;
+          reachable = false;
+        }
+        if (reachable && controllerIdle(state) && now() < deadline) {
           await verifyCandidate();
           // Exclude a new operation until the idle controller has stopped. The
           // frozen bootstrap takes the same lock itself, after we release it.
@@ -91,44 +101,79 @@ export async function activateAfterOperation({
 
 const bootstrapRoot = "/opt/latex-renderer/updater/bootstrap-v1";
 const execute = promisify(execFile);
-async function controllerState() {
-  const token = (
-    await readFile("/etc/latex-renderer/secrets/update-manager-token", "utf8")
-  ).trim();
-  return new Promise((resolve, reject) => {
-    const req = request(
-      {
-        socketPath: "/run/latex-renderer/update-manager.sock",
-        path: "/v1/state",
-        headers: { Authorization: `Bearer ${token}` },
-      },
-      (response) => {
-        let size = 0;
-        const chunks = [];
-        response.on("data", (chunk) => {
-          size += chunk.length;
-          if (size > 1024 * 1024)
-            req.destroy(new Error("Unbounded controller activation response"));
-          else chunks.push(chunk);
-        });
-        response.on("error", reject);
-        response.on("end", () => {
-          try {
-            if (response.statusCode !== 200)
-              throw new Error("Controller activation check failed");
-            resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")));
-          } catch (error) {
-            reject(error);
-          }
-        });
-      },
-    );
-    req.setTimeout(2000, () =>
-      req.destroy(new Error("Controller activation check timed out")),
-    );
-    req.on("error", reject);
-    req.end();
-  });
+export async function readControllerState({
+  tokenFile = "/etc/latex-renderer/secrets/update-manager-token",
+  socketPath = "/run/latex-renderer/update-manager.sock",
+  timeoutMs = 10_000,
+} = {}) {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000)
+    throw new Error("Invalid controller state request timeout");
+  const token = (await readFile(tokenFile, "utf8")).trim();
+  const unavailable = () =>
+    Object.assign(new Error("Controller activation check unavailable"), {
+      code: "UPDATER_CONTROLLER_UNAVAILABLE",
+    });
+  const transportError = (error) =>
+    ["ENOENT", "ECONNREFUSED", "ECONNRESET", "EPIPE", "ETIMEDOUT"].includes(
+      error.code,
+    )
+      ? unavailable()
+      : error;
+  const read = (path) =>
+    new Promise((resolve, reject) => {
+      const req = request(
+        {
+          socketPath,
+          path,
+          headers: { Authorization: `Bearer ${token}` },
+        },
+        (response) => {
+          let size = 0;
+          const chunks = [];
+          response.on("data", (chunk) => {
+            size += chunk.length;
+            if (size > 1024 * 1024)
+              req.destroy(
+                new Error("Unbounded controller activation response"),
+              );
+            else chunks.push(chunk);
+          });
+          response.on("error", (error) => reject(transportError(error)));
+          response.on("end", () => {
+            try {
+              if (response.statusCode !== 200)
+                throw Object.assign(
+                  [502, 503, 504].includes(response.statusCode)
+                    ? unavailable()
+                    : new Error("Controller activation check failed"),
+                  { statusCode: response.statusCode },
+                );
+              resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+            } catch (error) {
+              reject(error);
+            }
+          });
+        },
+      );
+      // Absolute deadline also bounds a peer that keeps sending small chunks.
+      const timer = globalThis.setTimeout(
+        () => req.destroy(unavailable()),
+        timeoutMs,
+      );
+      req.once("close", () => globalThis.clearTimeout(timer));
+      req.on("error", (error) => {
+        reject(transportError(error));
+      });
+      req.end();
+    });
+  try {
+    return await read("/v1/activation-state");
+  } catch (error) {
+    // Historical, independently rolled-back controllers expose only /state.
+    // An authentication failure or corrupt response is never a fallback.
+    if (error.statusCode !== 404) throw error;
+    return read("/v1/state");
+  }
 }
 
 async function main() {
@@ -178,7 +223,7 @@ async function main() {
           "Updater candidate does not match the installed application",
         );
     },
-    readController: controllerState,
+    readController: readControllerState,
     stopController: () => stopUpdaterForActivation(systemctl),
     recover: () =>
       execute(
