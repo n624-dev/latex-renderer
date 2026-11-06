@@ -16,6 +16,7 @@ import {
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { configureDockerRepository } from "./docker-repository.mjs";
+import { verifySetupBootRecovery } from "./setup-boot-recovery.mjs";
 import {
   withoutUserEnvironmentDefaults,
   userEnvironmentKeys,
@@ -321,6 +322,7 @@ try {
       configurationCommitted: false,
     }),
   );
+  await verifySetupBootRecovery(release, work, image);
 } finally {
   if (dummy) run("/usr/sbin/ip", ["link", "delete", "lr-ci-lan"]);
   await rm(work, { recursive: true, force: true });

@@ -119,6 +119,6 @@ it.each([
   ]);
   expect(driver).toContain('"$mcpb_base" "$local_mcpb_manifest_path"');
   expect(driver).toContain(
-    '"$mcpb_verify_root/latex-renderer-local.mcpb" \\\n  "$local_mcpb_manifest_path"',
+    '"$mcpb_verify_root/latex-renderer-local.mcpb" \\\n  "$mcpb_verify_root/mcpb.json"',
   );
 });

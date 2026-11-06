@@ -23,6 +23,7 @@ import { acquireUpdateBaseline } from "./update-baseline.mjs";
 import { verifyActivationCommitBarrier } from "./updater-activation-barrier.mjs";
 import { retryCiMutation } from "./retry-ci-mutation.mjs";
 import { runCiProcessGroup } from "./process-group.mjs";
+import { verifyPrivateMcpbHandoff } from "./mcpb-metadata-handoff.mjs";
 import {
   brokenUpdaterSource,
   assertStartupRecovery,
@@ -143,7 +144,13 @@ try {
     uid: execFileSync("id", ["-u", deployUser], { encoding: "utf8" }).trim(),
     gid: execFileSync("id", ["-g", deployUser], { encoding: "utf8" }).trim(),
   };
-  const deploy = async (source, release, initialInstall, deployer = helper) => {
+  const deploy = async (
+    source,
+    release,
+    initialInstall,
+    deployer = helper,
+    publishedMcpbRoot = null,
+  ) => {
     const manifest = await deployer.verifyExtractedRelease(release, source);
     const stage = await mkdtemp(
       "/opt/latex-renderer/update-staging/ci-deploy-",
@@ -171,6 +178,13 @@ try {
             ),
           ),
         );
+      if (publishedMcpbRoot)
+        builtMcpb.privateHandoff = await verifyPrivateMcpbHandoff({
+          assembly,
+          stage,
+          publishedRoot: publishedMcpbRoot,
+          identity,
+        });
       await deployer.deploySealedAssembly(
         assembly,
         stage,
@@ -870,6 +884,10 @@ try {
     throw new Error("Recovery touched application data");
   if (compactOrigin) {
     // The compact-origin update and independent cutover were exercised above.
+    const { verifyGatewayFailureRecovery } = await import(
+      pathToFileURL(join(candidate, "deploy/ci/gateway-failure-recovery.mjs"))
+    );
+    await verifyGatewayFailureRecovery();
     // The separate HTTP off/on acceptance starts from classic mode; preserve
     // the candidate Runtime/configuration and restore only these idle keys.
     const keys = new Set([
@@ -995,6 +1013,8 @@ try {
       candidate,
       { version: tag.slice(1), tag, commit },
       false,
+      helper,
+      publishedRoot,
     );
     if (
       rebuiltMcpb.sha256 === publishedMcpb.sha256 ||
@@ -1015,6 +1035,7 @@ try {
         commit,
         digest,
         distinctSignature: true,
+        ...rebuiltMcpb.privateHandoff,
       }),
     );
   }
