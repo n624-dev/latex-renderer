@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 1.6.3 - 2026-11-06
+
+- Promote validated 1.6.3-rc.1 to Stable with matching executable behavior, dependencies and configuration defaults.
+- Fix MCPB metadata permissions, Standalone Gateway failure recovery, initial setup timer ordering and sandboxed boot recovery (#310–#313).
+- Include the corrected Caddy example and legacy/current Caddy validation (#314).
+- Verify signed updates and recovery across five historical hosts, with production PDF/PNG/SVG and data-preservation checks on the release candidate.
+
 ## 1.6.3-rc.1 - 2026-11-06
 
 - Verify published MCPB archives as the deployment user using a private, byte-identical metadata handoff (#310).
