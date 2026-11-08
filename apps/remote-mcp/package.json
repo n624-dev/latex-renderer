@@ -9,14 +9,14 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@hono/node-server": "^2.1.5",
+    "@hono/node-server": "^2.1.6",
     "@latex-renderer/auth": "workspace:*",
     "@latex-renderer/contracts": "workspace:*",
     "@latex-renderer/database": "workspace:*",
     "@latex-renderer/remote-mcp-core": "workspace:*",
     "@latex-renderer/shared": "workspace:*",
     "@modelcontextprotocol/server": "^2.4.0",
-    "hono": "^4.13.14",
+    "hono": "^4.13.16",
     "zod": "^4.6.7"
   }
 }
