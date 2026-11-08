@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 1.6.4-rc.1 - 2026-11-09
+
+- Update Hono, the Node server adapter, jose and marked with upstream fixes.
+- Update ESLint, Playwright, Vite and Vitest, retaining the installed editor-module regression checks across bundled module-header layouts.
+- Update checksum-pinned setup-go and CodeQL Actions while retaining disabled dependency caches.
+
 ## 1.6.3 - 2026-11-06
 
 - Promote validated 1.6.3-rc.1 to Stable with matching executable behavior, dependencies and configuration defaults.
