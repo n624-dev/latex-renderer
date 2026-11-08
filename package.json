@@ -42,7 +42,7 @@
     "@typescript/native": "npm:typescript@^7.0.2",
     "esbuild": "0.28.2",
     "eslint": "^10.14.0",
-    "jose": "^6.2.14",
+    "jose": "^6.2.15",
     "playwright": "1.65.0",
     "prettier": "^3.9.10",
     "tsx": "^4.23.15",
