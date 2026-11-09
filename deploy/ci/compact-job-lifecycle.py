@@ -223,10 +223,7 @@ console.log(JSON.stringify({boundaryVerified:checked}));
             attempted.set()
             try:
                 status, _ = fixture.request("GET", "/api/v1/projects?pageSize=1",
-                                            # In-flight requests may observe a backend shutting down.
-                                            # Only this deliberate cutover interval permits 5xx;
-                                            # the initial and resumed requests require HTTP 200.
-                                            allowed=(200, 500, 502, 503, 504), timeout=3)
+                                            allowed=(200, 502, 503, 504), timeout=3)
                 traffic["successes" if status == 200 else "unavailable"] += 1
                 traffic["statuses"][str(status)] = traffic["statuses"].get(str(status), 0) + 1
             except (OSError, http.client.HTTPException):
@@ -234,7 +231,9 @@ console.log(JSON.stringify({boundaryVerified:checked}));
             except Exception as error:
                 errors.append(str(error) if isinstance(error, AssertionError) else type(error).__name__)
                 return
-            stop.wait(.05)
+            # The shipped proxy allows 120 API requests/minute, shared with
+            # setup and Job creation. Stay below it without disabling the limit.
+            stop.wait(1)
     thread = None
     try:
         path.write_text(base + "\nHTTP_IDLE_ENABLED=true\nHTTP_IDLE_TIMEOUT_SECONDS=30\n"
