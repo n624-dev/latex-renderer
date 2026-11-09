@@ -51,10 +51,9 @@ fi
 # PDF with unresolved citations. Inspect the PDF text in the same sandbox.
 grep -F 'Biber' "$output/main.blg" >/dev/null
 grep -F 'Fixture Press' "$output/main.bbl" >/dev/null
-docker run --rm --network none --read-only --cap-drop ALL \
+docker run --rm --interactive --network none --read-only --cap-drop ALL \
   --security-opt no-new-privileges --pids-limit 32 --memory 128m \
   --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m \
-  --mount "type=bind,src=$output,dst=/work/pdf,readonly" \
-  --user 0:0 --entrypoint pdftotext "$image" /work/pdf/result.pdf - \
+  --entrypoint pdftotext "$image" - - < "$output/result.pdf" \
   | grep -F 'Biber QA' >/dev/null
 printf '%s\n' 'Renderer Biber PDF/bibliography/PNG smoke test passed with noexec /tmp.'
