@@ -10,6 +10,7 @@ import ssl
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from urllib.parse import urlparse
 import uuid
@@ -65,7 +66,7 @@ class Fixture:
         self.key = json.loads(run([*self.prefix, "create", "--owner-id", owner, "--yes"]))
         return self
 
-    def request(self, method, path, token=None, payload=None, binary=False, allowed=(200, 201, 202, 204)):
+    def request(self, method, path, token=None, payload=None, binary=False, allowed=(200, 201, 202, 204), timeout=70):
         target = urlparse(path)
         if target.netloc:
             assert (target.scheme, target.netloc) == (self.origin.scheme, self.origin.netloc)
@@ -77,7 +78,7 @@ class Fixture:
             body = payload if binary else json.dumps(payload).encode()
             headers["Content-Type"] = "application/zip" if binary else "application/json"
             headers["Idempotency-Key"] = "compact-ci-" + uuid.uuid4().hex
-        connection = http.client.HTTPSConnection(self.origin.hostname, self.origin.port or 443, context=self.context, timeout=70)
+        connection = http.client.HTTPSConnection(self.origin.hostname, self.origin.port or 443, context=self.context, timeout=timeout)
         try:
             connection.request(method, path, body=body, headers=headers)
             response = connection.getresponse()
@@ -91,13 +92,18 @@ class Fixture:
     def json(self, method, path, token=None, payload=None):
         return json.loads(self.request(method, path, token, payload)[1])
 
-    def upload(self, slow=False):
+    def upload(self, slow=False, biber=False):
         text = (r"\documentclass{ltjsarticle}\begin{document}日本語 $x^2+y^2=z^2$."
                 + (r"\directlua{local t=os.clock(); while os.clock()-t<20 do end}" if slow else "")
                 + r"\newpage Second page. $a+b=c$.\end{document}")
+        if biber:
+            text = (r"\documentclass{article}\usepackage{biblatex}\addbibresource{refs.bib}"
+                    r"\begin{document}Hello \cite{qa}.\printbibliography\end{document}")
         archive = io.BytesIO()
         with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as zipped:
             zipped.writestr("main.tex", text)
+            if biber:
+                zipped.writestr("refs.bib", '@book{qa,author={Case, Jane},title={Biber QA},year={2026},publisher={Fixture Press}}')
         data = archive.getvalue()
         ticket = self.json("POST", "/api/v1/source-tickets", payload={"size": len(data), "sha256": hashlib.sha256(data).hexdigest()})
         if ticket["uploadRequired"]:
@@ -164,6 +170,109 @@ with sqlite3.connect('file:/var/lib/latex-renderer/renderer.sqlite3?mode=ro',uri
             raise RuntimeError("Disposable Job fixture cleanup failed") from failures[0]
 
 
+def verify_mode_transition():
+    guard()
+    fixture = Fixture()
+    path = Path("/etc/latex-renderer/renderer.env")
+    before = path.read_text()
+    keys = {"HTTP_IDLE_ENABLED", "HTTP_IDLE_TIMEOUT_SECONDS", "WORKER_IDLE_ENABLED",
+            "WORKER_IDLE_TIMEOUT_SECONDS", "MANAGER_IDLE_TIMEOUT_SECONDS", "RENDERER_RUNTIME_MODE"}
+    base = "\n".join(line for line in before.splitlines() if line.split("=", 1)[0] not in keys)
+    command = ["/usr/local/bin/node", str(fixture.source / "deploy/scripts/http-services.mjs"), "reconcile"]
+    def reconcile(check_boundary=False):
+        args = ["/usr/local/bin/node", "--input-type=module", "-e", r"""
+import assert from 'node:assert/strict';
+import {execFileSync} from 'node:child_process';
+import {pathToFileURL} from 'node:url';
+const moduleUrl = pathToFileURL(process.argv[2]);
+const {reconcileHttpServices} = await import(moduleUrl.href);
+const {retryCiMutation} = await import(new URL('../ci/retry-ci-mutation.mjs', moduleUrl).href);
+const checkBoundary = process.argv[3] === 'true';
+let checked = false;
+await retryCiMutation(() => reconcileHttpServices({run: (...args) => {
+  const result = execFileSync('/usr/bin/systemctl', args, {
+    encoding: 'utf8', timeout: args[0] === 'show' ? 5000 : 15 * 60000,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  if (checkBoundary && args[0] === 'stop' && args.at(-1) === 'latex-renderer-internal-api.socket') {
+    for (const suffix of ['socket', 'service']) {
+      const state = execFileSync('/usr/bin/systemctl', [
+        'show', `latex-renderer-standalone-gateway.${suffix}`,
+        '--property=ActiveState', '--value',
+      ], {encoding:'utf8', timeout:5000});
+      assert.equal(state.trim(), 'inactive', 'Gateway remained reachable at backend cutover');
+    }
+    checked = true;
+  }
+  return result;
+}}));
+assert(!checkBoundary || checked, 'Backend cutover was not observed');
+console.log(JSON.stringify({boundaryVerified:checked}));
+""", "mode-transition-fixture", command[1], str(check_boundary).lower()]
+        output = subprocess.run(args, check=True, capture_output=True, timeout=16 * 60).stdout
+        if check_boundary:
+            assert json.loads(output.splitlines()[-1])["boundaryVerified"]
+        return output
+    stop = threading.Event()
+    attempted = threading.Event()
+    traffic = {"attempts": 0, "successes": 0, "unavailable": 0, "statuses": {}}
+    errors = []
+    def poll():
+        while not stop.is_set():
+            traffic["attempts"] += 1
+            attempted.set()
+            try:
+                status, _ = fixture.request("GET", "/api/v1/projects?pageSize=1",
+                                            allowed=(200, 502, 503, 504), timeout=3)
+                traffic["successes" if status == 200 else "unavailable"] += 1
+                traffic["statuses"][str(status)] = traffic["statuses"].get(str(status), 0) + 1
+            except (OSError, http.client.HTTPException):
+                traffic["unavailable"] += 1
+            except Exception as error:
+                errors.append(str(error) if isinstance(error, AssertionError) else type(error).__name__)
+                return
+            # The shipped proxy allows 120 API requests/minute, shared with
+            # setup and Job creation. Stay below it without disabling the limit.
+            stop.wait(1)
+    thread = None
+    try:
+        path.write_text(base + "\nHTTP_IDLE_ENABLED=true\nHTTP_IDLE_TIMEOUT_SECONDS=30\n"
+                        "WORKER_IDLE_ENABLED=false\nWORKER_IDLE_TIMEOUT_SECONDS=30\n"
+                        "RENDERER_RUNTIME_MODE=classic\nMANAGER_IDLE_TIMEOUT_SECONDS=30\n")
+        reconcile()
+        fixture.start()
+        fixture.json("GET", "/api/v1/projects?pageSize=1")
+        thread = threading.Thread(target=poll)
+        thread.start()
+        assert attempted.wait(5), "Concurrent Projects request did not start"
+        path.write_text(base + "\nHTTP_IDLE_ENABLED=true\nHTTP_IDLE_TIMEOUT_SECONDS=30\n"
+                        "WORKER_IDLE_ENABLED=true\nWORKER_IDLE_TIMEOUT_SECONDS=30\n"
+                        "RENDERER_RUNTIME_MODE=compact\nMANAGER_IDLE_TIMEOUT_SECONDS=30\n")
+        reconcile(check_boundary=True)
+        stop.set()
+        thread.join(10)
+        assert not thread.is_alive(), "Concurrent request did not finish"
+        assert not errors, f"Concurrent request failed: {errors}"
+        fixture.json("GET", "/api/v1/projects?pageSize=1")
+        for name in ("image-manager", "internal-api", "standalone-gateway"):
+            state = run(["/usr/bin/systemctl", "show", f"latex-renderer-{name}.socket",
+                         "--property=ActiveState", "--value"]).strip()
+            assert state == b"active", f"{name} listener did not resume"
+        assert fixture.wait(fixture.queue(fixture.upload()))["status"] == "succeeded"
+        return {"concurrentProjects": traffic, "gatewayQuiescedAtCutover": True,
+                "listenersResumed": True, "renderSucceeded": True}
+    finally:
+        stop.set()
+        if thread is not None:
+            thread.join(10)
+            assert not thread.is_alive()
+        try:
+            path.write_text(before)
+            reconcile()
+        finally:
+            fixture.close()
+
+
 def verify():
     guard()
     result = {"idleBoundaryVerified": os.environ.get("CI_COMPACT_JOB_WAIT_IDLE") != "false"}
@@ -176,6 +285,8 @@ def verify():
         completed = [fixture.wait(ticket) for ticket in batch]
         assert all(job["status"] == "succeeded" for job in completed)
         result["threeJobBurstSeconds"] = time.monotonic() - started
+        assert fixture.wait(fixture.queue(fixture.upload(biber=True)))["status"] == "succeeded"
+        result["biberPdfPassed"] = True
         ticket = batch[0]
         pdf = next(item for item in completed[0]["artifacts"] if item["type"] == "pdf")
         assert any(item["type"] == "svg" for item in completed[0]["artifacts"])
@@ -233,4 +344,8 @@ with sqlite3.connect('/var/lib/latex-renderer/renderer.sqlite3') as db:
 
 
 if __name__ == "__main__":
-    print(json.dumps({"event": "compact_job_lifecycle.passed", **verify()}))
+    if sys.argv[1:] == ["--mode-transition"]:
+        print(json.dumps({"event": "compact_mode_transition.passed", **verify_mode_transition()}))
+    else:
+        assert not sys.argv[1:]
+        print(json.dumps({"event": "compact_job_lifecycle.passed", **verify()}))

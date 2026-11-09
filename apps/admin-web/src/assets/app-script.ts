@@ -784,6 +784,7 @@ function installRender(fetcher: Fetcher) {
     }
   };
   input.onchange = () => void inspect();
+  void inspect();
   projectSelect.onchange = () => {
     projectNameField.hidden = projectSelect.value !== "";
   };

@@ -1,9 +1,22 @@
+import type { ExecFileSyncOptionsWithStringEncoding } from "node:child_process";
+
 export const ENGINE_LOCK_PATH: string;
 export function acquireEngineLock(options?: {
   path?: string;
   exclusive?: boolean;
 }): Promise<{ release(): Promise<void> }>;
-export function workerEngineCommand(command: string, args: string[]): string;
+export function workerEngineCommand(
+  command: string,
+  args: string[],
+  options?: {
+    run?: (
+      command: string,
+      args: string[],
+      options: ExecFileSyncOptionsWithStringEncoding,
+    ) => string;
+    timeout?: number;
+  },
+): string;
 export function withContainerEngine<T>(
   operation: () => T | Promise<T>,
   environment?: NodeJS.ProcessEnv,

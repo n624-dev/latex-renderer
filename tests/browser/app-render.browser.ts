@@ -52,12 +52,18 @@ afterAll(async () => {
   await browser?.close();
 });
 
-async function fixture() {
+async function fixture(beforeSession?: (page: Page) => Promise<void>) {
   if (!browser) throw new Error("Browser not started");
   const page = await newTestPage(browser);
   pages.push(page);
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
+  let resumeSession = () => {};
+  const sessionReady = beforeSession
+    ? new Promise<void>((resolve) => {
+        resumeSession = resolve;
+      })
+    : Promise.resolve();
   const state = {
     sources: [] as Array<{ size: number; sha256: string }>,
     uploads: [] as Buffer[],
@@ -170,6 +176,7 @@ async function fixture() {
       return;
     }
     if (path === "/app/api/v1/me") {
+      await sessionReady;
       await json({ isAdmin: false });
       return;
     }
@@ -388,6 +395,11 @@ async function fixture() {
     await route.fulfill({ status: 404 });
   });
   await page.goto(`${origin}/app/`);
+  try {
+    await beforeSession?.(page);
+  } finally {
+    resumeSession();
+  }
   await page
     .waitForFunction(
       () =>
@@ -458,6 +470,48 @@ async function releaseRead(page: Page, name: string, fail = false) {
 }
 
 describe("App render in the selected browser", () => {
+  it.each(["tex", "zip"])(
+    "inspects the %s selected before session initialization completes",
+    async (kind) => {
+      const file = kind === "tex"
+        ? tex("early.tex")
+        : {
+            name: "early.zip",
+            mimeType: "application/zip",
+            buffer: await zip(["main.tex"]),
+          };
+      const { page, state, errors } = await fixture(async (page) => {
+        await page.locator("#app-files").setInputFiles(file);
+        expect(await start(page).isDisabled()).toBe(true);
+      });
+      await ready(page);
+      await start(page).click();
+      await finish(page);
+      expect(state.requests).toHaveLength(1);
+      expect(state.requests[0]?.body.originalFilename).toBe(file.name);
+      expect(errors).toEqual([]);
+    },
+  );
+  it("reports an unsupported file selected before session initialization completes", async () => {
+    const { page, state, errors } = await fixture(async (page) => {
+      await page.locator("#app-files").setInputFiles(tex("README.md"));
+    });
+    await expect
+      .poll(() => page.locator("#app-error").textContent())
+      .toContain("TeX");
+    expect(await start(page).isDisabled()).toBe(true);
+    expect(state.sources).toHaveLength(0);
+    expect(errors).toEqual([]);
+  });
+  it("keeps a selection cleared before session initialization empty", async () => {
+    const { page, state, errors } = await fixture(async (page) => {
+      await page.locator("#app-files").setInputFiles(tex("cleared.tex"));
+      await page.locator("#app-files").setInputFiles([]);
+    });
+    expect(await start(page).isDisabled()).toBe(true);
+    expect(state.sources).toHaveLength(0);
+    expect(errors).toEqual([]);
+  });
   it.each([false, true])(
     "requests only the selected missing PNG, retries pending generation and verifies SHA before opening: mismatch=%s",
     async (mismatch) => {

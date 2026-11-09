@@ -79,6 +79,8 @@ export function workerEngineCommand(
     XDG_DATA_HOME: "/var/lib/latex-render-worker/.local/share",
     XDG_CACHE_HOME: "/var/lib/latex-render-worker/.cache",
     DOCKER_CONFIG: "/var/lib/latex-render-worker/.docker",
+    // Match Image Manager cleanup; legacy root-run builds may own buildx/.
+    BUILDX_CONFIG: "/var/lib/latex-render-worker/.docker/buildx-worker",
     DOCKER_HOST: `unix:///run/user/${uid}/docker.sock`,
   };
   if (process.getuid() === 0)

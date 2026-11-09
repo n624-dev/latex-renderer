@@ -131,6 +131,7 @@ async function verifyBuildProtection(image, environment) {
       "-i",
       "PATH=/usr/local/bin:/usr/bin:/bin",
       "HOME=/var/lib/latex-render-worker",
+      "BUILDX_CONFIG=/var/lib/latex-render-worker/.docker/buildx-worker",
       `DOCKER_HOST=unix:///run/user/${uid}/docker.sock`,
       "/usr/bin/docker",
       "buildx",
@@ -270,6 +271,13 @@ export async function verifyCompactApplicationIdle() {
     "\nHTTP_IDLE_ENABLED=true\nHTTP_IDLE_TIMEOUT_SECONDS=30\nWORKER_IDLE_ENABLED=true\nWORKER_IDLE_TIMEOUT_SECONDS=30\nRENDERER_RUNTIME_MODE=compact\nMANAGER_IDLE_TIMEOUT_SECONDS=30\n";
   let results;
   try {
+    const modeTransition = JSON.parse(run(
+      "/usr/bin/python3",
+      ["-B", "/opt/latex-renderer/current/deploy/ci/compact-job-lifecycle.py", "--mode-transition"],
+      20 * 60_000,
+    ));
+    assert.equal(modeTransition.listenersResumed, true);
+    assert.equal(modeTransition.renderSucceeded, true);
     await writeFile(envPath, configured);
     await reconcile();
     await warmManagers();
@@ -411,6 +419,7 @@ export async function verifyCompactApplicationIdle() {
       maintenanceWake: { attempts: 2, acknowledged: true, withoutEngine: true },
       buildProtection,
       jobLifecycle,
+      modeTransition,
     };
   } finally {
     await writeFile(envPath, before);

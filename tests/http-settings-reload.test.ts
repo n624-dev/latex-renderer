@@ -14,7 +14,7 @@ import {
   reconcileHttpServices,
 } from "../deploy/scripts/http-services.mjs";
 
-function fixture() {
+function fixture(traffic = false) {
   const root = mkdtempSync(join(tmpdir(), "http-reload-"));
   const source = join(root, "source"),
     unitRoot = join(root, "units");
@@ -85,6 +85,12 @@ function fixture() {
     if (args[0] === "stop") {
       state.active = false;
       if (
+        traffic &&
+        name === "latex-renderer-internal-api.socket" &&
+        states.get(httpSocketUnit(gateway) as string)?.active
+      )
+        throw new Error("Gateway request reactivated the old dependencies");
+      if (
         name ===
         `latex-renderer-internal-api.${gatewayRequiresSocket ? "socket" : "service"}`
       ) {
@@ -141,6 +147,34 @@ function fixture() {
 }
 
 it.skipIf(process.platform === "win32")(
+  "closes the public gateway before backend listeners even with requests during cutover",
+  async () => {
+    const f = fixture(true);
+    try {
+      for (const enabled of [false, true]) {
+        const start = f.calls.length;
+        await reconcileHttpServices({
+          ...f,
+          values: { HTTP_IDLE_ENABLED: String(enabled) },
+        });
+        const calls = f.calls.slice(start);
+        const stops = calls.filter(([action]) => action === "stop");
+        expect(stops.slice(0, 2)).toEqual([
+          ["stop", "latex-renderer-standalone-gateway.socket"],
+          ["stop", "latex-renderer-standalone-gateway.service"],
+        ]);
+        expect(
+          f.states.get("latex-renderer-standalone-gateway.service")?.active ||
+            f.states.get("latex-renderer-standalone-gateway.socket")?.active,
+        ).toBe(true);
+      }
+    } finally {
+      rmSync(f.root, { recursive: true, force: true });
+    }
+  },
+);
+
+it.skipIf(process.platform === "win32")(
   "applies environment-only disable/enable, boot links and gateway dependencies under the mutation lock",
   async () => {
     const f = fixture();
@@ -159,7 +193,8 @@ it.skipIf(process.platform === "win32")(
           expect(state.active).toBe(state.socket === enabled);
         }
         expect(
-          f.states.get("latex-renderer-standalone-gateway.service")?.active,
+          f.states.get("latex-renderer-standalone-gateway.service")?.active ||
+            f.states.get("latex-renderer-standalone-gateway.socket")?.active,
         ).toBe(true);
         expect(
           readFileSync(
@@ -195,7 +230,8 @@ it.skipIf(process.platform === "win32")(
           }),
         ).rejects.toThrow("interrupted preparation");
         expect(
-          f.states.get("latex-renderer-standalone-gateway.service")?.active,
+          f.states.get("latex-renderer-standalone-gateway.service")?.active ||
+            f.states.get("latex-renderer-standalone-gateway.socket")?.active,
         ).toBe(true);
         for (const service of HTTP_SERVICE_UNITS.filter(
           (name) => !name.includes("admin-web"),
@@ -212,6 +248,68 @@ it.skipIf(process.platform === "win32")(
         ).resolves.toEqual({ enabled });
       }
       expect(f.released()).toBe(4);
+    } finally {
+      rmSync(f.root, { recursive: true, force: true });
+    }
+  },
+);
+
+it.skipIf(process.platform === "win32").each([false, true])(
+  "resumes a stopped configured Gateway after interruption (activation=%s)",
+  async (enabled) => {
+    const f = fixture();
+    try {
+      const values = { HTTP_IDLE_ENABLED: String(enabled) };
+      await reconcileHttpServices({ ...f, values });
+      const service = f.states.get("latex-renderer-standalone-gateway.service");
+      const listener = f.states.get("latex-renderer-standalone-gateway.socket");
+      if (!service || !listener) throw new Error("Missing Gateway fixture");
+      service.active = false;
+      listener.active = false;
+      f.interrupt();
+      await expect(
+        reconcileHttpServices({
+          ...f,
+          values: { HTTP_IDLE_ENABLED: String(!enabled) },
+        }),
+      ).rejects.toThrow("interrupted preparation");
+      expect(service.enabled || listener.enabled).toBe(true);
+      expect([service.active, listener.active]).toContain(true);
+      await reconcileHttpServices({
+        ...f,
+        values: { HTTP_IDLE_ENABLED: String(!enabled) },
+      });
+      expect([service.active, listener.active]).toContain(true);
+    } finally {
+      rmSync(f.root, { recursive: true, force: true });
+    }
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "keeps an unconfigured Gateway disabled",
+  async () => {
+    const f = fixture();
+    try {
+      for (const suffix of ["service", "socket"]) {
+        const state = f.states.get(
+          `latex-renderer-standalone-gateway.${suffix}`,
+        );
+        if (!state) throw new Error("Missing Gateway fixture");
+        state.active = false;
+        state.enabled = false;
+      }
+      await reconcileHttpServices({
+        ...f,
+        values: { HTTP_IDLE_ENABLED: "true" },
+      });
+      for (const suffix of ["service", "socket"])
+        expect(
+          f.states.get(`latex-renderer-standalone-gateway.${suffix}`),
+        ).toMatchObject({
+          active: false,
+          enabled: false,
+        });
     } finally {
       rmSync(f.root, { recursive: true, force: true });
     }

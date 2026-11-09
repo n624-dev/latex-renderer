@@ -612,11 +612,20 @@ export async function reconcileHttpServices({
     const gateway = "latex-renderer-standalone-gateway.service";
     const gatewayActive = httpServiceStatus(gateway, { run }).active;
     const gatewayEnabled = activationEnabledFor(gateway, { source, values });
+    const gatewayListener = properties(httpSocketUnit(gateway), run);
+    const gatewayConfigured =
+      gatewayActive ||
+      properties(gateway, run).UnitFileState === "enabled" ||
+      gatewayListener.UnitFileState === "enabled";
     let stopping = false,
       prepared = false;
     try {
       // Stop listeners first, so quiescing one backend cannot wake another.
       stopping = true;
+      // Gateway requests can activate Internal API using the old dependencies.
+      // Close this entrance and its process before stopping any backend socket.
+      if (gatewayConfigured)
+        controlService("stop", gateway, { run, enabled: gatewayEnabled });
       for (const { service } of units) {
         const socket = httpSocketUnit(service);
         if (properties(socket, run).LoadState === "loaded") run("stop", socket);
@@ -629,6 +638,8 @@ export async function reconcileHttpServices({
       // Current entrypoints support both inherited and ordinary listeners.
       for (const { service, enabled } of units)
         run("enable", enabled ? httpSocketUnit(service) : service);
+      if (gatewayConfigured)
+        run("enable", gatewayEnabled ? httpSocketUnit(gateway) : gateway);
       prepareHttpActivation(source, { run, unitRoot, values });
       prepared = true;
       if (compactCapable) configureEngine(compact);
@@ -649,7 +660,7 @@ export async function reconcileHttpServices({
       if (compact) run("enable", "--now", "latex-renderer-engine-idle.timer");
       if (existsSync(join(source, "deploy/scripts/passive-health.py")))
         run("start", "latex-renderer-status.socket");
-      if (gatewayActive) {
+      if (gatewayConfigured) {
         try {
           controlService("enable", gateway, { run, enabled: gatewayEnabled });
           controlService("start", gateway, { run, enabled: gatewayEnabled });
@@ -680,9 +691,15 @@ export async function reconcileHttpServices({
               /* retain primary failure */
             }
           }
-        if (gatewayActive)
+        if (gatewayConfigured)
           try {
-            controlService("start", gateway, { run, enabled: gatewayEnabled });
+            controlService("start", gateway, {
+              run,
+              enabled: prepared
+                ? gatewayEnabled
+                : gatewayListener.ActiveState === "active" ||
+                  gatewayListener.UnitFileState === "enabled",
+            });
           } catch {
             /* retain primary failure */
           }

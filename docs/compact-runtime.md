@@ -42,12 +42,19 @@ Apply the environment-only change under the existing mutation lock:
 sudo node /opt/latex-renderer/current/deploy/scripts/http-services.mjs reconcile
 ```
 
-The operation stops listeners before writers, lets active rendering drain,
+The operation closes the Standalone Gateway listener and process before backend
+listeners, preventing public requests from activating the previous dependencies
+during cutover. Requests may need to retry while the listeners are closed. It
+lets active rendering drain,
 reconciles service definitions and boot links, and changes only the dedicated
 worker user's Docker autostart policy. The separate engine idle timer releases
 Docker after its consumers and containers have drained. It does not stop a
-system-wide Docker installation or remove images. An interrupted reconciliation
-can be rerun; it does not restore the database or discard user data.
+system-wide Docker installation or remove images. A configured Gateway retains
+an enabled boot path and resumes on retry even if the previous attempt stopped
+its process and listener. An interrupted reconciliation can be rerun; it does
+not restore the database or discard user data. Worker engine history checks and
+Image Manager cleanup use the same worker-owned Buildx metadata directory, so
+legacy metadata created by root-run builds need not be made writable.
 
 For Worker activation without compact managers/engine, use
 `WORKER_IDLE_ENABLED=true` with `RENDERER_RUNTIME_MODE=classic`. For ordinary

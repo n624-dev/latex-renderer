@@ -27,6 +27,8 @@ export TEXMFCONFIG=/tmp/texlive/texmf-config
 export TEXMFVAR=/tmp/texlive/texmf-var
 export TEXMFCNF=/opt/renderer:
 export TEXMFCACHE=/tmp/texlive/texmf-var:/opt/texlive/2026/texmf-var
+export PAR_GLOBAL_TEMP=/opt/renderer/biber-cache
+unset PAR_GLOBAL_CLEAN PAR_GLOBAL_TMPDIR PAR_TEMP PAR_CLEAN
 
 # The host storage tree supplies a narrowly scoped default ACL for this
 # rootless container's subordinate UID/GID. Keep generated files group-private

@@ -14,7 +14,8 @@ export async function retryCiMutation(
     } catch (error) {
       if (
         attempt >= attempts ||
-        !String(error?.stderr ?? "").includes("code: 'MUTATION_LOCK_BUSY'")
+        (error?.code !== "MUTATION_LOCK_BUSY" &&
+          !String(error?.stderr ?? "").includes("code: 'MUTATION_LOCK_BUSY'"))
       )
         throw error;
       if (attempt === 1 || attempt % 10 === 0)

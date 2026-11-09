@@ -13,7 +13,10 @@ import {
   runtimeMode,
   managerIdleConfiguration,
 } from "../deploy/scripts/runtime-mode.mjs";
-import { acquireEngineLock } from "../deploy/scripts/on-demand-engine.mjs";
+import {
+  acquireEngineLock,
+  workerEngineCommand,
+} from "../deploy/scripts/on-demand-engine.mjs";
 import { idleContainerEngine } from "../deploy/scripts/idle-container-engine.mjs";
 import { imageManagerNeedsRecovery } from "../deploy/scripts/manager-demand.mjs";
 import { prepareUpdaterTransport } from "../deploy/scripts/updater-transport.mjs";
@@ -77,6 +80,58 @@ it.skipIf(process.platform === "win32")(
     const link = `${path}.link`;
     symlinkSync(path, link);
     await expect(acquireEngineLock({ path: link })).rejects.toThrow();
+  },
+);
+
+it.skipIf(process.platform === "win32").each([0, 995])(
+  "uses worker-owned Buildx metadata for engine history as UID %s",
+  (uid) => {
+    const identity = vi.spyOn(process, "getuid").mockReturnValue(uid);
+    const calls: string[][] = [];
+    const run = (
+      command: string,
+      args: string[],
+      options: { env?: NodeJS.ProcessEnv | undefined },
+    ) => {
+      if (command === "/usr/bin/id") return "995\n";
+      calls.push([command, ...args]);
+      const environment =
+        command === "/usr/sbin/runuser"
+          ? Object.fromEntries(
+              args
+                .filter((arg) => arg.includes("="))
+                .map((arg) => {
+                  const split = arg.indexOf("=");
+                  return [arg.slice(0, split), arg.slice(split + 1)];
+                }),
+            )
+          : options.env;
+      // Model historical root-owned buildx/ metadata: reading it is a failure,
+      // not an empty build history that permits shutdown.
+      if (
+        environment?.BUILDX_CONFIG !==
+        "/var/lib/latex-render-worker/.docker/buildx-worker"
+      )
+        throw new Error("Legacy Buildx metadata permission denied");
+      expect(environment.DOCKER_CONFIG).toBe(
+        "/var/lib/latex-render-worker/.docker",
+      );
+      expect(environment.DOCKER_HOST).toBe("unix:///run/user/995/docker.sock");
+      expect(environment.HOME).toBe("/var/lib/latex-render-worker");
+      return "Running\n";
+    };
+    try {
+      expect(
+        workerEngineCommand(
+          "/usr/bin/docker",
+          ["buildx", "--builder", "default", "history", "ls"],
+          { run },
+        ),
+      ).toBe("Running\n");
+      expect(calls).toHaveLength(1);
+    } finally {
+      identity.mockRestore();
+    }
   },
 );
 

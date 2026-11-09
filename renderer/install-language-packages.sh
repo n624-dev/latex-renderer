@@ -1,6 +1,53 @@
 #!/bin/sh
 set -eu
 [ "$#" -gt 0 ] || exit 64
+# Packed Biber executes its bundled Perl interpreter from the PAR cache. Build
+# that cache into the read-only Runtime rather than extracting into noexec /tmp.
+if [ "$1" = --prepare-biber-cache ]; then
+  [ "$#" -eq 1 ] || exit 64
+  export PAR_GLOBAL_TEMP=/opt/renderer/biber-cache
+  unset PAR_GLOBAL_CLEAN PAR_GLOBAL_TMPDIR PAR_TEMP PAR_CLEAN
+  mkdir -p "$PAR_GLOBAL_TEMP"
+  biber_version=$(timeout -s TERM -k 2 120 biber --version)
+  case "$biber_version" in
+    'biber version: '*) printf '%s\n' "$biber_version" ;;
+    *) echo 'Biber cache preparation did not complete' >&2; exit 65 ;;
+  esac
+  test -d "$PAR_GLOBAL_TEMP/inc"
+  test -f "$PAR_GLOBAL_TEMP/_CANARY_.txt"
+  # PAR lazily extracts XS modules under their archive CRC names. Prepare all
+  # of them, including modules not loaded by --version, before making it read-only.
+  perl -MFile::Find -MCompress::Raw::Zlib=crc32 - "$PAR_GLOBAL_TEMP" <<'BIBER_CACHE'
+use strict;
+use warnings;
+my $cache = shift @ARGV;
+find({ no_chdir => 1, wanted => sub {
+    return unless -f $_ && /\.so(?:\.\d+)*\z/;
+    open my $input, '<:raw', $_ or die "Cannot read Biber XS module: $!\n";
+    my ($crc, $buffer) = (0, '');
+    while (1) {
+        my $bytes = read($input, $buffer, 65536);
+        defined $bytes or die "Cannot read Biber XS module: $!\n";
+        last unless $bytes;
+        $crc = crc32($buffer, $crc);
+    }
+    close $input or die "Cannot close Biber XS module: $!\n";
+    my $target = sprintf '%s/%08x.so', $cache, $crc;
+    if (-e $target) {
+        die "Biber XS cache size mismatch\n" unless -s $target == -s $_;
+    } else {
+        link $_, $target or die "Cannot prepare Biber XS module: $!\n";
+    }
+}}, "$cache/inc");
+BIBER_CACHE
+  # Older PAR loaders open this lock even when extraction is complete. Only
+  # the lock is writable, in each container's private noexec temporary mount.
+  ln -sf /tmp/renderer-biber-inc.lock "$PAR_GLOBAL_TEMP/inc.lock"
+  find "$PAR_GLOBAL_TEMP" -type d -exec chmod 0555 {} +
+  find "$PAR_GLOBAL_TEMP" -type f -perm /111 -exec chmod 0555 {} +
+  find "$PAR_GLOBAL_TEMP" -type f ! -perm /111 -exec chmod 0444 {} +
+  exit 0
+fi
 # Build immutable font data, not only the name index. Load one face per process
 # so CJK preparation does not hold all faces in memory simultaneously.
 if [ "$1" = --warm-font-cache ]; then

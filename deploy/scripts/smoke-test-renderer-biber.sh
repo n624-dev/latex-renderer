@@ -1,0 +1,59 @@
+#!/bin/sh
+set -eu
+
+image=${1:-latex-renderer:ci}
+repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+. "$repo_root/deploy/scripts/smoke-container.sh"
+smoke_root=$(mktemp -d)
+input="$smoke_root/input"
+output="$smoke_root/output"
+trap 'rm -rf "$smoke_root"' EXIT HUP INT TERM
+chmod 00755 "$smoke_root"
+mkdir "$input" "$output"
+cp -R "$repo_root/tests/fixtures/runtime-biber/." "$input/"
+chmod -R a+rX "$input"
+chmod 0770 "$output"
+
+set +e
+run_smoke_container "$image" "$output" \
+  --network none \
+  --read-only \
+  --cap-drop ALL \
+  --security-opt "seccomp=$repo_root/deploy/security/seccomp.json" \
+  --pids-limit 128 \
+  --memory 1g \
+  --cpus 1.5 \
+  --tmpfs /tmp:rw,noexec,nosuid,nodev,size=256m \
+  --env LATEX_ENTRYPOINT=main.tex \
+  --env LATEX_OUTPUTS=pdf \
+  --mount "type=bind,src=$input,dst=/work/input,readonly" \
+  "$image"
+renderer_status=$?
+set -e
+if [ "$renderer_status" -ne 0 ]; then
+  echo "Renderer Biber smoke fixture failed with exit code $renderer_status." >&2
+  if [ -s "$output/compile.log" ]; then
+    tail -n 200 "$output/compile.log" >&2
+  fi
+  exit "$renderer_status"
+fi
+
+[ -s "$output/result.pdf" ] || {
+  echo "Renderer Biber smoke test did not produce result.pdf" >&2
+  exit 70
+}
+[ -s "$output/previews/page-1.png" ] || {
+  echo "Renderer Biber smoke test did not produce a PNG preview" >&2
+  exit 70
+}
+
+# Biber must have generated the bibliography rather than returning a first-pass
+# PDF with unresolved citations. Inspect the PDF text in the same sandbox.
+grep -F 'Biber' "$output/main.blg" >/dev/null
+grep -F 'Fixture Press' "$output/main.bbl" >/dev/null
+docker run --rm --interactive --network none --read-only --cap-drop ALL \
+  --security-opt no-new-privileges --pids-limit 32 --memory 128m \
+  --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m \
+  --entrypoint pdftotext "$image" - - < "$output/result.pdf" \
+  | grep -F 'Biber QA' >/dev/null
+printf '%s\n' 'Renderer Biber PDF/bibliography/PNG smoke test passed with noexec /tmp.'
