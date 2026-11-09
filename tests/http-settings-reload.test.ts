@@ -254,6 +254,68 @@ it.skipIf(process.platform === "win32")(
   },
 );
 
+it.skipIf(process.platform === "win32").each([false, true])(
+  "resumes a stopped configured Gateway after interruption (activation=%s)",
+  async (enabled) => {
+    const f = fixture();
+    try {
+      const values = { HTTP_IDLE_ENABLED: String(enabled) };
+      await reconcileHttpServices({ ...f, values });
+      const service = f.states.get("latex-renderer-standalone-gateway.service");
+      const listener = f.states.get("latex-renderer-standalone-gateway.socket");
+      if (!service || !listener) throw new Error("Missing Gateway fixture");
+      service.active = false;
+      listener.active = false;
+      f.interrupt();
+      await expect(
+        reconcileHttpServices({
+          ...f,
+          values: { HTTP_IDLE_ENABLED: String(!enabled) },
+        }),
+      ).rejects.toThrow("interrupted preparation");
+      expect(service.enabled || listener.enabled).toBe(true);
+      expect([service.active, listener.active]).toContain(true);
+      await reconcileHttpServices({
+        ...f,
+        values: { HTTP_IDLE_ENABLED: String(!enabled) },
+      });
+      expect([service.active, listener.active]).toContain(true);
+    } finally {
+      rmSync(f.root, { recursive: true, force: true });
+    }
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "keeps an unconfigured Gateway disabled",
+  async () => {
+    const f = fixture();
+    try {
+      for (const suffix of ["service", "socket"]) {
+        const state = f.states.get(
+          `latex-renderer-standalone-gateway.${suffix}`,
+        );
+        if (!state) throw new Error("Missing Gateway fixture");
+        state.active = false;
+        state.enabled = false;
+      }
+      await reconcileHttpServices({
+        ...f,
+        values: { HTTP_IDLE_ENABLED: "true" },
+      });
+      for (const suffix of ["service", "socket"])
+        expect(
+          f.states.get(`latex-renderer-standalone-gateway.${suffix}`),
+        ).toMatchObject({
+          active: false,
+          enabled: false,
+        });
+    } finally {
+      rmSync(f.root, { recursive: true, force: true });
+    }
+  },
+);
+
 it.skipIf(process.platform === "win32")(
   "validates before stopping and makes a failed resume retryable without touching user data",
   async () => {

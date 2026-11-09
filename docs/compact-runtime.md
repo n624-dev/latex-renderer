@@ -49,8 +49,10 @@ lets active rendering drain,
 reconciles service definitions and boot links, and changes only the dedicated
 worker user's Docker autostart policy. The separate engine idle timer releases
 Docker after its consumers and containers have drained. It does not stop a
-system-wide Docker installation or remove images. An interrupted reconciliation
-can be rerun; it does not restore the database or discard user data.
+system-wide Docker installation or remove images. A configured Gateway retains
+an enabled boot path and resumes on retry even if the previous attempt stopped
+its process and listener. An interrupted reconciliation can be rerun; it does
+not restore the database or discard user data.
 
 For Worker activation without compact managers/engine, use
 `WORKER_IDLE_ENABLED=true` with `RENDERER_RUNTIME_MODE=classic`. For ordinary

@@ -6,16 +6,22 @@ const busy = () =>
     stderr: Buffer.from("Error: busy\n  code: 'MUTATION_LOCK_BUSY'\n"),
   });
 
-it("waits for a transient CI reconciliation conflict without treating it as success", async () => {
-  const action = vi
-    .fn()
-    .mockRejectedValueOnce(busy())
-    .mockResolvedValue("verified");
-  const wait = vi.fn(() => Promise.resolve());
-  await expect(retryCiMutation(action, { wait })).resolves.toBe("verified");
-  expect(action).toHaveBeenCalledTimes(2);
-  expect(wait).toHaveBeenCalledWith(250);
-});
+it.each([
+  busy(),
+  Object.assign(new Error("busy"), { code: "MUTATION_LOCK_BUSY" }),
+])(
+  "waits for a transient CI reconciliation conflict without treating it as success: %s",
+  async (error) => {
+    const action = vi
+      .fn()
+      .mockRejectedValueOnce(error)
+      .mockResolvedValue("verified");
+    const wait = vi.fn(() => Promise.resolve());
+    await expect(retryCiMutation(action, { wait })).resolves.toBe("verified");
+    expect(action).toHaveBeenCalledTimes(2);
+    expect(wait).toHaveBeenCalledWith(250);
+  },
+);
 
 it("preserves the final busy failure at the retry bound", async () => {
   const error = busy(),

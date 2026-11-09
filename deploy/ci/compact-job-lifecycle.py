@@ -180,20 +180,21 @@ def verify_mode_transition():
     base = "\n".join(line for line in before.splitlines() if line.split("=", 1)[0] not in keys)
     command = ["/usr/local/bin/node", str(fixture.source / "deploy/scripts/http-services.mjs"), "reconcile"]
     def reconcile(check_boundary=False):
-        args = command
-        if check_boundary:
-            args = ["/usr/local/bin/node", "--input-type=module", "-e", r"""
+        args = ["/usr/local/bin/node", "--input-type=module", "-e", r"""
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
 import {pathToFileURL} from 'node:url';
-const {reconcileHttpServices} = await import(pathToFileURL(process.argv[2]).href);
+const moduleUrl = pathToFileURL(process.argv[2]);
+const {reconcileHttpServices} = await import(moduleUrl.href);
+const {retryCiMutation} = await import(new URL('../ci/retry-ci-mutation.mjs', moduleUrl).href);
+const checkBoundary = process.argv[3] === 'true';
 let checked = false;
-await reconcileHttpServices({run: (...args) => {
+await retryCiMutation(() => reconcileHttpServices({run: (...args) => {
   const result = execFileSync('/usr/bin/systemctl', args, {
     encoding: 'utf8', timeout: args[0] === 'show' ? 5000 : 15 * 60000,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
-  if (args[0] === 'stop' && args.at(-1) === 'latex-renderer-internal-api.socket') {
+  if (checkBoundary && args[0] === 'stop' && args.at(-1) === 'latex-renderer-internal-api.socket') {
     for (const suffix of ['socket', 'service']) {
       const state = execFileSync('/usr/bin/systemctl', [
         'show', `latex-renderer-standalone-gateway.${suffix}`,
@@ -204,17 +205,17 @@ await reconcileHttpServices({run: (...args) => {
     checked = true;
   }
   return result;
-}});
-assert(checked, 'Backend cutover was not observed');
-console.log(JSON.stringify({boundaryVerified:true}));
-""", "mode-transition-fixture", command[1]]
+}}));
+assert(!checkBoundary || checked, 'Backend cutover was not observed');
+console.log(JSON.stringify({boundaryVerified:checked}));
+""", "mode-transition-fixture", command[1], str(check_boundary).lower()]
         output = subprocess.run(args, check=True, capture_output=True, timeout=16 * 60).stdout
         if check_boundary:
-            assert json.loads(output)["boundaryVerified"]
+            assert json.loads(output.splitlines()[-1])["boundaryVerified"]
         return output
     stop = threading.Event()
     attempted = threading.Event()
-    traffic = {"attempts": 0, "successes": 0, "unavailable": 0}
+    traffic = {"attempts": 0, "successes": 0, "unavailable": 0, "statuses": {}}
     errors = []
     def poll():
         while not stop.is_set():
@@ -222,12 +223,16 @@ console.log(JSON.stringify({boundaryVerified:true}));
             attempted.set()
             try:
                 status, _ = fixture.request("GET", "/api/v1/projects?pageSize=1",
-                                            allowed=(200, 502, 503, 504), timeout=3)
+                                            # In-flight requests may observe a backend shutting down.
+                                            # Only this deliberate cutover interval permits 5xx;
+                                            # the initial and resumed requests require HTTP 200.
+                                            allowed=(200, 500, 502, 503, 504), timeout=3)
                 traffic["successes" if status == 200 else "unavailable"] += 1
+                traffic["statuses"][str(status)] = traffic["statuses"].get(str(status), 0) + 1
             except (OSError, http.client.HTTPException):
                 traffic["unavailable"] += 1
             except Exception as error:
-                errors.append(type(error).__name__)
+                errors.append(str(error) if isinstance(error, AssertionError) else type(error).__name__)
                 return
             stop.wait(.05)
     thread = None
@@ -247,7 +252,8 @@ console.log(JSON.stringify({boundaryVerified:true}));
         reconcile(check_boundary=True)
         stop.set()
         thread.join(10)
-        assert not thread.is_alive() and not errors
+        assert not thread.is_alive(), "Concurrent request did not finish"
+        assert not errors, f"Concurrent request failed: {errors}"
         fixture.json("GET", "/api/v1/projects?pageSize=1")
         for name in ("image-manager", "internal-api", "standalone-gateway"):
             state = run(["/usr/bin/systemctl", "show", f"latex-renderer-{name}.socket",
