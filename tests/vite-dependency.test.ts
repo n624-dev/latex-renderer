@@ -92,16 +92,22 @@ function editorHarness(
     "launch-editor/index.js",
     "launch-editor-middleware/index.js",
   ];
-  const selected = bundle.split(/^\/\/#region /m).flatMap((block) => {
+  // Rolldown emits plain module-path comments in newer bundles. Both layouts
+  // expose the same shipped factories to the isolated platform checks.
+  const selected = bundle.split(/^\/\/(?:#region)? /m).flatMap((block) => {
     const newline = block.indexOf("\n");
     const header = block.slice(0, newline);
     if (!modules.some((name) => header.endsWith(`/node_modules/${name}`)))
       return [];
     const end = block.indexOf("\n//#endregion", newline);
-    assert(end > newline, "Embedded module boundary changed");
-    return [block.slice(newline + 1, end)];
+    assert(newline >= 0, "Embedded module header changed");
+    return [block.slice(newline + 1, end < 0 ? undefined : end)];
   });
-  assert(selected.length >= 3, "Installed Vite editor modules are missing");
+  assert.equal(
+    selected.length,
+    modules.length,
+    "Installed Vite editor modules are missing",
+  );
   const context = createContext({
     URL,
     console: { log: () => undefined },
