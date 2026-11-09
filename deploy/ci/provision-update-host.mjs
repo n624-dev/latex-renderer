@@ -84,7 +84,13 @@ run("/usr/bin/apt-get", [
   "nginx",
   "docker-ce-rootless-extras",
 ]);
-run("/bin/sh", ["-c", "command -v dockerd-rootless-setuptool.sh >/dev/null"]);
+// Keep this fixed command separate from the argument-array runner so paths
+// passed to other programs never share a command-string execution boundary.
+execFileSync(
+  "/bin/sh",
+  ["-c", "command -v dockerd-rootless-setuptool.sh >/dev/null"],
+  { stdio: "inherit", timeout: 600_000 },
+);
 // Prepare Docker using the current account-isolated setup. The immutable RC.5
 // baseline then reuses the existing service without executing its old installer.
 run("/bin/sh", [
