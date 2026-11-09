@@ -197,7 +197,14 @@ describe("managed TeX Live image pipeline", () => {
     for (const match of compile.matchAll(
       /\/opt\/renderer\/([A-Za-z0-9._-]+)/g,
     )) {
-      expect(buildFiles, `compile.sh requires ${match[1]}`).toContain(match[1]);
+      if (match[1] === "biber-cache") {
+        expect(builder).toContain("--prepare-biber-cache");
+        expect(read("renderer/install-language-packages.sh")).toContain(
+          "export PAR_GLOBAL_TEMP=/opt/renderer/biber-cache",
+        );
+      } else {
+        expect(buildFiles, `compile.sh requires ${match[1]}`).toContain(match[1]);
+      }
     }
   });
 

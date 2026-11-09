@@ -46,9 +46,18 @@ Both `renderer-image` and `renderer-image-daily` use
 2. Discard the Base builder's redundant local build cache after loading Base.
 3. Build one temporary English/Japanese Runtime from that exact Base using the
    application's language-runtime builder, with layer-cache reuse disabled.
-4. Run basic rendering, English/Japanese PDF + PNG, SVG and compatibility smoke
-   tests, compare cold/precomputed font caches, then Source/client integration.
+4. Run basic rendering, English/Japanese PDF + PNG, SVG, Biber bibliography and
+   compatibility smoke tests, compare cold/precomputed font caches, then
+   Source/client integration.
 5. Remove the temporary Runtime and unused default-builder cache, even on failure.
+
+The Runtime build pre-extracts packed Biber into `/opt/renderer/biber-cache`,
+with read-only files and directories. Rendering selects that cache explicitly
+so the bundled interpreter executes from the immutable image. PAR's `inc.lock`
+points to a per-container data lock in `/tmp`; executable cache files stay
+read-only. Job `/tmp` keeps
+its `noexec,nosuid,nodev` mount options. The Biber smoke verifies bibliography
+content, PDF text and a PNG preview in that sandbox.
 
 Font-cache comparisons and host admission controls are described in
 [レンダリング資源保護とRemote MCPの再認証](runtime-resource-and-oauth-recovery.md).

@@ -612,11 +612,16 @@ export async function reconcileHttpServices({
     const gateway = "latex-renderer-standalone-gateway.service";
     const gatewayActive = httpServiceStatus(gateway, { run }).active;
     const gatewayEnabled = activationEnabledFor(gateway, { source, values });
+    const gatewayListener = properties(httpSocketUnit(gateway), run);
     let stopping = false,
       prepared = false;
     try {
       // Stop listeners first, so quiescing one backend cannot wake another.
       stopping = true;
+      // Gateway requests can activate Internal API using the old dependencies.
+      // Close this entrance and its process before stopping any backend socket.
+      if (gatewayActive)
+        controlService("stop", gateway, { run, enabled: gatewayEnabled });
       for (const { service } of units) {
         const socket = httpSocketUnit(service);
         if (properties(socket, run).LoadState === "loaded") run("stop", socket);
@@ -682,7 +687,12 @@ export async function reconcileHttpServices({
           }
         if (gatewayActive)
           try {
-            controlService("start", gateway, { run, enabled: gatewayEnabled });
+            controlService("start", gateway, {
+              run,
+              enabled: prepared
+                ? gatewayEnabled
+                : gatewayListener.ActiveState === "active",
+            });
           } catch {
             /* retain primary failure */
           }

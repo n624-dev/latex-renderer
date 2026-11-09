@@ -42,7 +42,10 @@ Apply the environment-only change under the existing mutation lock:
 sudo node /opt/latex-renderer/current/deploy/scripts/http-services.mjs reconcile
 ```
 
-The operation stops listeners before writers, lets active rendering drain,
+The operation closes the Standalone Gateway listener and process before backend
+listeners, preventing public requests from activating the previous dependencies
+during cutover. Requests may need to retry while the listeners are closed. It
+lets active rendering drain,
 reconciles service definitions and boot links, and changes only the dedicated
 worker user's Docker autostart policy. The separate engine idle timer releases
 Docker after its consumers and containers have drained. It does not stop a
