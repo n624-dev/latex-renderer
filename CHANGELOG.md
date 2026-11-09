@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 1.6.4 - 2026-11-09
+
+- Promote validated 1.6.4-rc.1 to Stable with matching executable behavior, dependencies and configuration defaults.
+- Include Hono, jose and marked fixes, development-tool updates and checksum-pinned setup-go and CodeQL updates.
+- Preserve bundled editor security regressions across Vite module-header layouts.
+
 ## 1.6.4-rc.1 - 2026-11-09
 
 - Update Hono, the Node server adapter, jose and marked with upstream fixes.
