@@ -29,19 +29,24 @@ describe("Cloudflare OAuth deployment build context", () => {
       const result = spawnSync(
         "sh",
         [
-          "-c",
-          `set -eu
+          "-eu",
+          "-s",
+          "--",
+          resolve("deploy/scripts/deployment-checks.sh"),
+          String(status),
+        ],
+        {
+          input: `
       . "$1"
       deployment_mode=cloudflare
       source_root=/sealed-control
-      run_deployment_pnpm() { return ${status}; }
+      preflight_status=$2
+      run_deployment_pnpm() { return "$preflight_status"; }
       ${block}
       echo PREFLIGHT_PASS
     `,
-          "preflight-fixture",
-          resolve("deploy/scripts/deployment-checks.sh"),
-        ],
-        { encoding: "utf8" },
+          encoding: "utf8",
+        },
       );
       expect(result.status === 0, result.stderr).toBe(status === 0 || status === 2);
       expect(result.stdout.includes("PREFLIGHT_PASS")).toBe(

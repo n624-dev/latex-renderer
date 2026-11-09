@@ -22,7 +22,10 @@ it("removes only per-user assignments from disposable-host PAM defaults", () => 
   expect(withoutUserEnvironmentDefaults("XDG_CONFIG_HOME=/caller")).toBe("");
 });
 
-it("overrides caller and PAM paths after switching to the Docker worker", () => {
+it.each([
+  "/var/lib/latex-render-worker",
+  "/var/lib/worker space ' \" $HOME; $(exit 91) `exit 92`",
+])("overrides caller and PAM paths for worker home %s", (workerHome) => {
   const source = readFileSync(
     "deploy/scripts/configure-rootless-docker.sh",
     "utf8",
@@ -35,10 +38,15 @@ it("overrides caller and PAM paths after switching to the Docker worker", () => 
     "sh",
     [
       "-eu",
-      "-c",
-      `
+      "-s",
+      "--",
+      process.execPath,
+      workerHome,
+    ],
+    {
+      input: `
 worker_user=latex-render-worker
-worker_home=/var/lib/latex-render-worker
+worker_home=$2
 runtime_dir=/run/user/999
 user_bus=unix:path=/run/user/999/bus
 runuser() {
@@ -51,10 +59,6 @@ runuser() {
 ${definition}
 run_worker "$1" -e 'console.log(JSON.stringify(Object.fromEntries(["HOME","XDG_CONFIG_HOME","XDG_DATA_HOME","XDG_CACHE_HOME","XDG_RUNTIME_DIR","DOCKER_CONFIG","DOCKER_HOST","DOCKER_CONTEXT","DBUS_SESSION_BUS_ADDRESS"].map(k=>[k,process.env[k]??null]))))'
 `,
-      "fixture",
-      process.execPath,
-    ],
-    {
       env: {
         ...process.env,
         XDG_DATA_HOME: "/caller/data",
@@ -68,12 +72,12 @@ run_worker "$1" -e 'console.log(JSON.stringify(Object.fromEntries(["HOME","XDG_C
   );
   expect(result.status, result.stderr).toBe(0);
   expect(JSON.parse(result.stdout)).toEqual({
-    HOME: "/var/lib/latex-render-worker",
-    XDG_CONFIG_HOME: "/var/lib/latex-render-worker/.config",
-    XDG_DATA_HOME: "/var/lib/latex-render-worker/.local/share",
-    XDG_CACHE_HOME: "/var/lib/latex-render-worker/.cache",
+    HOME: workerHome,
+    XDG_CONFIG_HOME: `${workerHome}/.config`,
+    XDG_DATA_HOME: `${workerHome}/.local/share`,
+    XDG_CACHE_HOME: `${workerHome}/.cache`,
     XDG_RUNTIME_DIR: "/run/user/999",
-    DOCKER_CONFIG: "/var/lib/latex-render-worker/.docker",
+    DOCKER_CONFIG: `${workerHome}/.docker`,
     DOCKER_HOST: null,
     DOCKER_CONTEXT: null,
     DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/999/bus",
