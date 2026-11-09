@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 1.6.5 - 2026-11-10
+
+- Promote validated 1.6.5-rc.1 to Stable with matching executable behavior, dependencies and configuration defaults.
+- Include Biber sandbox startup, Gateway cutover/retry, legacy Buildx metadata and early Web file-selection fixes (#322–#324).
+- Verify signed updates and recovery across five historical hosts, with Biber PDF/bibliography, PNG, SVG and data-preservation checks on the release candidate.
+
 ## 1.6.5-rc.1 - 2026-11-09
 
 - Pre-extract packed Biber and its native libraries into the immutable Runtime, with a per-container temporary lock, so biblatex works with noexec temporary storage (#322).
