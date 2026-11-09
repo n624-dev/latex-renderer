@@ -1,4 +1,4 @@
-export const PLATFORM_VERSION = "1.6.5-rc.1";
+export const PLATFORM_VERSION = "1.6.5";
 export const CLIENT_VERSION = PLATFORM_VERSION;
 export const PROTOCOL_VERSION = "v1";
 export const RENDERER_VERSION = "2026";
