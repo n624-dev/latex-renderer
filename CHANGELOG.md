@@ -6,6 +6,7 @@
 
 - Pre-extract packed Biber and its native libraries into the immutable Runtime, with a per-container temporary lock, so biblatex works with noexec temporary storage (#322).
 - Quiesce the Standalone Gateway before backend listeners during runtime-mode changes, and restore the prior listener mode if preparation fails (#323).
+- Inspect files selected while the Web session initializes, so they can be rendered without reselection (#324).
 - Exercise Biber through the rootless public Job pipeline and authenticated Projects requests during Classic-to-Compact reconciliation.
 - Clarify shell execution boundaries in CI fixtures and resolve the corresponding CodeQL alerts (#321).
 

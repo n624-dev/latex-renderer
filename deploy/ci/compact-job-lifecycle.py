@@ -179,8 +179,39 @@ def verify_mode_transition():
             "WORKER_IDLE_TIMEOUT_SECONDS", "MANAGER_IDLE_TIMEOUT_SECONDS", "RENDERER_RUNTIME_MODE"}
     base = "\n".join(line for line in before.splitlines() if line.split("=", 1)[0] not in keys)
     command = ["/usr/local/bin/node", str(fixture.source / "deploy/scripts/http-services.mjs"), "reconcile"]
-    def reconcile():
-        return subprocess.run(command, check=True, capture_output=True, timeout=16 * 60).stdout
+    def reconcile(check_boundary=False):
+        args = command
+        if check_boundary:
+            args = ["/usr/local/bin/node", "--input-type=module", "-e", r"""
+import assert from 'node:assert/strict';
+import {execFileSync} from 'node:child_process';
+import {pathToFileURL} from 'node:url';
+const {reconcileHttpServices} = await import(pathToFileURL(process.argv[2]).href);
+let checked = false;
+await reconcileHttpServices({run: (...args) => {
+  const result = execFileSync('/usr/bin/systemctl', args, {
+    encoding: 'utf8', timeout: args[0] === 'show' ? 5000 : 15 * 60000,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  if (args[0] === 'stop' && args.at(-1) === 'latex-renderer-internal-api.socket') {
+    for (const suffix of ['socket', 'service']) {
+      const state = execFileSync('/usr/bin/systemctl', [
+        'show', `latex-renderer-standalone-gateway.${suffix}`,
+        '--property=ActiveState', '--value',
+      ], {encoding:'utf8', timeout:5000});
+      assert.equal(state.trim(), 'inactive', 'Gateway remained reachable at backend cutover');
+    }
+    checked = true;
+  }
+  return result;
+}});
+assert(checked, 'Backend cutover was not observed');
+console.log(JSON.stringify({boundaryVerified:true}));
+""", "mode-transition-fixture", command[1]]
+        output = subprocess.run(args, check=True, capture_output=True, timeout=16 * 60).stdout
+        if check_boundary:
+            assert json.loads(output)["boundaryVerified"]
+        return output
     stop = threading.Event()
     attempted = threading.Event()
     traffic = {"attempts": 0, "successes": 0, "unavailable": 0}
@@ -213,7 +244,7 @@ def verify_mode_transition():
         path.write_text(base + "\nHTTP_IDLE_ENABLED=true\nHTTP_IDLE_TIMEOUT_SECONDS=30\n"
                         "WORKER_IDLE_ENABLED=true\nWORKER_IDLE_TIMEOUT_SECONDS=30\n"
                         "RENDERER_RUNTIME_MODE=compact\nMANAGER_IDLE_TIMEOUT_SECONDS=30\n")
-        reconcile()
+        reconcile(check_boundary=True)
         stop.set()
         thread.join(10)
         assert not thread.is_alive() and not errors
@@ -223,7 +254,8 @@ def verify_mode_transition():
                          "--property=ActiveState", "--value"]).strip()
             assert state == b"active", f"{name} listener did not resume"
         assert fixture.wait(fixture.queue(fixture.upload()))["status"] == "succeeded"
-        return {"concurrentProjects": traffic, "listenersResumed": True, "renderSucceeded": True}
+        return {"concurrentProjects": traffic, "gatewayQuiescedAtCutover": True,
+                "listenersResumed": True, "renderSucceeded": True}
     finally:
         stop.set()
         if thread is not None:
