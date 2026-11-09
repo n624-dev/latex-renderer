@@ -131,6 +131,7 @@ async function verifyBuildProtection(image, environment) {
       "-i",
       "PATH=/usr/local/bin:/usr/bin:/bin",
       "HOME=/var/lib/latex-render-worker",
+      "BUILDX_CONFIG=/var/lib/latex-render-worker/.docker/buildx-worker",
       `DOCKER_HOST=unix:///run/user/${uid}/docker.sock`,
       "/usr/bin/docker",
       "buildx",
