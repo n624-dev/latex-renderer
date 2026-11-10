@@ -38,4 +38,17 @@ export CI=true
 export PNPM_CONFIG_STORE_DIR="$build_root/.deployment-tooling/store"
 export PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=error
 export PNPM_CONFIG_FROZEN_LOCKFILE=true
+# Keep the same step-local bounds as update-build-environment.mjs. This shell
+# exec adds no resident launcher and preserves the deployment lock descriptor.
+update_command=$1
+[ "$update_command" != run ] || update_command=${2:-}
+case "$update_command" in
+  install)
+    export PNPM_MAX_WORKERS=1 PNPM_CONFIG_NETWORK_CONCURRENCY=4 PNPM_CONFIG_CHILD_CONCURRENCY=1
+    export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--max-old-space-size=256"
+    ;;
+  build:production-services)
+    export PNPM_CONFIG_WORKSPACE_CONCURRENCY=1
+    ;;
+esac
 exec "$pnpm_executable" --dir "$build_root" "$@"

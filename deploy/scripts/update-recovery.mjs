@@ -455,6 +455,7 @@ export class RecoveryStore {
       await this.remove(join(this.root, "staging", name));
     }
     const points = await this.points();
+    const retained = new Set(points.map((point) => point.id));
     for (let index = points.length - 1; index >= 0; index--) {
       const point = points[index];
       if (point.id === protectedId) continue;
@@ -466,8 +467,14 @@ export class RecoveryStore {
       const pressure =
         index > 0 &&
         (await this.usage()) + additionalBytes > this.policy.maxBytes;
-      if (expired || overCount || pressure) await this.discard(point.id);
+      if (expired || overCount || pressure) {
+        await this.discard(point.id);
+        retained.delete(point.id);
+      }
     }
+    // The caller holds the management lock. Return this invocation's verified
+    // survivors for reporting, never a cache for a subsequent GC or restore.
+    return points.filter((point) => retained.has(point.id));
   }
   async create({
     database,

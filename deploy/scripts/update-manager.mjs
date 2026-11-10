@@ -37,6 +37,7 @@ import {
   positiveBytesEnvironment,
 } from "./environment.mjs";
 import { validateBuildArtifacts } from "./release-assembly.mjs";
+import { updateBuildEnvironment } from "./update-build-environment.mjs";
 import { validateReleaseArchive } from "./release-archive.mjs";
 import {
   assertReleaseExtractor,
@@ -885,14 +886,14 @@ async function buildAndAssemble(
       "--store-dir",
       pnpmStore,
     ],
-    { env: deployEnvironment },
+    { env: updateBuildEnvironment(deployEnvironment, "install") },
   );
   for (const script of ["build:production-services", "build:client"])
     await runLogged(
       operation,
       corepack,
       [packageManager, "--dir", buildSource, script],
-      { env: deployEnvironment },
+      { env: updateBuildEnvironment(deployEnvironment, script) },
     );
 
   await validateBuildArtifacts({

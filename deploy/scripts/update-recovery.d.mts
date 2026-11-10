@@ -34,7 +34,7 @@ export class RecoveryStore {
     protectedId?: string | null;
     now?: number;
     additionalBytes?: number;
-  }): Promise<void>;
+  }): Promise<RecoveryPoint[]>;
   create(options: {
     database: string;
     storage: string;

@@ -71,6 +71,43 @@ export async function verifyRuntimeAssembly({
   await assert.rejects(lstat(join(assembly, "node_modules/vitest")), {
     code: "ENOENT",
   });
+  const distribution = join(copy, "client-dist");
+  const client = JSON.parse(
+    await readFile(join(distribution, "manifest.json")),
+  );
+  const mcpb = JSON.parse(await readFile(join(distribution, "mcpb.json")));
+  const names = ["manifest.json", "mcpb.json", client.archive, mcpb.archive];
+  const prepared = await Promise.all(
+    names.map((name) => readFile(join(distribution, name))),
+  );
+  // Exercise the production reuse path with the actual reduced-then-restored
+  // dependency tree. The signatures and archive bytes must remain identical.
+  for (const args of [
+    ["verify:mcpb"],
+    ["exec", "node", join(copy, "apps/public-web/build.mjs")],
+    [
+      "--filter",
+      "@latex-renderer/public-web",
+      "exec",
+      "wrangler",
+      "deploy",
+      "--dry-run",
+    ],
+  ])
+    run(
+      "/bin/sh",
+      [join(copy, "deploy/scripts/deployment-pnpm.sh"), copy, pnpm, ...args],
+      { ...options, env: { ...options.env, WRANGLER_SEND_METRICS: "false" } },
+    );
+  for (const [index, name] of names.entries())
+    assert((await readFile(join(distribution, name))).equals(prepared[index]));
+  console.log(
+    JSON.stringify({
+      event: "ci.prepared_client_reuse",
+      unchangedArchivesAndSignatures: true,
+      publicWorkerDryRun: true,
+    }),
+  );
   console.log(
     JSON.stringify({
       event: "ci.runtime_dependency_rehydration",
