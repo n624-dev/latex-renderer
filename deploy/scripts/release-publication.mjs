@@ -21,6 +21,7 @@ import { fileURLToPath } from "node:url";
 import { acquireMutationLockForPath } from "./mutation-lock.mjs";
 import { isMainModule } from "./is-main-module.mjs";
 import { assertSealedControlTree } from "./release-assembly.mjs";
+import { DurableFileBatch } from "./durable-file-batch.mjs";
 
 const marker = ".host-prepare-source-complete";
 const idPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,159}$/;
@@ -105,6 +106,7 @@ async function tree(
   )
     throw new Error("Unsafe release source root");
   await noMounts(root);
+  const pending = sync ? new DurableFileBatch(4) : null;
   let entries = 0;
   async function walk(path, relative) {
     if (++entries > 200_000 || relative.split("/").length > 128)
@@ -133,7 +135,10 @@ async function tree(
         await chown(path, uid, gid);
         await chmod(path, 0o750);
       }
-      if (sync) await syncDirectory(path);
+      if (pending) {
+        await pending.flush();
+        await syncDirectory(path);
+      }
     } else if (s.isFile()) {
       if (normalize && s.nlink !== 1)
         throw new Error("Shared release copy inode");
@@ -141,6 +146,7 @@ async function tree(
         path,
         constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
       );
+      let retained = false;
       try {
         const before = await handle.stat(),
           hash = createHash("sha256");
@@ -173,9 +179,12 @@ async function tree(
           await handle.chown(uid, gid);
           await handle.chmod(s.mode & 0o111 ? 0o750 : 0o640);
         }
-        if (sync) await handle.sync();
+        if (pending) {
+          retained = true;
+          await pending.add(handle);
+        }
       } finally {
-        await handle.close();
+        if (!retained) await handle.close();
       }
     } else if (s.isSymbolicLink()) {
       const target = await readlink(path),
@@ -186,8 +195,13 @@ async function tree(
       if (normalize) await lchown(path, uid, gid);
     } else throw new Error("Special release payload entry");
   }
-  await walk(root, "");
-  return digest.digest("hex");
+  try {
+    await walk(root, "");
+    await pending?.flush();
+    return digest.digest("hex");
+  } finally {
+    await pending?.discard();
+  }
 }
 
 async function privateJson(path, uid) {

@@ -1,6 +1,7 @@
 import { isMainModule } from "./is-main-module.mjs";
-import { lstat, readdir, readlink, realpath } from "node:fs/promises";
+import { chmod, lstat, readdir, readlink, realpath } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
+import { pruneRuntimeDependencies } from "./release-runtime.mjs";
 
 export const requiredProductionBuildOutputs = [
   "apps/admin-api/dist/server.js",
@@ -40,6 +41,15 @@ export async function assembleBuildArtifacts({
     `${buildSource}/`,
     `${assembly}/`,
   ]);
+  // rsync -a copies the source directory mode as well. Re-establish the
+  // private assembly boundary before selecting dependencies from copied data.
+  await chmod(assembly, 0o700);
+  await pruneRuntimeDependencies(assembly);
+  await assertBuildOutputs(verifiedSource, assembly);
+  await assertContainedSymlinks(assembly, assembly);
+}
+
+async function assertBuildOutputs(verifiedSource, root) {
   for (const requiredPath of requiredProductionBuildOutputs) {
     if (requiredPath === "apps/public-web/dist/index.html") {
       try {
@@ -60,13 +70,44 @@ export async function assembleBuildArtifacts({
       !(await ownerBootstrapRequired(verifiedSource))
     )
       continue;
-    const entry = await lstat(join(assembly, requiredPath));
+    const entry = await lstat(join(root, requiredPath));
     if (!entry.isFile())
       throw new Error(
         `Required production build output is missing: ${requiredPath}`,
       );
   }
-  await assertContainedSymlinks(assembly, assembly);
+}
+
+// Check derived outputs directly without copying the entire dependency tree
+// in the unprivileged controller. Root independently assembles and verifies it.
+export async function validateBuildArtifacts({ verifiedSource, buildSource }) {
+  await assertBuildOutputs(verifiedSource, buildSource);
+  const paths = ["node_modules", "client-dist"];
+  for (const group of ["apps", "packages"]) {
+    let names;
+    try {
+      names = await readdir(join(buildSource, group));
+    } catch (error) {
+      if (error.code === "ENOENT") continue;
+      throw error;
+    }
+    for (const name of names) {
+      paths.push(`${group}/${name}/dist`, `${group}/${name}/node_modules`);
+    }
+  }
+  for (const path of paths) {
+    const directory = join(buildSource, path);
+    let info;
+    try {
+      info = await lstat(directory);
+    } catch (error) {
+      if (error.code === "ENOENT") continue;
+      throw error;
+    }
+    if (!info.isDirectory())
+      throw new Error(`Invalid build output directory: ${path}`);
+    await assertContainedSymlinks(buildSource, directory);
+  }
 }
 
 async function ownerBootstrapRequired(source) {

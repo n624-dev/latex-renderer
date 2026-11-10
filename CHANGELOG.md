@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 1.6.6-rc.1 - 2026-11-10
+
+- Bound release file durability work to batches of four while preserving directory barriers, integrity receipts and atomic publication.
+- Keep production dependency closures and client verification tools in immutable releases; restore build tooling only in operation-local writable copies.
+- Validate controller build outputs directly and leave trusted assembly to the privileged helper, avoiding a redundant dependency-tree copy.
+- Exercise reduced runtime dependencies and frozen-lockfile rehydration in signed update/recovery validation.
+
 ## 1.6.5 - 2026-11-10
 
 - Promote validated 1.6.5-rc.1 to Stable with matching executable behavior, dependencies and configuration defaults.
