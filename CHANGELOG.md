@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 1.6.6 - 2026-11-10
+
+- Promote validated 1.6.6-rc.1 to Stable with matching executable behavior, dependencies and configuration defaults.
+- Reduce publication I/O with four-file durability batches, runtime dependency selection and removal of the redundant controller assembly copy.
+- Preserve private helper ownership during both artifact transfers and verify frozen runtime rehydration, signed updates and recovery across five host configurations.
+
 ## 1.6.6-rc.1 - 2026-11-10
 
 - Bound release file durability work to batches of four while preserving directory barriers, integrity receipts and atomic publication.
