@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 1.6.7 - 2026-11-10
+
+- Promote validated 1.6.7-rc.1 to Stable with matching executable behavior, dependencies and configuration defaults.
+- Reduce update-time installation and workspace-build memory peaks, reuse verified public client distributions and avoid duplicate recovery-GC hashing.
+- Verify signed updates and recovery across five host configurations, prepared-client signature preservation and post-update rendering.
+
 ## 1.6.7-rc.1 - 2026-11-10
 
 - Bound update-time dependency installation and serialize production workspace builds to reduce memory peaks without changing application memory limits.
