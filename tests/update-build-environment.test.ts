@@ -25,15 +25,25 @@ it("bounds installation without leaking its heap setting into compilation", () =
     PNPM_CONFIG_NETWORK_CONCURRENCY: "4",
     PNPM_CONFIG_CHILD_CONCURRENCY: "1",
   });
-  const heap = execFileSync(
-    process.execPath,
-    [
-      "-e",
-      "console.log(require('node:v8').getHeapStatistics().heap_size_limit)",
-    ],
-    { env: installed, encoding: "utf8" },
+  const heapLimit = (env: NodeJS.ProcessEnv) =>
+    Number(
+      execFileSync(
+        process.execPath,
+        [
+          "-e",
+          "console.log(require('node:v8').getHeapStatistics().heap_size_limit)",
+        ],
+        { env, encoding: "utf8" },
+      ),
+    );
+  // V8 adds a machine-dependent young generation to the old-space setting.
+  // Compare two settings on this same host rather than assuming that overhead.
+  expect(heapLimit(installed)).toBeLessThan(
+    heapLimit({
+      ...installed,
+      NODE_OPTIONS: "--enable-source-maps --max-old-space-size=512",
+    }),
   );
-  expect(Number(heap)).toBeLessThan(350 * 1024 ** 2);
   expect(
     updateBuildEnvironment(environment, "build:production-services"),
   ).toEqual({ ...environment, PNPM_CONFIG_WORKSPACE_CONCURRENCY: "1" });

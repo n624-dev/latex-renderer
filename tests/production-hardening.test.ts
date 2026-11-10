@@ -264,9 +264,24 @@ describe("production hardening", () => {
     expect(app).not.toContain("Cf-Access-Jwt-Assertion");
     expect(configure).toContain("/^CLOUDFLARE_INTERNAL_AUDIENCE=/d");
   });
-  it("invokes the public Web deploy package script with the deployment user's pnpm on PATH", () => {
+  it("deploys verified public Web assets with the deployment user's pnpm without rebuilding the client", () => {
     const deploy = read("deploy/scripts/deploy-production-release.sh");
-    expect(deploy).toContain("--filter @latex-renderer/public-web run deploy");
+    expect(deploy).toContain(
+      "--filter @latex-renderer/public-web exec wrangler deploy",
+    );
+    expect(deploy).not.toContain(
+      "--filter @latex-renderer/public-web run deploy",
+    );
+    const verify = deploy.indexOf("run_deployment_pnpm verify:mcpb");
+    const prepare = deploy.indexOf(
+      'run_deployment_pnpm exec node "$build_root/apps/public-web/build.mjs"',
+    );
+    const quiesce = deploy.indexOf(
+      'sh "$source_root/deploy/scripts/quiesce-image-manager.sh"',
+    );
+    expect(verify).toBeGreaterThan(0);
+    expect(prepare).toBeGreaterThan(verify);
+    expect(quiesce).toBeGreaterThan(prepare);
     expect(deploy).toContain(
       'sync_pnpm_bin="$build_root/.deployment-tooling/bin"',
     );
