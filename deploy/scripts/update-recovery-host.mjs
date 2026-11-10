@@ -412,8 +412,9 @@ if (isMainModule(import.meta.url)) {
           await store.sync();
           pending = null;
         }
+        let points;
         if (verb === "gc" && !pending) {
-          await store.collect();
+          points = await store.collect();
           console.log(
             JSON.stringify({
               event: "release.retention_completed",
@@ -424,7 +425,7 @@ if (isMainModule(import.meta.url)) {
             }),
           );
         }
-        const points = await store.points();
+        points ??= await store.points();
         console.log(
           JSON.stringify({
             pending: Boolean(pending),

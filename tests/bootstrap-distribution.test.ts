@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { runInNewContext } from "node:vm";
 import { expect, it } from "vitest";
+import { updateBuildEnvironment } from "../deploy/scripts/update-build-environment.mjs";
 
 const helper = readFileSync("deploy/scripts/update-manager-helper.mjs", "utf8");
 const buildFunction = helper
@@ -21,15 +22,32 @@ async function build(failStatic = false) {
     {uid: '1001', gid: '1002', deployUser: 'builder'})`,
     {
       join,
+      updateBuildEnvironment,
       mkdir: async () => {},
       chmod: async () => {},
       runCapture: () => Promise.resolve("11.24.0"),
       runLogged: (
         command: string,
         args: string[],
-        options?: { uid: number; gid: number; cwd: string },
+        options?: {
+          uid: number;
+          gid: number;
+          cwd: string;
+          env: NodeJS.ProcessEnv;
+        },
       ) => {
         calls.push(`${command} ${args.join(" ")}`);
+        if (args.includes("install"))
+          expect(options?.env).toMatchObject({
+            PNPM_MAX_WORKERS: "1",
+            PNPM_CONFIG_NETWORK_CONCURRENCY: "4",
+            PNPM_CONFIG_CHILD_CONCURRENCY: "1",
+            NODE_OPTIONS: "--max-old-space-size=256",
+          });
+        if (args.at(-1) === "build:production-services") {
+          expect(options?.env.PNPM_CONFIG_WORKSPACE_CONCURRENCY).toBe("1");
+          expect(options?.env.NODE_OPTIONS).toBeUndefined();
+        }
         if (args.some((arg) => arg.endsWith("apps/public-web/build.mjs"))) {
           expect(command).toBe("/usr/local/bin/node");
           expect(options).toMatchObject({

@@ -143,6 +143,25 @@ retained. Older releases without the policy use the full dependency layout.
 Build and recovery operations continue to use a separate writable tree. Their
 normal `deployment-pnpm.sh` frozen install restores development dependencies
 before compilation; no dependency installation runs in an immutable release.
+Update-time installs use one package worker, four concurrent network requests,
+one lifecycle child and a 256 MiB JavaScript heap setting. This heap setting is
+not a total process memory limit and applies only to installation. Production
+workspace builds run one workspace at a time; client compilation and application
+services do not inherit the installation heap setting. The controller, bootstrap
+helper and deployment/recovery shell use the same step-local settings.
+
+Cloudflare deployment verifies the prepared MCPB signature and distribution
+hashes before service cutover, prepares static assets from that distribution,
+and deploys them without rebuilding or re-signing the client. Normal development
+and release builds still generate the client normally. Post-deployment download,
+signature and renderer checks remain mandatory.
+
+Recovery GC returns its verified surviving points for reporting under the same
+management lock, avoiding a second full archive hash just to print a count.
+Every new GC/status invocation still verifies archives; no persistent verification
+cache or cross-operation trust is introduced. Corrupt state prevents collection,
+and restore and decrypted-backup checks are unchanged.
+
 Release CI verifies the reduced assembly, runtime tool resolution and an actual
 non-root frozen install plus production/client rebuild from a writable copy.
 This reduces publication work, not the required backups, provenance checks,

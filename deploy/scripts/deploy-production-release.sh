@@ -304,6 +304,13 @@ fi
   echo "production client distribution was not generated before release copy" >&2
   exit 70
 }
+if [ "$deployment_mode" = cloudflare ]; then
+  # Verify the exact generated client before any service cutover. Static assets
+  # are prepared from those files without rebuilding or re-signing the client.
+  deployment_checkpoint prepared-client-verification
+  run_deployment_pnpm verify:mcpb
+  run_deployment_pnpm exec node "$build_root/apps/public-web/build.mjs"
+fi
 
 # Freeze all TeX environment mutations before prepare-host changes the current
 # release symlink, renderer.env, inventory, or persisted Image Manager state.
@@ -444,7 +451,7 @@ if [ "$deployment_mode" = cloudflare ]; then
   deployment_checkpoint public-worker-deployment
   systemctl is-active --quiet cloudflared
   run_deployment_pnpm --filter @latex-renderer/gateway-worker exec wrangler deploy --config "$gateway_runtime_config"
-  run_deployment_pnpm --filter @latex-renderer/public-web run deploy
+  run_deployment_pnpm --filter @latex-renderer/public-web exec wrangler deploy
   run_deployment_pnpm exec node "$source_root/deploy/scripts/sync-public-worker-routes.mjs" --apply
 fi
 

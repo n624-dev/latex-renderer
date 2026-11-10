@@ -106,6 +106,37 @@ it("keeps two generations, expires after seven days, and leaves unrelated backup
     "keep",
   );
 });
+it("returns only verified GC survivors, including a protected expired point", async () => {
+  const f = await fixture();
+  const first = await f.store.create(f);
+  const second = await f.store.create({ ...f, now: now + 1 });
+  expect(
+    await f.store.collect({
+      now: now + 8 * 24 * 3600_000,
+      protectedId: first.id,
+    }),
+  ).toEqual([first]);
+  expect(await readdir(join(f.store.root, "points"))).toEqual([first.id]);
+  expect(second.id).not.toBe(first.id);
+});
+
+it("hashes each point once per GC and checks again on the next invocation", async () => {
+  const f = await fixture();
+  const point = await f.store.create(f);
+  const inspect = vi.spyOn(f.store, "points");
+  expect(await f.store.collect({ now })).toEqual([point]);
+  expect(inspect).toHaveBeenCalledTimes(1);
+  const archive = join(f.store.root, "points", point.id, "recovery.tar.age");
+  const bytes = await readFile(archive);
+  bytes[0] = (bytes[0] ?? 0) ^ 1;
+  await writeFile(archive, bytes);
+  await expect(f.store.collect({ now })).rejects.toThrow(
+    "Corrupt recovery archive",
+  );
+  expect(inspect).toHaveBeenCalledTimes(2);
+  expect(await readdir(join(f.store.root, "points"))).toEqual([point.id]);
+});
+
 it("resumes an interrupted deletion without requiring completed metadata in trash", async () => {
   const f = await fixture(),
     point = await f.store.create(f);

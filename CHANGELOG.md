@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 1.6.7-rc.1 - 2026-11-10
+
+- Bound update-time dependency installation and serialize production workspace builds to reduce memory peaks without changing application memory limits.
+- Verify and reuse prepared client distributions for public Web deployment instead of rebuilding and re-signing them.
+- Reuse verified recovery-point listings within each locked GC invocation while retaining full verification on subsequent operations.
+- Preserve frozen dependency installs, signed release provenance, post-deployment validation and interrupted-update recovery.
+
 ## 1.6.6 - 2026-11-10
 
 - Promote validated 1.6.6-rc.1 to Stable with matching executable behavior, dependencies and configuration defaults.

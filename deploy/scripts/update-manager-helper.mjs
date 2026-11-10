@@ -44,6 +44,7 @@ import {
 } from "./release-extraction.mjs";
 import { releaseAttestationArgs } from "./release-attestation.mjs";
 import { githubCliEnvironment } from "./github-cli-environment.mjs";
+import { updateBuildEnvironment } from "./update-build-environment.mjs";
 import { validatedReleaseRendererFingerprint } from "./runtime-image-identity.mjs";
 import { acquireMutationLockForPath } from "./mutation-lock.mjs";
 import {
@@ -706,14 +707,16 @@ export async function buildBootstrapRelease(
       "--store-dir",
       pnpmStore,
     ],
-    userOptions,
+    {
+      ...userOptions,
+      env: updateBuildEnvironment(deployEnvironment, "install"),
+    },
   );
   for (const script of ["build:production-services", "build:client"])
-    await runLogged(
-      corepack,
-      [packageManager, "--dir", buildSource, script],
-      userOptions,
-    );
+    await runLogged(corepack, [packageManager, "--dir", buildSource, script], {
+      ...userOptions,
+      env: updateBuildEnvironment(deployEnvironment, script),
+    });
 
   // Older signed deployment drivers expect the static-site distribution paths.
   // Generate derived assets without rebuilding/re-signing clients or deploying Workers.
