@@ -36,7 +36,7 @@ import {
   boundedIntegerEnvironment,
   positiveBytesEnvironment,
 } from "./environment.mjs";
-import { assembleBuildArtifacts } from "./release-assembly.mjs";
+import { validateBuildArtifacts } from "./release-assembly.mjs";
 import { validateReleaseArchive } from "./release-archive.mjs";
 import {
   assertReleaseExtractor,
@@ -895,16 +895,11 @@ async function buildAndAssemble(
       { env: deployEnvironment },
     );
 
-  const assembly = join(stage, "assembly");
-  await mkdir(assembly, { mode: 0o700 });
-  await assembleBuildArtifacts({
+  await validateBuildArtifacts({
     verifiedSource,
     buildSource,
-    assembly,
-    runCommand: (command, args) => runLogged(operation, command, args),
   });
-  await chmod(assembly, 0o700);
-  return { source: assembly, buildSource };
+  return { source: verifiedSource, buildSource };
 }
 
 async function assertDiskSpace(path, requiredBytes, purpose) {

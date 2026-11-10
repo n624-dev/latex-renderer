@@ -7,15 +7,18 @@ import {
   link,
   mkdir,
   mkdtemp,
+  open,
   readFile,
+  readlink,
   readdir,
   rm,
   symlink,
   writeFile,
 } from "node:fs/promises";
+import type { FileHandle } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   publishRelease,
   collectReleasePublications,
@@ -541,5 +544,67 @@ describe.skipIf(process.platform !== "linux")(
       ).rejects.toThrow("differs");
       expect(await readdir(f.releasesRoot)).not.toContain(f.releaseId);
     });
+  },
+);
+
+it.skipIf(process.platform !== "linux").each(["EIO", "ENOSPC"])(
+  "does not publish after actual batched file sync rejects with %s; retry preserves the prior release",
+  async (code) => {
+    const f = await fixture();
+    await publishRelease(f);
+    const old = await readFile(
+      join(f.releasesRoot, f.releaseId, "package.json"),
+    );
+    for (let n = 0; n < 12; n++)
+      await writeFile(join(f.source, `file-${n}`), `data:${n}`);
+    const next = {
+      ...f,
+      releaseId: f.releaseId.replace("aaaaaaaaaaaa", "bbbbbbbbbbbb"),
+    };
+    const probe = await open(join(f.source, "package.json"));
+    const prototype = Object.getPrototypeOf(probe) as Pick<FileHandle, "sync">;
+    await probe.close();
+    const original = prototype.sync;
+    let active = 0,
+      peak = 0,
+      rejected = false;
+    const spy = vi.spyOn(prototype, "sync").mockImplementation(async function (
+      this: FileHandle,
+    ) {
+      const info = await this.stat();
+      if (info.isDirectory()) {
+        expect(active).toBe(0);
+        return original.call(this);
+      }
+      const path = await readlink(`/proc/self/fd/${this.fd}`);
+      if (!path.includes(".pending-")) return original.call(this);
+      peak = Math.max(peak, ++active);
+      try {
+        await delay(2);
+        if (path.endsWith("/file-4")) {
+          rejected = true;
+          throw Object.assign(new Error(code), { code });
+        }
+        await original.call(this);
+      } finally {
+        active--;
+      }
+    });
+    try {
+      await expect(publishRelease(next)).rejects.toMatchObject({ code });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(rejected).toBe(true);
+    expect(peak).toBeGreaterThan(1);
+    expect(peak).toBeLessThanOrEqual(4);
+    expect(active).toBe(0);
+    await expect(
+      lstat(join(f.releasesRoot, next.releaseId)),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await publishRelease(next)).toMatchObject({ reused: false });
+    expect(
+      await readFile(join(f.releasesRoot, f.releaseId, "package.json")),
+    ).toEqual(old);
   },
 );

@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "rootPackages": ["@anthropic-ai/mcpb", "esbuild", "jose", "yazl"],
+  "requiredFiles": [
+    "node_modules/@anthropic-ai/mcpb/dist/cli/cli.js",
+    "node_modules/esbuild/lib/main.js"
+  ]
+}

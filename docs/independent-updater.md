@@ -118,6 +118,37 @@ at most three) and reclaims interrupted staging. Identical payload/envelope data
 reuse a slot. Corrupt state, unsafe paths, symlinks or mount points stop cleanup.
 Application/TeX/GHCR retention is unrelated to this collection.
 
+## Release publication I/O and runtime dependencies
+
+Release publication hashes every file and synchronizes data and permissions
+before writing a completion receipt. File synchronization runs in batches of at
+most four open descriptors. Each directory waits for outstanding file syncs
+before its own durability barrier; all barriers complete before the receipt,
+rename and parent-directory sync. A sync failure drains in-flight work and
+prevents publication. Interrupted copies remain private and are checked or
+reclaimed on retry. Existing immutable releases are never rewritten.
+
+The unprivileged controller validates derived build outputs directly. The root
+helper still independently verifies the signed archive, creates a private
+assembly and accepts only the allowed derived output directories from the
+build user. Controls and dependency-selection policy come from verified source.
+
+`deploy/runtime-dependencies.json` selects the transitive production dependencies
+of every workspace, installed optional/peer dependencies, and explicitly retained
+client-signing/verification and deployment tools. Development-only package slots,
+links and executable wrappers are removed only from the private assembly, before
+sealing and immutable publication. Source manifests and the frozen lockfile are
+retained. Older releases without the policy use the full dependency layout.
+
+Build and recovery operations continue to use a separate writable tree. Their
+normal `deployment-pnpm.sh` frozen install restores development dependencies
+before compilation; no dependency installation runs in an immutable release.
+Release CI verifies the reduced assembly, runtime tool resolution and an actual
+non-root frozen install plus production/client rebuild from a writable copy.
+This reduces publication work, not the required backups, provenance checks,
+render validation or recovery checks. A host updating through an older Updater
+uses that Updater's assembly behavior until the new independent slot activates.
+
 ## Normal application update
 
 Use the existing authenticated update operation for a published immutable

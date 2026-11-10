@@ -24,6 +24,7 @@ import { verifyActivationCommitBarrier } from "./updater-activation-barrier.mjs"
 import { retryCiMutation } from "./retry-ci-mutation.mjs";
 import { runCiProcessGroup } from "./process-group.mjs";
 import { verifyPrivateMcpbHandoff } from "./mcpb-metadata-handoff.mjs";
+import { verifyRuntimeAssembly } from "./runtime-dependencies.mjs";
 import {
   brokenUpdaterSource,
   assertStartupRecovery,
@@ -162,6 +163,14 @@ try {
         manifest.packageManager,
         identity,
       );
+      if (source === candidate && deployer === helper)
+        await verifyRuntimeAssembly({
+          assembly,
+          stage,
+          identity,
+          run,
+          rehydrate: process.env.CI_UPDATE_BASELINE === "installed",
+        });
       const builtMcpb =
         release.tag === tag && process.env.CI_UPDATE_BASELINE === "installed"
           ? JSON.parse(

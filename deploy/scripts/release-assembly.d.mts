@@ -1,5 +1,10 @@
 export const requiredProductionBuildOutputs: readonly string[];
 
+export function validateBuildArtifacts(options: {
+  verifiedSource: string;
+  buildSource: string;
+}): Promise<void>;
+
 export function assembleBuildArtifacts(options: {
   verifiedSource: string;
   buildSource: string;
