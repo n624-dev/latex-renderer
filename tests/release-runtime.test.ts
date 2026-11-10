@@ -189,14 +189,27 @@ it("uses verified selection policy and controls while pruning only the new assem
   });
   for (const path of requiredProductionBuildOutputs)
     await file(buildSource, path, "built");
+  await chmod(verifiedSource, 0o755);
+  await chmod(buildSource, 0o775);
+  await chmod(join(verifiedSource, "deploy/scripts/prepare-host.sh"), 0o755);
+  let privateCopies = 0;
   await assembleBuildArtifacts({
     verifiedSource,
     buildSource,
     assembly,
-    runCommand: (command, args) => {
+    runCommand: async (command, args) => {
       execFileSync(command, args);
+      const info = await lstat(assembly);
+      expect(info.uid).toBe(process.getuid?.());
+      expect(info.mode & 0o777).toBe(0o700);
+      privateCopies++;
     },
   });
+  expect(privateCopies).toBe(2);
+  expect(
+    (await lstat(join(assembly, "deploy/scripts/prepare-host.sh"))).mode &
+      0o111,
+  ).toBe(0o111);
   expect(
     await readFile(join(assembly, "deploy/scripts/prepare-host.sh"), "utf8"),
   ).toBe("signed control");

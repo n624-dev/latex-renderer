@@ -23,9 +23,17 @@ export async function assembleBuildArtifacts({
   assembly,
   runCommand,
 }) {
-  await runCommand("rsync", ["-a", `${verifiedSource}/`, `${assembly}/`]);
+  // Preserve file executable bits, but never import the build user's owner or
+  // directory modes. The assembly must stay private throughout BOTH copies,
+  // not only while dependency selection runs after the transfers finish.
+  const privateCopy = ["-a", "--no-owner", "--no-group", "--chmod=D700"];
   await runCommand("rsync", [
-    "-a",
+    ...privateCopy,
+    `${verifiedSource}/`,
+    `${assembly}/`,
+  ]);
+  await runCommand("rsync", [
+    ...privateCopy,
     "--prune-empty-dirs",
     "--include=/node_modules/***",
     "--include=/client-dist/***",
@@ -41,8 +49,7 @@ export async function assembleBuildArtifacts({
     `${buildSource}/`,
     `${assembly}/`,
   ]);
-  // rsync -a copies the source directory mode as well. Re-establish the
-  // private assembly boundary before selecting dependencies from copied data.
+  // Keep the explicit boundary even when the command adapter is injected.
   await chmod(assembly, 0o700);
   await pruneRuntimeDependencies(assembly);
   await assertBuildOutputs(verifiedSource, assembly);
