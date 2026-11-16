@@ -11,9 +11,9 @@
     "start": "node dist/server.js"
   },
   "dependencies": {
-    "@hono/node-server": "^2.1.6",
+    "@hono/node-server": "^2.1.8",
     "@latex-renderer/gateway-core": "workspace:*",
     "@latex-renderer/shared": "workspace:*",
-    "hono": "^4.13.16"
+    "hono": "^4.13.18"
   }
 }
