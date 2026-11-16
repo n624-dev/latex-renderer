@@ -48,13 +48,37 @@ const forgeSetup = `
 it("uses the upstream RSA fixes and removes every locked sprintf-js copy", () => {
   const workspace = readFileSync("pnpm-workspace.yaml", "utf8");
   const lock = readFileSync("pnpm-lock.yaml", "utf8");
-  expect(workspace).toContain("node-forge: 1.4.2");
-  expect(lock).toContain("node-forge@1.4.2:");
-  expect(lock).not.toContain("node-forge@1.4.0");
+  expect(workspace).toContain("node-forge: 1.4.3");
+  expect(lock).toContain("node-forge@1.4.3:");
+  expect(lock).not.toMatch(/node-forge@1\.4\.[012](?:[:(]|$)/m);
   expect(lock).not.toMatch(/^ {2}sprintf-js@/m);
   expect(readFileSync(".gitattributes", "utf8")).toContain(
     "patches/*.patch text eol=lf",
   );
+});
+
+it("rejects forged Ed25519 signatures under an identity public key through the real signer dependency", () => {
+  run(`${forgeSetup}
+    const identity = Buffer.alloc(32);
+    identity[0] = 1;
+    const forged = Buffer.alloc(64);
+    forged[0] = 1;
+    for (const message of ["admin=true", "another payload"]) {
+      assert.equal(forge.ed25519.verify({
+        message, encoding: "utf8", signature: forged, publicKey: identity
+      }), false);
+    }
+    const pair = forge.ed25519.generateKeyPair();
+    const valid = forge.ed25519.sign({
+      message: "valid payload", encoding: "utf8", privateKey: pair.privateKey
+    });
+    assert.equal(forge.ed25519.verify({
+      message: "valid payload", encoding: "utf8", signature: valid, publicKey: pair.publicKey
+    }), true);
+    assert.equal(forge.ed25519.verify({
+      message: "modified payload", encoding: "utf8", signature: valid, publicKey: pair.publicKey
+    }), false);
+  `);
 });
 
 it("rejects nested RSA DigestAlgorithm garbage, including alternate parameter forms", () => {
