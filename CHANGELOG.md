@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 1.6.8-rc.1 - 2026-11-17
+
+- Update Hono, its Node server adapter, jose, Commander and Marked with upstream fixes.
+- Update Prettier, typescript-eslint and Vite.
+- Upgrade the node-forge signing dependency to 1.4.3 and reject identity-key Ed25519 signature forgeries through the actual MCPB dependency.
+- Track the remaining Zod 3 development-tooling advisory in #334 pending upstream MCPB support. Production dependency auditing is clean.
+
 ## 1.6.7 - 2026-11-10
 
 - Promote validated 1.6.7-rc.1 to Stable with matching executable behavior, dependencies and configuration defaults.
