@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 1.6.8 - 2026-11-17
+
+- Promote validated 1.6.8-rc.1 to Stable with matching executable behavior, dependencies and configuration defaults.
+- Include the Hono, jose, Commander, Marked and development-tool updates and the node-forge 1.4.3 signing fixes.
+- Track the remaining MCPB/Zod 3 development-tooling advisory in #334.
+
 ## 1.6.8-rc.1 - 2026-11-17
 
 - Update Hono, its Node server adapter, jose, Commander and Marked with upstream fixes.
