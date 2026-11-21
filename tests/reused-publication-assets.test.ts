@@ -15,6 +15,7 @@ import { join, resolve } from "node:path";
 import { expect, it } from "vitest";
 import { publishRelease } from "../deploy/scripts/release-publication.mjs";
 import { waitForPublishedMcpbAssets } from "../deploy/scripts/verify-public-mcpb-assets.mjs";
+import { writeMcpbZipFixture } from "./fixtures/mcpb-bundle.js";
 
 it.skipIf(process.platform === "win32")(
   "verifies the immutable publication after the same source is rebuilt with another CMS key",
@@ -23,8 +24,9 @@ it.skipIf(process.platform === "win32")(
     const source = join(root, "source"),
       releasesRoot = join(root, "releases"),
       journalRoot = join(root, "journals");
-    const version = "7.8.9",
-      commit = "a".repeat(40),
+    const manifest = await readFile("client/mcpb/manifest.json");
+    const { version } = JSON.parse(manifest.toString()) as { version: string };
+    const commit = "a".repeat(40),
       releaseId = `v${version}-${commit.slice(0, 12)}`;
     const archive = `latex-renderer-local-${version}.mcpb`;
     const driver = "deploy/scripts/deploy-production-release.sh";
@@ -77,7 +79,7 @@ it.skipIf(process.platform === "win32")(
           },
         }),
       );
-      await writeFile(join(root, "unsigned"), "same unsigned MCPB content");
+      await writeMcpbZipFixture(join(root, "unsigned"), manifest);
       const signed = async (key: string) => {
         run("openssl", [
           "req",
@@ -123,6 +125,7 @@ it.skipIf(process.platform === "win32")(
           version,
           archive,
           size: bytes.length,
+          signature: "pkcs7",
           sha256: hash(bytes),
         };
         await writeFile(join(source, "client-dist", archive), bytes);
@@ -188,16 +191,8 @@ it.skipIf(process.platform === "win32")(
           localMetadataPath: join(source, "client-dist/mcpb.json"),
         }),
       ).rejects.toThrow("does not match");
-      // Keep the real CMS verification. Only the external manifest CLI is isolated.
-      const verifier = join(root, "client/verify-mcpb.mjs"),
-        cli = join(root, "node_modules/@anthropic-ai/mcpb/dist/cli");
-      await mkdir(join(root, "client"));
-      await mkdir(cli, { recursive: true });
-      await cp(resolve("client/verify-mcpb.mjs"), verifier);
-      await writeFile(
-        join(cli, "cli.js"),
-        "if(process.argv[2]!=='validate') process.exit(42);\n",
-      );
+      const repository = resolve(".");
+      const verifier = join(repository, "client/verify-mcpb.mjs");
       expect(() =>
         run(process.execPath, [verifier, downloaded, selected]),
       ).not.toThrow();
@@ -231,7 +226,7 @@ it.skipIf(process.platform === "win32")(
           encoding: "utf8",
           env: {
             ...process.env,
-            source_root: root,
+            source_root: repository,
             temporary_root: temporary,
             local_mcpb_manifest_path: selected,
             sync_user: "fixture",
