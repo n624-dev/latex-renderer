@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 1.6.9 - 2026-11-21
+
+- Promote v1.6.9-rc.2 with the same executable source and dependency versions.
+- Package and sign local MCP bundles with the existing ZIP tooling and OpenSSL, removing the MCPB build dependency on Zod 3.
+- Preserve manifest defaults, bundle format, and signature and checksum verification.
+
 ## 1.6.9-rc.2 - 2026-11-21
 
 - Build local MCP bundles with the existing ZIP tooling and OpenSSL, removing the Zod 3 dependency from MCPB packaging.
