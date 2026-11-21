@@ -85,7 +85,6 @@ export async function verifyRuntimeAssembly({
       "@latex-renderer/public-web",
       "exec",
       "wrangler",
-      "@anthropic-ai/mcpb",
       "deploy",
       "--dry-run",
     ],
