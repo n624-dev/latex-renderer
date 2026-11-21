@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## 1.6.9-rc.1 - 2026-11-21
+## 1.6.9-rc.2 - 2026-11-21
 
 - Build local MCP bundles with the existing ZIP tooling and OpenSSL, removing the Zod 3 dependency from MCPB packaging.
 - Verify the signed bundle's manifest, entry point, and release metadata while preserving the existing install format and configuration.
