@@ -1,6 +1,6 @@
 {
   "name": "latex-renderer",
-  "version": "1.6.8",
+  "version": "1.6.9-rc.1",
   "private": true,
   "license": "Apache-2.0",
   "type": "module",
@@ -28,7 +28,6 @@
     "format": "prettier --write ."
   },
   "devDependencies": {
-    "@anthropic-ai/mcpb": "2.1.2",
     "@eslint/js": "^10.0.1",
     "@latex-renderer/auth": "workspace:*",
     "@latex-renderer/database": "workspace:*",
@@ -40,6 +39,7 @@
     "@types/node": "^26.6.6",
     "@types/yazl": "^3.3.1",
     "@typescript/native": "npm:typescript@^7.0.2",
+    "ajv": "6.15.0",
     "esbuild": "0.28.2",
     "eslint": "^10.14.0",
     "jose": "^6.2.17",
@@ -51,6 +51,7 @@
     "vite": "8.3.8",
     "vitest": "^5.1.0",
     "wrangler": "4.152.0",
+    "yauzl": "3.4.0",
     "yazl": "^3.3.1"
   },
   "dependencies": {

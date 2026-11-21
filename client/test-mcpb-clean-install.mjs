@@ -1,11 +1,15 @@
 import { spawn } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import process from "node:process";
 import { clearTimeout, setTimeout } from "node:timers";
-import { unpackExtension } from "@anthropic-ai/mcpb";
+import {
+  entryPoint,
+  readMcpbBundle,
+  verifyMcpbBundle,
+} from "./mcpb-format.mjs";
 
 const repository = resolve(import.meta.dirname, ".."),
   outputRoot = join(repository, "client-dist"),
@@ -16,35 +20,33 @@ const repository = resolve(import.meta.dirname, ".."),
   temporary = await mkdtemp(join(tmpdir(), "latex-renderer-mcpb-install-"));
 
 try {
-  if (
-    !(await unpackExtension({
-      mcpbPath: archive,
-      outputDir: temporary,
-      silent: true,
-    }))
-  )
-    throw new Error("MCPB clean extraction failed");
-  const manifest = JSON.parse(
-    await readFile(join(temporary, "manifest.json"), "utf8"),
+  const {
+    manifest,
+    server: bundledServer,
+    manifestBytes,
+  } = await verifyMcpbBundle(
+    await readMcpbBundle(archive),
+    join(repository, "client/mcpb/manifest.json"),
   );
+  await mkdir(join(temporary, "server"));
+  await Promise.all([
+    writeFile(join(temporary, "manifest.json"), manifestBytes),
+    writeFile(join(temporary, entryPoint), bundledServer),
+  ]);
   if (!manifest.compatibility?.platforms?.includes(expectedPlatform))
     throw new Error(`MCPB does not declare ${expectedPlatform} compatibility`);
   if (manifest.server?.mcp_config?.command !== "node")
     throw new Error("MCPB does not use the host-provided Node runtime");
-  const server = spawn(
-    process.execPath,
-    [join(temporary, "server/index.cjs")],
-    {
-      cwd: temporary,
-      stdio: ["pipe", "pipe", "pipe"],
-      windowsHide: true,
-      env: {
-        ...process.env,
-        LATEX_RENDER_API_KEY: `lrk_${"a".repeat(32)}_${"A".repeat(43)}`,
-        LATEX_RENDER_BASE_URL: "https://latex.example.com",
-      },
+  const server = spawn(process.execPath, [join(temporary, entryPoint)], {
+    cwd: temporary,
+    stdio: ["pipe", "pipe", "pipe"],
+    windowsHide: true,
+    env: {
+      ...process.env,
+      LATEX_RENDER_API_KEY: `lrk_${"a".repeat(32)}_${"A".repeat(43)}`,
+      LATEX_RENDER_BASE_URL: "https://latex.example.com",
     },
-  );
+  });
   try {
     const initialized = response(server, 1);
     server.stdin.write(

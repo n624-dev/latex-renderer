@@ -14,15 +14,15 @@ const forgeSetup = `
   import { createRequire } from "node:module";
   import { generateKeyPairSync, privateEncrypt, sign, verify, constants } from "node:crypto";
   const root = createRequire(process.cwd() + "/package.json");
-  const mcpb = createRequire(root.resolve("@anthropic-ai/mcpb"));
-  // Resolve through the real signing dependency, not a test-only direct copy.
-  const forge = mcpb("node-forge");
+  const acme = createRequire(root.resolve("acme-client"));
+  // Resolve through the real ACME dependency, not a test-only direct copy.
+  const forge = acme("node-forge");
   const { privateKey, publicKey } = generateKeyPairSync("rsa", {
     modulusLength: 1024, publicExponent: 3
   });
   const pem = publicKey.export({ type: "spki", format: "pem" });
   const key = forge.pki.publicKeyFromPem(pem);
-  const message = Buffer.from("MCPB dependency regression fixture");
+  const message = Buffer.from("ACME dependency regression fixture");
   const digest = forge.md.sha256.create().update(message.toString()).digest().getBytes();
   const a = forge.asn1;
   const item = (type, value, constructed = false) =>
@@ -52,12 +52,15 @@ it("uses the upstream RSA fixes and removes every locked sprintf-js copy", () =>
   expect(lock).toContain("node-forge@1.4.3:");
   expect(lock).not.toMatch(/node-forge@1\.4\.[012](?:[:(]|$)/m);
   expect(lock).not.toMatch(/^ {2}sprintf-js@/m);
+  expect(lock).not.toMatch(
+    /^ {2}(?:['"]?@anthropic-ai\/mcpb@|zod@3\.|zod-to-json-schema@)/m,
+  );
   expect(readFileSync(".gitattributes", "utf8")).toContain(
     "patches/*.patch text eol=lf",
   );
 });
 
-it("rejects forged Ed25519 signatures under an identity public key through the real signer dependency", () => {
+it("rejects forged Ed25519 signatures under an identity public key through the real ACME dependency", () => {
   run(`${forgeSetup}
     const identity = Buffer.alloc(32);
     identity[0] = 1;
@@ -122,58 +125,6 @@ it("preserves normal RSA signing, optional SHA parameters, digest and padding ch
     const signedPss = sign("sha256", message, { key: privateKey,
       padding: constants.RSA_PKCS1_PSS_PADDING, saltLength: 32 });
     assert.equal(key.verify(digest, signedPss.toString("binary"), pss), true);
-  `);
-});
-
-it("keeps the real MCPB signer interoperable with independent OpenSSL CMS verification", () => {
-  run(`${forgeSetup}
-    const { execFileSync } = await import("node:child_process");
-    const { mkdtempSync, writeFileSync, readFileSync, rmSync } = await import("node:fs");
-    const { tmpdir } = await import("node:os");
-    const { dirname, join } = await import("node:path");
-    const { pathToFileURL } = await import("node:url");
-    const { signMcpbFile } = await import(pathToFileURL(join(
-      dirname(root.resolve("@anthropic-ai/mcpb")), "node/sign.js"
-    )).href);
-    const directory = mkdtempSync(join(tmpdir(), "mcpb-signature-regression-"));
-    try {
-      const certificate = forge.pki.createCertificate();
-      certificate.publicKey = key;
-      certificate.serialNumber = "01";
-      certificate.validity.notBefore = new Date(Date.now() - 60_000);
-      certificate.validity.notAfter = new Date(Date.now() + 86_400_000);
-      const subject = [{ name: "commonName", value: "MCPB regression fixture" }];
-      certificate.setSubject(subject);
-      certificate.setIssuer(subject);
-      certificate.sign(forge.pki.privateKeyFromPem(privateKey.export({
-        type: "pkcs8", format: "pem"
-      })), forge.md.sha256.create());
-      const archive = join(directory, "fixture.mcpb");
-      const certPath = join(directory, "certificate.pem");
-      const keyPath = join(directory, "key.pem");
-      writeFileSync(archive, message);
-      writeFileSync(certPath, forge.pki.certificateToPem(certificate));
-      writeFileSync(keyPath, privateKey.export({ type: "pkcs8", format: "pem" }), { mode: 0o600 });
-      signMcpbFile(archive, certPath, keyPath);
-      const signed = readFileSync(archive);
-      const header = Buffer.from("MCPB_SIG_V1");
-      assert.deepEqual(signed.subarray(0, message.length), message);
-      assert.deepEqual(signed.subarray(message.length, message.length + header.length), header);
-      const lengthOffset = message.length + header.length;
-      const start = lengthOffset + 4;
-      const end = start + signed.readUInt32LE(lengthOffset);
-      assert.equal(signed.subarray(end).toString(), "MCPB_SIG_END");
-      const cms = join(directory, "signature.der");
-      const content = join(directory, "content");
-      writeFileSync(cms, signed.subarray(start, end));
-      writeFileSync(content, message);
-      const args = ["cms", "-verify", "-binary", "-inform", "DER", "-in", cms,
-        "-content", content, "-noverify", "-out", join(directory, "verified")];
-      execFileSync("openssl", args, { timeout: 5000, stdio: "pipe" });
-      assert.deepEqual(readFileSync(join(directory, "verified")), message);
-      writeFileSync(content, "modified payload");
-      assert.throws(() => execFileSync("openssl", args, { timeout: 5000, stdio: "pipe" }));
-    } finally { rmSync(directory, { recursive: true, force: true }); }
   `);
 });
 

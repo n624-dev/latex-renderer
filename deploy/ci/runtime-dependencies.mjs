@@ -17,19 +17,14 @@ export async function verifyRuntimeAssembly({
     "eslint",
     "playwright",
     "wrangler",
+    "@anthropic-ai/mcpb",
   ]) {
     await assert.rejects(lstat(join(assembly, "node_modules", name)), {
       code: "ENOENT",
     });
   }
   const require = createRequire(join(assembly, "package.json"));
-  for (const name of [
-    "acme-client",
-    "@anthropic-ai/mcpb",
-    "esbuild",
-    "jose",
-    "yazl",
-  ])
+  for (const name of ["acme-client", "ajv", "esbuild", "jose", "yauzl", "yazl"])
     require.resolve(name);
   console.log(
     JSON.stringify({ event: "ci.runtime_dependency_selection", rehydrate }),
@@ -90,6 +85,7 @@ export async function verifyRuntimeAssembly({
       "@latex-renderer/public-web",
       "exec",
       "wrangler",
+      "@anthropic-ai/mcpb",
       "deploy",
       "--dry-run",
     ],
