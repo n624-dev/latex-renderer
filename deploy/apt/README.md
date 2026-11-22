@@ -16,7 +16,7 @@
 ## APT パッケージとサーバー構築の関係
 
 - `n624-latex server setup` のランチャーは、差し替え禁止（immutable）の正式版リリース資産と GitHub Attestation（ビルド来歴署名）を検証してサーバーを構築します。
-- セットアップを実行する前に、ホスト側へ rootless extras を含む Docker Engine を導入しておく必要があります。
+- セットアップを実行する前に、ホスト側へ rootless extras を含む Docker Engine と Nginx を導入します。
 - `--plan` を付けて実行すると、既存の導入状態、ホストの前提条件、およびディスク空き容量を事前検査できます。HTTPS や ID プロバイダー（OIDC 等）の設定手順はウィザード内で案内されます。
 
 ## リリース候補（RC）の検証手順

@@ -1,19 +1,14 @@
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import {
-  lstat,
-  mkdir,
-  mkdtemp,
-  readFile,
-  rm,
-  writeFile,
-} from "node:fs/promises";
+import { lstat, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { basename, delimiter, dirname, join } from "node:path";
+import process from "node:process";
 import { createInterface } from "node:readline";
 import { buffer } from "node:stream/consumers";
+import { URL } from "node:url";
 import { promisify } from "node:util";
 import yauzl from "yauzl";
 
@@ -131,23 +126,27 @@ try {
   }
   assert(before.equals(await readFile(credential)));
   await checkMcp(existingMcp);
-  console.log(`Packaged CLI migration passed on ${process.platform}.`);
+  process.stdout.write(
+    `Packaged CLI migration passed on ${process.platform}.\n`,
+  );
 } finally {
   server.closeAllConnections();
   if (server.listening) await new Promise((resolve) => server.close(resolve));
-  if (windows) {
-    // Use the installed uninstaller to remove the user PATH entry owned by
-    // this fixture, including when an assertion failed after installation.
-    const uninstaller = join(install, "uninstall.mjs");
-    if (await lstat(uninstaller).catch(() => undefined)) {
-      await execute(
-        process.execPath,
-        [uninstaller, "--install-directory", install, "--bin-directory", bin],
-        options,
-      );
+  try {
+    if (windows) {
+      // Remove the fixture's user PATH entry even when an assertion failed.
+      const uninstaller = join(install, "uninstall.mjs");
+      if (await lstat(uninstaller).catch(() => undefined)) {
+        await execute(
+          process.execPath,
+          [uninstaller, "--install-directory", install, "--bin-directory", bin],
+          options,
+        );
+      }
     }
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
   }
-  await rm(temporary, { recursive: true, force: true });
 }
 
 async function readDistribution(path) {

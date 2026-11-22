@@ -16,7 +16,7 @@ since: "v1.4.0"
 sudo n624-latex server setup
 ```
 
-- **初回構築に必要な準備**：[APT パッケージ `n624-latex`](/docs/client/) のインストールと、rootless extras を含む Docker Engine の導入を先に済ませます（ファイアウォールや Cloudflare Tunnel を使う場合の事前設定も管理者が行います）。既存サーバーでは通常の更新で同コマンドが利用可能になります。
+- **初回構築に必要な準備**：[APT パッケージ `n624-latex`](/docs/client/)、rootless extras を含む Docker Engine、Nginx をインストールします。ファイアウォールや Cloudflare Tunnel を使う場合は、管理者が事前に設定します。既存サーバーでは通常の更新で同コマンドが利用可能になります。
 - **よく使うオプション**：
   - 変更内容・前提条件・空き容量の事前確認のみ行う：`sudo n624-latex server setup --plan`
   - 管理下の専用 standalone HTTPS や LAN HTTPS（Akebi）を変更する：`sudo n624-latex server setup --ingress`

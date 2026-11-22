@@ -38,10 +38,6 @@ const settings = "/etc/latex-renderer/renderer.env";
 const database = "/var/lib/latex-renderer/renderer.sqlite3";
 const initialJournal =
   "/etc/latex-renderer/installation-transaction/journal.json";
-const dockerTools = [
-  "/usr/bin/docker",
-  "/usr/bin/dockerd-rootless-setuptool.sh",
-];
 
 function run(executable, args, options = {}) {
   return execFileSync(executable, args, {
@@ -129,11 +125,23 @@ async function freshPreflight() {
     if (bsize * bavail < 5n * 1024n ** 3n)
       throw new Error(`Server setup requires at least 5 GiB free on ${path}`);
   }
-  for (const path of dockerTools) {
-    if (!(await optional(path))) return false;
-    await controlled(path);
+  const missing = [];
+  for (const [name, paths] of [
+    [
+      "Docker Engine with rootless extras",
+      ["/usr/bin/docker", "/usr/bin/dockerd-rootless-setuptool.sh"],
+    ],
+    ["Nginx", ["/usr/sbin/nginx"]],
+  ]) {
+    for (const path of paths) {
+      if (!(await optional(path))) {
+        missing.push(name);
+        break;
+      }
+      await controlled(path);
+    }
   }
-  return true;
+  return missing;
 }
 
 async function writeState(path, state) {
@@ -437,22 +445,20 @@ async function main() {
   } else if (candidate !== undefined) {
     throw new Error("--candidate applies only to initial setup");
   }
-  const dockerReady = release || (await freshPreflight());
+  const missing = release ? [] : await freshPreflight();
   if (plan) {
     console.log(
       release
         ? `Open the managed setup wizard (${scope.slice(2)})`
         : `Prepare verified release v${version}, dedicated users, rootless Docker and local services`,
     );
-    if (!dockerReady)
-      console.log(
-        "Prerequisite: install Docker Engine with its rootless extras",
-      );
+    if (missing.length)
+      console.log(`Prerequisites: install ${missing.join(", ")}`);
     return;
   }
-  if (!dockerReady)
+  if (missing.length)
     throw new Error(
-      "Install Docker Engine with its rootless extras, then rerun n624-latex server setup",
+      `Install the missing prerequisites (${missing.join(", ")}), then rerun n624-latex server setup`,
     );
   if (!process.stdin.isTTY || !process.stdout.isTTY)
     throw new Error(

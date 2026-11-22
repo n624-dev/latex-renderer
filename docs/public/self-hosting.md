@@ -10,14 +10,14 @@ since: "v1.2.0"
 
 ## 現在の提供状況
 
-APT リポジトリの公開後は、APT パッケージ `n624-latex` と rootless 対応の Docker Engine を準備し、**サーバー設定ウィザード（`sudo n624-latex server setup`）**で公開経路・認証・最初の所有者（Owner）を設定できます。
+APT リポジトリの公開後は、**サーバー設定ウィザード（`sudo n624-latex server setup`）**で公開経路・認証・最初の所有者（Owner）を設定できます。
 
 ※ APT リポジトリが公開・案内されるまでの間や、APT を使わずに公開 tarball（`v1.6.9`）から手動でホストを構築する場合は、このページ後半の折りたたみ（[手動配置・旧版向けの手順](#v1-6-9をダウンロードして検証)）を参照してください。
 
 ### 初回導入の順序
 
 1. **構成を決める**：[公開方法とログイン方式](#対応する構成)を選び、[準備するもの](#準備するもの)を揃えます（LAN 内運用なら [LAN 内の自動 HTTPS](#lan-内の自動-https) も選べます）。
-2. **Docker と APT パッケージを入れる**：サーバーに rootless extras を含む Docker Engine を導入し、[APT パッケージ `n624-latex`](/docs/client/#debian-ubuntu-の-apt-パッケージ) をインストールします。
+2. **必要なパッケージを入れる**：rootless extras を含む Docker Engine、Nginx、[APT パッケージ `n624-latex`](/docs/client/#debian-ubuntu-の-apt-パッケージ) をインストールします。内蔵 HTTPS を使う場合は、設定するアドレスのポート 443 を空けてください。
 3. **ウィザードで初期構築する**：`sudo n624-latex server setup --plan` で前提条件と空き容量を確認してから、`sudo n624-latex server setup` を実行し、HTTPS・認証・最初の所有者を登録します（詳しい画面操作は[サーバー設定ウィザード](/docs/server-setup/)を参照）。
 4. **TeX 環境を確認する**：ウィザードの初回セットアップで構築した実行環境を管理画面（`/admin/tex-environment/`）で確認します。言語やバージョンを変更する場合は[TeX環境の初期設定](#tex環境の初期設定)を参照してください。
 5. **動作を確認する**：[導入完了の確認](#導入完了の確認)に沿って、実際の変換と権限境界をテストします。
