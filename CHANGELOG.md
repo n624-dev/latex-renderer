@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 1.7.0 - 2026-11-23
+
+- Run `n624-latex main.tex` to render a TeX project and save the verified PDF locally. Existing CLI and MCP commands remain available.
+- Add signed APT packaging for Debian and Ubuntu on amd64 and arm64.
+- Set up and recover a self-hosted server from the CLI. Owners can create and verify backups from the management UI.
+- Update the public guides for installation, first render, migration, and server operation.
+
 ## 1.7.0-rc.4 - 2026-11-23
 
 - Preserve links to the manual server download instructions when the documented release changes.
