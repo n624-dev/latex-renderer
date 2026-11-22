@@ -120,6 +120,7 @@ try {
   const server = join(library, "server");
   for (const name of [
     "n624-latex-server.mjs",
+    "n624-setup-version.mjs",
     "published-release.mjs",
     "release-attestation.mjs",
     "release-version.mjs",

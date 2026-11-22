@@ -1,6 +1,13 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { expect, it } from "vitest";
@@ -111,6 +118,25 @@ it.runIf(available)(
       expect(incomplete.status).not.toBe(0);
       expect(incomplete.stderr).toContain(
         "Every release must include both architectures",
+      );
+      const candidate = "n624-latex_1.0.0~rc.1_amd64.deb";
+      await rename(
+        join(packages, "n624-latex_1.0.0_amd64.deb"),
+        join(packages, candidate),
+      );
+      const prerelease = invoke(
+        process.execPath,
+        [
+          builder,
+          packages,
+          join(root, "prerelease"),
+          "https://example.invalid/project",
+        ],
+        { ...env, N624_APT_FINGERPRINT: fingerprint },
+      );
+      expect(prerelease.status).not.toBe(0);
+      expect(prerelease.stderr).toContain(
+        `Unexpected APT package: ${candidate}`,
       );
     } finally {
       invoke("gpgconf", ["--kill", "gpg-agent"]);

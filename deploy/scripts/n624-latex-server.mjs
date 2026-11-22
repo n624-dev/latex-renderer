@@ -16,9 +16,12 @@ import {
   symlink,
 } from "node:fs/promises";
 import { createInterface } from "node:readline/promises";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL, URL } from "node:url";
+import { parseArgs } from "node:util";
 import { acquireInheritedMutationLockForPath } from "./inherited-mutation-lock.mjs";
+import { selectSetupVersion } from "./n624-setup-version.mjs";
+import { isReleaseCandidate } from "./release-version.mjs";
 
 const root = "/opt/latex-renderer";
 const current = join(root, "current");
@@ -52,6 +55,9 @@ function read(executable, args) {
     stdio: ["ignore", "pipe", "inherit"],
     encoding: "utf8",
   }).trim();
+}
+function installedPackageVersion() {
+  return read("/usr/bin/dpkg-query", ["-W", "-f=${Version}", "n624-latex"]);
 }
 async function optional(path) {
   try {
@@ -344,22 +350,29 @@ async function main() {
     run(await controlled(localNode), [await controlled(recovery), "status"]);
     return;
   }
+  const usage =
+    "Usage: n624-latex server setup [--web|--cui] [--ingress|--candidate vX.Y.Z-rc.N] [--plan] | server recovery status";
+  if (args[0] !== "setup") throw new Error(usage);
+  const { values, tokens } = parseArgs({
+    args: args.slice(1),
+    options: {
+      web: { type: "boolean" },
+      cui: { type: "boolean" },
+      ingress: { type: "boolean" },
+      plan: { type: "boolean" },
+      candidate: { type: "string" },
+    },
+    tokens: true,
+  });
+  const { plan, ingress: external, web, cui: shell, candidate } = values;
   if (
-    args[0] !== "setup" ||
-    args
-      .slice(1)
-      .some(
-        (value) => !["--web", "--cui", "--ingress", "--plan"].includes(value),
-      ) ||
-    (args.includes("--web") && args.includes("--cui"))
+    (web && shell) ||
+    (external && candidate !== undefined) ||
+    tokens.filter(
+      (token) => token.kind === "option" && token.name === "candidate",
+    ).length > 1
   )
-    throw new Error(
-      "Usage: n624-latex server setup [--web|--cui] [--ingress] [--plan] | server recovery status",
-    );
-  const plan = args.includes("--plan");
-  const external = args.includes("--ingress");
-  const web = args.includes("--web");
-  const shell = args.includes("--cui");
+    throw new Error(usage);
   let release = await installedRelease();
   const pending = Boolean(await optional(initialJournal));
   const configured = Boolean(await optional(settings));
@@ -405,12 +418,31 @@ async function main() {
         );
     }
   }
+  let version;
+  if (!release) {
+    if (scriptRoot.replace(/\/$/, "") !== bootstrapRoot)
+      throw new Error(
+        "Install the n624-latex APT package for fresh-host provisioning",
+      );
+    version = selectSetupVersion(installedPackageVersion(), candidate);
+  } else if (scope === "--initial") {
+    const stagedVersion = basename(release).slice(1, -13);
+    if (isReleaseCandidate(stagedVersion) || candidate !== undefined) {
+      version = selectSetupVersion(installedPackageVersion(), candidate);
+      if (version !== stagedVersion)
+        throw new Error(
+          `Resume initial setup with the staged release v${stagedVersion}`,
+        );
+    }
+  } else if (candidate !== undefined) {
+    throw new Error("--candidate applies only to initial setup");
+  }
   const dockerReady = release || (await freshPreflight());
   if (plan) {
     console.log(
       release
         ? `Open the managed setup wizard (${scope.slice(2)})`
-        : "Prepare verified release, dedicated users, rootless Docker and local services",
+        : `Prepare verified release v${version}, dedicated users, rootless Docker and local services`,
     );
     if (!dockerReady)
       console.log(
@@ -444,10 +476,6 @@ async function main() {
           ? "--web"
           : "--cui";
     if (!release) {
-      if (scriptRoot.replace(/\/$/, "") !== bootstrapRoot)
-        throw new Error(
-          "Install the signed n624-latex APT package for fresh-host provisioning",
-        );
       const deployUser = process.env.SUDO_USER;
       if (
         !deployUser ||
@@ -461,15 +489,6 @@ async function main() {
       const gid = read("/usr/bin/id", ["-g", deployUser]);
       if (!/^[1-9]\d*$/.test(uid) || !/^[1-9]\d*$/.test(gid))
         throw new Error("Invalid deployment account");
-      const version = read("/usr/bin/dpkg-query", [
-        "-W",
-        "-f=${Version}",
-        "n624-latex",
-      ]);
-      if (!/^\d+\.\d+\.\d+$/.test(version))
-        throw new Error(
-          "Use a published Stable APT package for fresh-host setup",
-        );
       console.log(
         `Prepare signed application v${version}, required system packages, service Node.js paths, dedicated users and rootless Docker.`,
       );

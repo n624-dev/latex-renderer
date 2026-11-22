@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { selectSetupVersion } from "../deploy/scripts/n624-setup-version.mjs";
 import {
   assertValidatedCandidateTag,
   compareReleaseVersions,
@@ -18,6 +19,38 @@ import {
   validStableVersion,
 } from "../deploy/scripts/release-version.mjs";
 import { verifyPromotionContent } from "../deploy/scripts/verify-release-candidate-promotion.mjs";
+
+describe("initial Debian server setup version", () => {
+  it("uses the installed Stable package by default", () => {
+    expect(selectSetupVersion("3.4.5")).toBe("3.4.5");
+    expect(() => selectSetupVersion("3.4.5", "v3.4.5-rc.1")).toThrow(
+      "requires the matching RC package",
+    );
+  });
+
+  it("requires an exact candidate tag to use an RC package", () => {
+    expect(selectSetupVersion("3.4.5~rc.2", "v3.4.5-rc.2")).toBe("3.4.5-rc.2");
+    expect(() => selectSetupVersion("3.4.5~rc.2")).toThrow(
+      "Use --candidate v3.4.5-rc.2",
+    );
+    for (const tag of ["v3.4.5", "v3.4.5-rc.1", "3.4.5-rc.2", "latest"]) {
+      expect(() => selectSetupVersion("3.4.5~rc.2", tag)).toThrow(
+        "requires --candidate v3.4.5-rc.2",
+      );
+    }
+  });
+
+  it("rejects release versions outside the package builder's version format", () => {
+    for (const version of [
+      "3.4.5-rc.2",
+      "3.4.5~rc.0",
+      "3.4.5+other",
+      "1:3.4.5",
+    ]) {
+      expect(() => selectSetupVersion(version, "v3.4.5-rc.2")).toThrow();
+    }
+  });
+});
 
 describe("application release versions", () => {
   it("keeps the active RC string out of stable executable test fixtures", () => {

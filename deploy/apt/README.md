@@ -35,6 +35,27 @@ before running setup. Under `--plan`, the launcher inspects the existing
 installation, host prerequisites and available space. HTTPS and identity
 provider setup instructions appear in the wizard.
 
+## Test a release candidate
+
+On a disposable host, use the package built from the exact published RC tag
+with `node client/build-client.mjs` and
+`node deploy/apt/build-package.mjs amd64 packages-out` (use `arm64` on ARM).
+Install the resulting local package. For example, for `v1.7.0-rc.1` on amd64:
+
+```sh
+sudo apt install './packages-out/n624-latex_1.7.0~rc.1_amd64.deb'
+sudo n624-latex server setup --candidate v1.7.0-rc.1 --plan
+sudo n624-latex server setup --candidate v1.7.0-rc.1
+```
+
+Use the same package and tag to resume an interrupted initial setup. The
+bootstrap checks the exact version, immutable GitHub release, asset SHA-256 and
+attestation before installing the application. The public APT repository
+accepts Stable packages only. Use the managed Updater to test upgrading an
+existing server to a candidate.
+
+## Maintain repository trust
+
 When retiring or rotating the repository key, distribute an updated enrollment
 file through a trusted channel before retiring the previous key. If metadata or
 a package fails verification, retain the running application and investigate the
