@@ -54,6 +54,10 @@ const workspaceAliases = {
     "packages/setup-web/src/index.ts",
   ),
   "@latex-renderer/shared": join(repository, "packages/shared/src/index.ts"),
+  "@latex-renderer/zip-validation": join(
+    repository,
+    "packages/zip-validation/src/index.ts",
+  ),
 };
 
 await rm(outputRoot, { recursive: true, force: true });

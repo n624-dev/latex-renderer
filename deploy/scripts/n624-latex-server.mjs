@@ -76,17 +76,32 @@ async function controlled(file) {
   return path;
 }
 async function secureDirectory(path, mode) {
+  const parent = dirname(path);
+  const parentInfo = await lstat(parent);
+  if (
+    !parentInfo.isDirectory() ||
+    parentInfo.uid !== 0 ||
+    parentInfo.mode & 0o022 ||
+    (await realpath(parent)) !== parent
+  )
+    throw new Error(`Untrusted setup parent directory: ${parent}`);
   await mkdir(path, { mode }).catch((error) => {
     if (error.code !== "EEXIST") throw error;
   });
-  const info = await lstat(path);
-  if (
-    !info.isDirectory() ||
-    info.uid !== 0 ||
-    info.mode & 0o022 ||
-    (await realpath(path)) !== path
-  )
-    throw new Error(`Untrusted setup directory: ${path}`);
+  const directory = await open(
+    path,
+    constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+  );
+  try {
+    const info = await directory.stat();
+    if (info.uid !== 0 || info.mode & 0o022)
+      throw new Error(`Untrusted setup directory: ${path}`);
+    // The non-root build identity and services need the declared access even
+    // when the user starts setup with a restrictive umask.
+    if ((info.mode & 0o7777) !== mode) await directory.chmod(mode);
+  } finally {
+    await directory.close();
+  }
 }
 
 async function installedRelease() {
@@ -189,18 +204,26 @@ async function readState(path) {
 }
 
 async function ensureLocalRuntime() {
+  const target = join(root, "host-runtime");
   if (
     (await optional(localNode)) &&
     (await optional("/usr/local/bin/corepack"))
   ) {
-    const version = read(await controlled(localNode), ["--version"]);
+    const node = await controlled(localNode);
+    const corepack = await controlled("/usr/local/bin/corepack");
+    if (
+      node === join(target, "bin/node") ||
+      corepack === join(target, "corepack/dist/corepack.js")
+    ) {
+      await secureDirectory(target, 0o755);
+      await secureDirectory(join(target, "bin"), 0o755);
+    }
+    const version = read(node, ["--version"]);
     if (!/^v(?:24|26)\./.test(version))
       throw new Error("The existing service Node.js is incompatible");
-    await controlled("/usr/local/bin/corepack");
     return;
   }
   const library = "/usr/lib/n624-latex/runtime";
-  const target = join(root, "host-runtime");
   await secureDirectory(target, 0o755);
   await secureDirectory(join(target, "bin"), 0o755);
   await controlled(join(library, "bin/node"));

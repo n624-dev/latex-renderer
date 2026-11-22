@@ -131,11 +131,13 @@ try {
     const path = join(server, "deploy/scripts", name);
     await mkdir(join(server, "deploy/scripts"), { recursive: true });
     await cp(join(repository, "deploy/scripts", name), path);
+    // The root-only bootstrap rejects writable package code. Do not inherit
+    // group write permissions from shared development checkouts.
+    await chmod(path, 0o644);
   }
-  await cp(
-    join(repository, "deploy/apt/node-runtime.json"),
-    join(server, "node-runtime.json"),
-  );
+  const runtimeMetadata = join(server, "node-runtime.json");
+  await cp(join(repository, "deploy/apt/node-runtime.json"), runtimeMetadata);
+  await chmod(runtimeMetadata, 0o644);
   for (const name of [
     "n624-latex",
     "latex-render",

@@ -33,6 +33,7 @@ const allowedUnits = new Set(
   ].map((name) => `latex-renderer-${name}.service`),
 );
 allowedUnits.add("latex-renderer-status.socket");
+allowedUnits.add("latex-renderer-backup-control.socket");
 for (const name of [
   "backup",
   "audit-export",
