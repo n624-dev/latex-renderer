@@ -1,73 +1,65 @@
 ---
 slug: self-hosting
 category: セルフホスト
-title: 自分のサーバーに構築
+title: 自分のサーバーで運用する
 description: 対応するサーバー構成、導入前の準備、初期設定、更新とバックアップを説明します。
-navOrder: 18
-updated: "2026-10-26"
+navOrder: 63
+updated: "2026-11-22"
 since: "v1.2.0"
 ---
 
 ## 現在の提供状況
 
-このページは[`v1.6.9`](https://github.com/n624-dev/latex-renderer/releases/tag/v1.6.9)のサーバーbundleを対象にします。バージョンが`-rc.N`のReleaseは指定された検証hostだけへ明示適用し、一般利用者はStableを使用してください。Cloudflare構成に加えて、通常のTLSリバースプロキシとOIDC／ローカルパスワード認証を選択できます。このReleaseは公開後にタグや配布ファイルを差し替えできない設定で固定され、次を含みます。
+このガイドは、1 台の Debian／Ubuntu 系 Linux サーバーに LaTeX Renderer を導入して運用する手順です。既存のサーバーを更新する場合は[更新とロールバック](#更新とロールバック)へ進んでください。ホスト済みサービスを利用する場合は[最初の PDF を作る](/docs/#最短でpdfを作る)から始められます。
 
-- `latex-renderer-server-1.6.9.tar.gz`
-- クライアントZIPとClaude Desktop用MCPB
-- 3つの配布ファイルを検証する`SHA256SUMS`
-- commit、バージョン、Renderer fingerprint、Node.js／pnpm要件を記録したbundle内metadata
-- GitHub APIが返す各assetのSHA-256 digest
+### 初回導入の順序
 
-現在の`main`ブランチをcloneして本番へ直接デプロイしないでください。必ずバージョン付きReleaseを使用します。v1.3.0はforward-onlyのMigration 008〜016を追加します。更新前にmaintenance modeで実行中Jobをdrainし、暗号化backupを取得してください。Migration適用後にv1.2.xへ戻す場合は、コードだけを切り替えず更新前のdatabase backupも復元する必要があります。
+1. 公開方法とログイン方式を選び、[必要なもの](#準備するもの)を揃えます。
+2. [v1.6.9 のサーバー配布物をダウンロードして検証](#v1-6-9をダウンロードして検証)します。
+3. [ホストを準備](#ホストを準備)し、[HTTPS と認証を設定](#ホスト固有設定を作成)します。
+4. [サービスを配置](#サービスを配置)し、[最初の所有者を登録](#最初のowner)します。
+5. [TeX 環境を設定](#tex環境の初期設定)し、[実際の変換で導入を確認](#導入完了の確認)します。
 
-ホスト済みサービスを利用する場合は、[はじめに](/docs/)または[クライアントのインストール](/docs/client/)へ進んでください。
+新規導入には [v1.6.9 の正式版配布ファイル](https://github.com/n624-dev/latex-renderer/releases/tag/v1.6.9)を使用します。公開後にタグや配布ファイルを差し替えできないリリースで、サーバー用の `latex-renderer-server-1.6.9.tar.gz`、クライアント、Claude Desktop 拡張、チェックサムが含まれます。開発中の `main` からの直接配置はサポート対象外です。
 
 ## LAN 内の自動 HTTPS
 
-Akebi は v1.6 RC から利用できます。LAN の IP アドレスから決まる HTTPS URL を使用します。CUI/Web のセットアップで LAN と対象インターフェースを選び、共通または独自の証明書サーバーを設定します。既定は導入先の秘密鍵を使う公開 CA 証明書で、Keyless は明示的に選択できます。
+LAN 内で利用する場合、Akebi を使うとサーバーの LAN 内 IP アドレスから HTTPS URL を組み立てられます。例えば、IP が `192.168.1.50` の場合、設定した LAN ドメインに対して `192-168-1-50.<LAN ドメイン>` になります。
 
-独自の DNS・発行支援サーバー、招待制／自動登録、証明書の自動更新、既存証明書と private CA の違いは [Akebi の運用手順](https://github.com/n624-dev/latex-renderer/blob/main/docs/akebi-lan-https.md)を参照してください。異なる LAN で同じ IP を使う場合、ブラウザーの保存領域も共通の origin になります。
+準備済みのサーバーでセットアップを開き、LAN と対象のネットワークインターフェースを選択します。共通の証明書サービスまたは自分で管理するサービスを指定し、表示された HTTPS URL で他の端末から接続を確認します。公開 CA モードでは導入先が秘密鍵を保管します。Keyless、既存の証明書、プライベート CA を使う構成も選べます。ネットワークが変わっても同じ IP とドメインを使う場合は、ブラウザの保存領域が共通になります。
+
+専用の管理下にある standalone HTTPS 構成から切り替える場合は、サーバーの管理者ターミナルで CUI セットアップを開きます。
+
+```bash
+sudo /usr/local/bin/node /opt/latex-renderer/current/deploy/scripts/server-setup.mjs --cui --ingress
+```
+
+LAN の IP、許可するサブネット、発行支援サービス、証明書の方式を確認してから適用します。表示された URL は、その LAN へ到達できる端末で開けます。証明書を取得した後も、Web アプリへのログインにはサーバーで設定した認証が必要です。
 
 ## 対応する構成
 
-v1.6.9ではPassword＋OIDCの同時利用と、確認済み認証設定の切替・中断復旧を利用できます。
-併用時は`AUTH_BACKEND=native`、`AUTH_PASSWORD_ENABLED=true`、`AUTH_OIDC_ENABLED=true`を設定します。
-従来の`AUTH_MODE`は単一方式の互換設定です。初回セットアップと認証設定画面で方式を明示し、`main`を本番へ直接反映しないでください。
+公開経路を選び、その経路で使うログイン方法を決めます。
 
-対応するセルフホスト構成は、公開境界とブラウザ認証をそれぞれ明示選択する単一Linuxホストです。未指定や未知の値ではserviceを起動しません。
+| 公開方法 | 入口 | ログイン方法 |
+| --- | --- | --- |
+| `standalone` | Nginx・Caddy・Apache のいずれか、または対応する LAN HTTPS | ローカルパスワード、OIDC、または両方 |
+| `cloudflare` | Cloudflare Tunnel と Worker | Cloudflare Access、またはネイティブ認証（パスワード、OIDC、または両方） |
 
-| 領域             | 対応構成                                                                             |
-| ---------------- | ------------------------------------------------------------------------------------ |
-| ホスト           | `apt`とsystemdを使用できる専用Debian／Ubuntu系Linuxサーバー                          |
-| 公開経路         | `cloudflare`（Tunnel＋Worker）または`standalone`（TLS reverse proxy）                |
-| ブラウザ認証     | `cloudflare-access`、標準OIDC、またはローカルパスワード（nativeでは併用可）          |
-| Renderer         | 専用system userのrootless Docker、networkless／read-only sandbox                     |
-| アプリケーション | Node.js 24 LTS（Stable）、26 LTS（1.6 RC推奨）、pnpm 11、バージョン固定されたRelease |
-| TeX              | 公開GHCRの検証済み言語なしBase＋サーバー内Runtime                                    |
-| 管理             | `/admin/`、Admin CLI、root所有のImage／Update Manager                                |
+既に組織で使っている ID プロバイダーに利用者を揃えるなら OIDC を選べます。Cloudflare Access を使用する場合は、利用者用の Access Application を用意します。ローカルパスワードを選ぶ場合は、サーバー管理者が利用者を登録します。
 
-`standalone`ではNginx、Caddy、Apacheの検証可能な設定例を収録しています。Kubernetes、複数ホスト、平文HTTPでの公開、Admin APIや内部serviceの直接公開はサポート対象外です。
+ネイティブ認証でパスワードと OIDC を併用する場合は、`AUTH_BACKEND=native`、`AUTH_PASSWORD_ENABLED=true`、`AUTH_OIDC_ENABLED=true` を設定します。`AUTH_MODE` は従来の単一方式用です。以下のコマンド例は単一方式での新規導入を扱います。
 
-| `DEPLOYMENT_MODE` | 利用可能な`AUTH_MODE`                   |
-| ----------------- | --------------------------------------- |
-| `cloudflare`      | `cloudflare-access`、`oidc`、`password` |
-| `standalone`      | `oidc`、`password`                      |
-
-`cloudflare-access`はCloudflare署名JWTのissuer、audience、expiryをoriginでも検証します。OIDCはAuthorization Code＋PKCE S256＋state＋nonceを使用し、ローカルパスワードはscryptとroot所有pepperで保存します。どの方式でもWeb UIのrole・無効化・session・CSRF規則は共通です。
+対象は apt と systemd を使用できる単一の Linux ホストです。変換は専用ユーザーの rootless Docker で行います。内部サービスはループバックで待ち受け、入口から必要な経路だけを公開します。
 
 ## 準備するもの
 
-- sudoを使用できる非rootのデプロイ用ユーザー
-- 専用Linuxホストと、TeX Liveイメージ・成果物・バックアップを保存できるディスク
-- 公開用FQDNと信頼できるTLS証明書
-- `cloudflare`を選ぶ場合はTunnel、DNS、Workerを作成できる権限
-- `cloudflare-access`を選ぶ場合はAccess Applicationとownerのstable subject
-- `oidc`を選ぶ場合はHTTPS issuer、client ID、Git管理外のclient secret、ownerのstable subject
-- `password`を選ぶ場合はowner用の一時password file（コマンドライン引数や環境変数へpasswordを書かない）
-- GitHub Releases、`ghcr.io`、TeX Live archive、Debian repositoryへHTTPS接続できるネットワーク
-- `curl`、`jq`、`tar`、`sha256sum`、`gh`（`gh attestation verify`対応版）
+- sudo を使用できる通常のデプロイ用ユーザーと、TeX イメージ・成果物・バックアップを保存できるディスク。
+- Node.js 26 または 24、Corepack、rootless 用ツールを含む Docker Engine。`/usr/local/bin/node` と `/usr/local/bin/corepack` が必要です。
+- インターネットへ公開する場合は、利用者が開く HTTPS ホスト名と TLS 証明書。Cloudflare を選ぶ場合は Tunnel、DNS、Worker を設定できる権限。
+- 選んだログイン方法に必要な情報。OIDC では issuer・クライアント ID・シークレット・最初の所有者の subject、Cloudflare Access では Access Application と所有者の subject、パスワードでは所有者のログイン名と初期パスワード。
+- GitHub の配布物と署名情報を取得する `curl`、`jq`、`tar`、`sha256sum`、`gh attestation verify` 対応版の GitHub CLI。サーバーは GHCR、TeX Live のアーカイブ、Debian 系パッケージリポジトリにも HTTPS 接続できる必要があります。
 
-既定設定では空き容量が5 GiBを下回ると新規レンダリングを拒否します。TeX Live、複数のRuntime、リリース、成果物、暗号化バックアップにも容量が必要なため、5 GiBをホスト全体の必要容量として扱わないでください。
+サーバーの空きが既定の 5 GiB を下回ると、新規レンダリングを拒否します。導入前に、空き 5 GiB に加え、TeX イメージ、リリース、成果物、暗号化バックアップに必要な容量を見込んでください。
 
 ## sudoと通常運用の境界
 
@@ -101,15 +93,21 @@ v1.6.9ではPassword＋OIDCの同時利用と、確認済み認証設定の切�
 
 ## v1.6.9をダウンロードして検証
 
-初回導入には以下の固定版の検証手順を使います。過去RCから更新する場合だけ、[RC固有の互換性情報](/docs/reference/#過去rcのrenderer識別情報)を先に確認してください。
+初回導入では、次を同じ Bash セッションで実行します。公開リリースの SHA-256 と、GitHub Actions が署名したビルド来歴を両方検証します。
 
-次のコマンドは、固定されたReleaseであることをGitHub APIで確認し、APIが返すdigestとダウンロードしたbundleを照合します。通常の非rootユーザーで実行します。
+通常のユーザーで実行してください。
 
 ```bash
 version=1.6.9
 repository=n624-dev/latex-renderer
 asset="latex-renderer-server-$version.tar.gz"
-work_dir=$(mktemp -d)
+unset bundle_root
+work_dir=$(mktemp -d) &&
+bash -euo pipefail -s -- "$version" "$repository" "$asset" "$work_dir" <<'BASH' && bundle_root="$work_dir/latex-renderer-server-$version"
+version=$1
+repository=$2
+asset=$3
+work_dir=$4
 release_json="$work_dir/release.json"
 
 curl --proto '=https' --tlsv1.2 --fail --silent --show-error \
@@ -141,10 +139,10 @@ gh attestation verify "$work_dir/$asset" \
   --deny-self-hosted-runners
 
 tar -xzf "$work_dir/$asset" -C "$work_dir"
-bundle_root="$work_dir/latex-renderer-server-$version"
+BASH
 ```
 
-`OK`が表示されなければ、展開やsudo操作へ進みません。attestation bundleは公開GitHub APIから取得してoffline検証へ渡すため、host上のGitHubログインやGitHub tokenは不要です。`work_dir`と`bundle_root`は同じシェルで続く手順に使用します。
+検証や展開のいずれかで失敗すると、その時点で停止し、`bundle_root` は設定されません。エラーを解決してから続けてください。公開 API が返した来歴データを GitHub CLI に渡すため、GitHub へのログインや API トークンは不要です。
 
 ## ホストを準備
 
@@ -157,9 +155,7 @@ command -v setfacl
 command -v unzip
 ```
 
-RC.1以前でこの不足により更新が失敗した場合、`current`だけが新版へ切り替わり、新旧のサービス設定が混在している可能性があります。同じ更新コマンドを再実行せず、稼働サービス・DB migration・バックアップの状態を先に確認してください。DBが更新済みならコードだけを旧版へ戻してはいけません。
-
-Stable v1.6.9 の導入スクリプトの前に、Node.js 24 LTS、`/usr/local/bin/node`、`/usr/local/bin/corepack`、Docker Engineのrootless用toolを準備します。`cloudflare` profileだけはcloudflaredも必要です。Update Managerはbundle metadataに記録されたpnpmをCorepackでデプロイ用ユーザーへ導入し、実行前に版を照合します。インストール元はそれぞれの公式ドキュメントを使用し、第三者の非公式スクリプトをrootで実行しません。
+導入スクリプトの前に、Node.js 26 または 24、`/usr/local/bin/node`、`/usr/local/bin/corepack`、Docker Engineのrootless用toolを準備します。`cloudflare` profileだけはcloudflaredも必要です。Update Managerはbundle metadataに記録されたpnpmをCorepackでデプロイ用ユーザーへ導入し、実行前に版を照合します。インストール元はそれぞれの公式ドキュメントを使用し、第三者の非公式スクリプトをrootで実行しません。
 
 ```bash
 /usr/local/bin/node --version
@@ -172,10 +168,14 @@ cloudflared --version
 その後、通常のデプロイ用ユーザーからhost bootstrapを一度実行します。
 
 ```bash
-sudo sh "$bundle_root/deploy/scripts/install-host.sh"
+sudo sh "${bundle_root:?配布物の検証を完了してください}/deploy/scripts/install-host.sh"
 ```
 
-この処理は専用user、ディレクトリ、manager credentialを作成しますが、サービスはまだ起動しません。`/var/lib/latex-renderer`はroot所有、group `latex-renderer`、mode `2770`とし、その配下の通常データだけを各専用userへ所有させます。Image／Update Managerのroot所有領域を非root所有の親から辿らせないことで、`systemd-tmpfiles`のunsafe path判定を避けます。
+この処理は OS パッケージを追加し、専用ユーザー、ディレクトリ、管理用の資格情報を作成します。次に、専用の `latex-render-worker` ユーザーで rootless Docker を使用できるようにします。
+
+```bash
+sudo sh "${bundle_root:?配布物の検証を完了してください}/deploy/scripts/configure-rootless-docker.sh"
+```
 
 ## ホスト固有設定を作成
 
@@ -206,7 +206,7 @@ sudo install -o root -g cloudflared -m 0640 \
 
 Cloudflare Tunnelをremote管理する場合は、host-localの`config.yml`を使わず、deploy前にconnectorがactiveであることを確認します。不要な雛形を有効な設定として残さないでください。
 
-`standalone` profileでは、Nginx、Caddy、Apacheのいずれか1つを選び、`deploy/reverse-proxy/`の例をGit管理外の実設定へコピーします。FQDNと証明書pathを置き換え、設定検査を通してからreloadします。proxyは受信した`CF-Access-*`を削除し、client IP headerを上書きし、3100〜3105のloopback serviceを外部へ直接bindしません。
+`standalone` profileでは、Nginx、Caddy、Apacheのいずれか1つを先にインストールし、`deploy/reverse-proxy/`の例をGit管理外の実設定へコピーします。FQDNと証明書pathを置き換え、設定検査を通してからreloadします。proxyは受信した`CF-Access-*`を削除し、client IP headerを上書きし、3100〜3105のloopback serviceを外部へ直接bindしません。
 
 ```bash
 # Nginxの例
@@ -214,10 +214,11 @@ sudo install -o root -g root -m 0644 \
   "$bundle_root/deploy/reverse-proxy/nginx.conf.example" \
   /etc/nginx/sites-available/latex-renderer.conf
 sudoedit /etc/nginx/sites-available/latex-renderer.conf
-sudo nginx -t
+sudo ln -s /etc/nginx/sites-available/latex-renderer.conf /etc/nginx/sites-enabled/latex-renderer.conf
+sudo nginx -t && sudo systemctl reload nginx
 ```
 
-`AUTH_MODE=oidc`ではclient secretを改行なしのroot管理fileとして作成します。値は例、Issue、journal、`renderer.env`へ書きません。
+`AUTH_MODE=oidc` では、ID プロバイダーに `https://latex.example.com/auth/oidc/callback` をリダイレクト URI として登録します。ホスト名は `PUBLIC_ORIGIN` に合わせます。`renderer.env` に `OIDC_ISSUER` と `OIDC_CLIENT_ID` を設定し、クライアントシークレットは改行なしの別ファイルに保存します。
 
 ```bash
 sudo install -o root -g latex-renderer -m 0440 /dev/null \
@@ -230,8 +231,8 @@ sudoedit /etc/latex-renderer/secrets/oidc-client-secret
 選択した公開境界、認証、host固有設定が揃ったら、bundleのmetadataから一意なRelease IDを作って配置します。
 
 ```bash
-release_id=$(jq -r '"v\(.version)-\(.commit[0:12])"' "$bundle_root/.latex-renderer-release.json")
-sudo /usr/local/bin/node "$bundle_root/deploy/scripts/bootstrap-published-host.mjs" "$version"
+release_id=$(jq -r '"v\(.version)-\(.commit[0:12])"' "${bundle_root:?配布物の検証を完了してください}/.latex-renderer-release.json")
+sudo /usr/local/bin/node "${bundle_root:?配布物の検証を完了してください}/deploy/scripts/bootstrap-published-host.mjs" "$version"
 ```
 
 このコマンドはproduction serviceとWebが必要とする`client-dist`を先にbuildし、`/opt/latex-renderer/releases/$release_id`へ一緒に固定配置して、Update Managerのsocket、health check、公開境界のsmoke testを確認します。初回配置でOwnerがまだ存在しない場合だけ、認証済みレンダリングsmoke testはOwner登録後まで延期されます。既存環境の更新では配置処理内で自動実行されます。途中で失敗した場合は、エラーを修正せずに同じ処理を繰り返さず、最初に表示された失敗箇所とredacted logを確認します。
@@ -250,19 +251,18 @@ buildやservice停止の前に、`renderer.env`がroot所有・`0640`・重複ke
 
 Tunnel ingressは、固有のAPI／管理pathを先に、Web fallbackを後に、最後を`http_status:404`にします。設定例をそのまま使わず、すべての`example.com`、`REPLACE_*`、UUID、audienceを自分の環境の値へ置き換えます。
 
-`standalone`ではTLS reverse proxyが同じpath treeをloopback serviceへ振り分け、small JSON ticketだけをport 3105のStandalone Gatewayへ渡します。Nginx例は接続数とpassword login／ticket APIのrequest rateも制限します。標準Caddy／Apacheには同等のper-client request-count limiterが含まれないため、その2例ではhosting provider／load balancer側のrate limitが必須です。`/internal/*`、DB、manager socketは公開しません。詳細なroute順序と境界smoke testは、GitHubの[DEPLOYMENT.md](https://github.com/n624-dev/latex-renderer/blob/main/DEPLOYMENT.md)に分離しています。
+`standalone`ではTLS reverse proxyが同じpath treeをloopback serviceへ振り分け、small JSON ticketだけをport 3105のStandalone Gatewayへ渡します。Nginx例は接続数とpassword login／ticket APIのrequest rateも制限します。標準Caddy／Apacheには同等のper-client request-count limiterが含まれないため、その2例ではhosting provider／load balancer側のrate limitが必須です。`/internal/*`、DB、manager socketは公開しません。設定例は取得した配布物の `deploy/reverse-proxy/` にあります。反映後は[導入完了の確認](#導入完了の確認)を行ってください。
 
 ## 最初のOwner
 
 最初のOwnerはhost上で一度だけ登録します。emailは任意の表示属性です。外部認証の一意キーは`provider + issuer + subject`、password認証の一意キーはlogin nameです。email一致による自動linkやJIT owner作成はありません。
 
-次の例は値を対話入力し、コマンド履歴へ直接書きません。
+**Cloudflare Access または OIDC の場合**は、次の手順で登録します。subject にはログイン先に登録された利用者の識別子を入力します。
 
 ```bash
 IFS= read -r -p 'Owner display name: ' owner_name
 IFS= read -r -p 'Owner email (optional): ' owner_email
 
-# cloudflare-access / oidc
 IFS= read -r -p 'Stable subject: ' owner_subject
 sudo env \
   LATEX_RENDER_OWNER_EMAIL="$owner_email" \
@@ -270,7 +270,14 @@ sudo env \
   LATEX_RENDER_OWNER_SUBJECT="$owner_subject" \
   sh /opt/latex-renderer/current/deploy/scripts/bootstrap-owner.sh
 
-# password: passwordは環境変数やargvへ入れない
+unset owner_email owner_name owner_subject
+```
+
+**ローカルパスワードの場合**は、次の手順で登録します。例ではログイン名を `owner` にします。
+
+```bash
+IFS= read -r -p 'Owner display name: ' owner_name
+IFS= read -r -p 'Owner email (optional): ' owner_email
 password_file=$(mktemp)
 chmod 0600 "$password_file"
 read -r -s -p 'Initial password: ' owner_password
@@ -286,7 +293,10 @@ shred -u "$password_file"
 unset owner_email owner_name owner_subject password_file
 ```
 
-上の2例は`AUTH_MODE`に合う片方だけを実行します。以後の管理者・利用者はWeb管理画面から、現在のmodeに対応するidentityまたはcredentialを明示登録します。レンダリング用の`lrk_` API keyとブラウザlogin credentialを混同しないでください。
+選んだ認証方式に対応する方だけを実行します。所有者として `/admin/` にログインできたら、利用者を登録できます。
+
+- **Web・Remote MCP を使う利用者** — 管理画面の**ユーザー**から利用者を作成し、利用するログイン方式と対応する情報を登録します。利用者に Web アプリの URL とログイン方法を案内します。
+- **CLI・Local MCP・HTTP API を使う利用者** — 管理画面で利用者に紐づく**サービスアカウント**を作成します。**APIキー → APIキーを発行**からレンダリングキーを作り、変換と結果取得には `render:create` と `render:read:own` を付けます。発行時に表示される `lrk_` キーは利用者へ安全な方法で渡してください。
 
 ### 後からAUTH_MODEを変更する場合
 
@@ -348,13 +358,9 @@ shred -u "$password_file"
 
 公開GHCR Packageに保存するのは言語collectionを含まないBaseだけです。初回は、そのBaseに選択した言語と現在のRendererコードを重ねたRuntimeをこのサーバーで構築します。同じBase、Renderer、言語構成の完全一致Runtimeがローカルに残っていれば再利用します。RuntimeをGHCRから取得したり公開したりはしません。
 
-新規日付のBaseは、amd64とARM64をそれぞれネイティブCIで検証してから同じ日付タグのmulti-platform indexにまとめます。両方の匿名pullに成功するまで`latest`は切り替えません。過去のamd64専用日付タグはARMを追加するために上書きせず、ARMで利用できるとは扱いません。ARMホストの対応確認には、実TeX検証だけでなく署名付き更新・復旧CIの成功も必要です。
+`latest` は対応アーキテクチャの検証済み Base を選びます。日付を固定する場合は、ホストのアーキテクチャで使えるタグを指定してください。取得後はダイジェストで固定し、同じ名前の別イメージに切り替わらないようにします。
 
-Daily workflowは、候補Base自体を検査し、そのBaseから英語／日本語入りRuntimeをCI内だけで構築してPDF、PNG、通常描画、SVGのsmoke testを通した後に、合格したBaseだけを公開します。検査用Runtimeはpushせず終了時に削除します。GHCRの公開Packageはdated Base tagの上書きを禁止するimmutable tags設定を有効にしてください。公開workflowは既存dated tagへのpushを拒否し、push後にmanifest digestと匿名pullを照合します。ホスト側は`latest`や日付tagを検出用に一度だけ使い、取得後は`@sha256:...`（ローカルではDocker image ID）へ固定してRuntimeをbuild・実行します。GHCRでtag immutabilityを設定できない場合は、dated tagを本番のauthorityにしないでください。
-
-旧`runtime-v1-*` Packageのサポートは終了しました。現在のサーバーは検証済みBaseからRuntimeをローカル構築し、公開Registryの旧Runtimeを使いません。旧Runtimeは通常のRegistry GCで整理します。旧版アプリへの復元に旧Runtimeが取得できることは保証しません。整理のみ実行する場合は`renderer-image-daily`を`texlive_date=latest`、`publish=true`、`maintenance_only=true`で手動実行します。この経路はイメージをビルド・公開せず、VPSのsnapshotやバックアップにも触れません。
-
-画面を閉じても開始済みoperationは継続します。Webへ再接続できない場合は、Admin CLIまたはsystemd journalからoperation IDを確認します。
+画面を閉じても TeX 環境の構築は続きます。管理画面に戻り、選んだ言語と稼働中の Runtime を確認してください。取得に失敗した場合は `ghcr.io` に HTTPS で到達できるか、タグがそのアーキテクチャを含むかを確認します。ローカルでの Base のビルドは既定で無効です。
 
 ### 自動容量整理
 
@@ -401,37 +407,18 @@ TeXとアプリケーションは別々に更新します。
 
 アプリ更新は、公開後に差し替えできない固定リリース、固定tag／commit、サーバー用bundleのdigest、埋め込みmetadata、Renderer fingerprint、Node／pnpm要件を検証します。`v1.1.0`以降がこの更新経路に対応します。`v1.0.0`はサーバー用bundleと差し替え禁止設定がないため、Update Managerでは適用できません。
 
-Release workflowはtag refそのもの（Stableの`refs/tags/vX.Y.Z`または保守検証用の`refs/tags/vX.Y.Z-rc.N`）からのみ実行され、各配布assetへGitHub Actionsのkeyless Sigstore provenanceを付けます。Update Managerは保護された`server-release.yml` workflow、完全一致するtag ref、OIDC issuer、非self-hosted runnerを必ず検証します。host bootstrapは`gh`が古い場合、GitHub CLI v2.98.0を公式releaseから取得し、arch別に固定したSHA-256を検証して`/usr/local/bin/gh`へ導入します。attestation検証を無効化する設定はありません。
+### アプリケーションを更新する
 
-通常利用者はRelease Candidateを適用しません。`-rc.N`は公開後に変更できないPrereleaseとして、管理者が完全なversionを明示し、監査理由を入力した場合だけ検証用hostへ適用できます。空欄の更新確認、`latest`、通知、自動更新は常にStableだけを対象にします。正式版は、この検証用hostで実更新・全service・日本語／英語PDFとPNG・認証・公開境界を確認したRCと実装が一致する場合だけ公開されます。
+1. [バックアップ](#バックアップ)を取り、復元可能であることを確認します。作業に入る前に、新規ジョブを止め、進行中の変換が終わるのを待ちます。
+2. 所有者としてサーバーの **管理 → 更新**（`/admin/updates/`）を開き、更新を確認します。通常の更新確認と自動更新の対象は正式版です。
+3. 対象バージョンを確認して適用し、同じ更新操作の結果を待ちます。
+4. 更新後は利用者としてログインし、文書を実際に変換して結果を取得します。
 
-Webでは`/admin/updates/`から更新確認、方針変更、適用、operation確認、rollbackを行います。認証済みのAdmin CLIを使う場合も同じAPIと安全検査を使用します。これが通常の更新経路です。v1.2.xのroot Updaterから初回移行する場合だけ、後述の一回限りの専用sudo transitionを使います。
+更新中の権限と一時領域は[Updater の仕様](/docs/reference/#updaterの実行領域)を参照してください。データベースの変更を伴う更新から戻す場合は、そのバージョンに対応する復旧ポイントが必要です。稼働中のファイルやデータベースを手動で旧版へ切り替えないでください。
 
-Updaterの権限分離とビルド領域は[運用仕様](/docs/reference/#updaterの実行領域)を参照してください。署名検証を省略したり、稼働中の配布ファイルを直接編集したりしません。
+適用中はAdmin API自身も新しいReleaseで再起動するため、画面が一時的に「Admin APIへ再接続中」となったり、プロキシが短時間502を返したりすることがあります。画面は同じ更新操作を再確認します。接続が戻るまで、更新をもう一度開始しないでください。
 
-適用中はAdmin API自身も新しいReleaseで再起動するため、画面が一時的に「Admin APIへ再接続中」となったり、プロキシが短時間502を返したりすることがあります。画面は同じoperation IDへ再接続するので、その間に更新ボタンをもう一度押しません。修正版のデプロイ処理は、アプリ更新が保持しているmutation lockをTeX Runtime復元処理から重ねて取得せず、Image Manager起動時に検証済みの保存状態を復元します。デプロイが途中で失敗した場合も、停止したローカルserviceとtimerを復旧してからoperationを失敗として確定します。
-
-Web更新・コマンド更新ともに、サービス停止前に非rootの書込み可能なビルド領域で`pnpm install --frozen-lockfile`を非対話実行します。コピー元の絶対パスが残った依存関係はこの段階で再構成し、以後のネストしたコマンドも同じstoreを使います。デプロイ中の依存関係の自動再インストールはせず、不整合はエラーとして停止します。ビルド専用の`.deployment-tooling`キャッシュは固定Releaseへコピーしません。
-
-Cloudflare構成では、保存済みWranglerログイン情報の取得も同じビルド領域から実行し、サービス停止前に公開WorkerとTunnelのrouteを読み取り専用で確認します。変更が必要なrouteは配置後に反映しますが、認証・APIのエラーは停止前に検出します。`Cloudflare credentials unavailable`は必ずしもログイン期限切れを意味せず、pnpmの実行環境の不一致でも発生します。実際の認証状態を確認せずにtokenを再発行したり、設定へ書き込んだりしないでください。
-
-更新時は既存storage配下のディレクトリにもrootlessコンテナ用の継承ACLを適用します。storage最上位だけにACLがある状態では、以前から存在する`jobs`配下へ新しいジョブの書込み権限が継承されず、描画に失敗します。修復のためにstorageを`chmod 777`へ変更する必要はありません。
-
-serviceが`active`、または配置済みバージョンが新しくなったことだけでは更新成功とは判定しません。operationの成功、本番API経由の日本語・英語PDF／PNG描画、公開配布ファイルと認証境界の確認まで必要です。RC更新が失敗した場合はStableを公開せず、同じRCを繰り返し適用したり、migration済みdatabaseに対してコードだけを戻したりしないでください。
-
-```bash
-admin_cli=/opt/latex-renderer/current/apps/admin-cli/dist/index.js
-/usr/local/bin/node "$admin_cli" update status
-/usr/local/bin/node "$admin_cli" update check
-/usr/local/bin/node "$admin_cli" update policy --mode notify --reason "Keep updates manual" --yes
-/usr/local/bin/node "$admin_cli" update apply 1.3.2 --reason "Apply verified stable release" --yes
-```
-
-上の`1.3.2`は更新対象versionを明示する例です。利用可能と表示された実在versionだけを指定します。CLIは事前にAdmin API keyを設定し、通常ユーザーとして実行します。Cloudflare profileでAccess Service Authも設定した場合だけservice tokenを追加します。CLIへsudoを付けません。
-
-v1.2.0からの更新で、service smoke testと公開route更新が成功した後にOAuth consentの401を理由として失敗表示になった場合、v1.2.0のserviceはすでに稼働しています。同じv1.2.0 operationを繰り返さず、v1.2.2以降を新しい更新として適用してください。v1.2.1はこの最終確認を修正し、v1.2.2は公開Workerへログイン方式を切り替えるJavaScriptを収録します。どちらも新しいdatabase migrationは追加しません。
-
-更新前にはmaintenance mode、実行中jobのdrain、データベースbackupが必要です。データベースschemaを戻す必要がある場合は、アプリだけを強制的にロールバックせず、対応するbackupを復元します。
+操作が失敗した場合は、表示された操作 ID と失敗段階を控えます。復旧が進行中なら、その完了を待ってから再試行やロールバックを判断してください。
 
 ### v1.2.xのroot Updaterから権限分離Updaterへ移行する場合
 
@@ -449,6 +436,13 @@ v1.2.0からの更新で、service smoke testと公開route更新が成功した
 
 既定の暗号化backupは、WALと整合するSQLite snapshotに加え、削除されていないProjectの全revisionが参照するSource ZIPを同じarchiveへ保存します。各SourceはDB snapshotに記録されたサイズとSHA-256を照合し、欠落・symlink・hardlink・内容不一致があればbackup全体を失敗させます。DBだけ成功したように見せることはありません。
 
+既存のバックアップ設定で暗号化済みバックアップを即時作成するときは、サーバー上で次を実行します。暗号化先の設定と秘密鍵の保管先を決めてから実行してください。
+
+```bash
+sudo systemctl start latex-renderer-backup.service
+sudo journalctl -u latex-renderer-backup.service -n 20 --no-pager
+```
+
 最低限、次をReleaseとは別に保全します。
 
 - SQLiteデータベース、active Project revisionのSource、両者の対応manifestを含む既定の暗号化backup
@@ -458,13 +452,20 @@ v1.2.0からの更新で、service smoke testと公開route更新が成功した
 - Cloudflare profileの場合だけ`/etc/cloudflared`とTunnel、Access、Worker構成を復元できる記録
 - standalone profileの場合はTLS reverse proxyと証明書更新設定を復元できる記録
 
-既定のbackupはageで暗号化します。`deploy/scripts/restore-test.mjs`はSQLiteの整合性と外部キー、Project revision→Source対応、Sourceの通常ファイル性、サイズ、SHA-256も検査します。復元テストを行っていないbackupを、復旧可能なbackupとして扱わないでください。秘密鍵と暗号化backupは同じ障害で失われない場所へ保管します。
+既定のbackupはageで暗号化します。`deploy/scripts/restore-test.mjs`はSQLiteの整合性と外部キー、Project revision→Source対応、Sourceの通常ファイル性、サイズ、SHA-256も検査します。復元テストを行っていないbackupを、復旧可能なbackupとして扱わないでください。秘密鍵と暗号化バックアップは同じ障害で失われない場所へ保管します。復元テストは復号鍵を安全に利用できる環境で実行してください。
 
-`1.3.7-rc.1`以降のbackup／復旧検証は、現行Sourceとmigration 3由来の旧Job入力保存先の両方に対応します。Linuxの`/proc/self/fd`、GNU tar、ageが必要です。tar一覧は作成・検証の両方で各16MiBまでに制限し、不正な名前・リンク・重複entryを展開前に拒否します。実際の復旧時はサービスを停止し、archive内の`renderer.sqlite3`とSourceを同じ復旧点として戻します。`project-sources/<source_id>/source.zip`の配置先は、復旧DBの検証済み`storage_key`です。旧形式では対応する`jobs/job_<suffix>/input/source.zip`へ戻し、勝手に現行保存先へ変更しません。
+```bash
+BACKUP_AGE_IDENTITY_FILE=/path/to/age-identity \
+  /usr/local/bin/node /opt/latex-renderer/current/deploy/scripts/restore-test.mjs /path/to/backup.tar.age
+```
+
+このコマンドはバックアップを一時領域で検証します。稼働中のデータベースを書き換えることはありません。
+
+現行のバックアップと復旧検証は、現行Sourceとmigration 3由来の旧Job入力保存先の両方に対応します。Linuxの`/proc/self/fd`、GNU tar、ageが必要です。tar一覧は作成・検証の両方で各16MiBまでに制限し、不正な名前・リンク・重複entryを展開前に拒否します。実際の復旧時はサービスを停止し、archive内の`renderer.sqlite3`とSourceを同じ復旧点として戻します。`project-sources/<source_id>/source.zip`の配置先は、復旧DBの検証済み`storage_key`です。旧形式では対応する`jobs/job_<suffix>/input/source.zip`へ戻し、勝手に現行保存先へ変更しません。
 
 旧backupが既に旧Sourceを拒否しているhostでは、Updaterが切替前backupで止まる可能性があります。backup検証を省略したりsealed Releaseを書き換えたりせず、完全な復旧点と適用手順を個別に確認してください。定期backupは、独立Updaterの全DB／storage復旧ポイントとは別の機能です。
 
-同RCのmigration 18では、監査ログを時刻ではなく永続sequenceで出力管理します。移行時はDB内に残るログを一度再出力するため、過去のexportと重複する場合があります。未出力ログは古い時刻でも削除しません。checkpoint破損や復旧DBとの不一致は監査export／監査pruneを安全側に停止します。復旧時はcheckpointを適当に編集せず、[監査ログの復旧手順](https://github.com/n624-dev/latex-renderer/blob/main/OPERATIONS.md#audit-export-sequence-and-recovery)に従って保全・再出力を判断してください。
+監査ログの出力位置を記録するチェックポイントと復元したデータベースが一致しない場合、自動エクスポートと削除は停止します。データベースとエクスポート済みログを保全し、[監査ログの復旧手順](/docs/reference/#監査ログの復旧)に従ってください。
 
 ## 問題が起きた場合
 
@@ -480,4 +481,4 @@ v1.2.0からの更新で、service smoke testと公開route更新が成功した
 | レンダリングが開始されない          | queue、空き容量、worker、rootless Docker socket                       |
 | 更新直後に問題が起きた              | 新規jobを止め、現在と以前のRelease／Runtimeを確認してからrollback判断 |
 
-診断時もcredentialファイル、Authorization header、ユーザーのSource ZIP、PDF、raw logを表示・共有しません。詳細な運用と障害対応は、GitHubの[OPERATIONS.md](https://github.com/n624-dev/latex-renderer/blob/main/OPERATIONS.md)および[SECURITY.md](https://github.com/n624-dev/latex-renderer/blob/main/SECURITY.md)を参照してください。
+診断時は、操作 ID、失敗段階、公開しても安全なエラーコードを記録してください。[問題解決ガイド](/docs/troubleshooting/)と[セキュリティガイド](/docs/security/)も参照できます。

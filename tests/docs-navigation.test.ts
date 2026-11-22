@@ -74,7 +74,9 @@ describe("documentation navigation", () => {
     expect(siteScript).toContain("fetch('/assets/docs-search.json')");
     expect(siteScript).toContain("navigator.clipboard.writeText");
     expect(siteScript).toContain("document.createElement('button')");
-    expect(styles).toContain(".docs-layout { grid-template-columns: 1fr; }");
+    expect(styles).toContain(
+      ".docs-layout { grid-template-columns: minmax(0, 1fr); }",
+    );
     expect(styles).toContain(".docs-sidebar { position: static;");
   });
 });

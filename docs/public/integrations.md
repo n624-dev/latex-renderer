@@ -1,23 +1,25 @@
 ---
 slug: integrations
 category: AI・MCP
-title: Codex・Claude Code・MCP
+title: Codex・Claude Code で使う
 description: ローカルに保存した資格情報をCLIとMCPから共通利用します。
 navOrder: 40
-updated: "2026-10-19"
+updated: "2026-11-22"
 since: "v1.0.0"
 ---
 
 ## Skillの導入
 
-共通インストーラーと `latex-render setup` はOSを自動判定し、Codexは `$HOME/.agents/skills/latex-renderer`、Claude Codeは `$HOME/.claude/skills/latex-renderer` へSkillを導入します。
+1. [CLI をインストールし、API キーを登録](/docs/client/)します。
+2. Codex または Claude Code が使える状態で、次を実行します。この手順で LaTeX Renderer の使い方を AI に伝える Skill と、ローカル MCP を設定します。
+3. Codex または Claude Code を再起動し、変換したいフォルダと本文を指定して依頼します。
 
 ```text
 latex-render setup
 latex-render doctor --json
 ```
 
-旧Codex配置の `$HOME/.codex/skills/latex-renderer` は、以前の管理対象コピーから変更されていない場合だけ新しい配置へ移行します。利用者が変更したSkillは上書きも削除もせず、警告して保持します。導入後はCodexまたはClaude Codeを再起動してください。
+Skill の保存先は、Codex が `$HOME/.agents/skills/latex-renderer`、Claude Code が `$HOME/.claude/skills/latex-renderer` です。変更済みの Skill を検出した場合はその設定を保持し、セットアップ結果に表示します。
 
 ## MCPの登録
 

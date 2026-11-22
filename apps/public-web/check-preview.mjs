@@ -33,19 +33,16 @@ try {
   await waitUntilReady();
   await assertAsset("/", 200, "text/html", "LaTeXをPDFに変換");
   await assertAsset("/docs/", 200, "text/html", "最短でPDFを作る");
-  await assertAsset("/downloads/", 200, "text/html", "最新版ZIP");
-  await assertAsset(
-    "/assets/login.js",
-    200,
-    "text/javascript",
-    "/auth/config",
-  );
+  await assertAsset("/downloads/", 200, "text/html", "Windows の手順");
+  await assertAsset("/docs/cli/", 200, "text/html", "レンダリング");
+  await assertAsset("/docs/self-hosting/", 200, "text/html", "初回導入の順序");
+  await assertAsset("/assets/login.js", 200, "text/javascript", "/auth/config");
   await assertAsset("/assets/styles.css", 200, "text/css");
   await assertAsset(
     "/assets/docs-search.json",
     200,
     "application/json",
-    '"title":"はじめに"',
+    '"title":"LaTeX Renderer の使い方"',
   );
   await assertAsset("/openapi/gateway.openapi.yaml", 200, "application/yaml");
   await assertAsset("/definitely-not-present", 404, "text/html");

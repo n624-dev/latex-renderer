@@ -5,7 +5,7 @@ import {
   type DocsValidationInput,
 } from "../apps/admin-web/src/docs-validation.js";
 import {
-  docsPage,
+  renderPublicDoc,
   publicDocs,
   type PublicDoc,
 } from "../apps/admin-web/src/markdown-docs.js";
@@ -27,8 +27,19 @@ describe("public documentation CI validation", () => {
     expect(() =>
       assertPublicDocsValid(repositoryDocsValidationInput()),
     ).not.toThrow();
-    expect(docsPage()).toContain(
-      'href="https://github.com/n624-dev/latex-renderer/edit/main/docs/public/index.md"',
+  });
+
+  it("keeps user procedures in the public guides", () => {
+    for (const doc of publicDocs) {
+      expect(doc.html).not.toMatch(
+        /href="https:\/\/github\.com\/n624-dev\/latex-renderer\/blob\//,
+      );
+    }
+    expect(renderPublicDoc("self-hosting")).toContain(
+      `href="/docs/reference/#${encodeURIComponent("監査ログの復旧")}"`,
+    );
+    expect(renderPublicDoc("contributing")).toContain(
+      'href="https://github.com/n624-dev/latex-renderer/tree/main/docs/public"',
     );
   });
 

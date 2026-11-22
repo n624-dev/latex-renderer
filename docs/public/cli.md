@@ -1,22 +1,49 @@
 ---
 slug: cli
 category: CLI
-title: CLI
+title: CLI で変換と結果取得
 description: 実装済みのコマンドと保存される成果物を説明します。
 navOrder: 30
-updated: "2026-10-19"
+updated: "2026-11-22"
 since: "v1.0.0"
 ---
 
+[インストールと最初の PDF](/docs/client/)を済ませてから、このページで変換対象、出力先、過去の結果の取得方法を確認できます。
+
 ## 認証
 
-```powershell
-$env:LATEX_RENDER_API_KEY | latex-render auth login --api-key-stdin
+普段は `latex-render setup --gui` で設定画面を開き、API キーを保存します。ブラウザを開けない場合は、標準入力で登録できます。Bash または Zsh では次を実行し、1 行目でキーを入力します。
+
+```sh
+read -rs render_key
+printf '%s' "$render_key" | latex-render auth login --api-key-stdin
+unset render_key
+```
+
+Windows では[インストーラーの非表示入力](/docs/windows/#インストール)から登録できます。
+
+```text
 latex-render auth status
 latex-render auth logout
 ```
 
-`login` は標準入力だけを受け付けます。コマンドライン引数へAPIキーを含めないでください。環境変数 `LATEX_RENDER_API_KEY` が設定されている間は、保存済み資格情報より優先されます。
+`status` はローカルで使う資格情報を確認し、`logout` は保存済みキーを削除します。環境変数 `LATEX_RENDER_API_KEY` がある場合は、保存済みキーより優先されます。環境変数の削除やサーバーでのキーの失効は、それぞれ別の操作です。
+
+### 接続先サーバー
+
+既定ではホスト済みサービスを使用します。セルフホストの場合は、コマンドを実行するシェルでサーバーの HTTPS URL を指定します。URL には `/app/` や `/api/v1/` を付けず、同じサーバーが発行した API キーを使ってください。
+
+Linux・macOS:
+
+```sh
+export LATEX_RENDER_BASE_URL=https://latex.example.com
+```
+
+Windows PowerShell:
+
+```powershell
+$env:LATEX_RENDER_BASE_URL = 'https://latex.example.com'
+```
 
 ## セットアップと診断
 
@@ -48,6 +75,15 @@ latex-render doctor --json
 `setup --gui` は対話操作なので `--json` または `--api-key-stdin` と同時には使えません。
 
 ## レンダリング
+
+`main.tex` があるフォルダで `latex-render render . --open` を実行します。ZIP を変換する場合は、フォルダの代わりに ZIP のパスを指定します。
+
+```text
+latex-render render ./report.zip --entrypoint reports/report.tex --output .render/report --svg
+```
+
+`--entrypoint` は ZIP またはフォルダの内側から見た本文ファイルのパスです。上の例では PDF と SVG を要求し、`.render/report` に保存します。
+
 
 ```text
 latex-render render [directory-or-zip] [--entrypoint main.tex] [--output .render] [--open] [--svg]
@@ -100,7 +136,7 @@ latex-render jobs delete <jobId> --yes
 
 新しいRuntimeではPNGは初期1ページ＋要求したページだけを生成します。通常のダウンロードは生成済みPNGだけを取得し、`--preview-page 2 5` で追加ページを要求できます。PDFの再コンパイルや保持期限の延長は行わず、生成後の実際のサイズ・SHA-256を確認して保存します。
 
-新しいPDF＋SVGジョブはPDFを先に公開します。`--pdf-only` はPDFの確定まで待って取得し、SVG完了は待ちません。SVGだけが失敗した場合は、PDFを保存した上で部分成功を表示します。`retry-svg` は同じJob・Source・確定PDFを使ってSVGだけを再試行し、PDFを再コンパイルしません。初回を含め最大8回で、保持期限は延長しません。Runtimeが変わった場合はJob全体を新規作成してください。詳細は[PDFとSVGの独立処理](https://github.com/n624-dev/latex-renderer/blob/main/docs/independent-output-stages.md)を参照してください。
+新しいPDF＋SVGジョブはPDFを先に公開します。`--pdf-only` はPDFの確定まで待って取得し、SVG完了は待ちません。SVGだけが失敗した場合は、PDFを保存した上で部分成功を表示します。`retry-svg` は同じJob・Source・確定PDFを使ってSVGだけを再試行し、PDFを再コンパイルしません。初回を含め最大8回で、保持期限は延長しません。Runtimeが変わった場合はJob全体を新規作成してください。[PDF と SVG の状態と再試行条件](/docs/api/#pdfの先行公開とsvgの再試行)も参照できます。
 
 状態確認の一時的な通信障害は自動で再試行します。認証・権限エラーは自動再試行しません。画面側の待機が止まってもサーバーの処理が続く場合があるため、新規作成せず同じジョブを確認してください。[再試行条件](/docs/reference/#cliの待機と再試行)を参照してください。
 

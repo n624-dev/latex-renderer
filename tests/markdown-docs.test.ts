@@ -35,15 +35,15 @@ describe("Markdown public documentation", () => {
   it("loads ordered, complete frontmatter from repository Markdown files", () => {
     expect(publicDocs.map(({ slug }) => slug)).toEqual([
       "index",
-      "client",
-      "self-hosting",
-      "windows",
       "web",
+      "client",
+      "windows",
       "cli",
       "integrations",
       "mcp",
       "projects",
       "troubleshooting",
+      "self-hosting",
       "security",
       "api",
       "contributing",
@@ -107,13 +107,13 @@ describe("Markdown public documentation", () => {
     const page = docsPage();
 
     expect(page).toContain("最短でPDFを作る");
-    expect(page).toContain('<code class="language-text">');
-    expect(page).toContain('<div class="table-wrap"><table>');
+    expect(page).toContain('<code class="language-latex">');
+    expect(renderPublicDoc("api")).toContain('<div class="table-wrap"><table>');
     expect(page).toContain('<div class="notice warning">');
     expect(page).toContain('id="最短でpdfを作る"');
     expect(page).toContain('href="#最短でpdfを作る"');
     expect(page).toContain('aria-current="page"');
-    expect(page).toContain('<time datetime="2026-10-19">');
+    expect(page).toContain('<time datetime="2026-11-22">');
   });
 
   it("deduplicates heading fragments and escapes raw HTML", () => {
@@ -162,7 +162,7 @@ describe("Markdown public documentation", () => {
       const page = renderPublicDoc(document.slug);
       expect(page).not.toContain('class="eyebrow"');
       expect(page).toContain(
-        '<details class="docs-menu"><summary>使い方の一覧</summary>',
+        '<details class="docs-menu"><summary>ガイド一覧</summary>',
       );
       expect(page.match(/class="docs-nav-group"/g)).toHaveLength(2);
       for (const entry of publicDocs) {
@@ -173,7 +173,9 @@ describe("Markdown public documentation", () => {
       expect(page.indexOf('class="docs-meta"')).toBeGreaterThan(
         page.indexOf("</article>"),
       );
-      expect(page).toContain(`/edit/main/${document.sourcePath}`);
+      expect(page).not.toContain("/edit/main/");
+      if (document.slug !== "contributing")
+        expect(page).toContain("このガイドへのフィードバック");
       expect(page.includes('class="docs-toc"')).toBe(
         document.headings.length >= 5,
       );

@@ -1,7 +1,10 @@
 import type { Browser } from "playwright";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { launchTestBrowser, newTestPage } from "../helpers/browser-engine.js";
-import { renderPublicDoc } from "../../apps/admin-web/src/markdown-docs.js";
+import {
+  publicDocsSearchJson,
+  renderPublicDoc,
+} from "../../apps/admin-web/src/markdown-docs.js";
 import { siteScript } from "../../apps/admin-web/src/assets/site-script.js";
 import { styles } from "../../apps/admin-web/src/assets/styles.js";
 
@@ -13,7 +16,7 @@ afterAll(async () => {
   await browser?.close();
 });
 
-it.each([390, 768, 821, 960, 1100, 1200])(
+it.each([320, 390, 768, 821, 960, 1100, 1200])(
   "keeps document navigation accessible at %ipx",
   async (width) => {
     if (!browser) throw new Error("Browser not started");
@@ -109,6 +112,91 @@ it("opens relocated technical details for an existing heading fragment", async (
     expect(await page.locator(".docs-content").textContent()).toContain(
       "Web／APIへsudo権限やGitHub tokenを渡しません",
     );
+  } finally {
+    await page.close();
+  }
+});
+
+it("keeps dense API examples usable and searchable on a small screen", async () => {
+  if (!browser) throw new Error("Browser not started");
+  const page = await newTestPage(browser, {
+    viewport: { width: 320, height: 700 },
+  });
+  try {
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: {
+          writeText: (value: string) => {
+            document.body.dataset.copiedExample = value;
+            return Promise.resolve();
+          },
+        },
+      });
+    });
+    await page.route("https://renderer.invalid/**", (route) => {
+      const path = new URL(route.request().url()).pathname;
+      if (path === "/assets/site.js")
+        return route.fulfill({
+          contentType: "text/javascript",
+          body: siteScript,
+        });
+      if (path === "/assets/styles.css")
+        return route.fulfill({ contentType: "text/css", body: styles });
+      if (path === "/assets/docs-search.json")
+        return route.fulfill({
+          contentType: "application/json",
+          body: publicDocsSearchJson(),
+        });
+      return route.fulfill({
+        contentType: "text/html",
+        body: renderPublicDoc("api"),
+      });
+    });
+
+    await page.goto("https://renderer.invalid/docs/api/");
+    const toc = page.locator(".docs-toc");
+    const curl = toc.getByRole("link", { name: "curlの例" });
+    expect(await curl.isVisible()).toBe(false);
+    await toc.getByText("ページ内目次", { exact: true }).click();
+    await curl.click();
+
+    const example = page.locator(".docs-details").filter({
+      hasText: "ZIP を送信して PDF を取得する例を表示",
+    });
+    await example.locator("summary").click();
+    await example.getByRole("button", { name: "コピー", exact: true }).click();
+    await page.waitForFunction(() =>
+      document.body.dataset.copiedExample?.includes("--output result.pdf"),
+    );
+
+    const dimensions = await page.evaluate(() => {
+      const table = document.querySelector<HTMLElement>(".table-wrap");
+      const code = Array.from(document.querySelectorAll("pre")).find((pre) =>
+        pre.textContent.includes("--output result.pdf"),
+      );
+      if (!table || !code) throw new Error("Missing API content");
+      return {
+        pageFits: document.documentElement.scrollWidth <= innerWidth,
+        tableScrolls: table.scrollWidth > table.clientWidth,
+        codeScrolls: code.scrollWidth > code.clientWidth,
+        tableFocusable: table.tabIndex === 0,
+        codeFocusable: code.tabIndex === 0,
+      };
+    });
+    expect(dimensions).toEqual({
+      pageFits: true,
+      tableScrolls: true,
+      codeScrolls: true,
+      tableFocusable: true,
+      codeFocusable: true,
+    });
+
+    await page
+      .getByRole("searchbox", { name: "ガイド内を検索" })
+      .fill("CLI インストール");
+    const firstResult = page.locator("#docs-search-results a").first();
+    expect(await firstResult.getAttribute("href")).toBe("/docs/client/");
   } finally {
     await page.close();
   }
