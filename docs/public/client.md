@@ -9,7 +9,7 @@ since: "v1.0.0"
 ---
 
 > [!NOTE]
-> 次版より、APT 版と配布インストーラー版（Windows・macOS・Linux）のすべてで共通コマンド `n624-latex` を使用します。既存の設定やスクリプトとの互換性のため `latex-render` コマンドも残されています（現行 Stable の配布インストーラーを利用中の場合は、`n624-latex` を `latex-render` に読み替えてください）。
+> v1.7.0 以降の共通コマンドは `n624-latex` です。従来の `latex-render` も使えます。v1.6.9 以前のクライアントからは、[更新](#更新)の手順で `n624-latex` を追加できます。
 
 ## 対応環境
 
@@ -19,11 +19,9 @@ since: "v1.0.0"
 | Windows | **[PowerShell インストーラー](/docs/windows/)** | Node.js 24 以降、API キー |
 | macOS / APT を使わない Linux | **[配布インストーラー](#linux-macos)** | Node.js 24 以降、API キー |
 
-※ APT リポジトリが公開・案内されるまでは、Debian / Ubuntu でも下の[配布インストーラー](#linux-macos)を使ってください。
-
 ## Debian / Ubuntu の APT パッケージ
 
-1. 配布サイトの `n624-latex.sources` を保存します（このリポジトリ専用の署名公開鍵が含まれています）。
+1. [`n624-latex.sources` をダウンロード](https://apt.n624.jp/latex-renderer/n624-latex.sources)します。ファイルには LaTeX Renderer の APT 署名公開鍵が含まれています。
 2. ファイルを保存したフォルダで次を実行し、パッケージをインストールします。
 
 ```sh
@@ -89,8 +87,6 @@ n624-latex main.tex
 n624-latex auth status
 n624-latex render . --open
 ```
-
-現行 Stable では `latex-render render . --open` を使います。
 
 詳しいオプションは[CLI で変換と結果取得](/docs/cli/#レンダリング)を参照してください。
 
