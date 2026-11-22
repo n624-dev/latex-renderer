@@ -111,6 +111,16 @@ try {
   ]);
   assert.equal(doctor.success, true);
   assert.equal(doctor.result.status, "healthy");
+  const alias = join(bin, "n624-latex");
+  assert.equal(
+    (await exec(alias, ["--version"], { env })).stdout.trim(),
+    manifest.version,
+  );
+  assert.match(
+    (await exec(alias, ["admin", "update", "status", "--help"], { env }))
+      .stdout,
+    /Usage:.*status/,
+  );
   const removed = await runCheck("client-uninstall", process.execPath, [
     join(repository, "client-dist/uninstall.mjs"),
     "--install-directory",
@@ -123,6 +133,7 @@ try {
   ]);
   assert.equal(removed.result.removed, true);
   await assert.rejects(lstat(installation), { code: "ENOENT" });
+  await assert.rejects(lstat(alias), { code: "ENOENT" });
   await assert.rejects(
     lstat(join(temporary, "config/latex-renderer/credential")),
     { code: "ENOENT" },

@@ -20,6 +20,10 @@ since: "v1.3.6"
 
 ## 手動で作成する
 
+対応版では、所有者でログインし、**管理 → システム → バックアップ**で **作成** を選びます。作成が完了したら **最新を検証** を選び、状態を更新して検証時刻とファイル名を確認します。検証にはサーバーの復号鍵が必要です。
+
+### コマンドで作成・検証する
+
 初期セットアップ済みのサーバーで、暗号化バックアップを今すぐ作成します。保存先は `/etc/latex-renderer/backup.env` の `BACKUP_DIRECTORY`、既定は `/var/lib/latex-renderer/backups` です。定期実行は `latex-renderer-backup.timer` が管理します。
 
 ```bash
@@ -39,6 +43,12 @@ BACKUP_AGE_IDENTITY_FILE=/path/to/age-identity \
 ## 更新失敗後の復旧点を確認する
 
 更新失敗後に `RECOVERY_REVIEW_REQUIRED` と表示された場合は、サーバーの管理者権限で状態を確認します。
+
+```text
+sudo n624-latex server recovery status
+```
+
+旧版では次を使用します。
 
 ```bash
 sudo /usr/local/bin/node /usr/local/libexec/latex-renderer-update-recovery.mjs status

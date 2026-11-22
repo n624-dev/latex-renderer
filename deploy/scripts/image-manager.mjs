@@ -1714,6 +1714,43 @@ function send(res, status, value) {
   res.end(body);
 }
 
+// Initial installation needs a verified Runtime before the first owner and
+// renderer.env are committed. Build it through the same Base and Runtime path
+// as the manager without starting its listener or activating that Runtime.
+if (process.argv.slice(2).join(" ") === "--prepare-initial-runtime") {
+  if (process.geteuid?.() !== 0)
+    throw new Error("Initial Runtime setup requires root");
+  const existing = await stat(rendererEnv).catch((error) => {
+    if (error.code !== "ENOENT") throw error;
+  });
+  if (existing)
+    throw new Error("Use TeX Environment to change an installed Runtime");
+  const lock = await acquireMutationLock();
+  let work;
+  try {
+    work = await mkdtemp(join(operationsRoot, "initial-runtime-"));
+    const op = { logPath: join(work, "operations.log") };
+    const base = await pullOrRebuildBase(
+      op,
+      { mode: "latest", value: null },
+      false,
+    );
+    const runtime = await acquireRuntime(op, base, [
+      "collection-langenglish",
+      "collection-langjapanese",
+    ]);
+    await validateRuntime(op, runtime.ref);
+    console.log(runtime.imageId);
+  } finally {
+    try {
+      if (work) await rm(work, { recursive: true, force: true });
+    } finally {
+      await lock.release();
+    }
+  }
+  process.exit(0);
+}
+
 const server = createServer(
   activity.track(async (req, res) => {
     try {

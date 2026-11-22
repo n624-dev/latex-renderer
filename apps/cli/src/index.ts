@@ -1,9 +1,12 @@
 #!/usr/bin/env node
 import { Writable } from "node:stream";
-import { basename, resolve } from "node:path";
+import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { RendererClient } from "@latex-renderer/api-client";
 import {
+  compileProjectPdf,
   downloadJobArtifacts,
   openLocalTarget,
   getJob,
@@ -15,6 +18,7 @@ import {
   type ClientCoreEvent,
   type RenderProjectResult,
 } from "@latex-renderer/client-core";
+import { stripVTControlCharacters } from "node:util";
 import {
   AppError,
   CLIENT_VERSION,
@@ -35,7 +39,7 @@ import {
   type SetupStatus,
   type SkillTarget,
 } from "@latex-renderer/setup-core";
-import { runSetupWeb } from "@latex-renderer/setup-web";
+import { createSetupWebActions, runSetupWeb } from "@latex-renderer/setup-web";
 import { Command, CommanderError } from "commander";
 
 const quietWriter = new Writable({
@@ -44,6 +48,18 @@ const quietWriter = new Writable({
   },
 });
 
+const publicCommand = process.env.N624_LATEX_COMMAND === "1";
+const commandName = publicCommand ? "n624-latex" : "latex-render";
+const aptManaged = process.env.N624_LATEX_PACKAGE === "apt";
+
+function aptManagedError(): AppError {
+  return new AppError(
+    "APT_MANAGED_CLIENT",
+    "Manage the installed client with APT (n624-latex)",
+    400,
+  );
+}
+
 const program = new Command()
   .exitOverride()
   .configureOutput({
@@ -51,9 +67,60 @@ const program = new Command()
       if (!requestedJsonMode()) process.stderr.write(value);
     },
   })
-  .name("latex-render")
+  .name(commandName)
   .version(CLIENT_VERSION)
   .option("--json", "write one structured JSON result to stdout");
+
+if (publicCommand) {
+  program.addHelpText("after", "\nCompile a document: n624-latex main.tex");
+  program
+    .command("compile", { hidden: true })
+    .argument("<file>")
+    .option("-o, --output <file>", "write the PDF to this path")
+    .action(async (input: string, options: { output?: string }) => {
+      let client: RendererClient;
+      try {
+        client = await configuredClient();
+      } catch (error) {
+        if (
+          (error as NodeJS.ErrnoException).code === "ENOENT" ||
+          (error as NodeJS.ErrnoException).code === "CREDENTIAL_NOT_FOUND"
+        )
+          throw new AppError(
+            "CREDENTIAL_REQUIRED",
+            "Run n624-latex setup to configure the renderer client",
+            401,
+          );
+        throw error;
+      }
+      const result = await compileProjectPdf(client, input, options);
+      if (result.pdf !== undefined) {
+        emitSuccess("compile", { jobId: result.job.id, pdf: result.pdf }, () =>
+          process.stdout.write(`${result.pdf}\n`),
+        );
+        return;
+      }
+      const error = {
+        code: result.job.errorCode ?? "RENDER_FAILED",
+        message:
+          result.job.errorMessage ?? `Render ended with ${result.job.status}`,
+      };
+      if (isJsonMode())
+        writeJson({ success: false, command: "compile", result, error });
+      else {
+        const terminalText = (value: string) =>
+          stripVTControlCharacters(value).replaceAll(/\s+/g, " ").slice(0, 500);
+        process.stderr.write(
+          `${terminalText(error.message)} (${result.job.id})\n`,
+        );
+        for (const item of result.diagnostics?.errors.slice(0, 10) ?? [])
+          process.stderr.write(
+            `${terminalText(item.file)}${item.line === null ? "" : `:${item.line}`}: ${terminalText(item.message)}\n`,
+          );
+      }
+      process.exitCode = 2;
+    });
+}
 
 const auth = program.command("auth");
 const authLogin = auth.command("login").requiredOption("--api-key-stdin");
@@ -107,7 +174,23 @@ const setup = program
   .option("--api-key-stdin", "store a render API key read from standard input")
   .option("--gui", "open the loopback-only Local Setup Web UI")
   .action(async (options: SetupCommandOptions) => {
-    if (options.gui === true) {
+    if (aptManaged && options.apiKeyStdin === true && options.gui !== true) {
+      await saveCredential((await readStdin()).trim());
+      emitSuccess("setup", { configured: true }, () =>
+        process.stdout.write("Credential stored.\n"),
+      );
+      return;
+    }
+    const interactiveDefault =
+      publicCommand &&
+      process.stdin.isTTY &&
+      !isJsonMode() &&
+      Object.keys(options).length === 0;
+    if (
+      options.gui === true ||
+      (aptManaged && !isJsonMode()) ||
+      interactiveDefault
+    ) {
       if (isJsonMode())
         throw new AppError(
           "INTERACTIVE_JSON_CONFLICT",
@@ -120,13 +203,22 @@ const setup = program
           "setup --gui cannot be combined with --api-key-stdin",
           400,
         );
-      await runSetupWeb({
+      const webOptions = {
         ...setupCoreOptions(options),
         distributionBaseUri: options.baseUri ?? DEFAULT_DISTRIBUTION_URI,
         rendererBaseUrl: clientRendererBaseUrl(process.env),
-      });
+      };
+      if (aptManaged) {
+        const actions = createSetupWebActions(webOptions);
+        actions.status = () => inspectSetup(setupCoreOptions(options));
+        actions.doctor = () => doctorSetup(setupCoreOptions(options));
+        for (const name of ["update", "repair"] as const)
+          actions[name] = () => Promise.reject(aptManagedError());
+        await runSetupWeb({ ...webOptions, actions });
+      } else await runSetupWeb(webOptions);
       return;
     }
+    if (aptManaged) throw aptManagedError();
     const distribution = await fetchDistribution({
       baseUri: options.baseUri ?? DEFAULT_DISTRIBUTION_URI,
     });
@@ -162,6 +254,7 @@ setup
   .command("repair")
   .description("repair only settings owned by this installation")
   .action(async (options: SetupCommandOptions) => {
+    if (aptManaged) throw aptManagedError();
     const merged = setupSubcommandOptions(options);
     const result = await repairSetup({
       ...setupCoreOptions(merged),
@@ -194,6 +287,7 @@ setup
   .option("--keep-credential", "keep the stored render API key")
   .option("--keep-skills", "keep installed Codex and Claude skills")
   .action(async (options: SetupCommandOptions) => {
+    if (aptManaged) throw aptManagedError();
     const merged = setupSubcommandOptions(options);
     const result = await removeSetup({
       ...setupCoreOptions(merged),
@@ -523,28 +617,55 @@ jobs
     if (result.job.status !== "succeeded") process.exitCode = 2;
   });
 
-void program.parseAsync().catch((error: unknown) => {
-  if (
-    error instanceof CommanderError &&
-    ["commander.helpDisplayed", "commander.version"].includes(error.code)
-  ) {
-    process.exitCode = 0;
-    return;
-  }
-  if (isJsonMode()) {
-    const normalized = normalizeError(error);
-    writeJson({
-      success: false,
-      command: parsedCommandName(program),
-      error: normalized,
+const userArgs = process.argv.slice(2);
+if (publicCommand && userArgs[0] === "admin") {
+  const entry = join(dirname(process.argv[1] ?? ""), "latex-render-admin.mjs");
+  if (!existsSync(entry)) {
+    process.stderr.write("This installation does not contain the Admin CLI.\n");
+    process.exitCode = 1;
+  } else {
+    const child = spawnSync(process.execPath, [entry, ...userArgs.slice(1)], {
+      stdio: "inherit",
     });
-  } else if (!(error instanceof CommanderError)) {
-    process.stderr.write(
-      `latex-render: ${error instanceof Error ? error.message : "Unknown error"}\n`,
-    );
+    if (child.error !== undefined)
+      process.stderr.write(`${child.error.message}\n`);
+    process.exitCode = child.status ?? 1;
   }
-  process.exitCode = error instanceof CommanderError ? error.exitCode : 1;
-});
+} else {
+  const first = userArgs.findIndex((argument) => argument !== "--json");
+  const input = userArgs[first];
+  if (
+    publicCommand &&
+    input !== undefined &&
+    !input.startsWith("-") &&
+    /\.tex$/i.test(input)
+  )
+    userArgs.splice(first, 0, "compile");
+  void program
+    .parseAsync(userArgs, { from: "user" })
+    .catch((error: unknown) => {
+      if (
+        error instanceof CommanderError &&
+        ["commander.helpDisplayed", "commander.version"].includes(error.code)
+      ) {
+        process.exitCode = 0;
+        return;
+      }
+      if (isJsonMode()) {
+        const normalized = normalizeError(error);
+        writeJson({
+          success: false,
+          command: parsedCommandName(program),
+          error: normalized,
+        });
+      } else if (!(error instanceof CommanderError)) {
+        process.stderr.write(
+          `${commandName}: ${error instanceof Error ? error.message : "Unknown error"}\n`,
+        );
+      }
+      process.exitCode = error instanceof CommanderError ? error.exitCode : 1;
+    });
+}
 
 async function configuredClient(): Promise<RendererClient> {
   const base = clientRendererBaseUrl(process.env);
@@ -652,12 +773,21 @@ function writeJson(value: unknown): void {
 function setupCoreOptions(options: SetupCommandOptions): {
   installDirectory?: string;
   binDirectory?: string;
+  systemPackage?: { version: string; directory: string };
 } {
   return {
     ...(options.installDirectory
       ? { installDirectory: options.installDirectory }
       : {}),
     ...(options.binDirectory ? { binDirectory: options.binDirectory } : {}),
+    ...(aptManaged
+      ? {
+          systemPackage: {
+            version: CLIENT_VERSION,
+            directory: "/usr/lib/n624-latex/client",
+          },
+        }
+      : {}),
   };
 }
 

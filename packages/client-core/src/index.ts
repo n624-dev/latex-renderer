@@ -13,6 +13,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import {
+  basename,
   dirname,
   extname,
   isAbsolute,
@@ -27,6 +28,10 @@ import type {
   SourceRenderResponse,
   SourceTicketResponse,
   RenderOutput,
+} from "@latex-renderer/contracts";
+import {
+  structuredErrorsSchema,
+  type StructuredErrors,
 } from "@latex-renderer/contracts";
 import { AppError, DEFAULT_RESOURCE_LIMITS } from "@latex-renderer/shared";
 import {
@@ -205,6 +210,146 @@ export async function renderProject(
     return { job, outputDirectory, source, artifacts };
   } finally {
     await rm(temporary, { recursive: true, force: true });
+  }
+}
+
+/** Compile a project entrypoint and publish only the verified PDF. */
+export async function compileProjectPdf(
+  client: ClientTransport,
+  input: string,
+  options: Pick<
+    RenderOptions,
+    "pollIntervalMs" | "pollTimeoutMs" | "onEvent"
+  > & {
+    projectRoot?: string;
+    output?: string;
+  } = {},
+): Promise<{
+  job: JobResponse;
+  pdf?: string;
+  diagnostics?: StructuredErrors;
+}> {
+  const root = resolve(options.projectRoot ?? process.cwd());
+  const entrypoint = validateEntrypointPath(
+    relative(root, resolve(root, input)).split(sep).join("/"),
+  );
+  const destination = resolve(
+    root,
+    options.output ?? `${basename(entrypoint, extname(entrypoint))}.pdf`,
+  );
+  if (extname(destination).toLowerCase() !== ".pdf")
+    throw new AppError(
+      "INVALID_PDF_DESTINATION",
+      "Output must be a .pdf file",
+      400,
+    );
+  await assertSafeOutputFile(destination);
+  const work = await mkdtemp(join(tmpdir(), "n624-latex-"));
+  let jobId: string | undefined;
+  try {
+    const zip = join(work, "source.zip");
+    const archive = await createProjectArchive(
+      root,
+      zip,
+      entrypoint,
+      destination,
+    );
+    options.onEvent?.({ type: "archive.created", ...archive });
+    const source = await reserveAndUploadSource(client, zip, archive, options);
+    const ticket = await startSourceJob(client, source.sourceId, entrypoint);
+    jobId = ticket.jobId;
+    options.onEvent?.({ type: "job.queued", jobId: ticket.jobId });
+    const { job, jobTicket } = await pollUntilTerminal(client, ticket, options);
+    if (job.status !== "succeeded") {
+      const artifact = job.artifacts.find(
+        ({ relativePath }) => relativePath === "errors.json",
+      );
+      if (artifact !== undefined && artifact.size <= 1024 ** 2) {
+        try {
+          const path = join(work, "errors.json");
+          await downloadVerified(
+            client,
+            client.artifactUrl(job.id, "errors.json"),
+            jobTicket,
+            path,
+            artifact,
+          );
+          const diagnostics = structuredErrorsSchema.safeParse(
+            JSON.parse(await readFile(path, "utf8")),
+          );
+          if (diagnostics.success)
+            return { job, diagnostics: diagnostics.data };
+        } catch {
+          // The Job failure remains authoritative if optional diagnostics are unavailable.
+        }
+      }
+      return { job };
+    }
+
+    const pdf = job.artifacts.find(
+      ({ relativePath }) => relativePath === "result.pdf",
+    );
+    if (pdf === undefined || pdf.size <= 0 || pdf.size > 1024 ** 3)
+      throw new AppError(
+        "INVALID_ARTIFACT_METADATA",
+        "The renderer returned no valid PDF",
+        502,
+      );
+    const directory = dirname(destination);
+    await ensureSecureDirectory(directory);
+    const parent = await realpath(directory);
+    const { dev, ino } = await lstat(parent, { bigint: true });
+    const stage = await mkdtemp(join(parent, ".n624-latex-pdf-"));
+    try {
+      const staged = join(stage, "result.pdf");
+      await downloadVerified(
+        client,
+        client.artifactUrl(job.id, "result.pdf"),
+        jobTicket,
+        staged,
+        pdf,
+      );
+      const file = await open(
+        staged,
+        process.platform === "win32" ? "r+" : "r",
+      );
+      try {
+        await file.sync();
+      } finally {
+        await file.close();
+      }
+      const rechecked = await lstat(directory, { bigint: true });
+      if (
+        rechecked.dev !== dev ||
+        rechecked.ino !== ino ||
+        (await realpath(directory)) !== parent
+      )
+        throw new AppError(
+          "UNSAFE_OUTPUT_DIRECTORY",
+          "PDF output directory changed while downloading",
+          409,
+        );
+      await assertSafeOutputFile(destination);
+      await rename(staged, destination);
+      options.onEvent?.({
+        type: "artifact.downloaded",
+        name: "result.pdf",
+        path: destination,
+      });
+      return { job, pdf: destination };
+    } finally {
+      await rm(stage, { recursive: true, force: true }).catch(() => undefined);
+    }
+  } catch (error) {
+    if (jobId === undefined) throw error;
+    throw new AppError(
+      error instanceof AppError ? error.code : "PDF_PUBLICATION_FAILED",
+      `${error instanceof Error ? error.message : "PDF could not be saved"} (job ${jobId})`,
+      error instanceof AppError ? error.status : 500,
+      { jobId },
+    );
+  } finally {
+    await rm(work, { recursive: true, force: true }).catch(() => undefined);
   }
 }
 
@@ -484,14 +629,14 @@ export async function createProjectArchive(
   root: string,
   destination: string,
   entrypoint?: string,
-  excludedOutputDirectory?: string,
+  excludedOutputPath?: string,
 ): Promise<{ size: number; sha256: string; files: number }> {
   const requiredEntrypoint =
     entrypoint === undefined ? undefined : validateEntrypointPath(entrypoint);
   const excludedRelative =
-    excludedOutputDirectory === undefined
+    excludedOutputPath === undefined
       ? undefined
-      : relative(resolve(root), resolve(excludedOutputDirectory));
+      : relative(resolve(root), resolve(excludedOutputPath));
   if (excludedRelative === "")
     throw new AppError(
       "INVALID_OUTPUT_DIRECTORY",

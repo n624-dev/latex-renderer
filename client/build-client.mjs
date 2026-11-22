@@ -66,6 +66,12 @@ await Promise.all([
     bundleDefine,
   ),
   bundle(
+    "apps/admin-cli/src/index.ts",
+    join(payloadRoot, "app", "latex-render-admin.mjs"),
+    bundleDefine,
+    "esm",
+  ),
+  bundle(
     "apps/mcp-server/src/index.ts",
     join(payloadRoot, "app", "latex-renderer-mcp.cjs"),
     bundleDefine,
@@ -95,6 +101,14 @@ await Promise.all([
   cp(
     join(repository, "client/unix/latex-render"),
     join(payloadRoot, "bin", "latex-render"),
+  ),
+  cp(
+    join(repository, "client/unix/latex-render"),
+    join(payloadRoot, "bin", "n624-latex"),
+  ),
+  cp(
+    join(repository, "client/windows/latex-render.cmd"),
+    join(payloadRoot, "bin", "n624-latex.cmd"),
   ),
   cp(
     join(repository, "client/unix/latex-renderer-mcp"),

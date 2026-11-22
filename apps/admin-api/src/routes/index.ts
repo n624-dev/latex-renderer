@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { appendSetCookies } from "@latex-renderer/auth";
 import { requireActor } from "../auth/actor.js";
 import type { AdminDependencies } from "../types.js";
+import { createBackupsRouter } from "./backups.js";
 import { createApiKeysRouter } from "./api-keys.js";
 import { createJobsRouter } from "./jobs.js";
 import { createServiceAccountsRouter } from "./service-accounts.js";
@@ -51,6 +52,7 @@ export function createAdminV1Router(deps: AdminDependencies): Hono {
   r.route("/worker", createWorkerRouter(deps));
   r.route("/tex-environment", createTexEnvironmentRouter(deps));
   r.route("/updates", createUpdatesRouter(deps));
+  r.route("/backups", createBackupsRouter(deps));
   r.route("/audit-logs", createAuditRouter(deps));
   return r;
 }

@@ -76,6 +76,19 @@ latex-render doctor --json
 
 ## レンダリング
 
+### TeX ファイルを直接変換する
+
+文書のプロジェクトフォルダで使います。画像、参考文献、ローカルのスタイルをフォルダ内の相対パスで参照できます。
+
+```text
+n624-latex main.tex
+n624-latex chapters/report.tex -o build/report.pdf
+```
+
+出力先を省略すると、実行したフォルダに入力と同じ名前の PDF ができます。LaTeX のエラーは、取得できたファイル名・行番号・ジョブ ID とともに表示されます。変換やファイル取得に失敗した場合は、最後に正常に保存した PDF を保持します。
+
+### ZIP・複数の出力を指定する
+
 `main.tex` があるフォルダで `latex-render render . --open` を実行します。ZIP を変換する場合は、フォルダの代わりに ZIP のパスを指定します。
 
 ```text

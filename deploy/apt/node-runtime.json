@@ -1,0 +1,11 @@
+{
+  "version": "26.13.0",
+  "corepack": {
+    "version": "0.34.6",
+    "sha512": "gvylq9kzJB09mSsiOnKOnhg0YdCWNy2aGaeGbYF4HlyGd/v4moxEonQjJPYI45/K4zP7q1hW9qCVvaYYKK5nkA=="
+  },
+  "sha256": {
+    "amd64": "d28a96af6c38596f6d9d97c0ee531c13d238d757742387d1928de822d959e997",
+    "arm64": "406fe3fbde1c054adff8b297c16fdb5af6659db327c1ac8acd46b56ef1af9a92"
+  }
+}

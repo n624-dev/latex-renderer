@@ -17,6 +17,7 @@ import type {
 } from "@latex-renderer/contracts";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  compileProjectPdf,
   downloadJobArtifacts,
   getJob,
   renderProject,
@@ -38,6 +39,50 @@ afterEach(async () => {
 });
 
 describe("client core", () => {
+  it("compiles a nested entrypoint and replaces only the requested PDF", async () => {
+    const root = await temporaryRoot();
+    await mkdir(join(root, "chapters"));
+    await mkdir(join(root, "build"), { mode: 0o700 });
+    await writeFile(join(root, "chapters", "report.tex"), "document");
+    await writeFile(join(root, "notes.bib"), "references");
+    await writeFile(join(root, "build", "report.pdf"), "prior PDF");
+    await writeFile(join(root, "build", "figure.pdf"), "a figure");
+    const client = new FakeClient([job("succeeded")]);
+    const result = await compileProjectPdf(client, "chapters/report.tex", {
+      projectRoot: root,
+      output: "build/report.pdf",
+    });
+    expect(client.entrypoints).toEqual(["chapters/report.tex"]);
+    expect(client.archiveNames).toContain("notes.bib");
+    expect(client.archiveNames).toContain("build/figure.pdf");
+    expect(client.archiveNames).not.toContain("build/report.pdf");
+    expect(result.pdf).toBe(join(root, "build", "report.pdf"));
+    expect(await readFile(join(root, "build", "report.pdf"), "utf8")).toBe(
+      "result.pdf",
+    );
+    expect(await readFile(join(root, "build", "figure.pdf"), "utf8")).toBe(
+      "a figure",
+    );
+  });
+
+  it("retains the previous PDF on rendering or transfer failure", async () => {
+    const root = await temporaryRoot();
+    await writeFile(join(root, "main.tex"), "document");
+    const destination = join(root, "main.pdf");
+    await writeFile(destination, "prior PDF");
+    const failed = new FakeClient([job("failed")]);
+    expect(
+      (await compileProjectPdf(failed, "main.tex", { projectRoot: root })).job
+        .status,
+    ).toBe("failed");
+    const corrupted = new FakeClient([job("succeeded")]);
+    corrupted.download = async (_url, _ticket, path) =>
+      writeFile(path, "corrupt");
+    await expect(
+      compileProjectPdf(corrupted, "main.tex", { projectRoot: root }),
+    ).rejects.toThrow("advertised size and SHA256");
+    expect(await readFile(destination, "utf8")).toBe("prior PDF");
+  });
   it("generates only explicitly requested pages and downloads against fresh real metadata", async () => {
     const root = await temporaryRoot(),
       initial = { ...job("succeeded"), previewPageCount: 3 },

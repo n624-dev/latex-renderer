@@ -322,6 +322,13 @@ deployment_quiesced=true
 require_normal_maintenance_for_smoke
 LATEX_RENDERER_PREPARE_SOURCE="$source_root" \
   sh "$tools_root/deploy/scripts/prepare-host.sh" "$release_id"
+if [ -f "$source_root/deploy/systemd/latex-renderer-backup-control.socket" ]; then
+  install -o root -g root -m 0644 \
+    "$source_root/deploy/systemd/latex-renderer-backup-control.socket" \
+    "$source_root/deploy/systemd/latex-renderer-backup-control@.service" \
+    "$source_root/deploy/systemd/latex-renderer-backup-verify.service" /etc/systemd/system/
+  systemctl daemon-reload
+fi
 # The running Updater supplies the trusted publication tools, which can predate
 # socket activation. Install this verified release's listener definitions before
 # reconciling or starting its consumers, even when those older tools omit them.
@@ -582,6 +589,13 @@ fi
 
 deployment_checkpoint artifact-pruning
 sh "$tools_root/deploy/scripts/prune-production-artifacts.sh" "$release_id"
+
+if [ -f "$source_root/deploy/scripts/install-n624-latex.sh" ]; then
+  sh /opt/latex-renderer/current/deploy/scripts/install-n624-latex.sh
+fi
+if [ -f "$source_root/deploy/systemd/latex-renderer-backup-control.socket" ]; then
+  systemctl enable --now latex-renderer-backup-control.socket
+fi
 
 deployment_finished=true
 # The old controller must finish persisting its operation before it is stopped.

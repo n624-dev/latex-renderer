@@ -207,7 +207,11 @@ async function writeOutput(value) {
 }
 
 function runCapture(command, args, options = {}) {
-  const { maxCaptureBytes = 2 * 1024 * 1024, ...spawnOptions } = options;
+  const {
+    maxCaptureBytes = 2 * 1024 * 1024,
+    mutationLockFd = helperMutationLock?.fd,
+    ...spawnOptions
+  } = options;
   return new Promise((resolvePromise, reject) => {
     const child = spawn(command, args, {
       ...spawnOptions,
@@ -215,7 +219,7 @@ function runCapture(command, args, options = {}) {
         "ignore",
         "pipe",
         "pipe",
-        ...(helperMutationLock ? [helperMutationLock.fd] : []),
+        ...(mutationLockFd === undefined ? [] : [mutationLockFd]),
       ],
     });
     let stdout = "";
@@ -284,14 +288,15 @@ async function resolveGitHubCli(githubEnvironment) {
 }
 
 async function runLogged(command, args, options = {}) {
+  const { mutationLockFd = helperMutationLock?.fd, ...spawnOptions } = options;
   await writeOutput(`$ ${command} ${args.join(" ")}\n`);
   const child = spawn(command, args, {
-    ...options,
+    ...spawnOptions,
     stdio: [
       "ignore",
       "pipe",
       "pipe",
-      ...(helperMutationLock ? [helperMutationLock.fd] : []),
+      ...(mutationLockFd === undefined ? [] : [mutationLockFd]),
     ],
   });
   const consume = async (stream) => {
@@ -640,6 +645,7 @@ export async function buildBootstrapRelease(
   source,
   packageManager,
   identity,
+  mutationLockFd,
 ) {
   const buildSource = join(rootStage, "bootstrap-build");
   await mkdir(buildSource, { mode: 0o700 });
@@ -683,6 +689,7 @@ export async function buildBootstrapRelease(
     env: deployEnvironment,
     uid: Number(identity.uid),
     gid: Number(identity.gid),
+    mutationLockFd,
   };
   await runLogged(
     corepack,

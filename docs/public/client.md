@@ -10,6 +10,36 @@ since: "v1.0.0"
 
 ## 対応環境
 
+Debian 12／13 と Ubuntu 24.04／26.04（amd64・arm64）では、APT でクライアントを導入できます。Windows・macOS や APT リポジトリを登録できない環境では、このページの[配布インストーラー](#linux-macos)を使います。
+
+## Debian / Ubuntu の APT パッケージ
+
+最初に配布サイトの `n624-latex.sources` を保存します。ファイルには、このリポジトリだけに使う署名公開鍵が含まれます。ダウンロードしたフォルダで次を実行します。
+
+```sh
+sudo install -m 0644 n624-latex.sources /etc/apt/sources.list.d/n624-latex.sources
+sudo apt update
+sudo apt install n624-latex
+```
+
+公開されたリポジトリが案内されるまでは、下の配布インストーラーを使ってください。APT 版には専用の Node.js が含まれます。サーバーを運用する場合は、インストール後に[サーバー設定ウィザード](/docs/server-setup/)を明示的に起動します。
+
+通常のユーザーで設定を開き、サーバーが発行した API キーを保存します。
+
+```text
+n624-latex setup
+```
+
+`main.tex` のあるフォルダで変換します。
+
+```text
+n624-latex main.tex
+```
+
+`main.pdf` がそのフォルダに保存されます。別の出力先やエラーの読み方は[TeX ファイルを直接変換する](/docs/cli/#tex-ファイルを直接変換する)を参照してください。
+
+## 配布インストーラーの準備
+
 Node.js 24 以降と、サーバー管理者が発行した `lrk_` から始まる API キーを用意します。Node.js のバージョンは `node --version` で確認できます。インストールは普段使うユーザーで行います。
 
 - **Windows** — [PowerShell の手順](/docs/windows/)でインストールから最初の PDF まで進めます。
@@ -59,6 +89,10 @@ PDF は `.render/result.pdf` に保存されます。`--open` を付けると完
 各一式は1 GiB・10,000項目までで、切替中は旧・新一式と一時領域の空きが必要です。リンクや別のマウントを含む保存先は使用できません。Windowsでファイルが使用中の場合は閉じて再試行します。[保存・復旧の詳しい仕様](/docs/reference/#成果物の保存-復旧の仕様)も参照してください。
 
 ## 更新
+
+APT 版は `sudo apt update` の後に `sudo apt install --only-upgrade n624-latex` で更新します。接続設定や API キーは今のユーザーのまま使えます。サーバーアプリケーションは[管理画面の更新操作](/docs/updates/)で更新します。
+
+配布インストーラーで導入した場合は以下の手順を使います。
 
 次のコマンド、または同じインストールコマンドを再実行します。
 

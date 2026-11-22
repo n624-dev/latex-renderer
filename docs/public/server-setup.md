@@ -10,6 +10,16 @@ since: "v1.4.0"
 
 ## どの手順を使うか
 
+`n624-latex` 対応版では、管理者の端末から次のコマンドを実行し、端末またはブラウザを選びます。
+
+```text
+sudo n624-latex server setup
+```
+
+初回は[APT パッケージ](/docs/client/)と、rootless extras を含む Docker Engine が必要です。導入済みのサーバーでは通常の更新でコマンドが追加されます。実行内容だけを確認するには `sudo n624-latex server setup --plan`、HTTPS を変更するときは `sudo n624-latex server setup --ingress` を使います。中断後は同じコマンドを開くと、復旧が必要な設定を選べます。
+
+### 旧版・手動配置の場合
+
 初めてサーバーを準備する場合は[セルフホストの初回導入](/docs/self-hosting/#現在の提供状況)から始めます。このページのウィザードは、専用ユーザー、Node.js、rootless Docker などが準備され、検証済みでビルドされたリリースを `/opt/latex-renderer/current` に配置済みのサーバーが対象です。
 
 | したいこと                 | 起動時の指定 | 条件                                                                      |

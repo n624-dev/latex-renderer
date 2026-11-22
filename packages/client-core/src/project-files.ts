@@ -27,6 +27,7 @@ export function shouldExcludeProjectPath(name: string): boolean {
   const lower = normalized.toLowerCase();
   return (
     isArtifactTransactionPath(normalized) ||
+    /(?:^|\/)\.n624-latex-pdf-[a-z0-9]{6}(?:\/|$)/i.test(normalized) ||
     normalized === ".render" ||
     normalized.startsWith(".render/") ||
     normalized === ".git" ||
