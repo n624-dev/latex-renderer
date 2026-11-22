@@ -2,20 +2,24 @@
 slug: api
 category: API
 title: 公開API
-description: Source・保存Project共有、ジョブ作成、状態確認、成果物取得をHTTPから行います。
+description: HTTP リクエストで ZIP を送り、変換の状態を確認して PDF を取得します。
 navOrder: 70
-updated: "2026-10-22"
+updated: "2026-11-22"
 since: "v1.0.0"
 ---
 
 ## 利用の流れ
 
-1. ZIPのバイト数とSHA-256を計算し、Sourceを予約します。
-2. 必要な場合だけ、返されたURLへZIPをアップロードします。
-3. Sourceとエントリポイントを指定してジョブを作成します。
-4. ジョブ状態を確認し、成果物を取得します。
+HTTP API を使うには、レンダリング用 API キー（`lrk_`）と、本文や画像をまとめた ZIP が必要です。初めて試す場合は[ZIP の作り方](/docs/projects/#構成)に従って `main.tex` を含む ZIP を作り、[curl の例](#curlの例)で PDF を取得できます。
 
-[ジョブ作成API仕様](/openapi/gateway.openapi.yaml) / [アップロード・結果取得API仕様](/openapi/renderer.openapi.yaml)
+1. ZIP のサイズと SHA-256 を計算し、Source（変換に使う入力ファイル一式）を予約します。
+2. アップロードが必要な場合は、応答に含まれる URL とアップロード用トークンで ZIP を送ります。
+3. 準備できた Source の ID と変換する本文のパスから、ジョブを作ります。
+4. ジョブ用トークンで状態を確認し、成果物を取得します。
+
+同じ ZIP から複数文書を作る場合は Source を再利用できます。1 回の変換には、[ジョブ作成と同時に ZIP を予約する方法](#ジョブ作成)も使えます。
+
+[予約とジョブ作成の OpenAPI](/openapi/gateway.openapi.yaml) · [アップロードと結果取得の OpenAPI](/openapi/renderer.openapi.yaml)
 
 ## 認証とスコープ
 
@@ -140,6 +144,8 @@ ZIP送信時は `Content-Length` と予約時のサイズ・SHA-256が一致す�
 
 ### PDFの先行公開とSVGの再試行
 
+Web・CLI から操作する場合は[PDF・PNG・SVG の取得手順](/docs/outputs/)を参照してください。
+
 新しいPDF＋SVGのJobは、検証済みPDFとプレビューをSVG完了前に取得できます。Jobの `status` は要求全体の成否のままです。任意項目 `stages.pdf` / `stages.svg` に個別の状態・完了時刻・エラーを返し、PDFには `sha256`、SVGには `attempt` も含めます。PDF成功・SVG失敗でもPDFは利用可能です。
 
 SVGだけの再試行は `POST /api/v1/render-tickets` に `{"retrySvgJobId":"job_..."}` と `Idempotency-Key` を送信します。元のJob用ticketを返し、PDFの再コンパイルや保持期限の延長はしません。初回を含め最大8回で、元Source・PDF・Runtimeが一致する必要があります。認証には通常のAPIキーを使い、Job ticketでは再試行できません。SVG専用診断は `svg/compile.log`、`svg/errors.json`、`svg/dependencies.json` です。旧Jobには個別状態を推測して追加しません。
@@ -188,7 +194,7 @@ Content-Length: <ZIPサイズ>
 | canceled                      | キャンセル済み             | 必要なら新しいジョブを作成 |
 | deleting / deleted / expired  | 削除中・削除済み・期限切れ | 必要なら再作成             |
 
-成果物は完了済みJobだけが対象で、完了時刻（旧Jobで未記録なら更新時刻）から
+通常は完了したジョブから成果物を取得します。PDF＋SVG では[先に確定した PDF](#pdfの先行公開とsvgの再試行)を取得できます。完了時刻（旧Jobで未記録なら更新時刻）から
 `ARTIFACT_RETENTION_HOURS`（既定24時間）を過ぎると、実ファイルがcleanup待ちで残っていても
 新規取得できません。Job応答・Admin/App・Renderer・Remote MCPで同じ期限を使います。
 期限内に始まった直接ダウンロード・ZIP・MCP読み取りは、処理中だけ削除防止の予約を更新します。
@@ -211,17 +217,58 @@ Content-Length: <ZIPサイズ>
 
 ## curlの例
 
-> [!DETAILS] curlの例を表示
+Linux の Bash で、`source.zip` があるフォルダから実行します。必要なコマンドは `curl`、`jq`、`sha256sum`、`uuidgen` です。キーは非表示で入力します。セルフホストの場合は `base` を使用するサーバーの HTTPS URL に変更してください。
+
+> [!DETAILS] ZIP を送信して PDF を取得する例を表示
 >
 > ```bash
-> SIZE=$(wc -c < source.zip)
-> SHA=$(sha256sum source.zip | cut -d' ' -f1)
-> curl -sS -X POST https://latex-render.n624.jp/api/v1/render-tickets \
->   -H "Authorization: Bearer $LATEX_RENDER_API_KEY" \
->   -H "Content-Type: application/json" \
->   -H "Idempotency-Key: $(uuidgen)" \
->   -d '{"size":'$SIZE',"sha256":"'$SHA'"}'
+> (
+>   set -euo pipefail
+>   base=https://latex-render.n624.jp
+>   zip=source.zip
+>   read -rs -p 'Rendering API key: ' api_key
+>   printf '\n'
+>   size=$(wc -c < "$zip")
+>   digest=$(sha256sum "$zip")
+>   idempotency_key=$(uuidgen)
+>   request=$(jq -n --argjson size "$size" --arg sha "${digest%% *}" \
+>     '{size: $size, sha256: $sha}')
+>
+>   reservation=$(curl -fsS "$base/api/v1/render-tickets" \
+>     --header @- \
+>     -H "Idempotency-Key: $idempotency_key" \
+>     -H 'Content-Type: application/json' --data "$request" <<< "Authorization: Bearer $api_key")
+>   job_id=$(jq -er '.jobId' <<< "$reservation")
+>   token=$(jq -er '.jobTicket' <<< "$reservation")
+>   upload_token=$(jq -er '.uploadTicket' <<< "$reservation")
+>   printf 'Job ID: %s\n' "$job_id"
+>
+>   curl -fsS --upload-file "$zip" "$base/api/v1/jobs/$job_id/source" \
+>     --header @- \
+>     -H 'Content-Type: application/zip' <<< "Authorization: Bearer $upload_token"
+>
+>   for attempt in {1..60}; do
+>     status=$(curl -fsS "$base/api/v1/jobs/$job_id" \
+>       --header @- <<< "Authorization: Bearer $token" | jq -er '.status')
+>     case "$status" in
+>       succeeded)
+>         curl -fsS "$base/api/v1/jobs/$job_id/artifacts/result.pdf" \
+>           --header @- --output result.pdf <<< "Authorization: Bearer $token"
+>         printf 'Saved result.pdf\n'
+>         exit 0
+>         ;;
+>       reserved|uploading|queued|validating|running) sleep 2 ;;
+>       *) printf 'Job %s: %s\n' "$job_id" "$status" >&2; exit 1 ;;
+>     esac
+>   done
+>   printf 'Job %s is still pending; check the same job later.\n' "$job_id" >&2
+>   exit 1
+> )
 > ```
+
+この例は 2 秒間隔で最大 60 回、状態を確認します。まだ待機中なら、表示されたジョブ ID で後から同じジョブを確認してください。ジョブ用トークンが期限切れの場合は、作成時と同じ API キーで `POST /api/v1/job-tickets/{jobId}` を呼び、取得したトークンを使います。
+
+他の言語の例は、ジョブの予約と ZIP の送信までを示します。その後は同様にジョブ用トークンで状態と成果物を取得してください。
 
 ## PowerShell
 
@@ -249,6 +296,9 @@ Content-Length: <ZIPサイズ>
 > [!DETAILS] JavaScript / TypeScriptを表示
 >
 > ```typescript
+> import { readFile } from "node:fs/promises";
+> import { createHash, randomUUID } from "node:crypto";
+>
 > const zip = await readFile("source.zip");
 > const sha256 = createHash("sha256").update(zip).digest("hex");
 > const response = await fetch(
@@ -258,13 +308,14 @@ Content-Length: <ZIPサイズ>
 >     headers: {
 >       Authorization: "Bearer " + process.env.LATEX_RENDER_API_KEY,
 >       "Content-Type": "application/json",
->       "Idempotency-Key": crypto.randomUUID(),
+>       "Idempotency-Key": randomUUID(),
 >     },
 >     body: JSON.stringify({ size: zip.length, sha256 }),
 >   },
 > );
+> if (!response.ok) throw new Error(`Reservation failed: ${response.status}`);
 > const ticket = await response.json();
-> await fetch(ticket.uploadUrl, {
+> const upload = await fetch(ticket.uploadUrl, {
 >   method: "PUT",
 >   headers: {
 >     Authorization: "Bearer " + ticket.uploadTicket,
@@ -272,6 +323,7 @@ Content-Length: <ZIPサイズ>
 >   },
 >   body: zip,
 > });
+> if (!upload.ok) throw new Error(`Upload failed: ${upload.status}`);
 > ```
 
 ## Python
@@ -279,16 +331,25 @@ Content-Length: <ZIPサイズ>
 > [!DETAILS] Pythonを表示
 >
 > ```python
+> import hashlib
+> import os
+> import pathlib
+> import uuid
+>
+> import requests
+>
 > data = pathlib.Path("source.zip").read_bytes()
 > headers = {
 >     "Authorization": "Bearer " + os.environ["LATEX_RENDER_API_KEY"],
 >     "Idempotency-Key": str(uuid.uuid4()),
 > }
-> ticket = requests.post(
+> response = requests.post(
 >     "https://latex-render.n624.jp/api/v1/render-tickets",
 >     headers=headers,
 >     json={"size": len(data), "sha256": hashlib.sha256(data).hexdigest()},
-> ).json()
+> )
+> response.raise_for_status()
+> ticket = response.json()
 > requests.put(
 >     ticket["uploadUrl"],
 >     headers={

@@ -3,54 +3,60 @@
 [![CI](https://github.com/n624-dev/latex-renderer/actions/workflows/ci.yml/badge.svg)](https://github.com/n624-dev/latex-renderer/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-A security-oriented LuaLaTeX rendering platform with Web, CLI, HTTP API, and MCP interfaces. Untrusted TeX runs in a networkless, read-only, non-root Docker sandbox with explicit resource limits. Jobs produce PDF by default and can also extract self-contained SVG objects for math and TikZ output.
-
-The hosted service is available at [latex-render.n624.jp](https://latex-render.n624.jp/), with documentation at [latex-render.n624.jp/docs/](https://latex-render.n624.jp/docs/). Supported releases offer either Cloudflare Tunnel/Workers or a conventional TLS reverse proxy. Browser authentication is an explicit choice of Cloudflare Access or native authentication with OIDC, a local password, or both.
-
-The hostname `latex.example.com` used by deployment examples and tests is a placeholder. The hosted-service URL above is intentionally public, but this repository does not contain its production credentials or infrastructure-specific configuration.
+Turn LuaLaTeX documents into PDFs through a browser, the command line, an HTTP
+API, or an MCP-compatible AI client. Upload one `.tex` file or a ZIP containing
+your document, images, bibliography, and local style files. You can also request
+PNG page previews and SVG files for equations and TikZ figures.
 
 ## Get started
 
-- Use the hosted service: [public documentation](https://latex-render.n624.jp/docs/)
-- Install the CLI, MCP, and AI integrations: [client setup](https://latex-render.n624.jp/docs/client/)
-- Prepare a self-hosted server: [self-hosting guide](https://latex-render.n624.jp/docs/self-hosting/) or [SETUP.md](SETUP.md)
-- Develop or contribute: [CONTRIBUTING.md](CONTRIBUTING.md)
+[日本語の利用ガイド](https://latex-render.n624.jp/docs/)
 
-Self-hosted installation starts with the immutable
-[`v1.6.9` release](https://github.com/n624-dev/latex-renderer/releases/tag/v1.6.9),
-which includes a digest-labelled server bundle. Do not deploy the changeable
-`main` branch as a substitute. Follow the self-hosting guide for the supported
-profile, host prerequisites, checksum verification, and configuration steps.
+| I want to…                                 | Start here                                                                                                  |
+| ------------------------------------------ | ----------------------------------------------------------------------------------------------------------- |
+| Convert a document in my browser           | [Open the Web app](https://latex-render.n624.jp/app/) · [Web guide](https://latex-render.n624.jp/docs/web/) |
+| Render from a terminal                     | [Install the CLI on Windows, macOS, or Linux](https://latex-render.n624.jp/docs/client/)                    |
+| Use ChatGPT, Claude, or another MCP client | [Connect an AI client](https://latex-render.n624.jp/docs/mcp/)                                              |
+| Integrate rendering into my application    | [HTTP API guide](https://latex-render.n624.jp/docs/api/)                                                    |
+| Run my own server                          | [Self-hosting guide](https://latex-render.n624.jp/docs/self-hosting/)                                       |
 
-## Components
+For the hosted service, ask your administrator to set up your account for Web and
+Remote MCP access, or to issue a rendering API key for CLI, Local MCP, and HTTP
+API access. The same guides apply to a self-hosted server using its own URL.
 
-- `apps/gateway-worker`: small JSON ticket gateway
-- `apps/standalone-gateway`: loopback-only equivalent for reverse-proxy deployments
-- `packages/gateway-core`: shared admission and route validation for both gateways
-- `apps/internal-api`: API-key authentication, quotas, reservations, and ticket issuance
-- `apps/renderer-api`: uploads, job operations, and artifact downloads
-- `apps/renderer-worker`: queue processing and sandbox execution
-- `apps/admin-api` and `apps/admin-web`: administration and public Web surfaces
-- `apps/cli` and `apps/mcp-server`: local client interfaces
-- `apps/remote-mcp`: OAuth 2.1 Streamable HTTP MCP server
-- `renderer`: pinned TeX Live 2026 container
+### Try a small document
 
-## Development
+Save the following as `main.tex`. Select it in the Web app and choose **PDFに変換**
+(Convert to PDF). Open or download the PDF on the result page.
 
-Development setup and contribution requirements are in
-[CONTRIBUTING.md](CONTRIBUTING.md). Production internals and advanced operator
-procedures are in [DEPLOYMENT.md](DEPLOYMENT.md); general users should start
-with the Web-visible self-hosting guide instead.
+```latex
+\documentclass{article}
+\begin{document}
+Hello, LaTeX!
+\end{document}
+```
 
-The [Source pipeline E2E guide](docs/source-pipeline-e2e.md) distinguishes ordinary
-HTTP/DB/Worker regressions from the real TeX container integration checks.
-The server setup foundation and its remaining milestones are described in
-[Server Setup Core](docs/server-setup-core.md).
+For a document with images or references, ZIP the files together and keep their
+relative paths. See the [project guide](https://latex-render.n624.jp/docs/projects/)
+for a Japanese example, file types, and project layout.
 
-## Security and support
+## Run your own server
 
-Read [SECURITY.md](SECURITY.md) before deploying. Vulnerabilities must be reported through GitHub Private Vulnerability Reporting, not a public issue. The supported Cloudflare and standalone profiles, their deliberately different network-level protections, and the required authentication configuration are documented in the [self-hosting guide](https://latex-render.n624.jp/docs/self-hosting/).
+Use the versioned [v1.6.9 server release](https://github.com/n624-dev/latex-renderer/releases/tag/v1.6.9).
+The [self-hosting guide](https://latex-render.n624.jp/docs/self-hosting/) covers
+Linux prerequisites, supported HTTPS and sign-in options, release verification,
+first-time setup, updates, and backups.
 
-## Contributing
+Rendering runs on the server in a resource-limited, non-root Docker container
+with a read-only filesystem and no network access. See the
+[security guide](https://latex-render.n624.jp/docs/security/) for deployment
+and credential guidance.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). By contributing, you agree that your contribution is licensed under the [Apache License 2.0](LICENSE).
+## Help and contributions
+
+- [Troubleshoot installation, sign-in, or rendering](https://latex-render.n624.jp/docs/troubleshooting/)
+- [Report a bug or request a feature](https://github.com/n624-dev/latex-renderer/issues/new/choose)
+- [Report a vulnerability privately](SECURITY.md)
+- [Build, test, and contribute](CONTRIBUTING.md)
+
+Licensed under the [Apache License 2.0](LICENSE).

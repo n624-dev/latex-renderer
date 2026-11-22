@@ -1,48 +1,46 @@
 ---
 slug: index
 category: はじめる
-title: はじめに
-description: ブラウザ、AI連携、CLIから、自分に合う変換方法を選びます。
+title: LaTeX Renderer の使い方
+description: LaTeX 文書を PDF に変換します。ブラウザ、ターミナル、AI から使えます。
 navOrder: 10
-updated: "2026-10-19"
+updated: "2026-11-22"
 since: "v1.0.0"
 ---
 
+## 最短でPDFを作る
+
+1. [Web アプリ](/app/)を開き、管理者から案内された方法でログインします。
+2. `.tex` ファイルを選び、**PDFに変換**を押します。画像や参考文献がある場合は、文書と一緒に ZIP にまとめて選びます。
+3. 変換結果に表示された PDF を開きます。後から確認するときは、Web アプリの**履歴**を開きます。
+
+手元に文書がなければ、次を `main.tex` として UTF-8 で保存してください。
+
+```latex
+\documentclass{article}
+\begin{document}
+Hello, LaTeX!
+\end{document}
+```
+
+[日本語のサンプルと ZIP の作り方](/docs/projects/) · [Web アプリの詳しい使い方](/docs/web/)
+
+[PDF や PNG を保存する・SVG を再試行する](/docs/outputs/)
+
 ## 利用方法を選ぶ
 
-| 方法                                           | 用途                                                               |
-| ---------------------------------------------- | ------------------------------------------------------------------ |
-| [Webアプリ](/docs/web/)                        | ブラウザにログインしてファイルを選び、PDFを作成します。            |
-| [Remote MCP](/docs/mcp/)                       | 対応するAIサービスからログインし、変換と成果物の取得を行います。   |
-| [クライアント](/docs/client/)                  | Windows、Linux、macOSへCLI、MCP、AI向けSkillをまとめて導入します。 |
-| [セルフホスト](/docs/self-hosting/)            | 対応するサーバー構成、提供状況、初期設定と運用を確認します。       |
-| [CLI](/docs/cli/)                              | ターミナルから変換、状態確認、キャンセル、成果物取得を行います。   |
-| [Codex・Claude Code・MCP](/docs/integrations/) | APIキーを会話へ渡さず、ローカルCLI経由で操作します。               |
-| [公開API](/docs/api/)                          | 独自アプリケーションからHTTP APIを利用します。                     |
+- **ブラウザで変換する** — ファイルを選び、PDF やプレビューを確認します。[Web アプリの使い方](/docs/web/)
+- **ターミナルから変換する** — Windows・macOS・Linux で、結果を手元のフォルダに保存します。[CLI のインストール](/docs/client/)
+- **ChatGPT や Claude から変換する** — サーバーにログインして接続します。[AI クライアントを接続する](/docs/mcp/)
+- **Codex や Claude Code でローカルの文書を扱う** — CLI とローカル連携をセットアップします。[ローカルの AI 連携](/docs/integrations/)
+- **独自アプリから変換する** — ZIP の送信、変換、結果取得を自動化します。[HTTP API](/docs/api/)
+- **自分のサーバーで運用する** — Linux に HTTPS とログインを設定します。[セルフホスト](/docs/self-hosting/)
 
 ## 必要なもの
 
-- Webアプリ・Remote MCP: 管理者が用意したアカウントとログイン方法
-- CLI・ローカルのAI連携・公開API: 管理者から発行された `lrk_` で始まるAPIキー
-- 既定ではルートに `main.tex` があるLaTeXプロジェクト。別の相対 `.tex` entrypointも指定可能
-- クライアントの場合はNode.js 24以降
+Web アプリと Remote MCP では、サーバー管理者から案内されたアカウントでログインします。CLI・Local MCP・HTTP API では、管理者が発行する `lrk_` から始まるレンダリング用 API キーを使います。CLI のインストールには Node.js 24 以降が必要です。変換はサーバーが行うため、手元に TeX Live を入れる必要はありません。
 
 > [!WARNING]
-> APIキーを会話、ソースコード、Git、ログへ貼り付けないでください。漏えいした可能性がある場合は管理者へ失効と再発行を依頼します。
+> API キーは会話、ソースコード、Git、ログに貼り付けないでください。漏えいした場合は、管理者に失効と再発行を依頼してください。
 
-## 最短でPDFを作る
-
-ブラウザなら、[Webアプリ](/app/)にログインしてTeXまたはZIPを選び、変換します。APIキーの入力は不要です。詳しくは[Webの使い方](/docs/web/)を参照してください。
-
-CLIを使う場合は、次の手順で始めます。
-
-1. [クライアントをインストール](/downloads/)します。
-2. APIキーを標準入力から登録します。Windows用入口では非表示入力を利用できます。
-3. 新しいターミナルを開き、プロジェクトを指定します。
-
-```text
-latex-render auth status
-latex-render render /path/to/project --open
-```
-
-結果はプロジェクト内の `.render` に保存されます。失敗時は最初に `.render/errors.json` を確認してください。
+変換やログインで困ったときは[問題解決ガイド](/docs/troubleshooting/)を参照してください。

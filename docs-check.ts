@@ -24,6 +24,8 @@ export function repositoryDocsValidationInput(): DocsValidationInput {
       "/status/",
       "/app/",
       "/app/environment/",
+      "/app/history/",
+      "/app/projects/",
       "/openapi/gateway.openapi.yaml",
       "/openapi/renderer.openapi.yaml",
     ],

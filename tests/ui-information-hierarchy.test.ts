@@ -134,7 +134,7 @@ describe("concise public UI", () => {
       "/downloads/",
       "/docs/",
       "/docs/web/",
-      "/docs/integrations/",
+      "/docs/mcp/",
       "/docs/api/",
     ]) {
       expect(html).toContain(`href="${path}"`);
@@ -158,8 +158,8 @@ describe("concise public UI", () => {
       expect(html).toContain(`href="/downloads/${path}"`);
     }
     expect(html).toContain("クライアント 1.2.3");
-    expect(html).toContain('href="/docs/client/"');
-    expect(html).toContain('href="/docs/security/"');
+    expect(html).toContain('href="/docs/client/#linux-macos"');
+    expect(html).toContain('href="/docs/windows/"');
     expect(html).not.toContain('class="eyebrow"');
     expect(html).not.toContain("DPAPI");
     expect(downloadsPage("1.2.3", "client.zip")).not.toContain(

@@ -73,7 +73,15 @@ export const siteScript = `
       });
     });
 
+    document.querySelectorAll('.docs-content .table-wrap').forEach((table) => {
+      table.tabIndex = 0;
+      table.setAttribute('role', 'region');
+      table.setAttribute('aria-label', '表');
+    });
     document.querySelectorAll('.docs-content pre').forEach((pre) => {
+      pre.tabIndex = 0;
+      pre.setAttribute('role', 'region');
+      pre.setAttribute('aria-label', 'コード例');
       const block = document.createElement('div');
       block.className = 'code-block';
       const toolbar = document.createElement('div');
@@ -83,8 +91,12 @@ export const siteScript = `
       button.className = 'code-copy';
       button.textContent = 'コピー';
       button.addEventListener('click', async () => {
-        await navigator.clipboard.writeText(pre.querySelector('code')?.textContent || '');
-        button.textContent = 'コピー済み';
+        try {
+          await navigator.clipboard.writeText(pre.querySelector('code')?.textContent || '');
+          button.textContent = 'コピー済み';
+        } catch {
+          button.textContent = 'コピーできませんでした';
+        }
         window.setTimeout(() => { button.textContent = 'コピー'; }, 1500);
       });
       pre.before(block);
@@ -96,22 +108,34 @@ export const siteScript = `
     const results = document.querySelector('#docs-search-results');
     if (search && results) {
       let indexPromise;
+      let searchGeneration = 0;
+      const normalize = (value) => value.normalize('NFKC').trim().toLocaleLowerCase('ja');
       const loadIndex = () => indexPromise ||= fetch('/assets/docs-search.json').then((response) => {
         if (!response.ok) throw new Error('Search index unavailable');
         return response.json();
+      }).catch((error) => {
+        indexPromise = undefined;
+        throw error;
       });
       search.addEventListener('input', async () => {
-        const query = search.value.normalize('NFKC').trim().toLocaleLowerCase('ja');
+        const generation = ++searchGeneration;
+        const query = normalize(search.value);
         results.replaceChildren();
         if (query.length < 2) return;
+        const words = query.split(/\\s+/);
         try {
           const index = await loadIndex();
-          const matches = index.filter((item) =>
-            [item.title, item.description, item.category, item.text, ...item.headings.map((heading) => heading.text)]
-              .join(' ').normalize('NFKC').toLocaleLowerCase('ja').includes(query)
-          ).slice(0, 8);
+          if (generation !== searchGeneration) return;
+          const matches = index.flatMap((item) => {
+            const title = normalize(item.title);
+            const headings = normalize(item.headings.map((heading) => heading.text).join(' '));
+            const text = normalize([title, item.description, item.category, headings, item.text].join(' '));
+            if (!words.every((word) => text.includes(word))) return [];
+            const rank = words.every((word) => title.includes(word)) ? 2 : words.every((word) => headings.includes(word)) ? 1 : 0;
+            return [{ item, rank }];
+          }).sort((left, right) => right.rank - left.rank).slice(0, 8);
           const list = document.createElement('ul');
-          for (const item of matches) {
+          for (const { item } of matches) {
             const entry = document.createElement('li');
             const link = document.createElement('a');
             link.href = item.url;
@@ -122,7 +146,9 @@ export const siteScript = `
           if (matches.length === 0) results.textContent = '一致するページはありません。';
           else results.append(list);
         } catch {
-          results.textContent = '検索索引を読み込めませんでした。';
+          if (generation === searchGeneration) {
+            results.textContent = 'ガイド内の検索に失敗しました。入力し直すと再試行できます。';
+          }
         }
       });
     }

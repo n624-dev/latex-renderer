@@ -31,6 +31,7 @@ the page implementation.
 ## Commands
 
 ```bash
+pnpm --filter @latex-renderer/web... build
 pnpm --filter @latex-renderer/public-web build
 pnpm --filter @latex-renderer/public-web dev
 pnpm --filter @latex-renderer/public-web check:preview
@@ -41,7 +42,9 @@ pnpm --filter @latex-renderer/public-web routes:apply
 pnpm --filter @latex-renderer/public-web routes:disable
 ```
 
-The build first creates the deterministic Windows client distribution, then
+Build the Web workspace after changing public templates or CSS. The Static
+Assets build uses that compiled workspace to render the pages. It creates the
+client distribution, then
 rejects any generated file over the Workers Static Assets 25 MiB per-file
 limit. `build` and `check:deploy` perform a Wrangler dry run and start a local
 Workers runtime that verifies pages, headers, 404s, and redirects without

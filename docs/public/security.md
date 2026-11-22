@@ -1,12 +1,14 @@
 ---
 slug: security
 category: 問題解決・安全性
-title: セキュリティ境界
+title: アカウント・文書の安全な扱い
 description: 資格情報、アップロード、レンダラー、管理領域の安全な扱いです。
-navOrder: 65
-updated: "2026-08-29"
+navOrder: 71
+updated: "2026-11-22"
 since: "v1.0.0"
 ---
+
+API キーが漏えいした場合は管理者に失効と再発行を依頼してください。サービスの脆弱性を発見した場合は、[GitHub の非公開脆弱性報告](https://github.com/n624-dev/latex-renderer/security/advisories/new)を使用してください。
 
 ## 資格情報
 

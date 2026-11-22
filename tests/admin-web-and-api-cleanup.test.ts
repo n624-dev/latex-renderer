@@ -305,13 +305,14 @@ describe("public and administrative Web", () => {
 
     const docs = await (await app.request("/docs/")).text();
     expect(docs).toContain("最短でPDFを作る");
-    expect(docs).toContain("Codex・Claude Code・MCP");
+    expect(docs).toContain('href="/docs/integrations/"');
+    expect(docs).toContain('href="/docs/mcp/"');
 
     const troubleshooting = await (
       await app.request("/docs/troubleshooting/")
     ).text();
-    expect(troubleshooting).toContain("保存容量不足");
-    expect(troubleshooting).toContain("成果物が見つからない");
+    expect(troubleshooting).toContain("保存容量が上限");
+    expect(troubleshooting).toContain('href="/docs/outputs/#');
 
     const api = await (await app.request("/docs/api/")).text();
     expect(api).toContain("POST /api/v1/render-tickets");

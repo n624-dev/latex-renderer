@@ -1,47 +1,58 @@
 ---
 slug: client
 category: インストール
-title: クライアント
+title: CLI のインストール
 description: Windows、Linux、macOSへCLI、MCP、AI向けSkillをまとめて導入します。
 navOrder: 15
-updated: "2026-10-19"
+updated: "2026-11-22"
 since: "v1.0.0"
 ---
 
 ## 対応環境
 
-共通インストーラーと `latex-render setup` はOSを自動判定します。Node.js 24以降が必要です。
+Node.js 24 以降と、サーバー管理者が発行した `lrk_` から始まる API キーを用意します。Node.js のバージョンは `node --version` で確認できます。インストールは普段使うユーザーで行います。
 
-| OS      | 既定のインストール先                                                   | コマンド配置         |
-| ------- | ---------------------------------------------------------------------- | -------------------- |
-| Windows | `%LOCALAPPDATA%\LaTeXRenderer`                                         | 同フォルダ内の `bin` |
-| Linux   | `$XDG_DATA_HOME/latex-renderer` または `~/.local/share/latex-renderer` | `~/.local/bin`       |
-| macOS   | `~/Library/Application Support/LaTeXRenderer`                          | `~/.local/bin`       |
+- **Windows** — [PowerShell の手順](/docs/windows/)でインストールから最初の PDF まで進めます。
+- **Linux・macOS** — この下の手順を実行します。
 
 ## Linux / macOS
 
-```sh
-curl -fsSLo /tmp/install-latex-renderer.mjs https://latex-render.n624.jp/downloads/client/install.mjs
-node /tmp/install-latex-renderer.mjs
-```
-
-`~/.local/bin` が `PATH` にない場合は追加してください。インストーラーはCodex/Claude Codeが利用可能ならLocal MCPもユーザースコープへ登録します。APIキーは標準入力から登録します。
+ターミナルでインストーラーをダウンロードし、Node.js で実行します。
 
 ```sh
-read -s LATEX_RENDER_API_KEY
-printf '%s' "$LATEX_RENDER_API_KEY" | latex-render auth login --api-key-stdin
-unset LATEX_RENDER_API_KEY
+installer_dir=$(mktemp -d) &&
+  curl -fsSL https://latex-render.n624.jp/downloads/client/install.mjs -o "$installer_dir/install.mjs" &&
+  node "$installer_dir/install.mjs"
 ```
 
-LinuxとmacOSでは資格情報を現在のユーザーだけが読めるmode `0600` の設定ファイルへ保存します。
+`latex-render --version` が「command not found」となる場合は、新しいターミナルを開いてください。まだ見つからない場合は `export PATH="$HOME/.local/bin:$PATH"` を実行します。以後も使うには、使用しているシェルの起動設定に同じ行を追加します。
+
+次に設定画面を開き、サーバーから発行された API キーを登録します。
+
+```text
+latex-render setup --gui
+```
+
+ブラウザを開けない環境では、[標準入力からキーを登録](/docs/cli/#認証)できます。セルフホストを使う場合は、[接続先サーバーの指定](/docs/cli/#接続先サーバー)も確認してください。
+
+### 最初の PDF を作る
+
+`main.tex` があるフォルダで次を実行します。試せる文書は[はじめに](/docs/#最短でpdfを作る)にあります。
+
+```text
+latex-render auth status
+latex-render render . --open
+```
+
+PDF は `.render/result.pdf` に保存されます。`--open` を付けると完了後に開きます。[変換対象や出力先を指定する](/docs/cli/#レンダリング)
 
 ## Windows
 
-PowerShellでのインストール・最初の変換・削除は[Windowsの手順](/docs/windows/)にまとめています。資格情報は現在のWindowsユーザーに紐づけて暗号化保存されます。配置先の変更・PATH修復は[詳細仕様](/docs/reference/#windowsの配置と保護)を参照してください。
+[Windows の手順](/docs/windows/)では PowerShell を使用します。API キーは現在の Windows ユーザーに紐づけて暗号化されます。[配置先の変更と PATH の修復](/docs/reference/#windowsの配置と保護)
 
 ## 成果物の保存と復旧
 
-保存先は `.render/result.pdf`・`job.json`・プレビューなどの従来のパスです。コマンドが完了してから開いてください。失敗時は以前の一式を保持し、強制終了後は次のダウンロードで復旧します。
+保存先は `.render/result.pdf`・`job.json`・プレビューなどのです。コマンドが完了してから開いてください。失敗時は以前の一式を保持し、強制終了後は次のダウンロードで復旧します。
 
 同じ保存先への同時書込みは `OUTPUT_BUSY` になります。処理を待って再試行してください。出力先の隣にある `.latex-renderer-state` 管理フォルダーは、処理中や復旧前に削除しないでください。
 

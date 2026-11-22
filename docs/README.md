@@ -2,7 +2,10 @@
 
 Public documentation lives in `docs/public/*.md`. The Web and Cloudflare
 Static Assets builds read these files directly; normal body edits should not
-require TypeScript changes.
+require TypeScript changes. When adding a page, register its filename and
+navigation group in `apps/admin-web/src/markdown-docs.ts` and link to it from
+the related guide. The Web and Static Assets builds then serve the same page and
+include it in site search.
 
 Each published file starts with this frontmatter contract:
 

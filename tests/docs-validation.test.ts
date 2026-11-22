@@ -5,7 +5,7 @@ import {
   type DocsValidationInput,
 } from "../apps/admin-web/src/docs-validation.js";
 import {
-  docsPage,
+  renderPublicDoc,
   publicDocs,
   type PublicDoc,
 } from "../apps/admin-web/src/markdown-docs.js";
@@ -27,9 +27,20 @@ describe("public documentation CI validation", () => {
     expect(() =>
       assertPublicDocsValid(repositoryDocsValidationInput()),
     ).not.toThrow();
-    expect(docsPage()).toContain(
-      'href="https://github.com/n624-dev/latex-renderer/edit/main/docs/public/index.md"',
-    );
+  });
+
+  it.each([
+    ["web", "outputs"],
+    ["cli", "outputs"],
+    ["self-hosting", "server-setup"],
+    ["self-hosting", "lan-https"],
+    ["self-hosting", "updates"],
+    ["self-hosting", "backups"],
+    ["lan-https", "lan-https-authority"],
+  ])("links from %s to the %s procedure on the site", (guide, procedure) => {
+    const document = publicDocs.find(({ slug }) => slug === guide);
+    expect(document?.html).toContain(`href="/docs/${procedure}/"`);
+    expect(renderPublicDoc(procedure)).toContain("GitHub で原稿を見る");
   });
 
   it("detects broken internal routes and heading anchors", () => {
