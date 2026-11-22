@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath, URL } from "node:url";
 import matter from "gray-matter";
-import { Marked, Renderer, type Tokens } from "marked";
+import { Marked, Renderer, type Token, type Tokens } from "marked";
 import { escapeHtml, shell } from "./templates-shared.js";
 
 export interface PublicDocMetadata {
@@ -20,12 +20,14 @@ export interface PublicDoc extends PublicDocMetadata {
   markdown: string;
   html: string;
   headings: readonly PublicDocHeading[];
+  searchableMarkdown: string;
 }
 
 export interface PublicDocHeading {
   depth: number;
   id: string;
   text: string;
+  historical?: true;
 }
 
 const contentDirectory = fileURLToPath(
@@ -145,8 +147,8 @@ export function publicDocsSearchJson(): string {
       description: document.description,
       category: document.category,
       url: docUrl(document.slug),
-      headings: document.headings,
-      text: document.markdown
+      headings: document.headings.filter(({ historical }) => !historical),
+      text: document.searchableMarkdown
         .replaceAll(/[`*_>#|(){}~-]/g, " ")
         .replaceAll("[", " ")
         .replaceAll("]", " ")
@@ -222,25 +224,28 @@ export function renderMarkdown(markdown: string): string {
 
 function renderMarkdownDocument(
   markdown: string,
-): Pick<PublicDoc, "html" | "headings"> {
+): Pick<PublicDoc, "html" | "headings" | "searchableMarkdown"> {
   const headings: PublicDocHeading[] = [];
   const renderer = new DocsRenderer(headings);
   const marked = new Marked();
-  const rendered = marked.parse(markdown, { gfm: true, renderer });
-  if (typeof rendered !== "string") {
-    throw new Error("Asynchronous Markdown rendering is not supported");
-  }
+  const tokens = marked.lexer(markdown, { gfm: true });
+  const rendered = marked.parser(tokens, { gfm: true, renderer });
   return {
     html: rendered
       .replaceAll("<table>", '<div class="table-wrap"><table>')
       .replaceAll("</table>", "</table></div>"),
     headings,
+    searchableMarkdown: tokens
+      .filter((token) => !historicalDetails(token))
+      .map((token) => token.raw)
+      .join(""),
   };
 }
 
 class DocsRenderer extends Renderer {
   readonly #headingCounts = new Map<string, number>();
   readonly #headings: PublicDocHeading[];
+  #historical = false;
 
   constructor(headings: PublicDocHeading[]) {
     super();
@@ -257,7 +262,12 @@ class DocsRenderer extends Renderer {
     this.#headingCounts.set(base, count);
     const id = count === 1 ? base : `${base}-${count}`;
     if (depth === 2 || depth === 3)
-      this.#headings.push({ depth, id, text: label });
+      this.#headings.push({
+        depth,
+        id,
+        text: label,
+        ...(this.#historical ? { historical: true } : {}),
+      });
     const rendered = this.parser.parseInline(tokens);
     const body = explicitId
       ? rendered.slice(0, -explicitId[0].length)
@@ -265,19 +275,18 @@ class DocsRenderer extends Renderer {
     return `<h${depth} id="${escapeHtml(id)}">${body}<a class="heading-permalink" href="#${escapeHtml(id)}" aria-label="この見出しへのリンク">#</a></h${depth}>\n`;
   }
 
-  override blockquote({ tokens }: Tokens.Blockquote): string {
+  override blockquote(quote: Tokens.Blockquote): string {
     // A deliberately small Markdown-only disclosure syntax. Raw HTML remains
     // escaped; titles and nested content use the existing safe renderers.
-    const first = tokens[0];
-    const firstText: unknown =
-      first?.type === "paragraph" ? first.text : undefined;
-    if (
-      typeof firstText === "string" &&
-      /^\[!DETAILS\] [^\n]+$/.test(firstText)
-    ) {
-      return `<details class="docs-details"><summary>${escapeHtml(firstText.slice(11))}</summary>${this.parser.parse(tokens.slice(1))}</details>\n`;
+    const title = detailsTitle(quote);
+    if (title !== undefined) {
+      const wasHistorical = this.#historical;
+      this.#historical = wasHistorical || historicalDetails(quote);
+      const body = this.parser.parse(quote.tokens.slice(1));
+      this.#historical = wasHistorical;
+      return `<details class="docs-details"><summary>${escapeHtml(title)}</summary>${body}</details>\n`;
     }
-    const rendered = this.parser.parse(tokens);
+    const rendered = this.parser.parse(quote.tokens);
     const match = rendered.match(/^<p>\[!(NOTE|WARNING)\]\s*/);
     if (match === null) return `<blockquote>\n${rendered}</blockquote>\n`;
     const kind = match[1]?.toLowerCase() ?? "note";
@@ -287,6 +296,21 @@ class DocsRenderer extends Renderer {
   override html({ text }: Tokens.HTML | Tokens.Tag): string {
     return escapeHtml(text);
   }
+}
+
+function detailsTitle(quote: Tokens.Blockquote): string | undefined {
+  const first = quote.tokens[0];
+  const text: unknown = first?.type === "paragraph" ? first.text : undefined;
+  return typeof text === "string"
+    ? /^\[!DETAILS\] ([^\n]+)$/.exec(text)?.[1]
+    : undefined;
+}
+
+function historicalDetails(token: Token): boolean {
+  return (
+    token.type === "blockquote" &&
+    (detailsTitle(token as Tokens.Blockquote)?.startsWith("履歴資料") ?? false)
+  );
 }
 
 function headingSlug(value: string): string {

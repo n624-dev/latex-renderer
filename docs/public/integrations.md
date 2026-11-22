@@ -11,12 +11,10 @@ since: "v1.0.0"
 ## Skillの導入
 
 1. 先に[CLI をインストールし、API キーを登録](/docs/client/)します。
-2. Codex または Claude Code がインストールされた状態で、次を実行します（AI に操作手順を伝える Skill と、Local MCP がまとめて登録されます）。
+2. Codex または Claude Code がインストールされた状態で、導入方式に合わせて連携を設定します。
 
-```sh
-n624-latex setup
-n624-latex doctor --json
-```
+   - **配布インストーラー版**は `n624-latex setup` を開き、使う AI ツールへの連携を選びます。Skill と Local MCP をまとめて登録できます。
+   - **APT 版**は [Local MCP を手動で登録](/docs/mcp/#local-mcpの登録)します。
 
 3. Codex または Claude Code を再起動し、変換したいフォルダや本文ファイルを指定して依頼します。
 
@@ -27,7 +25,7 @@ n624-latex doctor --json
 
 ## MCPの登録
 
-- **手元のファイルを直接扱う場合（Codex / Claude Code）**：上の `setup` で自動登録されます。手動登録コマンドや詳細は[Local MCPの登録](/docs/mcp/#local-mcpの登録)を参照してください。既存の同名別登録は上書きしないため、競合や修復は[状態確認と修復](/docs/client/#状態確認と修復)で確認できます。
+- **手元のファイルを扱う（Codex / Claude Code）**場合は Local MCP を使います。[手動登録の方法](/docs/mcp/#local-mcpの登録)と[登録状態の確認](/docs/client/#状態確認と修復)も参照できます。
 - **クラウド上の AI から使う場合（ChatGPT / Claude Web 等）**：API キー不要の[Remote MCPの接続手順](/docs/mcp/#通常はremote-mcpを使う)を使用します。
 
 ## 依頼例

@@ -1,10 +1,9 @@
 # Public Web Static Assets
 
 This package builds the public LaTeX Renderer landing page for Cloudflare
-Workers Static Assets. Production routes are deliberately kept out of
-`wrangler.jsonc`: deploying the Worker uploads a previewable version without
-changing the shared production hostname. A separate reconciler owns only the
-explicit public paths.
+Workers Static Assets. A separate reconciler owns the explicit public routes.
+When those routes are attached, `wrangler deploy` immediately serves the
+uploaded version to production traffic.
 
 ## Included
 
@@ -36,7 +35,6 @@ pnpm --filter @latex-renderer/public-web build
 pnpm --filter @latex-renderer/public-web dev
 pnpm --filter @latex-renderer/public-web check:preview
 pnpm --filter @latex-renderer/public-web check:deploy
-pnpm --filter @latex-renderer/public-web run deploy
 pnpm --filter @latex-renderer/public-web routes:check
 pnpm --filter @latex-renderer/public-web routes:apply
 pnpm --filter @latex-renderer/public-web routes:disable
@@ -48,8 +46,16 @@ client distribution, then
 rejects any generated file over the Workers Static Assets 25 MiB per-file
 limit. `build` and `check:deploy` perform a Wrangler dry run and start a local
 Workers runtime that verifies pages, headers, 404s, and redirects without
-Cloudflare credentials. `deploy` uploads the Worker but does not attach the
-production hostname. `routes:apply` adds only `/`, `/docs`, `/downloads`,
+Cloudflare credentials.
+
+For a public site update from a clean `main` checkout, set `PUBLIC_ORIGIN`
+and run `sh deploy/scripts/deploy-public-web-production.sh`. The script
+verifies the latest immutable Stable client downloads, builds the guides,
+checks the uploaded Worker preview, and verifies the public routes and asset
+hashes after activation. Cloudflare credentials and Worker version previews
+must be available.
+
+`routes:apply` adds only `/`, `/docs`, `/downloads`,
 `/assets`, `/openapi`, and legacy `/client` patterns. `routes:disable` removes
 only routes assigned to this public Worker, returning those requests to the
 existing Tunnel/VPS origin without deleting the Worker.

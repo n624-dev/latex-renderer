@@ -9,7 +9,6 @@ if [ -z "$public_origin" ]; then
 fi
 export PUBLIC_ORIGIN="$public_origin"
 export LATEX_RENDER_BASE_URL="$public_origin"
-preview_url=${LATEX_RENDER_PUBLIC_PREVIEW_URL:-}
 cd "$repository_root"
 
 case "${1:-deploy}" in
@@ -36,10 +35,6 @@ case "${1:-deploy}" in
       echo "usage: deploy-public-web-production.sh [--rollback-vps|--rollback-version VERSION_ID]" >&2
       exit 64
     }
-    if [ -z "$preview_url" ]; then
-      echo "LATEX_RENDER_PUBLIC_PREVIEW_URL is required for deployment verification" >&2
-      exit 64
-    fi
     ;;
   *)
     echo "unknown operation: $1" >&2
@@ -73,32 +68,34 @@ previous_version=$(node deploy/scripts/read-active-worker-version.mjs \
 # Validation and the local Workers runtime preview complete before any remote
 # Worker version or production route can change.
 pnpm check
-pnpm --filter @latex-renderer/public-web run deploy
+sh deploy/scripts/prepare-public-release-client.sh
+node apps/public-web/build.mjs
+pnpm --filter @latex-renderer/public-web check:preview
 
-preview_attempt=1
-while [ "$preview_attempt" -le 12 ]; do
-  if curl --fail --silent --show-error --max-redirs 0 \
-    -D "$temporary_root/preview.headers" -o "$temporary_root/preview.html" "$preview_url/" && \
-    grep -qi '^X-LaTeX-Renderer-Serving: workers-static' "$temporary_root/preview.headers" && \
-    grep -Fq 'LaTeXをPDFに変換' "$temporary_root/preview.html"; then
-    break
-  fi
-  [ "$preview_attempt" -lt 12 ] || {
-    echo "deployed workers.dev preview did not pass; production routes remain unchanged" >&2
-    exit 1
-  }
-  sleep 2
-  preview_attempt=$((preview_attempt + 1))
-done
+pnpm --filter @latex-renderer/public-web exec wrangler versions upload \
+  --message "Public guides $(git rev-parse --short HEAD)" >"$temporary_root/upload.log"
+version_id=$(sed -n 's/^Worker Version ID: //p' "$temporary_root/upload.log")
+preview_url=$(sed -n 's/^Version Preview URL: //p' "$temporary_root/upload.log")
+printf '%s\n' "$version_id" | grep -Eq '^[0-9a-f-]{36}$'
+printf '%s\n' "$preview_url" | grep -Eq '^https://[a-z0-9.-]+\.workers\.dev/?$'
+node apps/public-web/check-live-content.mjs "$preview_url"
 
-node deploy/scripts/sync-public-worker-routes.mjs --apply
-if ! deploy/scripts/smoke-test-public-worker-boundary.sh; then
-  echo "public boundary verification failed; returning public paths to the VPS" >&2
-  node deploy/scripts/sync-public-worker-routes.mjs --disable
-  deploy/scripts/smoke-test-unified-origin.sh
+pnpm --filter @latex-renderer/public-web exec wrangler deployments list --json \
+  >"$temporary_root/deployments-current.json"
+[ "$(node deploy/scripts/read-active-worker-version.mjs "$temporary_root/deployments-current.json")" = "$previous_version" ] || {
+  echo "The active Worker changed during preview. Repeat the deployment against its new baseline." >&2
+  exit 1
+}
+pnpm --filter @latex-renderer/public-web exec wrangler versions deploy "$version_id@100" --yes
+if ! node deploy/scripts/sync-public-worker-routes.mjs --apply ||
+  ! node apps/public-web/check-live-content.mjs "$public_origin" ||
+  ! deploy/scripts/smoke-test-public-worker-boundary.sh ||
+  ! deploy/scripts/smoke-test-unified-origin.sh; then
+  echo "Public verification failed. Restoring the previous Worker version." >&2
+  pnpm --filter @latex-renderer/public-web exec wrangler rollback "$previous_version" \
+    --message "Restore previous public site after verification failure"
   exit 1
 fi
-deploy/scripts/smoke-test-unified-origin.sh
 
 pnpm --filter @latex-renderer/public-web exec wrangler deployments list --json \
   >"$temporary_root/deployments-after.json"

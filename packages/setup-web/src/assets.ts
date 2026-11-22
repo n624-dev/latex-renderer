@@ -1,4 +1,9 @@
-export const setupHtml = `<!doctype html>
+import type { ClientPackageManager } from "@latex-renderer/setup-core";
+
+export const setupHtml = clientSetupHtml();
+
+export function clientSetupHtml(packageManager?: ClientPackageManager): string {
+  return `<!doctype html>
 <html lang="ja">
 <head>
   <meta charset="utf-8">
@@ -28,12 +33,18 @@ export const setupHtml = `<!doctype html>
       </section>
       <section>
         <h2>AI連携</h2>
+        ${
+          packageManager === "apt"
+            ? "<p>APT版のLocal MCPは手動で登録します。</p>"
+            : `
         <p>選択した連携だけを設定します。他の設定は削除しません。</p>
         <label for="skill-target">Skill</label>
         <select id="skill-target"><option value="both">Codex + Claude</option><option value="codex">Codex</option><option value="claude">Claude</option><option value="none">設定しない</option></select>
         <label for="mcp-target">MCP</label>
         <select id="mcp-target"><option value="both">Codex + Claude</option><option value="codex">Codex</option><option value="claude">Claude</option><option value="none">設定しない</option></select>
-        <div class="actions"><button id="repair" type="button">修復・連携</button><button id="update" class="quiet" type="button">クライアント更新</button></div>
+        <div class="actions"><button id="repair" type="button">${packageManager ? "連携を設定" : "修復・連携"}</button>${packageManager ? "" : '<button id="update" class="quiet" type="button">クライアント更新</button>'}</div>
+        `
+        }
       </section>
     </div>
     <section>
@@ -45,6 +56,7 @@ export const setupHtml = `<!doctype html>
   <script src="/assets/setup.js" defer></script>
 </body>
 </html>`;
+}
 
 export const setupCss = `
 :root { color-scheme:light dark; font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
@@ -190,8 +202,8 @@ export const setupJavaScript = `"use strict";
   }));
   byId("remove-key").addEventListener("click", () => run(() => api("/api/auth/logout")));
   const targets = () => ({ skillTarget: byId("skill-target").value, mcpTarget: byId("mcp-target").value });
-  byId("repair").addEventListener("click", () => run(() => api("/api/repair", targets())));
-  byId("update").addEventListener("click", () => run(() => api("/api/update", targets())));
+  byId("repair")?.addEventListener("click", () => run(() => api("/api/repair", targets())));
+  byId("update")?.addEventListener("click", () => run(() => api("/api/update", targets())));
   byId("sample").addEventListener("click", () => run(() => api("/api/sample-render")));
   byId("close").addEventListener("click", async () => {
     try { await api("/api/close"); } finally { document.body.textContent = "セットアップを終了しました。このタブを閉じてください。"; }

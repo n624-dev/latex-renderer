@@ -2,22 +2,21 @@
 slug: client
 category: インストール
 title: CLI のインストール
-description: Windows、Linux、macOSへCLI、MCP、AI向けSkillをまとめて導入します。
+description: Windows、macOS、LinuxにCLIを導入し、ターミナルから最初のPDFを作ります。
 navOrder: 15
 updated: "2026-11-22"
 since: "v1.0.0"
 ---
 
-> [!NOTE]
-> v1.7.0 以降の共通コマンドは `n624-latex` です。従来の `latex-render` も使えます。v1.6.9 以前のクライアントからは、[更新](#更新)の手順で `n624-latex` を追加できます。
-
 ## 対応環境
 
-| 環境 | 推奨する導入方法 | 事前準備 |
+OSに合う方法でインストールし、サーバー管理者から受け取った API キー（`lrk_...`）を登録します。LaTeX の変換処理はサーバーで行います。
+
+| 環境 | インストール手順 | Node.js の準備 |
 | --- | --- | --- |
-| Debian 12 / 13、Ubuntu 24.04 / 26.04（amd64・arm64） | **APT パッケージ** | API キーのみ（専用 Node.js 同梱） |
-| Windows | **[PowerShell インストーラー](/docs/windows/)** | Node.js 24 以降、API キー |
-| macOS / APT を使わない Linux | **[配布インストーラー](#linux-macos)** | Node.js 24 以降、API キー |
+| Debian 12 / 13、Ubuntu 24.04 / 26.04（amd64・arm64） | **[APT パッケージ](#debian-ubuntu-の-apt-パッケージ)** | パッケージに同梱 |
+| Windows | **[Windows の手順](/docs/windows/)** | 24 以降 |
+| macOS / その他の Linux | **[配布インストーラー](#linux-macos)** | 24 以降 |
 
 ## Debian / Ubuntu の APT パッケージ
 
@@ -30,32 +29,15 @@ sudo apt update
 sudo apt install n624-latex
 ```
 
-※ パッケージをインストールしただけではサーバー構築は始まりません。サーバーとして運用する場合は、導入後に[サーバー設定ウィザード](/docs/server-setup/)を明示的に起動します。
-
-3. 普段使う通常ユーザーでセットアップを開き、サーバー管理者が発行した API キー（`lrk_...`）を保存します。
-
-```sh
-n624-latex setup
-```
-
-4. `main.tex` のあるフォルダで変換を試します。
-
-```sh
-n624-latex main.tex
-```
-
-同じフォルダに `main.pdf` が保存されます。出力先の変更やエラーの確認方法は[TeX ファイルを直接変換する](/docs/cli/#tex-ファイルを直接変換する)を参照してください。
+3. [最初の PDF を作る](#最初の-pdf-を作る)へ進みます。サーバーを構築する場合は[セルフホストの導入手順](/docs/self-hosting/)へ進みます。
 
 ## 配布インストーラーの準備
 
-APT を使わない環境では、**Node.js 24 以降**（`node --version` で確認）と、管理者が発行した `lrk_` から始まる API キーを用意します。インストールは root や管理者権限ではなく、普段使うユーザーで行います。
-
-- **Windows**：[Windows に CLI をインストール](/docs/windows/)の手順へ進んでください。
-- **Linux・macOS**：次の手順を実行します。
+配布インストーラーを使う場合は、普段使うユーザーで **Node.js 24 以降**を用意します。`node --version` で確認できます。Windows では[Windows の手順](/docs/windows/)を使います。
 
 ## Linux / macOS
 
-1. ターミナルでインストーラーを一時フォルダにダウンロードし、Node.js で実行します。
+ターミナルでインストーラーを一時フォルダにダウンロードし、Node.js で実行します。
 
 ```sh
 installer_dir=$(mktemp -d) &&
@@ -63,32 +45,23 @@ installer_dir=$(mktemp -d) &&
   node "$installer_dir/install.mjs"
 ```
 
-`n624-latex --version`（旧版は `latex-render --version`）が `command not found` になる場合は、新しいターミナルを開き直してください。それでも見つからない場合は `export PATH="$HOME/.local/bin:$PATH"` を実行し、使用中のシェルの設定ファイル（`~/.bashrc` や `~/.zshrc` など）にも同じ行を追加します。
+`n624-latex` が見つからない場合は、新しいターミナルを開きます。引き続き見つからなければ、`export PATH="$HOME/.local/bin:$PATH"` を実行し、使用中のシェルの設定ファイル（`~/.bashrc` や `~/.zshrc` など）にも同じ行を追加します。
 
-2. 設定画面をブラウザで開き、API キーを登録します。
+## 最初の PDF を作る
+
+1. 普段使うユーザーで設定画面を開き、API キーを保存します。セルフホスト環境に接続するときは、先に[接続先サーバーを指定](/docs/cli/#接続先サーバー)します。ブラウザのない環境では[標準入力からキーを登録](/docs/cli/#認証)できます。
 
 ```sh
-n624-latex setup --gui
+n624-latex setup
 ```
 
-ブラウザを開けない環境では、[標準入力からキーを登録](/docs/cli/#認証)できます。セルフホスト環境へ接続する場合は、[接続先サーバーの指定](/docs/cli/#接続先サーバー)も確認してください。
-
-### 最初の PDF を作る
-
-`main.tex` があるフォルダで次を実行します（サンプル文書は[最短でPDFを作る](/docs/#最短でpdfを作る)にあります）。
+2. `main.tex` があるフォルダで次を実行します。[最初のサンプル文書](/docs/#最短でpdfを作る)も使えます。
 
 ```sh
 n624-latex main.tex
 ```
 
-プロジェクト全体を `.render/result.pdf` に出力して自動で開く場合は、次のサブコマンドも使えます。
-
-```sh
-n624-latex auth status
-n624-latex render . --open
-```
-
-詳しいオプションは[CLI で変換と結果取得](/docs/cli/#レンダリング)を参照してください。
+同じフォルダに `main.pdf` ができます。出力先の指定や、ZIP・PDF・SVG を扱うコマンドは[CLI で変換と結果取得](/docs/cli/#レンダリング)を参照してください。
 
 ## Windows
 
@@ -113,64 +86,39 @@ sudo apt install --only-upgrade n624-latex
 n624-latex setup
 ```
 
-`latex-render` だけが入っている環境では、インストール手順を再実行します。[Windows では保存済みの API キーを再入力せずに更新できます](/docs/windows/#更新)。macOS と Linux では、`latex-render setup` で更新してから `latex-render setup repair` で新しいコマンドを追加する方法も使えます。
-
-ブラウザ画面で状態を確認しながら更新・設定したい場合は、OS を問わず次を使えます。
-
-```sh
-n624-latex setup --gui
-```
+> [!DETAILS] 履歴資料　v1.6.9 以前のクライアントを更新する
+>
+> `latex-render` だけが入っている環境では、インストール手順を再実行します。[Windows では保存済みの API キーを再入力せずに更新できます](/docs/windows/#更新)。macOS と Linux では、`latex-render setup` で更新してから `latex-render setup repair` で新しいコマンドを追加する方法も使えます。既存のスクリプトでは引き続き `latex-render` が使えます。
 
 > [!DETAILS] セットアップ・更新時の内部動作を表示
 >
-> - Local Setup Web UI（`setup --gui`）はループバック（`127.0.0.1`）のランダムポートのみを使用します。資格情報の保存、Codex / Claude Skill と MCP の選択、診断、固定サンプルの render、更新、repair をすべて共通の `setup-core` 経由で実行します。
 > - 配布 ZIP の SHA-256 が導入済みの版と同じ場合はファイルを再配置せず、管理対象の設定だけを確認します。
 > - クライアントを更新する際は、以前の版を日時付きバックアップへ移動します。既存の別ランチャー、別 MCP 登録、ユーザーが変更した Skill は上書きしません。
 
 ## 状態確認と修復
 
-導入状態の確認には次のコマンドを使います（旧版は `latex-render` に読み替えてください）。
+導入方式を問わず、次のコマンドで状態を確認できます。
 
 ```sh
 n624-latex setup status
 n624-latex doctor --json
 ```
 
-- `doctor` は読み取り専用で環境を診断します。
-- 配布インストーラー版の `n624-latex setup repair` は、`.install-state.json` で所有権を確認できる項目を修復します。管理状態が不正な場合や、インストール先が管理対象外の場合は停止します。
+- APT 版は `sudo apt install --reinstall n624-latex` でパッケージを再インストールします。
+- 配布インストーラー版は `n624-latex setup repair` で管理対象のランチャーや連携設定を修復します。
 
 ## 成果物の保存と復旧
 
-`render` や `jobs download` 実行時の保存先は `.render/result.pdf`・`job.json`・プレビュー画像などです。必ずコマンドが完了してからファイルを開いてください。
-
-- **失敗・中断時の保護**：失敗時は以前の成果物一式を保持し、強制終了された場合も次回のダウンロード実行時に自動復旧します。出力先の隣に作られる `.latex-renderer-state` 管理フォルダは、処理中や復旧前に削除しないでください。
-- **同時実行と使用中ファイル**：同じ保存先への同時書き込みは `OUTPUT_BUSY` エラーになります。前の処理を待ってから再試行してください。Windows で PDF を開いたままにしている場合は、閉じてから再試行します。
-- **上限と制限**：各一式は最大 1 GiB・10,000 項目までです。切り替え中は新旧一式と一時領域分の空き容量が必要です。シンボリックリンクや別マウントを含む保存先は使用できません（詳細：[成果物の保存・復旧の仕様](/docs/reference/#成果物の保存-復旧の仕様)）。
+`n624-latex main.tex` で作った PDF は現在のフォルダに保存されます。`render` や `jobs download` で保存するPDF、ログ、画像については[CLI の成果物](/docs/cli/#成果物)を参照してください。保存先が使用中の場合は[問題解決ガイド](/docs/troubleshooting/#成果物の取得)を確認してください。
 
 ## アンインストール
 
-配布インストーラーで導入した CLI は、次のコマンドで削除できます。
+APT 版は `sudo apt remove n624-latex` で削除します。ユーザーの API キーも消したいときは、削除前に `n624-latex auth logout` を実行します。
+
+配布インストーラー版は次のコマンドで削除します。
 
 ```sh
 n624-latex setup remove --yes
 ```
 
-配布スクリプトからアンインストールする場合は OS ごとに次を実行します。
-
-**Linux / macOS（配布インストーラー版）**：
-
-```sh
-curl -fsSLo /tmp/uninstall-latex-renderer.mjs https://latex-render.n624.jp/downloads/client/uninstall.mjs
-node /tmp/uninstall-latex-renderer.mjs
-```
-
-**Windows**：
-
-```powershell
-Invoke-WebRequest https://latex-render.n624.jp/downloads/windows/uninstall.ps1 -OutFile $env:TEMP\uninstall-latex-renderer.ps1
-powershell -NoProfile -ExecutionPolicy Bypass -File $env:TEMP\uninstall-latex-renderer.ps1
-```
-
-**APT 版（Debian / Ubuntu）**：`sudo apt remove n624-latex` でパッケージを削除できます（ユーザー設定を消す場合は先に `n624-latex auth logout` 等を実行します）。
-
-※ ユーザーが変更した Skill、既存の別コマンド、変更された MCP 登録は削除されません。資格情報や Skill を残したい場合は、共通アンインストーラーでは `--keep-credential` / `--keep-skills`、Windows 用スクリプトでは `-KeepCredential` / `-KeepSkills` を指定します。
+配布インストーラー版で資格情報や Skill を残す場合は、`--keep-credential` または `--keep-skills` を指定します。Windows 用スクリプトで削除する場合は[Windows の手順](/docs/windows/#アンインストール)を参照してください。

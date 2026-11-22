@@ -21,7 +21,9 @@ since: "v1.3.6"
 
 ## 手動で作成する
 
-管理画面が対応している版では、所有者（Owner）でログインして **管理 → システム → バックアップ** を開き、**作成** を押します。完了後に **最新を検証** を実行し、検証時刻とファイル名が更新されることを確認します（検証にはサーバー上の復号鍵が必要です）。
+1. 所有者（Owner）でログインし、**管理 → システム → バックアップ** を開きます。
+2. **バックアップを作成** を押し、作成が完了するまで待ちます。
+3. **最新のバックアップを検証** を押し、**最終検証** に対象のファイル名と検証時刻が表示されることを確認します。検証にはサーバー上の復号鍵が必要です。
 
 ### コマンドで作成・検証する
 
@@ -32,14 +34,16 @@ sudo systemctl start latex-renderer-backup.service
 sudo journalctl -u latex-renderer-backup.service -n 20 --no-pager
 ```
 
-2. 作成された `.tar.age` アーカイブを特定し、GNU `tar` と `age` が使える安全な検証用 Linux 環境で復元テストを実行します。
+2. 作成した `.tar.age` アーカイブを検証用の Linux ホストにコピーします。GNU `tar`、`age`、`node:sqlite` を使える対応 Node.js（24 または 26）、復号鍵を準備します。長期保管時はアーカイブと復号鍵を別々に保管します。
+3. バックアップを作成したアプリの版に対応するサーバー配布物を、[手動でダウンロードして検証する手順](/docs/self-hosting/#v1-6-9をダウンロードして検証)で取得・展開します。先頭の `version=` にその版を指定します。展開先を `release_dir` に設定し、配布物のスクリプトを実行します。
 
 ```bash
+release_dir=/path/to/verified-release
 BACKUP_AGE_IDENTITY_FILE=/path/to/age-identity \
-  /usr/local/bin/node /opt/latex-renderer/current/deploy/scripts/restore-test.mjs /path/to/backup.tar.age
+  node "$release_dir/deploy/scripts/restore-test.mjs" /path/to/backup.tar.age
 ```
 
-このテストは一時領域にのみ展開して SQLite の整合性・外部キー制約と入力 ZIP のサイズ・SHA-256 を検証するため、稼働中の DB やストレージには一切書き込みません（外部ストレージへコピーしたバックアップも同様に検証してください）。
+`restore_test.completed` が表示されれば検証は完了です。テストは一時領域に展開した SQLite と入力 ZIP の整合性を検証します。外部ストレージへ移したバックアップも、その保管先から取り出して検証できます。
 
 ## 更新失敗後の復旧点を確認する
 
@@ -49,7 +53,9 @@ BACKUP_AGE_IDENTITY_FILE=/path/to/age-identity \
 sudo n624-latex server recovery status
 ```
 
-（旧版・手動配置環境では `sudo /usr/local/bin/node /usr/local/libexec/latex-renderer-update-recovery.mjs status` を実行します）。
+> [!DETAILS] 履歴資料　旧版で状態を確認する
+>
+> `n624-latex server recovery status` がない環境では、`sudo /usr/local/bin/node /usr/local/libexec/latex-renderer-update-recovery.mjs status` を実行します。
 
 1. 表示された復旧点 ID（`POINT_ID`）、アプリと Updater の版、DB スキーマ、稼働中サービスを照合します。データ復旧が必要な場合は、先にアーカイブと現在の設定を別領域へ保全してください。
 2. 調査を終え、「データ復元は不要であり、この復旧点の保護を解除してよい」と判断した場合にのみ `acknowledge` を実行します。
@@ -58,7 +64,7 @@ sudo n624-latex server recovery status
 sudo /usr/local/bin/node /usr/local/libexec/latex-renderer-update-recovery.mjs acknowledge POINT_ID
 ```
 
-※ `acknowledge` は復旧レビュー状態を終了して条件に応じサービスを再開させる操作であり、**データの巻き戻しは行いません**。保護解除された復旧点は通常の自動整理対象に戻ります。
+`acknowledge` は復旧レビューを終了し、条件に応じてサービスを再開します。データを戻す場合は、復旧点を保護した状態で次の手順へ進みます。
 
 ## データを復旧する場合
 

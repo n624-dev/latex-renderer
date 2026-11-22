@@ -33,7 +33,12 @@ try {
   await waitUntilReady();
   await assertAsset("/", 200, "text/html", "LaTeXをPDFに変換");
   await assertAsset("/docs/", 200, "text/html", "最短でPDFを作る");
-  await assertAsset("/downloads/", 200, "text/html", "Windows の手順");
+  await assertAsset(
+    "/downloads/",
+    200,
+    "text/html",
+    "Debian・Ubuntu に APT でインストール",
+  );
   await assertAsset("/docs/cli/", 200, "text/html", "レンダリング");
   await assertAsset("/docs/self-hosting/", 200, "text/html", "初回導入の順序");
   for (const [slug, heading] of [

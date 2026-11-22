@@ -148,8 +148,17 @@ interface SkillInstallerModule {
   }): Promise<readonly { status: string; destination: string }[]>;
 }
 
+export type ClientPackageManager = "apt" | "winget" | "homebrew";
+
+export interface SystemClientPackage {
+  readonly manager: ClientPackageManager;
+  readonly version: string;
+  readonly directory: string;
+  readonly binDirectory: string;
+}
+
 interface CoreOptions {
-  systemPackage?: { readonly version: string; readonly directory: string };
+  systemPackage?: SystemClientPackage;
   readonly platform?: NodeJS.Platform;
   readonly home?: string;
   readonly env?: NodeJS.ProcessEnv;
@@ -494,7 +503,7 @@ export async function installDistribution({
     if (paths.platform !== "win32")
       output.write(`Command launchers: ${paths.binDirectory}\n`);
     output.write(
-      "Register an API key with: latex-render auth login --api-key-stdin\n",
+      "Open client settings with: n624-latex setup\n",
     );
     return {
       action: installExists ? "updated" : "installed",
@@ -521,7 +530,8 @@ export async function inspectSetup(
 ): Promise<SetupStatus> {
   const paths = resolveSetupPaths(options);
   if (options.systemPackage !== undefined) {
-    const { directory, version } = options.systemPackage;
+    const { directory, version, manager } = options.systemPackage;
+    const managedPaths = packageSetupPaths(paths, options.systemPackage);
     const checks: DiagnosticCheck[] = [];
     for (const [id, name] of [
       ["client.cli", "latex-render.cjs"],
@@ -535,8 +545,8 @@ export async function inspectSetup(
         path,
         status: present ? "pass" : "fail",
         message: present
-          ? "APT-managed payload is present"
-          : "APT-managed payload is missing",
+          ? `${manager}-managed payload is present`
+          : `${manager}-managed payload is missing`,
       });
     }
     checks.push(await inspectCredential(paths, options.env ?? process.env));
@@ -546,14 +556,7 @@ export async function inspectSetup(
         : "healthy",
       version,
       platform: paths.platform,
-      paths: {
-        ...paths,
-        installDirectory: directory,
-        binDirectory: "/usr/bin",
-        cliLauncher: "/usr/bin/n624-latex",
-        mcpLauncher: "/usr/bin/latex-renderer-mcp",
-        skillRoot: join(directory, "skill"),
-      },
+      paths: managedPaths,
       checks,
     };
   }
@@ -644,6 +647,109 @@ export async function inspectSetup(
     paths,
     checks,
     state,
+  };
+}
+
+function packageSetupPaths(
+  paths: SetupPaths,
+  { directory, binDirectory, manager }: SystemClientPackage,
+): SetupPaths {
+  const pathApi = paths.platform === "win32" ? win32 : posix;
+  const extension = manager === "winget" ? ".exe" : "";
+  return {
+    ...paths,
+    installDirectory: directory,
+    binDirectory,
+    statePath: pathApi.join(directory, STATE_FILE),
+    cliLauncher: pathApi.join(binDirectory, `n624-latex${extension}`),
+    mcpLauncher: pathApi.join(binDirectory, `latex-renderer-mcp${extension}`),
+    skillRoot: pathApi.join(directory, "skill"),
+  };
+}
+
+export async function configurePackageIntegrations({
+  skillTarget,
+  mcpTarget,
+  ...options
+}: CoreOptions & {
+  systemPackage: SystemClientPackage;
+  skillTarget: SkillTarget;
+  mcpTarget: McpTarget;
+}): Promise<RepairResult> {
+  validateTarget(skillTarget, "skillTarget");
+  validateTarget(mcpTarget, "mcpTarget");
+  const paths = packageSetupPaths(
+    resolveSetupPaths(options),
+    options.systemPackage,
+  );
+  const env = { ...(options.env ?? process.env) };
+  delete env.LATEX_RENDER_INSTALL_DIRECTORY;
+  delete env.LATEX_RENDER_BIN_DIRECTORY;
+  const legacyOptions = { platform: paths.platform, home: paths.home, env };
+  const legacy = await readManagedState(resolveSetupPaths(legacyOptions));
+  const legacyPaths =
+    legacy.kind === "managed"
+      ? resolveSetupPaths({
+          ...legacyOptions,
+          binDirectory: legacy.state.binDirectory,
+        })
+      : undefined;
+  const repaired: string[] = [];
+  const preserved: string[] = [];
+  if (skillTarget !== "none") {
+    const skill = await loadSkillInstaller(paths);
+    const results = await skill.installSkillTargets({
+      target: skillTarget,
+      source: paths.skillRoot,
+      ...(legacyPaths ? { previousSource: legacyPaths.skillRoot } : {}),
+      home: paths.home,
+      output: options.output ?? process.stdout,
+      warning: options.warning ?? process.stderr,
+    });
+    for (const result of results) {
+      (result.status.startsWith("preserved") ? preserved : repaired).push(
+        `skill:${result.destination}`,
+      );
+    }
+  }
+  const runner = options.runner ?? defaultCommandRunner;
+  const command = { command: paths.mcpLauncher, args: [] };
+  if (legacyPaths && legacy.kind === "managed") {
+    const oldCommand = mcpCommand(legacyPaths);
+    for (const client of selectedTargets(mcpTarget)) {
+      if (
+        !legacy.state.managedMcpClients.includes(client) ||
+        inspectMcpTarget(legacyPaths, client, runner) !== "current"
+      )
+        continue;
+      const removeArgs = [
+        "mcp",
+        "remove",
+        MCP_SERVER_NAME,
+        ...(client === "claude" ? ["--scope", "user"] : []),
+      ];
+      if (runner(client, removeArgs).status !== 0) {
+        preserved.push(`mcp:${client}:migration_failed`);
+        continue;
+      }
+      if (addMcpTarget(client, command, runner)) {
+        repaired.push(`mcp:${client}`);
+      } else {
+        if (!addMcpTarget(client, oldCommand, runner))
+          throw new AppError(
+            "MCP_MIGRATION_RESTORE_FAILED",
+            `Could not restore the previous ${client} MCP registration`,
+            409,
+          );
+        preserved.push(`mcp:${client}:migration_failed`);
+      }
+    }
+  }
+  const mcp = repairMcpTargets(paths, mcpTarget, [], runner, command);
+  return {
+    repaired: [...repaired, ...mcp.repaired],
+    preserved: [...preserved, ...mcp.preserved],
+    status: await inspectSetup(options),
   };
 }
 
@@ -1420,6 +1526,7 @@ function repairMcpTargets(
   target: McpTarget,
   previouslyManaged: readonly ("codex" | "claude")[],
   runner: CommandRunner,
+  command = mcpCommand(paths),
 ): {
   repaired: string[];
   preserved: string[];
@@ -1429,7 +1536,7 @@ function repairMcpTargets(
   const preserved: string[] = [];
   const managed = [...previouslyManaged];
   for (const client of selectedTargets(target)) {
-    const inspection = inspectMcpTarget(paths, client, runner);
+    const inspection = inspectMcpTarget(paths, client, runner, command);
     if (inspection === "unavailable") {
       preserved.push(`mcp:${client}:unavailable`);
       continue;
@@ -1439,29 +1546,7 @@ function repairMcpTargets(
       continue;
     }
     if (inspection === "current") continue;
-    const command = mcpCommand(paths);
-    const args =
-      client === "codex"
-        ? [
-            "mcp",
-            "add",
-            MCP_SERVER_NAME,
-            "--",
-            command.command,
-            ...command.args,
-          ]
-        : [
-            "mcp",
-            "add",
-            "--scope",
-            "user",
-            MCP_SERVER_NAME,
-            "--",
-            command.command,
-            ...command.args,
-          ];
-    const result = runner(client, args);
-    if (result.status !== 0) {
+    if (!addMcpTarget(client, command, runner)) {
       preserved.push(`mcp:${client}:failed`);
       continue;
     }
@@ -1469,6 +1554,24 @@ function repairMcpTargets(
     if (!managed.includes(client)) managed.push(client);
   }
   return { repaired, preserved, managed };
+}
+
+function addMcpTarget(
+  client: "codex" | "claude",
+  command: ReturnType<typeof mcpCommand>,
+  runner: CommandRunner,
+): boolean {
+  return (
+    runner(client, [
+      "mcp",
+      "add",
+      ...(client === "claude" ? ["--scope", "user"] : []),
+      MCP_SERVER_NAME,
+      "--",
+      command.command,
+      ...command.args,
+    ]).status === 0
+  );
 }
 
 function removeMcpTargets(
@@ -1496,6 +1599,7 @@ function inspectMcpTarget(
   paths: SetupPaths,
   client: "codex" | "claude",
   runner: CommandRunner,
+  expected = mcpCommand(paths),
 ): "unavailable" | "missing" | "current" | "conflict" | "error" {
   const version = runner(client, ["--version"]);
   if (version.status !== 0) return "unavailable";
@@ -1511,7 +1615,6 @@ function inspectMcpTarget(
     )
       ? "missing"
       : "error";
-  const expected = mcpCommand(paths);
   if (client === "codex") {
     try {
       const value: unknown = JSON.parse(result.stdout);

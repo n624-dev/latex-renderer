@@ -105,7 +105,10 @@ describe("Markdown public documentation", () => {
     expect(selfHosting?.html).toContain("install-host.sh");
     expect(selfHosting?.html).not.toContain("まだ正式提供前");
     expect(selfHosting?.html).toContain("main");
-    expect(selfHosting?.html).toContain("TeX環境の初期設定");
+    expect(selfHosting?.html).toContain('id="tex環境の初期設定"');
+    expect(selfHosting?.html).toContain(
+      "最初の TeX 実行環境はセットアップで用意されます",
+    );
     expect(selfHosting?.html).toContain("バックアップ");
   });
 

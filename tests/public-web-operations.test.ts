@@ -41,31 +41,39 @@ describe("public Web operations", () => {
     const deploy = read("deploy/scripts/deploy-public-web-production.sh");
     const mainGuard = deploy.indexOf('= "main"');
     const repositoryCheck = deploy.indexOf("pnpm check");
-    const workerDeploy = deploy.indexOf("run deploy");
+    const workerUpload = deploy.indexOf("wrangler versions upload");
+    const verifyPreview = deploy.indexOf(
+      'check-live-content.mjs "$preview_url"',
+    );
+    const workerDeploy = deploy.indexOf("wrangler versions deploy");
     const routeApply = deploy.indexOf("sync-public-worker-routes.mjs --apply");
 
     expect(mainGuard).toBeGreaterThan(-1);
     expect(deploy).toContain("git status --porcelain");
     expect(deploy).toContain("git rev-parse origin/main");
     expect(mainGuard).toBeLessThan(repositoryCheck);
-    expect(repositoryCheck).toBeLessThan(workerDeploy);
+    expect(repositoryCheck).toBeLessThan(workerUpload);
+    expect(deploy).toContain("prepare-public-release-client.sh");
+    expect(workerUpload).toBeLessThan(verifyPreview);
+    expect(verifyPreview).toBeLessThan(workerDeploy);
     expect(workerDeploy).toBeLessThan(routeApply);
   });
 
   it("has independent version and VPS rollback paths", () => {
     const deploy = read("deploy/scripts/deploy-public-web-production.sh");
-    const boundaryFailure = deploy.indexOf(
-      "if ! deploy/scripts/smoke-test-public-worker-boundary.sh",
+    const publicCheck = deploy.indexOf(
+      'check-live-content.mjs "$public_origin"',
     );
-    const automaticDisable = deploy.indexOf(
-      "sync-public-worker-routes.mjs --disable",
-      boundaryFailure,
+    const automaticRollback = deploy.indexOf(
+      'wrangler rollback "$previous_version"',
+      publicCheck,
     );
 
     expect(deploy).toContain("--rollback-version");
     expect(deploy).toContain('wrangler rollback "$version_id"');
     expect(deploy).toContain("--rollback-vps");
-    expect(automaticDisable).toBeGreaterThan(boundaryFailure);
+    expect(publicCheck).toBeGreaterThan(-1);
+    expect(automaticRollback).toBeGreaterThan(publicCheck);
     expect(deploy).toContain("smoke-test-unified-origin.sh");
   });
 

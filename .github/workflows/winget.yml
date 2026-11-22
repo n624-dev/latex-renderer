@@ -1,0 +1,67 @@
+name: winget
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/winget.yml
+      - apps/cli/**
+      - client/**
+      - deploy/winget/**
+      - packages/setup-core/**
+      - packages/setup-web/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  attestations: read
+
+concurrency:
+  group: winget-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native:
+    name: WinGet / ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2025
+            arch: x64
+          - runner: windows-11-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: "26.13.0"
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.3"
+          cache: false
+      - name: Build the native package and exercise install, migration, upgrade, and uninstall
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WINGET_ARCH: ${{ matrix.arch }}
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          if ((node -p process.arch) -ne $env:WINGET_ARCH) { throw 'Unexpected native runner architecture' }
+          corepack enable
+          pnpm install --frozen-lockfile
+          node client/build-client.mjs
+          $version = node -p 'require("./package.json").version'
+          $assets = Join-Path $env:RUNNER_TEMP release-assets
+          node deploy/winget/build-package.mjs $env:WINGET_ARCH client-dist/latex-renderer-client $assets
+          $archive = Join-Path $assets "n624-latex-$version-windows-$env:WINGET_ARCH.zip"
+          $previous = gh api repos/n624-dev/latex-renderer/releases/latest --jq 'select(.immutable and (.draft == false) and (.prerelease == false)) | .tag_name'
+          if ($previous -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') { throw 'A previous immutable Stable release is required' }
+          $old = "latex-renderer-client-$($previous.Substring(1)).zip"
+          gh release download $previous --repo n624-dev/latex-renderer --dir $env:RUNNER_TEMP --pattern $old
+          $previousArchive = Join-Path $env:RUNNER_TEMP $old
+          gh attestation verify $previousArchive --repo n624-dev/latex-renderer --signer-workflow n624-dev/latex-renderer/.github/workflows/server-release.yml --source-ref "refs/tags/$previous" --predicate-type https://slsa.dev/provenance/v1 --deny-self-hosted-runners
+          ./deploy/winget/check-native.ps1 -CandidateArchive $archive -PreviousClientArchive $previousArchive -Architecture $env:WINGET_ARCH

@@ -21,11 +21,12 @@ import {
   loadCredential,
   repairSetup,
   saveCredential,
+  type ClientPackageManager,
   type McpTarget,
   type SkillTarget,
 } from "@latex-renderer/setup-core";
 import { AppError, PUBLIC_ORIGIN } from "@latex-renderer/shared";
-import { setupCss, setupHtml, setupJavaScript } from "./assets.js";
+import { clientSetupHtml, setupCss, setupJavaScript } from "./assets.js";
 
 const MAXIMUM_BODY_BYTES = 16 * 1024;
 const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
@@ -79,6 +80,7 @@ export interface SetupWebServer {
 }
 
 export interface SetupWebServerOptions extends SetupWebActionOptions {
+  readonly packageManager?: ClientPackageManager;
   readonly host?: LoopbackHost;
   readonly idleTimeoutMs?: number;
   readonly maximumLifetimeMs?: number;
@@ -189,7 +191,12 @@ export async function createSetupWebServer(
       throw new HttpError(400, "INVALID_URL", "Request URL is invalid");
 
     if (request.method === "GET" && url.pathname === "/") {
-      send(response, 200, "text/html; charset=utf-8", setupHtml);
+      send(
+        response,
+        200,
+        "text/html; charset=utf-8",
+        clientSetupHtml(options.packageManager),
+      );
       return;
     }
     if (request.method === "GET" && url.pathname === "/assets/setup.css") {
@@ -638,4 +645,6 @@ function redactMessage(message: string): string {
   return message.replace(/lrk_[a-f0-9]{32}_[A-Za-z0-9_-]{43}/g, "[redacted]");
 }
 
-function openBrowser(url: string): Promise<boolean> { return openLocalTarget(url); }
+function openBrowser(url: string): Promise<boolean> {
+  return openLocalTarget(url);
+}

@@ -10,25 +10,24 @@ since: "v1.2.0"
 
 ## 現在の提供状況
 
-[APT パッケージ](/docs/client/#debian-ubuntu-の-apt-パッケージ)をインストールし、**サーバー設定ウィザード（`sudo n624-latex server setup`）**を開きます。ウィザードで公開経路、認証、最初の所有者（Owner）を設定できます。
-
-APT を使わずに `v1.7.0` の配布ファイルから構築する場合は、[手動配置の手順](#v1-6-9をダウンロードして検証)を参照してください。
+新しいサーバーは、[APT パッケージ](/docs/client/#debian-ubuntu-の-apt-パッケージ)を入れてセットアップウィザードで構築できます。ウィザードで HTTPS、ログイン方法、最初の管理者（Owner）を設定します。
 
 ### 初回導入の順序
 
-1. **構成を決める**：[公開方法とログイン方式](#対応する構成)を選び、[準備するもの](#準備するもの)を揃えます（LAN 内運用なら [LAN 内の自動 HTTPS](#lan-内の自動-https) も選べます）。
-2. **必要なパッケージを入れる**：rootless extras を含む Docker Engine、Nginx、[APT パッケージ `n624-latex`](/docs/client/#debian-ubuntu-の-apt-パッケージ) をインストールします。内蔵 HTTPS を使う場合は、設定するアドレスのポート 443 を空けてください。
-3. **ウィザードで初期構築する**：`sudo n624-latex server setup --plan` で前提条件と空き容量を確認してから、`sudo n624-latex server setup` を実行し、HTTPS・認証・最初の所有者を登録します（詳しい画面操作は[サーバー設定ウィザード](/docs/server-setup/)を参照）。
-4. **TeX 環境を確認する**：ウィザードの初回セットアップで構築した実行環境を管理画面（`/admin/tex-environment/`）で確認します。言語やバージョンを変更する場合は[TeX環境の初期設定](#tex環境の初期設定)を参照してください。
-5. **動作を確認する**：[導入完了の確認](#導入完了の確認)に沿って、実際の変換と権限境界をテストします。
+1. **サーバーを準備する。** [対応 OS と公開方法](#対応する構成)を確認し、[Docker Engine と Nginx を準備](#準備するもの)します。
+2. **APT パッケージを入れる。** [Debian / Ubuntu の手順](/docs/client/#debian-ubuntu-の-apt-パッケージ)で `n624-latex` をインストールします。
+3. **構築する。** 非 root のデプロイ用アカウントで `sudo n624-latex server setup --plan` を実行します。表示された不足項目を解消したら、[ブラウザでセットアップ](/docs/server-setup/#ブラウザで開く)を進めます。
+4. **最初の PDF を作る。** 設定した HTTPS URL を開き、[ログインしてテスト文書を変換](#導入完了の確認)します。最初の TeX 実行環境はセットアップで用意されます。
+
+既存サーバーのバージョンを上げる場合は [管理画面で更新する](/docs/updates/)に進みます。tarball から構築する場合は [手動配置の手順](#v1-6-9をダウンロードして検証)を参照してください。
 
 ## LAN 内の自動 HTTPS
 
-インターネットへ公開せず LAN 内で利用する場合は、**Akebi** を使ってサーバーのプライベート IP アドレスから決まる HTTPS URL を自動構成できます。詳しくは[LAN で HTTPS を使う（Akebi）](/docs/lan-https/)または[Akebi の証明書サービスを自分で運用する](/docs/lan-https-authority/)を参照してください。
+LAN 内で利用するときは、**Akebi** でプライベート IP アドレスから決まる HTTPS URL を設定できます。共通の証明書サービスを使う設定から始められます。[LAN で HTTPS を使う（Akebi）](/docs/lan-https/)
 
 ## 対応する構成
 
-対象は `apt` と `systemd` が使える単一の Debian / Ubuntu ホストです。LaTeX 変換は専用ユーザーの rootless Docker 内で隔離実行され、内部サービスはすべてループバック（`127.0.0.1`）で待ち受けます。
+APT で新規構築できるのは、`systemd` が動作する単一の Debian 12・13 または Ubuntu 24.04・26.04 ホスト（amd64・arm64）です。LaTeX の変換には専用ユーザーの rootless Docker が使われます。
 
 | 公開方法（`DEPLOYMENT_MODE`） | 入口（Ingress） | 選べるログイン方法 |
 | --- | --- | --- |
@@ -42,15 +41,113 @@ APT を使わずに `v1.7.0` の配布ファイルから構築する場合は、
 
 ## 準備するもの
 
-- **OS・ユーザー・ディスク**：`sudo` が使える通常のデプロイ用ユーザー（root 直接ログインではなく通常ユーザーから `sudo` を実行します）。サーバーの空き容量が既定の **5 GiB** を下回ると新規レンダリングを拒否するため、5 GiB ＋ TeX イメージ・リリース・成果物・暗号化バックアップ分の十分な空き容量を確保してください。
-- **Docker Engine**：rootless 用ツール（`dockerd-rootless-setuptool.sh` 等）を含む公式の Docker Engine。
-- **公開経路と TLS**：インターネット公開なら HTTPS ホスト名と TLS 証明書（Cloudflare なら Tunnel・DNS・Worker の管理権限）。
+- **作業アカウント。** 非 root のアカウントで接続し、サーバー設定コマンドを `sudo` で実行します。
+- **ディスク。** 初回の事前確認では `/opt` と `/var/lib` の各ファイルシステムに **5 GiB 以上の空き**が必要です。これに加えて TeX イメージ、リリース、成果物、暗号化バックアップの分を確保してください。
+- **Docker Engine。** 公式リポジトリから Docker Engine と `docker-ce-rootless-extras` を導入します。ウィザードが変換用の rootless Docker を構成します。[Docker の公式手順（Debian）](https://docs.docker.com/engine/install/debian/) · [Ubuntu](https://docs.docker.com/engine/install/ubuntu/)
+- **Nginx。** `sudo apt install nginx` で導入します。Caddy、Apache、Cloudflare で公開する場合も、APT 版の新規セットアップは Nginx の存在を確認します。
+- **公開経路と TLS。** 独自の HTTPS を使う場合はホスト名・証明書・秘密鍵を用意し、組み込み HTTPS で使うアドレスとポートを空けます。Cloudflare を使う場合は Tunnel・DNS・Worker を準備します。[LAN HTTPS を選ぶ場合の前提](#lan-内の自動-https)
 - **認証情報**：
   - OIDC：issuer URL、Client ID、Client Secret、最初の所有者の固定 `subject`
   - Cloudflare Access：Access Application の情報と所有者の `subject`
   - パスワード：所有者のログイン名と初期パスワード
 - **外部通信要件**：サーバーから GitHub（Releases / Attestations）、GHCR（`ghcr.io`）、TeX Live アーカイブ、Debian / Ubuntu パッケージリポジトリへ HTTPS 接続できること。
-- **手動 tarball 配置を使う場合の追加要件**：Node.js 26 または 24（`/usr/local/bin/node` と `/usr/local/bin/corepack`）、`curl`、`jq`、`tar`、`sha256sum`、`gh attestation verify` 対応の GitHub CLI（APT 版には専用の Node.js と検証・起動機構が含まれます）。
+- **APT パッケージ。** Node.js はパッケージに同梱されます。[APT パッケージの導入手順](/docs/client/#debian-ubuntu-の-apt-パッケージ)
+
+## 導入完了の確認
+
+1. 設定した HTTPS URL の `/admin/` を開き、セットアップで登録した所有者としてログインします。
+2. 同じ HTTPS URL の `/app/` を開き、[サンプルの `main.tex`](/docs/#最短でpdfを作る)を選んで **PDFに変換** を押します。
+3. 結果画面から PDF を開き、サンプルの本文が表示されることを確認します。
+
+> [!DETAILS] サービスと出力を追加で検証する
+>
+> 管理者は公開 URL 経由で変換するスモークテストを実行できます。テストで発行した API キーは直後に失効します。
+>
+> ```bash
+> sudo sh /opt/latex-renderer/current/deploy/scripts/smoke-test-production.sh
+> ```
+>
+> 一般利用者としてのログイン、公開ガイドの閲覧、TeX 環境に表示される言語とイメージ、日本語や SVG など運用で使う出力も確認できます。
+
+### 利用者と API キーの発行
+
+所有者として `/admin/` にログインできたら、利用者を登録します。
+
+- **Web・Remote MCP の利用者**：管理画面の**ユーザー**から利用者を作成し、ログイン方式に対応する識別情報を登録して Web アプリの URL を案内します。
+- **CLI・Local MCP・HTTP API の利用者**：管理画面で利用者に紐づく**サービスアカウント**を作成し、**APIキー → APIキーを発行**から `render:create` と `render:read:own` を付けたレンダリングキー（`lrk_...`）を発行して安全な経路で渡します。
+
+## 更新とロールバック
+
+### アプリケーションを更新する
+
+- アプリ本体を更新するには、所有者として **管理 → 更新** を開きます。[正式版への更新とロールバック](/docs/updates/)
+- TeX Live の版や言語を変更するには **管理 → TeX環境** を開きます。[TeX 環境の設定](#tex環境の初期設定)
+
+> [!DETAILS] 履歴資料と特殊な復旧手順へのリンク
+>
+> ### v1.2.xのroot Updaterから権限分離Updaterへ移行する場合
+>
+> [権限分離 Updater への移行手順](/docs/reference/#v1-2-xのroot-updaterから権限分離updaterへ移行する場合)を参照してください。
+>
+> ### GNU tarの展開がFunction not implementedで停止する場合
+>
+> [展開エラーの確認手順](/docs/reference/#gnu-tarの展開がfunction-not-implementedで停止する場合)を参照してください。
+>
+> ### mutation lockが使用中と表示される場合
+>
+> [ロックを使用している処理の確認手順](/docs/reference/#mutation-lockが使用中と表示される場合)を参照してください。
+
+## バックアップ
+
+定期バックアップと更新直前の復旧点の作成・復元テスト・データ復旧の手順は、[バックアップを作成・検証・復旧する](/docs/backups/)を参照してください（復元後に監査ログの出力位置不一致が出た場合は[監査ログの復旧](/docs/reference/#監査ログの復旧)を参照）。
+
+## 問題が起きた場合
+
+| 状況 | 最初に確認すること |
+| --- | --- |
+| `/app/` へ到達できない | DNS、TLS 証明書、Tunnel / リバースプロキシ設定、ループバックサービスの起動順序 |
+| 管理者だけログインできない | Owner の明示的な identity / credential、`AUTH_MODE`、issuer / audience、ロール設定 |
+| TeX Image を取得できない | `ghcr.io` への HTTPS 疎通、Package の公開設定、指定タグのアーキテクチャ対応 |
+| TeX 変更が長時間終わらない | 操作 ID（operation ID）と Image Manager の redacted ログ |
+| アプリ更新が拒否される | 対象リリースが immutable か、asset digest、アップグレード経路、ディスク空き容量 |
+| host bootstrap が unsafe path で止まる | `/var/lib/latex-renderer` が所有者 `root:latex-renderer`・mode `2770` になっているか |
+| 更新画面だけ起動しない | リリース内の `client-dist/manifest.json` の有無と Admin Web のサービス状態 |
+| レンダリングが開始されない | キュー状態、ディスク空き容量（5 GiB 以上か）、worker サービス、rootless Docker ソケット |
+| 更新直後に問題が起きた | 新規ジョブ受付を止め、新旧の Release / Runtime を確認してからロールバックを判断 |
+
+調査時は操作 ID、失敗した段階、安全なエラーコードを控えてください。あわせて[問題解決ガイド](/docs/troubleshooting/)、[アカウント・文書の安全な扱い](/docs/security/)、[デプロイ構成の詳細と設定ファイル一覧（DEPLOYMENT.md）](https://github.com/n624-dev/latex-renderer/blob/main/DEPLOYMENT.md)も参照できます。
+
+## TeX 環境を変更する {#tex環境の初期設定}
+
+初回セットアップで変換に使う TeX 環境が準備されます。言語を追加したいときや TeX Live の版を変更したいときは、**管理 → TeX環境**（`/admin/tex-environment/`）を開きます。英語・日本語を使う場合の設定例です。
+
+| 項目 | 推奨値 |
+| --- | --- |
+| Image | `latest`（日付固定タグを使う場合はホストのアーキテクチャ対応版を指定） |
+| Languages | `collection-langenglish`、`collection-langjapanese` |
+| Automatic image update | On |
+| Base local build fallback | Off（既定で無効） |
+
+- 公開 GHCR パッケージから取得するのは言語を含まない **Base イメージ**（取得後はダイジェスト固定）だけです。サーバー上で選択した言語と現在の Renderer コードを重ねて **Runtime イメージ**をビルドします（同一構成のローカル Runtime が残っていれば再利用し、Runtime を外部へ公開することはありません）。
+- ビルドはブラウザを閉じても継続します。完了後に管理画面で稼働中の Runtime と選択言語を確認してください（取得失敗時は `ghcr.io` への HTTPS 疎通と対応アーキテクチャを確認します）。
+
+### 自動容量整理
+
+> [!DETAILS] 未使用イメージ・ビルドキャッシュの自動容量整理を表示
+>
+> Image Manager は既定で 24 時間ごとに未使用の管理対象イメージを整理します（現行・直前のロールバック用 Base / Runtime と設定参照中のイメージは保護し、それ以外の管理イメージは作成 24 時間後に削除対象、未使用ビルドキャッシュは 2 GiB を目安に整理します。Docker 全体の容量上限ではありません）。
+>
+> `/etc/latex-renderer/renderer.env` で調整でき、TeX 更新中でないときに `sudo systemctl restart latex-renderer-image-manager.service` で反映します。
+>
+> ```dotenv
+> IMAGE_CLEANUP_INTERVAL_HOURS=24
+> IMAGE_CLEANUP_RETENTION_HOURS=24
+> IMAGE_BUILD_CACHE_MAX_GIB=2
+> ```
+>
+> - `INTERVAL_HOURS`：`0` で自動整理無効、`1`〜`720` 時間で指定（起動 5 分後から 5 分おきに期限確認し、更新・デプロイ中は共通ロックで延期。Web / CLI の手動 Cleanup は保持期間を待たず保護対象外を整理します）。
+> - `RETENTION_HOURS`：`0`〜`8760` 時間、`BUILD_CACHE_MAX_GIB`：`0`〜`1024` GiB。
+> - `1.3.4-rc.2` 以降は非 root Docker の Buildx メタデータをワーカーホーム配下の `.docker/buildx-worker` へ分離し、root ビルドとの権限競合を防止しています。旧構成イメージや手動復旧ディレクトリは自動削除対象外のため、不要と確認したものだけを個別に消し、Docker データディレクトリ自体は直接削除しないでください。
 
 ## sudoと通常運用の境界
 
@@ -86,6 +183,8 @@ APT パッケージと `sudo n624-latex server setup` を使う標準手順で�
 > 新規の手動導入には、正式版リリース [v1.7.0](https://github.com/n624-dev/latex-renderer/releases/tag/v1.7.0)（`latex-renderer-server-1.7.0.tar.gz`）を使用します。このリリースは公開後にタグや配布ファイルを差し替えできない設定です。開発中の `main` ブランチからの直接配置やローカルでの TeX 用 `docker build` は一般運用ではサポート対象外です。
 >
 > ### v1.7.0をダウンロードして検証 {#v1-6-9をダウンロードして検証}
+>
+> ダウンロード用に `curl`、`jq`、`tar`、`sha256sum`、`gh attestation verify` が使える GitHub CLI を準備します。サーバー用の Node.js と Corepack は、後述のホスト準備で導入します。
 >
 > 通常のユーザーで、同じ Bash セッション内で次を実行します。GitHub Releases の SHA-256 と GitHub Actions のビルド来歴署名（Attestation）の両方を検証します（公開 API の来歴データを `gh` に渡すため、GitHub ログインやトークンは不要です）。途中で失敗した場合は `bundle_root` が設定されないため、原因を解決してからやり直してください。
 >
@@ -305,107 +404,3 @@ APT パッケージと `sudo n624-latex server setup` を使う標準手順で�
 >   --password-file "$password_file" --yes
 > shred -u "$password_file"
 > ```
-
-### 利用者と API キーの発行
-
-所有者として `/admin/` にログインできたら、利用者を登録します。
-
-- **Web・Remote MCP の利用者**：管理画面の**ユーザー**から利用者を作成し、ログイン方式に対応する識別情報を登録して Web アプリの URL を案内します。
-- **CLI・Local MCP・HTTP API の利用者**：管理画面で利用者に紐づく**サービスアカウント**を作成し、**APIキー → APIキーを発行**から `render:create` と `render:read:own` を付けたレンダリングキー（`lrk_...`）を発行して安全な経路で渡します。
-
-## TeX環境の初期設定
-
-管理画面の `/admin/tex-environment/` を開き、TeX 実行環境を構築します。一般的な英語・日本語環境での推奨設定は次のとおりです。
-
-| 項目 | 推奨値 |
-| --- | --- |
-| Image | `latest`（日付固定タグを使う場合はホストのアーキテクチャ対応版を指定） |
-| Languages | `collection-langenglish`、`collection-langjapanese` |
-| Automatic image update | On |
-| Base local build fallback | Off（既定で無効） |
-
-- 公開 GHCR パッケージから取得するのは言語を含まない **Base イメージ**（取得後はダイジェスト固定）だけです。サーバー上で選択した言語と現在の Renderer コードを重ねて **Runtime イメージ**をビルドします（同一構成のローカル Runtime が残っていれば再利用し、Runtime を外部へ公開することはありません）。
-- ビルドはブラウザを閉じても継続します。完了後に管理画面で稼働中の Runtime と選択言語を確認してください（取得失敗時は `ghcr.io` への HTTPS 疎通と対応アーキテクチャを確認します）。
-
-### 自動容量整理
-
-> [!DETAILS] 未使用イメージ・ビルドキャッシュの自動容量整理を表示
->
-> Image Manager は既定で 24 時間ごとに未使用の管理対象イメージを整理します（現行・直前のロールバック用 Base / Runtime と設定参照中のイメージは保護し、それ以外の管理イメージは作成 24 時間後に削除対象、未使用ビルドキャッシュは 2 GiB を目安に整理します。Docker 全体の容量上限ではありません）。
->
-> `/etc/latex-renderer/renderer.env` で調整でき、TeX 更新中でないときに `sudo systemctl restart latex-renderer-image-manager.service` で反映します。
->
-> ```dotenv
-> IMAGE_CLEANUP_INTERVAL_HOURS=24
-> IMAGE_CLEANUP_RETENTION_HOURS=24
-> IMAGE_BUILD_CACHE_MAX_GIB=2
-> ```
->
-> - `INTERVAL_HOURS`：`0` で自動整理無効、`1`〜`720` 時間で指定（起動 5 分後から 5 分おきに期限確認し、更新・デプロイ中は共通ロックで延期。Web / CLI の手動 Cleanup は保持期間を待たず保護対象外を整理します）。
-> - `RETENTION_HOURS`：`0`〜`8760` 時間、`BUILD_CACHE_MAX_GIB`：`0`〜`1024` GiB。
-> - `1.3.4-rc.2` 以降は非 root Docker の Buildx メタデータをワーカーホーム配下の `.docker/buildx-worker` へ分離し、root ビルドとの権限競合を防止しています。旧構成イメージや手動復旧ディレクトリは自動削除対象外のため、不要と確認したものだけを個別に消し、Docker データディレクトリ自体は直接削除しないでください。
-
-## 導入完了の確認
-
-Owner 登録と TeX 環境の初期設定が終わったら、本番用のスモークテストを実行します（一時的な最小権限 API キーを発行して公開 Origin 経由で実際にレンダリングし、直後にキーを失効させます。秘密値は標準出力や journal に残りません）。
-
-```bash
-sudo sh /opt/latex-renderer/current/deploy/scripts/smoke-test-production.sh
-```
-
-次の項目をすべて満たせば初期導入は完了です。
-
-- 必要な `systemd` サービスとタイマーがすべて `active`
-- ループバックのヘルスチェックが正常
-- 未ログイン時、`/app/` と `/admin/` から選択したログイン画面へ遷移し、`/docs/` はそのまま閲覧できる
-- Owner が `/admin/` へ、一般利用者が `/app/` へログインできる
-- TeX 画面に公開 GHCR 由来のダイジェストと選択言語が表示されている
-- 英語・日本語・数式・TikZ を含むテスト文書から PDF と SVG が生成できる
-- 資格情報、API キー、入力文書、PDF、生ログが Git や公開ログに含まれていない
-
-## 更新とロールバック
-
-アプリケーション本体と TeX 環境は独立して更新します。
-
-### アプリケーションを更新する
-
-- **アプリケーションの更新**：更新前にバックアップを検証し、管理画面（通常保守モード `normal`）から適用します。詳しい手順は[サーバーを更新する・前の版に戻す](/docs/updates/#正式版を適用する)を参照してください。
-- **TeX 環境の更新**：管理画面の `/admin/tex-environment/`（[TeX環境の初期設定](#tex環境の初期設定)）から行います。
-- **旧版からの特殊移行・ロック競合時**：同じ失敗操作を繰り返したり、ロックファイルやセキュリティ制限を手動解除したりせず、必ずリファレンスの手順を確認してください。
-  - [v1.2.xのroot Updaterから権限分離Updaterへ移行する場合](/docs/reference/#v1-2-xのroot-updaterから権限分離updaterへ移行する場合)
-  - [GNU tarの展開がFunction not implementedで停止する場合](/docs/reference/#gnu-tarの展開がfunction-not-implementedで停止する場合)
-  - [mutation lockが使用中と表示される場合](/docs/reference/#mutation-lockが使用中と表示される場合)
-
-> [!DETAILS] 旧版の移行・復旧手順へのリンク
->
-> ### v1.2.xのroot Updaterから権限分離Updaterへ移行する場合
->
-> [権限分離 Updater への移行手順](/docs/reference/#v1-2-xのroot-updaterから権限分離updaterへ移行する場合)を参照してください。
->
-> ### GNU tarの展開がFunction not implementedで停止する場合
->
-> [展開エラーの確認手順](/docs/reference/#gnu-tarの展開がfunction-not-implementedで停止する場合)を参照してください。
->
-> ### mutation lockが使用中と表示される場合
->
-> [ロックを使用している処理の確認手順](/docs/reference/#mutation-lockが使用中と表示される場合)を参照してください。
-
-## バックアップ
-
-定期バックアップと更新直前の復旧点の作成・復元テスト・データ復旧の手順は、[バックアップを作成・検証・復旧する](/docs/backups/)を参照してください（復元後に監査ログの出力位置不一致が出た場合は[監査ログの復旧](/docs/reference/#監査ログの復旧)を参照）。
-
-## 問題が起きた場合
-
-| 状況 | 最初に確認すること |
-| --- | --- |
-| `/app/` へ到達できない | DNS、TLS 証明書、Tunnel / リバースプロキシ設定、ループバックサービスの起動順序 |
-| 管理者だけログインできない | Owner の明示的な identity / credential、`AUTH_MODE`、issuer / audience、ロール設定 |
-| TeX Image を取得できない | `ghcr.io` への HTTPS 疎通、Package の公開設定、指定タグのアーキテクチャ対応 |
-| TeX 変更が長時間終わらない | 操作 ID（operation ID）と Image Manager の redacted ログ |
-| アプリ更新が拒否される | 対象リリースが immutable か、asset digest、アップグレード経路、ディスク空き容量 |
-| host bootstrap が unsafe path で止まる | `/var/lib/latex-renderer` が所有者 `root:latex-renderer`・mode `2770` になっているか |
-| 更新画面だけ起動しない | リリース内の `client-dist/manifest.json` の有無と Admin Web のサービス状態 |
-| レンダリングが開始されない | キュー状態、ディスク空き容量（5 GiB 以上か）、worker サービス、rootless Docker ソケット |
-| 更新直後に問題が起きた | 新規ジョブ受付を止め、新旧の Release / Runtime を確認してからロールバックを判断 |
-
-調査時は操作 ID、失敗した段階、安全なエラーコードを控えてください。あわせて[問題解決ガイド](/docs/troubleshooting/)、[アカウント・文書の安全な扱い](/docs/security/)、[デプロイ構成の詳細と設定ファイル一覧（DEPLOYMENT.md）](https://github.com/n624-dev/latex-renderer/blob/main/DEPLOYMENT.md)も参照できます。

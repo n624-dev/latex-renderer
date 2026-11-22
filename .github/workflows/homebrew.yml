@@ -1,0 +1,85 @@
+name: homebrew
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/homebrew.yml
+      - apps/cli/**
+      - client/**
+      - deploy/homebrew/**
+      - packages/setup-core/**
+      - packages/setup-web/**
+  workflow_dispatch:
+    inputs:
+      published_stable:
+        description: "Optional immutable Stable tag, for example vX.Y.Z. Leave blank to test this checkout."
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  attestations: read
+
+concurrency:
+  group: homebrew-${{ github.ref }}-${{ inputs.published_stable }}
+  cancel-in-progress: true
+
+jobs:
+  native:
+    name: Homebrew / ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: "26.13.0"
+      - name: Select the client archive and verify legacy installer provenance
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_ARCH: ${{ matrix.arch }}
+          RELEASE_TAG: ${{ inputs.published_stable }}
+        run: |
+          set -euo pipefail
+          node -e 'if (process.arch !== process.env.EXPECTED_ARCH) throw Error("A native macOS runner is required")'
+          legacy=latex-renderer-client-1.7.0.zip
+          legacy_dir="$RUNNER_TEMP/legacy"
+          gh release download v1.7.0 --repo n624-dev/latex-renderer --pattern "$legacy" --dir "$legacy_dir"
+          gh attestation verify "$legacy_dir/$legacy" --repo n624-dev/latex-renderer \
+            --signer-workflow n624-dev/latex-renderer/.github/workflows/server-release.yml \
+            --source-ref refs/tags/v1.7.0 --predicate-type https://slsa.dev/provenance/v1 \
+            --deny-self-hosted-runners
+          if [ -n "$RELEASE_TAG" ]; then
+            node deploy/homebrew/published-formula.mjs "$RELEASE_TAG" >"$RUNNER_TEMP/n624-latex.rb"
+            name=latex-renderer-client-${RELEASE_TAG#v}.zip
+            gh release download "$RELEASE_TAG" --repo n624-dev/latex-renderer --pattern "$name" --dir "$RUNNER_TEMP"
+            digest=$(sed -n 's/^  sha256 "\([a-f0-9]*\)"$/\1/p' "$RUNNER_TEMP/n624-latex.rb")
+            [ "$(shasum -a 256 "$RUNNER_TEMP/$name" | awk '{print $1}')" = "$digest" ]
+            archive="$RUNNER_TEMP/$name"
+          else
+            corepack enable
+            pnpm install --frozen-lockfile
+            node client/build-client.mjs
+            name=$(node -p 'require("./client-dist/manifest.json").archive')
+            archive="$PWD/client-dist/$name"
+          fi
+          {
+            printf 'HOMEBREW_CLIENT_ARCHIVE=%s\n' "$archive"
+            printf 'HOMEBREW_LEGACY_ARCHIVE=%s\n' "$legacy_dir/$legacy"
+          } >>"$GITHUB_ENV"
+      - name: Install, migrate, convert, upgrade, and uninstall
+        shell: bash
+        run: |
+          set -euo pipefail
+          node deploy/homebrew/test-macos.mjs "$HOMEBREW_CLIENT_ARCHIVE" "$HOMEBREW_LEGACY_ARCHIVE"
