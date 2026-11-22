@@ -99,23 +99,34 @@ try {
   await checkMcp(existingMcp);
 
   distribution = next;
-  const updated = JSON.parse(
-    await run("latex-render", [
-      "setup",
-      "--base-uri",
-      baseUri,
-      ...setupArguments,
-    ]),
-  );
+  const updateArguments = ["--base-uri", baseUri, ...setupArguments];
+  let updateOutput;
+  if (windows) {
+    // The previous Stable external CMD shim runs the bundled CLI using Node's
+    // eval mode. Its Commander parser treats the injected script path as an
+    // argument, so migration from that version uses the current installer.
+    const currentInstaller = join(temporary, "current-install.mjs");
+    await writeFile(currentInstaller, next.installer, { flag: "wx" });
+    updateOutput = (
+      await execute(
+        process.execPath,
+        [currentInstaller, ...updateArguments],
+        options,
+      )
+    ).stdout;
+  } else {
+    updateOutput = await run("latex-render", ["setup", ...updateArguments]);
+    // The old installer knows only the old launcher names. Repair runs the
+    // installed version and registers the new launcher.
+    assert.equal(
+      JSON.parse(await run("latex-render", ["setup", "repair", "--json"]))
+        .success,
+      true,
+    );
+  }
+  const updated = JSON.parse(updateOutput);
   assert.equal(updated.success, true);
   assert.equal(updated.result.action, "updated");
-  // A pre-alias installer only refreshes the launchers it knows about.
-  // Repair now runs the installed version and registers the new launcher.
-  assert.equal(
-    JSON.parse(await run("latex-render", ["setup", "repair", "--json"]))
-      .success,
-    true,
-  );
   for (const name of ["latex-render", "n624-latex"]) {
     assert.equal(await run(name, ["--version"]), next.manifest.version);
     assert.equal(
