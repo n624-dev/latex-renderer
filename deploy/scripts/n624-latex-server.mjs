@@ -33,6 +33,7 @@ const environment = {
   PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
   TERM: process.env.TERM ?? "dumb",
   LANG: "C.UTF-8",
+  NODE_USE_SYSTEM_CA: "1",
 };
 const settings = "/etc/latex-renderer/renderer.env";
 const database = "/var/lib/latex-renderer/renderer.sqlite3";
