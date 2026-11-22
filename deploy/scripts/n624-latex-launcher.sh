@@ -11,7 +11,8 @@ if [ "${1-}" = server ]; then
   if [ ! -f /opt/latex-renderer/current/deploy/scripts/n624-latex-server.mjs ]; then
     if [ -x /usr/bin/n624-latex ]; then exec /usr/bin/n624-latex server "$@"; fi
     if [ "$*" = 'recovery status' ]; then
-      exec /usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin +        /usr/local/bin/node /usr/local/libexec/latex-renderer-update-recovery.mjs status
+      exec /usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin \
+        /usr/local/bin/node /usr/local/libexec/latex-renderer-update-recovery.mjs status
     fi
     echo 'This application release uses the legacy server setup guide.' >&2
     exit 69

@@ -29,12 +29,12 @@
 公開 APT リポジトリには正式版（Stable）のみを登録します。リリース候補（RC）の初期構築をテストする場合は、使い捨ての検証用ホスト上で公開済み RC タグからローカル `.deb` パッケージをビルドして検証します。
 
 1. 検証対象の公開済み RC タグをチェックアウトし、`node client/build-client.mjs` に続けて `node deploy/apt/build-package.mjs amd64 packages-out`（ARM 環境では `arm64`）を実行します。
-2. 生成されたローカルパッケージをインストールし、`--candidate` に RC タグを指定してセットアップを検証します（`v1.7.0-rc.1` / `amd64` の例）：
+2. 生成されたローカルパッケージをインストールし、`--candidate` に RC タグを指定してセットアップを検証します（`v2.3.4-rc.1` / `amd64` の例）：
 
 ```sh
-sudo apt install './packages-out/n624-latex_1.7.0~rc.1_amd64.deb'
-sudo n624-latex server setup --candidate v1.7.0-rc.1 --plan
-sudo n624-latex server setup --candidate v1.7.0-rc.1
+sudo apt install './packages-out/n624-latex_2.3.4~rc.1_amd64.deb'
+sudo n624-latex server setup --candidate v2.3.4-rc.1 --plan
+sudo n624-latex server setup --candidate v2.3.4-rc.1
 ```
 
 - 初期セットアップが途中で中断した場合は、同じパッケージと同じ `--candidate` タグを指定して再開します。ブートストラップ処理は、バージョン番号の完全一致、immutable な GitHub Release、アセットの SHA-256、および Attestation 署名をすべて検証してからアプリケーションを配置します。
