@@ -248,12 +248,21 @@ class DocsRenderer extends Renderer {
   }
 
   override heading({ tokens, depth, text }: Tokens.Heading): string {
-    const base = headingSlug(text);
+    const explicitId = text.match(
+      / \{#([\p{Letter}\p{Number}][\p{Letter}\p{Number}-]*)\}$/u,
+    );
+    const label = explicitId ? text.slice(0, -explicitId[0].length) : text;
+    const base = explicitId?.[1] ?? headingSlug(label);
     const count = (this.#headingCounts.get(base) ?? 0) + 1;
     this.#headingCounts.set(base, count);
     const id = count === 1 ? base : `${base}-${count}`;
-    if (depth === 2 || depth === 3) this.#headings.push({ depth, id, text });
-    return `<h${depth} id="${escapeHtml(id)}">${this.parser.parseInline(tokens)}<a class="heading-permalink" href="#${escapeHtml(id)}" aria-label="この見出しへのリンク">#</a></h${depth}>\n`;
+    if (depth === 2 || depth === 3)
+      this.#headings.push({ depth, id, text: label });
+    const rendered = this.parser.parseInline(tokens);
+    const body = explicitId
+      ? rendered.slice(0, -explicitId[0].length)
+      : rendered;
+    return `<h${depth} id="${escapeHtml(id)}">${body}<a class="heading-permalink" href="#${escapeHtml(id)}" aria-label="この見出しへのリンク">#</a></h${depth}>\n`;
   }
 
   override blockquote({ tokens }: Tokens.Blockquote): string {

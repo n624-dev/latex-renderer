@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.7.0-rc.4 - 2026-11-23
+
+- Preserve links to the manual server download instructions when the documented release changes.
+
 ## 1.7.0-rc.3 - 2026-11-23
 
 - Build the client bundle from a clean checkout and normalize APT bootstrap permissions.
