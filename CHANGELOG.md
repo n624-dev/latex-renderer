@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 1.7.0-rc.3 - 2026-11-23
+
+- Build the client bundle from a clean checkout and normalize APT bootstrap permissions.
+- Preserve access to the managed Node.js runtime when first-time setup starts or resumes with a restrictive umask.
+
 ## 1.7.0-rc.2 - 2026-11-23
 
 - Add the shared `n624-latex` command and direct TeX-to-PDF rendering while keeping existing client launchers compatible.
