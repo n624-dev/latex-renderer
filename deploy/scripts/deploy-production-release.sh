@@ -591,9 +591,11 @@ deployment_checkpoint artifact-pruning
 sh "$tools_root/deploy/scripts/prune-production-artifacts.sh" "$release_id"
 
 if [ -f "$source_root/deploy/scripts/install-n624-latex.sh" ]; then
+  deployment_checkpoint client-launcher
   sh /opt/latex-renderer/current/deploy/scripts/install-n624-latex.sh
 fi
 if [ -f "$source_root/deploy/systemd/latex-renderer-backup-control.socket" ]; then
+  deployment_checkpoint backup-control
   systemctl enable --now latex-renderer-backup-control.socket
 fi
 

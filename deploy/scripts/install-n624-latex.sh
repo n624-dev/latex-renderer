@@ -15,7 +15,8 @@ test ! -L "$library"
 stage=$(mktemp -d "$library/.install.XXXXXX")
 trap 'rm -rf -- "$stage"' EXIT
 for entry in latex-render.cjs latex-render-admin.mjs; do
-  install -o root -g root -m 0644 +    "$source_root/client-dist/latex-renderer-client/app/$entry" "$stage/$entry"
+  install -o root -g root -m 0644 \
+    "$source_root/client-dist/latex-renderer-client/app/$entry" "$stage/$entry"
   mv -fT "$stage/$entry" "$library/$entry"
 done
 install -o root -g root -m 0755 "$source_root/deploy/scripts/n624-latex-launcher.sh" "$stage/launcher"
