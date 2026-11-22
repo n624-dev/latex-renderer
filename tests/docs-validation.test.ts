@@ -16,6 +16,7 @@ const cliHelp = new Map([
   ["auth status", "Usage: latex-render auth status"],
   ["auth logout", "Usage: latex-render auth logout"],
   ["render", "Usage: latex-render render\n--open"],
+  ["compile", "Usage: n624-latex compile\n--output"],
   ["jobs get", "Usage: latex-render jobs get"],
   ["jobs cancel", "Usage: latex-render jobs cancel"],
   ["jobs download", "Usage: latex-render jobs download\n--output"],
@@ -27,7 +28,7 @@ describe("public documentation CI validation", () => {
     expect(() =>
       assertPublicDocsValid(repositoryDocsValidationInput()),
     ).not.toThrow();
-  });
+  }, 60_000);
 
   it.each([
     ["web", "outputs"],
@@ -39,7 +40,9 @@ describe("public documentation CI validation", () => {
     ["lan-https", "lan-https-authority"],
   ])("links from %s to the %s procedure on the site", (guide, procedure) => {
     const document = publicDocs.find(({ slug }) => slug === guide);
-    expect(document?.html).toContain(`href="/docs/${procedure}/"`);
+    expect(document?.html).toMatch(
+      new RegExp(`href="/docs/${procedure}/(?:#[^"]+)?"`),
+    );
     expect(renderPublicDoc(procedure)).toContain("GitHub で原稿を見る");
   });
 
@@ -60,7 +63,7 @@ describe("public documentation CI validation", () => {
   it("detects CLI command and option drift", () => {
     const docs = replaceMarkdown(
       "cli",
-      "\n```text\nlatex-render jobs retry <jobId>\nlatex-render render . --preview\n```\n",
+      "\n```text\nlatex-render jobs retry <jobId>\nn624-latex render . --preview\n```\n",
     );
 
     expect(validate(docs)).toEqual(

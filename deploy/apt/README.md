@@ -1,46 +1,35 @@
-# Signed APT distribution
+# 署名付き APT パッケージの配布仕様
 
-The `n624-latex` package installs the client, its private Node.js runtime and the
-server setup entry point. A package installation or upgrade does not start the
-server or modify an existing deployment. System administrators use
-`sudo n624-latex server setup` to start server provisioning.
+`n624-latex` パッケージは、CLI クライアント、専用のプライベート Node.js ランタイム、およびサーバー構築のエントリポイントを一括で導入します。
 
-## Publication
+- パッケージをインストールまたはアップグレードしただけでは、サーバーは起動せず、稼働中の既存デプロイメントも変更されません。
+- サーバー管理者がプロビジョニングを開始するときは、明示的に `sudo n624-latex server setup` を実行します。
 
-1. Enable GitHub Pages with GitHub Actions as the deployment source for the
-   repository.
-2. Create a dedicated OpenPGP signing key. Store the signing material as the
-   `APT_SIGNING_KEY` secret on the `github-pages` environment, and its full
-   fingerprint as `APT_SIGNING_FINGERPRINT`. Store the HTTPS repository origin
-   as `APT_ORIGIN`. Protect the environment and keep an offline copy of the key.
-3. After publishing a Stable server release with the matching version and
-   completing release acceptance, run **publish-apt** on `main` with the Stable
-   tag. It builds and runs the packaged client on both runner architectures and
-   signs the repository containing the current release.
-4. Verify an install and upgrade on an enrolled Debian or Ubuntu host before
-   publishing the link to `n624-latex.sources` in the [client guide](../../docs/public/client.md).
-   Share the signing fingerprint through the same release announcement so
-   administrators can verify the enrollment file.
+## APT リポジトリの公開手順（リリース担当者向け）
 
-The archive generator accepts up to three complete version pairs, with at most
-90 MiB per package and 600 MiB for the package pool. The Pages workflow publishes
-only the current pair. The existing application Updater and its rollback
-retention manage deployed server versions separately.
+1. **GitHub Pages の有効化**：対象リポジトリで、デプロイ元を GitHub Actions に設定して GitHub Pages を有効にします。
+2. **署名鍵と環境シークレットの設定**：APT リポジトリ専用の OpenPGP 署名鍵を作成し、保護された `github-pages` 環境に次の値を登録します（秘密鍵のオフラインバックアップも別途保管します）。
+   - `APT_SIGNING_KEY`：OpenPGP 秘密鍵データ
+   - `APT_SIGNING_FINGERPRINT`：公開鍵の完全なフィンガープリント
+   - `APT_ORIGIN`：APT リポジトリの HTTPS オリジン URL
+3. **APT パッケージのビルドと公開**：対応するバージョンの正式版（Stable）サーバーリリースを公開し、受け入れテストを完了した後、`main` ブランチで対象の Stable タグを指定して **publish-apt** ワークフローを実行します。両アーキテクチャ（`amd64` / `arm64`）でパッケージ化されたクライアントのビルド・動作確認が行われ、現行リリースを含む署名付きリポジトリが公開されます。
+4. **導入検証と案内**：[CLI インストールガイド](../../docs/public/client.md)に `n624-latex.sources` の取得リンクを掲載する前に、登録済みの Debian / Ubuntu 実機で新規インストールとアップグレードの両方を検証します。また、管理者が `.sources` ファイルを照合できるよう、リリース告知に署名鍵のフィンガープリントを併記して共有します。
 
-## APT and the server
+**アーカイブの上限とバージョン管理の境界**：
+アーカイブ生成ツール自体は最大 3 世代分のペア（1 パッケージ最大 90 MiB、パッケージプール全体で最大 600 MiB）を扱えますが、GitHub Pages の公開ワークフローは最新の正式版ペアのみを公開します。デプロイ済みサーバー本体のバージョン更新とロールバック保持は、APT ではなくアプリケーション側の Updater が独立して管理します。
 
-The server launcher uses the immutable Stable asset and its GitHub
-attestation. Install Docker Engine with its rootless extras on the server
-before running setup. Under `--plan`, the launcher inspects the existing
-installation, host prerequisites and available space. HTTPS and identity
-provider setup instructions appear in the wizard.
+## APT パッケージとサーバー構築の関係
 
-## Test a release candidate
+- `n624-latex server setup` のランチャーは、差し替え禁止（immutable）の正式版リリース資産と GitHub Attestation（ビルド来歴署名）を検証してサーバーを構築します。
+- セットアップを実行する前に、ホスト側へ rootless extras を含む Docker Engine を導入しておく必要があります。
+- `--plan` を付けて実行すると、既存の導入状態、ホストの前提条件、およびディスク空き容量を事前検査できます。HTTPS や ID プロバイダー（OIDC 等）の設定手順はウィザード内で案内されます。
 
-On a disposable host, use the package built from the exact published RC tag
-with `node client/build-client.mjs` and
-`node deploy/apt/build-package.mjs amd64 packages-out` (use `arm64` on ARM).
-Install the resulting local package. For example, for `v1.7.0-rc.1` on amd64:
+## リリース候補（RC）の検証手順
+
+公開 APT リポジトリには正式版（Stable）のみを登録します。リリース候補（RC）の初期構築をテストする場合は、使い捨ての検証用ホスト上で公開済み RC タグからローカル `.deb` パッケージをビルドして検証します。
+
+1. 検証対象の公開済み RC タグをチェックアウトし、`node client/build-client.mjs` に続けて `node deploy/apt/build-package.mjs amd64 packages-out`（ARM 環境では `arm64`）を実行します。
+2. 生成されたローカルパッケージをインストールし、`--candidate` に RC タグを指定してセットアップを検証します（`v1.7.0-rc.1` / `amd64` の例）：
 
 ```sh
 sudo apt install './packages-out/n624-latex_1.7.0~rc.1_amd64.deb'
@@ -48,16 +37,10 @@ sudo n624-latex server setup --candidate v1.7.0-rc.1 --plan
 sudo n624-latex server setup --candidate v1.7.0-rc.1
 ```
 
-Use the same package and tag to resume an interrupted initial setup. The
-bootstrap checks the exact version, immutable GitHub release, asset SHA-256 and
-attestation before installing the application. The public APT repository
-accepts Stable packages only. Use the managed Updater to test upgrading an
-existing server to a candidate.
+- 初期セットアップが途中で中断した場合は、同じパッケージと同じ `--candidate` タグを指定して再開します。ブートストラップ処理は、バージョン番号の完全一致、immutable な GitHub Release、アセットの SHA-256、および Attestation 署名をすべて検証してからアプリケーションを配置します。
+- **稼働中の既存サーバー**を RC 版へアップグレードするテストには、APT パッケージではなく管理画面・Admin CLI の Updater を使用してください。
 
-## Maintain repository trust
+## リポジトリの信頼性維持と鍵ローテーション
 
-When retiring or rotating the repository key, distribute an updated enrollment
-file through a trusted channel before retiring the previous key. If metadata or
-a package fails verification, retain the running application and investigate the
-publication job. Keep repository signing, `Signed-By` and package hash checks
-enabled.
+- リポジトリ署名鍵を廃止またはローテーションする際は、旧鍵を失効させる前に、信頼できる経路で新しい `.sources` 登録ファイルを配布してください。
+- メタデータやパッケージの署名・ハッシュ検証に失敗した場合は、稼働中のアプリケーションをそのまま維持し、公開ジョブ（publish-apt）の状態を調査します。リポジトリ署名、`Signed-By` 指定、およびパッケージのハッシュ検証は常に有効のまま維持してください。

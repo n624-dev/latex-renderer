@@ -121,10 +121,17 @@ function cliHelp(commandPath: string): string | undefined {
       "--import",
       "tsx",
       join(repositoryRoot, "apps/cli/src/index.ts"),
-      ...commandPath.split(" "),
+      ...(commandPath === "" ? [] : commandPath.split(" ")),
       "--help",
     ],
-    { cwd: repositoryRoot, encoding: "utf8" },
+    {
+      cwd: repositoryRoot,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        N624_LATEX_COMMAND: commandPath === "compile" ? "1" : "0",
+      },
+    },
   );
   return result.status === 0 ? result.stdout : undefined;
 }

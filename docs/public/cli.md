@@ -8,38 +8,51 @@ updated: "2026-11-22"
 since: "v1.0.0"
 ---
 
-[インストールと最初の PDF](/docs/client/)を済ませてから、このページで変換対象、出力先、過去の結果の取得方法を確認できます。
+> [!NOTE]
+> 次版以降の共通コマンドは `n624-latex` です。既存スクリプト互換のため `latex-render` も同じサブコマンドで動作します（現行 Stable では `latex-render` を使用してください。ただし `.tex` の直接変換 `n624-latex main.tex` は次版以降の機能です）。
 
 ## 認証
 
-普段は `latex-render setup --gui` で設定画面を開き、API キーを保存します。ブラウザを開けない場合は、標準入力で登録できます。Bash または Zsh では次を実行し、1 行目でキーを入力します。
+通常はブラウザの設定画面を開いて API キーを保存します。
+
+```sh
+n624-latex setup --gui
+```
+
+SSH 接続先などブラウザを開けない環境では、コマンドライン引数に残さないよう**標準入力**から登録します（Bash / Zsh の例。1 行実行後にキーを貼り付けて Enter を押します）。
 
 ```sh
 read -rs render_key
-printf '%s' "$render_key" | latex-render auth login --api-key-stdin
+printf '%s' "$render_key" | n624-latex auth login --api-key-stdin
 unset render_key
 ```
 
-Windows では[インストーラーの非表示入力](/docs/windows/#インストール)から登録できます。
+Windows では[インストーラーの非表示入力](/docs/windows/#インストール)からも登録できます。
 
-```text
-latex-render auth status
-latex-render auth logout
+保存状態の確認とキーの削除は次のコマンドで行います。
+
+```sh
+n624-latex auth status
+n624-latex auth logout
 ```
 
-`status` はローカルで使う資格情報を確認し、`logout` は保存済みキーを削除します。環境変数 `LATEX_RENDER_API_KEY` がある場合は、保存済みキーより優先されます。環境変数の削除やサーバーでのキーの失効は、それぞれ別の操作です。
+- 環境変数 `LATEX_RENDER_API_KEY` が設定されている場合は、ローカルに保存されたキーよりも優先されます。
+- `logout` はローカルの保存済みキーだけを削除します。環境変数の解除や、サーバー側での API キー失効はそれぞれ別の操作です。
 
 ### 接続先サーバー
 
-既定ではホスト済みサービスを使用します。セルフホストの場合は、コマンドを実行するシェルでサーバーの HTTPS URL を指定します。URL には `/app/` や `/api/v1/` を付けず、同じサーバーが発行した API キーを使ってください。
+既定ではホスト済みサービス（`https://latex-render.n624.jp`）に接続します。セルフホスト環境を使う場合は、コマンドを実行するシェルでサーバーの HTTPS URL を指定してください。
 
-Linux・macOS:
+- URL の末尾に `/app/` や `/api/v1/` は付けません。
+- 必ずその接続先サーバーが発行した API キーを使用してください。
+
+**Linux・macOS**：
 
 ```sh
 export LATEX_RENDER_BASE_URL=https://latex.example.com
 ```
 
-Windows PowerShell:
+**Windows PowerShell**：
 
 ```powershell
 $env:LATEX_RENDER_BASE_URL = 'https://latex.example.com'
@@ -47,138 +60,146 @@ $env:LATEX_RENDER_BASE_URL = 'https://latex.example.com'
 
 ## セットアップと診断
 
-```text
-latex-render setup
-latex-render setup --gui
-latex-render setup status
-latex-render setup repair
-latex-render doctor
-latex-render setup remove --yes
+```sh
+n624-latex setup
+n624-latex setup --gui
+n624-latex setup status
+n624-latex setup repair
+n624-latex doctor
+n624-latex setup remove --yes
 ```
 
-`setup` はOSを自動判定し、公開配布物のSHA-256を検証してCLI、Local MCP、Skill、ランチャーをインストールまたは更新します。同じ配布物に対する再実行は冪等です。CodexまたはClaude Codeが導入済みなら、ユーザースコープの `latex-renderer` MCP登録も作成します。
+- **`setup`**：対話端末では設定画面を開きます。配布インストーラー版では、公開配布物の SHA-256 を検証して CLI・Local MCP・Skill・ランチャーを導入または更新でき、Codex や Claude Code があればユーザー用の MCP 登録も作成できます。
+- **`setup --gui`**：`127.0.0.1` のランダムポートで一回限りの専用 URL を開き、ブラウザから資格情報、Codex / Claude 連携、診断、サンプル変換、更新、修復を操作できます。外部へは公開されず、CLI を終了すると画面も閉じます（対話操作のため `--json` や `--api-key-stdin` とは併用できません）。
+- **`doctor`**：Node.js、OS、PATH、配布ファイル、資格情報の保護状態、Skill、MCP 登録を読み取り専用で診断します（API キー自体は出力しません）。未導入または degraded の場合は終了コード `2` を返します。
 
-`setup --gui` はブラウザでLocal Setup Web UIを開きます。外部へlistenせず、`127.0.0.1` のランダムポートで、この起動専用の一回限りURLを使います。画面から資格情報、Codex/Claude連携、診断、サンプルrender、更新、repairを操作できます。CLIを終了すると画面も利用できなくなります。
+セットアップや修復と同時に標準入力から API キーを保存することもできます。
 
-既存の同名ランチャー、MCP登録、変更済みSkillなど、管理状態から所有を確認できない設定は上書きしません。`setup repair` も管理対象だけを修復し、`setup remove --yes` はこのセットアップが作成した項目だけを削除します。
-
-APIキーも同時に保存する場合は、引数ではなく標準入力を使います。
-
-```text
-latex-render setup --api-key-stdin
-latex-render setup repair --api-key-stdin
-latex-render doctor --json
+```sh
+n624-latex setup --api-key-stdin
+n624-latex setup repair --api-key-stdin
+n624-latex doctor --json
 ```
 
-`doctor` はNode.js、OS、PATH、配布ファイル、資格情報の保護状態、Skill、MCP登録を読み取り専用で診断します。APIキー自体は出力しません。診断が未導入またはdegradedの場合は終了コード `2` です。
+※ 管理状態ファイルから所有を確認できない既存ランチャー、別 MCP 登録、変更済み Skill は上書き・修復・削除の対象外です。
 
-`setup --gui` は対話操作なので `--json` または `--api-key-stdin` と同時には使えません。
+APT 版では設定画面で API キーを管理できます。クライアント本体の更新・修復・削除は APT で行い、Local MCP は[手動で登録](/docs/mcp/#local-mcpの登録)します。
 
 ## レンダリング
 
 ### TeX ファイルを直接変換する
 
-文書のプロジェクトフォルダで使います。画像、参考文献、ローカルのスタイルをフォルダ内の相対パスで参照できます。
+プロジェクトフォルダ内で `.tex` ファイルを直接指定して PDF を作れます。画像、参考文献、ローカルの `.sty` などもフォルダ内の相対パスで参照できます。
 
-```text
+```sh
 n624-latex main.tex
 n624-latex chapters/report.tex -o build/report.pdf
 ```
 
-出力先を省略すると、実行したフォルダに入力と同じ名前の PDF ができます。LaTeX のエラーは、取得できたファイル名・行番号・ジョブ ID とともに表示されます。変換やファイル取得に失敗した場合は、最後に正常に保存した PDF を保持します。
+- `-o` を省略すると、実行したフォルダに入力ファイルと同名の PDF（例：`main.pdf`）が出力されます。
+- LaTeX エラーが発生した場合は、特定できたファイル名・行番号・ジョブ ID が表示されます。変換や取得に失敗した場合でも、前回正常に保存された PDF は消えずに保持されます。
 
 ### ZIP・複数の出力を指定する
 
-`main.tex` があるフォルダで `latex-render render . --open` を実行します。ZIP を変換する場合は、フォルダの代わりに ZIP のパスを指定します。
+ログ・プレビュー・SVG を含む成果物一式を取得する場合や、ZIP ファイルを指定する場合は `render` サブコマンドを使います。
 
-```text
-latex-render render ./report.zip --entrypoint reports/report.tex --output .render/report --svg
+```sh
+n624-latex render [directory-or-zip] [--entrypoint main.tex] [--output .render] [--open] [--svg]
 ```
 
-`--entrypoint` は ZIP またはフォルダの内側から見た本文ファイルのパスです。上の例では PDF と SVG を要求し、`.render/report` に保存します。
+**実行例**：
 
+```sh
+# 現在のフォルダの main.tex を変換し、完了後に PDF を開く
+n624-latex render . --open
 
-```text
-latex-render render [directory-or-zip] [--entrypoint main.tex] [--output .render] [--open] [--svg]
+# ZIP 内の特定の本文を指定し、PDF と SVG の両方を出力する
+n624-latex render ./report.zip --entrypoint reports/report.tex --output .render/report --svg
 ```
 
-パスを省略すると現在のフォルダを使います。`--entrypoint` を省略した場合は `main.tex` を選び、最大500ファイルを含むSourceを準備して終了状態まで待ちます。`--svg` を付けるとPDFに加えて外側の数式と最上位TikZ図をSVGへ抽出します。任意の相対 `.tex` パスを指定でき、最終的な存在確認と安全性検証はサーバー側でも行われます。
+- パスを省略すると現在のフォルダ、`--entrypoint` を省略すると `main.tex` が選ばれ、最大 500 ファイルを含む Source を準備して完了まで待機します（任意の相対 `.tex` パスを指定でき、サーバー側でも存在と安全性を検証します）。
+- `--svg` を付けると、PDF に加えて外側の数式と最上位の TikZ 図を自己完結 SVG として抽出します。
 
-同じディレクトリまたはZIPから複数文書を作る場合は、Sourceを1回だけアップロードして使い回します。各Jobの出力先は重ならないよう指定してください。
+### 同じ入力から複数の文書を作る（Source の再利用）
 
-同じ出力先を再利用するときは、前回の`job.json`に記録された生成物のうち、今回存在しないPDF・プレビュー・SVGを整理します。無関係な利用者ファイルは削除しません。保存先のリンクは拒否します。POSIX環境では所有者とgroup／otherの書込み権限も検査しますが、WindowsにはPOSIXのmodeビット判定を適用しません。
+1 つのフォルダや ZIP から複数の本文を変換する場合は、先に `source upload` で 1 回だけアップロードして Source ID を使い回すと高速です。出力先（`--output`）はジョブごとに重ならないよう分けてください。
 
-`--output` にProject内の別フォルダを指定した場合、そのフォルダだけを次回の入力ZIPから除外します。似た名前の他のフォルダは除外しません。Projectルートそのものは出力先に指定できません。
-
-```text
-latex-render source upload ./project.zip --json
-latex-render render --source source_... --entrypoint reports/a.tex --output .render/a
-latex-render render --source source_... --entrypoint reports/b.tex --output .render/b
+```sh
+n624-latex source upload ./project.zip --json
+n624-latex render --source source_... --entrypoint reports/a.tex --output .render/a
+n624-latex render --source source_... --entrypoint reports/b.tex --output .render/b
 ```
 
-Source作成結果が `uploadRequired: false` の場合、同じowner・同じSHA-256のZIPは再送信されません。Source IDは後続Jobで使えますが、別ownerからは利用できません。
+> [!DETAILS] 保存先の整理・除外・重複アップロード省略の仕様を表示
+>
+> - **前回の生成物の整理**：同じ出力先を再利用すると、前回の `job.json` に記録された生成物のうち今回存在しない PDF・プレビュー・SVG だけを整理します。無関係な利用者ファイルは削除しません。
+> - **保存先の安全性検査**：シンボリックリンクを含む保存先は拒否します。POSIX 環境では所有者と group / other の書き込み権限も検査します（Windows には POSIX mode ビット判定を適用しません）。
+> - **出力先の自動除外**：`--output` にプロジェクト内のサブフォルダを指定した場合、そのフォルダだけを次回の入力 ZIP から除外します（似た名前の別フォルダは除外しません。また、プロジェクトルートそのものは出力先に指定できません）。
+> - **重複送信の省略**：同じ所有者・同じ SHA-256 の有効な ZIP がサーバーにある場合、`uploadRequired: false` となり再送信は行われません。返された Source ID は同じ所有者内でのみ後続ジョブに利用できます。
 
 ## 保存Projectと改訂
 
-```text
-latex-render projects list
-latex-render projects create <name>
-latex-render projects save <projectId> ./project --entrypoint main.tex --name <revision-name>
-latex-render projects get <projectId>
-latex-render projects jobs <projectId> <revisionId>
-latex-render projects render <projectId> <revisionId>
-latex-render projects rename <projectId> <name>
-latex-render projects delete <projectId> --yes
+サーバー上の保存プロジェクトと改訂（リビジョン）を CLI から管理・再変換できます。同じユーザーの Web・API・MCP・別の API キーと共有されます（一時的な `render` や `source upload` では保存プロジェクトの作成は不要です）。
+
+```sh
+n624-latex projects list
+n624-latex projects create <name>
+n624-latex projects save <projectId> ./project --entrypoint main.tex --name <revision-name>
+n624-latex projects get <projectId>
+n624-latex projects jobs <projectId> <revisionId>
+n624-latex projects render <projectId> <revisionId>
+n624-latex projects rename <projectId> <name>
+n624-latex projects delete <projectId> --yes
 ```
 
-`save` はローカルのディレクトリまたはZIPをSourceとして準備し、指定Projectへ不変の改訂を保存します。`--svg` は改訂の初回出力設定をPDF＋SVGにします。`render` は保存済みの指定改訂を使ってJobを作成し、`--svg` を付けた場合だけ出力設定を上書きします。`list`／`get`／`jobs` は `--cursor` で続きのページを取得できます。Projectは同じユーザーのWeb・API・MCP・別のAPIキーと共有されます。一時的な `render` や `source upload` は保存Projectを必須にしません。削除はProject記録の非表示であり、既存Jobを直ちに削除しません。
+- **`save`**：ローカルのフォルダまたは ZIP を Source として準備し、指定プロジェクトに不変の改訂として保存します。`--svg` を付けると、その改訂の初回出力設定が PDF＋SVG になります。
+- **`render`**：保存済みの改訂からジョブを作成します（`--svg` を付けた場合のみ出力設定を上書きします）。
+- **`list` / `get` / `jobs`**：`--cursor` で続きのページを取得できます。
+- **`delete`**：プロジェクト一覧の記録を非表示にする操作であり、既存のジョブを直ちに完全削除するものではありません。
 
 ## ジョブ操作
 
-```text
-latex-render jobs get <jobId>
-latex-render jobs cancel <jobId>
-latex-render jobs download <jobId> --output .render
-latex-render jobs download <jobId> --pdf-only --output .render
-latex-render jobs download <jobId> --preview-page 2 5 --output .render
-latex-render jobs retry-svg <jobId> --output .render
-latex-render jobs delete <jobId> --yes
+```sh
+n624-latex jobs get <jobId>
+n624-latex jobs cancel <jobId>
+n624-latex jobs download <jobId> --output .render
+n624-latex jobs download <jobId> --pdf-only --output .render
+n624-latex jobs download <jobId> --preview-page 2 5 --output .render
+n624-latex jobs retry-svg <jobId> --output .render
+n624-latex jobs delete <jobId> --yes
 ```
 
-ジョブ操作時はAPIキーで操作用トークンを更新します。`jobs download` は指定Jobが終了するまで待ってから成果物を切り替えます。待機中にキャンセルした場合や待機が失敗した場合、保存済みの一式は変更しません。削除は終了済みジョブだけが対象です。
-
-新しいRuntimeではPNGは初期1ページ＋要求したページだけを生成します。通常のダウンロードは生成済みPNGだけを取得し、`--preview-page 2 5` で追加ページを要求できます。PDFの再コンパイルや保持期限の延長は行わず、生成後の実際のサイズ・SHA-256を確認して保存します。
-
-新しいPDF＋SVGジョブはPDFを先に公開します。`--pdf-only` はPDFの確定まで待って取得し、SVG完了は待ちません。SVGだけが失敗した場合は、PDFを保存した上で部分成功を表示します。`retry-svg` は同じJob・Source・確定PDFを使ってSVGだけを再試行し、PDFを再コンパイルしません。初回を含め最大8回で、保持期限は延長しません。Runtimeが変わった場合はJob全体を新規作成してください。[PDF と SVG の状態と再試行条件](/docs/api/#pdfの先行公開とsvgの再試行)も参照できます。
-
-状態確認の一時的な通信障害は自動で再試行します。認証・権限エラーは自動再試行しません。画面側の待機が止まってもサーバーの処理が続く場合があるため、新規作成せず同じジョブを確認してください。[再試行条件](/docs/reference/#cliの待機と再試行)を参照してください。
+- **ダウンロードと待機**：ジョブ操作時は API キーで短時間トークンを更新します。`jobs download` は完了まで待ってから成果物を切り替えます（待機中に中断・失敗した場合、既存の保存済み一式は変更されません）。`delete` は終了済みジョブのみ対象です。
+- **PNG プレビューの追加取得**：PNG は初期状態で 1 ページ目のみ生成されます。通常のダウンロードは生成済み PNG のみを取得し、`--preview-page 2 5` のように指定すると追加ページを生成・検証（サイズと SHA-256 を確認）して保存します。PDF の再コンパイルや保持期限の延長は行いません。
+- **PDF の先行取得と SVG 再試行**：PDF＋SVG ジョブでは PDF が先に公開されるため、`--pdf-only` で SVG 完了を待たずに PDF を取得できます。SVG のみ失敗した場合は PDF を保存した上で部分成功となり、`retry-svg` で確定済み PDF を保ったまま SVG だけを再試行できます（初回を含め最大 8 回、保持期限の延長なし。Runtime が更新された場合は新規ジョブを作成してください。詳細：[PDFの先行公開とSVGの再試行](/docs/api/#pdfの先行公開とsvgの再試行)）。
+- **通信エラー時の自動再試行**：状態確認中の一時的な通信障害は自動で再試行しますが、認証・権限エラーは再試行しません。CLI 側の待機が止まってもサーバー側で処理が続いている場合があるため、作り直さず同じ `<jobId>` を確認してください（詳細：[CLIの待機と再試行](/docs/reference/#cliの待機と再試行)）。
 
 ## 成果物
 
-PDF の先行取得、PNG ページの指定、SVG の再試行は[成果物を取得する手順](/docs/outputs/)を参照してください。
+PDF の先行取得、PNG ページの指定、SVG の再試行手順は[PDF・PNG・SVG を取得する](/docs/outputs/)も参照してください。
 
-| パス                          | 内容                           |
-| ----------------------------- | ------------------------------ |
-| `.render/result.pdf`          | 成功時のPDF                    |
-| `.render/compile.log`         | コンパイルログ                 |
-| `.render/errors.json`         | 構造化されたエラー             |
-| `.render/job.json`            | 最終ジョブ状態                 |
-| `.render/previews/page-N.png` | 最大100ページのプレビュー      |
-| `.render/svg/manifest.json`   | SVGとソース位置・PDF座標の対応 |
-| `.render/svg/objects/*.svg`   | 数式・TikZごとの自己完結SVG    |
+| パス | 内容 |
+| --- | --- |
+| `.render/result.pdf` | 成功時の PDF |
+| `.render/compile.log` | LaTeX コンパイルログ |
+| `.render/errors.json` | 構造化されたエラー情報 |
+| `.render/job.json` | 最終ジョブ状態 |
+| `.render/previews/page-N.png` | ページプレビュー画像（最大 100 ページ） |
+| `.render/svg/manifest.json` | SVG とソース位置・PDF 座標の対応表 |
+| `.render/svg/objects/*.svg` | 数式・TikZ ごとの自己完結 SVG |
 
 ## JSON出力
 
-すべてのCLI操作で `--json` を指定すると、進捗表示を混ぜず、標準出力へ1個のJSONオブジェクトだけを書き出します。human表示とJSON表示は同じ `client-core` の処理結果を利用します。
+すべての CLI コマンドに `--json` を付けると、進捗表示を混ぜずに標準出力へ 1 個の JSON オブジェクトだけを出力します（通常表示と同じ `client-core` の処理結果を使用し、API キーや短時間トークンは一切含めません）。
 
-```text
-latex-render auth status --json
-latex-render render . --json
-latex-render source upload ./project.zip --json
-latex-render render --source source_... --entrypoint report.tex --output .render/report --json
-latex-render jobs get <jobId> --json
-latex-render jobs download <jobId> --output .render --json
-latex-render doctor --json
+```sh
+n624-latex auth status --json
+n624-latex render . --json
+n624-latex source upload ./project.zip --json
+n624-latex render --source source_... --entrypoint report.tex --output .render/report --json
+n624-latex jobs get <jobId> --json
+n624-latex jobs download <jobId> --output .render --json
+n624-latex doctor --json
 ```
 
-JSONの成功・失敗形式と終了コードは[機械処理用の仕様](/docs/reference/#cliのjson形式)を参照してください。APIキーや短時間トークンは出力されません。
+成功・失敗時のスキーマと終了コードは[CLIのJSON形式](/docs/reference/#cliのjson形式)を参照してください。

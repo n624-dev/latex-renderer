@@ -10,63 +10,62 @@ since: "v1.0.0"
 
 ## 利用の流れ
 
-HTTP API を使うには、レンダリング用 API キー（`lrk_`）と、本文や画像をまとめた ZIP が必要です。初めて試す場合は[ZIP の作り方](/docs/projects/#構成)に従って `main.tex` を含む ZIP を作り、[curl の例](#curlの例)で PDF を取得できます。
+レンダリング用 API キー（`lrk_...`）と、[対応構成の ZIP](/docs/projects/#構成) を用意します。すぐに試したい場合は末尾の[curl の例](#curlの例)を参照してください。
 
-1. ZIP のサイズと SHA-256 を計算し、Source（変換に使う入力ファイル一式）を予約します。
-2. アップロードが必要な場合は、応答に含まれる URL とアップロード用トークンで ZIP を送ります。
-3. 準備できた Source の ID と変換する本文のパスから、ジョブを作ります。
-4. ジョブ用トークンで状態を確認し、成果物を取得します。
+1. **Source の予約**：手元で ZIP のバイトサイズと SHA-256 を計算し、`POST /api/v1/source-tickets` で Source（入力一式）を予約します。
+2. **ZIP のアップロード**：応答の `uploadRequired` が `true` の場合のみ、返された URL と短時間の `uploadTicket` を使って ZIP を `PUT` 送信します（同一ユーザー内で同じ ZIP が有効な場合はアップロード不要で再利用されます）。
+3. **ジョブの作成**：準備できた `sourceId` と本文の相対パス（`entrypoint`）を指定して `POST /api/v1/render-tickets` でジョブを作ります（単発変換なら 1〜3 をまとめた[従来フロー](#ジョブ作成)も使えます）。
+4. **状態確認と成果物取得**：返された短時間の `jobTicket` で `GET /api/v1/jobs/{jobId}` をポーリングし、完了したら PDF 等を取得します。
 
-同じ ZIP から複数文書を作る場合は Source を再利用できます。1 回の変換には、[ジョブ作成と同時に ZIP を予約する方法](#ジョブ作成)も使えます。
-
-[予約とジョブ作成の OpenAPI](/openapi/gateway.openapi.yaml) · [アップロードと結果取得の OpenAPI](/openapi/renderer.openapi.yaml)
+OpenAPI 定義：[予約とジョブ作成（gateway.openapi.yaml）](/openapi/gateway.openapi.yaml) · [アップロードと結果取得（renderer.openapi.yaml）](/openapi/renderer.openapi.yaml)
 
 ## 認証とスコープ
 
-ジョブ作成、保存Project操作、操作用トークン更新はAPIキー、アップロードとジョブ操作は応答で返された短時間トークンをBearer認証で送ります。同じユーザーが所有する別のAPIキー／Service Accountは同じ保存Projectを扱えます。他のユーザーには公開されません。
+すべての認証は HTTP ヘッダー `Authorization: Bearer <TOKEN>` で送ります。
 
-APIキーで作成したJobの操作用トークンは、作成時のAPIキーに固定されます。同じService Accountの別キーでも、既存Jobのチケット更新・同じ `Idempotency-Key` による作成応答の再取得・SVG再試行は404で拒否されます。元のキーが失効しても別キーへ所有権は移りません。Source・保存Projectの同一ユーザー内共有は別の仕組みであり、共有Sourceから別キーで新しいJobを作成することはできます。その場合は新しい `Idempotency-Key` を使ってください。
-
-```http
-Authorization: Bearer <TOKEN>
-```
-
-- `render:create`：ジョブ作成、Project作成・改名・削除・改訂保存
-- `render:read:own`：自分のジョブ用短時間トークンの更新、Projectと履歴の閲覧
+- **API キー（`lrk_...`）を使う操作**：Source 予約、ジョブ作成、保存 Project 操作、ジョブ用トークンの再発行（`job-tickets`）、SVG 再試行
+  - `render:create`：ジョブ作成、Project の作成・改名・削除・改訂保存
+  - `render:read:own`：自分のジョブ用短時間トークンの更新、Project と履歴の閲覧
+- **短時間トークン（`uploadTicket` / `jobTicket`）を使う操作**：ZIP アップロード、ジョブの状態取得・キャンセル・成果物取得・削除
 
 > [!WARNING]
-> APIキー、uploadTicket、jobTicketをログ、URL、ソースZIPへ含めないでください。
+> API キー、`uploadTicket`、`jobTicket` をログ、URL クエリ、送信するソース ZIP 内に含めないでください。
+
+> [!NOTE]
+> **キー単位のジョブ所有固定**：API キーで作成した Job は、**作成したその API キー自身**に固定されます。同じユーザーや同じ Service Account の別キーであっても、既存 Job の `job-tickets` 更新・同一 `Idempotency-Key` での作成応答再取得・SVG 再試行を行うと `404` で拒否されます（元のキーが失効しても別キーへ引き継がれません）。一方、Source と保存 Project は同一ユーザー内で共有されるため、共有 Source から別キー＋新しい `Idempotency-Key` で**新規 Job** を作ることは可能です。
 
 ## APIエンドポイント
 
-| メソッド | パス                                                         | 用途                                                                 |
-| -------- | ------------------------------------------------------------ | -------------------------------------------------------------------- |
-| POST     | `/api/v1/render-tickets`                                     | 既存SourceからJobを作成、または従来フローのJobとuploadTicket等を作成 |
-| POST     | `/api/v1/source-tickets`                                     | Sourceを予約または同一ユーザー内で再利用                             |
-| GET      | `/api/v1/projects`                                           | 保存Projectの一覧                                                    |
-| POST     | `/api/v1/projects`                                           | 保存Projectの作成                                                    |
-| GET      | `/api/v1/projects/{projectId}`                               | Projectの詳細・改訂履歴                                              |
-| PATCH    | `/api/v1/projects/{projectId}`                               | Projectの改名                                                        |
-| DELETE   | `/api/v1/projects/{projectId}`                               | Projectの削除                                                        |
-| POST     | `/api/v1/projects/{projectId}/revisions`                     | ready Sourceを不変の改訂として保存                                   |
-| GET      | `/api/v1/projects/{projectId}/revisions/{revisionId}/jobs`   | 改訂のJob履歴を取得                                                  |
-| POST     | `/api/v1/projects/{projectId}/revisions/{revisionId}/render` | 指定した改訂を再レンダリング                                         |
-| PUT      | `/api/v1/sources/{sourceId}/content`                         | Source ZIPを検証してアップロード                                     |
-| POST     | `/api/v1/job-tickets/{jobId}`                                | 所有ジョブの操作用トークンを更新                                     |
-| PUT      | `/api/v1/jobs/{jobId}/source`                                | ZIPを直接Renderer APIへアップロード                                  |
-| GET      | `/api/v1/jobs/{jobId}`                                       | 状態とエラーを取得                                                   |
-| POST     | `/api/v1/jobs/{jobId}/cancel`                                | 待機中または処理中のジョブを中止                                     |
-| GET      | `/api/v1/jobs/{jobId}/artifacts/{path}`                      | PDF、ログ、構造化エラー、SVGを取得                                   |
-| GET      | `/api/v1/jobs/{jobId}/previews/{page}`                       | `page-N.png` のページプレビューを取得                                |
-| DELETE   | `/api/v1/jobs/{jobId}`                                       | 終了済みジョブを削除対象へ移行                                       |
+| メソッド | パス | 用途 |
+| --- | --- | --- |
+| `POST` | `/api/v1/source-tickets` | Source を予約、または同一ユーザー内で既存 ZIP を再利用 |
+| `PUT` | `/api/v1/sources/{sourceId}/content` | Source ZIP を検証してアップロード |
+| `POST` | `/api/v1/render-tickets` | 既存 Source から Job 作成、SVG 再試行、または 1 ジョブ従来フローの予約 |
+| `POST` | `/api/v1/job-tickets/{jobId}` | 所有ジョブの操作用 `jobTicket` を再発行 |
+| `PUT` | `/api/v1/jobs/{jobId}/source` | 1 ジョブ従来フローで ZIP を直接アップロード |
+| `GET` | `/api/v1/jobs/{jobId}` | ジョブの状態とエラー情報を取得 |
+| `POST` | `/api/v1/jobs/{jobId}/cancel` | 待機中または処理中のジョブを中止 |
+| `GET` | `/api/v1/jobs/{jobId}/artifacts/{path}` | PDF、ログ、構造化エラー、SVG を取得 |
+| `GET` | `/api/v1/jobs/{jobId}/previews/{page}` | `page-N.png` のページプレビューを取得 |
+| `DELETE` | `/api/v1/jobs/{jobId}` | 終了済みジョブを削除対象へ移行 |
+| `GET` / `POST` | `/api/v1/projects` | 保存 Project の一覧取得 / 新規作成 |
+| `GET` / `PATCH` / `DELETE` | `/api/v1/projects/{projectId}` | Project の詳細・改訂履歴 / 改名 / 削除（非表示化） |
+| `POST` | `/api/v1/projects/{projectId}/revisions` | ready Source を不変の改訂として保存 |
+| `GET` | `/api/v1/projects/{projectId}/revisions/{revisionId}/jobs` | 指定した改訂の Job 履歴を取得 |
+| `POST` | `/api/v1/projects/{projectId}/revisions/{revisionId}/render` | 指定した改訂を再レンダリング |
 
-Projectの一覧・詳細・Job履歴は `cursor` と `pageSize` でページングできます。改訂保存は `sourceId`、Source内の相対 `.tex` パスである `entrypoint`、`displayName`、`originalFilename`、`outputs` を送ります。同じProject・Source・entrypointなら改訂を再利用します。改訂のレンダリングは `Idempotency-Key`（16〜200文字）が必須で、本文の `outputs` を省略するとその改訂の初回設定を使います。返された固定の `projectId`／`revisionId` で履歴を参照してください。従来の一時的なSource→Jobフローも引き続き利用できます。
-
-保守モードが `reject-new-jobs` の間はProjectの閲覧・改名・削除・改訂保存とSourceの準備は可能ですが、新しいJobは作成できません。`read-only` と `lockdown` ではProjectの変更に加え、Sourceの予約・アップロード・改訂・参照作成も拒否されます。予約済みのアップロードも公開直前に再確認し、保守モードが変更された場合は完成扱いにしません。Project削除は記録の非表示であり、SourceやJobの即時完全削除ではありません。
+> [!DETAILS] 保存 Project API と保守モード時の挙動を表示
+>
+> - **保存 Project のパラメータ**：一覧・詳細・Job 履歴は `cursor` と `pageSize` でページングします。改訂保存（`POST .../revisions`）には `sourceId`、`entrypoint`（相対 `.tex` パス）、`displayName`、`originalFilename`、`outputs` を送り、同一 Project・Source・entrypoint なら既存改訂を再利用します。改訂のレンダリング（`POST .../render`）には `Idempotency-Key`（16〜200 文字）が必須で、`outputs` 省略時はその改訂の初回設定を使います。
+> - **保守モード時の制限**：
+>   - `reject-new-jobs`：Project の閲覧・改名・削除・改訂保存と Source 準備は可能ですが、新規 Job 作成は拒否されます。
+>   - `read-only` / `lockdown`：Project 変更に加え、Source の予約・アップロード・改訂・参照作成もすべて拒否されます（予約済みアップロードも公開直前に保守モードを再確認し、変更されていれば完成扱いにしません）。
 
 ## ジョブ作成
 
-複数のエントリポイントで同じZIPを使う場合は、先にSourceを1回だけアップロードします。
+### 方法 1：Source を準備してからジョブを作る（推奨・再利用対応）
+
+1. Source を予約します。
 
 ```http
 POST /api/v1/source-tickets
@@ -77,7 +76,7 @@ Idempotency-Key: <16〜200文字>
 {"size":12345,"sha256":"64文字の小文字16進値"}
 ```
 
-`uploadRequired` が `true` の場合だけ、次のURLへZIPを送ります。
+2. `uploadRequired: true` の場合のみ、ZIP をアップロードします（予約時のサイズ・SHA-256 と完全一致が必要。成功時は HTTP `204`）。
 
 ```http
 PUT /api/v1/sources/{sourceId}/content
@@ -86,13 +85,7 @@ Content-Type: application/zip
 Content-Length: <ZIPサイズ>
 ```
 
-Sourceがreadyになったら、ZIP内に存在する相対 `.tex` パスを指定します。省略時は `main.tex` です。
-Jobにも有効なProject改訂にも参照されないready Sourceは初期値1時間でcleanupされ、管理画面の `source_orphan_retention_minutes`（5分〜24時間）で保持時間を変更できます。
-同じ所有者のJob（`deleted`・`expired`以外）または削除されていないProject改訂が保持するready Sourceは、この孤立時の期限を過ぎても再利用・再描画できます。終了済みJobも保持に含まれます。最後の参照がなくなると、期限を過ぎたSourceは利用できず、cleanup対象になります。参照によってアップロード途中・削除中のSourceがreadyへ戻ることはありません。
-
-Source応答の `expiresAt` は、アップロード前なら予約の期限、readyなら参照がない場合の期限です。ready Sourceの保持期限を一律に表す値ではありません。同じZIPの再利用に対する `Idempotency-Key` は受付から24時間記録され、再送で延長されません。未完了アップロードの予約は従来どおり10分です。同じ有効キーを別の内容へ使うと409、元のSourceの期限切れは410、削除済みは404になります。アップロード等が進行中なら409で再開を拒否します。期限切れのキーは定期cleanupを待たず再利用できますが、元のSourceを復活させるものではありません。
-
-この保持判定はWeb・HTTP API・MCPで共通です。MCPの重複アップロード開始・完了も保持済みready Sourceを使い、ZIPを書き換えません。MCPのSource参照は最大15分で、参照自体はSourceの保持を延長しません。未完了アップロードの期限・検証・同時書込み制御は引き続き適用されます。
+3. ready になった `sourceId` からジョブを作成します（`entrypoint` 省略時は `main.tex`、`outputs` 省略時は `["pdf"]` のみ。`["svg"]` 単独指定は不可）。
 
 ```http
 POST /api/v1/render-tickets
@@ -103,9 +96,7 @@ Idempotency-Key: <16〜200文字>
 {"sourceId":"source_...","entrypoint":"chapters/report.tex","outputs":["pdf","svg"]}
 ```
 
-`outputs` を省略すると従来どおりPDFだけを生成します。`["pdf","svg"]` を指定すると、PDFに加えて外側の数式と最上位のTikZ図を自己完結SVGとして抽出します。SVGだけの指定はできません。
-
-既存SourceからJobを作成した場合のレスポンスは、Job操作に必要な値だけを返します。
+応答（ZIP アップロード済みのため `uploadTicket` / `uploadUrl` は含まれません）：
 
 ```json
 {
@@ -115,9 +106,7 @@ Idempotency-Key: <16〜200文字>
 }
 ```
 
-このフローではZIPを再アップロードしないため、`uploadTicket` と `uploadUrl` は返りません。
-
-従来の1ジョブ用フローも引き続き利用できます。
+### 方法 2：1 ジョブ用の従来フロー（予約とアップロードを直結）
 
 ```http
 POST /api/v1/render-tickets
@@ -128,7 +117,7 @@ Idempotency-Key: <16〜200文字>
 {"size":12345,"sha256":"64文字の小文字16進値","outputs":["pdf","svg"]}
 ```
 
-従来フローではJob予約と同時に、そのJobへZIPを送るための値を返します。
+応答に含まれる `uploadUrl`（`/api/v1/jobs/{jobId}/source`）へ、`uploadTicket` を使って ZIP を `PUT` 送信します（成功時は HTTP `204`）。
 
 ```json
 {
@@ -140,41 +129,48 @@ Idempotency-Key: <16〜200文字>
 }
 ```
 
-ZIP送信時は `Content-Length` と予約時のサイズ・SHA-256が一致する必要があります。正常時はHTTP 204です。
+> [!DETAILS] Source の保持期限と Idempotency-Key の詳細仕様を表示
+>
+> - **孤立 Source と参照保持**：どの Job（`deleted` / `expired` 以外。終了済み Job も含む）にも有効な Project 改訂にも参照されない ready Source は既定 1 時間（管理画面の `source_orphan_retention_minutes` で 5 分〜24 時間に変更可）で cleanup されます。有効な Job または改訂から参照されている間は、この孤立期限を過ぎても保持・再利用できます（最後の参照が消えた時点で期限切れなら利用不可・cleanup 対象になります。参照によってアップロード途中・削除中の Source が ready に戻ることはありません）。
+> - **`expiresAt` の意味**：アップロード前は「未完了予約の期限（10 分）」、ready 後は「参照がない場合の孤立期限」を表します（参照保持を含めた一律の期限ではありません）。この判定は Web・HTTP API・MCP で共通です（MCP の `sourceRef` は最大 15 分で、Source 自体の保持は延長しません）。
+> - **`Idempotency-Key` の扱い**：同一 ZIP 再利用時のキーは受付から 24 時間記録されます（再送で延長なし）。有効期間中に同じキーを別内容へ使うと `409`、元 Source が期限切れなら `410`、削除済みなら `404`、アップロード進行中なら `409` になります。24 時間を過ぎたキーは定期 cleanup を待たず再利用できますが、元 Source を復活させることはありません。
 
 ### PDFの先行公開とSVGの再試行
 
-Web・CLI から操作する場合は[PDF・PNG・SVG の取得手順](/docs/outputs/)を参照してください。
+Web・CLI での操作手順は[PDF・PNG・SVG を取得する](/docs/outputs/)を参照してください。
 
-新しいPDF＋SVGのJobは、検証済みPDFとプレビューをSVG完了前に取得できます。Jobの `status` は要求全体の成否のままです。任意項目 `stages.pdf` / `stages.svg` に個別の状態・完了時刻・エラーを返し、PDFには `sha256`、SVGには `attempt` も含めます。PDF成功・SVG失敗でもPDFは利用可能です。
+- **PDF の先行取得と `stages`**：PDF＋SVG ジョブでは、SVG 完了前でも検証済み PDF とプレビューを取得できます。Job 全体の `status` は全要求の成否を表し、`stages.pdf`（`sha256` 含む）と `stages.svg`（`attempt` 含む）に個別の状態・完了時刻・エラーが返ります（旧版の Job に推測で追加されることはありません）。
+- **SVG だけの再試行**：`POST /api/v1/render-tickets` に API キー認証（`jobTicket` 不可）で `{"retrySvgJobId":"job_..."}` と `Idempotency-Key` を送ります。元の `jobTicket` が返り、PDF の再コンパイルや保持期限の延長をせずに SVG 抽出だけを再実行します（元 Source・PDF・Runtime が一致する場合に初回含め最大 8 回。SVG 専用診断は `svg/compile.log`・`svg/errors.json`・`svg/dependencies.json`）。
 
-SVGだけの再試行は `POST /api/v1/render-tickets` に `{"retrySvgJobId":"job_..."}` と `Idempotency-Key` を送信します。元のJob用ticketを返し、PDFの再コンパイルや保持期限の延長はしません。初回を含め最大8回で、元Source・PDF・Runtimeが一致する必要があります。認証には通常のAPIキーを使い、Job ticketでは再試行できません。SVG専用診断は `svg/compile.log`、`svg/errors.json`、`svg/dependencies.json` です。旧Jobには個別状態を推測して追加しません。
-
-SVG出力は `svg/objects/math-NNNNNN.svg` または `tikz-NNNNNN.svg` として保存され、`svg/manifest.json` が実行順、ソースファイル・行、特定できた場合のPDFページ上の座標を対応付けます。新しいmanifestは `schemaVersion: 2` です。位置を特定できるオブジェクトは次の形式です。
-
-```json
-{
-  "id": 1,
-  "kind": "math",
-  "artifact": "svg/objects/math-000001.svg",
-  "sourceFile": "chapters/formula.tex",
-  "sourceLine": 18,
-  "placementStatus": "known",
-  "page": 2,
-  "x": 123.4,
-  "y": 85.2,
-  "width": 210.6,
-  "height": 32.8
-}
-```
-
-同じソース行の複数の数式など、SyncTeXから個々の位置を確定できない場合もSVG画像は生成しますが、推測座標は返しません。そのオブジェクトは `placementStatus: "unknown"` とし、`page`・`x`・`y` を省略します。例えば `{"id":2,"kind":"math","artifact":"svg/objects/math-000002.svg","sourceFile":"main.tex","sourceLine":20,"placementStatus":"unknown","width":10,"height":5}` です。このとき `width`・`height` は抽出したSVG自体の寸法であり、PDF上の配置を意味しません。
-
-`id` は文書の実行順に1から始まります。位置が既知なら `page` も1始まりです。座標単位はPDF point（1/72 inch）、原点はページ左上、x軸は右向き、y軸は下向きです。この規約はmanifest直下の `coordinateSystem` にも記録されます。クライアントは `schemaVersion` と `placementStatus` を確認してからPDF上へ重ねてください。既存の `schemaVersion: 1` 成果物の読取りは引き続き受け付けますが、新しい出力には常にバージョン2を使用します。
-
-SVG取得時のContent-Typeは `image/svg+xml`、Content-Dispositionは `attachment` です。個数不一致、外部参照、scriptやイベント属性などの能動コンテンツがあればJob全体が失敗します。
+> [!DETAILS] `svg/manifest.json`（schemaVersion: 2）の座標・スキーマ仕様を表示
+>
+> 抽出された SVG は `svg/objects/math-NNNNNN.svg` または `tikz-NNNNNN.svg`（`Content-Type: image/svg+xml`、`Content-Disposition: attachment`。個数不一致や外部参照・script・イベント属性等の能動コンテンツがあれば Job 全体を失敗させます）として保存され、`svg/manifest.json`（新規出力は常に `schemaVersion: 2`、旧 `1` の読み取りも互換維持）で対応付けます。
+>
+> - **座標系（`coordinateSystem`）**：`id` と `page` は 1 始まり。単位は PDF point（$1/72\text{ inch}$）、原点はページ左上、x 軸は右向き、y 軸は下向きです。
+> - **位置が特定できた場合（`placementStatus: "known"`）**：
+>   ```json
+>   {
+>     "id": 1,
+>     "kind": "math",
+>     "artifact": "svg/objects/math-000001.svg",
+>     "sourceFile": "chapters/formula.tex",
+>     "sourceLine": 18,
+>     "placementStatus": "known",
+>     "page": 2,
+>     "x": 123.4,
+>     "y": 85.2,
+>     "width": 210.6,
+>     "height": 32.8
+>   }
+>   ```
+> - **位置を確定できない場合（`placementStatus: "unknown"`）**：同一行に複数の数式があり SyncTeX から個別座標を確定できない場合などは推測座標を返さず、`page`・`x`・`y` を省略します（このときの `width`・`height` は抽出 SVG 自体の寸法であり、PDF 上の配置サイズではありません）。クライアントは必ず `schemaVersion` と `placementStatus` を確認してから PDF 上へ重ねてください。
+>   ```json
+>   {"id":2,"kind":"math","artifact":"svg/objects/math-000002.svg","sourceFile":"main.tex","sourceLine":20,"placementStatus":"unknown","width":10,"height":5}
+>   ```
 
 ## ZIPアップロード
+
+1 ジョブ従来フローで予約したジョブに ZIP を送るエンドポイントです（Source 分離フローでは `PUT /api/v1/sources/{sourceId}/content` を使用します）。
 
 ```http
 PUT /api/v1/jobs/{jobId}/source
@@ -185,21 +181,17 @@ Content-Length: <ZIPサイズ>
 
 ## ジョブ状態
 
-| 状態                          | 意味                       | 利用者の対応               |
-| ----------------------------- | -------------------------- | -------------------------- |
-| reserved / uploading          | 予約済み・アップロード中   | 期限内にZIPを送信          |
-| queued / validating / running | 待機・検証・変換中         | 間隔を空けて確認           |
-| succeeded                     | 成功                       | PDFと必要な成果物を取得    |
-| failed / timeout / rejected   | 失敗・時間超過・受付拒否   | エラー情報を確認           |
-| canceled                      | キャンセル済み             | 必要なら新しいジョブを作成 |
-| deleting / deleted / expired  | 削除中・削除済み・期限切れ | 必要なら再作成             |
+| 状態 | 意味 | クライアントの対応 |
+| --- | --- | --- |
+| `reserved` / `uploading` | 予約済み・アップロード中 | 期限内に ZIP を送信 |
+| `queued` / `validating` / `running` | 待機・検証・変換中 | 間隔を空けて状態を再確認 |
+| `succeeded` | 成功 | PDF と必要な成果物を取得 |
+| `failed` / `timeout` / `rejected` | 失敗・時間超過・受付拒否 | エラー情報を確認 |
+| `canceled` | キャンセル済み | 必要なら新しいジョブを作成 |
+| `deleting` / `deleted` / `expired` | 削除中・削除済み・期限切れ | 必要なら再作成 |
 
-通常は完了したジョブから成果物を取得します。PDF＋SVG では[先に確定した PDF](#pdfの先行公開とsvgの再試行)を取得できます。完了時刻（旧Jobで未記録なら更新時刻）から
-`ARTIFACT_RETENTION_HOURS`（既定24時間）を過ぎると、実ファイルがcleanup待ちで残っていても
-新規取得できません。Job応答・Admin/App・Renderer・Remote MCPで同じ期限を使います。
-期限内に始まった直接ダウンロード・ZIP・MCP読み取りは、処理中だけ削除防止の予約を更新します。
-終了/切断時に解放し、異常終了で残った予約は最後の更新から5分で失効します。
-予約更新に失敗した転送は中止し、期限切れの成果物を自動で復活させません。
+**成果物の保持期限とダウンロード中の保護**：
+完了時刻（旧 Job で未記録なら更新時刻）から `ARTIFACT_RETENTION_HOURS`（既定 24 時間）を過ぎると、cleanup 待ちで実ファイルが残っていても新規取得はできません（Web・API・Renderer・Remote MCP 共通）。期限内に開始されたダウンロード・ZIP 取得・MCP 読み取りは転送中のみ削除防止の予約を自動更新し、終了・切断時に解放します（異常終了時は最終更新から 5 分で失効。予約更新に失敗した転送は中止され、期限切れ成果物を復活させることはありません）。
 
 ## 共通エラー
 
@@ -207,17 +199,17 @@ Content-Length: <ZIPサイズ>
 { "error": { "code": "ERROR_CODE", "message": "説明", "requestId": "任意" } }
 ```
 
-| HTTP      | 意味                                 | 再試行         |
-| --------- | ------------------------------------ | -------------- |
-| 400       | 入力、ヘッダー、ZIPが不正            | 修正後         |
-| 401 / 403 | トークン不正または権限不足           | 資格情報確認後 |
-| 404 / 410 | ジョブ・成果物なし、元データ期限切れ | 必要なら再作成 |
-| 409       | 状態またはIdempotency-Key競合        | 状態確認後     |
-| 429 / 503 | 容量、キュー、メンテナンス           | 時間を置いて可 |
+| HTTP ステータス | 意味 | 再試行の目安 |
+| --- | --- | --- |
+| `400` | 入力値、ヘッダー、または ZIP 内容が不正 | 入力内容を修正してから実行 |
+| `401` / `403` | トークン不正・期限切れ、またはスコープ不足 | 資格情報・権限を確認後に実行 |
+| `404` / `410` | ジョブ・成果物なし（別キー所有を含む）、または元データ期限切れ | 必要なら新規ジョブを作成 |
+| `409` | ジョブ状態の不整合、または `Idempotency-Key` の競合 | 現在の状態を確認後に判断 |
+| `429` / `503` | レート制限・容量不足・キュー上限・メンテナンス中 | 時間を置いて再試行可 |
 
 ## curlの例
 
-Linux の Bash で、`source.zip` があるフォルダから実行します。必要なコマンドは `curl`、`jq`、`sha256sum`、`uuidgen` です。キーは非表示で入力します。セルフホストの場合は `base` を使用するサーバーの HTTPS URL に変更してください。
+Linux の Bash で、`source.zip` があるフォルダから予約・送信・2 秒間隔（最大 60 回）の待機・PDF 保存までを行う完全な例です（要 `curl`・`jq`・`sha256sum`・`uuidgen`。セルフホストの場合は `base` を変更してください）。
 
 > [!DETAILS] ZIP を送信して PDF を取得する例を表示
 >
@@ -266,13 +258,11 @@ Linux の Bash で、`source.zip` があるフォルダから実行します。�
 > )
 > ```
 
-この例は 2 秒間隔で最大 60 回、状態を確認します。まだ待機中なら、表示されたジョブ ID で後から同じジョブを確認してください。ジョブ用トークンが期限切れの場合は、作成時と同じ API キーで `POST /api/v1/job-tickets/{jobId}` を呼び、取得したトークンを使います。
-
-他の言語の例は、ジョブの予約と ZIP の送信までを示します。その後は同様にジョブ用トークンで状態と成果物を取得してください。
+60 回確認しても待機中の場合は、表示された `jobId` で後から同じジョブを確認してください（`jobTicket` が期限切れになった場合は、作成時と同じ API キーで `POST /api/v1/job-tickets/{jobId}` を呼んで再取得します）。以下の各言語サンプルはジョブ予約と ZIP 送信までを示します。
 
 ## PowerShell
 
-> [!DETAILS] PowerShellを表示
+> [!DETAILS] PowerShell の例を表示
 >
 > ```powershell
 > $zip = Resolve-Path .\source.zip
@@ -293,7 +283,7 @@ Linux の Bash で、`source.zip` があるフォルダから実行します。�
 
 ## JavaScript / TypeScript
 
-> [!DETAILS] JavaScript / TypeScriptを表示
+> [!DETAILS] JavaScript / TypeScript の例を表示
 >
 > ```typescript
 > import { readFile } from "node:fs/promises";
@@ -328,7 +318,7 @@ Linux の Bash で、`source.zip` があるフォルダから実行します。�
 
 ## Python
 
-> [!DETAILS] Pythonを表示
+> [!DETAILS] Python の例を表示
 >
 > ```python
 > import hashlib
