@@ -9,7 +9,7 @@ since: "v1.0.0"
 ---
 
 > [!NOTE]
-> 次版以降の共通コマンドは `n624-latex` です。既存スクリプト互換のため `latex-render` も同じサブコマンドで動作します（現行 Stable では `latex-render` を使用してください。ただし `.tex` の直接変換 `n624-latex main.tex` は次版以降の機能です）。
+> v1.7.0 以降は `n624-latex main.tex` で TeX ファイルを直接変換できます。従来の `latex-render` でも既存のサブコマンドを利用できます。
 
 ## 認証
 

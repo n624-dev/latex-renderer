@@ -9,7 +9,7 @@ since: "v1.0.0"
 ---
 
 > [!NOTE]
-> 次版以降の共通コマンドは `n624-latex` です。互換性のため `latex-render` も利用できます（現行 Stable を利用中の場合は `latex-render` を使ってください）。
+> v1.7.0 以降の共通コマンドは `n624-latex` です。従来の `latex-render` も使えます。既存クライアントに `n624-latex` を追加するには、[更新](#更新)の手順を使います。
 
 ## インストール
 
@@ -41,8 +41,6 @@ n624-latex main.tex
 n624-latex auth status
 n624-latex render . --open
 ```
-
-現行 Stable では `latex-render render . --open` を使います。
 
 ## 更新
 
