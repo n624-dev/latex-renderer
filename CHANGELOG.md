@@ -9,6 +9,10 @@
 - Set up and recover a self-hosted server from the CLI. Owners can create and verify backups from the management UI.
 - Update the public guides for installation, first render, migration, and server operation.
 
+## 1.7.0-rc.4 - 2026-11-23
+
+- Preserve links to the manual server download instructions when the documented release changes.
+
 ## 1.7.0-rc.3 - 2026-11-23
 
 - Build the client bundle from a clean checkout and normalize APT bootstrap permissions.

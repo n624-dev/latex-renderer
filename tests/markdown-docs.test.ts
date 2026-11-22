@@ -133,6 +133,17 @@ describe("Markdown public documentation", () => {
     expect(html).not.toContain("<script>");
   });
 
+  it("keeps an explicit heading fragment when the release changes", () => {
+    const html = renderMarkdown(
+      "> [!DETAILS] 手動ダウンロード\n>\n> ### v1.7.0をダウンロードして検証 {#v1-6-9をダウンロードして検証}",
+    );
+
+    expect(html).toContain(
+      '<h3 id="v1-6-9をダウンロードして検証">v1.7.0をダウンロードして検証',
+    );
+    expect(html).not.toContain("{#");
+  });
+
   it("folds Markdown details without allowing raw HTML and retains nested anchors", () => {
     const html = renderMarkdown(
       '> [!DETAILS] <img src=x onerror=alert(1)>\n>\n> ### 詳細の見出し\n>\n> ```js\n> console.log("example");\n> ```\n>\n> <script>alert(1)</script>',

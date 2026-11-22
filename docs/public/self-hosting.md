@@ -85,7 +85,7 @@ APT パッケージと `sudo n624-latex server setup` を使う標準手順で�
 >
 > 新規の手動導入には、正式版リリース [v1.7.0](https://github.com/n624-dev/latex-renderer/releases/tag/v1.7.0)（`latex-renderer-server-1.7.0.tar.gz`）を使用します。このリリースは公開後にタグや配布ファイルを差し替えできない設定です。開発中の `main` ブランチからの直接配置やローカルでの TeX 用 `docker build` は一般運用ではサポート対象外です。
 >
-> ### v1.7.0をダウンロードして検証
+> ### v1.7.0をダウンロードして検証 {#v1-6-9をダウンロードして検証}
 >
 > 通常のユーザーで、同じ Bash セッション内で次を実行します。GitHub Releases の SHA-256 と GitHub Actions のビルド来歴署名（Attestation）の両方を検証します（公開 API の来歴データを `gh` に渡すため、GitHub ログインやトークンは不要です）。途中で失敗した場合は `bundle_root` が設定されないため、原因を解決してからやり直してください。
 >
