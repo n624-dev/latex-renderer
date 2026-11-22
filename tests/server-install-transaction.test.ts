@@ -151,6 +151,17 @@ async function fixture(kind: "initial" | "ingress" = "initial") {
 }
 
 describe("durable prepared-host installation", () => {
+  it("includes the backup control socket in the initial installation transaction", async () => {
+    const f = await fixture();
+    const socket = "latex-renderer-backup-control.socket";
+    const initialUnits = f.host.units(model());
+    f.host.units = () => [...initialUnits, socket];
+    const review = await reviewInstallation(f.store, f.host, model());
+    await applyInstallation(f.store, f.host, review, {});
+    expect(f.active.has(socket)).toBe(true);
+    expect(await f.store.journal()).toBeNull();
+  });
+
   it("recovers and resubmits an empty owner DB in the same frontend after ENOSPC", async () => {
     const f = await fixture(),
       databasePath = join(f.root, "empty-owner.sqlite3"),
