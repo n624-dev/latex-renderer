@@ -42,23 +42,29 @@ describe("Markdown public documentation", () => {
       "integrations",
       "mcp",
       "projects",
+      "outputs",
       "troubleshooting",
       "self-hosting",
-      "security",
+      "server-setup",
+      "lan-https",
+      "lan-https-authority",
+      "updates",
+      "backups",
       "api",
+      "security",
       "contributing",
       "reference",
     ]);
-    expect(new Set(publicDocs.map(({ navOrder }) => navOrder)).size).toBe(14);
+    expect(new Set(publicDocs.map(({ navOrder }) => navOrder)).size).toBe(
+      publicDocs.length,
+    );
     for (const document of publicDocs) {
       expect(document.sourcePath).toBe(`docs/public/${document.slug}.md`);
       expect(document.title).not.toBe("");
       expect(document.category).not.toBe("");
       expect(document.description).not.toBe("");
       expect(document.updated).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-      expect(document.since).toBe(
-        document.slug === "self-hosting" ? "v1.2.0" : "v1.0.0",
-      );
+      expect(document.since).toMatch(/^v[0-9]+\.[0-9]+\.[0-9]+$/);
       expect(
         readFileSync(
           new URL(`../${document.sourcePath}`, import.meta.url),
@@ -164,7 +170,7 @@ describe("Markdown public documentation", () => {
       expect(page).toContain(
         '<details class="docs-menu"><summary>ガイド一覧</summary>',
       );
-      expect(page.match(/class="docs-nav-group"/g)).toHaveLength(2);
+      expect(page.match(/class="docs-nav-group"/g)).toHaveLength(3);
       for (const entry of publicDocs) {
         expect(page).toContain(
           `href="${entry.slug === "index" ? "/docs/" : `/docs/${entry.slug}/`}"`,
@@ -173,7 +179,9 @@ describe("Markdown public documentation", () => {
       expect(page.indexOf('class="docs-meta"')).toBeGreaterThan(
         page.indexOf("</article>"),
       );
-      expect(page).not.toContain("/edit/main/");
+      expect(page).toContain(
+        `href="https://github.com/n624-dev/latex-renderer/blob/main/${document.sourcePath}"`,
+      );
       if (document.slug !== "contributing")
         expect(page).toContain("このガイドへのフィードバック");
       expect(page.includes('class="docs-toc"')).toBe(

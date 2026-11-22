@@ -25,6 +25,8 @@ Hello, LaTeX!
 
 [日本語のサンプルと ZIP の作り方](/docs/projects/) · [Web アプリの詳しい使い方](/docs/web/)
 
+[PDF や PNG を保存する・SVG を再試行する](/docs/outputs/)
+
 ## 利用方法を選ぶ
 
 - **ブラウザで変換する** — ファイルを選び、PDF やプレビューを確認します。[Web アプリの使い方](/docs/web/)

@@ -70,6 +70,16 @@ describe("documentation navigation", () => {
     );
   });
 
+  it("serves every public guide from the compatibility Web", async () => {
+    const app = createWebApp(distribution);
+    for (const { slug, title } of publicDocs) {
+      const url = slug === "index" ? "/docs/" : `/docs/${slug}/`;
+      const response = await app.request(url);
+      expect(response.status, url).toBe(200);
+      expect(await response.text(), url).toContain(`<h1>${title}</h1>`);
+    }
+  });
+
   it("supports keyboard-native search and code-copy controls on mobile", () => {
     expect(siteScript).toContain("fetch('/assets/docs-search.json')");
     expect(siteScript).toContain("navigator.clipboard.writeText");

@@ -22,19 +22,11 @@ since: "v1.2.0"
 
 新規導入には [v1.6.9 の正式版配布ファイル](https://github.com/n624-dev/latex-renderer/releases/tag/v1.6.9)を使用します。公開後にタグや配布ファイルを差し替えできないリリースで、サーバー用の `latex-renderer-server-1.6.9.tar.gz`、クライアント、Claude Desktop 拡張、チェックサムが含まれます。開発中の `main` からの直接配置はサポート対象外です。
 
+検証済みのビルドと Runtime を配置した準備済みホストでは、[サーバー設定ウィザード](/docs/server-setup/)から初回設定や既存の認証・実行制限の変更を行えます。
+
 ## LAN 内の自動 HTTPS
 
-LAN 内で利用する場合、Akebi を使うとサーバーの LAN 内 IP アドレスから HTTPS URL を組み立てられます。例えば、IP が `192.168.1.50` の場合、設定した LAN ドメインに対して `192-168-1-50.<LAN ドメイン>` になります。
-
-準備済みのサーバーでセットアップを開き、LAN と対象のネットワークインターフェースを選択します。共通の証明書サービスまたは自分で管理するサービスを指定し、表示された HTTPS URL で他の端末から接続を確認します。公開 CA モードでは導入先が秘密鍵を保管します。Keyless、既存の証明書、プライベート CA を使う構成も選べます。ネットワークが変わっても同じ IP とドメインを使う場合は、ブラウザの保存領域が共通になります。
-
-専用の管理下にある standalone HTTPS 構成から切り替える場合は、サーバーの管理者ターミナルで CUI セットアップを開きます。
-
-```bash
-sudo /usr/local/bin/node /opt/latex-renderer/current/deploy/scripts/server-setup.mjs --cui --ingress
-```
-
-LAN の IP、許可するサブネット、発行支援サービス、証明書の方式を確認してから適用します。表示された URL は、その LAN へ到達できる端末で開けます。証明書を取得した後も、Web アプリへのログインにはサーバーで設定した認証が必要です。
+LAN 内で利用する場合は、Akebi でプライベート IP から決まる HTTPS URL を設定できます。[LAN 内の接続・証明書設定](/docs/lan-https/)または[独自の証明書サービスの構築](/docs/lan-https-authority/)へ進んでください。
 
 ## 対応する構成
 
@@ -400,25 +392,11 @@ sudo sh /opt/latex-renderer/current/deploy/scripts/smoke-test-production.sh
 
 ## 更新とロールバック
 
-TeXとアプリケーションは別々に更新します。
-
-- TeX：`/admin/tex-environment/`でImage、言語、自動更新を管理
-- アプリ：`/admin/updates/`で更新確認、通知／自動ポリシー、適用、ロールバックを管理
-
-アプリ更新は、公開後に差し替えできない固定リリース、固定tag／commit、サーバー用bundleのdigest、埋め込みmetadata、Renderer fingerprint、Node／pnpm要件を検証します。`v1.1.0`以降がこの更新経路に対応します。`v1.0.0`はサーバー用bundleと差し替え禁止設定がないため、Update Managerでは適用できません。
+アプリケーションと TeX 環境は別々に更新します。アプリケーションは[サーバーの更新手順](/docs/updates/)、イメージや言語は[TeX 環境の設定](#tex環境の初期設定)を参照してください。
 
 ### アプリケーションを更新する
 
-1. [バックアップ](#バックアップ)を取り、復元可能であることを確認します。作業に入る前に、新規ジョブを止め、進行中の変換が終わるのを待ちます。
-2. 所有者としてサーバーの **管理 → 更新**（`/admin/updates/`）を開き、更新を確認します。通常の更新確認と自動更新の対象は正式版です。
-3. 対象バージョンを確認して適用し、同じ更新操作の結果を待ちます。
-4. 更新後は利用者としてログインし、文書を実際に変換して結果を取得します。
-
-更新中の権限と一時領域は[Updater の仕様](/docs/reference/#updaterの実行領域)を参照してください。データベースの変更を伴う更新から戻す場合は、そのバージョンに対応する復旧ポイントが必要です。稼働中のファイルやデータベースを手動で旧版へ切り替えないでください。
-
-適用中はAdmin API自身も新しいReleaseで再起動するため、画面が一時的に「Admin APIへ再接続中」となったり、プロキシが短時間502を返したりすることがあります。画面は同じ更新操作を再確認します。接続が戻るまで、更新をもう一度開始しないでください。
-
-操作が失敗した場合は、表示された操作 ID と失敗段階を控えます。復旧が進行中なら、その完了を待ってから再試行やロールバックを判断してください。
+[正式版の確認から適用まで](/docs/updates/#正式版を適用する)を参照してください。更新前にバックアップを検証し、実行中の変換が落ち着く時間を選びます。管理画面から適用するときは通常の保守モードを使います。
 
 ### v1.2.xのroot Updaterから権限分離Updaterへ移行する場合
 
@@ -434,38 +412,7 @@ TeXとアプリケーションは別々に更新します。
 
 ## バックアップ
 
-既定の暗号化backupは、WALと整合するSQLite snapshotに加え、削除されていないProjectの全revisionが参照するSource ZIPを同じarchiveへ保存します。各SourceはDB snapshotに記録されたサイズとSHA-256を照合し、欠落・symlink・hardlink・内容不一致があればbackup全体を失敗させます。DBだけ成功したように見せることはありません。
-
-既存のバックアップ設定で暗号化済みバックアップを即時作成するときは、サーバー上で次を実行します。暗号化先の設定と秘密鍵の保管先を決めてから実行してください。
-
-```bash
-sudo systemctl start latex-renderer-backup.service
-sudo journalctl -u latex-renderer-backup.service -n 20 --no-pager
-```
-
-最低限、次をReleaseとは別に保全します。
-
-- SQLiteデータベース、active Project revisionのSource、両者の対応manifestを含む既定の暗号化backup
-- Project外のSource、Job成果物も復元する場合は`/var/lib/latex-renderer/storage`全体の別backup
-- `/var/lib/latex-renderer/image-manager`のdesired／active state
-- `/etc/latex-renderer`
-- Cloudflare profileの場合だけ`/etc/cloudflared`とTunnel、Access、Worker構成を復元できる記録
-- standalone profileの場合はTLS reverse proxyと証明書更新設定を復元できる記録
-
-既定のbackupはageで暗号化します。`deploy/scripts/restore-test.mjs`はSQLiteの整合性と外部キー、Project revision→Source対応、Sourceの通常ファイル性、サイズ、SHA-256も検査します。復元テストを行っていないbackupを、復旧可能なbackupとして扱わないでください。秘密鍵と暗号化バックアップは同じ障害で失われない場所へ保管します。復元テストは復号鍵を安全に利用できる環境で実行してください。
-
-```bash
-BACKUP_AGE_IDENTITY_FILE=/path/to/age-identity \
-  /usr/local/bin/node /opt/latex-renderer/current/deploy/scripts/restore-test.mjs /path/to/backup.tar.age
-```
-
-このコマンドはバックアップを一時領域で検証します。稼働中のデータベースを書き換えることはありません。
-
-現行のバックアップと復旧検証は、現行Sourceとmigration 3由来の旧Job入力保存先の両方に対応します。Linuxの`/proc/self/fd`、GNU tar、ageが必要です。tar一覧は作成・検証の両方で各16MiBまでに制限し、不正な名前・リンク・重複entryを展開前に拒否します。実際の復旧時はサービスを停止し、archive内の`renderer.sqlite3`とSourceを同じ復旧点として戻します。`project-sources/<source_id>/source.zip`の配置先は、復旧DBの検証済み`storage_key`です。旧形式では対応する`jobs/job_<suffix>/input/source.zip`へ戻し、勝手に現行保存先へ変更しません。
-
-旧backupが既に旧Sourceを拒否しているhostでは、Updaterが切替前backupで止まる可能性があります。backup検証を省略したりsealed Releaseを書き換えたりせず、完全な復旧点と適用手順を個別に確認してください。定期backupは、独立Updaterの全DB／storage復旧ポイントとは別の機能です。
-
-監査ログの出力位置を記録するチェックポイントと復元したデータベースが一致しない場合、自動エクスポートと削除は停止します。データベースとエクスポート済みログを保全し、[監査ログの復旧手順](/docs/reference/#監査ログの復旧)に従ってください。
+[バックアップの作成・検証・復旧](/docs/backups/)では、定期バックアップと更新直前の復旧点にそれぞれ含まれるデータ、暗号化バックアップの作成と復元テスト、障害時の対応を説明します。監査ログの出力位置に不一致がある場合は[監査ログの復旧](/docs/reference/#監査ログの復旧)を参照してください。
 
 ## 問題が起きた場合
 
@@ -482,3 +429,5 @@ BACKUP_AGE_IDENTITY_FILE=/path/to/age-identity \
 | 更新直後に問題が起きた              | 新規jobを止め、現在と以前のRelease／Runtimeを確認してからrollback判断 |
 
 診断時は、操作 ID、失敗段階、公開しても安全なエラーコードを記録してください。[問題解決ガイド](/docs/troubleshooting/)と[セキュリティガイド](/docs/security/)も参照できます。
+
+[デプロイ構成の詳細と設定ファイル一覧](https://github.com/n624-dev/latex-renderer/blob/main/DEPLOYMENT.md)

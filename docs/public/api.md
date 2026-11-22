@@ -144,6 +144,8 @@ ZIP送信時は `Content-Length` と予約時のサイズ・SHA-256が一致す�
 
 ### PDFの先行公開とSVGの再試行
 
+Web・CLI から操作する場合は[PDF・PNG・SVG の取得手順](/docs/outputs/)を参照してください。
+
 新しいPDF＋SVGのJobは、検証済みPDFとプレビューをSVG完了前に取得できます。Jobの `status` は要求全体の成否のままです。任意項目 `stages.pdf` / `stages.svg` に個別の状態・完了時刻・エラーを返し、PDFには `sha256`、SVGには `attempt` も含めます。PDF成功・SVG失敗でもPDFは利用可能です。
 
 SVGだけの再試行は `POST /api/v1/render-tickets` に `{"retrySvgJobId":"job_..."}` と `Idempotency-Key` を送信します。元のJob用ticketを返し、PDFの再コンパイルや保持期限の延長はしません。初回を含め最大8回で、元Source・PDF・Runtimeが一致する必要があります。認証には通常のAPIキーを使い、Job ticketでは再試行できません。SVG専用診断は `svg/compile.log`、`svg/errors.json`、`svg/dependencies.json` です。旧Jobには個別状態を推測して追加しません。

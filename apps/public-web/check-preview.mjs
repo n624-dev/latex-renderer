@@ -36,6 +36,16 @@ try {
   await assertAsset("/downloads/", 200, "text/html", "Windows の手順");
   await assertAsset("/docs/cli/", 200, "text/html", "レンダリング");
   await assertAsset("/docs/self-hosting/", 200, "text/html", "初回導入の順序");
+  for (const [slug, heading] of [
+    ["outputs", "ページ画像を取得する"],
+    ["server-setup", "ブラウザで開く"],
+    ["lan-https", "LAN 向けに設定する"],
+    ["lan-https-authority", "DNS を委任する"],
+    ["updates", "正式版を適用する"],
+    ["backups", "データを復旧する場合"],
+  ]) {
+    await assertAsset(`/docs/${slug}/`, 200, "text/html", heading);
+  }
   await assertAsset("/assets/login.js", 200, "text/javascript", "/auth/config");
   await assertAsset("/assets/styles.css", 200, "text/css");
   await assertAsset(

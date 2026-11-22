@@ -3,7 +3,7 @@ slug: security
 category: 問題解決・安全性
 title: アカウント・文書の安全な扱い
 description: 資格情報、アップロード、レンダラー、管理領域の安全な扱いです。
-navOrder: 65
+navOrder: 71
 updated: "2026-11-22"
 since: "v1.0.0"
 ---

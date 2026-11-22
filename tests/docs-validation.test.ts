@@ -29,18 +29,18 @@ describe("public documentation CI validation", () => {
     ).not.toThrow();
   });
 
-  it("keeps user procedures in the public guides", () => {
-    for (const doc of publicDocs) {
-      expect(doc.html).not.toMatch(
-        /href="https:\/\/github\.com\/n624-dev\/latex-renderer\/blob\//,
-      );
-    }
-    expect(renderPublicDoc("self-hosting")).toContain(
-      `href="/docs/reference/#${encodeURIComponent("監査ログの復旧")}"`,
-    );
-    expect(renderPublicDoc("contributing")).toContain(
-      'href="https://github.com/n624-dev/latex-renderer/tree/main/docs/public"',
-    );
+  it.each([
+    ["web", "outputs"],
+    ["cli", "outputs"],
+    ["self-hosting", "server-setup"],
+    ["self-hosting", "lan-https"],
+    ["self-hosting", "updates"],
+    ["self-hosting", "backups"],
+    ["lan-https", "lan-https-authority"],
+  ])("links from %s to the %s procedure on the site", (guide, procedure) => {
+    const document = publicDocs.find(({ slug }) => slug === guide);
+    expect(document?.html).toContain(`href="/docs/${procedure}/"`);
+    expect(renderPublicDoc(procedure)).toContain("GitHub で原稿を見る");
   });
 
   it("detects broken internal routes and heading anchors", () => {

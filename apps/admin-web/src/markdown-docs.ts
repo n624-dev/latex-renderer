@@ -35,12 +35,18 @@ const sourceFiles = [
   "index.md",
   "client.md",
   "self-hosting.md",
+  "server-setup.md",
+  "lan-https.md",
+  "lan-https-authority.md",
+  "updates.md",
+  "backups.md",
   "web.md",
   "windows.md",
   "cli.md",
   "integrations.md",
   "mcp.md",
   "projects.md",
+  "outputs.md",
   "troubleshooting.md",
   "security.md",
   "api.md",
@@ -60,12 +66,24 @@ const navigationGroups = [
       "integrations",
       "mcp",
       "projects",
+      "outputs",
       "troubleshooting",
     ],
   },
   {
-    title: "運用・開発",
-    slugs: ["self-hosting", "security", "api", "contributing", "reference"],
+    title: "サーバーを運用する",
+    slugs: [
+      "self-hosting",
+      "server-setup",
+      "lan-https",
+      "lan-https-authority",
+      "updates",
+      "backups",
+    ],
+  },
+  {
+    title: "連携・開発",
+    slugs: ["api", "security", "contributing", "reference"],
   },
 ];
 
@@ -114,7 +132,7 @@ export function renderPublicDoc(slug: string): string {
         ${toc}
         <article class="docs-content">${document.html}</article>
         ${pager}
-        <footer class="docs-meta"><p>更新日 <time datetime="${escapeHtml(document.updated)}">${escapeHtml(document.updated)}</time></p>${footer}</footer>
+        <footer class="docs-meta"><p>更新日 <time datetime="${escapeHtml(document.updated)}">${escapeHtml(document.updated)}</time></p><p><a href="https://github.com/n624-dev/latex-renderer/blob/main/${document.sourcePath}">GitHub で原稿を見る</a></p>${footer}</footer>
       </div>
     </div>`,
   );

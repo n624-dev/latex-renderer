@@ -142,6 +142,8 @@ latex-render jobs delete <jobId> --yes
 
 ## 成果物
 
+PDF の先行取得、PNG ページの指定、SVG の再試行は[成果物を取得する手順](/docs/outputs/)を参照してください。
+
 | パス                          | 内容                           |
 | ----------------------------- | ------------------------------ |
 | `.render/result.pdf`          | 成功時のPDF                    |
