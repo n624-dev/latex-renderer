@@ -14,7 +14,7 @@ import { join, win32 } from "node:path";
 export function windowsLauncherContents(
   installDirectory: string,
   binDirectory: string,
-  name: "latex-render" | "latex-renderer-mcp",
+  name: "latex-render" | "latex-renderer-mcp" | "n624-latex",
 ): string {
   return launcherContents(installDirectory, binDirectory, name, false);
 }
@@ -22,18 +22,22 @@ export function windowsLauncherContents(
 function launcherContents(
   installDirectory: string,
   binDirectory: string,
-  name: "latex-render" | "latex-renderer-mcp",
+  name: "latex-render" | "latex-renderer-mcp" | "n624-latex",
   legacy: boolean,
 ): string {
   const encoded = Buffer.from(
     JSON.stringify({
       install: installDirectory,
       bin: binDirectory,
-      entry: win32.join(installDirectory, "app", `${name}.cjs`),
+      entry: win32.join(
+        installDirectory,
+        "app",
+        `${name === "n624-latex" ? "latex-render" : name}.cjs`,
+      ),
       cli: win32.join(binDirectory, "latex-render.cmd"),
     }),
   ).toString("base64");
-  const script = `const c=JSON.parse(Buffer.from('${encoded}','base64').toString('utf8'));process.env.LATEX_RENDER_INSTALL_DIRECTORY=c.install;process.env.LATEX_RENDER_BIN_DIRECTORY=c.bin;process.env.LATEX_RENDER_CLI_PATH=c.cli;${legacy ? "process.env.LATEX_RENDER_BASE_URL||='https://latex-render.n624.jp';" : ""}process.argv.splice(1,0,c.entry);require(c.entry)`;
+  const script = `const c=JSON.parse(Buffer.from('${encoded}','base64').toString('utf8'));process.env.LATEX_RENDER_INSTALL_DIRECTORY=c.install;process.env.LATEX_RENDER_BIN_DIRECTORY=c.bin;process.env.LATEX_RENDER_CLI_PATH=c.cli;${name === "n624-latex" ? "process.env.N624_LATEX_COMMAND='1';" : ""}${legacy ? "process.env.LATEX_RENDER_BASE_URL||='https://latex-render.n624.jp';" : ""}process.argv.splice(1,0,c.entry);require(c.entry)`;
   return `@echo off\r\n@rem latex-renderer managed external launcher v${legacy ? "1" : "2"}\r\nsetlocal DisableDelayedExpansion\r\nnode -e "${script}" -- %*\r\n`;
 }
 
@@ -55,7 +59,21 @@ export async function manageWindowsLaunchers(
   const result = { repaired: [] as string[], preserved: [] as string[] };
   if (!hasExternalWindowsBin(installDirectory, binDirectory)) return result;
   if (!remove) await mkdir(binDirectory, { recursive: true });
-  for (const name of ["latex-render", "latex-renderer-mcp"] as const) {
+  for (const name of [
+    "latex-render",
+    "latex-renderer-mcp",
+    "n624-latex",
+  ] as const) {
+    if (name === "n624-latex" && !remove) {
+      const installed = await lstat(
+        join(installDirectory, "bin", "n624-latex.cmd"),
+      ).catch((error: unknown) => {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT")
+          return undefined;
+        throw error;
+      });
+      if (!installed?.isFile()) continue;
+    }
     const destination = join(binDirectory, `${name}.cmd`),
       expected = windowsLauncherContents(installDirectory, binDirectory, name);
     const info = await lstat(destination).catch((error: unknown) => {

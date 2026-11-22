@@ -1,0 +1,14 @@
+[Unit]
+Description=LaTeX Renderer local backup control
+
+[Service]
+ExecStart=/usr/local/bin/node /opt/latex-renderer/current/deploy/scripts/backup-control.mjs request
+StandardInput=socket
+StandardOutput=socket
+StandardError=journal
+RuntimeMaxSec=15s
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+RestrictAddressFamilies=AF_UNIX

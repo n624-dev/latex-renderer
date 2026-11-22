@@ -84,7 +84,9 @@ const maintenanceUnits = [
   "update-recovery-gc",
   "worker-reconcile",
   "engine-idle",
-].map((name) => `latex-renderer-${name}.timer`);
+]
+  .map((name) => `latex-renderer-${name}.timer`)
+  .concat("latex-renderer-backup-control.socket");
 const managers = [
   "latex-renderer-image-manager.service",
   "latex-renderer-update-manager.service",
@@ -1013,7 +1015,11 @@ export async function createInitialServerSetupHost(kind = "initial") {
     runtime: {
       databasePath,
       storageRoot: "/var/lib/latex-renderer/storage",
-      rendererImage: `sha256:${"0".repeat(64)}`,
+      rendererImage: /^sha256:[a-f0-9]{64}$/.test(
+        process.env.N624_INITIAL_RUNTIME ?? "",
+      )
+        ? process.env.N624_INITIAL_RUNTIME
+        : `sha256:${"0".repeat(64)}`,
       limits: Object.fromEntries(
         Object.entries(SERVER_RUNTIME_LIMITS).map(([name, [, value]]) => [
           name,

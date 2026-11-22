@@ -2,6 +2,9 @@
 set -eu
 
 launcher=$0
+case "${launcher##*/}" in
+  n624-latex) export N624_LATEX_COMMAND=1 ;;
+esac
 launcher_dir=$(CDPATH= cd "$(dirname "$launcher")" && pwd)
 script=$launcher
 while [ -L "$script" ]; do

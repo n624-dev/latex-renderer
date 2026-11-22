@@ -149,6 +149,7 @@ interface SkillInstallerModule {
 }
 
 interface CoreOptions {
+  systemPackage?: { readonly version: string; readonly directory: string };
   readonly platform?: NodeJS.Platform;
   readonly home?: string;
   readonly env?: NodeJS.ProcessEnv;
@@ -519,6 +520,43 @@ export async function inspectSetup(
   options: CoreOptions = {},
 ): Promise<SetupStatus> {
   const paths = resolveSetupPaths(options);
+  if (options.systemPackage !== undefined) {
+    const { directory, version } = options.systemPackage;
+    const checks: DiagnosticCheck[] = [];
+    for (const [id, name] of [
+      ["client.cli", "latex-render.cjs"],
+      ["client.mcp", "latex-renderer-mcp.cjs"],
+      ["client.admin", "latex-render-admin.mjs"],
+    ] as const) {
+      const path = join(directory, "app", name);
+      const present = await isFile(path);
+      checks.push({
+        id,
+        path,
+        status: present ? "pass" : "fail",
+        message: present
+          ? "APT-managed payload is present"
+          : "APT-managed payload is missing",
+      });
+    }
+    checks.push(await inspectCredential(paths, options.env ?? process.env));
+    return {
+      status: checks.some((check) => check.status === "fail")
+        ? "degraded"
+        : "healthy",
+      version,
+      platform: paths.platform,
+      paths: {
+        ...paths,
+        installDirectory: directory,
+        binDirectory: "/usr/bin",
+        cliLauncher: "/usr/bin/n624-latex",
+        mcpLauncher: "/usr/bin/latex-renderer-mcp",
+        skillRoot: join(directory, "skill"),
+      },
+      checks,
+    };
+  }
   const stateResult = await readManagedState(paths);
   if (stateResult.kind === "absent") {
     const unmanagedDirectory = await exists(paths.installDirectory);
@@ -1122,9 +1160,10 @@ async function installUnixLaunchers(
   await mkdir(paths.binDirectory, { recursive: true, mode: 0o755 });
   const repaired: string[] = [];
   const preserved: string[] = [];
-  for (const name of ["latex-render", "latex-renderer-mcp"]) {
+  for (const name of ["latex-render", "latex-renderer-mcp", "n624-latex"]) {
     const destination = join(paths.binDirectory, name);
     const target = join(paths.installDirectory, "bin", name);
+    if (name === "n624-latex" && !(await exists(target))) continue;
     await chmod(target, 0o755);
     const info = await lstat(destination).catch(() => undefined);
     if (info === undefined) {
@@ -1152,7 +1191,7 @@ async function removeUnixLaunchers(
   warning: NodeJS.WritableStream,
 ): Promise<string[]> {
   const preserved: string[] = [];
-  for (const name of ["latex-render", "latex-renderer-mcp"]) {
+  for (const name of ["latex-render", "latex-renderer-mcp", "n624-latex"]) {
     const destination = join(paths.binDirectory, name);
     const info = await lstat(destination).catch(() => undefined);
     if (!info) continue;

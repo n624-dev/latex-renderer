@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 1.7.0-rc.1 - 2026-11-23
+
+- Add the shared `n624-latex` command and direct TeX-to-PDF rendering while keeping existing client launchers compatible.
+- Add signed Debian and Ubuntu APT packaging with a private Node.js runtime.
+- Add server setup and recovery entry points and owner-controlled backup creation and verification.
+- Organize the public guides around the new command and retain the verified Stable installation procedures.
+
 ## 1.6.9 - 2026-11-21
 
 - Promote v1.6.9-rc.2 with the same executable source and dependency versions.

@@ -13,6 +13,7 @@ export interface DocsValidationInput {
   resolveCliHelp: (commandPath: string) => string | undefined;
 }
 
+type CliBinary = "latex-render" | "n624-latex";
 const methods = "get|post|put|patch|delete|head|options";
 const globalCliOptions = new Set(["--json"]);
 const setupCliOptions = new Set([
@@ -109,15 +110,25 @@ function validateCliExamples(
 ): void {
   const cache = new Map<string, string | undefined>();
   for (const doc of docs) {
-    for (const invocation of cliInvocations(doc.markdown)) {
-      const commandPath = documentedCommandPath(invocation);
+    for (const { binary, invocation } of cliInvocations(doc.markdown)) {
+      const commandPath =
+        binary === "n624-latex" &&
+        /^[^\s-][^\s]*\.tex(?:\s|$)/i.test(invocation)
+          ? "compile"
+          : documentedCommandPath(invocation);
+      const helpBinary =
+        commandPath === "compile" ? "n624-latex" : "latex-render";
+      const usage = `Usage: ${helpBinary} ${commandPath}`.trimEnd();
       let help = cache.get(commandPath);
       if (!cache.has(commandPath)) {
         help = resolveCliHelp(commandPath);
         cache.set(commandPath, help);
       }
-      const usage = `Usage: latex-render ${commandPath}`;
-      if (help === undefined || !help.includes(usage)) {
+      if (
+        help === undefined ||
+        !help.includes(usage) ||
+        (commandPath === "compile" && binary !== "n624-latex")
+      ) {
         errors.push(
           `${doc.sourcePath}: unknown CLI command in \`${invocation}\``,
         );
@@ -137,10 +148,21 @@ function validateCliExamples(
   }
 }
 
-function cliInvocations(markdown: string): string[] {
+function cliInvocations(
+  markdown: string,
+): Array<{ binary: CliBinary; invocation: string }> {
   return codeBlockLines(markdown).flatMap((line) => {
-    const match = line.match(/\blatex-render\s+(.+?)\s*$/);
-    return match?.[1] === undefined ? [] : [match[1].trim()];
+    if (line.trimStart().startsWith("#")) return [];
+    const match = line.match(/\b(latex-render|n624-latex)\s+(.+?)\s*$/);
+    const binary = match?.[1];
+    const invocation = match?.[2];
+    if (
+      (binary !== "n624-latex" && binary !== "latex-render") ||
+      invocation === undefined ||
+      (binary === "n624-latex" && /^(?:admin|server)\b/.test(invocation))
+    )
+      return [];
+    return [{ binary, invocation }];
   });
 }
 
@@ -187,9 +209,10 @@ function validateMcpExamples(
 }
 
 function codeBlockLines(markdown: string): string[] {
-  return [...markdown.matchAll(/^```[^\n]*\n([\s\S]*?)^```/gm)].flatMap(
-    (match) => match[1]?.split("\n") ?? [],
-  );
+  const source = markdown.replace(/^> ?/gm, "");
+  return [
+    ...source.matchAll(/^ {0,3}```[^\n]*\n([\s\S]*?)^ {0,3}```/gm),
+  ].flatMap((match) => match[1]?.split("\n") ?? []);
 }
 
 function validateOpenApiCoverage(
@@ -201,9 +224,14 @@ function validateOpenApiCoverage(
   const documented = new Set(
     [
       ...markdown.matchAll(
-        /^\|\s*(GET|POST|PUT|PATCH|DELETE)\s*\|\s*`(\/api\/v1\/[^`]+)`/gm,
+        /^(?:>[ \t]*)?\|([^|\n]+)\|[ \t]*`(\/api\/v1\/[^`]+)`/gm,
       ),
-    ].map((match) => `${match[1]} ${match[2]}`),
+    ].flatMap((match) => {
+      const methodCell = match[1] ?? "";
+      return [...methodCell.matchAll(/\b(GET|POST|PUT|PATCH|DELETE)\b/g)].map(
+        ([method]) => `${method} ${match[2]}`,
+      );
+    }),
   );
   const specified = new Set<string>();
   for (const openApi of openApis) {

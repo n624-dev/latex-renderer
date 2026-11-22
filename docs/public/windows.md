@@ -8,36 +8,54 @@ updated: "2026-11-22"
 since: "v1.0.0"
 ---
 
+> [!NOTE]
+> 次版以降の共通コマンドは `n624-latex` です。互換性のため `latex-render` も利用できます（現行 Stable を利用中の場合は `latex-render` を使ってください）。
+
 ## インストール
 
-Node.js 24 以降と、サーバー管理者が発行した `lrk_` から始まる API キーを用意します。PowerShell を開き、`node --version` でバージョンを確認してから次を実行します。通常のユーザー権限で利用できます。
+1. **Node.js 24 以降**と、サーバー管理者が発行した `lrk_` から始まる API キーを用意します。
+2. PowerShell を開き（管理者権限ではなく通常のユーザー権限で構いません）、`node --version` でバージョンを確認してから次を実行します。
 
 ```powershell
 Invoke-WebRequest https://latex-render.n624.jp/downloads/windows/install.ps1 -OutFile $env:TEMP\install-latex-renderer.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File $env:TEMP\install-latex-renderer.ps1
 ```
 
-APIキーは画面に表示されない入力欄へ貼り付け、Windows DPAPIで現在のWindowsユーザーに紐づけて保存します。完了後は新しいPowerShellを開きます。
+3. 画面に表示されない非表示入力欄が開いたら API キーを貼り付けます。キーは Windows DPAPI で現在の Windows ユーザーに紐づけて暗号化保存されます。
+4. 完了したら、PATH を反映するため**新しい PowerShell ウィンドウを開き直します**。
 
 ## 最初の変換
 
-エクスプローラーで `main.tex` があるフォルダを開き、アドレス欄に `powershell` と入力して Enter を押します。試せる文書は[はじめに](/docs/#最短でpdfを作る)にあります。
+1. エクスプローラーで `main.tex` があるフォルダを開きます（試せるサンプル文書は[最短でPDFを作る](/docs/#最短でpdfを作る)にあります）。
+2. エクスプローラーのアドレス欄に `powershell` と入力して Enter を押し、次を実行します。
 
 ```powershell
-latex-render auth status
-latex-render render . --open
+n624-latex main.tex
 ```
 
-`--open` を付けると成功後にPDFを開きます。成果物は指定したプロジェクトの `.render` フォルダへ保存されます。
+同じフォルダに `main.pdf` が生成されます。
+
+`.render` フォルダに成果物一式を出力し、成功後に自動で PDF を開く場合は次を実行します。
+
+```powershell
+n624-latex auth status
+n624-latex render . --open
+```
+
+現行 Stable では `latex-render render . --open` を使います。
 
 ## 更新
 
-新しい PowerShell で `latex-render setup` を実行するか、上のインストール手順を繰り返します。クライアントを入れ替える場合は、以前の版を日時付きのバックアップに移動します。
+新しい PowerShell で `n624-latex setup` を実行するか、[インストール](#インストール)の手順を再実行します。クライアント本体が更新される際は、以前の版が日時付きのバックアップへ移動されます。
+
+`latex-render` だけが入っている場合は、`latex-render setup` で更新してから `latex-render setup repair` を実行すると、新しいコマンドも使えるようになります。保存済みの API キーは引き継がれます。
 
 ## APIキーだけを削除
 
+クライアントを残したまま保存済みの API キーだけを削除したい場合は、次を実行します。
+
 ```powershell
-latex-render auth logout
+n624-latex auth logout
 ```
 
 ## アンインストール
@@ -47,4 +65,4 @@ Invoke-WebRequest https://latex-render.n624.jp/downloads/windows/uninstall.ps1 -
 powershell -NoProfile -ExecutionPolicy Bypass -File $env:TEMP\uninstall-latex-renderer.ps1
 ```
 
-既定ではクライアント、保存済みAPIキー、Codex・ClaudeのSkillを削除します。`-KeepCredential` または `-KeepSkills` でそれぞれ保持できます。
+既定ではクライアント本体、保存済み API キー、管理対象の Codex・Claude 用 Skill を削除します。API キーや Skill を残したい場合は、末尾に `-KeepCredential` または `-KeepSkills` を付けて実行してください。

@@ -286,7 +286,7 @@ it("requires the release E2E before upload and grants it no publishing authority
     ".github/workflows/server-release.yml",
     "utf8",
   );
-  expect(workflow).toContain("needs: [build, update-e2e]");
+  expect(workflow).toContain("needs: [build, update-e2e, client-migration]");
   const e2e = workflow.split("  update-e2e:")[1]?.split("  upload-draft:")[0];
   expect(e2e).toContain("contents: read");
   expect(e2e).not.toContain("contents: write");

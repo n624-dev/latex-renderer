@@ -110,7 +110,7 @@ it("opens relocated technical details for an existing heading fragment", async (
       }),
     ).toBe(true);
     expect(await page.locator(".docs-content").textContent()).toContain(
-      "Web／APIへsudo権限やGitHub tokenを渡しません",
+      "Web や API に sudo 権限や GitHub トークンを渡しません",
     );
   } finally {
     await page.close();

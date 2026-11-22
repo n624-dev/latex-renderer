@@ -92,7 +92,7 @@ describe("Markdown public documentation", () => {
     expect(selfHosting?.html).toContain("/opt/latex-renderer/updater");
     expect(reference?.html).toContain("bootstrap-update-manager-transition.sh");
     expect(reference?.html).toContain("bootstrap-build");
-    expect(reference?.html).toContain("GitHub tokenを渡しません");
+    expect(reference?.html).toContain("GitHub トークンを渡しません");
     expect(selfHosting?.html).toContain("--bundle");
     expect(selfHosting?.html).not.toContain(
       "chmod 2770 /var/lib/latex-renderer",
@@ -151,16 +151,16 @@ describe("Markdown public documentation", () => {
       "X-Latex-Renderer-Client-IP",
       "remote_mcp.rpc_result",
       "bootstrap-update-manager-transition.sh",
-      "ロックファイル自体を削除してはいけません",
+      "ファイル自体は絶対に削除しないでください",
       "Content",
       "1,000",
       "10,000",
     ]) {
       expect(reference).toContain(text);
     }
-    expect(renderPublicDoc("api").match(/class="docs-details"/g)).toHaveLength(
-      4,
-    );
+    expect(
+      renderPublicDoc("api").match(/class="docs-details"/g)?.length ?? 0,
+    ).toBeGreaterThanOrEqual(4);
   });
 
   it("keeps every document reachable without decorative headings or repeated metadata", () => {

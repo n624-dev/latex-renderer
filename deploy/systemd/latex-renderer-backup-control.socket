@@ -1,0 +1,15 @@
+[Unit]
+Description=LaTeX Renderer backup controls
+ConditionPathExists=/opt/latex-renderer/current/deploy/scripts/backup-control.mjs
+
+[Socket]
+ListenStream=/run/latex-renderer-backup-control.sock
+SocketUser=latex-renderer
+SocketGroup=latex-renderer
+SocketMode=0600
+Accept=yes
+MaxConnections=4
+RemoveOnStop=true
+
+[Install]
+WantedBy=sockets.target

@@ -253,6 +253,11 @@ async function fixture(kind: string, query = "", pagedOwners = false) {
       },
       "/system/config": { items: [] },
       "/system/ticket-keys": { activeKid: "fixture", verificationKids: [] },
+      "/backups/status": {
+        backup: { active: "inactive", result: "success" },
+        verification: { active: "inactive", result: "success" },
+        latestVerification: null,
+      },
       "/audit-logs": {
         items: [],
         total: 0,
@@ -353,6 +358,9 @@ it.each([
           .count(),
       ).toBe(1);
       expect(await page.getByText("利用不可", { exact: true }).count()).toBe(1);
+      expect(
+        await page.getByRole("button", { name: "バックアップを作成" }).count(),
+      ).toBe(1);
     }
     for (const width of [390, 768, 960, 1200]) {
       await page.setViewportSize({ width, height: 900 });
