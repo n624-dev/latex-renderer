@@ -327,7 +327,7 @@ describe("public and administrative Web", () => {
       expect(api).toContain(environment);
 
     const windows = await (await app.request("/docs/windows/")).text();
-    expect(windows).toContain("latex-render auth logout");
+    expect(windows).toContain("n624-latex auth logout");
     expect(windows).toContain("uninstall-latex-renderer.ps1");
 
     const status = await (

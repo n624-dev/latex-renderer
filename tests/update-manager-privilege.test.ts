@@ -64,13 +64,20 @@ describe("application updater privilege boundary", () => {
     ).toBeLessThan(controller.indexOf('const child = spawn("/usr/bin/sudo"'));
     expect(controller).toContain("waitPrivilegedProcess");
     expect(controller).toContain("recoveringOperationId = operation.id");
-    expect(
-      helper.indexOf(
-        "helperMutationLock = await acquireInheritedMutationLock()",
-      ),
-    ).toBeLessThan(helper.indexOf('case "apply-locked":'));
+    const acquire = helper.indexOf(
+      "helperMutationLock = await acquireInheritedMutationLock()",
+    );
+    expect(acquire).toBeGreaterThanOrEqual(0);
+    expect(acquire).toBeLessThan(helper.indexOf('case "apply-locked":'));
     expect(helper).toContain("validReleaseId(request.expectedReleaseId)");
-    expect(helper).toContain("helperMutationLock.fd");
+    expect(
+      helper.match(/mutationLockFd = helperMutationLock\?\.fd/g),
+    ).toHaveLength(2);
+    expect(
+      helper.match(
+        /mutationLockFd === undefined \? \[\] : \[mutationLockFd\]/g,
+      ),
+    ).toHaveLength(2);
     expect(launcher).toContain("--property=KillMode=control-group");
     expect(launcher).toContain("--property=RuntimeMaxSec=2h");
     const files = JSON.parse(read("deploy/updater-files.json")) as string[];

@@ -46,7 +46,9 @@ n624-latex render . --open
 
 ## 更新
 
-新しい PowerShell で `n624-latex setup`（旧版は `latex-render setup`）を実行するか、[インストール](#インストール)の手順を再実行します。クライアント本体が更新される際は、以前の版が日時付きのバックアップへ移動されます。
+新しい PowerShell で `n624-latex setup` を実行するか、[インストール](#インストール)の手順を再実行します。クライアント本体が更新される際は、以前の版が日時付きのバックアップへ移動されます。
+
+`latex-render` だけが入っている場合は、`latex-render setup` で更新してから `latex-render setup repair` を実行すると、新しいコマンドも使えるようになります。保存済みの API キーは引き継がれます。
 
 ## APIキーだけを削除
 

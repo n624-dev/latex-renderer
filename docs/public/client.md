@@ -117,6 +117,8 @@ sudo apt install --only-upgrade n624-latex
 n624-latex setup
 ```
 
+`latex-render` だけが入っている環境では、インストール手順を再実行するか、`latex-render setup` で更新してから `latex-render setup repair` で新しいコマンドを追加します。保存済みの API キーは引き継がれます。
+
 ブラウザ画面で状態を確認しながら更新・設定したい場合は、OS を問わず次を使えます。
 
 ```sh

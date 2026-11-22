@@ -3,7 +3,6 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   cp,
-  link,
   lstat,
   mkdir,
   mkdtemp,
@@ -101,7 +100,8 @@ try {
           .digest("hex");
         const hashes = join(directory, "by-hash", algorithm);
         await mkdir(hashes, { recursive: true });
-        await link(indexFile, join(hashes, hash));
+        // GitHub Pages artifacts require independent files.
+        await writeFile(join(hashes, hash), value);
       }
     }
   }
