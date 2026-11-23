@@ -1,3 +1,4 @@
+import { isAbsolute } from "node:path";
 import { validReleaseVersion } from "./release-version.mjs";
 
 // Transport is deliberately absent: production obtains immutable published
@@ -11,9 +12,9 @@ export function releaseAttestationArgs({ artifact, tag, commit, bundle }) {
     typeof commit !== "string" ||
     !/^[a-f0-9]{40}$/.test(commit) ||
     typeof artifact !== "string" ||
-    !artifact.startsWith("/") ||
+    !isAbsolute(artifact) ||
     (bundle !== undefined &&
-      (typeof bundle !== "string" || !bundle.startsWith("/")))
+      (typeof bundle !== "string" || !isAbsolute(bundle)))
   )
     throw new Error("Invalid pinned release attestation input");
   return [

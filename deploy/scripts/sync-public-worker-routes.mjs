@@ -97,7 +97,7 @@ export function authenticationToken() {
   try {
     const output = execFileSync(
       "pnpm",
-      ["exec", "wrangler", "auth", "token", "--json"],
+      ["--silent", "exec", "wrangler", "auth", "token", "--json"],
       {
         cwd: process.env.LATEX_RENDERER_BUILD_ROOT || repositoryRoot,
         encoding: "utf8",

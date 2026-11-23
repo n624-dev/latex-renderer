@@ -60,14 +60,23 @@ temporary_root=$(mktemp -d /tmp/latex-renderer-public-deploy.XXXXXX)
 cleanup() { rm -rf -- "$temporary_root"; }
 trap cleanup EXIT INT TERM HUP
 
-pnpm --filter @latex-renderer/public-web exec wrangler deployments list --json \
+pnpm --silent --filter @latex-renderer/public-web exec wrangler deployments list --json \
   >"$temporary_root/deployments-before.json"
 previous_version=$(node deploy/scripts/read-active-worker-version.mjs \
   "$temporary_root/deployments-before.json")
 
-# Validation and the local Workers runtime preview complete before any remote
-# Worker version or production route can change.
-pnpm check
+# Reuse the full check for the exact main commit when GitHub Actions has
+# completed it. Keep the local check available for deployments before that run.
+deployment_commit=$(git rev-parse HEAD)
+checked_commit=$(gh run list --repo n624-dev/latex-renderer --workflow ci.yml \
+  --branch main --event push --commit "$deployment_commit" --status success \
+  --limit 1 --json headSha --jq '.[0].headSha // empty') || checked_commit=
+if [ "$checked_commit" = "$deployment_commit" ]; then
+  pnpm --filter @latex-renderer/web... build
+else
+  pnpm check
+fi
+# Check the local Workers runtime before uploading a version.
 sh deploy/scripts/prepare-public-release-client.sh
 node apps/public-web/build.mjs
 pnpm --filter @latex-renderer/public-web check:preview
@@ -81,7 +90,7 @@ printf '%s\n' "$preview_url" | grep -Eq '^https://[a-z0-9.-]+\.workers\.dev/?$'
 node apps/public-web/check-live-content.mjs "$preview_url"
 
 node deploy/scripts/sync-public-worker-routes.mjs
-pnpm --filter @latex-renderer/public-web exec wrangler deployments list --json \
+pnpm --silent --filter @latex-renderer/public-web exec wrangler deployments list --json \
   >"$temporary_root/deployments-current.json"
 [ "$(node deploy/scripts/read-active-worker-version.mjs "$temporary_root/deployments-current.json")" = "$previous_version" ] || {
   echo "The active Worker changed during preview. Repeat the deployment against its new baseline." >&2
@@ -97,7 +106,7 @@ if ! node apps/public-web/check-live-content.mjs "$public_origin" ||
   exit 1
 fi
 
-pnpm --filter @latex-renderer/public-web exec wrangler deployments list --json \
+pnpm --silent --filter @latex-renderer/public-web exec wrangler deployments list --json \
   >"$temporary_root/deployments-after.json"
 current_version=$(node deploy/scripts/read-active-worker-version.mjs \
   "$temporary_root/deployments-after.json")

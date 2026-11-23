@@ -14,6 +14,7 @@ since: "v1.0.0"
 2. Codex または Claude Code がインストールされた状態で、導入方式に合わせて連携を設定します。
 
    - **配布インストーラー版**は `n624-latex setup` を開き、使う AI ツールへの連携を選びます。Skill と Local MCP をまとめて登録できます。
+   - **Homebrew 版**も `n624-latex setup` で AI 連携を設定できます。移行時に既存の Local MCP を切り替える方法は [Homebrew の手順](/docs/client/#配布インストーラー版から-homebrew-へ移行する)を参照してください。
    - **APT 版**は [Local MCP を手動で登録](/docs/mcp/#local-mcpの登録)します。
 
 3. Codex または Claude Code を再起動し、変換したいフォルダや本文ファイルを指定して依頼します。

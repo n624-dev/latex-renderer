@@ -10,6 +10,12 @@ on:
       - packages/setup-core/**
       - packages/setup-web/**
   workflow_dispatch:
+    inputs:
+      published:
+        description: "Optionally verify the exact Stable package from its manifest or the public catalog."
+        type: choice
+        default: fixture
+        options: [fixture, manifest, catalog]
 
 permissions:
   contents: read
@@ -58,10 +64,67 @@ jobs:
           $assets = Join-Path $env:RUNNER_TEMP release-assets
           node deploy/winget/build-package.mjs $env:WINGET_ARCH client-dist/latex-renderer-client $assets
           $archive = Join-Path $assets "n624-latex-$version-windows-$env:WINGET_ARCH.zip"
-          $previous = gh api repos/n624-dev/latex-renderer/releases/latest --jq 'select(.immutable and (.draft == false) and (.prerelease == false)) | .tag_name'
+          $target = [version]($version.Split('-')[0])
+          $previous = gh api --paginate 'repos/n624-dev/latex-renderer/releases?per_page=100' --jq '.[] | select(.immutable and (.draft == false) and (.prerelease == false)) | .tag_name' |
+            Where-Object { $_ -match '^v[0-9]+\.[0-9]+\.[0-9]+$' -and [version]($_.Substring(1)) -lt $target } |
+            Sort-Object { [version]($_.Substring(1)) } -Descending |
+            Select-Object -First 1
           if ($previous -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') { throw 'A previous immutable Stable release is required' }
           $old = "latex-renderer-client-$($previous.Substring(1)).zip"
           gh release download $previous --repo n624-dev/latex-renderer --dir $env:RUNNER_TEMP --pattern $old
           $previousArchive = Join-Path $env:RUNNER_TEMP $old
           gh attestation verify $previousArchive --repo n624-dev/latex-renderer --signer-workflow n624-dev/latex-renderer/.github/workflows/server-release.yml --source-ref "refs/tags/$previous" --predicate-type https://slsa.dev/provenance/v1 --deny-self-hosted-runners
           ./deploy/winget/check-native.ps1 -CandidateArchive $archive -PreviousClientArchive $previousArchive -Architecture $env:WINGET_ARCH
+      - name: Install the verified Stable package from its public distribution
+        if: inputs.published == 'manifest' || inputs.published == 'catalog'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WINGET_ARCH: ${{ matrix.arch }}
+          PUBLISHED_SOURCE: ${{ inputs.published }}
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $version = node -p 'require("./package.json").version'
+          $winget = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\winget.exe'
+          if (!(Test-Path -LiteralPath $winget)) {
+            $winget = (Get-Command winget.exe -CommandType Application | Select-Object -First 1).Source
+          }
+          $manifest = Join-Path $env:RUNNER_TEMP 'published-winget'
+          $id = 'n624-dev.n624-latex'
+          $installer = @('--id', $id, '--exact', '--version', $version, '--source', 'winget')
+          $localManifest = $env:PUBLISHED_SOURCE -eq 'manifest'
+          node deploy/winget/published-manifest.mjs "v$version" $manifest
+          if ($localManifest) {
+            & $winget validate --manifest $manifest
+            & $winget settings --enable LocalManifestFiles
+            $installer = @('--manifest', $manifest)
+          } else {
+            & $winget source update --name winget --disable-interactivity
+            $release = gh api "repos/n624-dev/latex-renderer/releases/tags/v$version" | ConvertFrom-Json
+            $asset = "n624-latex-$version-windows-$env:WINGET_ARCH.zip"
+            $expected = ($release.assets | Where-Object { $_.name -eq $asset }).digest
+            if ($expected -notmatch '^sha256:[a-f0-9]{64}$') { throw 'Missing Stable package digest' }
+            $download = Join-Path $env:RUNNER_TEMP 'catalog-winget'
+            & $winget download @installer --scope user --architecture $env:WINGET_ARCH --download-directory $download --skip-dependencies --disable-interactivity --accept-package-agreements --accept-source-agreements
+            $packages = @(Get-ChildItem -LiteralPath $download -Recurse -File -Filter '*.zip')
+            if ($packages.Count -ne 1 -or ("sha256:" + (Get-FileHash -LiteralPath $packages[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()) -ne $expected) {
+              throw 'The catalog archive differs from the verified Stable asset'
+            }
+          }
+          $installed = $false
+          try {
+            & $winget install @installer --scope user --architecture $env:WINGET_ARCH --silent --disable-interactivity --accept-package-agreements --accept-source-agreements
+            $installed = $true
+            $links = Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links'
+            foreach ($name in @('n624-latex', 'latex-render', 'latex-render-admin')) {
+              if ((& (Join-Path $links "$name.exe") --version) -ne $version) {
+                throw "Unexpected version from $name"
+              }
+            }
+            if (!(Test-Path -LiteralPath (Join-Path $links 'latex-renderer-mcp.exe'))) { throw 'Local MCP launcher is missing' }
+          } finally {
+            if ($installed) {
+              & $winget uninstall @installer --silent --disable-interactivity --accept-source-agreements
+            }
+            if ($localManifest) { & $winget settings --disable LocalManifestFiles }
+          }

@@ -9,7 +9,7 @@ import {
   symlink,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { releaseAttestationArgs } from "../deploy/scripts/release-attestation.mjs";
 import {
@@ -64,15 +64,16 @@ async function fixture(overrides: Record<string, unknown> = {}) {
 }
 
 it("pins both entries to the same repository, workflow, tag and commit", () => {
+  const artifact = resolve("artifact.tar.gz");
   const args = releaseAttestationArgs({
-    artifact: "/artifact.tar.gz",
+    artifact,
     tag,
     commit,
   });
   expect(args).toEqual([
     "attestation",
     "verify",
-    "/artifact.tar.gz",
+    artifact,
     "--repo",
     "n624-dev/latex-renderer",
     "--signer-workflow",
@@ -86,7 +87,7 @@ it("pins both entries to the same repository, workflow, tag and commit", () => {
     "--deny-self-hosted-runners",
   ]);
   expect(
-    releaseAttestationArgs({ artifact: "/a", tag, commit, bundle: "/proof" }),
+    releaseAttestationArgs({ artifact, tag, commit, bundle: resolve("proof") }),
   ).toContain("--bundle");
 });
 

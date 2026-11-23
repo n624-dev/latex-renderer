@@ -50,7 +50,8 @@ Cloudflare credentials.
 
 For a public site update from a clean `main` checkout, set `PUBLIC_ORIGIN`
 and run `sh deploy/scripts/deploy-public-web-production.sh`. The script
-verifies the latest immutable Stable client downloads, builds the guides,
+reuses a successful CI run for the exact main commit or runs the checks
+locally. It verifies the latest immutable Stable client downloads, builds the guides,
 checks the uploaded Worker preview, and verifies the public routes and asset
 hashes after activation. Cloudflare credentials, Worker version previews, and
 the public routes configured by `routes:apply` must be available.

@@ -46,6 +46,7 @@ Hello, LaTeX!
 - **CLI / Local MCP / HTTP API**：管理者が発行するレンダリング用 API キー（`lrk_` から始まる文字列）
 - **CLI の動作環境**：
   - Debian / Ubuntu（APT パッケージ版）：専用の Node.js が同梱されるため事前準備は不要です。
+  - macOS（Homebrew 版）：必要な Node.js は Homebrew がインストールします。
   - Windows / macOS / Linux（配布インストーラー版）：Node.js 24 以降が必要です。
 
 変換処理はすべてサーバー側で行うため、どの利用方法でも手元の端末に TeX Live をインストールする必要はありません。
