@@ -24,7 +24,15 @@ export async function verifyRuntimeAssembly({
     });
   }
   const require = createRequire(join(assembly, "package.json"));
-  for (const name of ["acme-client", "ajv", "esbuild", "jose", "yauzl", "yazl"])
+  for (const name of [
+    "acme-client",
+    "ajv",
+    "ajv-formats",
+    "esbuild",
+    "jose",
+    "yauzl",
+    "yazl",
+  ])
     require.resolve(name);
   console.log(
     JSON.stringify({ event: "ci.runtime_dependency_selection", rehydrate }),
