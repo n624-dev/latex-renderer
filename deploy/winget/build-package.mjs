@@ -56,6 +56,12 @@ try {
     fileURLToPath(new URL("../../LICENSE", import.meta.url)),
     join(payload, "LICENSE"),
   );
+  const goEnvironment = { ...process.env, GOTOOLCHAIN: "local" };
+  const goRoot = execFileSync("go", ["env", "GOROOT"], {
+    env: goEnvironment,
+    encoding: "utf8",
+  }).trim();
+  await cp(join(goRoot, "LICENSE"), join(payload, "GO-LICENSE"));
   const launcher = join(payload, "n624-latex.exe");
   execFileSync(
     "go",
@@ -69,11 +75,10 @@ try {
     ],
     {
       env: {
-        ...process.env,
+        ...goEnvironment,
         GOOS: "windows",
         GOARCH: arch === "x64" ? "amd64" : arch,
         CGO_ENABLED: "0",
-        GOTOOLCHAIN: "local",
       },
       stdio: "inherit",
     },
