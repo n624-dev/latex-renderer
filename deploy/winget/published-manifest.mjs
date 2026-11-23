@@ -6,7 +6,6 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import process from "node:process";
 import { fileURLToPath, URL } from "node:url";
-import { releaseAttestationArgs } from "../scripts/release-attestation.mjs";
 import { validStableVersion } from "../scripts/release-version.mjs";
 
 const repository = "n624-dev/latex-renderer";
@@ -72,7 +71,22 @@ try {
     for await (const chunk of createReadStream(local)) hash.update(chunk);
     if (`sha256:${hash.digest("hex")}` !== asset.digest)
       throw new Error(`WinGet ZIP checksum mismatch for ${architecture}`);
-    github(releaseAttestationArgs({ artifact: local, tag, commit }));
+    github([
+      "attestation",
+      "verify",
+      local,
+      "--repo",
+      repository,
+      "--signer-workflow",
+      `${repository}/.github/workflows/server-release.yml`,
+      "--source-ref",
+      `refs/tags/${tag}`,
+      "--source-digest",
+      commit,
+      "--predicate-type",
+      "https://slsa.dev/provenance/v1",
+      "--deny-self-hosted-runners",
+    ]);
   }
   execFileSync(
     process.execPath,
