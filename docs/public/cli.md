@@ -71,6 +71,7 @@ n624-latex doctor
 | インストール方法 | 更新・修復・削除 |
 | --- | --- |
 | APT 版 | [APT で更新](/docs/client/#apt-版の更新)し、破損したパッケージは[再インストール](/docs/client/#状態確認と修復)します。Local MCP は[手動で登録](/docs/mcp/#local-mcpの登録)します。 |
+| Homebrew 版 | [Homebrew で更新](/docs/client/#homebrew-版の更新)し、破損したパッケージは[再インストール](/docs/client/#状態確認と修復)します。AI 連携は `n624-latex setup` で設定できます。 |
 | 配布インストーラー版 | [設定画面で更新](/docs/client/#配布インストーラー版の更新)します。管理対象の連携設定やランチャーは `n624-latex setup repair` で修復できます。 |
 
 削除するときは[インストール方法別の手順](/docs/client/#アンインストール)を参照してください。設定画面は端末上だけで開き、CLI を終了すると画面も閉じます。

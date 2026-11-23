@@ -16,6 +16,7 @@ OSに合う方法でインストールし、サーバー管理者から受け取
 | --- | --- | --- |
 | Debian 12 / 13、Ubuntu 24.04 / 26.04（amd64・arm64） | **[APT パッケージ](#debian-ubuntu-の-apt-パッケージ)** | パッケージに同梱 |
 | Windows | **[Windows の手順](/docs/windows/)** | 24 以降 |
+| macOS（Apple Silicon・Intel） | **[Homebrew](#homebrew-でインストール)** | Homebrew が用意 |
 | macOS / その他の Linux | **[配布インストーラー](#linux-macos)** | 24 以降 |
 
 ## Debian / Ubuntu の APT パッケージ
@@ -30,6 +31,35 @@ sudo apt install n624-latex
 ```
 
 3. [最初の PDF を作る](#最初の-pdf-を作る)へ進みます。サーバーを構築する場合は[セルフホストの導入手順](/docs/self-hosting/)へ進みます。
+
+## Homebrew でインストール
+
+Homebrew が入っている Mac で実行します。
+
+```sh
+brew install n624-dev/tap/n624-latex
+n624-latex setup
+```
+
+API キーを登録したら、[最初の PDF を作る](#最初の-pdf-を作る)へ進みます。
+
+### 配布インストーラー版から Homebrew へ移行する
+
+インストール後も、保存済みの API キーと既存の MCP 設定を使えます。`type -a n624-latex` で、最初に見つかるコマンドを確認してください。以前の版が先に表示された場合は、次のコマンドで Homebrew 版を直接起動できます。
+
+```sh
+"$(brew --prefix)/bin/n624-latex" setup
+```
+
+通常の `n624-latex` も Homebrew 版に切り替えるには、シェルの `PATH` で Homebrew の `bin` を以前のインストール先より前に置きます。
+
+Local MCP も切り替える場合は、AI ツールの既存設定で `latex-renderer` のコマンドを Homebrew の `bin/latex-renderer-mcp` の絶対パスに変更します。`brew --prefix` で Homebrew の場所を確認できます。
+
+以前の版を削除する場合は、AI ツールを再起動して Homebrew 版の Local MCP に接続できることを先に確認します。旧ランチャーの絶対パスを指定し、API キーと Skill を残して削除してください。標準の場所に導入した旧版なら、次のコマンドを使います。
+
+```sh
+"$HOME/.local/bin/latex-render" setup remove --yes --keep-credential --keep-skills
+```
 
 ## 配布インストーラーの準備
 
@@ -78,6 +108,12 @@ sudo apt install --only-upgrade n624-latex
 
 保存済みの接続設定や API キーはそのまま引き継がれます（セルフホストのサーバー本体を更新する場合は[管理画面の更新操作](/docs/updates/)を使います）。
 
+### Homebrew 版の更新
+
+```sh
+brew upgrade n624-dev/tap/n624-latex
+```
+
 ### 配布インストーラー版の更新
 
 次のコマンドを実行するか、初回と同じインストールコマンドを再実行します。
@@ -105,6 +141,7 @@ n624-latex doctor --json
 ```
 
 - APT 版は `sudo apt install --reinstall n624-latex` でパッケージを再インストールします。
+- Homebrew 版は `brew reinstall n624-dev/tap/n624-latex` でパッケージを再インストールします。
 - 配布インストーラー版は `n624-latex setup repair` で管理対象のランチャーや連携設定を修復します。
 
 ## 成果物の保存と復旧
@@ -114,6 +151,8 @@ n624-latex doctor --json
 ## アンインストール
 
 APT 版は `sudo apt remove n624-latex` で削除します。ユーザーの API キーも消したいときは、削除前に `n624-latex auth logout` を実行します。
+
+Homebrew 版は `brew uninstall n624-dev/tap/n624-latex` で削除します。保存済みの API キーと AI ツールの MCP 設定は残ります。不要な場合は、アンインストール前にログアウトし、AI ツール側の MCP 設定も削除してください。
 
 配布インストーラー版は次のコマンドで削除します。
 

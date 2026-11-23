@@ -46,11 +46,15 @@ describe("public Web operations", () => {
       'check-live-content.mjs "$preview_url"',
     );
     const workerDeploy = deploy.indexOf("wrangler versions deploy");
-    const routeCheck = deploy.indexOf('node deploy/scripts/sync-public-worker-routes.mjs\n');
+    const routeCheck = deploy.indexOf(
+      "node deploy/scripts/sync-public-worker-routes.mjs\n",
+    );
 
     expect(mainGuard).toBeGreaterThan(-1);
     expect(deploy).toContain("git status --porcelain");
     expect(deploy).toContain("git rev-parse origin/main");
+    expect(deploy).toContain('--commit "$deployment_commit" --status success');
+    expect(deploy).toContain('[ "$checked_commit" = "$deployment_commit" ]');
     expect(mainGuard).toBeLessThan(repositoryCheck);
     expect(repositoryCheck).toBeLessThan(workerUpload);
     expect(deploy).toContain("prepare-public-release-client.sh");

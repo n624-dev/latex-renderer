@@ -66,12 +66,16 @@ describe("Cloudflare OAuth deployment build context", () => {
       const build = join(root, "build");
       mkdirSync(bin);
       mkdirSync(build);
+      const command =
+        script === "sync-public-worker-routes.mjs"
+          ? "--silent exec wrangler auth token --json"
+          : "exec wrangler auth token --json";
       writeFileSync(
         join(bin, "pnpm"),
         `#!/bin/sh
 set -eu
 [ "$PWD" = "$LATEX_RENDERER_BUILD_ROOT" ] || exit 42
-[ "$*" = 'exec wrangler auth token --json' ] || exit 43
+[ "$*" = '${command}' ] || exit 43
 [ "$PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN" = error ] || exit 44
 [ "$PNPM_CONFIG_STORE_DIR" = "$PWD/.deployment-tooling/store" ] || exit 45
 printf '%s\\n' '{"token":"test-only-credential"}'

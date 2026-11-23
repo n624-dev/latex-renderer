@@ -26,6 +26,7 @@ export function downloadsPage(
     <section><h2>CLI をインストール</h2><p>使っているOSを選びます。管理者から受け取った API キーがあれば、導入後にすぐPDFを作れます。</p>
     <ul><li><a href="/docs/client/#debian-ubuntu-の-apt-パッケージ">Debian・Ubuntu に APT でインストール</a>（Node.js 同梱）</li>
     <li><a href="/docs/windows/">Windows にインストール</a>（Node.js 24 以降）</li>
+    <li><a href="/docs/client/#homebrew-でインストール">macOS に Homebrew でインストール</a></li>
     <li><a href="/docs/client/#linux-macos">macOS・その他の Linux にインストール</a>（Node.js 24 以降）</li></ul></section>
     ${mcpbName === undefined ? "" : '<section><h2>Claude Desktop 拡張</h2><p>手元のフォルダを指定して変換するための拡張です。<a href="/docs/mcp/#ローカルファイルを直接扱う">セットアップ手順</a>を参照してください。</p><a class="button secondary" href="/downloads/mcpb/latest.mcpb" download>Claude Desktop拡張を取得</a></section>'}
     <details><summary>配布ファイルを直接取得</summary><div class="actions"><a class="button secondary" href="/downloads/client/install.mjs" download>共通インストーラー</a><a class="button secondary" href="/downloads/client/latest.zip" download>最新版ZIPを取得</a></div><p><a href="/downloads/client/${encodeURIComponent(archiveName)}" download>${escapeHtml(archiveName)}</a>${mcpbName === undefined ? "" : ` / <a href="/downloads/mcpb/${encodeURIComponent(mcpbName)}" download>${escapeHtml(mcpbName)}</a>`}</p></details>`,
