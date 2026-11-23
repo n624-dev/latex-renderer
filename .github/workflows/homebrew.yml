@@ -15,6 +15,11 @@ on:
         description: "Optional immutable Stable tag, for example vX.Y.Z. Leave blank to test this checkout."
         required: false
         type: string
+      verify_public_tap:
+        description: "Also install the verified Stable formula from the public Homebrew tap."
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -83,3 +88,25 @@ jobs:
         run: |
           set -euo pipefail
           node deploy/homebrew/test-macos.mjs "$HOMEBREW_CLIENT_ARCHIVE" "$HOMEBREW_LEGACY_ARCHIVE"
+      - name: Verify the published Homebrew formula
+        if: inputs.verify_public_tap
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.published_stable }}
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+        run: |
+          set -euo pipefail
+          test -n "$RELEASE_TAG"
+          tap=n624-dev/tap
+          formula=$tap/n624-latex
+          brew tap "$tap"
+          trap 'brew untap "$tap"' EXIT
+          cmp "$(brew --repository "$tap")/Formula/n624-latex.rb" "$RUNNER_TEMP/n624-latex.rb"
+          brew install "$formula"
+          trap 'brew uninstall "$formula"; brew untap "$tap"' EXIT
+          [[ "$(n624-latex --version)" == "${RELEASE_TAG#v}" ]]
+          [[ "$(latex-render --version)" == "${RELEASE_TAG#v}" ]]
+          test -x "$(brew --prefix)/bin/latex-renderer-mcp"
+          brew uninstall "$formula"
+          trap 'brew untap "$tap"' EXIT
+          test ! -e "$(brew --prefix)/bin/n624-latex"

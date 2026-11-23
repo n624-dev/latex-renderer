@@ -32,7 +32,7 @@ const commands = [
   "latex-renderer-mcp",
   "latex-render-admin",
 ];
-const schemaVersion = "1.9.0";
+const schemaVersion = "1.28.0";
 const testing = Object.keys(values).length > 0;
 let identifier = "n624-dev.n624-latex";
 let packageVersion = version;
