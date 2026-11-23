@@ -65,9 +65,11 @@ describe("MCPB deployment metadata", () => {
         ])
           copyFileSync(file, join(root, file));
         const manifest = readFileSync("client/mcpb/manifest.json");
-        const { version } = JSON.parse(manifest.toString()) as {
+        const manifestData = JSON.parse(manifest.toString()) as {
           version: string;
+          author: Record<string, unknown>;
         };
+        const { version } = manifestData;
         await writeMcpbZipFixture(join(root, "content"), manifest);
         const cert = run("openssl", [
           "req",
@@ -177,6 +179,25 @@ describe("MCPB deployment metadata", () => {
           [{ serverMode: 0o120777 }, "Unexpected MCPB ZIP entry"],
           [{ serverPath: "server/other.cjs" }, "Unexpected MCPB ZIP entry"],
           [{ manifest: Buffer.from("{}") }, "Invalid MCPB manifest"],
+          [
+            {
+              manifest: Buffer.from(
+                JSON.stringify({
+                  ...manifestData,
+                  author: { ...manifestData.author, email: "invalid" },
+                }),
+              ),
+            },
+            '/author/email must match format "email"',
+          ],
+          [
+            {
+              manifest: Buffer.from(
+                JSON.stringify({ ...manifestData, homepage: "invalid" }),
+              ),
+            },
+            '/homepage must match format "uri"',
+          ],
           [
             {
               manifest: Buffer.from(

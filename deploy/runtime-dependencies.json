@@ -1,5 +1,5 @@
 {
   "schemaVersion": 1,
-  "rootPackages": ["ajv", "esbuild", "jose", "yauzl", "yazl"],
+  "rootPackages": ["ajv", "ajv-formats", "esbuild", "jose", "yauzl", "yazl"],
   "requiredFiles": ["node_modules/esbuild/lib/main.js"]
 }

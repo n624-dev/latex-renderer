@@ -6,6 +6,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { buffer } from "node:stream/consumers";
 import Ajv from "ajv";
+import addFormats from "ajv-formats";
 import yauzl from "yauzl";
 
 // Published with @anthropic-ai/mcpb 2.1.2, commit 2a788100a60db19a6b1c018fb1cf84ae85de9537.
@@ -18,9 +19,9 @@ const maxManifestBytes = 64 * 1024;
 const maxSignatureBytes = 1024 * 1024;
 const signatureHeader = Buffer.from("MCPB_SIG_V1");
 const signatureFooter = Buffer.from("MCPB_SIG_END");
-const validateSchema = new Ajv({ format: "full", ownProperties: true }).compile(
-  schema,
-);
+const validator = new Ajv({ ownProperties: true });
+addFormats(validator, ["email", "uri"]);
+const validateSchema = validator.compile(schema);
 
 export function validateMcpbManifest(bytes) {
   if (bytes.length > maxManifestBytes)
@@ -28,7 +29,7 @@ export function validateMcpbManifest(bytes) {
   const manifest = JSON.parse(bytes.toString("utf8"));
   if (!validateSchema(manifest))
     throw new Error(
-      `Invalid MCPB manifest: ${validateSchema.errors[0].dataPath} ${validateSchema.errors[0].message}`,
+      `Invalid MCPB manifest: ${validateSchema.errors[0].instancePath} ${validateSchema.errors[0].message}`,
     );
   if (
     manifest.manifest_version !== "0.4" ||
