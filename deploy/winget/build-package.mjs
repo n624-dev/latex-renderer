@@ -51,6 +51,11 @@ try {
   await cp(join(input, "app"), join(payload, "app"), { recursive: true });
   await cp(join(input, "skill"), join(payload, "skill"), { recursive: true });
   await cp(join(input, "VERSION"), join(payload, "VERSION"));
+  await cp(join(input, "README.md"), join(payload, "README.md"));
+  await cp(
+    fileURLToPath(new URL("../../LICENSE", import.meta.url)),
+    join(payload, "LICENSE"),
+  );
   const launcher = join(payload, "n624-latex.exe");
   execFileSync(
     "go",

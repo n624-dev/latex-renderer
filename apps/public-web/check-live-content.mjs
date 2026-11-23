@@ -18,7 +18,9 @@ const routes = [
 ];
 
 for (const route of routes) {
-  const expected = await readFile(new URL(`./dist${route}index.html`, import.meta.url));
+  const expected = await readFile(
+    new URL(`./dist${route}index.html`, import.meta.url),
+  );
   await verifyDownload(route, {
     size: expected.length,
     sha256: createHash("sha256").update(expected).digest("hex"),

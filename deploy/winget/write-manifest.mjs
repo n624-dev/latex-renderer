@@ -102,7 +102,6 @@ ${commands
   PortableCommandAlias: ${name}`,
   )
   .join("\n")}
-Scope: user
 InstallModes:
 - silent
 - silentWithProgress

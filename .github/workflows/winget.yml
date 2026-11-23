@@ -51,8 +51,8 @@ jobs:
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
           if ((node -p process.arch) -ne $env:WINGET_ARCH) { throw 'Unexpected native runner architecture' }
-          corepack enable
-          pnpm install --frozen-lockfile
+          $packageManager = node -p 'require("./package.json").packageManager'
+          npm exec --yes --package $packageManager -- pnpm install --frozen-lockfile
           node client/build-client.mjs
           $version = node -p 'require("./package.json").version'
           $assets = Join-Path $env:RUNNER_TEMP release-assets

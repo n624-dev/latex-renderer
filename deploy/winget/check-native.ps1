@@ -18,10 +18,15 @@ if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hoste
 
 function Invoke-Checked {
     param([string]$File, [string[]]$CommandArguments)
+    # Preserve native stdout when called from a workflow that turns a
+    # nonzero exit into a PowerShell exception before assignment.
+    $PSNativeCommandUseErrorActionPreference = $false
     $result = & $File @CommandArguments
-    if ($LASTEXITCODE -ne 0) {
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -ne 0) {
         $result | Out-Host
-        throw "$([IO.Path]::GetFileName($File)) $($CommandArguments[0]) exited with $LASTEXITCODE"
+        $hex = '0x{0:X8}' -f [int]$exitCode
+        throw "$([IO.Path]::GetFileName($File)) $($CommandArguments[0]) exited with $exitCode ($hex)"
     }
     $result
 }
@@ -41,7 +46,11 @@ function Test-WinGet {
     if (!(Test-Path -LiteralPath $File)) { return $false }
     try {
         $probe = & $File --version 2>$null
-        return $LASTEXITCODE -eq 0 -and ($probe -join '') -match '^v?\d+\.\d+'
+        if ($LASTEXITCODE -ne 0 -or ($probe -join '').Trim() -notmatch '^v?(\d+\.\d+\.\d+)(?:\.\d+)?$') {
+            return $false
+        }
+        # WinGet 1.29 fixes local manifests for ZIP portable applications.
+        return [version]$Matches[1] -ge [version]'1.29'
     } catch {
         return $false
     }
@@ -294,6 +303,7 @@ $packageBuilder = Join-Path $PSScriptRoot 'build-package.mjs'
 
 try {
     $winget = Get-WinGet
+    Invoke-Checked $winget @('--version') | Out-Host
     if (Test-Path -LiteralPath $legacyInstall) { throw 'The fixture cannot overwrite an existing legacy installation.' }
     $links = Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links'
     foreach ($name in @('n624-latex', 'latex-render', 'latex-render-admin', 'latex-renderer-mcp')) {

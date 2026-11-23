@@ -129,6 +129,7 @@ await Promise.all([
     join(payloadRoot, "uninstall.ps1"),
   ),
   cp(join(repository, "client/README.md"), join(payloadRoot, "README.md")),
+  cp(join(repository, "LICENSE"), join(payloadRoot, "LICENSE")),
   cp(
     join(repository, "integrations/latex-renderer"),
     join(payloadRoot, "skill"),

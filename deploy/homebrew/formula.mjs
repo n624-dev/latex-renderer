@@ -41,6 +41,7 @@ ${revision === undefined ? "" : `  revision ${revision}\n`}
 
   def install
     libexec.install "app", "skill"
+    pkgshare.install "LICENSE" if File.exist?("LICENSE")
     bin.mkpath
     entries = {
       "n624-latex"         => "latex-render.cjs",

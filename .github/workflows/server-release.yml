@@ -383,9 +383,8 @@ jobs:
           WINGET_ARCH: ${{ matrix.arch }}
         run: |
           if ((node -p process.arch) -ne $env:WINGET_ARCH) { throw 'Unexpected native runner architecture' }
-          corepack enable
-          if ($LASTEXITCODE -ne 0) { throw 'Could not enable Corepack' }
-          pnpm install --frozen-lockfile
+          $packageManager = node -p 'require("./package.json").packageManager'
+          npm exec --yes --package $packageManager -- pnpm install --frozen-lockfile
           if ($LASTEXITCODE -ne 0) { throw 'Could not install build dependencies' }
           $version = $env:RELEASE_TAG.Substring(1)
           $assets = Join-Path $env:RUNNER_TEMP release-assets
