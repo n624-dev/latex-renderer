@@ -42,7 +42,7 @@ for a Japanese example, file types, and project layout.
 
 ## Run your own server
 
-Use the versioned [v1.7.0 server release](https://github.com/n624-dev/latex-renderer/releases/tag/v1.7.0).
+Use the versioned [v1.7.1 server release](https://github.com/n624-dev/latex-renderer/releases/tag/v1.7.1).
 The [self-hosting guide](https://latex-render.n624.jp/docs/self-hosting/) covers
 Linux prerequisites, supported HTTPS and sign-in options, release verification,
 first-time setup, updates, and backups.
