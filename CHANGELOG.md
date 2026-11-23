@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 1.7.1-rc.1 - 2026-11-23
+
+- Make installation, the first PDF, and server operation easier to follow in the public guides.
+- Verify the published guides and exact Stable ZIP and MCPB assets when updating the public site.
+- Prepare Windows and macOS package-manager distribution with native installation and upgrade checks.
+
 ## 1.7.0 - 2026-11-23
 
 - Run `n624-latex main.tex` to render a TeX project and save the verified PDF locally. Existing CLI and MCP commands remain available.

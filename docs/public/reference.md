@@ -85,13 +85,13 @@ since: "v1.0.0"
 
 ## 旧版からの移行と特殊復旧
 
-> [!DETAILS] 仕様・手順を表示
+> [!DETAILS] 履歴資料　旧 Updater からの移行と展開エラー
 >
 > ### v1.2.xのroot Updaterから権限分離Updaterへ移行する場合
 >
 > v1.2.x までの Update Manager は root デーモンでしたが、v1.3.0 以降は常駐 controller を `latex-renderer-update` ユーザーへ分離し、固定 verb のみを受け取る短命 root helper 構成になりました。旧 Updater から Web 更新すると `Application Update Manager must use a separate non-root build tree` で止まる場合があります（同じ Web 操作を繰り返さないでください）。
 >
-> この一度限りの移行では、[セルフホストの手動ダウンロード・検証](/docs/self-hosting/#v1-6-9をダウンロードして検証)を通常ユーザーで実行し、展開した対象 Release（`VERSION` と完全一致させる）から専用移行スクリプトを 1 回だけ実行します。
+> この一度限りの移行には [v1.3.6 のサーバー配布物](https://github.com/n624-dev/latex-renderer/releases/tag/v1.3.6)を使います。通常ユーザーで [配布物のダウンロードと検証](/docs/self-hosting/#v1-6-9をダウンロードして検証)を開き、コマンドの先頭の `version=` の行を `version=1.3.6` に置き換えてから実行します。検証と展開で設定された `bundle_root` は同じ端末で引き継ぎます。
 >
 > ```bash
 > VERSION=1.3.6
@@ -130,6 +130,8 @@ since: "v1.0.0"
 > Updater の新バージョンと `ready` / `pending=false` を確認した後、同じバージョンを通常の Web / Admin CLI `update apply` でアプリ本体へ適用します。
 >
 > ※ なお、`v1.4.0-rc.3` の Updater には root コピーした bundle の所有者が非 root のまま残り `Release extraction requires a private regular bundle` で止まる既知問題があります。この場合も検査を解除せず、所有者修正を含む新しい公開済み Release へ Updater のみ先行更新してからアプリを適用してください（root / systemd 下の展開検証は `sudo /usr/local/bin/node deploy/ci/restricted-release-extraction.mjs` で単体実行可能です）。
+
+> [!DETAILS] 更新や TeX 変更のロックを調べる
 >
 > ### mutation lockが使用中と表示される場合
 >
@@ -153,9 +155,9 @@ since: "v1.0.0"
 
 ## 過去RCのRenderer識別情報
 
-> [!DETAILS] 仕様・手順を表示
+> [!DETAILS] 履歴資料　v1.3.4 のリリース候補
 >
-> `RC.3` から `RC.4` への更新は、Renderer 識別ハッシュの対象ファイル数変更（旧 Updater は 5 ファイル、新 metadata は 6 ファイル）によりサービス切り替え前に失敗します。検証を無効化したり `RC.4` を再試行したりせず、旧互換の 5 ファイル項目と新 6 ファイル項目を併記した修正版 `RC.5` 以降を指定してください（配布物全体の checksum・provenance 署名には追加ファイルも含まれます）。
+> `v1.3.4-rc.3` から `v1.3.4-rc.4` への更新は、Renderer 識別ハッシュの対象ファイルが 5 個から 6 個に変わったため、サービス切り替え前に失敗しました。この組み合わせでは、旧版との互換情報も持つ修正版 `v1.3.4-rc.5` が移行先です。配布物全体のチェックサムと来歴署名で、追加されたファイルも検証します。
 
 ## Updaterの実行領域
 

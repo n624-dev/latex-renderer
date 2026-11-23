@@ -137,6 +137,11 @@ jobs:
           set -euo pipefail
           sh deploy/scripts/build-server-release-assets.sh \
             "$RELEASE_TAG" "$RUNNER_TEMP/release-assets" "$CANDIDATE_TAG"
+          for arch in x64 arm64; do
+            node deploy/winget/build-package.mjs "$arch" \
+              client-dist/latex-renderer-client "$RUNNER_TEMP/release-assets"
+          done
+          (cd "$RUNNER_TEMP/release-assets" && sha256sum n624-latex-*-windows-*.zip >> SHA256SUMS)
       - name: Attest release assets with Sigstore provenance
         id: attest
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
@@ -152,7 +157,9 @@ jobs:
           for asset in \
             "$RUNNER_TEMP/release-assets/latex-renderer-server-$version.tar.gz" \
             "$RUNNER_TEMP/release-assets/latex-renderer-client-$version.zip" \
-            "$RUNNER_TEMP/release-assets/latex-renderer-local-$version.mcpb"; do
+            "$RUNNER_TEMP/release-assets/latex-renderer-local-$version.mcpb" \
+            "$RUNNER_TEMP/release-assets/n624-latex-$version-windows-x64.zip" \
+            "$RUNNER_TEMP/release-assets/n624-latex-$version-windows-arm64.zip"; do
             gh attestation verify "$asset" \
               --repo n624-dev/latex-renderer \
               --signer-workflow n624-dev/latex-renderer/.github/workflows/server-release.yml \
@@ -333,8 +340,127 @@ jobs:
             --predicate-type https://slsa.dev/provenance/v1 --deny-self-hosted-runners
           node client/test-cli-migration.mjs "$RUNNER_TEMP/$old" "$candidate"
 
+  winget:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2025
+            arch: x64
+          - runner: windows-11-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      attestations: read
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.build.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: "26.13.0"
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.3"
+          cache: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact-id }}
+          path: ${{ runner.temp }}/release-assets
+          merge-multiple: true
+          digest-mismatch: error
+      - name: Verify and exercise the exact WinGet release package
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.version }}
+          SOURCE_COMMIT: ${{ needs.build.outputs.commit }}
+          WINGET_ARCH: ${{ matrix.arch }}
+        run: |
+          if ((node -p process.arch) -ne $env:WINGET_ARCH) { throw 'Unexpected native runner architecture' }
+          $packageManager = node -p 'require("./package.json").packageManager'
+          npm exec --yes --package $packageManager -- pnpm install --frozen-lockfile
+          if ($LASTEXITCODE -ne 0) { throw 'Could not install build dependencies' }
+          $version = $env:RELEASE_TAG.Substring(1)
+          $assets = Join-Path $env:RUNNER_TEMP release-assets
+          $archive = Join-Path $assets "n624-latex-$version-windows-$env:WINGET_ARCH.zip"
+          gh attestation verify $archive --bundle (Join-Path $assets PROVENANCE.jsonl) --repo n624-dev/latex-renderer --signer-workflow n624-dev/latex-renderer/.github/workflows/server-release.yml --source-ref "refs/tags/$env:RELEASE_TAG" --source-digest $env:SOURCE_COMMIT --predicate-type https://slsa.dev/provenance/v1 --deny-self-hosted-runners
+          if ($LASTEXITCODE -ne 0) { throw 'Could not verify the WinGet package attestation' }
+          $previous = gh api repos/n624-dev/latex-renderer/releases/latest --jq 'select(.immutable and (.draft == false) and (.prerelease == false)) | .tag_name'
+          if ($LASTEXITCODE -ne 0 -or $previous -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$' -or $previous -eq $env:RELEASE_TAG) { throw 'A previous immutable Stable release is required' }
+          $old = "latex-renderer-client-$($previous.Substring(1)).zip"
+          gh release download $previous --repo n624-dev/latex-renderer --dir $env:RUNNER_TEMP --pattern $old
+          if ($LASTEXITCODE -ne 0) { throw 'Could not download the previous client' }
+          $previousArchive = Join-Path $env:RUNNER_TEMP $old
+          gh attestation verify $previousArchive --repo n624-dev/latex-renderer --signer-workflow n624-dev/latex-renderer/.github/workflows/server-release.yml --source-ref "refs/tags/$previous" --predicate-type https://slsa.dev/provenance/v1 --deny-self-hosted-runners
+          if ($LASTEXITCODE -ne 0) { throw 'Could not verify the previous client attestation' }
+          ./deploy/winget/check-native.ps1 -CandidateArchive $archive -PreviousClientArchive $previousArchive -Architecture $env:WINGET_ARCH
+
+  homebrew:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      attestations: read
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.build.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: "26.13.0"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact-id }}
+          path: ${{ runner.temp }}/release-assets
+          merge-multiple: true
+          digest-mismatch: error
+      - name: Verify the exact release archive and exercise Homebrew on native macOS
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.version }}
+          SOURCE_COMMIT: ${{ needs.build.outputs.commit }}
+          BREW_ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          [[ "$(node -p process.arch)" == "$BREW_ARCH" ]]
+          assets="$RUNNER_TEMP/release-assets"
+          candidate="$assets/latex-renderer-client-${RELEASE_TAG#v}.zip"
+          gh attestation verify "$candidate" --bundle "$assets/PROVENANCE.jsonl" \
+            --repo n624-dev/latex-renderer \
+            --signer-workflow n624-dev/latex-renderer/.github/workflows/server-release.yml \
+            --source-ref "refs/tags/$RELEASE_TAG" --source-digest "$SOURCE_COMMIT" \
+            --predicate-type https://slsa.dev/provenance/v1 --deny-self-hosted-runners
+          previous=$(gh api repos/n624-dev/latex-renderer/releases/latest \
+            --jq 'select(.immutable and (.draft == false) and (.prerelease == false)) | .tag_name')
+          [[ "$previous" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ && "$previous" != "$RELEASE_TAG" ]]
+          old="latex-renderer-client-${previous#v}.zip"
+          gh release download "$previous" --repo n624-dev/latex-renderer --pattern "$old" --dir "$RUNNER_TEMP"
+          gh attestation verify "$RUNNER_TEMP/$old" --repo n624-dev/latex-renderer \
+            --signer-workflow n624-dev/latex-renderer/.github/workflows/server-release.yml \
+            --source-ref "refs/tags/$previous" --predicate-type https://slsa.dev/provenance/v1 \
+            --deny-self-hosted-runners
+          node deploy/homebrew/test-macos.mjs "$candidate" "$RUNNER_TEMP/$old"
+
   upload-draft:
-    needs: [build, update-e2e, client-migration]
+    needs: [build, update-e2e, client-migration, winget, homebrew]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -390,6 +516,8 @@ jobs:
             "$RUNNER_TEMP/release-assets/latex-renderer-server-$version.tar.gz" \
             "$RUNNER_TEMP/release-assets/latex-renderer-client-$version.zip" \
             "$RUNNER_TEMP/release-assets/latex-renderer-local-$version.mcpb" \
+            "$RUNNER_TEMP/release-assets/n624-latex-$version-windows-x64.zip" \
+            "$RUNNER_TEMP/release-assets/n624-latex-$version-windows-arm64.zip" \
             "$RUNNER_TEMP/release-assets/SHA256SUMS" \
             --repo n624-dev/latex-renderer \
             --clobber

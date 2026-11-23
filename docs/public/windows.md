@@ -8,45 +8,39 @@ updated: "2026-11-22"
 since: "v1.0.0"
 ---
 
-> [!NOTE]
-> v1.7.0 以降の共通コマンドは `n624-latex` です。従来の `latex-render` も使えます。既存クライアントに `n624-latex` を追加するには、[更新](#更新)の手順を使います。
-
 ## インストール
 
-1. **Node.js 24 以降**と、サーバー管理者が発行した `lrk_` から始まる API キーを用意します。
-2. PowerShell を開き（管理者権限ではなく通常のユーザー権限で構いません）、`node --version` でバージョンを確認してから次を実行します。
+1. **Node.js 24 以降**と、サーバー管理者から受け取った API キー（`lrk_...`）を用意します。
+2. 普段使うユーザーで PowerShell を開き、次のコマンドを実行します。
 
 ```powershell
 Invoke-WebRequest https://latex-render.n624.jp/downloads/windows/install.ps1 -OutFile $env:TEMP\install-latex-renderer.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File $env:TEMP\install-latex-renderer.ps1
 ```
 
-3. 画面に表示されない非表示入力欄が開いたら API キーを貼り付けます。キーは Windows DPAPI で現在の Windows ユーザーに紐づけて暗号化保存されます。
-4. 完了したら、PATH を反映するため**新しい PowerShell ウィンドウを開き直します**。
+3. 非表示の入力欄に API キーを貼り付けます。キーは現在の Windows ユーザー専用に暗号化して保存されます。
+4. インストールが終わったら **新しい PowerShell** を開きます。[セルフホスト環境を使う場合](/docs/cli/#接続先サーバー)は接続先を指定してから変換します。
+
+あとから API キーを登録し直すには `n624-latex setup` で設定画面を開きます。
 
 ## 最初の変換
 
-1. エクスプローラーで `main.tex` があるフォルダを開きます（試せるサンプル文書は[最短でPDFを作る](/docs/#最短でpdfを作る)にあります）。
-2. エクスプローラーのアドレス欄に `powershell` と入力して Enter を押し、次を実行します。
+1. エクスプローラーで `main.tex` があるフォルダを開きます。[最初のサンプル文書](/docs/#最短でpdfを作る)も使えます。
+2. エクスプローラーのアドレス欄に `powershell` と入力して Enter を押します。開いた PowerShell で次を実行します。
 
 ```powershell
 n624-latex main.tex
 ```
 
-同じフォルダに `main.pdf` が生成されます。
-
-`.render` フォルダに成果物一式を出力し、成功後に自動で PDF を開く場合は次を実行します。
-
-```powershell
-n624-latex auth status
-n624-latex render . --open
-```
+同じフォルダに `main.pdf` ができます。ZIP や複数の成果物を扱うには[CLI の変換手順](/docs/cli/#レンダリング)を参照してください。
 
 ## 更新
 
-新しい PowerShell で `n624-latex setup` を実行するか、[インストール](#インストール)の手順を再実行します。クライアント本体が更新される際は、以前の版が日時付きのバックアップへ移動されます。
+PowerShell で `n624-latex setup` を実行し、開いた設定画面から更新します。
 
-`latex-render` だけが入っている場合は、上のインストール手順で取得したインストーラーを `-SkipCredential` 付きで実行します。保存済みの API キーを引き継ぎ、`n624-latex` を追加します。インストール先やコマンドの配置先を変更していた場合は、[同じ場所を指定](/docs/reference/#windowsの配置と保護)してください。
+> [!DETAILS] 履歴資料　v1.6.9 以前から移行する
+>
+> [インストール手順](#インストール)と同じインストーラーを `-SkipCredential` 付きで実行します。保存済みの API キーを引き継ぎ、`n624-latex` を追加します。インストール先を変更していた場合は[同じ場所を指定](/docs/reference/#windowsの配置と保護)してください。既存のスクリプトでは引き続き `latex-render` を使えます。
 
 ## APIキーだけを削除
 

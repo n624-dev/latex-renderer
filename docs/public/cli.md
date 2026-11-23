@@ -2,14 +2,13 @@
 slug: cli
 category: CLI
 title: CLI で変換と結果取得
-description: 実装済みのコマンドと保存される成果物を説明します。
+description: ターミナルでTeXを変換し、PDF、ログ、プレビューを取得する方法です。
 navOrder: 30
 updated: "2026-11-22"
 since: "v1.0.0"
 ---
 
-> [!NOTE]
-> v1.7.0 以降は `n624-latex main.tex` で TeX ファイルを直接変換できます。従来の `latex-render` でも既存のサブコマンドを利用できます。
+`main.tex` のあるフォルダで `n624-latex main.tex` を実行すると、同じフォルダに PDF を保存できます。初めて使う場合は[CLI のインストール](/docs/client/)で接続を設定します。
 
 ## 認証
 
@@ -60,30 +59,21 @@ $env:LATEX_RENDER_BASE_URL = 'https://latex.example.com'
 
 ## セットアップと診断
 
+接続や連携の設定は `n624-latex setup` で開きます。サーバーに接続できない場合は、まず以下で状態を確認します。`n624-latex` が見つからない場合は、[インストールと PATH の確認](/docs/troubleshooting/#インストール-ログイン)を参照してください。
+
 ```sh
-n624-latex setup
-n624-latex setup --gui
 n624-latex setup status
-n624-latex setup repair
 n624-latex doctor
-n624-latex setup remove --yes
 ```
 
-- **`setup`**：対話端末では設定画面を開きます。配布インストーラー版では、公開配布物の SHA-256 を検証して CLI・Local MCP・Skill・ランチャーを導入または更新でき、Codex や Claude Code があればユーザー用の MCP 登録も作成できます。
-- **`setup --gui`**：`127.0.0.1` のランダムポートで一回限りの専用 URL を開き、ブラウザから資格情報、Codex / Claude 連携、診断、サンプル変換、更新、修復を操作できます。外部へは公開されず、CLI を終了すると画面も閉じます（対話操作のため `--json` や `--api-key-stdin` とは併用できません）。
-- **`doctor`**：Node.js、OS、PATH、配布ファイル、資格情報の保護状態、Skill、MCP 登録を読み取り専用で診断します（API キー自体は出力しません）。未導入または degraded の場合は終了コード `2` を返します。
+`doctor` はインストール状態や資格情報を読み取り専用で確認し、API キーの値を出力しません。問題が見つかった場合は終了コード `2` を返します。
 
-セットアップや修復と同時に標準入力から API キーを保存することもできます。
+| インストール方法 | 更新・修復・削除 |
+| --- | --- |
+| APT 版 | [APT で更新](/docs/client/#apt-版の更新)し、破損したパッケージは[再インストール](/docs/client/#状態確認と修復)します。Local MCP は[手動で登録](/docs/mcp/#local-mcpの登録)します。 |
+| 配布インストーラー版 | [設定画面で更新](/docs/client/#配布インストーラー版の更新)します。管理対象の連携設定やランチャーは `n624-latex setup repair` で修復できます。 |
 
-```sh
-n624-latex setup --api-key-stdin
-n624-latex setup repair --api-key-stdin
-n624-latex doctor --json
-```
-
-※ 管理状態ファイルから所有を確認できない既存ランチャー、別 MCP 登録、変更済み Skill は上書き・修復・削除の対象外です。
-
-APT 版では設定画面で API キーを管理できます。クライアント本体の更新・修復・削除は APT で行い、Local MCP は[手動で登録](/docs/mcp/#local-mcpの登録)します。
+削除するときは[インストール方法別の手順](/docs/client/#アンインストール)を参照してください。設定画面は端末上だけで開き、CLI を終了すると画面も閉じます。
 
 ## レンダリング
 

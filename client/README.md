@@ -13,10 +13,10 @@ The API key is stored with Windows DPAPI on Windows and in a user-owned mode `06
 
 On Windows, DPAPI operations use the standard modules belonging to Windows PowerShell itself, independently of inherited PowerShell 7 module search paths. Existing encrypted credentials remain compatible. `doctor --json` verifies that a stored DPAPI credential can be decrypted by the current Windows account without displaying it. Missing files, file-access failures, decryption failures, and PowerShell initialization failures have distinct diagnostics; a runtime failure does not mean that the API key was deleted or revoked.
 
-Remove only the stored API key with `latex-render auth logout`. Run `uninstall.mjs` on any supported OS or the Windows `uninstall.ps1` wrapper to remove the client, credential, and managed unmodified Codex/Claude skills. Modified skills are preserved.
+Remove only the stored API key with `n624-latex auth logout`. For a client installed with the standalone installer, run `n624-latex setup remove --yes` to remove the client and its managed integrations. Use the package manager to remove a client installed through APT, WinGet, or Homebrew.
 
 Add `--json` to any CLI operation to emit one structured result on stdout. Structured output never contains API keys, upload tickets, or job tickets.
 
-Run `latex-render setup` to install or idempotently update the cross-platform client, Skill, launchers, and available Codex/Claude MCP registrations. Run `latex-render setup --gui` for the authenticated loopback-only setup UI. Run `latex-render doctor --json` for a read-only, secret-free diagnosis, `latex-render setup repair` to repair owned settings, and `latex-render setup remove --yes` to remove only managed settings. Conflicting or modified settings are preserved.
+Run `n624-latex setup` to open the local settings page and save a connection, then run `n624-latex main.tex` to create your first PDF. Run `n624-latex doctor --json` for a read-only diagnosis. The existing `latex-render` command remains available for scripts. See the [client guide](https://latex-render.n624.jp/docs/client/) for installation and update instructions.
 
 On Linux and macOS, relative `--install-directory` and `--bin-directory` values are resolved against the working directory before creating launchers or saving installation state. MCP removal requires an exact command and argument match. Edited registrations and unrecognized CLI output are preserved and reported instead of inferred from a matching path substring.

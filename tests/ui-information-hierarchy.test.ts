@@ -158,6 +158,9 @@ describe("concise public UI", () => {
       expect(html).toContain(`href="/downloads/${path}"`);
     }
     expect(html).toContain("クライアント 1.2.3");
+    expect(html).toContain(
+      'href="/docs/client/#debian-ubuntu-の-apt-パッケージ">Debian・Ubuntu に APT でインストール</a>（Node.js 同梱）',
+    );
     expect(html).toContain('href="/docs/client/#linux-macos"');
     expect(html).toContain('href="/docs/windows/"');
     expect(html).not.toContain('class="eyebrow"');

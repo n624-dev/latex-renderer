@@ -27,6 +27,8 @@ Hello, LaTeX!
 - [Web アプリの詳しい使い方](/docs/web/)
 - [PDF や PNG を保存する・SVG を再試行する](/docs/outputs/)
 
+ターミナルから使う場合は、[お使いのOSにCLIをインストール](/docs/client/)します。`n624-latex setup` で接続を設定し、`main.tex` を保存したフォルダで `n624-latex main.tex` を実行すると、`main.pdf` ができます。
+
 ## 利用方法を選ぶ
 
 | やりたいこと | 使う機能 | ガイド |

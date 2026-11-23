@@ -70,6 +70,15 @@ describe("documentation navigation", () => {
     );
   });
 
+  it("keeps historical migration links available without indexing their commands", () => {
+    const heading = "v1.2.xのroot Updaterから権限分離Updaterへ移行する場合";
+    expect(renderPublicDoc("reference")).toContain(heading);
+    const index = publicDocsSearchJson();
+    expect(index).not.toContain("bootstrap-update-manager-transition.sh");
+    expect(index).not.toContain(heading);
+    expect(index).toContain("サーバー設定ウィザード");
+  });
+
   it("serves every public guide from the compatibility Web", async () => {
     const app = createWebApp(distribution);
     for (const { slug, title } of publicDocs) {

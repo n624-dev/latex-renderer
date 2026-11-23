@@ -2,7 +2,7 @@
 import { Writable } from "node:stream";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { RendererClient } from "@latex-renderer/api-client";
 import {
@@ -26,6 +26,7 @@ import {
 } from "@latex-renderer/shared";
 import {
   DEFAULT_DISTRIBUTION_URI,
+  configurePackageIntegrations,
   deleteCredential,
   doctorSetup,
   fetchDistribution,
@@ -38,6 +39,7 @@ import {
   type McpTarget,
   type SetupStatus,
   type SkillTarget,
+  type SystemClientPackage,
 } from "@latex-renderer/setup-core";
 import { createSetupWebActions, runSetupWeb } from "@latex-renderer/setup-web";
 import { Command, CommanderError } from "commander";
@@ -50,12 +52,14 @@ const quietWriter = new Writable({
 
 const publicCommand = process.env.N624_LATEX_COMMAND === "1";
 const commandName = publicCommand ? "n624-latex" : "latex-render";
-const aptManaged = process.env.N624_LATEX_PACKAGE === "apt";
+const packageManager = (["apt", "winget", "homebrew"] as const).find(
+  (manager) => manager === process.env.N624_LATEX_PACKAGE,
+);
 
-function aptManagedError(): AppError {
+function packageManagedError(): AppError {
   return new AppError(
-    "APT_MANAGED_CLIENT",
-    "Manage the installed client with APT (n624-latex)",
+    packageManager === "apt" ? "APT_MANAGED_CLIENT" : "PACKAGE_MANAGED_CLIENT",
+    `Manage the installed client with ${packageManager === "apt" ? "APT" : packageManager === "winget" ? "WinGet" : "Homebrew"} (n624-latex)`,
     400,
   );
 }
@@ -174,7 +178,11 @@ const setup = program
   .option("--api-key-stdin", "store a render API key read from standard input")
   .option("--gui", "open the loopback-only Local Setup Web UI")
   .action(async (options: SetupCommandOptions) => {
-    if (aptManaged && options.apiKeyStdin === true && options.gui !== true) {
+    if (
+      packageManager &&
+      options.apiKeyStdin === true &&
+      options.gui !== true
+    ) {
       await saveCredential((await readStdin()).trim());
       emitSuccess("setup", { configured: true }, () =>
         process.stdout.write("Credential stored.\n"),
@@ -188,7 +196,7 @@ const setup = program
       Object.keys(options).length === 0;
     if (
       options.gui === true ||
-      (aptManaged && !isJsonMode()) ||
+      (packageManager && !isJsonMode()) ||
       interactiveDefault
     ) {
       if (isJsonMode())
@@ -208,17 +216,27 @@ const setup = program
         distributionBaseUri: options.baseUri ?? DEFAULT_DISTRIBUTION_URI,
         rendererBaseUrl: clientRendererBaseUrl(process.env),
       };
-      if (aptManaged) {
+      if (packageManager) {
+        const core = setupCoreOptions(options);
         const actions = createSetupWebActions(webOptions);
-        actions.status = () => inspectSetup(setupCoreOptions(options));
-        actions.doctor = () => doctorSetup(setupCoreOptions(options));
-        for (const name of ["update", "repair"] as const)
-          actions[name] = () => Promise.reject(aptManagedError());
-        await runSetupWeb({ ...webOptions, actions });
+        actions.status = () => inspectSetup(core);
+        actions.doctor = () => doctorSetup(core);
+        actions.update = () => Promise.reject(packageManagedError());
+        actions.repair = (targets) =>
+          packageManager === "apt" || !core.systemPackage
+            ? Promise.reject(packageManagedError())
+            : configurePackageIntegrations({
+                ...core,
+                systemPackage: core.systemPackage,
+                ...targets,
+                output: quietWriter,
+                warning: quietWriter,
+              });
+        await runSetupWeb({ ...webOptions, actions, packageManager });
       } else await runSetupWeb(webOptions);
       return;
     }
-    if (aptManaged) throw aptManagedError();
+    if (packageManager) throw packageManagedError();
     const distribution = await fetchDistribution({
       baseUri: options.baseUri ?? DEFAULT_DISTRIBUTION_URI,
     });
@@ -240,6 +258,35 @@ const setup = program
   });
 
 setup
+  .command("integrations")
+  .description(
+    "configure AI integrations for a WinGet or Homebrew installation",
+  )
+  .action(async (options: SetupCommandOptions) => {
+    const merged = setupSubcommandOptions(options);
+    const core = setupCoreOptions(merged);
+    if (!core.systemPackage || packageManager === "apt")
+      throw new AppError(
+        "DESKTOP_PACKAGE_REQUIRED",
+        "This command is for WinGet or Homebrew installations",
+        400,
+      );
+    const result = await configurePackageIntegrations({
+      ...core,
+      systemPackage: core.systemPackage,
+      skillTarget: parseTarget(merged.skillTarget ?? "both", "skill target"),
+      mcpTarget: parseTarget(merged.mcpTarget ?? "both", "MCP target"),
+      ...(isJsonMode() ? { output: quietWriter, warning: quietWriter } : {}),
+    });
+    emitSuccess("setup.integrations", result, () => {
+      for (const item of result.repaired)
+        process.stdout.write(`Configured: ${item}\n`);
+      for (const item of result.preserved)
+        process.stdout.write(`Preserved: ${item}\n`);
+    });
+  });
+
+setup
   .command("status")
   .description("inspect the managed client without changing it")
   .action(async (options: SetupCommandOptions) => {
@@ -254,7 +301,7 @@ setup
   .command("repair")
   .description("repair only settings owned by this installation")
   .action(async (options: SetupCommandOptions) => {
-    if (aptManaged) throw aptManagedError();
+    if (packageManager) throw packageManagedError();
     const merged = setupSubcommandOptions(options);
     const result = await repairSetup({
       ...setupCoreOptions(merged),
@@ -287,7 +334,7 @@ setup
   .option("--keep-credential", "keep the stored render API key")
   .option("--keep-skills", "keep installed Codex and Claude skills")
   .action(async (options: SetupCommandOptions) => {
-    if (aptManaged) throw aptManagedError();
+    if (packageManager) throw packageManagedError();
     const merged = setupSubcommandOptions(options);
     const result = await removeSetup({
       ...setupCoreOptions(merged),
@@ -773,18 +820,41 @@ function writeJson(value: unknown): void {
 function setupCoreOptions(options: SetupCommandOptions): {
   installDirectory?: string;
   binDirectory?: string;
-  systemPackage?: { version: string; directory: string };
+  systemPackage?: SystemClientPackage;
 } {
+  const directory =
+    packageManager === "apt"
+      ? "/usr/lib/n624-latex/client"
+      : process.env.LATEX_RENDER_INSTALL_DIRECTORY;
+  const binDirectory =
+    packageManager === "apt"
+      ? "/usr/bin"
+      : process.env.LATEX_RENDER_BIN_DIRECTORY;
+  if (
+    packageManager &&
+    (!directory ||
+      !binDirectory ||
+      !isAbsolute(directory) ||
+      !isAbsolute(binDirectory))
+  ) {
+    throw new AppError(
+      "PACKAGE_INSTALLATION_INVALID",
+      "The package launcher must supply absolute paths",
+      400,
+    );
+  }
   return {
     ...(options.installDirectory
       ? { installDirectory: options.installDirectory }
       : {}),
     ...(options.binDirectory ? { binDirectory: options.binDirectory } : {}),
-    ...(aptManaged
+    ...(packageManager && directory && binDirectory
       ? {
           systemPackage: {
+            manager: packageManager,
             version: CLIENT_VERSION,
-            directory: "/usr/lib/n624-latex/client",
+            directory,
+            binDirectory,
           },
         }
       : {}),
