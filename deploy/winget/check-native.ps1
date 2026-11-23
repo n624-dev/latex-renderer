@@ -36,9 +36,20 @@ function Get-CheckedDownload {
     $file
 }
 
+function Test-WinGet {
+    param([string]$File)
+    if (!(Test-Path -LiteralPath $File)) { return $false }
+    try {
+        $probe = & $File --version 2>$null
+        return $LASTEXITCODE -eq 0 -and ($probe -join '') -match '^v?\d+\.\d+'
+    } catch {
+        return $false
+    }
+}
+
 function Get-WinGet {
-    $existing = Get-Command winget.exe -CommandType Application -ErrorAction SilentlyContinue
-    if ($existing) { return $existing.Source }
+    $existing = Get-Command winget.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($existing -and (Test-WinGet $existing.Source)) { return $existing.Source }
 
     $bundle = Get-CheckedDownload 'Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle' '65dea9c01ce08ee7b763366b27c0e651f97db857c11ca9b9c301826c10092f2e'
     $dependencies = Get-CheckedDownload 'DesktopAppInstaller_Dependencies.zip' 'ba875afe9d190f61218985ac0292a99d1db710bf93e13c68944ca9d89f0d82d1'
@@ -51,17 +62,46 @@ function Get-WinGet {
 $ErrorActionPreference = 'Stop'
 $dependencies = @(Get-ChildItem -LiteralPath $env:N624_WINGET_FRAMEWORKS -Filter '*.appx')
 if ($dependencies.Count -ne 3) { throw 'App Installer framework archive is incomplete.' }
-Add-AppxPackage -Path $env:N624_WINGET_BUNDLE -DependencyPath $dependencies.FullName
+$appx = @{ Path = $env:N624_WINGET_BUNDLE; DependencyPath = $dependencies.FullName }
+try {
+    Add-AppxPackage @appx
+} catch {
+    if (($_ | Out-String) -notmatch '0x80073D02') { throw }
+    # This test only runs on a disposable hosted runner. The desktop may
+    # already be using a framework required by the pinned App Installer.
+    Write-Warning 'Installing App Installer requires closing applications that are using its framework dependencies.'
+    Add-AppxPackage @appx -ForceApplicationShutdown
+}
 '@
         Invoke-Checked 'powershell.exe' @('-NoProfile', '-NonInteractive', '-Command', $install) | Out-Host
     } finally {
         Remove-Item Env:N624_WINGET_BUNDLE,Env:N624_WINGET_FRAMEWORKS -ErrorAction SilentlyContinue
     }
     $aliasPath = Join-Path $env:LOCALAPPDATA 'Microsoft/WindowsApps/winget.exe'
-    if (!(Test-Path -LiteralPath $aliasPath)) {
-        throw 'WinGet application alias is unavailable after App Installer registration.'
+    for ($attempt = 0; $attempt -lt 10; $attempt++) {
+        if (Test-WinGet $aliasPath) { return $aliasPath }
+        Start-Sleep -Seconds 1
     }
-    $aliasPath
+    throw 'WinGet application alias is unavailable after App Installer registration.'
+}
+
+function Assert-NativeExecutable {
+    param([string]$File)
+    $resolved = [IO.File]::ResolveLinkTarget($File, $true)
+    if ($resolved) { $File = $resolved.FullName }
+    $reader = [IO.BinaryReader]::new([IO.File]::OpenRead($File))
+    try {
+        if ($reader.ReadUInt16() -ne 0x5a4d) { throw 'Invalid executable DOS header.' }
+        $reader.BaseStream.Position = 0x3c
+        $reader.BaseStream.Position = $reader.ReadUInt32()
+        if ($reader.ReadUInt32() -ne 0x00004550) { throw 'Invalid executable PE header.' }
+        $expected = @{ x64 = 0x8664; arm64 = 0xaa64 }
+        if ($reader.ReadUInt16() -ne $expected[$Architecture]) {
+            throw "The package executable is not native $Architecture`: $File"
+        }
+    } finally {
+        $reader.Dispose()
+    }
 }
 
 function Assert-Installed {
@@ -71,21 +111,37 @@ function Assert-Installed {
         [Environment]::ExpandEnvironmentVariables($_).TrimEnd('\', '/')
     })
     if ($links -notin $normalized) { throw 'WinGet did not register the user Links directory on PATH.' }
-    $env:Path = "$([Environment]::GetEnvironmentVariable('Path', 'Machine'));$userPath;$originalPath"
+    $env:Path = "$fixtureBin;$([Environment]::GetEnvironmentVariable('Path', 'Machine'));$userPath;$originalPath"
     foreach ($name in @('n624-latex', 'latex-render', 'latex-render-admin')) {
-        $command = Get-Command "$name.exe" -CommandType Application
+        $command = Get-Command "$name.exe" -CommandType Application | Select-Object -First 1
         if ($command.Source -ne (Join-Path $links "$name.exe")) { throw "$name is missing from the WinGet PATH." }
+        Assert-NativeExecutable $command.Source
         if ((Invoke-Checked $command.Source @('--version')).Trim() -ne $Version) {
             throw "$name did not start the expected bundled version."
         }
     }
+    $mcpPath = Join-Path $links 'latex-renderer-mcp.exe'
+    Assert-NativeExecutable $mcpPath
+    $executable = [IO.File]::ResolveLinkTarget($mcpPath, $true)
+    if (!$executable) { throw 'WinGet did not create its expected launcher link.' }
+    Assert-NativeExecutable (Join-Path $executable.DirectoryName 'runtime\node.exe')
     $status = Invoke-Checked (Join-Path $links 'n624-latex.exe') @('auth', 'status', '--json') | ConvertFrom-Json
     if (!$status.success -or !$status.result.configured) { throw 'The installed client cannot decrypt the saved key.' }
     if ((Get-FileHash -LiteralPath $credential -Algorithm SHA256).Hash -ne $credentialHash) {
         throw 'The saved DPAPI credential changed.'
     }
-    if ((Get-FileHash -LiteralPath $registration -Algorithm SHA256).Hash -ne $registrationHash) {
-        throw 'The existing MCP registration changed.'
+}
+
+function Assert-ClientPath {
+    $entries = @(Get-Command n624-latex -All -CommandType Application)
+    $managed = Join-Path $links 'n624-latex.exe'
+    $legacy = Join-Path $legacyInstall 'bin\n624-latex.cmd'
+    if ($managed -notin $entries.Source -or $legacy -notin $entries.Source) {
+        throw 'The WinGet and legacy clients were not both discoverable in the refreshed shell.'
+    }
+    if ($entries[0].Source -ne $managed) {
+        if ($entries[0].Source -ne $legacy) { throw 'An unrelated application shadows n624-latex.' }
+        Write-Output 'The existing legacy PATH entry takes priority. Verifying the documented explicit WinGet launcher.'
     }
 }
 
@@ -117,6 +173,99 @@ function Assert-Mcp {
     }
 }
 
+function Assert-Registration {
+    param([string]$File, [string]$ExpectedLauncher, [switch]$Legacy)
+    $entry = Get-Content -LiteralPath $File -Raw | ConvertFrom-Json
+    if (!$entry.enabled -or $entry.transport.type -ne 'stdio') {
+        throw 'The fixture does not have an enabled stdio MCP registration.'
+    }
+    if ($Legacy) {
+        if ($entry.transport.command -ne 'cmd' -or $entry.transport.args.Count -ne 2 -or
+            $entry.transport.args[0] -ne '/c' -or $entry.transport.args[1] -ne $ExpectedLauncher) {
+            throw 'The existing Codex registration does not use the legacy installer launcher.'
+        }
+    } elseif ($entry.transport.command -ne $ExpectedLauncher -or $entry.transport.args.Count -ne 0) {
+        throw 'The new Codex registration does not use the stable WinGet launcher.'
+    }
+    Assert-Mcp $ExpectedLauncher
+}
+
+function New-CodexFixture {
+    $null = New-Item -ItemType Directory -Path $fixtureBin
+    $fixtureSource = Join-Path $work 'codex-fixture.go'
+    [IO.File]::WriteAllText($fixtureSource, @'
+package main
+
+import (
+    "encoding/json"
+    "fmt"
+    "os"
+    "slices"
+)
+
+type transport struct {
+    Type string `json:"type"`
+    Command string `json:"command"`
+    Args []string `json:"args"`
+}
+
+type registration struct {
+    Enabled bool `json:"enabled"`
+    Transport transport `json:"transport"`
+}
+
+func main() {
+    if err := run(os.Args[1:], os.Getenv("FIXTURE_MCP_STATE")); err != nil {
+        fmt.Fprintln(os.Stderr, err)
+        os.Exit(1)
+    }
+}
+
+func run(args []string, state string) error {
+    if state == "" {
+        return fmt.Errorf("missing Codex fixture state path")
+    }
+    switch {
+    case slices.Equal(args, []string{"--version"}):
+        fmt.Println("Codex test fixture 1")
+    case slices.Equal(args, []string{"mcp", "get", "latex-renderer", "--json"}):
+        bytes, err := os.ReadFile(state)
+        if os.IsNotExist(err) {
+            return fmt.Errorf("No MCP server found")
+        }
+        if err != nil {
+            return err
+        }
+        // Model Codex's public get output without unrelated configuration.
+        var entry registration
+        if err := json.Unmarshal(bytes, &entry); err != nil {
+            return err
+        }
+        return json.NewEncoder(os.Stdout).Encode(entry)
+    case len(args) >= 5 && slices.Equal(args[:4], []string{"mcp", "add", "latex-renderer", "--"}):
+        entry := registration{true, transport{"stdio", args[4], args[5:]}}
+        bytes, err := json.Marshal(entry)
+        if err != nil {
+            return err
+        }
+        file, err := os.OpenFile(state, os.O_WRONLY | os.O_CREATE | os.O_EXCL, 0600)
+        if err != nil {
+            return err
+        }
+        defer file.Close()
+        _, err = file.Write(bytes)
+        return err
+    case slices.Equal(args, []string{"mcp", "remove", "latex-renderer"}):
+        return os.Remove(state)
+    default:
+        return fmt.Errorf("unexpected Codex fixture arguments: %q", args)
+    }
+    return nil
+}
+'@)
+    Invoke-Checked 'go' @('build', '-o', (Join-Path $fixtureBin 'codex.exe'), $fixtureSource) | Out-Host
+}
+
 $candidate = (Get-Item -LiteralPath $CandidateArchive).FullName
 $previous = (Get-Item -LiteralPath $PreviousClientArchive).FullName
 $releasePattern = '[0-9]+\.[0-9]+\.[0-9]+(?:-rc\.[1-9][0-9]*)?'
@@ -130,18 +279,22 @@ $work = Join-Path $env:RUNNER_TEMP "n624-winget-$([guid]::NewGuid())"
 $null = New-Item -ItemType Directory -Path $work
 $originalPath = $env:Path
 $originalUserPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-$environmentNames = @('APPDATA', 'LATEX_RENDER_API_KEY', 'LATEX_RENDER_BASE_URL')
+$environmentNames = @('APPDATA', 'LATEX_RENDER_API_KEY', 'LATEX_RENDER_BASE_URL', 'FIXTURE_MCP_STATE')
 $originalEnvironment = @{}
 foreach ($name in $environmentNames) { $originalEnvironment[$name] = [Environment]::GetEnvironmentVariable($name) }
 $server = $null
 $winget = $null
 $armed = $false
 $installedManifest = $null
+$legacyInstall = Join-Path $env:LOCALAPPDATA 'LaTeXRenderer'
+$ownsLegacyInstall = $false
+$fixtureBin = Join-Path $work 'fixture-bin'
 $manifestWriter = Join-Path $PSScriptRoot 'write-manifest.mjs'
 $packageBuilder = Join-Path $PSScriptRoot 'build-package.mjs'
 
 try {
     $winget = Get-WinGet
+    if (Test-Path -LiteralPath $legacyInstall) { throw 'The fixture cannot overwrite an existing legacy installation.' }
     $links = Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links'
     foreach ($name in @('n624-latex', 'latex-render', 'latex-render-admin', 'latex-renderer-mcp')) {
         if (Test-Path -LiteralPath (Join-Path $links "$name.exe")) { throw "WinGet fixture path is in use: $name" }
@@ -213,7 +366,8 @@ server.listen(0, "127.0.0.1", () => writeFileSync(ready, String(server.address()
     $fixtureScript = Join-Path $work 'fixture.cjs'
     $portFile = Join-Path $work 'port'
     [IO.File]::WriteAllText($fixtureScript, $serverScript)
-    $info = [Diagnostics.ProcessStartInfo]::new((Get-Command node -CommandType Application).Source)
+    $node = Get-Command node.exe -CommandType Application | Select-Object -First 1
+    $info = [Diagnostics.ProcessStartInfo]::new($node.Source)
     $info.UseShellExecute = $false
     foreach ($argument in @($fixtureScript, $assets, $portFile)) { $info.ArgumentList.Add($argument) }
     $server = [Diagnostics.Process]::Start($info)
@@ -236,24 +390,27 @@ server.listen(0, "127.0.0.1", () => writeFileSync(ready, String(server.address()
 
     $env:APPDATA = Join-Path $work 'profile'
     $env:LATEX_RENDER_BASE_URL = $origin
+    New-CodexFixture
+    $env:Path = "$fixtureBin;$originalPath"
+    $legacyRegistration = Join-Path $work 'legacy-mcp.json'
+    $env:FIXTURE_MCP_STATE = $legacyRegistration
     Remove-Item Env:LATEX_RENDER_API_KEY -ErrorAction SilentlyContinue
-    $installation = Join-Path $work 'legacy'
-    $legacyBin = Join-Path $work 'legacy-bin'
+    $ownsLegacyInstall = $true
     $fixtureKey = "lrk_$('a' * 32)_$('A' * 43)"
-    $fixtureKey | & node (Join-Path $legacyPayload 'install.mjs') --base-uri $origin --install-directory $installation --bin-directory $legacyBin --skill-target none --mcp-target none --api-key-stdin | Out-Null
+    $fixtureKey | & node (Join-Path $legacyPayload 'install.mjs') --base-uri $origin --skill-target none --mcp-target codex --api-key-stdin --json | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'The verified prior legacy installer failed.' }
     $credential = Join-Path $env:APPDATA 'latex-renderer/credential.bin'
     if ([Text.Encoding]::UTF8.GetString([IO.File]::ReadAllBytes($credential)).Contains($fixtureKey)) {
         throw 'The prior client wrote a plaintext API key.'
     }
     $credentialHash = (Get-FileHash -LiteralPath $credential -Algorithm SHA256).Hash
-    # The absolute launcher in an existing registration should remain usable
-    # after migration, even while the WinGet alias runs a different version.
-    $legacyMcp = Join-Path $legacyBin 'latex-renderer-mcp.cmd'
-    $registration = Join-Path $work 'codex-config.toml'
-    [IO.File]::WriteAllText($registration, "[mcp_servers.latex-renderer]`ncommand = $($legacyMcp | ConvertTo-Json -Compress)`n")
-    $registrationHash = (Get-FileHash -LiteralPath $registration -Algorithm SHA256).Hash
-    Assert-Mcp $legacyMcp
+    $legacyMcp = Join-Path $legacyInstall 'bin\latex-renderer-mcp.cmd'
+    Assert-Registration $legacyRegistration $legacyMcp -Legacy
+    $customized = Get-Content -LiteralPath $legacyRegistration -Raw | ConvertFrom-Json -AsHashtable
+    $customized['tool_timeout_sec'] = 120
+    $customized['enabled_tools'] = @('render', 'get_job')
+    [IO.File]::WriteAllText($legacyRegistration, ($customized | ConvertTo-Json -Depth 10))
+    $legacyRegistrationHash = (Get-FileHash -LiteralPath $legacyRegistration -Algorithm SHA256).Hash
 
     Invoke-Checked $winget @('settings', '--enable', 'LocalManifestFiles') | Out-Host
     $armed = $true
@@ -262,19 +419,54 @@ server.listen(0, "127.0.0.1", () => writeFileSync(ready, String(server.address()
     $installedManifest = $oldManifest
     Invoke-Checked $winget (@('install', '--manifest', $installedManifest) + $installationOptions) | Out-Host
     Assert-Installed $previousVersion
+    $managedCli = Join-Path $links 'n624-latex.exe'
+    $managedMcp = Join-Path $links 'latex-renderer-mcp.exe'
 
     Invoke-Checked $winget (@('upgrade', '--manifest', $newManifest) + $installationOptions) | Out-Host
     $installedManifest = $newManifest
     Assert-Installed $version
-    Assert-Mcp (Join-Path $links 'latex-renderer-mcp.exe')
-    Assert-Mcp $legacyMcp
+    Assert-ClientPath
+    $setupArgs = @('setup', 'integrations', '--mcp-target', 'codex', '--skill-target', 'none', '--json')
+    $preserved = Invoke-Checked $managedCli $setupArgs | ConvertFrom-Json
+    if (!$preserved.success -or 'mcp:codex:conflict' -notin $preserved.result.preserved -or
+        (Get-FileHash -LiteralPath $legacyRegistration -Algorithm SHA256).Hash -ne $legacyRegistrationHash) {
+        throw 'Explicit AI integration setup did not preserve the existing customized Codex registration.'
+    }
+    Assert-Registration $legacyRegistration $legacyMcp -Legacy
+    $managedRegistration = Join-Path $work 'managed-mcp.json'
+    $env:FIXTURE_MCP_STATE = $managedRegistration
+    $fresh = Invoke-Checked $managedCli $setupArgs | ConvertFrom-Json
+    if (!$fresh.success -or 'mcp:codex' -notin $fresh.result.repaired) {
+        throw 'Explicit AI integration setup did not register Codex with the WinGet launcher.'
+    }
+    Assert-Registration $managedRegistration $managedMcp
+    $managedRegistrationHash = (Get-FileHash -LiteralPath $managedRegistration -Algorithm SHA256).Hash
+    $existingAppData = $env:APPDATA
+    try {
+        $env:APPDATA = Join-Path $work 'new-profile'
+        $null = New-Item -ItemType Directory -Path $env:APPDATA
+        $login = $fixtureKey | & $managedCli setup --api-key-stdin --json | ConvertFrom-Json
+        if ($LASTEXITCODE -ne 0 -or !$login.success -or !$login.result.configured) {
+            throw 'A fresh Windows user profile could not save an API key with the packaged client.'
+        }
+        $freshStatus = Invoke-Checked $managedCli @('auth', 'status', '--json') | ConvertFrom-Json
+        if (!$freshStatus.success -or !$freshStatus.result.configured) {
+            throw 'A fresh Windows user profile could not reload the packaged client key.'
+        }
+        $freshCredential = Join-Path $env:APPDATA 'latex-renderer\credential.bin'
+        if ([Text.Encoding]::UTF8.GetString([IO.File]::ReadAllBytes($freshCredential)).Contains($fixtureKey)) {
+            throw 'The packaged client wrote a plaintext API key.'
+        }
+    } finally {
+        $env:APPDATA = $existingAppData
+    }
 
     $project = Join-Path $work 'project'
     $null = New-Item -ItemType Directory -Path $project
     [IO.File]::WriteAllText((Join-Path $project 'main.tex'), '\documentclass{article}\begin{document}WinGet\end{document}')
     Push-Location $project
     try {
-        Invoke-Checked (Join-Path $links 'n624-latex.exe') @('main.tex') | Out-Host
+        Invoke-Checked $managedCli @('main.tex') | Out-Host
         if ((Get-Content -LiteralPath 'main.pdf' -TotalCount 1) -ne '%PDF-1.4') {
             throw 'The installed CLI did not save the PDF from the configured test server.'
         }
@@ -288,10 +480,11 @@ server.listen(0, "127.0.0.1", () => writeFileSync(ready, String(server.address()
         if (Test-Path -LiteralPath (Join-Path $links "$name.exe")) { throw "WinGet left a launcher on PATH: $name" }
     }
     if ((Get-FileHash -LiteralPath $credential -Algorithm SHA256).Hash -ne $credentialHash -or
-        (Get-FileHash -LiteralPath $registration -Algorithm SHA256).Hash -ne $registrationHash) {
+        (Get-FileHash -LiteralPath $legacyRegistration -Algorithm SHA256).Hash -ne $legacyRegistrationHash -or
+        (Get-FileHash -LiteralPath $managedRegistration -Algorithm SHA256).Hash -ne $managedRegistrationHash) {
         throw 'Uninstall changed the existing credential or MCP registration.'
     }
-    Assert-Mcp $legacyMcp
+    Assert-Registration $legacyRegistration $legacyMcp -Legacy
     Write-Output "WinGet install, upgrade, same-user credential and MCP migration, and uninstall passed on $Architecture."
 } finally {
     if ($installedManifest) {
@@ -307,5 +500,6 @@ server.listen(0, "127.0.0.1", () => writeFileSync(ready, String(server.address()
     }
     [Environment]::SetEnvironmentVariable('Path', $originalUserPath, 'User')
     $env:Path = $originalPath
+    if ($ownsLegacyInstall) { Remove-Item -LiteralPath $legacyInstall -Recurse -Force -ErrorAction SilentlyContinue }
     Remove-Item -LiteralPath $work -Recurse -Force
 }

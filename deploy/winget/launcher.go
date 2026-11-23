@@ -30,6 +30,7 @@ func run() error {
 	}
 	directory := filepath.Dir(launcher)
 	name := strings.ToLower(filepath.Base(launcher))
+	bin := commandDirectory(launcher)
 	entry := ""
 	public := "0"
 	switch name {
@@ -51,9 +52,35 @@ func run() error {
 		"N624_LATEX_COMMAND="+public,
 		"N624_LATEX_PACKAGE=winget",
 		"LATEX_RENDER_INSTALL_DIRECTORY="+directory,
-		"LATEX_RENDER_BIN_DIRECTORY="+directory,
-		"LATEX_RENDER_CLI_PATH="+filepath.Join(directory, "latex-render.exe"),
+		"LATEX_RENDER_BIN_DIRECTORY="+bin,
+		"LATEX_RENDER_CLI_PATH="+filepath.Join(bin, "latex-render.exe"),
 	)
 	child.Stdin, child.Stdout, child.Stderr = os.Stdin, os.Stdout, os.Stderr
 	return child.Run()
+}
+
+func commandDirectory(launcher string) string {
+	var directories []string
+	if local := os.Getenv("LOCALAPPDATA"); filepath.IsAbs(local) {
+		directories = append(directories, filepath.Join(local, "Microsoft", "WinGet", "Links"))
+	}
+	directories = append(directories, filepath.SplitList(os.Getenv("PATH"))...)
+	root := filepath.Dir(launcher)
+	for _, directory := range directories {
+		if !filepath.IsAbs(directory) {
+			continue
+		}
+		matches := true
+		for _, name := range []string{"n624-latex.exe", "latex-render.exe", "latex-renderer-mcp.exe", "latex-render-admin.exe"} {
+			target, err := filepath.EvalSymlinks(filepath.Join(directory, name))
+			if err != nil || !strings.EqualFold(target, filepath.Join(root, name)) {
+				matches = false
+				break
+			}
+		}
+		if matches {
+			return filepath.Clean(directory)
+		}
+	}
+	return root
 }

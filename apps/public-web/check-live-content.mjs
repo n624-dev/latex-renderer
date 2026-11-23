@@ -18,14 +18,11 @@ const routes = [
 ];
 
 for (const route of routes) {
-  const expected = await readFile(
-    new URL(`./dist${route}index.html`, import.meta.url),
-    "utf8",
-  );
-  const heading = /<h1>[^<]+<\/h1>/.exec(expected)?.[0];
-  const html = await (await request(route)).text();
-  if (!heading || !html.includes(heading))
-    throw new Error(`Unexpected guide title at ${route}`);
+  const expected = await readFile(new URL(`./dist${route}index.html`, import.meta.url));
+  await verifyDownload(route, {
+    size: expected.length,
+    sha256: createHash("sha256").update(expected).digest("hex"),
+  });
 }
 
 const clientGuide = await (await request("/docs/client/")).text();
@@ -49,6 +46,7 @@ for (const text of [
 }
 for (const [route, metadataRoute, expected] of [
   ["/downloads/client/latest.zip", "/downloads/client/manifest.json", client],
+  ["/downloads/windows/latest.zip", "/downloads/windows/manifest.json", client],
   ["/downloads/mcpb/latest.mcpb", "/downloads/mcpb/mcpb.json", mcpb],
 ]) {
   const metadata = await (await request(metadataRoute)).json();

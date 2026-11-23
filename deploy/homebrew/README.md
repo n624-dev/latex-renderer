@@ -18,6 +18,7 @@ directory. The supported installation target is macOS.
    The generator checks the immutable release, expected asset URL, size,
    SHA-256, and build attestation. Copy the formula to
    `Formula/n624-latex.rb` in `n624-dev/homebrew-tap`.
+
 4. Verify a fresh installation from the public tap before advertising it in
    the download and installation guides.
 
@@ -30,9 +31,15 @@ directory. The supported installation target is macOS.
    legacy migration, use `type -a n624-latex` to identify any old launcher
    ahead of Homebrew on PATH. Open the Homebrew client directly with
    `"$(brew --prefix)/bin/n624-latex" setup` if an older copy takes priority.
-   Select integration configuration to migrate launcher registrations owned by
-   the previous installer. Put the Homebrew bin directory first on PATH for
-   subsequent commands.
+   Put the Homebrew bin directory first on PATH for subsequent commands.
+
+   Integration setup adds Local MCP where it has yet to be configured. Existing
+   registrations keep their current settings and launcher. To switch an
+   existing registration to Homebrew, run `brew --prefix` and use the resulting
+   absolute `bin/latex-renderer-mcp` path for the `latex-renderer` server's
+   `command` field in Codex or Claude Code. Leave the other MCP settings as
+   they are, restart the AI tool, and confirm the connection before uninstalling
+   an older copy of the client.
 
 Users update and uninstall with `brew upgrade n624-dev/tap/n624-latex` and
 `brew uninstall n624-dev/tap/n624-latex`. Uninstall removes the package

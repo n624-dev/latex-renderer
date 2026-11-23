@@ -96,8 +96,12 @@ for (const [suffix, contents] of [
       `InstallerType: zip
 NestedInstallerType: portable
 NestedInstallerFiles:
-${commands.map((name) => `- RelativeFilePath: ${name}.exe
-  PortableCommandAlias: ${name}`).join("\n")}
+${commands
+  .map(
+    (name) => `- RelativeFilePath: ${name}.exe
+  PortableCommandAlias: ${name}`,
+  )
+  .join("\n")}
 Scope: user
 InstallModes:
 - silent

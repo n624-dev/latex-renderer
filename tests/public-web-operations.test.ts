@@ -46,7 +46,7 @@ describe("public Web operations", () => {
       'check-live-content.mjs "$preview_url"',
     );
     const workerDeploy = deploy.indexOf("wrangler versions deploy");
-    const routeApply = deploy.indexOf("sync-public-worker-routes.mjs --apply");
+    const routeCheck = deploy.indexOf('node deploy/scripts/sync-public-worker-routes.mjs\n');
 
     expect(mainGuard).toBeGreaterThan(-1);
     expect(deploy).toContain("git status --porcelain");
@@ -56,7 +56,8 @@ describe("public Web operations", () => {
     expect(deploy).toContain("prepare-public-release-client.sh");
     expect(workerUpload).toBeLessThan(verifyPreview);
     expect(verifyPreview).toBeLessThan(workerDeploy);
-    expect(workerDeploy).toBeLessThan(routeApply);
+    expect(routeCheck).toBeGreaterThan(verifyPreview);
+    expect(routeCheck).toBeLessThan(workerDeploy);
   });
 
   it("has independent version and VPS rollback paths", () => {

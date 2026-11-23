@@ -130,9 +130,13 @@ try {
   installer.child.stdin.end(fixtureCredential + "\n");
   assert.equal(JSON.parse((await installer).stdout).success, true);
   const before = await readFile(credential);
-  const registration = async () =>
-    JSON.parse(await readFile(mcpState, "utf8")).transport.command;
-  const legacyMcp = await registration();
+  const legacyRegistration = JSON.parse(await readFile(mcpState, "utf8"));
+  const legacyMcp = legacyRegistration.transport.command;
+  legacyRegistration.enabled_tools = ["render_project"];
+  legacyRegistration.startup_timeout_sec = 30;
+  legacyRegistration.transport.env = { N624_FIXTURE_SETTING: "preserve" };
+  await writeFile(mcpState, JSON.stringify(legacyRegistration, null, 2) + "\n");
+  const legacyMcpSettings = await readFile(mcpState);
   assert.notEqual(legacyMcp, publishedMcp);
   await checkPackagedMcp(
     spawn(legacyMcp, [], { env, stdio: ["pipe", "pipe", "ignore"] }),
@@ -167,7 +171,13 @@ try {
   assert.equal(await cli(publishedCli, ["--version"]), version);
   const freshHome = join(stage, "fresh-home");
   await mkdir(freshHome, { mode: 0o700 });
-  const freshEnv = { ...env, HOME: freshHome, XDG_CONFIG_HOME: freshHome };
+  const freshMcpState = join(freshHome, "fixture-mcp.json");
+  const freshEnv = {
+    ...env,
+    HOME: freshHome,
+    XDG_CONFIG_HOME: freshHome,
+    FIXTURE_MCP_STATE: freshMcpState,
+  };
   const freshSetup = exec(
     publishedCli,
     ["setup", "--api-key-stdin", "--json"],
@@ -199,21 +209,37 @@ try {
     cli(publishedCli, ["setup", "remove", "--yes", "--json"]),
     (error) => JSON.parse(error.stdout).error.code === "PACKAGE_MANAGED_CLIENT",
   );
-  const configured = JSON.parse(
-    await cli(publishedCli, [
-      "setup",
-      "integrations",
-      "--mcp-target",
-      "codex",
-      "--skill-target",
-      "none",
-      "--json",
-    ]),
+  const integrationArgs = [
+    "setup",
+    "integrations",
+    "--mcp-target",
+    "codex",
+    "--skill-target",
+    "none",
+    "--json",
+  ];
+  assert.equal(
+    JSON.parse(await cli(publishedCli, integrationArgs)).success,
+    true,
   );
-  assert.equal(configured.success, true);
-  assert.equal(await registration(), publishedMcp);
+  assert.deepEqual(await readFile(mcpState), legacyMcpSettings);
   await checkPackagedMcp(
-    spawn(await registration(), [], { env, stdio: ["pipe", "pipe", "ignore"] }),
+    spawn(legacyMcp, [], { env, stdio: ["pipe", "pipe", "ignore"] }),
+  );
+  assert.equal(
+    JSON.parse(await cli(publishedCli, integrationArgs, { env: freshEnv }))
+      .success,
+    true,
+  );
+  assert.equal(
+    JSON.parse(await readFile(freshMcpState, "utf8")).transport.command,
+    publishedMcp,
+  );
+  await checkPackagedMcp(
+    spawn(publishedMcp, [], {
+      env: freshEnv,
+      stdio: ["pipe", "pipe", "ignore"],
+    }),
   );
   await checkPackagedRender(join(stage, "render"), (cwd, endpoint) =>
     cli(publishedCli, ["main.tex"], {
@@ -224,12 +250,14 @@ try {
 
   // A formula revision advances Homebrew's package version while using the
   // exact same ZIP. This checks the upgrade lifecycle for the first release.
+  const oldKeg = await realpath(await brew("--prefix", formula));
   await writeFile(
     brewFormulaPath,
     renderHomebrewFormula(version, sha256, { fixture, revision: 1 }),
   );
   await brew("upgrade", formula);
   await brew("cleanup", "--prune=all", formula);
+  await assert.rejects(lstat(oldKeg), { code: "ENOENT" });
   assert.match(
     await brew("list", "--versions", formula),
     new RegExp(` ${version.replaceAll(".", "\\.")}_1(?: |$)`),
@@ -242,16 +270,36 @@ try {
   );
   assert.equal(await cli(publishedCli, ["--version"]), version);
   assert.deepEqual(await readFile(credential), before);
-  assert.equal(await registration(), publishedMcp);
+  assert.deepEqual(await readFile(mcpState), legacyMcpSettings);
+  assert.equal(
+    JSON.parse(await readFile(freshMcpState, "utf8")).transport.command,
+    publishedMcp,
+  );
   await checkPackagedMcp(
-    spawn(await registration(), [], { env, stdio: ["pipe", "pipe", "ignore"] }),
+    spawn(publishedMcp, [], {
+      env: freshEnv,
+      stdio: ["pipe", "pipe", "ignore"],
+    }),
+  );
+
+  await checkPackagedRender(
+    join(stage, "render-after-upgrade"),
+    (cwd, endpoint) =>
+      cli(publishedCli, ["main.tex"], {
+        cwd,
+        env: { ...env, LATEX_RENDER_BASE_URL: endpoint },
+      }),
   );
 
   await brew("uninstall", "--force", formula);
   await assert.rejects(lstat(publishedCli), { code: "ENOENT" });
   await assert.rejects(lstat(publishedMcp), { code: "ENOENT" });
   assert.deepEqual(await readFile(credential), before);
-  assert.equal(await registration(), publishedMcp);
+  assert.deepEqual(await readFile(mcpState), legacyMcpSettings);
+  assert.equal(
+    JSON.parse(await readFile(freshMcpState, "utf8")).transport.command,
+    publishedMcp,
+  );
   assert((await lstat(legacyMcp)).isFile());
   process.stdout.write(
     `Homebrew package lifecycle passed on macOS ${process.arch}.\n`,

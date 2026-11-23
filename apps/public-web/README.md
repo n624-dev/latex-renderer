@@ -52,8 +52,8 @@ For a public site update from a clean `main` checkout, set `PUBLIC_ORIGIN`
 and run `sh deploy/scripts/deploy-public-web-production.sh`. The script
 verifies the latest immutable Stable client downloads, builds the guides,
 checks the uploaded Worker preview, and verifies the public routes and asset
-hashes after activation. Cloudflare credentials and Worker version previews
-must be available.
+hashes after activation. Cloudflare credentials, Worker version previews, and
+the public routes configured by `routes:apply` must be available.
 
 `routes:apply` adds only `/`, `/docs`, `/downloads`,
 `/assets`, `/openapi`, and legacy `/client` patterns. `routes:disable` removes

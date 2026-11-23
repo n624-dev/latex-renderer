@@ -80,6 +80,7 @@ printf '%s\n' "$version_id" | grep -Eq '^[0-9a-f-]{36}$'
 printf '%s\n' "$preview_url" | grep -Eq '^https://[a-z0-9.-]+\.workers\.dev/?$'
 node apps/public-web/check-live-content.mjs "$preview_url"
 
+node deploy/scripts/sync-public-worker-routes.mjs
 pnpm --filter @latex-renderer/public-web exec wrangler deployments list --json \
   >"$temporary_root/deployments-current.json"
 [ "$(node deploy/scripts/read-active-worker-version.mjs "$temporary_root/deployments-current.json")" = "$previous_version" ] || {
@@ -87,8 +88,7 @@ pnpm --filter @latex-renderer/public-web exec wrangler deployments list --json \
   exit 1
 }
 pnpm --filter @latex-renderer/public-web exec wrangler versions deploy "$version_id@100" --yes
-if ! node deploy/scripts/sync-public-worker-routes.mjs --apply ||
-  ! node apps/public-web/check-live-content.mjs "$public_origin" ||
+if ! node apps/public-web/check-live-content.mjs "$public_origin" ||
   ! deploy/scripts/smoke-test-public-worker-boundary.sh ||
   ! deploy/scripts/smoke-test-unified-origin.sh; then
   echo "Public verification failed. Restoring the previous Worker version." >&2

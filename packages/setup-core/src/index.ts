@@ -714,37 +714,8 @@ export async function configurePackageIntegrations({
   }
   const runner = options.runner ?? defaultCommandRunner;
   const command = { command: paths.mcpLauncher, args: [] };
-  if (legacyPaths && legacy.kind === "managed") {
-    const oldCommand = mcpCommand(legacyPaths);
-    for (const client of selectedTargets(mcpTarget)) {
-      if (
-        !legacy.state.managedMcpClients.includes(client) ||
-        inspectMcpTarget(legacyPaths, client, runner) !== "current"
-      )
-        continue;
-      const removeArgs = [
-        "mcp",
-        "remove",
-        MCP_SERVER_NAME,
-        ...(client === "claude" ? ["--scope", "user"] : []),
-      ];
-      if (runner(client, removeArgs).status !== 0) {
-        preserved.push(`mcp:${client}:migration_failed`);
-        continue;
-      }
-      if (addMcpTarget(client, command, runner)) {
-        repaired.push(`mcp:${client}`);
-      } else {
-        if (!addMcpTarget(client, oldCommand, runner))
-          throw new AppError(
-            "MCP_MIGRATION_RESTORE_FAILED",
-            `Could not restore the previous ${client} MCP registration`,
-            409,
-          );
-        preserved.push(`mcp:${client}:migration_failed`);
-      }
-    }
-  }
+  // Existing entries may carry restrictions that the AI clients' inspection
+  // commands do not expose. Leave those entries intact and add missing ones.
   const mcp = repairMcpTargets(paths, mcpTarget, [], runner, command);
   return {
     repaired: [...repaired, ...mcp.repaired],
