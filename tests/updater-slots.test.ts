@@ -290,7 +290,7 @@ it("requires the release E2E before upload and grants it no publishing authority
   expect(upload).toMatch(
     /^\s*needs: \[build, update-e2e, client-migration, winget, homebrew\]/m,
   );
-  const e2e = workflow.split("\n  update-e2e:")[1]?.split(/\n  [\w-]+:/)[0];
+  const e2e = workflow.split("\n  update-e2e:")[1]?.split(/\n {2}[\w-]+:/)[0];
   expect(e2e).toContain("contents: read");
   expect(e2e).not.toContain("contents: write");
   expect(e2e).not.toContain("secrets.");

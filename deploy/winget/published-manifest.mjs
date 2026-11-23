@@ -5,7 +5,7 @@ import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import process from "node:process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, URL } from "node:url";
 import { releaseAttestationArgs } from "../scripts/release-attestation.mjs";
 import { validStableVersion } from "../scripts/release-version.mjs";
 
