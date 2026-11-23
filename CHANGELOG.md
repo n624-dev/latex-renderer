@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## 1.7.1-rc.1 - 2026-11-23
+## 1.7.1 - 2026-11-23
 
 - Make installation, the first PDF, and server operation easier to follow in the public guides.
 - Verify the published guides and exact Stable ZIP and MCPB assets when updating the public site.
