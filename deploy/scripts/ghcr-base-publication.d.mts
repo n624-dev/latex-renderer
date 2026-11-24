@@ -70,6 +70,12 @@ export function publishBase(
   expected: Identity,
   registry?: Registry,
 ): Promise<string>;
+export function promoteBase(
+  digest: string,
+  date: string,
+  registry: Registry,
+  pause?: (delay: number) => Promise<unknown>,
+): Promise<void>;
 export function stageBase(
   base: string,
   arch: Architecture,

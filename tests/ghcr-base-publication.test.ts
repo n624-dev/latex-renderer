@@ -15,6 +15,7 @@ import {
   basePlatforms,
   nativeBaseDigest,
   planBase,
+  promoteBase,
   publicationIndex,
   publishBase,
   registryClient,
@@ -119,6 +120,92 @@ function fixture() {
 }
 
 describe("immutable dual-native Base publication", () => {
+  function promotionFixture() {
+    const base = fixture();
+    const bytes = publicationIndex(receipts(), pin);
+    const index = remote(bytes);
+    base.documents.set(index.digest, bytes);
+    base.documents.set(pin.date, bytes);
+    return { ...base, index, pause: vi.fn(() => Promise.resolve()) };
+  }
+
+  it("confirms a delayed latest update without writing the tag again", async () => {
+    const { registry, manifest, index, put, pause } = promotionFixture();
+    const previous = remote(
+      JSON.stringify({
+        ...index.manifest,
+        annotations: { fixture: "previous" },
+      }),
+    );
+    manifest
+      .mockResolvedValueOnce(index)
+      .mockResolvedValueOnce(index)
+      .mockResolvedValueOnce(previous)
+      .mockResolvedValueOnce(null);
+    await expect(
+      promoteBase(index.digest, pin.date, registry, pause),
+    ).resolves.toBeUndefined();
+    expect(manifest.mock.calls.map(([reference]) => reference)).toEqual([
+      index.digest,
+      pin.date,
+      "latest",
+      "latest",
+      "latest",
+    ]);
+    expect(pause.mock.calls).toEqual([[1000], [2000]]);
+    expect(put.mock.calls).toEqual([["latest", index.bytes]]);
+  });
+
+  it("fails after six reads if latest keeps returning a different digest", async () => {
+    const { registry, manifest, index, put, pause, documents } =
+      promotionFixture();
+    const previous = remote(
+      JSON.stringify({
+        ...index.manifest,
+        annotations: { fixture: "previous" },
+      }),
+    );
+    manifest.mockImplementation((reference) =>
+      Promise.resolve(
+        reference === "latest"
+          ? previous
+          : remote(documents.get(reference) ?? ""),
+      ),
+    );
+    await expect(
+      promoteBase(index.digest, pin.date, registry, pause),
+    ).rejects.toThrow("not confirmed after 6 reads");
+    expect(
+      manifest.mock.calls.filter(([reference]) => reference === "latest"),
+    ).toHaveLength(6);
+    expect(pause.mock.calls).toEqual([[1000], [2000], [4000], [8000], [15000]]);
+    expect(put.mock.calls).toEqual([["latest", index.bytes]]);
+  });
+
+  it("keeps manifest integrity errors fatal during latest confirmation", async () => {
+    const { registry, manifest, index, put, pause } = promotionFixture();
+    manifest
+      .mockResolvedValueOnce(index)
+      .mockResolvedValueOnce(index)
+      .mockRejectedValueOnce(new Error("Registry manifest digest mismatch"));
+    await expect(
+      promoteBase(index.digest, pin.date, registry, pause),
+    ).rejects.toThrow("Registry manifest digest mismatch");
+    expect(manifest).toHaveBeenCalledTimes(3);
+    expect(pause).not.toHaveBeenCalled();
+    expect(put).toHaveBeenCalledOnce();
+  });
+
+  it("refuses to promote if the immutable date no longer points to the verified digest", async () => {
+    const { registry, index, put, pause, documents } = promotionFixture();
+    documents.delete(pin.date);
+    await expect(
+      promoteBase(index.digest, pin.date, registry, pause),
+    ).rejects.toThrow("Dated Base identity changed before promotion");
+    expect(put).not.toHaveBeenCalled();
+    expect(pause).not.toHaveBeenCalled();
+  });
+
   it.each(["amd64", "arm64"] as const)(
     "pins the published index before provisioning the native %s host",
     async (arch) => {

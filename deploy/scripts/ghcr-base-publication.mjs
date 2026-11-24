@@ -11,6 +11,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { isMainModule } from "./is-main-module.mjs";
 
 export const baseRepository = "ghcr.io/n624-dev/latex-renderer-texlive";
@@ -524,6 +525,28 @@ export async function stageBase(
   };
 }
 
+export async function promoteBase(digest, date, registry, pause = sleep) {
+  if (!digestPattern.test(digest ?? ""))
+    throw new Error("A verified index digest is required");
+  const tag = dateTag(date);
+  const index = await registry.manifest(digest);
+  if (
+    index?.digest !== digest ||
+    (await registry.manifest(tag))?.digest !== digest
+  )
+    throw new Error("Dated Base identity changed before promotion");
+  basePlatforms(index.manifest);
+  await registry.put("latest", index.bytes);
+
+  // GHCR can acknowledge the write before a tag lookup returns the new index.
+  // Confirm the same digest, retrying only a successful read of an old or missing tag.
+  for (const delay of [0, 1000, 2000, 4000, 8000, 15000]) {
+    if (delay > 0) await pause(delay);
+    if ((await registry.manifest("latest"))?.digest === digest) return;
+  }
+  throw new Error("Latest promotion digest not confirmed after 6 reads");
+}
+
 async function main() {
   if (
     process.env.GITHUB_ACTIONS !== "true" ||
@@ -583,22 +606,14 @@ async function main() {
     );
     await appendFile(process.env.GITHUB_OUTPUT, `digest=${digest}\n`);
   } else if (verb === "promote") {
-    if (!digestPattern.test(argument ?? ""))
-      throw new Error("A verified index digest is required");
-    const registry = registryClient({
-      actor: process.env.GHCR_ACTOR,
-      token: process.env.GHCR_TOKEN,
-    });
-    const index = await registry.manifest(argument);
-    if (
-      !index ||
-      (await registry.manifest(dateTag(expected.date)))?.digest !== argument
-    )
-      throw new Error("Dated Base identity changed before promotion");
-    basePlatforms(index.manifest);
-    await registry.put("latest", index.bytes);
-    if ((await registry.manifest("latest"))?.digest !== argument)
-      throw new Error("Latest promotion digest not confirmed");
+    await promoteBase(
+      argument,
+      expected.date,
+      registryClient({
+        actor: process.env.GHCR_ACTOR,
+        token: process.env.GHCR_TOKEN,
+      }),
+    );
   } else
     throw new Error(
       "usage: ghcr-base-publication.mjs plan DATE | stage BASE RECEIPTS | publish RECEIPTS | promote DIGEST",
