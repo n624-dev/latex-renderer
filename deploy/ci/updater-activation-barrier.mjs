@@ -81,37 +81,39 @@ export async function verifyActivationCommitBarrier(slots) {
     (
       await systemctl("show", name, `--property=${key}`, "--value")
     ).stdout.trim();
-  const root = await mkdtemp("/run/latex-renderer/activation-e2e-");
-  await chown(root, 0, (await lstat("/run/latex-renderer")).gid);
-  await chmod(root, 0o750);
+  const stateRoot = "/var/lib/latex-renderer/update-manager";
+  const controllerOwner = await lstat(stateRoot);
   const overrideRoot = `/run/systemd/system/${controller}.d`;
   const override = join(overrideRoot, "90-ci-activation-barrier.conf");
   const condition = `/run/systemd/system/${unit}.d/90-ci-explicit-activation.conf`;
   const originalCondition = await readFile(condition);
-  const committed = join(root, "committed");
-  const timedOut = join(root, "timed-out");
-  const invalid = join(root, "invalid-state");
-  const script = join(root, "controller.mjs");
   const before = await slots.state();
   if (!before.candidate || before.pending)
     throw new Error(
       `Activation barrier requires a clean candidate: ${JSON.stringify(before)}`,
     );
-  await writeFile(timedOut, "", { mode: 0o640 });
-  const controllerOwner = await lstat("/var/lib/latex-renderer/update-manager");
-  await chown(timedOut, controllerOwner.uid, controllerOwner.gid);
-  await writeFile(
-    script,
-    activationBarrierControllerSource({
-      socket: "/run/latex-renderer/update-manager.sock",
-      committed,
-      timedOut,
-      invalid,
-    }),
-    { mode: 0o644 },
-  );
-
+  // systemd may change ownership beneath a shared RuntimeDirectory when
+  // another service starts. Keep the fixture in the controller's own state
+  // directory so it can record the timeout without restarting.
+  const root = await mkdtemp(join(stateRoot, "activation-e2e-"));
+  const committed = join(root, "committed");
+  const timedOut = join(root, "timed-out");
+  const invalid = join(root, "invalid-state");
+  const script = join(root, "controller.mjs");
   try {
+    await chown(root, controllerOwner.uid, controllerOwner.gid);
+    await chmod(root, 0o750);
+    await writeFile(
+      script,
+      activationBarrierControllerSource({
+        socket: "/run/latex-renderer/update-manager.sock",
+        committed,
+        timedOut,
+        invalid,
+      }),
+      { mode: 0o644 },
+    );
+
     await mkdir(overrideRoot, { recursive: true });
     await writeFile(
       override,
