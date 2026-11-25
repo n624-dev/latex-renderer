@@ -931,6 +931,7 @@ export class RemoteRenderService {
     | undefined;
   private readonly maxInlineArtifactBytes: number;
   private inlineArtifactBytesInFlight = 0;
+  private attachmentImportsInFlight = 0;
   private readonly inlineArtifactWaiters: Array<{
     bytes: number;
     resolve: (release: () => void) => void;
@@ -1053,8 +1054,12 @@ export class RemoteRenderService {
         null,
       );
     assertSourceWritable(this.database);
-    const root = await mkdtemp(join(this.storageRoot, ".remote-attachment-"));
+    if (this.attachmentImportsInFlight >= 2)
+      throw new AppError("ATTACHMENT_IMPORT_BUSY", "Attachment import capacity is in use", 503);
+    this.attachmentImportsInFlight += 1;
+    let root: string | undefined;
     try {
+      root = await mkdtemp(join(this.storageRoot, ".remote-attachment-"));
       const archive = join(root, "source.zip");
       try {
         await downloadAttachment(
@@ -1114,7 +1119,11 @@ export class RemoteRenderService {
       });
       return this.summarizeSource(source, null);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      try {
+        if (root !== undefined) await rm(root, { recursive: true, force: true });
+      } finally {
+        this.attachmentImportsInFlight -= 1;
+      }
     }
   }
 

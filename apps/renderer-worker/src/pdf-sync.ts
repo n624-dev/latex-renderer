@@ -8,7 +8,23 @@ export LC_ALL=C.UTF-8
 cd /work/input
 case "$1" in
   pdf_to_source) timeout -k 2 10 synctex edit -o "$2:/work/pdf/result.pdf" ;;
-  source_to_pdf) timeout -k 2 10 synctex view -i "$2" -o /work/pdf/result.pdf ;;
+  source_to_pdf)
+    # The CLI can fall back to a basename. First require the selected exact
+    # relative path in the map, so a similarly named file cannot stand in.
+    recorded=$(timeout -k 1 4 gzip -cd /work/pdf/result.synctex.gz |
+      head -c 4194304 |
+      awk -v path="$3" '
+        /^Input:[0-9]+:/ {
+          sub(/^Input:[0-9]+:/, "");
+          if ($0==path || $0=="./" path || $0=="/work/input/" path) {
+            print; exit;
+          }
+        }
+      ')
+    if [ -n "$recorded" ]; then
+      timeout -k 2 10 synctex view -i "$2:0:$recorded" -o /work/pdf/result.pdf
+    fi
+    ;;
   *) exit 64 ;;
 esac > /work/output/source-map-result
 `;
@@ -19,7 +35,7 @@ export function syncArguments(query: PdfSyncQuery): string[] {
         query.direction,
         `${query.page}:${query.x.toFixed(5)}:${query.y.toFixed(5)}`,
       ]
-    : [query.direction, `${query.line}:0:/work/input/${query.path}`];
+    : [query.direction, String(query.line), query.path];
 }
 
 export async function readSyncResult(

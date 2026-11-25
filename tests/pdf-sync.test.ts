@@ -40,7 +40,8 @@ SyncTeX result end
     } as const;
     expect(syncArguments(query)).toEqual([
       "source_to_pdf",
-      "10:0:/work/input/chapter/日本語 数式.tex",
+      "10",
+      "chapter/日本語 数式.tex",
     ]);
     expect(
       parseSyncResult(

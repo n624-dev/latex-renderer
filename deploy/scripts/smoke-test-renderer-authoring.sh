@@ -58,11 +58,19 @@ TEX
       [ -s /tmp/smoke-text ]
       if [ -n "${EXPECTED_DATE_TEXT:-}" ]; then
         grep -Fx "$EXPECTED_DATE_TEXT" /tmp/smoke-text
+        # The Worker publishes the canonical PDF and private SyncTeX map
+        # with the same basename. This direct renderer test mirrors that step.
+        if [ -f /work/output/main.synctex.gz ]; then
+          mv /work/output/main.synctex.gz /work/output/result.synctex.gz
+        fi
+        test -s /work/output/result.synctex.gz
         synctex view -i 3:0:/work/input/main.tex -o /work/output/result.pdf > /tmp/sync-view
+        cat /tmp/sync-view
         grep -qx "Page:1" /tmp/sync-view
         point=$(awk -F: "/^x:/ {x=\$2} /^y:/ {print x \":\" \$2; exit}" /tmp/sync-view)
         [ -n "$point" ]
         synctex edit -o "1:$point:/work/output/result.pdf" > /tmp/sync-edit
+        cat /tmp/sync-edit
         grep -Eq "^Input:(/work/input/|[.]/)?main[.]tex$" /tmp/sync-edit
       fi
       if [ "$SAMPLE" = japanese-tagged ]; then
