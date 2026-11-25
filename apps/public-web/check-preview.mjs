@@ -31,15 +31,23 @@ const exited = new Promise((resolve) => worker.once("exit", resolve));
 
 try {
   await waitUntilReady();
-  await assertAsset("/", 200, "text/html", "LaTeXをPDFに変換");
+  await assertAsset("/", 200, "text/html", "Convert LaTeX to PDF");
+  await assertAsset("/ja/", 200, "text/html", "LaTeXをPDFに変換");
   await assertAsset("/docs/", 200, "text/html", "最短でPDFを作る");
   await assertAsset(
-    "/downloads/",
+    "/ja/downloads/",
     200,
     "text/html",
     "Debian・Ubuntu に APT でインストール",
   );
   await assertAsset("/docs/cli/", 200, "text/html", "レンダリング");
+  await assertAsset("/fr/docs/cli/", 200, "text/html", '<html lang="fr">');
+  await assertAsset(
+    "/zh-CN/assets/docs-search.json",
+    200,
+    "application/json",
+    '"/zh-CN/docs/cli/"',
+  );
   await assertAsset("/docs/self-hosting/", 200, "text/html", "初回導入の順序");
   for (const [slug, heading] of [
     ["outputs", "ページ画像を取得する"],

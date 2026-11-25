@@ -3,6 +3,7 @@ import { z } from "zod";
 import { AppError, pageSize } from "@latex-renderer/shared";
 import {
   createLegacyRenderTicketRequestSchema,
+  renderEngineSchema,
   renderOutputsSchema,
   sourceRenderTicketRequestSchema,
   createSourceTicketRequestSchema,
@@ -54,6 +55,7 @@ export function createJobsRouter(deps: AdminDependencies): Hono {
           createLegacyRenderTicketRequestSchema(deps.maxUploadBytes).extend({
             apiKeyId: z.string().min(1).max(128),
             outputs: renderOutputsSchema,
+            engine: renderEngineSchema.optional(),
           }),
           sourceRenderTicketRequestSchema.extend({
             apiKeyId: z.string().min(1).max(128),

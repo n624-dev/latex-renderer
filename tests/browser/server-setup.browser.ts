@@ -60,6 +60,7 @@ async function fixture(
     options,
   );
   const page = await newTestPage(browser, {
+    locale: "ja-JP",
     viewport: mobile
       ? { width: 390, height: 844 }
       : { width: 1200, height: 800 },
@@ -79,15 +80,15 @@ describe("real server-settings Web flow", () => {
     const f = await fixture();
     await f.page
       .getByRole("spinbutton", {
-        name: "minimumAvailableMemoryBytes",
+        name: "開始に必要な空きRAM（MiB）",
         exact: true,
       })
       .fill("500");
     await f.page
-      .getByRole("spinbutton", { name: "maximumMemoryBytes", exact: true })
+      .getByRole("spinbutton", { name: "実行RAMの上限（MiB）", exact: true })
       .fill("2048");
     await f.page
-      .getByRole("spinbutton", { name: "maximumSwapBytes", exact: true })
+      .getByRole("spinbutton", { name: "追加swapの上限（MiB・0は無効）", exact: true })
       .fill("1024");
     await f.page
       .getByRole("button", { name: "変更内容を確認", exact: true })
@@ -171,7 +172,7 @@ describe("real server-settings Web flow", () => {
       document.documentElement.style.zoom = "2";
     });
     const limit = f.page.getByRole("spinbutton", {
-      name: "maxQueueLength",
+      name: "待機ジョブ数",
       exact: true,
     });
     await limit.fill("42");
@@ -217,7 +218,7 @@ describe("real server-settings Web flow", () => {
   it("edits, reviews and applies the exact candidate, then shuts down the bootstrap", async () => {
     const f = await fixture();
     await f.page
-      .getByRole("spinbutton", { name: "maxQueueLength", exact: true })
+      .getByRole("spinbutton", { name: "待機ジョブ数", exact: true })
       .fill("42");
     await f.page
       .getByRole("button", { name: "変更内容を確認", exact: true })
@@ -246,7 +247,7 @@ describe("real server-settings Web flow", () => {
       () => !document.getElementById("confirmation")?.hidden,
     );
     await f.page
-      .getByRole("spinbutton", { name: "maxQueueLength", exact: true })
+      .getByRole("spinbutton", { name: "待機ジョブ数", exact: true })
       .fill("43");
     expect(await f.page.locator("#confirmation").isVisible()).toBe(false);
     expect(f.apply).not.toHaveBeenCalled();

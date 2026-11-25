@@ -72,9 +72,10 @@ describe("documentation implementation contracts", () => {
   });
 
   it("documents the compile and whole-job timeout defaults", () => {
-    const compileMatch = /timeout -s TERM -k 2 (\d+) latexmk/.exec(
-      read("renderer/compile.sh"),
-    );
+    const compileMatch =
+      /^else\n[ \t]+run_latex (\d+) "" >> "\$renderer_log"/m.exec(
+        read("renderer/compile.sh"),
+      );
     const jobMatch = /^RENDERER_JOB_TIMEOUT_SECONDS=(\d+)$/m.exec(
       read(".env.example"),
     );

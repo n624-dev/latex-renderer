@@ -298,7 +298,17 @@ export async function sourcePipelineFixture(
     const spawnSpy = vi
       .spyOn(docker, "spawnRenderer")
       .mockImplementation(
-        (cfg, id, generation, input, staging, entrypoint, outputs, stage) => {
+        (
+          cfg,
+          id,
+          generation,
+          input,
+          staging,
+          entrypoint,
+          outputs,
+          stage,
+          engine,
+        ) => {
           const held = holdNext && (!holdSvg || stage?.mode === "svg");
           if (stage?.mode !== "preview") sourceInputs.push(input);
           const result =
@@ -312,6 +322,7 @@ export async function sourcePipelineFixture(
                   entrypoint,
                   outputs,
                   stage,
+                  engine,
                 )
               : {
                   containerName: "pipeline-fixture",

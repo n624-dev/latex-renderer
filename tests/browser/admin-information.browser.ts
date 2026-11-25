@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import type { Browser, Page } from "playwright";
 import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
 import { launchTestBrowser, newTestPage } from "../helpers/browser-engine.js";
+import { routeWebFonts } from "../helpers/browser-web-fonts.js";
 import {
   adminPage,
   adminDocsPage,
@@ -281,6 +282,7 @@ async function fixture(kind: string, query = "", pagedOwners = false) {
         : kind === "audit"
           ? "audit-logs"
           : kind;
+  await routeWebFonts(page, origin);
   await page.goto(`${origin}/admin/${path}/${query}`);
   if (kind !== "docs") {
     await page.waitForFunction(
@@ -534,7 +536,7 @@ it("navigates ungenerated pages, retries a pending PNG and does not fetch untouc
     return Boolean(
       img &&
       !img.hidden &&
-      img.alt === "PDF 2ページ目のプレビュー" &&
+      img.alt === "2ページ目のプレビュー" &&
       img.naturalWidth > 0,
     );
   });

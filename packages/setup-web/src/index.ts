@@ -1,3 +1,4 @@
+import { preferredDisplayLanguages, resolveDisplayLocale } from "@latex-renderer/shared/locale";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import {
@@ -26,7 +27,7 @@ import {
   type SkillTarget,
 } from "@latex-renderer/setup-core";
 import { AppError, PUBLIC_ORIGIN } from "@latex-renderer/shared";
-import { clientSetupHtml, setupCss, setupJavaScript } from "./assets.js";
+import { clientSetupHtml, clientSetupScript, setupCss } from "./assets.js";
 
 const MAXIMUM_BODY_BYTES = 16 * 1024;
 const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
@@ -195,7 +196,10 @@ export async function createSetupWebServer(
         response,
         200,
         "text/html; charset=utf-8",
-        clientSetupHtml(options.packageManager),
+        clientSetupHtml(
+          options.packageManager,
+          resolveDisplayLocale({ preferred: preferredDisplayLanguages(request.headers["accept-language"]) }),
+        ),
       );
       return;
     }
@@ -204,7 +208,9 @@ export async function createSetupWebServer(
       return;
     }
     if (request.method === "GET" && url.pathname === "/assets/setup.js") {
-      send(response, 200, "text/javascript; charset=utf-8", setupJavaScript);
+      const preferred = preferredDisplayLanguages(request.headers["accept-language"]);
+      const locale = resolveDisplayLocale({ preferred });
+      send(response, 200, "text/javascript; charset=utf-8", clientSetupScript(locale));
       return;
     }
     if (request.method !== "POST")

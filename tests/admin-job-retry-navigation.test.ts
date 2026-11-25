@@ -1,4 +1,6 @@
+import { japaneseAdminMessage } from "./helpers/admin-message.js";
 import { Script } from "node:vm";
+import { escapeHtml } from "../apps/admin-web/src/templates-shared.js";
 import { expect, it, vi } from "vitest";
 import { part5 } from "../apps/admin-web/src/assets/admin-script-parts/part-5.js";
 
@@ -17,6 +19,8 @@ it("opens the new administrator Job using the retry route's id response", async 
     request = vi.fn().mockResolvedValue(response),
     assign = vi.fn();
   new Script(source + "\nbindJobMutations();").runInNewContext({
+    adminMessage: japaneseAdminMessage,
+    esc: escapeHtml,
     bindSvgRetryMutations() {},
     bindAction(selector: string, handler: (button: unknown) => void) {
       if (selector === "[data-j-retry]")

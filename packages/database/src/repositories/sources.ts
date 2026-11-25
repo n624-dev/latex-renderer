@@ -3,6 +3,7 @@ import { userJobSql } from "../user-visible.js";
 import {
   readySourceSql,
   sourceReferenceCountSql,
+  projectSourceReferenceCountSql,
 } from "../source-lifecycle.js";
 import {
   AppError,
@@ -101,9 +102,7 @@ export class SourcesRepository {
     return (
       this.db
         .prepare(
-          `SELECT 1 FROM sources s JOIN project_revisions r ON r.source_id=s.id
-       JOIN projects p ON p.id=r.project_id
-       WHERE s.id=? AND p.deleted_at IS NULL AND p.owner_user_id=s.owner_user_id LIMIT 1`,
+          `SELECT 1 FROM sources s WHERE s.id=? AND ${projectSourceReferenceCountSql("s", true)}>0`,
         )
         .get(id) !== undefined
     );
@@ -468,13 +467,12 @@ export class SourcesRepository {
     return (
       this.db
         .prepare(
-          `SELECT
-            (SELECT COUNT(*) FROM jobs WHERE source_id=? AND status!='deleted') +
-            (SELECT COUNT(*) FROM project_revisions r JOIN projects p ON p.id=r.project_id
-             WHERE r.source_id=? AND p.deleted_at IS NULL) AS count`,
+          `SELECT (SELECT COUNT(*) FROM jobs WHERE source_id=s.id AND status!='deleted') +
+            ${projectSourceReferenceCountSql("s")} AS count
+          FROM sources s WHERE s.id=?`,
         )
-        .get(id, id) as { count: number }
-    ).count;
+        .get(id) as { count: number } | undefined
+    )?.count ?? 0;
   }
 
   /** References that prevent a ready/expired Source from being deleted. */

@@ -14,6 +14,7 @@ export interface SvgRetryLimits {
   maxUserStorageBytes?: number;
   maxOutputBytes?: number;
   artifactRetentionHours?: number;
+  runtimeImage?: string | undefined;
 }
 
 export class SvgRetryOperations {
@@ -80,6 +81,18 @@ export class SvgRetryOperations {
           );
         return { id: jobId, reused: true };
       }
+      const checkpoint = this.db.outputStages.checkpoint(jobId);
+      const activeRuntime = this.limits.runtimeImage;
+      if (
+        activeRuntime !== undefined &&
+        checkpoint?.pdf_status === "succeeded" &&
+        checkpoint.renderer_image !== activeRuntime
+      )
+        throw new AppError(
+          "SVG_RUNTIME_CHANGED",
+          "The Runtime changed after PDF publication. Start a new Job to generate PDF and SVG together.",
+          409,
+        );
       if (
         this.db.settings.value<string>("maintenance_mode", "normal") !==
         "normal"

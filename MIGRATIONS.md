@@ -146,6 +146,26 @@ No rows are deleted, but old application code ignores the visibility boundary;
 full recovery point, not an application-only rollback or live column removal.
 See [the migration and recovery guide](deploy/migrations/019_internal_smoke_visibility.rollback.md).
 
+## Migration 026: Frozen draft preview inputs
+
+Migration 026 pins the exact file versions used by each queued or active draft
+preview. The Worker verifies and unpacks these files into its per-attempt working
+directory. File pins are released once the job is terminal and its worker lease
+has been cleared. The encrypted backup includes sources with active pins.
+
+Migration 023 adds engines and output sets to saved revision identities and
+defaults existing jobs and revisions to LuaLaTeX. Migration 024 adds versioned
+drafts and their source references. Migration 025 records the account display
+language.
+
+## Migration 027: Draft work-cache reservations
+
+Migration 027 accounts for private work-cache entries and bounds them by their
+owning project and account. Cache files expire with their completed preview.
+Verify schema 27 after a restore test and private-copy migration
+preflight. Deploy the application, Worker and cleanup together. Downgrades
+require the verified full recovery point.
+
 ## Migration 022: PDF-bound preview requests
 
 The same migration adds bounded `source_trees` and `source_tree_readers` for

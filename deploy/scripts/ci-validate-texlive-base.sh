@@ -61,6 +61,7 @@ RUNTIME_NO_CACHE=true RUNTIME_BUILDX_BUILDER=default RUNTIME_FORMAT_JOBS="$forma
 [ "$(docker image inspect "$validation_runtime" --format '{{index .Config.Labels "jp.n624.latex-renderer.runtime-kind"}}')" = managed-local-v1 ]
 run_stage basic sh "$script_root/smoke-test-renderer-basic.sh" "$validation_runtime"
 run_stage en-jp sh "$script_root/smoke-test-renderer-en-jp.sh" "$validation_runtime"
+run_stage engines sh "$script_root/smoke-test-renderer-engines.sh" "$validation_runtime"
 run_stage svg sh "$script_root/smoke-test-renderer-svg.sh" "$validation_runtime"
 run_stage biber sh "$script_root/smoke-test-renderer-biber.sh" "$validation_runtime"
 run_stage compat sh "$script_root/smoke-test-renderer-compat.sh" "$validation_runtime"

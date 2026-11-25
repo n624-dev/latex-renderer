@@ -21,7 +21,11 @@ import { directorySize } from "../apps/renderer-worker/src/artifact-validator.js
 const databases: RendererDatabase[] = [];
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
-  return { ...actual, rename: vi.fn(actual.rename) };
+  return {
+    ...actual,
+    mkdir: vi.fn(actual.mkdir),
+    rename: vi.fn(actual.rename),
+  };
 });
 const temporaryRoots: string[] = [];
 
@@ -271,6 +275,34 @@ describe("renderer transient workspace cleanup", () => {
     await expect(directorySize(output)).resolves.toBe(total);
   });
 
+  it.each(["ENOSPC", "EDQUOT"])(
+    "commits a fenced failure when %s prevents writing diagnostic files",
+    async (code) => {
+      const { database, config, root, jobId } = await fixture("validating");
+      vi.mocked(fs.mkdir).mockRejectedValueOnce(
+        Object.assign(new Error("No storage"), { code }),
+      );
+      await recordFailure(
+        database,
+        config,
+        workerJob(jobId),
+        "No storage",
+        "INSUFFICIENT_STORAGE",
+        "failed",
+      );
+      expect(database.jobs.get(jobId)).toMatchObject({
+        status: "failed",
+        error_code: "INSUFFICIENT_STORAGE",
+        output_size: 0,
+        lease_owner: null,
+      });
+      expect(database.artifacts.listDownloadable(jobId)).toEqual([]);
+      expect(await pathExists(join(root, "jobs", jobId, "outputs", "1"))).toBe(
+        false,
+      );
+    },
+  );
+
   it("removes its uncommitted output if the final DB transaction rolls back", async () => {
     const { database, config, root, jobId } = await fixture("validating");
     const legacy = join(root, "jobs", jobId, "output");
@@ -485,6 +517,7 @@ function workerJob(jobId: string) {
     source_id: null,
     source_storage_key: null,
     entrypoint: "main.tex",
+    engine: "lualatex" as const,
     outputs_json: '["pdf"]',
     lease_generation: 1,
   };

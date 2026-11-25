@@ -14,7 +14,6 @@ import {
   protectArtifactDownloadLeases,
   ARTIFACT_DOWNLOAD_LEASE_MS,
   type RendererDatabase,
-  type WorkerJobRow,
   type PreviewRequest,
 } from "@latex-renderer/database";
 import { AppError, newId, nowIso } from "@latex-renderer/shared";
@@ -254,16 +253,10 @@ export async function processPreview(
         ) > Date.now(),
     };
     if (!lifecycle.owns()) throw new Error("Preview ownership lost");
-    const job: WorkerJobRow = {
+    const job = {
       id: request.job_id,
       lease_generation: request.attempt,
-      status: "running",
-      source_id: null,
-      source_storage_key: null,
-      source_size: 0,
-      source_sha256: "",
       entrypoint: "main.tex",
-      outputs_json: '["pdf"]',
     };
     const result = await runRendererStage(
       db,

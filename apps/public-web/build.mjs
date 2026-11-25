@@ -15,10 +15,11 @@ const distribution = loadClientDistribution(clientDistributionDirectory);
 await rm(outputDirectory, { recursive: true, force: true });
 
 for (const asset of createPublicStaticAssets(distribution)) {
+  const content = asset.content;
   const size =
-    typeof asset.content === "string"
-      ? Buffer.byteLength(asset.content, "utf8")
-      : asset.content.byteLength;
+    typeof content === "string"
+      ? Buffer.byteLength(content, "utf8")
+      : content.byteLength;
   if (size > maximumAssetBytes) {
     throw new Error(
       `Static asset exceeds the Workers 25 MiB limit: ${asset.path}`,
@@ -28,7 +29,7 @@ for (const asset of createPublicStaticAssets(distribution)) {
   await mkdir(dirname(destination), { recursive: true });
   await writeFile(
     destination,
-    asset.content,
-    typeof asset.content === "string" ? "utf8" : undefined,
+    content,
+    typeof content === "string" ? "utf8" : undefined,
   );
 }

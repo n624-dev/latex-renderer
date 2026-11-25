@@ -1,3 +1,4 @@
+import { renderEngineSchema } from "@latex-renderer/contracts";
 import type { PublicDoc } from "./markdown-docs.js";
 
 export interface OpenApiDocument {
@@ -8,6 +9,7 @@ export interface OpenApiDocument {
 
 export interface DocsValidationInput {
   docs: readonly PublicDoc[];
+  localizedDocs?: ReadonlyArray<{ root: string; docs: readonly PublicDoc[] }>;
   publicPaths: readonly string[];
   openApis: readonly OpenApiDocument[];
   resolveCliHelp: (commandPath: string) => string | undefined;
@@ -40,21 +42,26 @@ export function assertPublicDocsValid(input: DocsValidationInput): void {
 
 export function validatePublicDocs({
   docs,
+  localizedDocs = [],
   publicPaths,
   openApis,
   resolveCliHelp,
 }: DocsValidationInput): string[] {
   const errors: string[] = [];
-  const docsByPath = new Map(docs.map((doc) => [docUrl(doc.slug), doc]));
+  const docsByPath = new Map(
+    [{ root: "/docs/", docs }, ...localizedDocs].flatMap(({ root, docs }) =>
+      docs.map((doc) => [docUrl(doc.slug, root), doc] as const),
+    ),
+  );
   const knownPaths = new Set([...publicPaths, ...docsByPath.keys()]);
 
-  for (const doc of docs) {
+  for (const [path, doc] of docsByPath) {
     for (const target of markdownLinks(doc.markdown)) {
-      validateLink(doc, target, knownPaths, docsByPath, errors);
+      validateLink(doc, path, target, knownPaths, docsByPath, errors);
     }
   }
 
-  validateCliExamples(docs, resolveCliHelp, errors);
+  validateCliExamples([...docsByPath.values()], resolveCliHelp, errors);
   validateMcpExamples(docs, errors);
   validateOpenApiCoverage(docs, openApis, errors);
   return errors;
@@ -62,6 +69,7 @@ export function validatePublicDocs({
 
 function validateLink(
   source: PublicDoc,
+  sourceUrl: string,
   target: string,
   knownPaths: ReadonlySet<string>,
   docsByPath: ReadonlyMap<string, PublicDoc>,
@@ -70,7 +78,7 @@ function validateLink(
   if (/^(?:https?:|mailto:)/i.test(target)) return;
   let url: URL;
   try {
-    url = new URL(target, `https://docs.invalid${docUrl(source.slug)}`);
+    url = new URL(target, `https://docs.invalid${sourceUrl}`);
   } catch {
     errors.push(`${source.sourcePath}: invalid link ${target}`);
     return;
@@ -86,7 +94,8 @@ function validateLink(
   const fragment = decodeURIComponent(url.hash.slice(1));
   if (
     linkedDoc === undefined ||
-    !linkedDoc.headings.some(({ id }) => id === fragment)
+    !(linkedDoc.headings.some(({ id }) => id === fragment) ||
+      (linkedDoc.anchorAliases !== undefined && Object.hasOwn(linkedDoc.anchorAliases, fragment)))
   ) {
     errors.push(`${source.sourcePath}: missing heading anchor ${target}`);
   }
@@ -111,13 +120,18 @@ function validateCliExamples(
   const cache = new Map<string, string | undefined>();
   for (const doc of docs) {
     for (const { binary, invocation } of cliInvocations(doc.markdown)) {
+      const engine = renderEngineSchema.safeParse(
+        invocation.split(/\s+/, 1)[0],
+      );
       const commandPath =
         binary === "n624-latex" &&
         /^[^\s-][^\s]*\.tex(?:\s|$)/i.test(invocation)
           ? "compile"
-          : documentedCommandPath(invocation);
-      const helpBinary =
-        commandPath === "compile" ? "n624-latex" : "latex-render";
+          : engine.success
+            ? engine.data
+            : documentedCommandPath(invocation);
+      const compile = commandPath === "compile" || engine.success;
+      const helpBinary = compile ? "n624-latex" : "latex-render";
       const usage = `Usage: ${helpBinary} ${commandPath}`.trimEnd();
       let help = cache.get(commandPath);
       if (!cache.has(commandPath)) {
@@ -127,7 +141,7 @@ function validateCliExamples(
       if (
         help === undefined ||
         !help.includes(usage) ||
-        (commandPath === "compile" && binary !== "n624-latex")
+        (compile && binary !== "n624-latex")
       ) {
         errors.push(
           `${doc.sourcePath}: unknown CLI command in \`${invocation}\``,
@@ -276,6 +290,6 @@ function openApiOperations(source: string): string[] {
   return operations;
 }
 
-function docUrl(slug: string): string {
-  return slug === "index" ? "/docs/" : `/docs/${slug}/`;
+function docUrl(slug: string, root: string): string {
+  return slug === "index" ? root : `${root}${slug}/`;
 }

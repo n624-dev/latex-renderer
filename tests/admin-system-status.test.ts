@@ -1,3 +1,4 @@
+import { japaneseAdminMessage } from "./helpers/admin-message.js";
 import { Script } from "node:vm";
 import { describe, expect, it } from "vitest";
 import { RendererDatabase } from "@latex-renderer/database";
@@ -20,7 +21,7 @@ describe("admin system status and dashboard contract", () => {
     ],
     ["lockdown", "running", true, "要確認", "緊急停止", "稼働中", undefined],
     ["normal", "paused", true, "要確認", "通常運転", "停止中", undefined],
-    ["normal", "draining", true, "要確認", "通常運転", "ドレイン中", undefined],
+    ["normal", "draining", true, "要確認", "通常運転", "処理の終了待ち", undefined],
     ["normal", "running", false, "要確認", "通常運転", "稼働中", undefined],
     [
       "normal",
@@ -28,7 +29,7 @@ describe("admin system status and dashboard contract", () => {
       true,
       "正常",
       "通常運転",
-      "待機中（必要時に起動）",
+      "待機中（アクセス時に起動）",
       "idle",
     ],
     [
@@ -104,6 +105,8 @@ describe("admin system status and dashboard contract", () => {
         expect(dashboard).toBeDefined();
         const out = { innerHTML: "" };
         await new Script(`${dashboard}\ndashboard()`).runInNewContext({
+        adminMessage: japaneseAdminMessage,
+          document: { documentElement: { lang: "ja" } },
           out,
           request: (path: string) =>
             Promise.resolve(

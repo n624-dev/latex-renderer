@@ -22,7 +22,7 @@ LABEL org.opencontainers.image.title="latex-renderer-texlive" \
 ARG DEBIAN_FRONTEND=noninteractive
 RUN --mount=type=bind,source=install-debian-packages.sh,target=/tmp/install-debian-packages.sh \
     sh /tmp/install-debian-packages.sh "${DEBIAN_SNAPSHOT}" \
-      ca-certificates curl fontconfig gnupg gpgv imagemagick libfontconfig1 perl poppler-utils qpdf tar xz-utils
+      ca-certificates curl fontconfig gnupg gpgv imagemagick libfontconfig1 perl poppler-data poppler-utils qpdf tar xz-utils
 
 COPY texlive.profile /tmp/texlive.profile
 RUN mkdir -p /tmp/install-tl \

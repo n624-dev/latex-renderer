@@ -5,6 +5,8 @@ import { schemaSql } from "./schema.js";
 import { applyDatabaseMigrations } from "./migrations.js";
 import { notifyWorkerAfterCommit } from "../../../deploy/scripts/worker-demand.mjs";
 export { ProjectOperations, type ProjectActor } from "./project-operations.js";
+export { ProjectDraftOperations, type DraftUpdate } from "./project-drafts.js";
+export type { DraftWorkCacheIdentity } from "./repositories/drafts.js";
 export {
   SvgRetryOperations,
   type SvgRetryActor,
@@ -35,6 +37,7 @@ import {
   RemoteMcpRepository,
   WebPrincipalsRepository,
   ProjectsRepository,
+  DraftsRepository,
   BrowserAuthRepository,
   OutputStagesRepository,
   PreviewsRepository,
@@ -62,6 +65,7 @@ export class RendererDatabase {
   public readonly remoteMcp: RemoteMcpRepository;
   public readonly webPrincipals: WebPrincipalsRepository;
   public readonly projects: ProjectsRepository;
+  public readonly drafts: DraftsRepository;
   public readonly browserAuth: BrowserAuthRepository;
   public readonly outputStages: OutputStagesRepository;
   public readonly previews: PreviewsRepository;
@@ -86,6 +90,7 @@ export class RendererDatabase {
     this.remoteMcp = new RemoteMcpRepository(this.raw);
     this.webPrincipals = new WebPrincipalsRepository(this.raw);
     this.projects = new ProjectsRepository(this.raw);
+    this.drafts = new DraftsRepository(this.raw);
     this.browserAuth = new BrowserAuthRepository(this.raw);
     this.outputStages = new OutputStagesRepository(this.raw);
     this.previews = new PreviewsRepository(this.raw);

@@ -8,6 +8,7 @@ export {
   appHistoryPage,
   appJobPage,
   appProjectPage,
+  appProjectEditorPage,
   appProjectsPage,
   appRenderPage,
 } from "./templates-app.js";

@@ -8,6 +8,37 @@ Install the shared collector with the Worker and existing cleanup timer. Use
 See [Source reuse and recovery](docs/source-input-reuse.md) and the optional
 [environment additions](deploy/renderer-io.env.example).
 
+Migration 026 records the inputs used by pending draft previews. Migration 027
+records quota reservations for reusable compile state.
+Run the backup, restore test and migration preflight before deploying all
+application services together. Verify schema 27 after startup. See
+[the migration notes](MIGRATIONS.md#migration-026-frozen-draft-preview-inputs).
+
+Draft previews are subject to the regular artifact lifetime. The cleanup timer
+keeps up to three completed previews and targets 32 MiB of retained preview
+files per project. `DRAFT_PREVIEW_KEEP_GENERATIONS` and
+`DRAFT_PREVIEW_MAX_RETAINED_BYTES_PER_PROJECT` override those thresholds. Zero
+disables the corresponding threshold. Set `DRAFT_PREVIEW_RETENTION_HOURS` for a
+shorter lifetime. The latest successful PDF stays available until expiry,
+subject to explicit project or output deletion. Its size and active leases can
+temporarily keep a project above the thresholds. The cleanup journal reports
+the number scheduled as `draftPreviewsScheduled`.
+
+A live preview that has run for 30 seconds can yield to a newer queued
+preview for the same project. The Worker verifies that the previous container
+has stopped before releasing its input or taking the next preview.
+`DRAFT_PREVIEW_SUPERSEDE_AFTER_SECONDS=0` lets the old preview finish normally.
+
+`DRAFT_WORK_CACHE_BYTES` enables the optional draft compile cache. The default
+is zero. Keep it disabled until cold and warm builds have been compared on the
+intended immutable Runtime. The setting bounds logical seed bytes globally.
+Each user can consume up to half the budget and each project up to one eighth.
+There are at most 128 total entries, 32 per user, 4 per project, and 1MiB per
+entry. Seeds live with their successful preview, follow the preview lifetime
+and are never served as artifacts. The Worker skips new seeds when the budget
+is exhausted and runs a clean build when the cache misses.
+This cache is separate from the TeX Live CI mirror and needs no services.
+
 Migration 022 adds PDF-bound page metadata and a deduplicated preview request
 queue. Upgrade database consumers and cleanup together after the encrypted
 backup, restore test and private-copy migration preflight, then verify schema 22. Updated Runtimes generate page 1 first; the Worker generates other pages on

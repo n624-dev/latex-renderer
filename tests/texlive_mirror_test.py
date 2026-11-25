@@ -785,6 +785,10 @@ class MirrorTest(unittest.TestCase):
             second = mirror.sync(self.config, "2026-09-07", now + dt.timedelta(hours=1))
         self.assertEqual(first["status"], "published")
         self.assertEqual(second["status"], "unchanged")
+        self.assertGreater(first["estimatedPeakBytes"], 0)
+        self.assertLessEqual(first["estimatedPeakBytes"], self.config.sync_peak_limit)
+        self.assertGreater(first["managedBytesBeforeGc"], 0)
+        self.assertGreater(first["managedBytesAfterGc"], 0)
         self.assertEqual(first["snapshotId"], second["snapshotId"])
         self.assertEqual(len(mirror.load_state(self.config)["snapshots"]), 1)
         snapshot = self.root / "snapshots" / first["snapshotId"]

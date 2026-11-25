@@ -1,4 +1,5 @@
 import process from "node:process";
+import { displayLocales } from "@latex-renderer/shared/locale";
 import {
   apiDocsPage as markdownApiDocsPage,
   cliDocsPage as markdownCliDocsPage,
@@ -7,7 +8,8 @@ import {
   projectsDocsPage as markdownProjectsDocsPage,
   troubleshootingDocsPage as markdownTroubleshootingDocsPage,
   windowsDocsPage as markdownWindowsDocsPage,
-  publicDocs,
+  docUrl,
+  publicDocSlugs,
   renderPublicDoc,
 } from "./markdown-docs.js";
 import {
@@ -60,7 +62,17 @@ export function renderDocsPage(slug: string): string {
   return renderPublicDoc(slug);
 }
 
-export const publicDocumentationPages = publicDocs.map(({ slug }) => ({
+export const publicDocumentationPages = publicDocSlugs.map((slug) => ({
   slug,
+  url: docUrl(slug),
   render: () => renderDocsPage(slug),
+}));
+
+export const localizedDocumentation = displayLocales.map((locale) => ({
+  locale,
+  pages: publicDocSlugs.map((slug) => ({
+    slug,
+    url: docUrl(slug, locale),
+    render: () => renderPublicDoc(slug, locale),
+  })),
 }));

@@ -1,3 +1,4 @@
+import { resolveDisplayLocale } from "@latex-renderer/shared/locale";
 import { createAdaptorServer } from "@hono/node-server";
 import {
   startHttpService,
@@ -68,7 +69,9 @@ const oauth = new RemoteOAuthService(
     database,
     browserAuth: authentication.browserAuth,
     oauth,
-    mcp: createRemoteMcpHandler(renders, PLATFORM_VERSION),
+    mcp: createRemoteMcpHandler(renders, PLATFORM_VERSION, (userId) =>
+      resolveDisplayLocale({ saved: database.users.displayLocale(userId) ?? undefined }),
+    ),
     publicOrigin,
   }),
   port = validPortEnvironment(process.env, "PORT", 3104);

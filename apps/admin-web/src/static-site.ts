@@ -1,8 +1,13 @@
+import { readFileSync } from "node:fs";
 import { loginScript } from "./assets/login-script.js";
 import { siteScript } from "./assets/site-script.js";
 import { styles } from "./assets/styles.js";
+import { publicWebFontFiles } from "./assets/font-assets.js";
 import type { ClientDistribution } from "./client-distribution.js";
-import { publicDocumentationPages } from "./docs-pages.js";
+import {
+  localizedDocumentation,
+  publicDocumentationPages,
+} from "./docs-pages.js";
 import { publicDocsSearchJson } from "./markdown-docs.js";
 import { downloadsPage, homePage, publicPage404 } from "./templates.js";
 
@@ -50,14 +55,18 @@ function headers(archiveName: string, mcpbName?: string): string {
 /downloads/client/${archiveName}
   Content-Type: application/zip
   Content-Disposition: attachment; filename="${archiveName}"
-${mcpbName === undefined ? "" : `
+${
+  mcpbName === undefined
+    ? ""
+    : `
 /downloads/mcpb/*.mcpb
   Content-Type: application/octet-stream
   Content-Disposition: attachment; filename="${mcpbName}"
 
 /downloads/mcpb/mcpb.json
   Content-Type: application/json; charset=utf-8
-`}
+`
+}
 
 /openapi/*.yaml
   Content-Type: application/yaml; charset=utf-8
@@ -66,12 +75,13 @@ ${mcpbName === undefined ? "" : `
 }
 
 function redirects(archiveName: string): string {
-  const docRedirects = publicDocumentationPages
-    .filter(({ slug }) => slug !== "index")
-    .map(({ slug }) => `/docs/${slug} /docs/${slug}/ 308`)
+  const docRedirects = [
+    ...publicDocumentationPages,
+    ...localizedDocumentation.flatMap(({ pages }) => pages),
+  ]
+    .map(({ url }) => `${url.slice(0, -1)} ${url} 308`)
     .join("\n");
-  return `/docs /docs/ 308
-${docRedirects}
+  return `${docRedirects}
 /downloads /downloads/ 308
 /client /downloads/ 308
 /client/ /downloads/ 308
@@ -87,20 +97,33 @@ ${docRedirects}
 export function createPublicStaticAssets(
   distribution: ClientDistribution,
 ): readonly StaticAsset[] {
+  const docAsset = ({ url, render }: { url: string; render: () => string }) => ({
+    path: `${url.slice(1)}index.html`,
+    content: render(),
+  });
   return [
-    { path: "index.html", content: homePage() },
-    ...publicDocumentationPages.map(({ slug, render }) => ({
-      path: slug === "index" ? "docs/index.html" : `docs/${slug}/index.html`,
-      content: render(),
-    })),
-    { path: "assets/docs-search.json", content: publicDocsSearchJson() },
-    {
-      path: "downloads/index.html",
-      content: downloadsPage(
+    { path: "index.html", content: localizedEntry(homePage("en"), "/") },
+    ...publicDocumentationPages.map(docAsset),
+    ...localizedDocumentation.flatMap(({ locale, pages }) => [
+      ...pages.map(docAsset),
+      { path: `${locale}/assets/docs-search.json`, content: publicDocsSearchJson(locale) },
+      { path: `${locale}/index.html`, content: homePage(locale) },
+      { path: `${locale}/downloads/index.html`, content: downloadsPage(
         distribution.version,
         distribution.archiveName,
         distribution.mcpbName,
-      ),
+        locale,
+      ) },
+    ]),
+    { path: "assets/docs-search.json", content: publicDocsSearchJson() },
+    {
+      path: "downloads/index.html",
+      content: localizedEntry(downloadsPage(
+        distribution.version,
+        distribution.archiveName,
+        distribution.mcpbName,
+        "en",
+      ), "/downloads/"),
     },
     {
       path: "downloads/client/manifest.json",
@@ -147,7 +170,10 @@ export function createPublicStaticAssets(
     distribution.mcpbName === undefined
       ? []
       : [
-          { path: "downloads/mcpb/mcpb.json", content: distribution.mcpbMetadata },
+          {
+            path: "downloads/mcpb/mcpb.json",
+            content: distribution.mcpbMetadata,
+          },
           { path: "downloads/mcpb/latest.mcpb", content: distribution.mcpb },
           {
             path: `downloads/mcpb/${distribution.mcpbName}`,
@@ -166,10 +192,20 @@ export function createPublicStaticAssets(
     { path: "assets/login.js", content: loginScript },
     { path: "assets/styles.css", content: styles },
     { path: "assets/site.js", content: siteScript },
+    ...publicWebFontFiles.map(({ path, source }) => ({
+      path,
+      get content() {
+        return readFileSync(source);
+      },
+    })),
     {
       path: "_headers",
       content: headers(distribution.archiveName, distribution.mcpbName),
     },
     { path: "_redirects", content: redirects(distribution.archiveName) },
   ];
+}
+
+function localizedEntry(html: string, pathname: "/" | "/downloads/"): string {
+  return html.replace("<head>", `<head><meta name="public-locale-entry" content="${pathname}">`);
 }

@@ -18,12 +18,13 @@ import type {
 import { AppError, newId, nowIso } from "@latex-renderer/shared";
 import {
   captureValidatedSourceTree,
+  extractValidatedSourceFiles,
   validateAndExtract,
   verifyValidatedSourceTree,
   type VerifiedSourceTree,
   type ZipLimits,
 } from "@latex-renderer/zip-validation";
-import type { WorkerConfig } from "./config.js";
+import { rendererRuntimeDigest, type WorkerConfig } from "./config.js";
 import { dockerStopVerified, rendererContainerName } from "./docker.js";
 import { collectSourceTrees } from "../../../deploy/scripts/source-tree-gc.mjs";
 export { collectSourceTrees } from "../../../deploy/scripts/source-tree-gc.mjs";
@@ -73,12 +74,97 @@ export async function prepareSourceInput(
   destination: string,
 ): Promise<{ input: string; release: () => void; hit: boolean }> {
   const canonicalRoot = await realpath(config.storageRoot);
-  const limits = limitsFor(config),
-    owner = db.jobs.get(job.id)?.user_id,
-    source =
-      job.source_id === null
-        ? undefined
-        : db.sources.getReady(job.source_id, nowIso());
+  const limits = limitsFor(config);
+  const owner = db.jobs.get(job.id)?.user_id;
+  const draft = db.drafts.renderInput(job.id);
+  if (draft) {
+    const expected = rendererRuntimeDigest(draft.runtime ?? "");
+    if (expected !== null && expected !== rendererRuntimeDigest(config.image))
+      throw new AppError(
+        "DRAFT_RUNTIME_CHANGED",
+        "Runtime changed. Request a new preview.",
+        409,
+      );
+    if (
+      owner === undefined ||
+      draft.files.length > limits.maxFiles ||
+      !draft.files.some((file) => file.path === job.entrypoint)
+    )
+      throw new AppError(
+        "INVALID_DRAFT_INPUT",
+        "The preview input is incomplete",
+        422,
+      );
+    const manifest = draft.files.map(({ path, source_id, source_path }) => ({
+      path,
+      source_id,
+      source_path,
+    }));
+    if (
+      createHash("sha256").update(JSON.stringify(manifest)).digest("hex") !==
+      job.source_sha256
+    )
+      throw new AppError(
+        "INVALID_DRAFT_INPUT",
+        "The preview file manifest changed",
+        422,
+      );
+    const archives = new Map<string, typeof draft.files>();
+    for (const file of draft.files) {
+      if (file.owner_user_id !== owner || file.status !== "ready")
+        throw new AppError(
+          "SOURCE_NOT_READY",
+          "A preview Source is unavailable",
+          409,
+        );
+      const files = archives.get(file.source_id) ?? [];
+      files.push(file);
+      archives.set(file.source_id, files);
+    }
+    await mkdir(destination, { mode: 0o770 });
+    let remaining = limits.maxExtractedBytes;
+    for (const files of archives.values()) {
+      const file = files[0];
+      if (!file) throw new Error("Draft archive group is empty");
+      if (
+        file.storage_key !== `sources/${file.source_id}/source.zip` &&
+        !/^jobs\/job_[a-f0-9]{32}\/input\/source\.zip$/.test(file.storage_key)
+      )
+        throw new AppError(
+          "SOURCE_NOT_READY",
+          "A preview Source path is invalid",
+          409,
+        );
+      if (!/^source_[a-f0-9]{32}$/.test(file.source_id))
+        throw new AppError(
+          "SOURCE_NOT_READY",
+          "A preview Source ID is invalid",
+          409,
+        );
+      const path = join(canonicalRoot, file.storage_key);
+      if ((await realpath(path)) !== path)
+        throw new AppError(
+          "SOURCE_NOT_READY",
+          "A preview Source path is unsafe",
+          409,
+        );
+      await verifyArchive(path, file.size, file.sha256, config.maxUploadBytes);
+      remaining -= await extractValidatedSourceFiles(
+        path,
+        destination,
+        files.map(({ path, source_path }) => ({
+          path,
+          sourcePath: source_path,
+        })),
+        { ...limits, maxExtractedBytes: remaining },
+      );
+    }
+    return { input: destination, release: () => {}, hit: false };
+  }
+  const source =
+    job.source_id === null
+      ? undefined
+      : db.sources.getReady(job.source_id, nowIso());
   if (
     source &&
     (source.owner_user_id !== owner ||

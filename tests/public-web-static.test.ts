@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { displayLocales } from "../packages/shared/src/locale.js";
+import { publicWebFontFiles } from "../apps/admin-web/src/assets/font-assets.js";
 import { createPublicStaticAssets } from "../apps/admin-web/src/static-site.js";
 
 const bytes = new TextEncoder().encode("test");
@@ -25,7 +27,24 @@ describe("public web static build", () => {
       ]),
     );
 
-    expect([...assets.keys()].sort()).toEqual([
+    const paths = [...assets.keys()].sort();
+    const fontPaths = publicWebFontFiles.map(({ path }) => path).sort();
+    expect(paths.filter((path) => path.startsWith("assets/fonts/"))).toEqual(fontPaths);
+    const localPaths = new Set<string>();
+    for (const locale of displayLocales) {
+      const guides = paths.filter((path) => path.startsWith(`${locale}/docs/`));
+      expect(guides).toEqual(paths.filter((path) => path.startsWith("docs/"))
+        .map((path) => `${locale}/${path}`));
+      for (const path of guides) {
+        expect(assets.get(path)).toContain(`<html lang="${locale}">`);
+        localPaths.add(path);
+      }
+      for (const path of ["assets/docs-search.json", "index.html", "downloads/index.html"]) {
+        expect(assets.has(`${locale}/${path}`)).toBe(true);
+        localPaths.add(`${locale}/${path}`);
+      }
+    }
+    expect(paths.filter((path) => !localPaths.has(path) && !fontPaths.includes(path))).toEqual([
       "404.html",
       "_headers",
       "_redirects",
@@ -68,7 +87,8 @@ describe("public web static build", () => {
       "openapi/gateway.openapi.yaml",
       "openapi/renderer.openapi.yaml",
     ]);
-    expect(assets.get("index.html")).toContain("LaTeXをPDFに変換");
+    expect(assets.get("index.html")).toContain("Convert LaTeX to PDF");
+    expect(assets.get("ja/index.html")).toContain("LaTeXをPDFに変換");
     expect(assets.get("assets/login.js")).toContain("/auth/config");
     expect(assets.get("assets/styles.css")).toContain(
       "[hidden] { display: none !important; }",
@@ -77,6 +97,12 @@ describe("public web static build", () => {
     expect(assets.has("assets/render.js")).toBe(false);
     expect(assets.get("404.html")).toContain("ページが見つかりません");
     expect(assets.get("docs/index.html")).toContain("最短でPDFを作る");
+    expect(assets.get("ja/docs/index.html")).toContain('href="/ja/docs/cli/"');
+    expect(assets.get("ja/docs/cli/index.html")).toContain('id="レンダリング"');
+    expect(assets.get("en/docs/web/index.html")).toContain('<html lang="en">');
+    expect(assets.get("en/assets/docs-search.json")).toContain(
+      '"url":"/en/docs/web/"',
+    );
     expect(assets.get("downloads/index.html")).toContain("0.2.0");
     expect(assets.get("downloads/windows/latest.zip")).toBe(bytes);
     expect(assets.get("downloads/client/latest.zip")).toBe(bytes);
@@ -121,7 +147,7 @@ describe("public web static build", () => {
       bytes,
     );
     expect(assets.get("downloads/mcpb/mcpb.json")).toBe(bytes);
-    expect(assets.get("downloads/index.html")).toContain(
+    expect(assets.get("ja/downloads/index.html")).toContain(
       "Claude Desktop拡張を取得",
     );
     expect(assets.get("_headers")).toContain("/downloads/mcpb/*.mcpb");

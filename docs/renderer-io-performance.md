@@ -5,6 +5,90 @@
 比較試験は使い捨てのGitHub-hosted Runner専用です。共有サーバーでは実行しません。
 生成ファイルは終了時に回収し、永続的なActions cacheは追加しません。
 
+## 編集間のコンパイル作業キャッシュ
+
+TeX Live 2026-11-22 のamd64 Baseから、英語と日本語コレクションを入れた
+Runtimeを作り、Ubuntu 24.04の使い捨てKVMで計測しました。VMは3 vCPU・
+4 GiB RAM、各コンテナは1.5 CPU・1 GiBです。数式、参照、BibTeX、TikZを含む
+合成文書で本文だけを書き換え、空の出力領域からの処理と、直前のコンパイルの
+補助ファイルを使う処理を比較しました。pLaTeXとupLaTeXには日本語を含めました。
+
+次の各セルは、コンテナ起動から成果物回収までの経過秒数です。各条件を1回ずつ
+測定しました。ブラウザーへの転送やジョブの待機は含みません。
+
+| エンジン |     1ページ |    10ページ |    50ページ |   100ページ |
+| -------- | ----------: | ----------: | ----------: | ----------: |
+| LuaLaTeX | 5.36 → 2.61 | 5.42 → 2.57 | 5.52 → 2.64 | 5.71 → 2.71 |
+| pdfLaTeX | 3.37 → 1.77 | 3.37 → 1.79 | 3.49 → 1.78 | 3.63 → 1.84 |
+| XeLaTeX  | 3.83 → 2.13 | 3.86 → 2.12 | 3.90 → 2.15 | 4.03 → 2.12 |
+| upLaTeX  | 3.58 → 2.08 | 3.59 → 2.12 | 3.70 → 2.13 | 3.78 → 2.12 |
+| pLaTeX   | 3.50 → 2.03 | 3.51 → 2.04 | 3.59 → 2.07 | 3.73 → 2.10 |
+
+全20ケースでページ数、PDFから抽出した本文、45 DPIで描画した全ページの
+画像が一致しました。補助ファイルは1件あたり12,092〜21,931 bytesでした。
+コンテナのCPU時間は約50〜60%減り、測定した最大メモリは約185 MiBから
+約184 MiBでした。補助ファイル再利用の効果は文書によって異なります。
+
+同じ変更のWebビルドから取得したgzipファイルは、エディターが124,237 bytes、
+選択言語の辞書が1,708〜2,416 bytes、PDF.js本体とWorkerがそれぞれ
+156,664 bytesと396,859 bytesでした。エディターは編集画面を開いた時点で
+読み込みます。狭い画面ではPDFタブを開くまでPDF.jsを読み込まず、PNG表示
+から開始した場合もPDF.jsを取得しません。
+
+再計測する場合は、使い捨てホストにDockerとPopplerのコマンドを用意し、
+検証済みRuntimeを指定してください。サービス運用中のホストでは実行しません。
+
+```sh
+RENDERER_DISPOSABLE_BENCHMARK=1 sh deploy/scripts/benchmark-draft-engines.sh latex-renderer:test
+```
+
+キャッシュは`DRAFT_WORK_CACHE_BYTES`で有効にできます。既定では無効です。
+設定の上限と回収については[運用手順](../DEPLOYMENT.md)を参照してください。
+
+## エディターで最初のページを表示するまで
+
+所有者がエディターでPDFを表示すると、ブラウザーは必要なバイト範囲を取得
+できます。取得ごとに認証とダウンロード中の削除保護が適用されます。PDFは
+引き続き `private, no-store` です。エディターのスクリプト・CSS・辞書・
+PDF.jsの補助ファイルには内容のSHA-256を含むURLを使い、ブラウザーが1年間
+再利用できます。公開資産が変わるとページに新しいURLが入ります。
+
+ChromiumのローカルHTTP試験では、1,620,518 bytesの合成PDFの先頭ページに
+必要だった本文は113,190 bytes、範囲リクエストは2件でした。1画素の試験用
+PNGは69 bytesです。同じブラウザーで2ページを開き、共通CSSの要求が1回
+であることも確認しました。初回PDFの処理にはPDF.jsとWorkerの初回読み込み
+が入ります。文書構造、キャッシュ、通信速度、PNGの生成待ちで結果は変わります。
+
+- ブラウザーのPerformanceパネルで `latex-renderer:editor:input-idle`、
+  `save-and-queue`、`pdf-load-and-paint`、`png-load-and-paint` の
+  直近の計測を確認できます。転送量とサーバー応答時間はNetworkパネルで確認
+  できます。
+- Workerの `renderer_worker.draft_preview_completed` は、投入から動作開始
+  までの `queueAndPrepareMs`、そのうち入力準備の `sourcePrepareMs`、
+  コンパイル用コンテナの経過、成果物検証、確定処理、作業キャッシュの利用を
+  記録します。Workerの既存診断ローテーションを使用します。
+- CIミラーの新規公開時は `estimatedPeakBytes` と、GC前後に実際に割り当て
+  られていたバイト数を記録します。前者は同期を許可した時点の見積もりで、
+  後者は各時点の観測です。使用量にはハードリンクした内容を一度だけ数えます。
+
+ブラウザー試験はビルド済みのWebを使って再現できます。
+
+```sh
+pnpm --filter @latex-renderer/web build
+EDITOR_PREVIEW_BENCHMARK=1 pnpm exec vitest run --disableConsoleIntercept --config vitest.browser.config.ts tests/browser/project-editor.browser.ts
+```
+
+英語・日本語コレクションを含むRuntimeでは、5エンジンの通常文書と回転した
+数式、およびpLaTeXとupLaTeXの縦組文書でPDF・PNG・SVGを確認できます。
+回転・縦組の試験数式はSVGに残り、位置を確定できない場合は
+`placementStatus: "unknown"` を返します。
+
+```sh
+RENDERER_SMOKE_GEOMETRY=1 sh deploy/scripts/smoke-test-renderer-engines.sh latex-renderer:test
+```
+
+CIの手動I/O計測でも、この追加の組版確認を実行します。
+
 ## 基準値
 
 [基準実行](https://github.com/n624-dev/latex-renderer/actions/runs/39194458574)

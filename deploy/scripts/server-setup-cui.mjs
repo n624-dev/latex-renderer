@@ -1,3 +1,4 @@
+import { terminalSetupText as setupText } from "./setup-messages.mjs";
 import {
   SERVER_RUNTIME_LIMITS,
   createServerSetupSession,
@@ -12,10 +13,10 @@ export async function runServerSetupCui(host, io) {
     const { review } = await session.status();
     let candidate = JSON.parse(JSON.stringify(review));
     io.print(
-      "Existing prepared host only. No OS, user, Docker, disk, owner, key or ingress changes. Blank input retains a value.",
+      setupText("existingPreparedHostOnlyNoOs"),
     );
     io.print(
-      `Public origin: ${candidate.deployment.authentication.deployment.publicOrigin}`,
+      setupText("publicOriginValue", { value: candidate.deployment.authentication.deployment.publicOrigin }),
     );
     const memoryFields = [
       "minimumAvailableMemoryBytes",
@@ -24,9 +25,9 @@ export async function runServerSetupCui(host, io) {
     ];
     /** @type {Record<string,string>} */
     const memoryLabels = {
-      minimumAvailableMemoryBytes: "開始に必要な空きRAM",
-      maximumMemoryBytes: "実行RAMの上限",
-      maximumSwapBytes: "追加swapの上限（0は無効）",
+      minimumAvailableMemoryBytes: setupText("freeRamRequiredToStart"),
+      maximumMemoryBytes: setupText("runtimeRamLimit"),
+      maximumSwapBytes: setupText("additionalSwapLimit0DisablesIt"),
     };
     for (const [name, [, , maximum, minimum = 1]] of Object.entries(
       SERVER_RUNTIME_LIMITS,
@@ -50,7 +51,7 @@ export async function runServerSetupCui(host, io) {
     const authentication = candidate.deployment.authentication.authentication;
     if (authentication.backend === "native") {
       const selected = await io.ask(
-        "Login methods [blank keeps current; password / oidc / both]: ",
+        setupText("loginMethodsBlankKeepsCurrentPassword") + " ",
       );
       if (selected.trim()) {
         if (!["password", "oidc", "both"].includes(selected.trim()))
@@ -65,19 +66,19 @@ export async function runServerSetupCui(host, io) {
           const issuer =
             (
               await io.ask(
-                `OIDC HTTPS issuer [${existing?.issuer ?? "required"}]: `,
+                setupText("oidcHttpsIssuerValue", { value: existing?.issuer ?? "required" }) + " ",
               )
             ).trim() || existing?.issuer;
           const clientId =
             (
               await io.ask(
-                `OIDC client ID [${existing?.clientId ?? "required"}]: `,
+                setupText("oidcClientIdValue", { value: existing?.clientId ?? "required" }) + " ",
               )
             ).trim() || existing?.clientId;
           const displayName =
             (
               await io.ask(
-                `OIDC display name [${existing?.displayName ?? "OIDC"}]: `,
+                setupText("oidcDisplayNameValue", { value: existing?.displayName ?? "OIDC" }) + " ",
               )
             ).trim() ||
             existing?.displayName ||
@@ -100,7 +101,7 @@ export async function runServerSetupCui(host, io) {
     // The Web frontend has an advanced format-4 editor. Keep an equivalent
     // inline CUI path so uncommon reviewed fields/backends are not Web-only.
     const advanced = await io.ask(
-      "Optional full format-4 JSON on one line (no secrets; blank keeps the fields above): ",
+      setupText("optionalFullFormat4JsonOn") + " ",
     );
     if (advanced.trim()) candidate = JSON.parse(advanced);
     const checked = await session.preview(candidate);
@@ -110,16 +111,16 @@ export async function runServerSetupCui(host, io) {
       );
     io.print(JSON.stringify(checked.review, null, 2));
     io.print(
-      "Apply stops the fixed service set, validates existing credentials/owner and recovers failures. No credentials are collected here.",
+      setupText("applyStopsTheFixedServiceSet"),
     );
     if (
-      (await io.ask("Type APPLY to apply; anything else cancels: ")) !== "APPLY"
+      (await io.ask(setupText("typeApplyToApplyAnythingElse") + " ")) !== "APPLY"
     ) {
-      io.print("Cancelled; no settings applied.");
+      io.print(setupText("cancelledNoSettingsApplied"));
       return { applied: false };
     }
     await session.apply(checked.confirmation);
-    io.print("Applied. Verify owner login and a representative render.");
+    io.print(setupText("appliedVerifyOwnerLoginAndA"));
     return { applied: true };
   } finally {
     session.close();

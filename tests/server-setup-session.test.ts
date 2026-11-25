@@ -238,11 +238,11 @@ describe("CUI adapter", () => {
     await runServerSetupCui(f.host, {
       ask: (prompt) =>
         Promise.resolve(
-          prompt.startsWith("開始に必要な空きRAM")
+          /^(Free RAM required to start|開始に必要な空きRAM)/u.test(prompt)
             ? "500"
-            : prompt.startsWith("実行RAMの上限")
+            : /^(Runtime RAM limit|実行RAMの上限)/u.test(prompt)
               ? "2048"
-              : prompt.startsWith("追加swapの上限")
+              : /^(Additional swap limit|追加swapの上限)/u.test(prompt)
                 ? "0"
                 : prompt.startsWith("Type APPLY")
                   ? "APPLY"

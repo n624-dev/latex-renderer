@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { RendererDatabase } from "@latex-renderer/database";
+import type { RendererDatabase, WorkerJobRow } from "@latex-renderer/database";
 
 export const MIB = 1024 ** 2;
 export const RENDER_MEMORY_MAX = 1024 * MIB;
@@ -13,6 +13,7 @@ export interface MemoryCandidate {
   source_sha256: string;
   entrypoint: string;
   outputs_json: string;
+  engine?: WorkerJobRow["engine"];
   queued_at: string;
 }
 interface Record {
@@ -45,6 +46,7 @@ export function memoryProfileKey(candidate: MemoryCandidate, image: string) {
           candidate.entrypoint,
           image,
           [...new Set(outputs)].sort(),
+          ...(candidate.engine === undefined || candidate.engine === "lualatex" ? [] : [candidate.engine]),
         ]),
       )
       .digest("hex");

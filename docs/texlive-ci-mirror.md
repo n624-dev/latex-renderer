@@ -176,6 +176,11 @@ the relevant filesystems. The 15/11/9/14 GiB values use exactly 1,073,741,824
 bytes per GiB. Actual free space is re-read after deletion; apparent snapshot
 sizes are not treated as reclaimed bytes.
 
+A successful sync reports the admission estimate as `estimatedPeakBytes`.
+`managedBytesBeforeGc` and `managedBytesAfterGc` report actual allocation at
+the two collection checkpoints. These values allow comparison with the
+estimate and distinguish retained storage from space used during a sync.
+
 The mirror downloads the canonical date archive, verifies both signed SHA-512
 files with a locally provisioned TeX Live keyring, verifies the installer and
 the uncompressed `texlive.tlpdb`, and checks the database's declared release.

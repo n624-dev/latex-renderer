@@ -148,6 +148,28 @@ export function diagnosticWriter(storageRoot, channel, now = Date.now) {
         )
           safe[key] = value;
       }
+      if (
+        channel === "renderer-worker" &&
+        safe.event === "renderer_worker.draft_preview_completed"
+      ) {
+        for (const key of [
+          "queueAndPrepareMs",
+          "sourcePrepareMs",
+          "compileMs",
+          "validationMs",
+          "publishMs",
+        ]) {
+          const value = record[key];
+          if (
+            typeof value === "number" &&
+            Number.isSafeInteger(value) &&
+            value >= 0
+          )
+            safe[key] = value;
+        }
+        if (typeof record.workCacheHit === "boolean")
+          safe.workCacheHit = record.workCacheHit;
+      }
       const line =
         JSON.stringify({ ...safe, time: new Date(now()).toISOString() }) + "\n";
       if (Buffer.byteLength(line) > 2048) return;

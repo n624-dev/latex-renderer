@@ -3,12 +3,17 @@ import { statfs } from "node:fs/promises";
 import { AppError, newId, nowIso } from "@latex-renderer/shared";
 import {
   ProjectOperations,
+  ProjectDraftOperations,
   SvgRetryOperations,
   sourceRequestExpiresAt,
   assertSourceWritable,
   type JobRow,
 } from "@latex-renderer/database";
-import type { RenderOutput } from "@latex-renderer/contracts";
+import {
+  defaultRenderEngine,
+  type RenderEngine,
+  type RenderOutput,
+} from "@latex-renderer/contracts";
 import { RemoteRenderService } from "@latex-renderer/remote-mcp-core";
 import { validateEntrypointPath } from "@latex-renderer/zip-validation";
 import type { AdminDependencies, AppActor } from "../types.js";
@@ -25,6 +30,27 @@ const RETAINED = new Set([
 
 export class AdminJobsService {
   constructor(private readonly deps: AdminDependencies) {}
+  async createDraftPreview(
+    actor: AppActor, projectId: string, version: number,
+    principal: { api_key_id: string; service_account_id: string },
+  ) {
+    const free = await statfs(this.deps.storageRoot);
+    const drafts = new ProjectDraftOperations(this.deps.database, this.deps.maxFileCount, this.deps.maxZipEntries);
+    const result = drafts.queuePreview(actor, projectId, version, {
+      apiKeyId: principal.api_key_id,
+      serviceAccountId: principal.service_account_id,
+      rendererVersion: this.deps.rendererVersion,
+      runtime: process.env.RENDERER_IMAGE ?? null,
+      retentionHours: this.deps.artifactRetentionHours,
+      reservedOutputBytes: this.deps.maxOutputBytes,
+      admit: () => {
+        if (free.bavail * free.bsize < this.deps.minFreeStorageBytes)
+          throw new AppError("STORAGE_PRESSURE", "Insufficient free storage", 503);
+        this.assertAccepting(actor.userId, principal.service_account_id, 0);
+      },
+    });
+    return result;
+  }
   list(
     filters: {
       status?: string;
@@ -106,6 +132,7 @@ export class AdminJobsService {
       source_id: row.source_id,
       entrypoint: row.entrypoint,
       outputs: this.deps.database.jobs.outputs(row),
+      ...this.deps.database.jobs.renderProvenance(row),
       created_at: row.created_at,
       updated_at: row.updated_at,
       queued_at: row.queued_at,
@@ -193,12 +220,14 @@ export class AdminJobsService {
           apiKeyId: string;
           size: number;
           sha256: string;
+          engine?: RenderEngine | undefined;
           outputs: RenderOutput[];
         }
       | {
           apiKeyId: string;
           sourceId: string;
           entrypoint?: string | undefined;
+          engine?: RenderEngine | undefined;
           outputs: RenderOutput[];
           project?:
             | {
@@ -223,8 +252,10 @@ export class AdminJobsService {
         "A valid Idempotency-Key is required",
         400,
       );
-    const normalized = input.outputs.includes("svg")
-        ? input
+    const { engine: selectedEngine, ...legacy } = input;
+    const engine = selectedEngine ?? defaultRenderEngine,
+      normalized = input.outputs.includes("svg")
+        ? legacy
         : {
             apiKeyId: input.apiKeyId,
             size: input.size,
@@ -232,7 +263,12 @@ export class AdminJobsService {
           },
       keyHash = createHash("sha256").update(idempotencyKey).digest("hex"),
       requestHash = createHash("sha256")
-        .update(JSON.stringify(normalized))
+        .update(
+          JSON.stringify({
+            ...normalized,
+            ...(engine === defaultRenderEngine ? {} : { engine }),
+          }),
+        )
         .digest("hex"),
       timestamp = nowIso();
     const existing = this.deps.database.security.idempotency(
@@ -321,6 +357,7 @@ export class AdminJobsService {
           timestamp,
           sourceId,
           outputs: input.outputs,
+          engine,
           reservedOutputBytes: this.deps.maxOutputBytes,
         });
         this.deps.database.security.insertNonce(nonce, jobId, expiresAt);
@@ -575,6 +612,7 @@ export class AdminJobsService {
       apiKeyId: string;
       sourceId: string;
       entrypoint?: string | undefined;
+      engine?: RenderEngine | undefined;
       outputs: RenderOutput[];
       project?:
         | {
@@ -608,7 +646,8 @@ export class AdminJobsService {
         "Selected render target is unavailable",
         409,
       );
-    const normalized = input.outputs.includes("svg")
+    const engine = input.engine ?? defaultRenderEngine,
+      normalized = input.outputs.includes("svg")
         ? {
             apiKeyId: input.apiKeyId,
             sourceId: input.sourceId,
@@ -624,7 +663,12 @@ export class AdminJobsService {
           },
       keyHash = createHash("sha256").update(idempotencyKey).digest("hex"),
       requestHash = createHash("sha256")
-        .update(JSON.stringify(normalized))
+        .update(
+          JSON.stringify({
+            ...normalized,
+            ...(engine === defaultRenderEngine ? {} : { engine }),
+          }),
+        )
         .digest("hex"),
       existing = this.deps.database.security.idempotency(
         actor.type,
@@ -709,6 +753,7 @@ export class AdminJobsService {
                   actor,
                   currentSource.id,
                   entrypoint,
+                  engine,
                   input.project,
                 ),
           projectRevisionId = resolvedProject?.id;
@@ -723,6 +768,7 @@ export class AdminJobsService {
             sourceId: currentSource.id,
             entrypoint,
             outputs: input.outputs,
+            engine,
             ...(projectRevisionId === undefined ? {} : { projectRevisionId }),
             timestamp,
             reservedOutputBytes: this.deps.maxOutputBytes,
@@ -803,6 +849,7 @@ export class AdminJobsService {
     actor: AppActor,
     sourceId: string,
     entrypoint: string,
+    engine: RenderEngine,
     project:
       | {
           projectId: string;
@@ -826,7 +873,8 @@ export class AdminJobsService {
       if (
         revision?.project_id !== owned.id ||
         revision.source_id !== sourceId ||
-        revision.entrypoint !== entrypoint
+        revision.entrypoint !== entrypoint ||
+        revision.engine !== engine
       )
         throw new AppError(
           "PROJECT_REVISION_NOT_FOUND",
@@ -847,6 +895,7 @@ export class AdminJobsService {
       displayName: project.displayName,
       originalFilename: project.originalFilename,
       outputs: project.outputs,
+      engine,
     });
     return {
       id: revision.id,
@@ -925,7 +974,10 @@ export class AdminJobsService {
     const fs = await statfs(this.deps.storageRoot);
     if (fs.bavail * fs.bsize < this.deps.minFreeStorageBytes)
       throw new AppError("STORAGE_PRESSURE", "Insufficient free storage", 503);
-    return new SvgRetryOperations(this.deps.database, this.deps).retry(
+    return new SvgRetryOperations(this.deps.database, {
+      ...this.deps,
+      runtimeImage: process.env.RENDERER_IMAGE,
+    }).retry(
       { userId: row.user_id, type: actor.type, id: actor.id },
       id,
       key,

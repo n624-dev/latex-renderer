@@ -2,7 +2,7 @@ import type { RendererDatabase } from "@latex-renderer/database";
 import { AppError, nowIso } from "@latex-renderer/shared";
 import type { WorkerConfig } from "./config.js";
 import { assertDockerIsolation, RendererCleanupDeferred } from "./docker.js";
-import { recordFailure } from "./failure.js";
+import { isArtifactStorageFull, recordFailure } from "./failure.js";
 import { startWorkerHeartbeat } from "./heartbeat.js";
 import { processJob } from "./job-processor.js";
 import { createPeriodicLeaseRecovery } from "./periodic-recovery.js";
@@ -339,8 +339,10 @@ export async function runWorker(
           );
           continue;
         }
-        const message =
-            error instanceof Error
+        const storageFull = isArtifactStorageFull(error);
+        const message = storageFull
+            ? "Renderer artifact storage is full"
+            : error instanceof Error
               ? error.message.slice(0, 1000)
               : "Unknown renderer error",
           rejected = error instanceof AppError && error.status === 422;
@@ -361,12 +363,14 @@ export async function runWorker(
           config,
           job,
           message,
-          error instanceof AppError &&
-            (rejected ||
-              database.outputStages.checkpoint(job.id) !== undefined ||
-              database.artifacts.hasPublishedPdf(job.id))
-            ? error.code
-            : "RENDERER_FAILED",
+          storageFull
+            ? "INSUFFICIENT_STORAGE"
+            : error instanceof AppError &&
+                (rejected ||
+                  database.outputStages.checkpoint(job.id) !== undefined ||
+                  database.artifacts.hasPublishedPdf(job.id))
+              ? error.code
+              : "RENDERER_FAILED",
           rejected ? "rejected" : "failed",
         );
         console.error(

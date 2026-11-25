@@ -25,6 +25,46 @@ function root() {
   return p;
 }
 describe("bounded service diagnostics", () => {
+  it("retains typed Draft Preview timings without retaining source paths", async () => {
+    const p = root();
+    const log = diagnosticWriter(p, "renderer-worker");
+    log({
+      event: "renderer_worker.draft_preview_completed",
+      queueAndPrepareMs: 17,
+      sourcePrepareMs: 10,
+      compileMs: 1500,
+      validationMs: 4,
+      publishMs: 2,
+      workCacheHit: false,
+      path: "main.tex",
+    });
+    log({
+      event: "renderer_worker.draft_preview_completed",
+      compileMs: "main.tex",
+      validationMs: -1,
+      workCacheHit: "unknown",
+    });
+    await log.flush();
+    const lines = readFileSync(
+      join(p, "diagnostics/renderer-worker.jsonl"),
+      "utf8",
+    )
+      .trim()
+      .split("\n");
+    expect(JSON.parse(lines[0] ?? "") as unknown).toMatchObject({
+      queueAndPrepareMs: 17,
+      sourcePrepareMs: 10,
+      compileMs: 1500,
+      validationMs: 4,
+      publishMs: 2,
+      workCacheHit: false,
+    });
+    expect(lines.join("\n")).not.toContain("main.tex");
+    expect(JSON.parse(lines[1] ?? "") as unknown).not.toHaveProperty(
+      "validationMs",
+    );
+  });
+
   it("writes bounded JSON and rotates instead of accumulating files", async () => {
     const p = root(),
       log = diagnosticWriter(p, "remote-mcp");

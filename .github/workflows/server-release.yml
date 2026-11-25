@@ -293,7 +293,7 @@ jobs:
       matrix:
         runner: [ubuntu-24.04, macos-15, windows-2025]
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 15
+    timeout-minutes: ${{ matrix.runner == 'macos-15' && 19 || 15 }}
     permissions:
       actions: read
       attestations: read
@@ -303,6 +303,20 @@ jobs:
         with:
           ref: ${{ inputs.version }}
           persist-credentials: false
+      - name: Check out macOS diagnostics from the workflow revision
+        if: runner.os == 'macOS'
+        id: macos-tools
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .ci-macos
+          sparse-checkout: .github/actions/macos-diagnostics/
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - uses: ./.ci-macos/.github/actions/macos-diagnostics
+        if: runner.os == 'macOS'
+        with:
+          phase: start
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: "26.13.0"
@@ -313,6 +327,7 @@ jobs:
           merge-multiple: true
           digest-mismatch: error
       - name: Verify current and previous Stable clients and exercise native migration
+        timeout-minutes: 15
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -338,7 +353,16 @@ jobs:
             --signer-workflow n624-dev/latex-renderer/.github/workflows/server-release.yml \
             --source-ref "refs/tags/$RELEASE_TAG" --source-digest "$SOURCE_COMMIT" \
             --predicate-type https://slsa.dev/provenance/v1 --deny-self-hosted-runners
-          node client/test-cli-migration.mjs "$RUNNER_TEMP/$old" "$candidate"
+          if [ "$RUNNER_OS" = macOS ]; then
+            node client/test-cli-migration.mjs "$RUNNER_TEMP/$old" "$candidate" \
+              2>&1 | tee "$MACOS_DIAGNOSTICS_DIR/client-migration.log"
+          else
+            node client/test-cli-migration.mjs "$RUNNER_TEMP/$old" "$candidate"
+          fi
+      - uses: ./.ci-macos/.github/actions/macos-diagnostics
+        if: always() && runner.os == 'macOS' && steps.macos-tools.outcome == 'success'
+        with:
+          phase: finish
 
   winget:
     needs: build
@@ -412,7 +436,7 @@ jobs:
           - runner: macos-15-intel
             arch: x64
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 20
+    timeout-minutes: 24
     permissions:
       actions: read
       attestations: read
@@ -422,6 +446,18 @@ jobs:
         with:
           ref: ${{ needs.build.outputs.commit }}
           persist-credentials: false
+      - name: Check out macOS diagnostics from the workflow revision
+        id: macos-tools
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .ci-macos
+          sparse-checkout: .github/actions/macos-diagnostics/
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - uses: ./.ci-macos/.github/actions/macos-diagnostics
+        with:
+          phase: start
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: "26.13.0"
@@ -432,6 +468,7 @@ jobs:
           merge-multiple: true
           digest-mismatch: error
       - name: Verify the exact release archive and exercise Homebrew on native macOS
+        timeout-minutes: 20
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -457,7 +494,12 @@ jobs:
             --signer-workflow n624-dev/latex-renderer/.github/workflows/server-release.yml \
             --source-ref "refs/tags/$previous" --predicate-type https://slsa.dev/provenance/v1 \
             --deny-self-hosted-runners
-          node deploy/homebrew/test-macos.mjs "$candidate" "$RUNNER_TEMP/$old"
+          node deploy/homebrew/test-macos.mjs "$candidate" "$RUNNER_TEMP/$old" \
+            2>&1 | tee "$MACOS_DIAGNOSTICS_DIR/native-homebrew.log"
+      - uses: ./.ci-macos/.github/actions/macos-diagnostics
+        if: always() && steps.macos-tools.outcome == 'success'
+        with:
+          phase: finish
 
   upload-draft:
     needs: [build, update-e2e, client-migration, winget, homebrew]

@@ -18,6 +18,159 @@ afterEach(async () => {
 });
 
 describe("scheduled cleanup", () => {
+  it("collects obsolete draft output while retaining the latest PDF and leased work", async () => {
+    const root = await mkdtemp(join(tmpdir(), "latex-draft-retention-"));
+    roots.push(root);
+    const databasePath = join(root, "renderer.sqlite3"),
+      storageRoot = join(root, "storage");
+    const db = new RendererDatabase(databasePath);
+    db.migrate();
+    const recent = new Date(Date.now() - 30000).toISOString();
+    const old = new Date(Date.now() - 2 * 3600000).toISOString();
+    const future = new Date(Date.now() + 60000).toISOString();
+    try {
+      const userId = "user_draft_preview";
+      db.raw
+        .prepare(
+          `INSERT INTO users
+        (id,email,display_name,role,status,security_version,created_by,created_at,updated_at)
+        VALUES (?,?,'Draft','user','active',1,'test',?,?)`,
+        )
+        .run(userId, "preview@example.test", recent, recent);
+      db.webPrincipals.ensureAll();
+      const principal = db.raw
+        .prepare(
+          "SELECT service_account_id,api_key_id FROM web_principals WHERE user_id=?",
+        )
+        .get(userId) as { service_account_id: string; api_key_id: string };
+      const projectId = "project_" + "a".repeat(32);
+      db.projects.insert({
+        id: projectId,
+        ownerUserId: userId,
+        displayName: "Draft",
+        timestamp: recent,
+      });
+      const add = async (
+        version: number,
+        status: "succeeded" | "failed" | "canceled" | "running",
+        options: {
+          time?: string;
+          worker?: string;
+          superseded?: boolean;
+          bytes?: number;
+        } = {},
+      ) => {
+        const jobId = "job_" + version.toString(16).padStart(32, "0");
+        const time = options.time ?? recent;
+        db.jobs.insertDraftRender({
+          id: jobId,
+          userId,
+          serviceAccountId: principal.service_account_id,
+          apiKeyId: principal.api_key_id,
+          rendererVersion: "test",
+          manifestSha256: "a".repeat(64),
+          entrypoint: "main.tex",
+          engine: "lualatex",
+          timestamp: time,
+          reservedOutputBytes: 64,
+        });
+        db.drafts.attachRender(jobId, projectId, version, null);
+        db.raw
+          .prepare(
+            `UPDATE jobs SET status=?,completed_at=?,lease_owner=?,error_code=? WHERE id=?`,
+          )
+          .run(
+            status,
+            time,
+            options.worker ?? null,
+            options.superseded ? "DRAFT_SUPERSEDED" : null,
+            jobId,
+          );
+        const output = join(storageRoot, "jobs", jobId, "output");
+        await mkdir(output, { recursive: true });
+        const file = status === "succeeded" ? "result.pdf" : "compile.log";
+        const bytes = options.bytes ?? 5;
+        await writeFile(join(output, file), Buffer.alloc(bytes));
+        db.artifacts.insert({
+          id: `fixture-${version}`,
+          job_id: jobId,
+          type: status === "succeeded" ? "pdf" : "log",
+          relative_path: file,
+          size: bytes,
+          sha256: "a".repeat(64),
+          created_at: time,
+        });
+        return jobId;
+      };
+      const older = await add(1, "succeeded");
+      const transfer = await add(2, "failed");
+      const good = await add(3, "succeeded");
+      const recentFailure = await add(4, "failed");
+      const superseded = await add(5, "canceled", {
+        time: old,
+        superseded: true,
+      });
+      const stopping = await add(6, "canceled", {
+        time: old,
+        worker: "worker-stopping",
+      });
+      const running = await add(7, "running", {
+        time: old,
+        worker: "worker-running",
+      });
+      db.artifacts.createLease({
+        id: "transfer",
+        jobId: transfer,
+        artifactId: "fixture-2",
+        createdAt: recent,
+        expiresAt: future,
+      });
+      const cleanup = () =>
+        execFileAsync(
+          process.execPath,
+          [join(process.cwd(), "deploy/scripts/cleanup.mjs")],
+          {
+            env: {
+              ...process.env,
+              DATABASE_PATH: databasePath,
+              STORAGE_ROOT: storageRoot,
+              ARTIFACT_RETENTION_HOURS: "24",
+              DRAFT_PREVIEW_RETENTION_HOURS: "1",
+              DRAFT_PREVIEW_KEEP_GENERATIONS: "2",
+              DRAFT_PREVIEW_MAX_RETAINED_BYTES_PER_PROJECT: "10",
+            },
+          },
+        );
+      const first = await cleanup();
+      expect(first.stdout).toContain('"draftPreviewsScheduled":2');
+      for (const id of [older, superseded]) {
+        expect(db.jobs.get(id)).toBeUndefined();
+        await expect(stat(join(storageRoot, "jobs", id))).rejects.toMatchObject(
+          { code: "ENOENT" },
+        );
+      }
+      for (const id of [good, recentFailure, transfer, stopping, running])
+        expect((await stat(join(storageRoot, "jobs", id))).isDirectory()).toBe(
+          true,
+        );
+      expect(
+        db.drafts.previewActivity(projectId, userId, null, 24).successful
+          ?.jobId,
+      ).toBe(good);
+      db.artifacts.deleteLease("transfer");
+      db.raw
+        .prepare("UPDATE jobs SET lease_owner=NULL WHERE id=?")
+        .run(stopping);
+      await cleanup();
+      expect(db.jobs.get(transfer)).toBeUndefined();
+      expect(db.jobs.get(stopping)).toBeUndefined();
+      expect(db.jobs.get(good)?.status).toBe("succeeded");
+      expect(db.jobs.get(running)?.status).toBe("running");
+    } finally {
+      db.close();
+    }
+  });
+
   it("keeps Project input reusable after final Job cleanup, then collects it after Project deletion", async () => {
     const root = await mkdtemp(join(tmpdir(), "latex-project-retention-"));
     roots.push(root);

@@ -264,9 +264,17 @@ components:
         displayName: { type: string, minLength: 1, maxLength: 200 }
         originalFilename: { type: string, minLength: 1, maxLength: 240 }
         outputs: { $ref: "#/components/schemas/RenderOutputs" }
+        engine: { $ref: "#/components/schemas/RenderEngine" }
     RenderTicketRequest:
       oneOf:
-        - { $ref: "#/components/schemas/SourceTicketRequest" }
+        - type: object
+          additionalProperties: false
+          required: [size, sha256]
+          properties:
+            size: { type: integer, minimum: 1, maximum: 20971520 }
+            sha256: { type: string, pattern: "^[a-f0-9]{64}$" }
+            outputs: { $ref: "#/components/schemas/RenderOutputs" }
+            engine: { $ref: "#/components/schemas/RenderEngine" }
         - type: object
           additionalProperties: false
           required: [sourceId]
@@ -274,6 +282,12 @@ components:
             sourceId: { type: string, pattern: "^source_[a-f0-9]{32}$" }
             entrypoint: { type: string, maxLength: 2048, default: main.tex }
             outputs: { $ref: "#/components/schemas/RenderOutputs" }
+            engine: { $ref: "#/components/schemas/RenderEngine" }
+        - type: object
+          additionalProperties: false
+          required: [retrySvgJobId]
+          properties:
+            retrySvgJobId: { type: string, pattern: "^job_[a-f0-9]{32}$" }
     SourceTicketRequest:
       type: object
       additionalProperties: false
@@ -281,6 +295,11 @@ components:
       properties:
         size: { type: integer, minimum: 1, maximum: 20971520 }
         sha256: { type: string, pattern: "^[a-f0-9]{64}$" }
+    RenderEngine:
+      type: string
+      enum: [lualatex, pdflatex, xelatex, uplatex, platex]
+      default: lualatex
+      description: pLaTeX and upLaTeX require a Runtime with the Japanese TeX Live collection.
     RenderOutputs:
       type: array
       default: [pdf]

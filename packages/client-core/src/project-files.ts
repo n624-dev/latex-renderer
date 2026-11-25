@@ -1,4 +1,5 @@
 import { isArtifactTransactionPath } from "./artifact-transaction.js";
+import { projectEngineConfig } from "./tex-engine.js";
 
 const generatedLatexSuffixes = [
   ".aux",
@@ -33,6 +34,7 @@ export function shouldExcludeProjectPath(name: string): boolean {
     normalized === ".git" ||
     normalized.startsWith(".git/") ||
     normalized === ".latexrenderignore" ||
+    normalized === projectEngineConfig ||
     normalized === "node_modules" ||
     normalized.startsWith("node_modules/") ||
     normalized === ".env" ||

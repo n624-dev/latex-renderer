@@ -19,11 +19,13 @@ import {
   projectIdSchema,
   projectRevisionIdSchema,
   attachProjectRevisionResponseSchema,
+  renderEngineSchema,
   renderOutputsSchema,
   jobStagesSchema,
   type JobArtifact,
   type JobResponse,
   type RenderOutput,
+  type RenderEngine,
 } from "@latex-renderer/contracts";
 import { loadCredential } from "@latex-renderer/setup-core";
 import {
@@ -58,6 +60,7 @@ export const renderProjectInputSchema = z
     directory: z.string().min(1),
     entrypoint: z.string().min(1).default("main.tex"),
     outputs: renderOutputsSchema.optional(),
+    engine: renderEngineSchema.optional(),
   })
   .strict();
 export const uploadSourceInputSchema = z
@@ -68,6 +71,7 @@ export const createRenderJobInputSchema = z
     sourceId: z.string().regex(/^source_[a-f0-9]{32}$/),
     entrypoint: z.string().min(1).default("main.tex"),
     outputs: renderOutputsSchema.optional(),
+    engine: renderEngineSchema.optional(),
   })
   .strict();
 export const jobInputSchema = z.object({ jobId: mcpJobIdSchema }).strict();
@@ -95,6 +99,7 @@ export const attachProjectRevisionInputSchema = z
     displayName: z.string().trim().min(1).max(200),
     originalFilename: z.string().trim().min(1).max(240),
     outputs: renderOutputsSchema,
+    engine: renderEngineSchema.optional(),
   })
   .strict();
 const errorSchema = z
@@ -129,6 +134,9 @@ const jobSchema = z
     previewPageCount: z.number().int().nonnegative().optional(),
     sourceId: z.string().nullable().optional(),
     entrypoint: z.string().optional(),
+    engine: renderEngineSchema.optional(),
+    runtimeDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/).nullable().optional(),
+    previousRuntimeDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/).optional(),
     stages: jobStagesSchema.optional(),
   })
   .strict();
@@ -342,11 +350,13 @@ export interface McpOperations {
     sourceId: string,
     entrypoint: string,
     outputs?: RenderOutput[],
+    engine?: RenderEngine,
   ): Promise<CreateRenderJobOutput>;
   renderProject(
     directory: string,
     entrypoint: string,
     outputs?: RenderOutput[],
+    engine?: RenderEngine,
   ): Promise<RenderProjectOutput>;
   getRenderStatus(jobId: string): Promise<GetRenderStatusOutput>;
   downloadRenderArtifacts(
@@ -413,7 +423,7 @@ export function createMcpOperations(
         },
       };
     },
-    createRenderJob: async (sourceId, entrypoint, outputs) => ({
+    createRenderJob: async (sourceId, entrypoint, outputs, engine) => ({
       success: true,
       operation: "create_render_job",
       result: {
@@ -422,12 +432,12 @@ export function createMcpOperations(
             await client(),
             sourceId,
             entrypoint,
-            outputs === undefined ? {} : { outputs },
+            { ...(outputs === undefined ? {} : { outputs }), engine },
           ),
         ),
       },
     }),
-    renderProject: async (directory, entrypoint, outputs) => {
+    renderProject: async (directory, entrypoint, outputs, engine) => {
       const localDirectory = await resolveAllowedMcpPath(
         directory,
         allowedRoots(),
@@ -436,6 +446,7 @@ export function createMcpOperations(
       const rendered = await renderProject(await client(), localDirectory, {
         entrypoint,
         ...(outputs === undefined ? {} : { outputs }),
+        engine,
         ...(options.renderTimeoutMs === undefined
           ? {}
           : { pollTimeoutMs: options.renderTimeoutMs }),
@@ -604,6 +615,9 @@ function summarizeJob(job: JobResponse): z.infer<typeof jobSchema> {
       : { previewPageCount: job.previewPageCount }),
     ...(job.sourceId === undefined ? {} : { sourceId: job.sourceId }),
     ...(job.entrypoint === undefined ? {} : { entrypoint: job.entrypoint }),
+    ...(job.engine === undefined ? {} : { engine: job.engine }),
+    ...(job.runtimeDigest === undefined ? {} : { runtimeDigest: job.runtimeDigest }),
+    ...(job.previousRuntimeDigest === undefined ? {} : { previousRuntimeDigest: job.previousRuntimeDigest }),
     ...(job.stages === undefined
       ? {}
       : {

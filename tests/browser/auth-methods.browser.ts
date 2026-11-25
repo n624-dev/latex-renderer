@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import type { Browser, Page } from "playwright";
 import { launchTestBrowser, newTestPage } from "../helpers/browser-engine.js";
+import { routeWebFonts } from "../helpers/browser-web-fonts.js";
 import {
   afterAll,
   afterEach,
@@ -196,6 +197,7 @@ async function fixture(options: FixtureOptions = {}) {
       await route.abort();
     }
   });
+  await routeWebFonts(page, origin);
   await page.goto(
     origin +
       (options.admin ? "/admin/users/" : "/login/") +

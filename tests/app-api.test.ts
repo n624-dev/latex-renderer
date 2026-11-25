@@ -1,9 +1,14 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { createHash } from "node:crypto";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
 import { ApiKeyService, type AccessJwtVerifier } from "@latex-renderer/auth";
-import { RendererDatabase } from "@latex-renderer/database";
+import {
+  artifactStoragePath,
+  ProjectOperations,
+  RendererDatabase,
+} from "@latex-renderer/database";
 import { TicketService } from "@latex-renderer/ticket";
 import { createAdminApp } from "../apps/admin-api/src/app.js";
 import { legacyTestBrowserAuth } from "./helpers/browser-auth.js";
@@ -17,7 +22,266 @@ afterEach(() => {
 });
 
 describe("user Web application API", () => {
-  it("retains Project Sources and records output changes per Job without changing revisions", async () => {
+  it("serves single PDF ranges only to the owning user", async () => {
+    const { app, database, root } = setup();
+    const post = (path: string, body: string) =>
+      app.request("/app/api/v1" + path, {
+        method: "POST",
+        headers: mutation("user"),
+        body,
+      });
+    const created = await post("/projects", '{"displayName":"Range test"}');
+    const { id } = (await created.json()) as { id: string };
+    const base = `/projects/${id}/draft`;
+    expect((await post(base, "{}")).status).toBe(200);
+    const queued = await post(base + "/preview", '{"version":1}');
+    expect(queued.status).toBe(202);
+    const { jobId } = (await queued.json()) as { jobId: string };
+    const content = Buffer.from("%PDF-test");
+    const now = new Date().toISOString();
+    database.raw
+      .prepare("UPDATE jobs SET status='succeeded',completed_at=? WHERE id=?")
+      .run(now, jobId);
+    const row = {
+      id: "artifact_range",
+      job_id: jobId,
+      type: "pdf",
+      relative_path: "result.pdf",
+      storage_generation: 2,
+      size: content.length,
+      sha256: createHash("sha256").update(content).digest("hex"),
+      created_at: now,
+    };
+    database.artifacts.insert(row);
+    const path = artifactStoragePath(root, row);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, content);
+    const url = `/app/api/v1/jobs/${jobId}/artifacts/result.pdf?disposition=inline`;
+    const request = (range: string, ifRange?: string) =>
+      app.request(url, {
+        headers: {
+          ...assertion("user"),
+          Range: range,
+          ...(ifRange ? { "If-Range": ifRange } : {}),
+        },
+      });
+
+    expect(
+      (await app.request(url, { headers: { Range: "bytes=0-1" } })).status,
+    ).toBe(401);
+    const other = await app.request(url, {
+      headers: { ...assertion("other"), Range: "bytes=0-1" },
+    });
+    expect(other.status).toBe(404);
+    expect(other.headers.has("Content-Range")).toBe(false);
+    const partial = await request("bytes=0-3");
+    expect(partial.status).toBe(206);
+    expect(partial.headers.get("Accept-Ranges")).toBe("bytes");
+    expect(partial.headers.get("Content-Range")).toBe("bytes 0-3/9");
+    expect(partial.headers.get("Content-Length")).toBe("4");
+    expect(partial.headers.get("Cache-Control")).toContain("no-store");
+    expect(partial.headers.has("Content-Digest")).toBe(false);
+    expect(partial.headers.get("Repr-Digest")).toBe(
+      `sha-256=:${Buffer.from(row.sha256, "hex").toString("base64")}:`,
+    );
+    expect(await partial.text()).toBe("%PDF");
+
+    const suffix = await request("bytes=-4", partial.headers.get("ETag") ?? "");
+    expect(suffix.status).toBe(206);
+    expect(await suffix.text()).toBe("test");
+    const tail = await request("bytes=5-");
+    expect(tail.status).toBe(206);
+    expect(await tail.text()).toBe("test");
+    const unsatisfied = await request("bytes=9-");
+    expect(unsatisfied.status).toBe(416);
+    expect(unsatisfied.headers.get("Content-Range")).toBe("bytes */9");
+    expect(await unsatisfied.text()).toBe("");
+    for (const full of [
+      await request("bytes=0-1,4-5"),
+      await request("bytes=0-1", '"stale"'),
+    ]) {
+      expect(full.status).toBe(200);
+      expect(full.headers.has("Content-Digest")).toBe(true);
+      expect(await full.text()).toBe(content.toString());
+    }
+  });
+
+  it("opens a blank draft, replaces it only at the confirmed version, and keeps previews in the editor", async () => {
+    const { app, database } = setup();
+    const post = (
+      path: string,
+      data: unknown,
+      user: "user" | "other" = "user",
+    ) =>
+      app.request(path, {
+        method: "POST",
+        headers: mutation(user),
+        body: JSON.stringify(data),
+      });
+    const read = (path: string, user: "user" | "other" = "user") =>
+      app.request(path, { headers: assertion(user) });
+    const create = await post("/app/api/v1/projects", {
+      displayName: "Empty draft",
+    });
+    const { id } = (await create.json()) as { id: string };
+    const base = `/app/api/v1/projects/${id}/draft`;
+    const opened = await post(base, {});
+    expect(opened.status).toBe(200);
+    await expect(opened.json()).resolves.toMatchObject({
+      version: 1,
+      entrypoint: "main.tex",
+      files: [{ path: "main.tex" }],
+    });
+    await expect(
+      (await read(base + "/file?path=main.tex&version=1")).json(),
+    ).resolves.toMatchObject({ text: "" });
+    const original = await post(base + "/revisions", {
+      version: 1,
+      displayName: "First",
+    });
+    expect(original.status).toBe(200);
+    const { revisionId } = (await original.json()) as { revisionId: string };
+    const edited = await app.request(base + "/file", {
+      method: "PUT",
+      headers: mutation("user"),
+      body: '{"version":1,"path":"main.tex","text":"Edited"}',
+    });
+    expect(edited.status).toBe(200);
+    const queued = await post(base + "/preview", { version: 2 });
+    expect(queued.status).toBe(202);
+    const { jobId } = (await queued.json()) as { jobId: string };
+    await expect(
+      (await read(`/app/api/v1/jobs/${jobId}`)).json(),
+    ).resolves.toMatchObject({ id: jobId, engine: "lualatex" });
+    await expect((await read(base + "/preview")).json()).resolves.toEqual({
+      latest: { jobId, version: 2, status: "queued" },
+      successful: null,
+    });
+    expect((await read(base + "/preview", "other")).status).toBe(404);
+    await expect(
+      (await read("/app/api/v1/jobs")).json(),
+    ).resolves.toMatchObject({ items: [] });
+    expect(
+      (await post(base + "/replace", { revisionId, version: 1 })).status,
+    ).toBe(409);
+    expect(
+      (await post(base + "/replace", { revisionId, version: 2 }, "other"))
+        .status,
+    ).toBe(404);
+    expect(database.jobs.get(jobId)?.status).toBe("queued");
+    const replaced = await post(base + "/replace", { revisionId, version: 2 });
+    expect(replaced.status).toBe(200);
+    await expect(replaced.json()).resolves.toMatchObject({
+      version: 3,
+      entrypoint: "main.tex",
+    });
+    await expect(
+      (await read(base + "/file?path=main.tex&version=3")).json(),
+    ).resolves.toMatchObject({ text: "" });
+    expect(database.jobs.get(jobId)?.error_code).toBe("DRAFT_SUPERSEDED");
+    expect(database.projects.revisionCount(id)).toBe(1);
+    expect(database.drafts.renderInput(jobId)?.files).toHaveLength(0);
+  });
+
+  it("authorizes and streams Draft attachment content without raising the JSON body limit", async () => {
+    const { app, database } = setup(),
+      headers = mutation("user");
+    const created = await app.request("/app/api/v1/projects", {
+      method: "POST",
+      headers,
+      body: '{"displayName":"Draft files"}',
+    });
+    const { id } = (await created.json()) as { id: string };
+    const reserved = await app.request("/app/api/v1/source-tickets", {
+      method: "POST",
+      headers: { ...headers, "Idempotency-Key": "draft-test-source-012345" },
+      body: JSON.stringify({ size: 123, sha256: "1".repeat(64) }),
+    });
+    const { sourceId } = (await reserved.json()) as { sourceId: string };
+    database.raw
+      .prepare(
+        "UPDATE sources SET status='ready',paths_json='[\"main.tex\"]' WHERE id=?",
+      )
+      .run(sourceId);
+    const actor = { type: "user", userId: "user_one", id: "user_one" };
+    new ProjectOperations(database).attachRevision(actor, {
+      projectId: id,
+      sourceId,
+      entrypoint: "main.tex",
+      originalFilename: "main.tex",
+      displayName: "Original",
+      outputs: ["pdf"],
+    });
+    const base = `/app/api/v1/projects/${id}/draft`;
+    expect(
+      (await app.request(base, { method: "POST", headers, body: "{}" })).status,
+    ).toBe(200);
+    const text = "% Japanese draft test\n".repeat(4000);
+    const upload = (user: "user" | "other") =>
+      app.request(
+        `${base}/file/content?path=chapter.tex&version=1&size=${Buffer.byteLength(text)}`,
+        {
+          method: "PUT",
+          headers: {
+            ...mutation(user),
+            "Content-Type": "text/plain; charset=utf-8",
+          },
+          body: text,
+        },
+      );
+    expect((await upload("other")).status).toBe(404);
+    expect((await upload("user")).status).toBe(200);
+    await expect(
+      (
+        await app.request(`${base}/file?path=chapter.tex&version=2`, {
+          headers: assertion("user"),
+        })
+      ).json(),
+    ).resolves.toMatchObject({ text });
+    expect(
+      (
+        await app.request(`${base}/file`, {
+          method: "PUT",
+          headers,
+          body: JSON.stringify({ version: 2, path: "chapter.tex", text }),
+        })
+      ).status,
+    ).toBe(413);
+    expect((await upload("user")).status).toBe(409);
+  });
+
+  it("serves the saved display locale only to the corresponding account", async () => {
+    const { app } = setup();
+    expect(
+      (
+        await app.request("/app/api/v1/me/locale", {
+          method: "PATCH",
+          headers: mutation("user"),
+          body: '{"locale":"de"}',
+        })
+      ).status,
+    ).toBe(200);
+    for (const [user, displayLocale] of [
+      ["user", "de"],
+      ["other", null],
+    ] as const) {
+      const response = await app.request("/app/api/v1/me", {
+        headers: assertion(user),
+      });
+      await expect(response.json()).resolves.toMatchObject({ displayLocale });
+    }
+    expect(
+      (
+        await app.request("/app/api/v1/me/locale", {
+          method: "PATCH",
+          headers: mutation("user"),
+          body: '{"locale":"xx"}',
+        })
+      ).status,
+    ).toBe(400);
+  });
+
+  it("shares Sources across output-specific revisions and retains revision identity on rerender", async () => {
     const { app, database } = setup(),
       headers = mutation("user");
     const project = (await (
@@ -72,10 +336,10 @@ describe("user Web application API", () => {
       jobId: string;
       revisionId: string;
     };
-    expect(second.revisionId).toBe(first.revisionId);
+    expect(second.revisionId).not.toBe(first.revisionId);
     expect(database.jobs.get(first.jobId)?.outputs_json).toBe('["pdf"]');
     expect(database.jobs.get(second.jobId)?.outputs_json).toBe('["pdf","svg"]');
-    expect(database.projects.revisionCount(project.id)).toBe(1);
+    expect(database.projects.revisionCount(project.id)).toBe(2);
     for (let retry = 0; retry < 2; retry++) {
       const reused = await app.request("/app/api/v1/source-tickets", {
         method: "POST",
@@ -138,7 +402,7 @@ describe("user Web application API", () => {
         headers: assertion("user"),
       })
     ).json()) as { revisions: { jobs: { id: string; outputs: string[] }[] }[] };
-    expect(detail.revisions[0]?.jobs).toEqual(
+    expect(detail.revisions.flatMap((revision) => revision.jobs)).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: first.jobId, outputs: ["pdf"] }),
         expect.objectContaining({ id: second.jobId, outputs: ["pdf", "svg"] }),
@@ -549,7 +813,7 @@ function setup() {
         rendererPublicUrl: "https://latex.example.com",
       },
     });
-  return { app, database, tickets };
+  return { app, database, tickets, root };
 }
 
 function assertion(token: string): Record<string, string> {

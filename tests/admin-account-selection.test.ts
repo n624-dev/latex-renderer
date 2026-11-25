@@ -1,3 +1,4 @@
+import { japaneseAdminMessage } from "./helpers/admin-message.js";
 import { runInNewContext } from "node:vm";
 import { expect, it } from "vitest";
 import { part3 } from "../apps/admin-web/src/assets/admin-script-parts/part-3.js";
@@ -30,6 +31,7 @@ it.each(["active", "disabled"])(
       table: () => "",
       nextPage: () => "",
       esc: escapeHtml,
+      adminMessage: japaneseAdminMessage,
       document: { querySelector: () => ({ onclick: null }) },
       bindAction: () => {},
       sessionStorage: { getItem: () => null },

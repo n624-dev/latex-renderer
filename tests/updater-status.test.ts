@@ -1,3 +1,4 @@
+import { japaneseAdminMessage } from "./helpers/admin-message.js";
 import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -128,7 +129,7 @@ it("only reports combined success for an exact committed slot identity", async (
 });
 it("renders application success separately until controller activation is confirmed", () => {
   const label = (operation: unknown): unknown =>
-    runInNewContext(`${part7}\nupdateOperationLabel(operation)`, { operation });
+    runInNewContext(`${part7}\nupdateOperationLabel(operation)`, { operation, adminMessage: japaneseAdminMessage });
   expect(label({ status: "succeeded" })).toBe("アプリ更新済み・Updater要確認");
   expect(
     label({ status: "succeeded", outcome: { updater: "activating" } }),

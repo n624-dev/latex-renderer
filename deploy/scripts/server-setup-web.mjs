@@ -13,7 +13,8 @@ import {
   lanHttpsInterfaceChoices,
   LAN_HTTPS_COMMON,
 } from "../../packages/server-setup-core/src/index.mjs";
-import { setupHtml, setupScript, setupStyle } from "./server-setup-assets.mjs";
+import { serverSetupHtml, serverSetupScript, setupStyle } from "./server-setup-assets.mjs";
+import { browserSetupLocale } from "./setup-messages.mjs";
 
 const token = () => randomBytes(32).toString("base64url");
 function equal(actual, expected) {
@@ -184,9 +185,15 @@ export async function startServerSetupWeb(host, options = {}) {
       if (url.origin !== origin || url.search || url.hash)
         throw new ServerSetupSessionError("FORBIDDEN");
       if (request.method === "GET") {
+        if (url.pathname === "/" || url.pathname === "/script.js") {
+          const locale = browserSetupLocale(request.headers["accept-language"]);
+          if (url.pathname === "/")
+            send(response, 200, serverSetupHtml(locale), "text/html");
+          else
+            send(response, 200, serverSetupScript(locale), "text/javascript");
+          return;
+        }
         const assets = {
-          "/": [setupHtml, "text/html"],
-          "/script.js": [setupScript, "text/javascript"],
           "/style.css": [setupStyle, "text/css"],
         };
         if (!Object.hasOwn(assets, url.pathname))

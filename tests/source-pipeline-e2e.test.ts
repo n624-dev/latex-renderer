@@ -1,8 +1,14 @@
-import { artifactStoragePath } from "@latex-renderer/database";
+import {
+  artifactStoragePath,
+  ProjectDraftOperations,
+  ProjectOperations,
+} from "@latex-renderer/database";
 import { defined } from "./helpers/assert-defined.js";
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { diagnosticWriter } from "../deploy/scripts/service-diagnostics.mjs";
 import { describe, expect, it } from "vitest";
 import {
   downloadJobArtifacts,
@@ -22,6 +28,190 @@ import {
 } from "../apps/renderer-worker/src/memory-plan.js";
 
 describe(`Source pipeline HTTP/DB/Worker E2E (${realPipelineImage === undefined ? "deterministic renderer, NOT TeX" : "real TeX container"})`, () => {
+  it.skipIf(realPipelineImage === undefined)(
+    "reuses a real Draft seed after a body edit and rebuilds after bibliography, image or file edits",
+    async () => {
+      const f = await sourcePipelineFixture();
+      try {
+        f.config.draftWorkCacheBytes = 2 * 1024 ** 2;
+        const actor = {
+          type: "user",
+          id: "pipeline_user",
+          userId: "pipeline_user",
+        };
+        const bibliography = (title: string) =>
+          `@book{sample, author={Ada Example}, title={${title}}, publisher={Example}, year={2026}}\n`;
+        const document = (body: string) =>
+          [
+            "\\documentclass{article}",
+            "\\usepackage{graphicx}",
+            "\\begin{document}",
+            body,
+            "\\includegraphics[width=15mm]{figure.png}",
+            "\\input{chapter.tex}",
+            "Reference~\\cite{sample}.",
+            "\\bibliographystyle{plain}",
+            "\\bibliography{refs}",
+            "\\end{document}",
+            "",
+          ].join("\n");
+        const black =
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR4nGNgAAAAAgABSK+kcQAAAABJRU5ErkJggg==";
+        const white =
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR4nGP4DwABAQEAsTj2FAAAAABJRU5ErkJggg==";
+        const source = await f.renders.createSource(
+          { userId: actor.userId, scopes: ["mcp:render"] },
+          [
+            { path: "main.tex", text: document("First paragraph.") },
+            { path: "chapter.tex", text: "First chapter." },
+            { path: "refs.bib", text: bibliography("First Reference") },
+            { path: "figure.png", base64: black },
+          ],
+        );
+        const projects = new ProjectOperations(f.database);
+        const drafts = new ProjectDraftOperations(f.database);
+        const project = projects.create(actor, "Runtime preview");
+        projects.attachRevision(actor, {
+          projectId: project.id,
+          sourceId: source.id,
+          entrypoint: "main.tex",
+          displayName: "First draft",
+          originalFilename: "preview.zip",
+          outputs: ["pdf"],
+        });
+        let draft = drafts.open(actor, project.id);
+        const principal = await f.renders.createRender(
+          { userId: actor.userId, scopes: ["mcp:render"] },
+          { sourceId: source.id, entrypoint: "main.tex" },
+        );
+        const row = defined(f.database.jobs.get(principal.id));
+        f.database.raw
+          .prepare("UPDATE jobs SET status='canceled' WHERE id=?")
+          .run(principal.id);
+        const observations: Readonly<Record<string, unknown>>[] = [];
+        const diagnostic = diagnosticWriter(f.storage, "renderer-worker");
+        f.config.diagnostic = diagnostic;
+        const readPdf = (path: string, tool: string, args: string[]) =>
+          execFileSync(
+            "docker",
+            [
+              "run",
+              "--rm",
+              "--pull=never",
+              "--network",
+              "none",
+              "--read-only",
+              "--cap-drop",
+              "ALL",
+              "--user",
+              `${f.config.containerUid}:${f.config.containerGid}`,
+              "--mount",
+              `type=bind,src=${path},dst=/input.pdf,readonly`,
+              "--entrypoint",
+              tool,
+              f.config.image,
+              ...args,
+            ],
+            { timeout: 20_000, maxBuffer: 2 * 1024 ** 2 },
+          );
+        const preview = async (usesSeed: boolean, expectedText: string) => {
+          const ticket = drafts.queuePreview(actor, project.id, draft.version, {
+            serviceAccountId: row.service_account_id,
+            apiKeyId: row.api_key_id,
+            rendererVersion: "pipeline-test",
+            runtime: f.config.image,
+            reservedOutputBytes: 256 * 1024,
+            admit: () => {},
+          });
+          await f.runNext();
+          await diagnostic.flush();
+          const records = await readFile(
+            join(f.storage, "diagnostics", "renderer-worker.jsonl"),
+            "utf8",
+          );
+          const last = JSON.parse(
+            records.trimEnd().split("\n").at(-1) ?? "",
+          ) as Record<string, unknown>;
+          expect(last.event).toBe("renderer_worker.draft_preview_completed");
+          observations.push(last);
+          const pdf = defined(
+            f.database.artifacts.getDownloadable(ticket.jobId, "result.pdf"),
+          );
+          const log = defined(
+            f.database.artifacts.getDownloadable(ticket.jobId, "compile.log"),
+          );
+          const used = (
+            await readFile(artifactStoragePath(f.storage, log), "utf8")
+          ).includes("renderer: work cache used");
+          expect(used).toBe(usesSeed);
+          expect(
+            readPdf(artifactStoragePath(f.storage, pdf), "pdftotext", [
+              "/input.pdf",
+              "-",
+            ]).toString("utf8"),
+          ).toContain(expectedText);
+          expect(observations.at(-1)).toMatchObject({
+            jobId: ticket.jobId,
+            workCacheHit: usesSeed,
+            compileMs: expect.any(Number) as unknown,
+            validationMs: expect.any(Number) as unknown,
+          });
+          return artifactStoragePath(f.storage, pdf);
+        };
+        await preview(false, "First paragraph.");
+        draft = await f.renders.saveDraftText(
+          actor,
+          project.id,
+          draft.version,
+          "main.tex",
+          document("Edited paragraph."),
+        );
+        await preview(true, "Edited paragraph.");
+        draft = await f.renders.saveDraftText(
+          actor,
+          project.id,
+          draft.version,
+          "refs.bib",
+          bibliography("Updated Reference"),
+        );
+        const withBlack = await preview(false, "Updated Reference");
+        const replacement = Buffer.from(white, "base64");
+        draft = await f.renders.saveDraftFileContent(
+          actor,
+          project.id,
+          {
+            version: draft.version,
+            path: "figure.png",
+            size: replacement.length,
+            utf8: false,
+          },
+          new Response(new Uint8Array(replacement)).body,
+          AbortSignal.timeout(10_000),
+        );
+        const withWhite = await preview(false, "Updated Reference");
+        const raster = (path: string) =>
+          readPdf(path, "pdftoppm", ["-r", "45", "-singlefile", "/input.pdf"]);
+        expect(raster(withWhite).equals(raster(withBlack))).toBe(false);
+        draft = await f.renders.saveDraftText(
+          actor,
+          project.id,
+          draft.version,
+          "chapter.tex",
+          "Updated chapter.",
+        );
+        await preview(false, "Updated chapter.");
+        if (process.env.EDITOR_PREVIEW_BENCHMARK === "1") {
+          for (const [index, record] of observations.entries()) {
+            const timing = { ...record };
+            delete timing.jobId;
+            console.log(JSON.stringify({ case: index + 1, ...timing }));
+          }
+        }
+      } finally {
+        await f.close();
+      }
+    },
+  );
   it.skipIf(realPipelineImage === undefined).each([5000, 10000])(
     "keeps an actual Docker outer timeout at %ims and renders normally afterward",
     async (timeout) => {

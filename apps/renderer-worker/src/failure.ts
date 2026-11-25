@@ -2,8 +2,20 @@ import { chmod, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { RendererDatabase, WorkerJobRow } from "@latex-renderer/database";
 import { newId, nowIso } from "@latex-renderer/shared";
-import { publishArtifacts, validateArtifacts } from "./artifact-validator.js";
+import {
+  publishArtifacts,
+  validateArtifacts,
+  type ValidatedArtifact,
+} from "./artifact-validator.js";
 import type { WorkerConfig } from "./config.js";
+
+export function isArtifactStorageFull(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    (error.code === "ENOSPC" || error.code === "EDQUOT")
+  );
+}
 
 export async function recordFailure(
   database: RendererDatabase,
@@ -78,33 +90,52 @@ export async function recordFailure(
       new Date(Date.now() + 30_000).toISOString(),
     ) === 1;
   if (!renewLease()) return;
-  await rm(failureRoot, { recursive: true, force: true });
   try {
-    // prepare-host.sh installs a default ACL for the rootless renderer mapping;
-    // do not fall back to a world-writable staging directory on failure paths.
-    await mkdir(staging, { recursive: true, mode: 0o770 });
-    await chmod(staging, 0o770);
-    await writeFile(join(staging, "compile.log"), `${safeMessage}\n`, {
-      mode: 0o660,
-    });
-    await writeFile(
-      join(staging, "errors.json"),
-      `${JSON.stringify({ success: false, exitCode: null, errors: [{ file: "main.tex", line: null, message: safeMessage }], warnings: [] }, null, 2)}\n`,
-      { mode: 0o660 },
-    );
-    await writeFile(
-      join(staging, "dependencies.json"),
-      '{"inputs":[],"outputs":[]}\n',
-      { mode: 0o660 },
-    );
-    const artifacts = await validateArtifacts(config, staging, false);
-    await publishArtifacts(staging, candidateOutput, artifacts);
-    if (!renewLease()) return;
-    await mkdir(join(root, "outputs"), { recursive: true, mode: 0o770 });
-    await rename(candidateOutput, output);
-    published = true;
+    let artifacts: ValidatedArtifact[] = [];
+    let diagnosticsUnavailable = false;
+    try {
+      await rm(failureRoot, { recursive: true, force: true });
+      // prepare-host.sh installs a default ACL for the rootless renderer mapping;
+      // do not fall back to a world-writable staging directory on failure paths.
+      await mkdir(staging, { recursive: true, mode: 0o770 });
+      await chmod(staging, 0o770);
+      await writeFile(join(staging, "compile.log"), `${safeMessage}\n`, {
+        mode: 0o660,
+      });
+      await writeFile(
+        join(staging, "errors.json"),
+        `${JSON.stringify({ success: false, exitCode: null, errors: [{ file: "main.tex", line: null, message: safeMessage }], warnings: [] }, null, 2)}\n`,
+        { mode: 0o660 },
+      );
+      await writeFile(
+        join(staging, "dependencies.json"),
+        '{"inputs":[],"outputs":[]}\n',
+        { mode: 0o660 },
+      );
+      artifacts = await validateArtifacts(config, staging, false);
+      await publishArtifacts(staging, candidateOutput, artifacts);
+      if (!renewLease()) return;
+      await mkdir(join(root, "outputs"), { recursive: true, mode: 0o770 });
+      await rename(candidateOutput, output);
+      published = true;
+    } catch (error) {
+      if (!isArtifactStorageFull(error)) throw error;
+      // The database can stay writable when the artifact filesystem is full.
+      // Record the fenced terminal state even when no diagnostics can be saved.
+      artifacts = [];
+      diagnosticsUnavailable = true;
+    }
     committed = database.transaction(() => {
       const timestamp = nowIso();
+      if (database.worker.runtimeState(jobId)?.cancel_requested_at != null) {
+        database.worker.markCanceled(
+          jobId,
+          config.workerId,
+          job.lease_generation,
+          timestamp,
+        );
+        return false;
+      }
       const total = artifacts.reduce((sum, artifact) => sum + artifact.size, 0);
       if (
         database.worker.finishFailure(
@@ -137,7 +168,12 @@ export async function recordFailure(
         targetType: "job",
         targetId: jobId,
         result: status,
-        metadata: { message: safeMessage },
+        metadata: {
+          message: safeMessage,
+          ...(diagnosticsUnavailable
+            ? { diagnosticsUnavailable: "insufficient_storage" }
+            : {}),
+        },
       });
       return true;
     });

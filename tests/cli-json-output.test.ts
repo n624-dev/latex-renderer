@@ -104,6 +104,30 @@ describe("CLI structured output", () => {
     expect(result.stdout).toBe("Credential is configured.\n");
   });
 
+  it("localizes human-readable output and retains English JSON diagnostics", () => {
+    const french = { LC_ALL: "fr_FR.UTF-8", LANGUAGE: "" };
+    const status = run(["auth", "status"], undefined, french);
+    const failure = run(
+      ["auth", "login", "--api-key-stdin", "--json"],
+      "not-a-key\n",
+      french,
+    );
+    const fallback = run(["auth", "status"], undefined, {
+      LC_ALL: "ar_EG.UTF-8",
+      LANGUAGE: "",
+    });
+
+    expect(status.status).toBe(0);
+    expect(status.stdout).toBe("Identifiant d’accès : configuration effectuée.\n");
+    expect(JSON.parse(failure.stdout)).toMatchObject({
+      error: {
+        code: "INVALID_API_KEY",
+        message: "Input is not a render API key",
+      },
+    });
+    expect(fallback.stdout).toBe("Credential is configured.\n");
+  });
+
   it("advertises Source reuse and arbitrary entrypoints", () => {
     const renderHelp = run(["render", "--help"]),
       sourceHelp = run(["source", "upload", "--help"]);

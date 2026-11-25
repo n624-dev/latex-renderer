@@ -1,3 +1,6 @@
+const localizedPublicPaths = "(?:en|ja|zh-CN|ko|es|pt|fr|de|it|ru|tr|pl|cs|nl|sv|no|da|fi)(?:/$|/docs(?:/|$)|/downloads/?$|/assets/docs-search\\.json$)";
+
+
 // Only the existing public-static generator's routes are exposed here. Every
 // authenticated route and every source/artifact remains behind its API.
 export const publicHealthNginx = `
@@ -27,7 +30,7 @@ export const publicStaticNginx = `
     add_header Referrer-Policy no-referrer always;
     add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data: blob:; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" always;
   }
-  location ~ ^/(?:docs(?:/|$)|downloads(?:/|$)|assets/(?:styles\\.css|site\\.js|login\\.js|docs-search\\.json)$|openapi/(?:gateway|renderer)\\.openapi\\.yaml$) {
+  location ~ ^/(?:docs(?:/|$)|downloads(?:/|$)|assets/(?:styles\\.css|site\\.js|login\\.js|docs-search\\.json)$|openapi/(?:gateway|renderer)\\.openapi\\.yaml$|${localizedPublicPaths}) {
     root /opt/latex-renderer/current/apps/public-web/dist;
     try_files $uri $uri/index.html @latex_renderer_web;
     add_header Strict-Transport-Security "max-age=63072000" always;

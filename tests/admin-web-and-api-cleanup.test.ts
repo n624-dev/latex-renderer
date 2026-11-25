@@ -296,7 +296,8 @@ describe("public and administrative Web", () => {
 
   it("shows user-focused public content and expanded API documentation", async () => {
     const app = createWebApp(distribution);
-    const home = await (await app.request("/")).text();
+    const headers = { "Accept-Language": "ja" };
+    const home = await (await app.request("/", { headers })).text();
     expect(home).toContain("LaTeXをPDFに変換");
     expect(home).not.toContain("Secure Japanese / English");
     expect(home).not.toContain("単一ドメイン");
@@ -338,7 +339,7 @@ describe("public and administrative Web", () => {
           downloads: true,
           checkedAt: "2026-08-09T00:00:00.000Z",
         }),
-      ).request("/status/")
+      ).request("/status/", { headers })
     ).text();
     expect(status).toContain("API：応答中");
     expect(status).toContain("レンダリング処理：応答中");
@@ -367,11 +368,13 @@ describe("public and administrative Web", () => {
     expect(admin).not.toContain("/cdn-cgi/access/logout");
     expect(admin).not.toContain("owner / admin 専用");
 
-    const adminDocs = await (await app.request("/admin/docs/")).text();
+    const adminDocs = await (await app.request("/admin/docs/", {
+      headers: { "Accept-Language": "ja" },
+    })).text();
     expect(adminDocs).toContain("管理API資料");
-    expect(adminDocs).toContain("外部identityはissuer＋subject");
-    expect(adminDocs).toContain("emailでは自動連携しません");
-    expect(adminDocs).toContain("ブラウザ認証とは独立した");
+    expect(adminDocs).toContain("外部IDをissuerとsubject");
+    expect(adminDocs).toContain("メールアドレスによる自動連携はありません");
+    expect(adminDocs).toContain("ブラウザー認証とは別の lra_ 管理APIキー");
   });
 
   it("keeps the administrative module valid and exposes guarded operations", () => {
@@ -390,16 +393,17 @@ describe("public and administrative Web", () => {
       "new URLSearchParams(location.search).get('job')",
     );
     expect(adminScript).toContain(
-      "details(await request('/jobs/'+requestedJob),'ジョブ詳細')",
+      'details(await request(\'/jobs/\'+requestedJob),adminMessage("jobDetails"))',
     );
-    expect(adminScript).toContain('name="actor"');
-    expect(adminScript).toContain('name="target"');
-    expect(adminScript).toContain('name="from"');
-    expect(adminScript).toContain('name="to"');
+    const markup = adminScript.replaceAll(String.raw`\"`, '"');
+    expect(markup).toContain('name="actor"');
+    expect(markup).toContain('name="target"');
+    expect(markup).toContain('name="from"');
+    expect(markup).toContain('name="to"');
     expect(adminScript).toContain("watchAdminJob");
-    expect(adminScript).toContain('aria-label="前のページ"');
-    expect(adminScript).toContain('aria-label="次のページ"');
-    expect(adminScript).toContain("img.alt='PDF '+page+'ページ目のプレビュー'");
+    expect(adminScript).toContain('esc(adminMessage("previousPage"))');
+    expect(adminScript).toContain('esc(adminMessage("nextPage"))');
+    expect(adminScript).toContain('img.alt=adminMessage("previewPageNumber",{page})');
     expect(adminScript).toContain("数十分〜数時間");
     expect(adminScript).toContain("CPU・ディスク容量");
     expect(adminScript).toContain("responsive-table");

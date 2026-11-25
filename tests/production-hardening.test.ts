@@ -7,7 +7,7 @@ const read = (path: string) =>
 describe("production hardening", () => {
   it("allows a full 300 seconds for LaTeX compilation", () => {
     expect(read("renderer/compile.sh")).toContain(
-      "timeout -s TERM -k 2 300 latexmk",
+      'run_latex 300 "" >> "$renderer_log"',
     );
   });
   it("keeps the worker deadline above the compiler deadline", () => {
@@ -93,9 +93,10 @@ describe("production hardening", () => {
   });
   it("checks stable content on both unified local Web surfaces", () => {
     const script = read("deploy/scripts/deploy-production-release.sh");
-    expect(script).toContain("LaTeXをPDFに変換");
+    expect(script).toContain('data-public-page="home"');
     expect(script).toContain('data-page="dashboard"');
-    expect(script).toContain("レンダリング処理：応答中");
+    expect(script).toContain('href="/downloads/client/latest.zip"');
+    expect(script).toContain('data-rendering-status="online"');
     expect(script).not.toContain("grep -q 'クライアント登録'");
   });
   it("preflights local or remotely managed Tunnels and reconciles routes without restarting the connector", () => {

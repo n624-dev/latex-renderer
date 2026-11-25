@@ -1883,3 +1883,5 @@ async function removeIfEmpty(directory: string): Promise<void> {
 function timestamp(): string {
   return new Date().toISOString().replaceAll(/[-:.TZ]/g, "");
 }
+
+export { setupDiagnosticCatalog } from "./user-diagnostics.js";

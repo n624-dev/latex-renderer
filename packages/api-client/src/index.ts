@@ -19,6 +19,7 @@ import {
   type ProjectDetail,
   type AttachProjectRevisionResponse,
   type RenderOutput,
+  type RenderEngine,
   type SourceRenderResponse,
   type SourceTicketResponse,
   type TicketResponse,
@@ -50,6 +51,7 @@ export class RendererClient {
     size: number,
     sha256: string,
     idempotencyKey: string,
+    engine?: RenderEngine,
   ): Promise<TicketResponse> {
     const response = await fetch(
       new URL(`${PUBLIC_API_PREFIX}/render-tickets`, this.#baseUrl),
@@ -59,7 +61,7 @@ export class RendererClient {
           "Content-Type": "application/json",
           "Idempotency-Key": idempotencyKey,
         }),
-        body: JSON.stringify({ size, sha256 }),
+        body: JSON.stringify({ size, sha256, engine }),
         redirect: "error",
       },
     );
@@ -150,6 +152,7 @@ export class RendererClient {
     entrypoint: string | undefined,
     idempotencyKey: string,
     outputs: readonly RenderOutput[] = ["pdf"],
+    engine?: RenderEngine,
   ): Promise<SourceRenderResponse> {
     const response = await fetch(
       new URL(`${PUBLIC_API_PREFIX}/render-tickets`, this.#baseUrl),
@@ -163,6 +166,7 @@ export class RendererClient {
           sourceId,
           entrypoint: entrypoint ?? "main.tex",
           outputs,
+          engine,
         }),
         redirect: "error",
       },
@@ -287,6 +291,7 @@ export class RendererClient {
     displayName: string;
     originalFilename: string;
     outputs?: readonly RenderOutput[];
+    engine?: RenderEngine | undefined;
   }): Promise<AttachProjectRevisionResponse> {
     const response = await fetch(
       new URL(
@@ -302,6 +307,7 @@ export class RendererClient {
           displayName: input.displayName,
           originalFilename: input.originalFilename,
           outputs: input.outputs ?? ["pdf"],
+          engine: input.engine,
         }),
         redirect: "error",
       },

@@ -54,6 +54,7 @@ const repository = resolve(import.meta.dirname, ".."),
       "packages/setup-core/src/index.ts",
     ),
     "@latex-renderer/shared": join(repository, "packages/shared/src/index.ts"),
+    "@latex-renderer/shared/locale": join(repository, "packages/shared/src/locale.ts"),
     "@latex-renderer/zip-validation": join(
       repository,
       "packages/zip-validation/src/index.ts",

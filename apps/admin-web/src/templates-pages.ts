@@ -1,17 +1,36 @@
+import type { DisplayLocale } from "@latex-renderer/shared/locale";
+import { docUrl } from "./markdown-docs.js";
+import { siteText } from "./site-messages.js";
 import { escapeHtml, shell } from "./templates-shared.js";
 import type { StatusSnapshot } from "./status-probe.js";
 
-export function homePage(): string {
+export function homePage(locale: DisplayLocale = "ja"): string {
+  const t = siteText(locale);
+  const doc = (slug: string) => docUrl(slug, locale);
+  const methods = siteText(locale, escapeHtml)("homeMethods", {
+    web: link(doc("web"), t("webApp")),
+    cli: link(doc("cli"), "CLI"),
+    ai: link(doc("mcp"), t("aiIntegrations")),
+    api: link(doc("api"), "API"),
+  });
   return shell(
-    "ホーム",
-    `<div class="hero"><h1>LaTeXをPDFに変換</h1><p>日本語・英語の文書を、画像や参考文献もまとめて変換できます。</p><div class="actions"><a class="button" href="/app/">ブラウザで変換</a><a class="button secondary" href="/downloads/">クライアントをダウンロード</a><a class="button ghost" href="/docs/">使い方を見る</a></div></div><section><h2>利用を始める</h2><p>ブラウザで使う場合は、管理者が用意したアカウントでログインします。<a href="/docs/web/">ブラウザでの使い方</a>、<a href="/docs/mcp/">AI連携</a>、<a href="/docs/api/">API</a>から利用方法を選べます。</p><p>変換に失敗した場合も、ログとエラー情報を確認できます。</p></section>`,
+    t("home"),
+    `<div class="hero" data-public-page="home"><h1>${escapeHtml(t("convert"))}</h1><p>${escapeHtml(t("homeDescription"))}</p><div class="actions"><a class="button" href="/app/">${escapeHtml(t("convertInBrowser"))}</a><a class="button secondary" href="/${locale}/downloads/">${escapeHtml(t("downloadClient"))}</a><a class="button ghost" href="${doc("index")}">${escapeHtml(t("readGuides"))}</a></div></div><section><h2>${escapeHtml(t("getStarted"))}</h2><p>${escapeHtml(t("homeSignIn"))} ${methods}</p><p>${escapeHtml(t("homeFailure"))}</p></section>`,
+    locale,
+    { languageUrl: (choice) => `/${choice}/` },
   );
 }
 
-export function loginPage(): string {
+export function loginPage(
+  locale: DisplayLocale = "ja",
+  languageUrl?: (choice: DisplayLocale) => string,
+): string {
+  const t = siteText(locale);
   return shell(
-    "ログイン",
-    `<section class="login-panel"><h1>ログイン</h1><p id="login-message" role="alert">ログイン方式を確認しています。</p><div id="login-methods" class="stack"></div><noscript>ログインにはJavaScriptを有効にしてください。</noscript></section><script data-cfasync="false" type="module" src="/assets/login.js"></script>`,
+    t("signIn"),
+    `<section class="login-panel"><h1>${escapeHtml(t("signIn"))}</h1><p id="login-message" role="alert">${escapeHtml(t("checkingSignIn"))}</p><div id="login-methods" class="stack"></div><noscript>${escapeHtml(t("signInJavascript"))}</noscript></section><script data-cfasync="false" type="module" src="/assets/login.js"></script>`,
+    locale,
+    { languageUrl: languageUrl ?? ((choice) => `?locale=${choice}`) },
   );
 }
 
@@ -19,32 +38,50 @@ export function downloadsPage(
   version: string,
   archiveName: string,
   mcpbName?: string,
+  locale: DisplayLocale = "ja",
 ): string {
+  const t = siteText(locale);
+  const doc = (slug: string) => docUrl(slug, locale);
+  const setupGuide = link(doc("mcp") + "#ローカルファイルを直接扱う", t("claudeSetupGuide"));
+  const mcpbSection = mcpbName === undefined ? "" : `<section><h2>${escapeHtml(t("claudeExtension"))}</h2><p>${escapeHtml(t("claudeDescription"))} ${siteText(locale, escapeHtml)("claudeSetup", { setupGuide })}</p><a class="button secondary" href="/downloads/mcpb/latest.mcpb" download>${escapeHtml(t("claudeDownload"))}</a></section>`;
   return shell(
-    "ダウンロード",
-    `<div class="page-heading"><div><h1>ダウンロード</h1><p>クライアント ${escapeHtml(version)}</p></div></div>
-    <section><h2>CLI をインストール</h2><p>使っているOSを選びます。管理者から受け取った API キーがあれば、導入後にすぐPDFを作れます。</p>
-    <ul><li><a href="/docs/client/#debian-ubuntu-の-apt-パッケージ">Debian・Ubuntu に APT でインストール</a>（Node.js 同梱）</li>
-    <li><a href="/docs/windows/">Windows にインストール</a>（Node.js 24 以降）</li>
-    <li><a href="/docs/client/#homebrew-でインストール">macOS に Homebrew でインストール</a></li>
-    <li><a href="/docs/client/#linux-macos">macOS・その他の Linux にインストール</a>（Node.js 24 以降）</li></ul></section>
-    ${mcpbName === undefined ? "" : '<section><h2>Claude Desktop 拡張</h2><p>手元のフォルダを指定して変換するための拡張です。<a href="/docs/mcp/#ローカルファイルを直接扱う">セットアップ手順</a>を参照してください。</p><a class="button secondary" href="/downloads/mcpb/latest.mcpb" download>Claude Desktop拡張を取得</a></section>'}
-    <details><summary>配布ファイルを直接取得</summary><div class="actions"><a class="button secondary" href="/downloads/client/install.mjs" download>共通インストーラー</a><a class="button secondary" href="/downloads/client/latest.zip" download>最新版ZIPを取得</a></div><p><a href="/downloads/client/${encodeURIComponent(archiveName)}" download>${escapeHtml(archiveName)}</a>${mcpbName === undefined ? "" : ` / <a href="/downloads/mcpb/${encodeURIComponent(mcpbName)}" download>${escapeHtml(mcpbName)}</a>`}</p></details>`,
+    t("downloads"),
+    `<div class="page-heading"><div><h1>${escapeHtml(t("downloads"))}</h1><p>${escapeHtml(t("clientVersion", { version }))}</p></div></div>
+    <section><h2>${escapeHtml(t("installCli"))}</h2><p>${escapeHtml(t("chooseOs"))}</p>
+    <ul><li>${link(doc("client") + "#debian-ubuntu-の-apt-パッケージ", t("installApt"))} ${escapeHtml(t("bundledNode"))}</li>
+    <li>${link(doc("windows"), t("installWindows"))} ${escapeHtml(t("requiredNode"))}</li>
+    <li>${link(doc("client") + "#homebrew-でインストール", t("installBrew"))}</li>
+    <li>${link(doc("client") + "#linux-macos", t("installUnix"))} ${escapeHtml(t("requiredNode"))}</li></ul></section>
+    ${mcpbSection}
+    <details><summary>${escapeHtml(t("directDownloads"))}</summary><div class="actions"><a class="button secondary" href="/downloads/client/install.mjs" download>${escapeHtml(t("commonInstaller"))}</a><a class="button secondary" href="/downloads/client/latest.zip" download>${escapeHtml(t("latestZip"))}</a></div><p><a href="/downloads/client/${encodeURIComponent(archiveName)}" download>${escapeHtml(archiveName)}</a>${mcpbName === undefined ? "" : ` / <a href="/downloads/mcpb/${encodeURIComponent(mcpbName)}" download>${escapeHtml(mcpbName)}</a>`}</p></details>`,
+    locale,
+    { languageUrl: (choice) => `/${choice}/downloads/` },
   );
 }
 
-export function statusPage(status: StatusSnapshot): string {
+export function statusPage(status: StatusSnapshot, locale: DisplayLocale = "ja"): string {
+  const t = siteText(locale);
   const item = (label: string, available: boolean, idle = false) =>
-    `<p><span class="status ${available ? "active" : "failed"}">${label}：${idle ? "待機中（アクセス時に起動）" : available ? "応答中" : "停止または確認不可"}</span></p>`;
+    `<p><span class="status ${available ? "active" : "failed"}">${escapeHtml(t("statusItem", { label, state: t(idle ? "statusIdle" : available ? "statusOnline" : "statusOffline") }))}</span></p>`;
+  const troubleshooting = link(docUrl("troubleshooting", locale), t("statusGuide"));
   return shell(
-    "稼働状況",
-    `<div class="page-heading"><h1>稼働状況</h1></div><section>${item("Webサイト", true)}${item("API", status.api, status.apiIdle)}${item("レンダリング処理", status.rendering)}${item("ダウンロード", status.downloads)}<p class="muted">最終更新：<time datetime="${escapeHtml(status.checkedAt)}">${escapeHtml(new Date(status.checkedAt).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" }))}</time></p></section><p>変換できない場合は<a href="/docs/troubleshooting/">問題解決の手順</a>を確認してください。</p>`,
+    t("status"),
+    `<div class="page-heading"><h1>${escapeHtml(t("status"))}</h1></div><section data-rendering-status="${status.rendering ? "online" : "offline"}">${item(t("website"), true)}${item("API", status.api, status.apiIdle)}${item(t("renderingService"), status.rendering)}${item(t("downloads"), status.downloads)}<p class="muted">${escapeHtml(t("statusUpdated"))}<time datetime="${escapeHtml(status.checkedAt)}">${escapeHtml(new Date(status.checkedAt).toLocaleString(locale, { timeZone: "Asia/Tokyo" }))}</time></p></section><p>${siteText(locale, escapeHtml)("statusTroubleshooting", { troubleshooting })}</p>`,
+    locale,
+    { languageUrl: (choice) => `?locale=${choice}` },
   );
 }
 
-export function publicPage404(): string {
+export function publicPage404(locale: DisplayLocale = "ja"): string {
+  const t = siteText(locale);
   return shell(
-    "ページが見つかりません",
-    `<section><h1>ページが見つかりません</h1><p>URLを確認するか、<a href="/">ホームへ戻ってください</a>。</p></section>`,
+    t("notFound"),
+    `<section><h1>${escapeHtml(t("notFound"))}</h1><p>${siteText(locale, escapeHtml)("notFoundInstruction", { homeLink: link(`/${locale}/`, t("returnHome")) })}</p></section>`,
+    locale,
+    { languageUrl: (choice) => `/${choice}/` },
   );
+}
+
+function link(href: string, label: string): string {
+  return `<a href="${escapeHtml(href)}">${escapeHtml(label)}</a>`;
 }

@@ -430,7 +430,12 @@ async function recoverPendingActivation() {
   const oldImage = rendererImageFromEnv(journal.oldEnv);
   if (configured === journal.newImageId) {
     await dockerCapture(["image", "inspect", journal.newImageId]);
-    await writeInventory(await collectInventory(journal.newImageId));
+    await writeInventory(
+      await collectInventory(
+        journal.newImageId,
+        journal.nextState.current?.engineCapabilities,
+      ),
+    );
     state = journal.nextState;
     await persistState();
     await rm(activationJournalPath, { force: true });
@@ -441,7 +446,12 @@ async function recoverPendingActivation() {
     await persistState();
     if (oldImage) {
       await dockerCapture(["image", "inspect", oldImage]);
-      await writeInventory(await collectInventory(oldImage));
+      await writeInventory(
+        await collectInventory(
+          oldImage,
+          journal.previousState.current?.engineCapabilities,
+        ),
+      );
     }
     await rm(activationJournalPath, { force: true });
     return { operationId: journal.operationId ?? null, committed: false };
@@ -989,9 +999,41 @@ async function validateRuntime(op, runtimeRef) {
     [join(repoRoot, "deploy/scripts/smoke-test-renderer-basic.sh"), runtimeRef],
     { env: rootlessEnv() },
   );
+  const info = JSON.parse(
+    await dockerCapture(["image", "inspect", runtimeRef]),
+  )[0];
+  const labels = info?.Config?.Labels ?? {};
+  if (labels["jp.n624.latex-renderer.engine-entrypoint"] !== "1") return null;
+  if (!/^sha256:[0-9a-f]{64}$/.test(info?.Id ?? ""))
+    throw new Error("Engine validation requires an immutable Runtime identity");
+  const japanese = (labels["jp.n624.latex-renderer.languages"] ?? "")
+    .split(",")
+    .includes("collection-langjapanese");
+  await runLogged(
+    op,
+    "sh",
+    [
+      join(repoRoot, "deploy/scripts/smoke-test-renderer-engines.sh"),
+      info.Id,
+      japanese ? "japanese" : "standard",
+    ],
+    { env: rootlessEnv() },
+  );
+  const engines = ["lualatex", "pdflatex", "xelatex"];
+  if (japanese) engines.push("uplatex", "platex");
+  return {
+    schemaVersion: 1,
+    runtimeImage: info.Id,
+    engines: engines.map((engine) => ({
+      engine,
+      pdf: true,
+      svg: true,
+      placement: true,
+    })),
+  };
 }
 
-async function collectInventory(runtimeRef) {
+async function collectInventory(runtimeRef, engineCapabilities = null) {
   const packages = await dockerCapture([
     "run",
     "--rm",
@@ -1018,7 +1060,7 @@ async function collectInventory(runtimeRef) {
   ]);
   if (!packages.trim() || !fonts.trim())
     throw new Error("Renderer environment inventory generation failed");
-  return { packages, fonts };
+  return { packages, fonts, engineCapabilities };
 }
 
 async function readInventorySnapshot() {
@@ -1034,6 +1076,13 @@ async function readInventorySnapshot() {
       result[name] = null;
     }
   }
+  result.engineCapabilities = await readFile(
+    join(environmentRoot, "engines.json"),
+    "utf8",
+  ).catch((error) => {
+    if (error?.code !== "ENOENT") throw error;
+    return null;
+  });
   return result;
 }
 
@@ -1044,6 +1093,15 @@ async function writeInventory(inventory) {
     0o640,
   );
   await writeAtomic(join(environmentRoot, "fonts.txt"), inventory.fonts, 0o640);
+  const enginePath = join(environmentRoot, "engines.json");
+  if (inventory.engineCapabilities === null)
+    await rm(enginePath, { force: true });
+  else
+    await writeAtomic(
+      enginePath,
+      JSON.stringify(inventory.engineCapabilities) + "\n",
+      0o640,
+    );
 }
 
 async function restoreInventory(snapshot) {
@@ -1052,6 +1110,10 @@ async function restoreInventory(snapshot) {
     if (snapshot[name] === null) await rm(path, { force: true });
     else await writeAtomic(path, snapshot[name], 0o640);
   }
+  const enginePath = join(environmentRoot, "engines.json");
+  if (snapshot.engineCapabilities == null)
+    await rm(enginePath, { force: true });
+  else await writeAtomic(enginePath, snapshot.engineCapabilities, 0o640);
 }
 
 function rendererEnvWithImage(contents, imageId) {
@@ -1204,8 +1266,8 @@ async function applyRuntime(op, input, resolvedBase = null) {
   const base =
     resolvedBase ?? (await pullOrRebuildBase(op, selector, rebuildIfMissing));
   const runtime = await acquireRuntime(op, base, languages);
-  await validateRuntime(op, runtime.ref);
-  const inventory = await collectInventory(runtime.ref);
+  const engineCapabilities = await validateRuntime(op, runtime.ref);
+  const inventory = await collectInventory(runtime.ref, engineCapabilities);
   const previousState = cloneState();
   const nextState = {
     ...previousState,
@@ -1227,6 +1289,7 @@ async function applyRuntime(op, input, resolvedBase = null) {
       runtimeIdentity: runtime.identity,
       runtimeSource: runtime.source,
       runtimePackageRef: runtime.packageRef,
+      engineCapabilities,
       snapshotDate: base.snapshotDate,
       languages,
       effectiveLanguageCollections: runtime.effectiveLanguages,
@@ -1256,17 +1319,20 @@ async function rollback(op) {
 
   if (target.legacy === true || !target.baseImageId) {
     await dockerLogged(op, ["image", "inspect", target.runtimeImageId]);
-    await validateRuntime(op, target.runtimeImageId);
+    const engineCapabilities = await validateRuntime(op, target.runtimeImageId);
     imageId = target.runtimeImageId;
-    inventory = await collectInventory(target.runtimeImageId);
-    nextCurrent = cloneState(target);
+    inventory = await collectInventory(
+      target.runtimeImageId,
+      engineCapabilities,
+    );
+    nextCurrent = { ...cloneState(target), engineCapabilities };
   } else {
     const base = await inspectBase(target.baseImageId);
     const languages = validateLanguages(target.languages ?? []);
     const runtime = await acquireRuntime(op, base, languages);
-    await validateRuntime(op, runtime.ref);
+    const engineCapabilities = await validateRuntime(op, runtime.ref);
     imageId = runtime.imageId;
-    inventory = await collectInventory(runtime.ref);
+    inventory = await collectInventory(runtime.ref, engineCapabilities);
     nextCurrent = {
       ...cloneState(target),
       baseRef: target.baseRef ?? base.ref,
@@ -1281,6 +1347,7 @@ async function rollback(op) {
       snapshotDate: target.snapshotDate ?? base.snapshotDate,
       languages,
       effectiveLanguageCollections: runtime.effectiveLanguages,
+      engineCapabilities,
       rendererUpdatedAt: new Date().toISOString(),
       legacy: false,
     };
@@ -1310,8 +1377,15 @@ async function rollback(op) {
 async function revalidate(op) {
   if (!state.current?.runtimeImageId)
     throw new Error("No managed runtime is active");
-  await validateRuntime(op, state.current.runtimeImageId);
-  await writeInventory(await collectInventory(state.current.runtimeImageId));
+  const engineCapabilities = await validateRuntime(
+    op,
+    state.current.runtimeImageId,
+  );
+  await writeInventory(
+    await collectInventory(state.current.runtimeImageId, engineCapabilities),
+  );
+  state.current.engineCapabilities = engineCapabilities;
+  await persistState();
 }
 
 async function cleanup(op, automatic = false) {

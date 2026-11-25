@@ -90,7 +90,7 @@ function assertSchema(db) {
     undefined
   )
     throw new Error("Migration version 4 is absent");
-  for (const version of [5, 6, 17, 18, 19, 20, 21, 22]) {
+  for (const version of [5, 6, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26]) {
     if (
       db
         .prepare("SELECT 1 FROM schema_migrations WHERE version=?")
@@ -120,6 +120,14 @@ function assertSchema(db) {
     .find(({ name }) => name === "outputs_json");
   if (outputs?.notnull !== 1)
     throw new Error("jobs.outputs_json is absent or nullable");
+  for (const table of ["jobs", "project_revisions"]) {
+    const engine = db
+      .prepare(`PRAGMA table_info(${table})`)
+      .all()
+      .find(({ name }) => name === "engine");
+    if (engine?.notnull !== 1 || engine.dflt_value !== "'lualatex'")
+      throw new Error(`${table}.engine lacks the LuaLaTeX default`);
+  }
   if (
     !db
       .prepare("PRAGMA table_info(artifacts)")

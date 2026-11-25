@@ -9,6 +9,7 @@ import { DatabaseSync } from "node:sqlite";
 import {
   assertBackupDatabase,
   openBackupFile,
+  projectSourceRows,
   projectSourceStorageKey,
   validateBackupArchive,
 } from "./backup-boundary.mjs";
@@ -82,16 +83,7 @@ async function verifyProjectSources(database, boundary) {
     !Array.isArray(boundary.revisions)
   )
     throw new Error("Project Source backup manifest is invalid");
-  const expectedSources = database
-    .prepare(
-      `SELECT DISTINCT s.id,s.storage_key,s.size,s.sha256
-       FROM sources s
-       JOIN project_revisions r ON r.source_id=s.id
-       JOIN projects p ON p.id=r.project_id
-       WHERE p.deleted_at IS NULL
-       ORDER BY s.id`,
-    )
-    .all();
+  const expectedSources = projectSourceRows(database);
   if (boundary.sources.length !== expectedSources.length)
     throw new Error("Project Source backup set is incomplete");
   for (let index = 0; index < expectedSources.length; index += 1) {

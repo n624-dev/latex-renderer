@@ -28,6 +28,7 @@ import type {
   SourceRenderResponse,
   SourceTicketResponse,
   RenderOutput,
+  RenderEngine,
 } from "@latex-renderer/contracts";
 import {
   structuredErrorsSchema,
@@ -41,6 +42,7 @@ import {
 import ignore, { type Ignore } from "ignore";
 import yazl from "yazl";
 import { shouldExcludeProjectPath } from "./project-files.js";
+import { resolveLocalTexEngine } from "./tex-engine.js";
 import { pollUntilTerminal } from "./polling.js";
 import { pruneGeneratedArtifacts } from "./artifact-cleanup.js";
 import { publishArtifactSet } from "./artifact-transaction.js";
@@ -51,6 +53,10 @@ import {
 
 export { shouldExcludeProjectPath } from "./project-files.js";
 export { openLocalTarget } from "./open-local-target.js";
+export {
+  renderEngineSchema,
+  type RenderEngine,
+} from "@latex-renderer/contracts";
 
 export interface ClientTransport {
   preparePreview?(
@@ -78,6 +84,7 @@ export interface ClientTransport {
     entrypoint: string | undefined,
     idempotencyKey: string,
     outputs?: readonly RenderOutput[],
+    engine?: RenderEngine,
   ): Promise<SourceRenderResponse>;
   job(
     jobId: string,
@@ -141,6 +148,7 @@ export interface DownloadArtifactsResult {
 export interface ClientCoreOptions {
   onEvent?: (event: ClientCoreEvent) => void;
   outputs?: readonly RenderOutput[];
+  engine?: RenderEngine | undefined;
   pdfOnly?: boolean;
   /** Explicitly generate these pages; default downloads only existing PNGs. */
   previewPages?: readonly number[];
@@ -195,6 +203,7 @@ export async function renderProject(
       source.sourceId,
       entrypoint,
       options.outputs,
+      options.engine,
     );
     options.onEvent?.({ type: "job.queued", jobId: ticket.jobId });
     const { job, jobTicket } = await pollUntilTerminal(client, ticket, options);
@@ -219,7 +228,7 @@ export async function compileProjectPdf(
   input: string,
   options: Pick<
     RenderOptions,
-    "pollIntervalMs" | "pollTimeoutMs" | "onEvent"
+    "pollIntervalMs" | "pollTimeoutMs" | "onEvent" | "engine"
   > & {
     projectRoot?: string;
     output?: string;
@@ -255,8 +264,16 @@ export async function compileProjectPdf(
       destination,
     );
     options.onEvent?.({ type: "archive.created", ...archive });
+    const engine =
+      options.engine ?? (await resolveLocalTexEngine(root, zip, entrypoint));
     const source = await reserveAndUploadSource(client, zip, archive, options);
-    const ticket = await startSourceJob(client, source.sourceId, entrypoint);
+    const ticket = await startSourceJob(
+      client,
+      source.sourceId,
+      entrypoint,
+      undefined,
+      engine,
+    );
     jobId = ticket.jobId;
     options.onEvent?.({ type: "job.queued", jobId: ticket.jobId });
     const { job, jobTicket } = await pollUntilTerminal(client, ticket, options);
@@ -385,6 +402,7 @@ export async function createSourceRenderJob(
     sourceId,
     validateEntrypointPath(entrypoint),
     options.outputs,
+    options.engine,
   );
   options.onEvent?.({ type: "job.queued", jobId: ticket.jobId });
   return client.job(ticket.jobId, ticket.jobTicket);
@@ -401,6 +419,7 @@ export async function renderSource(
       sourceId,
       entrypoint,
       options.outputs,
+      options.engine,
     );
   options.onEvent?.({ type: "job.queued", jobId: ticket.jobId });
   const { job, jobTicket } = await pollUntilTerminal(client, ticket, options),
@@ -621,8 +640,15 @@ function startSourceJob(
   sourceId: string,
   entrypoint: string,
   outputs: readonly RenderOutput[] = ["pdf"],
+  engine?: RenderEngine,
 ): Promise<SourceRenderResponse> {
-  return client.createSourceJob(sourceId, entrypoint, randomUUID(), outputs);
+  return client.createSourceJob(
+    sourceId,
+    entrypoint,
+    randomUUID(),
+    outputs,
+    ...(engine === undefined ? [] : ([engine] as const)),
+  );
 }
 
 export async function createProjectArchive(

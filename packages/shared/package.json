@@ -1,6 +1,6 @@
 {
   "name": "@latex-renderer/shared",
-  "version": "1.7.1",
+  "version": "1.7.2-rc.1",
   "private": true,
   "license": "Apache-2.0",
   "type": "module",
@@ -10,6 +10,14 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./locale": {
+      "types": "./dist/locale.d.ts",
+      "import": "./dist/locale.js"
+    },
+    "./diagnostic-locale": {
+      "types": "./dist/diagnostic-locale.d.ts",
+      "import": "./dist/diagnostic-locale.js"
     }
   },
   "scripts": {

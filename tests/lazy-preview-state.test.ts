@@ -172,6 +172,20 @@ describe("lazy preview durable state (conversion boundary is deterministic, not 
       });
       await writeFile(
         join(path, ".preview-info.json"),
+        '{"schemaVersion":2,"pages":3,"dpi":150,"firstPage":"on-demand"}',
+      );
+      const pdf = [
+        { path: "result.pdf", type: "pdf", size: 8, sha256: "0".repeat(64) },
+      ];
+      expect(await previewPageCount(path, pdf, true)).toBe(3);
+      await expect(previewPageCount(path, pdf)).rejects.toMatchObject({
+        code: "PREVIEW_METADATA_INVALID",
+      });
+      await expect(previewPageCount(path, [], true)).rejects.toMatchObject({
+        code: "PREVIEW_METADATA_INVALID",
+      });
+      await writeFile(
+        join(path, ".preview-info.json"),
         '{"schemaVersion":1,"pages":101,"dpi":150}',
       );
       await expect(previewPageCount(path, artifacts)).rejects.toMatchObject({

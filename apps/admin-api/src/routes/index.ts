@@ -36,11 +36,13 @@ export function createAdminV1Router(deps: AdminDependencies): Hono {
   });
   r.get("/me", async (c) => {
     const actor = await requireActor(deps, c, "admin:users:read"),
-      user = deps.database.users.get(actor.userId);
+      user = deps.database.users.get(actor.userId),
+      displayLocale = actor.type === "user" ? deps.database.users.displayLocale(actor.userId) : null;
     return c.json({
       userId: actor.userId,
       displayName: user?.display_name ?? actor.userId,
       role: actor.role,
+      ...(displayLocale === null ? {} : { displayLocale }),
     });
   });
   r.route("/users", createUsersRouter(deps));

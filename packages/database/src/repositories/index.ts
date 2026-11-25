@@ -10,6 +10,7 @@ export * from "./security.js";
 export * from "./worker.js";
 export * from "./web-principals.js";
 export * from "./projects.js";
+export * from "./drafts.js";
 export * from "./remote-mcp.js";
 export * from "./browser-auth.js";
 export * from "./output-stages.js";
