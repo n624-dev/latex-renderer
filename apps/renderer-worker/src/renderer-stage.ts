@@ -1,4 +1,5 @@
 import type { RendererDatabase, WorkerJobRow } from "@latex-renderer/database";
+import type { ContainerObservation } from "./container-memory.js";
 import type { WorkerConfig } from "./config.js";
 import { inspectOutputTree } from "./artifact-validator.js";
 import {
@@ -20,7 +21,7 @@ export async function runRendererStage(
   options: RendererStageOptions,
   timeoutMs: number,
   lifecycle?: { owns: () => boolean },
-): Promise<{ exitCode: number; timedOut: boolean; stderr: string }> {
+): Promise<{ exitCode: number; timedOut: boolean; stderr: string; observation?: ContainerObservation | undefined }> {
   const renderer = spawnRenderer(
     config,
     job.id,
@@ -128,5 +129,5 @@ export async function runRendererStage(
   }
   if (cleanupFailure !== undefined) throw cleanupFailure;
   if (failure !== undefined) throw failure;
-  return { exitCode, timedOut, stderr };
+  return { exitCode, timedOut, stderr, observation: renderer.observation?.() };
 }

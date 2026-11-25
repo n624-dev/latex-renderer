@@ -620,14 +620,15 @@ export class JobsRepository {
     publicationMs?: number;
     sourcePrepareMs?: number;
     workCacheUsed?: boolean;
+    containerSample?: object | undefined;
   }) {
     this.db
       .prepare(
-        `INSERT INTO job_stage_observations VALUES (?,?,?,?,?,?,?,?)
+        `INSERT INTO job_stage_observations VALUES (?,?,?,?,?,?,?,?,?)
        ON CONFLICT(job_id,stage) DO UPDATE SET generation=excluded.generation,
        renderer_wall_ms=excluded.renderer_wall_ms,validation_wall_ms=excluded.validation_wall_ms,
        publication_wall_ms=excluded.publication_wall_ms,source_prepare_wall_ms=excluded.source_prepare_wall_ms,
-       work_cache_used=excluded.work_cache_used WHERE excluded.generation>job_stage_observations.generation`,
+       work_cache_used=excluded.work_cache_used,container_sample_json=excluded.container_sample_json WHERE excluded.generation>job_stage_observations.generation`,
       )
       .run(
         input.jobId,
@@ -638,6 +639,7 @@ export class JobsRepository {
         input.publicationMs ?? null,
         input.sourcePrepareMs ?? null,
         input.workCacheUsed === undefined ? null : Number(input.workCacheUsed),
+      input.containerSample === undefined ? null : JSON.stringify(input.containerSample),
       );
   }
 
@@ -646,11 +648,11 @@ export class JobsRepository {
       .prepare(
         `SELECT stage,generation,renderer_wall_ms AS rendererMs,validation_wall_ms AS validationMs,
        publication_wall_ms AS publicationMs,source_prepare_wall_ms AS sourcePrepareMs,
-       work_cache_used AS cache FROM job_stage_observations WHERE job_id=? ORDER BY stage`,
+       work_cache_used AS cache,container_sample_json AS sample FROM job_stage_observations WHERE job_id=? ORDER BY stage`,
       )
       .all(jobId)
       .map((record) => {
-        const { cache, ...row } = record as {
+        const { cache, sample, ...row } = record as {
           stage: "pdf" | "svg";
           generation: number;
           rendererMs: number | null;
@@ -658,8 +660,11 @@ export class JobsRepository {
           publicationMs: number | null;
           sourcePrepareMs: number | null;
           cache: number | null;
+        sample: string | null;
         };
-        return { ...row, workCacheUsed: cache === null ? null : cache === 1 };
+        return { ...row, workCacheUsed: cache === null ? null : cache === 1,
+        containerSample: sample === null ? null : JSON.parse(sample) as unknown,
+      };
       });
   }
 

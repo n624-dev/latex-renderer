@@ -75,6 +75,7 @@ CREATE TABLE job_stage_observations (
   publication_wall_ms INTEGER CHECK(publication_wall_ms>=0),
   source_prepare_wall_ms INTEGER CHECK(source_prepare_wall_ms>=0),
   work_cache_used INTEGER CHECK(work_cache_used IN (0,1)),
+  container_sample_json TEXT CHECK(container_sample_json IS NULL OR json_valid(container_sample_json)),
   PRIMARY KEY(job_id,stage)
 );
 CREATE TABLE document_probes (

@@ -1119,7 +1119,7 @@ export function createRemoteMcpHandler(
           _meta: oauthToolMeta("mcp:read"),
           title: "Get a render's input, Runtime and artifact identities",
           description:
-            "Read the manifest for one Job. Recorded timestamps are nullable. The digest records which PDF was produced; it does not assert PDF and SVG visual equivalence.",
+            "Read the manifest for one Job. Worker phase durations are wall-clock milliseconds. An optional last cgroup sample contains cumulative container counters, which can omit work after the sample and are not per-phase totals. The digest identifies the recorded PDF.",
           inputSchema: z.object({ jobId }).strict(),
           outputSchema: operationOutput(
             "get_render_manifest",
@@ -1161,6 +1161,14 @@ export function createRemoteMcpHandler(
                         .nonnegative()
                         .nullable(),
                       workCacheUsed: z.boolean().nullable(),
+                      containerSample: z.object({
+                        sampledAt: z.string(),
+                        memoryPeakBytes: z.number().int().nonnegative().nullable(),
+                        cpuUsageUs: z.number().int().nonnegative().nullable(),
+                        ioReadBytes: z.number().int().nonnegative().nullable(),
+                        ioWriteBytes: z.number().int().nonnegative().nullable(),
+                        oomKills: z.number().int().nonnegative().nullable(),
+                      }).strict().nullable(),
                     })
                     .strict(),
                 ),

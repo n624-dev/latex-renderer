@@ -461,6 +461,7 @@ export async function processJob(
           validationMs: Math.round(publishBegan - validationBegan),
           publicationMs: Math.round(performance.now() - publishBegan),
           workCacheUsed: warm === true,
+          containerSample: spawned.observation?.(),
         });
         const total = publicBytes + (sourceMap?.size ?? 0);
         if (

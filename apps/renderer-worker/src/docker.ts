@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 import type { WorkerConfig } from "./config.js";
-import { containerMemoryProbe } from "./container-memory.js";
+import { containerObservationProbe, type ContainerObservation } from "./container-memory.js";
 import { MIB, RENDER_MEMORY_MAX } from "./memory-plan.js";
 import { withContainerEngine } from "../../../deploy/scripts/on-demand-engine.mjs";
 import type { WorkerJobRow } from "@latex-renderer/database";
@@ -52,8 +52,9 @@ export function spawnRenderer(
     stdio: ["ignore", "pipe", "pipe"],
     env: dockerEnvironment(),
   });
-  if (config.observeContainerMemory && stage?.mode !== "preview") {
-    const probe = containerMemoryProbe(containerName, (name) =>
+  let observation: ContainerObservation | undefined;
+  if (stage?.mode !== "preview" && stage?.mode !== "inspection") {
+    const probe = containerObservationProbe(containerName, (name) =>
       runDocker(["inspect", "--format", "{{.Id}} {{.State.Pid}}", name], 2000),
     );
     let busy = false,
@@ -62,11 +63,13 @@ export function spawnRenderer(
       if (busy || closed) return;
       busy = true;
       void probe()
-        .then((peak) => {
-          if (!closed && peak !== undefined)
+        .then((sample) => {
+          if (closed || sample === undefined) return;
+          observation = sample;
+          if (sample.memoryPeakBytes !== null && sample.memoryPeakBytes > 0)
             config.observeContainerMemory?.(
               `${containerName}:${stage?.mode ?? "all"}`,
-              peak,
+              sample.memoryPeakBytes,
             );
         })
         .catch(() => {})
@@ -82,10 +85,10 @@ export function spawnRenderer(
     process.once("close", stop);
     process.once("error", stop);
   }
-  return {
-    process,
-    containerName,
+  const metrics: { observation?: () => ContainerObservation | undefined } = {
+    observation: () => observation,
   };
+  return { process, containerName, ...metrics };
 }
 export function rendererRunArguments(
   config: WorkerConfig,

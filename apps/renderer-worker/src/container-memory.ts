@@ -28,23 +28,77 @@ export function containerMemoryDirectory(
   }
 }
 
-export function containerMemoryProbe(
+export interface ContainerObservation {
+  memoryPeakBytes: number | null;
+  cpuUsageUs: number | null;
+  ioReadBytes: number | null;
+  ioWriteBytes: number | null;
+  oomKills: number | null;
+  sampledAt: string;
+}
+
+export function containerObservationProbe(
   name: string,
   inspect: (name: string) => Promise<string>,
 ) {
   let directory: string | undefined;
   let attempts = 0;
-  return async (): Promise<number | undefined> => {
+  return async (): Promise<ContainerObservation | undefined> => {
+    if (!directory && attempts++ < 10)
+      directory = containerMemoryDirectory(await inspect(name));
+    if (!directory) return;
+    return readContainerObservation(directory);
+  };
+}
+
+export function readContainerObservation(
+  directory: string,
+): ContainerObservation | undefined {
+  const read = (name: string) => {
     try {
-      if (!directory && attempts++ < 10)
-        directory = containerMemoryDirectory(await inspect(name));
-      if (!directory) return;
-      const value = readFileSync(`${directory}/memory.peak`, "utf8").trim();
-      if (!/^[0-9]{1,12}$/.test(value)) return;
-      const peak = Number(value);
-      if (Number.isSafeInteger(peak) && peak > 0) return peak;
+      return readFileSync(`${directory}/${name}`, "utf8").trim();
     } catch {
-      // Unavailable/removed cgroups are unknown, not evidence of a small Job.
+      return undefined;
     }
+  };
+  const counter = (value: string | undefined) => {
+    if (value === undefined || !/^\d{1,16}$/.test(value)) return null;
+    const number = Number(value);
+    return Number.isSafeInteger(number) ? number : null;
+  };
+  const memoryPeakBytes = counter(read("memory.peak"));
+  const cpuUsageUs = counter(
+    /^usage_usec (\d+)$/m.exec(read("cpu.stat") ?? "")?.[1],
+  );
+  const oomKills = counter(
+    /^oom_kill (\d+)$/m.exec(read("memory.events") ?? "")?.[1],
+  );
+  const io = read("io.stat");
+  const total = (kind: "rbytes" | "wbytes") => {
+    if (!io) return null;
+    const counters = [
+      ...io.matchAll(new RegExp(`(?:^| )${kind}=(\\d+)(?= |$)`, "gm")),
+    ];
+    if (!counters.length) return null;
+    const values = counters.map((match) => counter(match[1]));
+    if (values.some((value) => value === null)) return null;
+    const bytes = values.reduce<number>((sum, value) => sum + (value ?? 0), 0);
+    return Number.isSafeInteger(bytes) ? bytes : null;
+  };
+  const ioReadBytes = total("rbytes"),
+    ioWriteBytes = total("wbytes");
+  if (
+    [memoryPeakBytes, cpuUsageUs, oomKills, ioReadBytes, ioWriteBytes].every(
+      (value) => value === null,
+    )
+  )
+    return;
+  return {
+    memoryPeakBytes,
+    cpuUsageUs,
+    ioReadBytes,
+    ioWriteBytes,
+    oomKills,
+    sampledAt: new Date().toISOString(),
   };
 }

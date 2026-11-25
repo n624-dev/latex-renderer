@@ -1,3 +1,4 @@
+import type { ContainerObservation } from "./container-memory.js";
 import { createHash } from "node:crypto";
 import { createReadStream, constants } from "node:fs";
 import {
@@ -202,6 +203,7 @@ export async function processStagedJob(
               stage: "pdf",
               generation,
               rendererMs,
+              containerSample: execution.observation,
             });
             if (
               db.worker.transitionOwned(
@@ -299,6 +301,7 @@ export async function processStagedJob(
           rendererMs,
           validationMs: Math.round(publicationBegan - validationBegan),
           publicationMs: Math.round(performance.now() - publicationBegan),
+          containerSample: execution.observation,
         });
         if (
           db.worker.transitionOwned(
@@ -395,6 +398,7 @@ export async function processStagedJob(
     await chmod(staging, 0o770);
     let result: ReturnType<typeof classifyRenderResult>, exitCode: number;
     let rendererMs: number | null = null;
+    let containerSample: ContainerObservation | undefined;
     try {
       const renderBegan = performance.now();
       const execution = await runRendererStage(
@@ -407,6 +411,7 @@ export async function processStagedJob(
         deadline - Date.now(),
       );
       rendererMs = Math.round(performance.now() - renderBegan);
+      containerSample = execution.observation;
       exitCode = execution.exitCode;
       result = classifyRenderResult(
         exitCode,
@@ -576,6 +581,7 @@ export async function processStagedJob(
         stage: "svg",
         generation,
         rendererMs,
+        containerSample,
       });
       if (
         db.worker.transitionOwned(
