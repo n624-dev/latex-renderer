@@ -3,7 +3,11 @@ import { once } from "node:events";
 import { createServer } from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Browser } from "playwright";
-import { launchTestBrowser, newTestPage } from "../helpers/browser-engine.js";
+import {
+  browserSettings,
+  launchTestBrowser,
+  newTestPage,
+} from "../helpers/browser-engine.js";
 import type { ClientDistribution } from "../../apps/admin-web/src/client-distribution.js";
 
 const origin = "http://127.0.0.1:43128";
@@ -36,10 +40,11 @@ function fixturePdf() {
   const padding = "unused image data\n".repeat(90000);
   const objects = [
     "<< /Type /Catalog /Pages 2 0 R >>",
-    "<< /Type /Pages /Count 1 /Kids [3 0 R] >>",
+    "<< /Type /Pages /Count 2 /Kids [3 0 R 6 0 R] >>",
     "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >>",
     `<< /Length ${content.length} >>\nstream\n${content}endstream`,
     `<< /Length ${padding.length} >>\nstream\n${padding}endstream`,
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >>",
   ];
   let output = "%PDF-1.4\n";
   const offsets = objects.map((item, index) => {
@@ -48,14 +53,14 @@ function fixturePdf() {
     return offset;
   });
   const xref = output.length;
-  output += "xref\n0 6\n0000000000 65535 f \n";
+  output += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
   for (const offset of offsets)
     output += `${String(offset).padStart(10, "0")} 00000 n \n`;
-  output += `trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  output += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
   return Buffer.from(output);
 }
 
-describe("Project editor on Chromium", () => {
+describe("Project editor", () => {
   it("lazily loads the editor and PDF worker, then keeps the last PDF on a failed build", async () => {
     const appPath = new URL("../../apps/admin-web/dist/app.js", import.meta.url)
       .href;
@@ -104,8 +109,10 @@ describe("Project editor on Chromium", () => {
     await css.body?.cancel();
     if (browser === undefined) throw new Error("Test browser did not start");
     const page = await newTestPage(browser);
+    page.setDefaultTimeout(8_000);
     const observed: string[] = [],
-      failures: string[] = [];
+      failures: string[] = [],
+      failedRequests: string[] = [];
     const pdf = fixturePdf(),
       ranges: number[] = [];
     const pdfPath = `/app/api/v1/jobs/${jobId}/artifacts/result.pdf`;
@@ -180,6 +187,7 @@ describe("Project editor on Chromium", () => {
       let version = 1,
         text = "Original",
         fail = false,
+        running = false,
         posts = 0,
         replacements = 0,
         locale = "ja";
@@ -189,13 +197,17 @@ describe("Project editor on Chromium", () => {
         engine: "lualatex",
         files: [{ path: "main.tex" }],
       });
-      page.on("pageerror", (error) => failures.push(error.message));
+      page.on("requestfailed", (request) =>
+        failedRequests.push(`${new URL(request.url()).pathname}: ${request.failure()?.errorText}`),
+      );
+      page.on("pageerror", (error) => failures.push(error.stack ?? error.message));
       page.on("console", (message) => {
-        if (message.type() === "error") failures.push(message.text());
+        if (message.type() === "error")
+          failures.push(`${message.text()} (${message.location().url})`);
       });
       await page.goto(origin + "/cache-check/first");
       await page.goto(origin + "/cache-check/second");
-      expect(cssRequests).toBe(1);
+      if (browserSettings().engine === "chromium") expect(cssRequests).toBe(1);
       await page.route("**/*", async (route) => {
         const request = route.request(),
           url = new URL(request.url()),
@@ -255,9 +267,9 @@ describe("Project editor on Chromium", () => {
               latest:
                 posts === 0
                   ? null
-                  : { jobId, version, status: fail ? "failed" : "succeeded" },
+                  : { jobId, version, status: running ? "running" : fail ? "failed" : "succeeded" },
               successful:
-                posts === 0 ? null : { jobId, version: 1, pageCount: 1 },
+                posts === 0 ? null : { jobId, version: 1, pageCount: 2 },
             });
           }
           posts++;
@@ -265,8 +277,8 @@ describe("Project editor on Chromium", () => {
         }
         if (path === `/app/api/v1/jobs/${jobId}`)
           return json({
-            status: fail ? "failed" : "succeeded",
-            pdfPageCount: 1,
+            status: running ? "running" : fail ? "failed" : "succeeded",
+            pdfPageCount: 2,
           });
         if (path === `/app/api/v1/jobs/${jobId}/artifacts/errors.json`)
           return json({
@@ -339,9 +351,13 @@ describe("Project editor on Chromium", () => {
       expect(observed).toContain(assetRoot + "locales/ja.js");
       expect(
         await page.locator("#editor-canvas").getAttribute("aria-label"),
-      ).toBe("PDF 1 / 1");
+      ).toBe("PDF 1 / 2");
       expect(await page.locator(".cm-content").isVisible()).toBe(true);
       expect(await page.locator("#editor-panels").isVisible()).toBe(false);
+      await page.locator("#editor-next").click();
+      await expect
+        .poll(() => page.locator("#editor-canvas").getAttribute("aria-label"))
+        .toBe("PDF 2 / 2");
       await openOptions("preview");
       await page.locator("#editor-zoom").selectOption("150%");
       await page.keyboard.press("Escape");
@@ -354,6 +370,7 @@ describe("Project editor on Chromium", () => {
       expect(await page.locator(".cm-content").textContent()).toBe("Original");
       expect(await page.locator("#editor-canvas").isVisible()).toBe(true);
       expect(await page.locator("#editor-zoom").inputValue()).toBe("150%");
+      expect(await page.locator("#editor-canvas").getAttribute("aria-label")).toBe("PDF 2 / 2");
       expect(posts).toBe(1);
       await page.locator("#editor-language").selectOption("ja");
       await expect
@@ -364,7 +381,12 @@ describe("Project editor on Chromium", () => {
       await page.locator("#editor-search").click();
       await page.locator(".cm-search input[name=search]").waitFor();
       await page.keyboard.press("Escape");
+      await page.locator("#editor-prev").click();
+      await expect
+        .poll(() => page.locator("#editor-canvas").getAttribute("aria-label"))
+        .toBe("PDF 1 / 2");
       fail = true;
+      running = true;
       await page.locator(".cm-content").fill("Edited\n\\badcommand");
       await expect
         .poll(() => text, { timeout: 5000 })
@@ -372,6 +394,26 @@ describe("Project editor on Chromium", () => {
       await expect.poll(() => posts, { timeout: 5000 }).toBe(2);
       await expect
         .poll(() => page.locator("#editor-preview-status").textContent())
+        .toBe("コンパイル中");
+      const activeJob = await page.locator("#editor-build-detail").getAttribute("href");
+      await openOptions("settings");
+      await page.locator("#editor-language").selectOption("en");
+      await expect
+        .poll(() => page.locator("#app-editor").getAttribute("lang"))
+        .toBe("en");
+      expect(await page.locator("#editor-build-detail").getAttribute("href")).toBe(activeJob);
+      expect(await page.locator("#editor-canvas").getAttribute("aria-label")).toBe("PDF 1 / 2");
+      expect(posts).toBe(2);
+      await page.locator("#editor-language").selectOption("ja");
+      await expect
+        .poll(() => page.locator("#app-editor").getAttribute("lang"))
+        .toBe("ja");
+      await page.keyboard.press("Escape");
+      running = false;
+      await expect
+        .poll(() => page.locator("#editor-preview-status").textContent(), {
+          timeout: 5_000,
+        })
         .toBe("コンパイル失敗");
       expect(await page.locator("#editor-canvas").isVisible()).toBe(true);
       expect(
@@ -394,7 +436,7 @@ describe("Project editor on Chromium", () => {
       await page.keyboard.press("Escape");
       await expect
         .poll(() => page.locator("#editor-canvas").getAttribute("aria-label"))
-        .toBe("PNG 1 / 1");
+        .toBe("PNG 1 / 2");
       const pngMs = Math.round(performance.now() - pngStart);
       const browserTiming = await page.evaluate(() =>
         performance
@@ -431,7 +473,7 @@ describe("Project editor on Chromium", () => {
       await page.locator("#editor-canvas:visible").waitFor({ timeout: 9000 });
       expect(
         await page.locator("#editor-canvas").getAttribute("aria-label"),
-      ).toBe("PNG 1 / 1");
+      ).toBe("PNG 1 / 2");
       expect(
         observed
           .slice(beforeReload)
@@ -514,6 +556,7 @@ describe("Project editor on Chromium", () => {
         `${String(error)}\n${JSON.stringify({
           observed,
           failures,
+          failedRequests,
           text: await page
             .locator("main")
             .textContent()
@@ -526,5 +569,5 @@ describe("Project editor on Chromium", () => {
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
-  });
+  }, 50_000);
 });

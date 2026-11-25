@@ -207,7 +207,7 @@ describe("shared saved Project operations", () => {
     ).toBe(404);
   });
 
-  it("shares Source bytes while keeping engine and output settings in revision identity", async () => {
+  it.each(["pdflatex", "xelatex", "platex", "uplatex"])("shares Source bytes and preserves %s in the revision, job and worker", async (engine) => {
     const f = fixture(),
       token = f.tokens[0];
     const response = await f.request(token, "POST", "/projects", {
@@ -234,17 +234,18 @@ describe("shared saved Project operations", () => {
       };
     };
     const legacy = await attach({});
-    const xetex = await attach({ engine: "xelatex" });
+    const selected = await attach({ engine });
     const withSvg = await attach({
-      engine: "xelatex",
+      engine,
       outputs: ["svg", "pdf"],
     });
     expect(legacy.engine).toBe("lualatex");
-    expect(xetex.engine).toBe("xelatex");
+    expect((await attach({ engine: "lualatex" })).id).toBe(legacy.id);
+    expect(selected.engine).toBe(engine);
     expect(withSvg.outputs).toEqual(["pdf", "svg"]);
-    expect(new Set([legacy.id, xetex.id, withSvg.id]).size).toBe(3);
+    expect(new Set([legacy.id, selected.id, withSvg.id]).size).toBe(3);
     expect(
-      (await attach({ engine: "xelatex", outputs: ["pdf", "svg"] })).id,
+      (await attach({ engine, outputs: ["pdf", "svg"] })).id,
     ).toBe(withSvg.id);
     expect(
       f.database.projects.revisions(id).map((revision) => revision.source_id),
@@ -253,15 +254,15 @@ describe("shared saved Project operations", () => {
     const rendered = await f.request(
       token,
       "POST",
-      `${path}/${xetex.id}/render`,
+      `${path}/${selected.id}/render`,
       {},
       "engine-render-123456789",
     );
     expect(rendered.status).toBe(201);
     const { jobId } = (await rendered.json()) as { jobId: string };
     expect(f.database.jobs.get(jobId)).toMatchObject({
-      engine: "xelatex",
-      project_revision_id: xetex.id,
+      engine,
+      project_revision_id: selected.id,
     });
     expect(
       f.database.worker.claimNext(
@@ -269,7 +270,7 @@ describe("shared saved Project operations", () => {
         new Date().toISOString(),
         new Date(Date.now() + 60000).toISOString(),
       )?.engine,
-    ).toBe("xelatex");
+    ).toBe(engine);
   });
 
   it("keeps a versioned Draft owner-scoped and retains only its referenced Sources", () => {

@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import type {
   JobResponse,
+  RenderEngine,
   SourceRenderResponse,
   SourceTicketResponse,
 } from "@latex-renderer/contracts";
@@ -39,6 +40,17 @@ afterEach(async () => {
 });
 
 describe("client core", () => {
+  it.each(["lualatex", "pdflatex", "xelatex", "platex", "uplatex"] as const)(
+    "sends the explicitly selected %s engine with the compile request",
+    async (engine) => {
+      const root = await temporaryRoot();
+      await writeFile(join(root, "main.tex"), "document");
+      const client = new FakeClient([job("succeeded")]);
+      await compileProjectPdf(client, "main.tex", { projectRoot: root, engine });
+      expect(client.engines).toEqual([engine]);
+    },
+  );
+
   it("compiles a nested entrypoint and replaces only the requested PDF", async () => {
     const root = await temporaryRoot();
     await mkdir(join(root, "chapters"));
@@ -517,6 +529,7 @@ class FakeClient implements ClientTransport {
   readonly actions: string[] = [];
   readonly archiveNames: string[] = [];
   readonly entrypoints: string[] = [];
+  readonly engines: (RenderEngine | undefined)[] = [];
   createdTickets = 0;
   renewed = 0;
   uploadedPath = "";
@@ -558,8 +571,12 @@ class FakeClient implements ClientTransport {
   createSourceJob(
     _sourceId: string,
     entrypoint: string | undefined,
+    _idempotencyKey?: string,
+    _outputs?: unknown,
+    engine?: RenderEngine,
   ): Promise<SourceRenderResponse> {
     this.entrypoints.push(entrypoint ?? "main.tex");
+    this.engines.push(engine);
     return Promise.resolve({
       jobId: "job_test",
       jobTicket: "job-ticket-value",

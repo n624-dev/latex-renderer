@@ -59,6 +59,20 @@ PNGは69 bytesです。同じブラウザーで2ページを開き、共通CSS�
 であることも確認しました。初回PDFの処理にはPDF.jsとWorkerの初回読み込み
 が入ります。文書構造、キャッシュ、通信速度、PNGの生成待ちで結果は変わります。
 
+pdfLaTeXで組版した10ページの文書2本を、Ubuntu 24.04のChromiumで3回ずつ
+計測しました。PDFと最初のページのPNGは同じ組版結果から配信しました。
+時間は初回表示までの中央値です。PNGは初回要求時にPopplerで150 DPIの画像を
+生成しています。バイト数は成果物の本文のみです。
+
+| 文書 | PDF全体 | PDFの初回転送 | PDF表示 | PNGの初回転送 | PNG生成 | PNG表示 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 文章と数式 | 69,922 bytes | 69,922 bytes | 335 ms | 37,530 bytes | 79 ms | 173 ms |
+| ページごとに画像を含む | 19,483,667 bytes | 2,051,091 bytes | 328 ms | 654,544 bytes | 127 ms | 227 ms |
+
+画像付きPDFは範囲リクエスト5件で先頭ページを表示しました。localhostでの
+比較で、実環境の通信遅延やWorkerのキュー待ちは含みません。
+[計測実行](https://github.com/n624-dev/latex-renderer/actions/runs/45538009393)
+
 - ブラウザーのPerformanceパネルで `latex-renderer:editor:input-idle`、
   `save-and-queue`、`pdf-load-and-paint`、`png-load-and-paint` の
   直近の計測を確認できます。転送量とサーバー応答時間はNetworkパネルで確認

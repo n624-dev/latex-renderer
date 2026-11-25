@@ -1091,7 +1091,7 @@ function installProjects(fetcher: Fetcher) {
         })
         .catch(showError);
     };
-    void load();
+    void load().catch(showError);
   }
   if (detail) {
     const match = /^\/app\/projects\/(project_[a-f0-9]{32})\/$/.exec(
@@ -1417,7 +1417,7 @@ function installApp() {
       if (page === "render") installRender(fetcher);
       if (page === "history") {
         const history = document.querySelector<HTMLElement>("#app-history");
-        if (history) void loadJobs(fetcher, history);
+        if (history) void loadJobs(fetcher, history).catch(showError);
         installJob(fetcher);
       }
       if (page === "projects") installProjects(fetcher);

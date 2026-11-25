@@ -1276,7 +1276,7 @@ describe("Remote MCP HTTP server", () => {
     },
   );
 
-  it("creates an inline Job and returns metadata plus a protected resource link", async () => {
+  it.each([undefined, "lualatex", "pdflatex", "xelatex", "platex", "uplatex"])("returns the effective engine for inline MCP Job %s with a protected resource link", async (engine) => {
     const fixture = await createFixture(),
       token = issueAccessToken(fixture.oauth),
       created = await mcpRequest(fixture.app, token, {
@@ -1289,6 +1289,7 @@ describe("Remote MCP HTTP server", () => {
             inlineSource:
               "\\documentclass{article}\\begin{document}remote\\end{document}",
             entrypoint: "main.tex",
+            ...(engine ? { engine } : {}),
           },
         },
       });
@@ -1298,7 +1299,7 @@ describe("Remote MCP HTTP server", () => {
       result: {
         job: {
           status: "queued",
-          engine: "lualatex",
+          engine: engine ?? "lualatex",
           rendererVersion: "renderer:test",
           entrypoint: "main.tex",
           startedAt: null,

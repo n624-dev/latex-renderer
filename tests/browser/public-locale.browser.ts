@@ -147,6 +147,12 @@ describe("Display language in the browser", () => {
     }
     const second = await openPage("ja");
     try {
+      await second.addInitScript(() => {
+        Object.defineProperty(document, "cookie", {
+          get: () => "",
+          set: () => {},
+        });
+      });
       await second.goto(origin + "/app/projects/");
       await second.waitForFunction(
         () => document.documentElement.lang === "de",

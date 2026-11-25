@@ -50,12 +50,9 @@ function synchronizeDisplayLocale(
   if (saved && saved !== language && displayLocales.includes(saved)) {
     const secure = location.protocol === "https:" ? "; Secure" : "";
     document.cookie = `latex_renderer_locale=${saved}; Path=/; Max-Age=31536000; SameSite=Lax${secure}`;
-    if (
-      document.cookie.split("; ").includes(`latex_renderer_locale=${saved}`)
-    ) {
-      location.replace(url);
-      return false;
-    }
+    url.searchParams.set("locale", saved);
+    location.replace(url);
+    return false;
   }
   return undefined;
 }
