@@ -7,6 +7,7 @@ import {
 
 export interface DraftRow {
   project_id: string;
+  base_revision_id?: string | null;
   version: number;
   entrypoint: string;
   engine: RenderEngine;
@@ -159,8 +160,8 @@ export class DraftsRepository {
   insert(row: DraftRow): void {
     this.db
       .prepare(
-        `INSERT INTO project_drafts(project_id,version,entrypoint,engine,outputs_json,created_at,updated_at)
-       VALUES (?,?,?,?,?,?,?)`,
+        `INSERT INTO project_drafts(project_id,version,entrypoint,engine,outputs_json,created_at,updated_at,base_revision_id)
+       VALUES (?,?,?,?,?,?,?,?)`,
       )
       .run(
         row.project_id,
@@ -170,6 +171,7 @@ export class DraftsRepository {
         row.outputs_json,
         row.created_at,
         row.updated_at,
+        row.base_revision_id ?? null,
       );
   }
 
@@ -177,7 +179,7 @@ export class DraftsRepository {
     return (
       this.db
         .prepare(
-          `UPDATE project_drafts SET version=?,entrypoint=?,engine=?,outputs_json=?,updated_at=?
+          `UPDATE project_drafts SET version=?,entrypoint=?,engine=?,outputs_json=?,updated_at=?,base_revision_id=?
        WHERE project_id=? AND version=?`,
         )
         .run(
@@ -186,10 +188,23 @@ export class DraftsRepository {
           row.engine,
           row.outputs_json,
           row.updated_at,
+          row.base_revision_id ?? null,
           row.project_id,
           expectedVersion,
         ).changes === 1
     );
+  }
+
+  setBaseRevision(
+    projectId: string,
+    version: number,
+    revisionId: string,
+  ): void {
+    this.db
+      .prepare(
+        "UPDATE project_drafts SET base_revision_id=? WHERE project_id=? AND version=?",
+      )
+      .run(revisionId, projectId, version);
   }
 
   putFile(projectId: string, file: DraftFileRow): void {
@@ -218,6 +233,17 @@ export class DraftsRepository {
       this.db
         .prepare("SELECT 1 FROM job_draft_inputs WHERE job_id=?")
         .get(jobId) !== undefined
+    );
+  }
+
+  isOwnedProjectPreview(jobId: string, userId: string): boolean {
+    return (
+      this.db
+        .prepare(
+          `SELECT 1 FROM job_draft_inputs d JOIN projects p ON p.id=d.project_id
+       WHERE d.job_id=? AND p.owner_user_id=?`,
+        )
+        .get(jobId, userId) !== undefined
     );
   }
 

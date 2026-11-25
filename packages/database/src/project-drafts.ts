@@ -47,11 +47,25 @@ export class ProjectDraftOperations {
       : this.snapshot(row, JSON.parse(row.files_json) as DraftFileRow[]);
   }
 
-  open(actor: ProjectActor, projectId: string, initialRevisionId?: string) {
+  open(
+    actor: ProjectActor,
+    projectId: string,
+    initialRevisionId?: string,
+    requireNew = false,
+  ) {
     return this.db.transaction(() => {
       this.assertOwned(actor, projectId);
       const existing = this.db.drafts.getOwned(projectId, actor.userId);
-      if (existing !== undefined) return this.snapshot(existing);
+      if (existing !== undefined) {
+        if (requireNew)
+          throw new AppError(
+            "DRAFT_ALREADY_EXISTS",
+            "A shared draft already exists",
+            409,
+            { currentVersion: existing.version },
+          );
+        return this.snapshot(existing);
+      }
       assertSourceWritable(this.db);
       const revisionId =
         initialRevisionId ?? this.db.projects.latestRevision(projectId)?.id;
@@ -69,6 +83,7 @@ export class ProjectDraftOperations {
       const timestamp = nowIso();
       const draft: DraftRow = {
         project_id: projectId,
+        base_revision_id: revision.id,
         version: 1,
         entrypoint: revision.entrypoint,
         engine: revision.engine,
@@ -168,6 +183,7 @@ export class ProjectDraftOperations {
       this.checkPaths(paths, revision.entrypoint);
       const next = {
         ...current,
+        base_revision_id: revision.id,
         version: current.version + 1,
         entrypoint: revision.entrypoint,
         engine: revision.engine,
@@ -451,6 +467,7 @@ export class ProjectDraftOperations {
   ) {
     return {
       projectId: row.project_id,
+      baseRevisionId: row.base_revision_id ?? null,
       version: row.version,
       entrypoint: row.entrypoint,
       engine: row.engine,

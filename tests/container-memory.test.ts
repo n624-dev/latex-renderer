@@ -8,7 +8,10 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { containerMemoryDirectory } from "../apps/renderer-worker/src/container-memory.js";
+import {
+  containerMemoryDirectory,
+  readContainerObservation,
+} from "../apps/renderer-worker/src/container-memory.js";
 const roots: string[] = [];
 afterEach(() => {
   for (const root of roots.splice(0))
@@ -26,6 +29,36 @@ function fixture(group: string) {
 }
 describe("host-side renderer cgroup identity", () => {
   const id = "a".repeat(64);
+  it("reports cumulative host samples with missing counters kept unknown", () => {
+    const { cgroup } = fixture(`/docker/${id}`);
+    writeFileSync(join(cgroup, "memory.peak"), "24000\n");
+    writeFileSync(
+      join(cgroup, "cpu.stat"),
+      "usage_usec 9000\nuser_usec 8000\n",
+    );
+    writeFileSync(join(cgroup, "memory.events"), "oom 0\noom_kill 0\n");
+    writeFileSync(
+      join(cgroup, "io.stat"),
+      "8:1 rbytes=20 wbytes=300\n8:2 rbytes=4 wbytes=15\n",
+    );
+    expect(readContainerObservation(cgroup)).toMatchObject({
+      memoryPeakBytes: 24000,
+      cpuUsageUs: 9000,
+      ioReadBytes: 24,
+      ioWriteBytes: 315,
+      oomKills: 0,
+    });
+    const absent = join(cgroup, "absent");
+    expect(readContainerObservation(absent)).toBeUndefined();
+    writeFileSync(
+      join(cgroup, "io.stat"),
+      "8:1 rbytes=9999999999999999 wbytes=0\n",
+    );
+    expect(readContainerObservation(cgroup)).toMatchObject({
+      ioReadBytes: null,
+      ioWriteBytes: 0,
+    });
+  });
   it("accepts the exact delegated rootless container scope", () => {
     const group = `/user.slice/user-1001.slice/user@1001.service/app.slice/docker-${id}.scope`;
     const roots = fixture(group);

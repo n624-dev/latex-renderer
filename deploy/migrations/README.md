@@ -97,3 +97,7 @@ Migration 26 records the file versions used by queued and active draft previews.
 Migration 27 accounts for bounded, disposable preview work-cache entries.
 The Worker reads these records to keep each preview stable while editing continues.
 Accounts without a preference continue to use device language negotiation.
+
+Migration 28 stores versioned document conditions, the selected Project revision,
+and review records bound to a Job and PDF digest. Back up the database and its
+matching storage as one recovery point.

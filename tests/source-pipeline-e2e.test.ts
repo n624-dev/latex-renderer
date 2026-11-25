@@ -1,4 +1,12 @@
 import {
+  processDocumentProbe,
+  processPdfInspection,
+} from "../apps/renderer-worker/src/pdf-inspection.js";
+import {
+  documentProbeSchema,
+  type PdfInspectionInput,
+} from "../packages/contracts/src/index.js";
+import {
   artifactStoragePath,
   ProjectDraftOperations,
   ProjectOperations,
@@ -28,6 +36,66 @@ import {
 } from "../apps/renderer-worker/src/memory-plan.js";
 
 describe(`Source pipeline HTTP/DB/Worker E2E (${realPipelineImage === undefined ? "deterministic renderer, NOT TeX" : "real TeX container"})`, () => {
+  it.skipIf(realPipelineImage === undefined)(
+    "inspects, crops and maps an exact PDF and probes a real font combination",
+    async () => {
+      const f = await sourcePipelineFixture();
+      try {
+        const identity = { userId: "pipeline_user", scopes: ["mcp:render", "mcp:read"] as const };
+        const job = await f.renders.createRender(identity, {
+          inlineSource: pipelineDocument(2, "Exact source map and PDF inspection"),
+          reproducibility: { mode: "fixed", date: "2024-05-06T12:34:00Z" },
+        });
+        await f.runNext();
+        const status = f.renders.job(identity, job.id);
+        expect(status.status).toBe("succeeded");
+        const pdf = defined(f.database.artifacts.getDownloadable(job.id, "result.pdf"));
+        expect(f.database.artifacts.sourceMap(pdf)?.size).toBeGreaterThan(0);
+        expect(status.artifacts.some(({ relativePath }) => relativePath.endsWith(".synctex.gz"))).toBe(false);
+
+        const inspect = async (params?: PdfInspectionInput) => {
+          expect(f.renders.pdfInspection(identity, job.id, pdf.sha256, true, params).state).toBe("queued");
+          const request = defined(f.database.pdfInspections.claim(f.config.workerId, new Date().toISOString()));
+          await processPdfInspection(f.database, f.config, request);
+          const result = f.renders.pdfInspection(identity, job.id, pdf.sha256, false, params);
+          expect(result).toMatchObject({ state: "ready", pdfSha256: pdf.sha256, errorCode: null });
+          return result.report;
+        };
+        expect(await inspect()).toMatchObject({
+          checks: { "page-rasters": { status: "observed", truncated: false } },
+        });
+        expect(await inspect({ pages: [2, 1] })).toMatchObject({
+          pages: [2, 1], columns: 2, mimeType: "image/jpeg",
+        });
+        expect(await inspect({ page: 1, x: 0.1, y: 0.1, width: 0.5, height: 0.5 })).toMatchObject({
+          page: 1, mimeType: "image/jpeg",
+        });
+        expect(await inspect({ direction: "source_to_pdf", path: "main.tex", line: 4 })).toMatchObject({
+          state: "candidate", evidence: "canonical_synctex",
+        });
+        const target = { jobId: job.id, pdfSha256: pdf.sha256 };
+        expect(f.renders.comparePdfInspections(identity, target, target)).toMatchObject({
+          visual: "same_observation", samePdfBytes: true,
+          visualCoverage: { comparedPages: 2, changedPreviewPages: [] },
+        });
+
+        const input = documentProbeSchema.parse({
+          engine: "lualatex", japanese: true, font: "Harano Aji Mincho",
+          mathFont: "Latin Modern Math", packages: ["amsmath"],
+        });
+        const probe = f.renders.documentProbe(identity, input);
+        expect(probe.state).toBe("queued");
+        const request = defined(f.database.documentProbes.claim(f.config.workerId, new Date().toISOString()));
+        await processDocumentProbe(f.database, f.config, request);
+        expect(f.renders.documentProbe(identity, input)).toMatchObject({
+          probeId: probe.probeId, state: "ready", code: "DOCUMENT_PROBE_COMPILED",
+        });
+      } finally {
+        await f.close();
+      }
+    },
+  );
+
   it.skipIf(realPipelineImage === undefined)(
     "reuses a real Draft seed after a body edit and rebuilds after bibliography, image or file edits",
     async () => {

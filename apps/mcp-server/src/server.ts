@@ -343,7 +343,9 @@ async function runTool(
 
 function shortSummary(output: McpToolOutput): string {
   if (!output.success)
-    return `${output.operation} failed (${output.error?.code ?? "UNKNOWN"}).`;
+    return output.error?.jobId
+      ? `${output.operation} failed (${output.error.code}). The server Job was not canceled by this client. Call get_render_status with jobId ${output.error.jobId} (last observed status: ${output.error.lastStatus ?? "unknown"}).`
+      : `${output.operation} failed (${output.error?.code ?? "UNKNOWN"}).`;
   switch (output.operation) {
     case "list_projects":
       return mcpText(locale, "foundValueProjectS", { value: output.result?.page.items.length ?? 0 });

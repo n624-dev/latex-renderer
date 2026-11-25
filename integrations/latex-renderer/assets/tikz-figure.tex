@@ -1,0 +1,15 @@
+\documentclass{article}
+\usepackage{tikz}
+\begin{document}
+\begin{figure}[htbp]
+  \centering
+  \begin{tikzpicture}[>=stealth]
+    \draw[->] (0,0) -- (3,0) node[right] {$x$ (cm)};
+    \draw[->] (0,0) -- (0,2) node[above] {$y$ (cm)};
+    \draw[thick] (0,0) -- (1,0.5) -- (2,1);
+    \foreach \x/\y in {0/0,1/0.5,2/1}
+      \fill (\x,\y) circle (1.5pt);
+  \end{tikzpicture}
+  \caption{Three observed points.}
+\end{figure}
+\end{document}

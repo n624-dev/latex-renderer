@@ -1,17 +1,20 @@
 import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 import type { WorkerConfig } from "./config.js";
-import { containerMemoryProbe } from "./container-memory.js";
+import { containerObservationProbe, type ContainerObservation } from "./container-memory.js";
 import { MIB, RENDER_MEMORY_MAX } from "./memory-plan.js";
 import { withContainerEngine } from "../../../deploy/scripts/on-demand-engine.mjs";
 import type { WorkerJobRow } from "@latex-renderer/database";
 
 export interface RendererStageOptions {
-  mode: "pdf" | "svg" | "preview";
+  mode: "pdf" | "svg" | "preview" | "inspection";
   pdfDirectory?: string;
   page?: number;
   deferFirstPreview?: boolean;
+  outputs?: readonly ("pdf" | "svg")[];
   workSeed?: string;
+  inspectionScript?: string;
+  inspectionArguments?: readonly string[];
 }
 
 export function spawnRenderer(
@@ -28,7 +31,11 @@ export function spawnRenderer(
   const containerName = rendererContainerName(
     jobId,
     leaseGeneration,
-    stage?.mode === "preview" ? stage.page : undefined,
+    stage?.mode === "inspection"
+      ? "inspection"
+      : stage?.mode === "preview"
+        ? stage.page
+        : undefined,
   );
   const args = rendererRunArguments(
     config,
@@ -45,8 +52,9 @@ export function spawnRenderer(
     stdio: ["ignore", "pipe", "pipe"],
     env: dockerEnvironment(),
   });
-  if (config.observeContainerMemory && stage?.mode !== "preview") {
-    const probe = containerMemoryProbe(containerName, (name) =>
+  let observation: ContainerObservation | undefined;
+  if (stage?.mode !== "preview" && stage?.mode !== "inspection") {
+    const probe = containerObservationProbe(containerName, (name) =>
       runDocker(["inspect", "--format", "{{.Id}} {{.State.Pid}}", name], 2000),
     );
     let busy = false,
@@ -55,11 +63,13 @@ export function spawnRenderer(
       if (busy || closed) return;
       busy = true;
       void probe()
-        .then((peak) => {
-          if (!closed && peak !== undefined)
+        .then((sample) => {
+          if (closed || sample === undefined) return;
+          observation = sample;
+          if (sample.memoryPeakBytes !== null && sample.memoryPeakBytes > 0)
             config.observeContainerMemory?.(
               `${containerName}:${stage?.mode ?? "all"}`,
-              peak,
+              sample.memoryPeakBytes,
             );
         })
         .catch(() => {})
@@ -75,10 +85,10 @@ export function spawnRenderer(
     process.once("close", stop);
     process.once("error", stop);
   }
-  return {
-    process,
-    containerName,
+  const metrics: { observation?: () => ContainerObservation | undefined } = {
+    observation: () => observation,
   };
+  return { process, containerName, ...metrics };
 }
 export function rendererRunArguments(
   config: WorkerConfig,
@@ -91,6 +101,11 @@ export function rendererRunArguments(
   stage?: RendererStageOptions,
   engine?: WorkerJobRow["engine"],
 ): string[] {
+  const conversion = stage?.mode === "preview" || stage?.mode === "inspection";
+  const inspectionScript =
+    stage?.mode === "inspection" ? stage.inspectionScript : undefined;
+  if (stage?.mode === "inspection" && !inspectionScript)
+    throw new Error("Missing PDF inspector");
   const maximum = config.maximumMemoryBytes ?? RENDER_MEMORY_MAX;
   const memory = config.containerMemoryBytes ?? maximum;
   const swap = config.maximumSwapBytes ?? 0;
@@ -109,20 +124,16 @@ export function rendererRunArguments(
   )
     throw new Error("Invalid worker-selected renderer memory cap");
   const memoryArgument = memory === RENDER_MEMORY_MAX ? "1g" : String(memory);
-  const stageMemory =
-    stage?.mode === "preview" ? Math.min(memory, 256 * MIB) : memory;
+  const stageMemory = conversion ? Math.min(memory, 256 * MIB) : memory;
   const swapArgument =
     swap === 0
-      ? stage?.mode === "preview"
+      ? conversion
         ? stageMemory === 256 * MIB
           ? "256m"
           : String(stageMemory)
         : memoryArgument
       : String(stageMemory + swap);
-  if (
-    (stage?.mode === "svg" || stage?.mode === "preview") &&
-    stage.pdfDirectory === undefined
-  )
+  if ((stage?.mode === "svg" || conversion) && stage.pdfDirectory === undefined)
     throw new Error("Conversion stage requires an immutable PDF checkpoint");
   if (
     stage?.mode === "preview" &&
@@ -155,7 +166,11 @@ export function rendererRunArguments(
     rendererContainerName(
       jobId,
       leaseGeneration,
-      stage?.mode === "preview" ? stage.page : undefined,
+      stage?.mode === "inspection"
+        ? "inspection"
+        : stage?.mode === "preview"
+          ? stage.page
+          : undefined,
     ),
     "--label",
     `latex-renderer.job=${jobId}`,
@@ -174,14 +189,14 @@ export function rendererRunArguments(
     "--cpus",
     "1.5",
     "--memory",
-    stage?.mode === "preview"
+    conversion
       ? stageMemory === 256 * MIB
         ? "256m"
         : String(stageMemory)
       : memoryArgument,
     "--memory-swap",
     swapArgument,
-    ...(stage?.mode === "preview"
+    ...(conversion
       ? [
           "--ulimit",
           `fsize=${Math.min(config.maxOutputBytes, 10 * 1024 * 1024)}:${Math.min(config.maxOutputBytes, 10 * 1024 * 1024)}`,
@@ -193,11 +208,19 @@ export function rendererRunArguments(
     `LATEX_ENTRYPOINT=${entrypoint}`,
     "--env",
     `LATEX_OUTPUTS=${outputs.join(",")}`,
+    ...(config.reproducibilityEpoch === undefined || conversion
+      ? []
+      : [
+          "--env",
+          `SOURCE_DATE_EPOCH=${config.reproducibilityEpoch}`,
+          "--env",
+          "FORCE_SOURCE_DATE=1",
+          "--env",
+          "TZ=UTC",
+        ]),
     // Older images lack this entrypoint. They must fail instead of silently
     // ignoring a non-Lua engine and compiling with their LuaLaTeX default.
-    ...(engine === undefined ||
-    engine === "lualatex" ||
-    stage?.mode === "preview"
+    ...(engine === undefined || engine === "lualatex" || conversion
       ? []
       : [
           "--entrypoint",
@@ -235,22 +258,32 @@ export function rendererRunArguments(
           "--mount",
           `type=bind,src=${stage.pdfDirectory},dst=/work/pdf,readonly`,
         ]),
+    ...(stage?.mode === "inspection" ? ["--entrypoint", "/bin/sh"] : []),
     config.image,
+    ...(inspectionScript === undefined
+      ? []
+      : [
+          "-ec",
+          inspectionScript,
+          "pdf-inspector",
+          ...(stage?.inspectionArguments ?? []),
+        ]),
   ];
 }
 export function rendererContainerName(
   jobId: string,
   leaseGeneration: number,
-  previewPage?: number,
+  previewPage?: number | "inspection",
 ): string {
   if (!Number.isSafeInteger(leaseGeneration) || leaseGeneration < 0)
     throw new Error("Worker lease generation is invalid");
   if (
     previewPage !== undefined &&
+    previewPage !== "inspection" &&
     (!Number.isSafeInteger(previewPage) || previewPage < 1 || previewPage > 100)
   )
     throw new Error("Invalid preview page");
-  return `latex-render-${jobId}${previewPage === undefined ? "" : `-p${previewPage}`}-g${leaseGeneration}`;
+  return `latex-render-${jobId}${previewPage === undefined ? "" : previewPage === "inspection" ? "-inspect" : `-p${previewPage}`}-g${leaseGeneration}`;
 }
 export async function dockerStop(name: string): Promise<void> {
   await dockerStopVerified(name);

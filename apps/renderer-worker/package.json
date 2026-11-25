@@ -1,6 +1,6 @@
 {
   "name": "@latex-renderer/renderer-worker",
-  "version": "1.7.2-rc.2",
+  "version": "1.7.2-rc.3",
   "private": true,
   "license": "Apache-2.0",
   "type": "module",
@@ -12,6 +12,7 @@
     "dev": "tsx src/index.ts"
   },
   "dependencies": {
+    "@latex-renderer/contracts": "workspace:*",
     "@latex-renderer/database": "workspace:*",
     "@latex-renderer/log-parser": "workspace:*",
     "@latex-renderer/shared": "workspace:*",

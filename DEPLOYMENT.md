@@ -9,10 +9,11 @@ See [Source reuse and recovery](docs/source-input-reuse.md) and the optional
 [environment additions](deploy/renderer-io.env.example).
 
 Migration 026 records the inputs used by pending draft previews. Migration 027
-records quota reservations for reusable compile state.
+records quota reservations for reusable compile state. Migration 028 adds
+project document conditions, PDF inspections and date profiles.
 Run the backup, restore test and migration preflight before deploying all
-application services together. Verify schema 27 after startup. See
-[the migration notes](MIGRATIONS.md#migration-026-frozen-draft-preview-inputs).
+application services together. Verify schema 28 after startup. See
+[the migration notes](MIGRATIONS.md#migration-028-project-document-state-and-pdf-inspection).
 
 Draft previews are subject to the regular artifact lifetime. The cleanup timer
 keeps up to three completed previews and targets 32 MiB of retained preview
@@ -86,6 +87,41 @@ application readers and workers together using the maintenance/drain/backup
 procedure; do not use an application-only rollback after new artifacts exist.
 Existing artifacts keep their old locations and public URLs. See
 [migration 017 recovery](deploy/migrations/017_artifact_generation.rollback.md).
+
+## Authoring tools and tagged PDF
+
+Run `pnpm build:authoring-plugin` to package the authoring Skill, templates,
+and Remote MCP connection metadata in `client-dist/`. The release workflow
+adds the same archive to the checksum and attestation set. The archive uses
+the public service URL and contains no credentials. Install or update the
+archive separately from refreshing a registered MCP connection.
+
+Check templates on an isolated host with the exact Runtime image ID.
+For tagged Japanese PDF, run the following command with that same image.
+It writes evidence to standard output only after the checks pass.
+
+```sh
+sh deploy/scripts/smoke-test-renderer-authoring.sh "$runtime_image_id" tagged-ja
+```
+
+Install that output as `authoring-profiles.json` in the renderer environment
+directory, with the same read access as `engines.json`. The Remote MCP only
+advertises the profile when the evidence matches its Runtime and bundled
+fixture. The fixture checks tagged structure and Japanese text extraction.
+Reading order and PDF/UA conformance require separate checks.
+
+With LuaLaTeX, the `date-profile` fixture checks the visible PDF dates and
+times for two distinct epochs. Use it when validating the Runtime used by
+`fixed` and `latest` jobs.
+
+```sh
+sh deploy/scripts/smoke-test-renderer-authoring.sh "$runtime_image_id" date-profile
+```
+
+`REMOTE_MCP_FILE_ORIGINS` is empty by default. If the deployment has confirmed
+ChatGPT attachment delivery origins, list those exact HTTPS origins separated
+by commas in the Remote MCP service environment. Test an attachment through
+the connected client before offering automatic import to users.
 
 ## Build and validation
 

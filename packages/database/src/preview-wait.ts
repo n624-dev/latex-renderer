@@ -1,6 +1,7 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { AppError, nowIso } from "@latex-renderer/shared";
 import type { RendererDatabase } from "./index.js";
+import { previewFailure } from "./repositories/previews.js";
 import type { ArtifactRow } from "./repositories/artifacts.js";
 import type { ArtifactAvailability } from "./artifact-availability.js";
 
@@ -42,6 +43,7 @@ export async function waitForPreview(
       "PREVIEW_BUSY",
       "Too many preview requests are waiting",
       503,
+      { retryAfterSeconds: 2 },
     );
   const timeoutMs = options.timeoutMs ?? 12_000;
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 15_000)
@@ -65,12 +67,14 @@ export async function waitForPreview(
           "Artifact does not exist",
           404,
         );
-      if (db.previews.get(jobId, page)?.status === "failed") break;
+      const request = db.previews.get(jobId, page);
+      if (request?.status === "failed") throw previewFailure(request);
     }
     throw new AppError(
       "PREVIEW_PENDING",
       "Preview is not ready; retry shortly",
       503,
+      { retryAfterSeconds: 2 },
     );
   } finally {
     const remaining = (waiting.get(db) ?? 1) - 1;

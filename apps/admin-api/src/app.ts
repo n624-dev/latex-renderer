@@ -2,7 +2,7 @@ import { localizedDiagnostic } from "@latex-renderer/shared/diagnostic-locale";
 import { Hono } from "hono";
 import { secureHeaders } from "hono/secure-headers";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
-import { safeError } from "@latex-renderer/shared";
+import { publicPreviewErrorDetails, safeError } from "@latex-renderer/shared";
 import { installBodyLimit } from "./middleware/body-limit.js";
 import { installRequestPolicy } from "./middleware/request-policy.js";
 import { createAdminV1Router } from "./routes/index.js";
@@ -48,7 +48,16 @@ export function createAdminApp(deps: AdminDependencies): Hono {
       }),
     );
     return c.json(
-      { error: { code: safe.code, message: localizedDiagnostic(safe.message, c.req.header("Accept-Language")) } },
+      {
+        error: {
+          code: safe.code,
+          message: localizedDiagnostic(
+            safe.message,
+            c.req.header("Accept-Language"),
+          ),
+          ...publicPreviewErrorDetails(error),
+        },
+      },
       safe.status as ContentfulStatusCode,
     );
   });

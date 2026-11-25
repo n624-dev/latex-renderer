@@ -10,6 +10,7 @@ import {
   accountLocaleV25Sql,
   draftRenderInputsV26Sql,
   draftWorkCacheV27Sql,
+  projectDocumentStateV28Sql,
 } from "./schema.js";
 
 const usersAccessSubjectV2Sql = `
@@ -90,6 +91,8 @@ export function applyDatabaseMigrations(db: DatabaseSync): void {
       db.exec(draftRenderInputsV26Sql);
     if (!db.prepare("SELECT 1 FROM schema_migrations WHERE version=27").get())
       db.exec(draftWorkCacheV27Sql);
+    if (!db.prepare("SELECT 1 FROM schema_migrations WHERE version=28").get())
+      db.exec(projectDocumentStateV28Sql);
     db.exec("COMMIT");
   } catch (error) {
     if (db.isTransaction) db.exec("ROLLBACK");

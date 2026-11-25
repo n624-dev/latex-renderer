@@ -65,6 +65,13 @@ run_stage engines sh "$script_root/smoke-test-renderer-engines.sh" "$validation_
 run_stage svg sh "$script_root/smoke-test-renderer-svg.sh" "$validation_runtime"
 run_stage biber sh "$script_root/smoke-test-renderer-biber.sh" "$validation_runtime"
 run_stage compat sh "$script_root/smoke-test-renderer-compat.sh" "$validation_runtime"
+authoring_status=0
+if [ "${CI_RENDERER_AUTHORING:-0}" = 1 ]; then
+  runtime_id=$(docker image inspect --format '{{.Id}}' "$validation_runtime")
+  run_stage authoring-templates sh "$script_root/smoke-test-renderer-authoring.sh" "$runtime_id" templates || authoring_status=1
+  run_stage authoring-date-and-synctex sh "$script_root/smoke-test-renderer-authoring.sh" "$runtime_id" date-profile || authoring_status=1
+  run_stage authoring-tagged-ja sh "$script_root/smoke-test-renderer-authoring.sh" "$runtime_id" tagged-ja || authoring_status=1
+fi
 run_stage font-cache sh "$script_root/ci-font-cache-benchmark.sh" "$validation_runtime"
 # Reuse this exact immutable local Runtime before the existing cleanup trap;
 # Source/client integration success is also mandatory before Base publication.
@@ -77,3 +84,4 @@ esac
 # Success is the exit status of this complete sequence, never a cached marker.
 cleanup
 sh "$script_root/ci-renderer-disk.sh" after-language-validation 0
+exit "$authoring_status"

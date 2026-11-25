@@ -496,12 +496,17 @@ describe("user Web application API", () => {
     expect(createdProject.status).toBe(201);
     const project = (await createdProject.json()) as { id: string };
 
+    // An empty but structurally valid ZIP is enough to exercise exact
+    // delivery. Upload validation is covered separately.
+    const archive = Buffer.alloc(22);
+    archive.writeUInt32LE(0x06054b50);
+    const archiveSha = createHash("sha256").update(archive).digest("hex");
     const sourceResponse = await fixture.app.request(
       "/app/api/v1/source-tickets",
       {
         method: "POST",
         headers: { ...headers, "Idempotency-Key": "web-source-1234567890" },
-        body: JSON.stringify({ size: 123, sha256: "a".repeat(64) }),
+        body: JSON.stringify({ size: archive.length, sha256: archiveSha }),
       },
     );
     expect(sourceResponse.status).toBe(201);
@@ -654,6 +659,20 @@ describe("user Web application API", () => {
     });
     expect(fixture.database.sources.referenceCount(source.sourceId)).toBe(2);
     expect(fixture.database.sources.markDeleting(source.sourceId, now)).toBe(0);
+
+    const savedZip = join(fixture.root, "sources", source.sourceId, "source.zip");
+    mkdirSync(dirname(savedZip), { recursive: true });
+    writeFileSync(savedZip, archive);
+    const downloadPath = `/app/api/v1/projects/${project.id}/revisions/${rendered.revisionId}/source.zip`;
+    const download = await fixture.app.request(downloadPath, { headers: assertion("user") });
+    expect(download.status).toBe(200);
+    expect(download.headers.get("etag")).toBe(`"${archiveSha}"`);
+    expect(Buffer.from(await download.arrayBuffer())).toEqual(archive);
+    const corrupted = Buffer.from(archive);
+    corrupted[10] = 42;
+    writeFileSync(savedZip, corrupted);
+    const mismatched = await fixture.app.request(downloadPath, { headers: assertion("user") });
+    expect(mismatched.status).toBe(410);
 
     const renewed = await fixture.app.request(
       `/app/api/v1/jobs/${rendered.jobId}/access-ticket`,

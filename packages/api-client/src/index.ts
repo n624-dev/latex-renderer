@@ -498,13 +498,11 @@ export class RendererClient {
         error === null ||
         !("code" in error) ||
         typeof error.code !== "string" ||
-        !error.code.startsWith("PREVIEW_")
+        !["PREVIEW_PENDING", "PREVIEW_BUSY", "PREVIEW_QUEUE_FULL"].includes(
+          error.code,
+        )
       )
-        throw new AppError(
-          "PREVIEW_UNAVAILABLE",
-          "Preview service unavailable",
-          503,
-        );
+        throwFromValue(response.status, body);
       if (attempt < 5 && Date.now() + 2000 < deadline)
         await delay(
           2000,
@@ -660,10 +658,30 @@ async function throwResponse(response: Response): Promise<never> {
 }
 function throwFromValue(status: number, value: unknown): never {
   if (typeof value === "object" && value !== null && "error" in value) {
-    const error = (value as { error?: { code?: unknown; message?: unknown } })
-      .error;
+    const error = (
+      value as {
+        error?: {
+          code?: unknown;
+          message?: unknown;
+          previewErrorCode?: unknown;
+          retryable?: unknown;
+        };
+      }
+    ).error;
     if (typeof error?.code === "string" && typeof error.message === "string")
-      throw new AppError(error.code, error.message, status);
+      throw new AppError(
+        error.code,
+        error.message,
+        status,
+        error.code === "PREVIEW_FAILED" &&
+          typeof error.previewErrorCode === "string" &&
+          typeof error.retryable === "boolean"
+          ? {
+              previewErrorCode: error.previewErrorCode,
+              retryable: error.retryable,
+            }
+          : undefined,
+      );
   }
   throw new AppError(
     "HTTP_ERROR",

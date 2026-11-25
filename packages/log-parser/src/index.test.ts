@@ -118,7 +118,43 @@ describe("compile log parser", () => {
     const result = parseCompileLog(log, 1);
     expect(result.errors).toHaveLength(200);
     expect(result.warnings).toHaveLength(500);
+    expect(result.coverage).toMatchObject({
+      scannedLines: 2000,
+      errorsOmitted: 800,
+      warningsOmitted: 500,
+    });
     expect(result.errors.at(-1)?.line).toBe(200);
+  });
+
+  it("captures missing glyphs, multiline font warnings, and bibliography and conversion warnings", () => {
+    const result = parseCompileLog(
+      [
+        "Missing character: There is no 字 in font Example!",
+        "LaTeX Font Warning: Font shape unavailable",
+        "(Font) using regular shape instead.",
+        "WARN - Duplicate entry key: 'foo' in file 'refs.bib'",
+        "Warning--empty publisher in Example",
+        "dvipdfmx:warning: Font conversion warning",
+        `main.tex:5: ${"x".repeat(2100)}`,
+      ].join("\n"),
+      0,
+    );
+    expect(result.success).toBe(true);
+    expect(result.warnings.map((item) => item.type)).toEqual([
+      "missing-character",
+      "font-warning",
+      "biber-warning",
+      "bibtex-warning",
+      "dvipdfmx-warning",
+    ]);
+    expect(result.warnings[1]?.message).toContain(
+      "using regular shape instead",
+    );
+    expect(result.errors[0]).toMatchObject({
+      logLine: 7,
+      messageTruncated: true,
+    });
+    expect(result.coverage?.messagesTruncated).toBe(1);
   });
 
   it("keeps the first affected line of overfull and underfull warnings", () => {

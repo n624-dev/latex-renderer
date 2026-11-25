@@ -357,10 +357,14 @@ export class JobsRepository {
   }
 
   storageUsageForUser(id: string): number {
+    return this.storageBreakdownForUser(id).totalBytes;
+  }
+
+  storageBreakdownForUser(id: string, visibleOnly = false) {
     const sourceBytes = (
       this.db
         .prepare(
-          `SELECT COALESCE(SUM(size),0) AS bytes FROM sources WHERE owner_user_id=? AND status!='deleted'`,
+          `SELECT COALESCE(SUM(size),0) AS bytes FROM sources WHERE owner_user_id=? AND status!='deleted' ${visibleOnly ? "AND purpose='user'" : ""}`,
         )
         .get(id) as { bytes: number }
     ).bytes;
@@ -372,29 +376,37 @@ export class JobsRepository {
           THEN MAX(COALESCE(output_size,0),reserved_output_bytes)
           ELSE COALESCE(output_size,0) END
         + CASE WHEN source_id IS NULL THEN source_size ELSE 0 END),0) AS bytes
-      FROM jobs WHERE user_id=? AND status!='deleted'`,
+      FROM jobs WHERE user_id=? AND status!='deleted' ${visibleOnly ? `AND ${userJobSql()}` : ""}`,
         )
         .get(id) as { bytes: number }
     ).bytes;
     const previews = this.db
       .prepare(
         `SELECT COALESCE(SUM(p.reserved_bytes),0) AS bytes
-      FROM job_preview_requests p JOIN jobs j ON j.id=p.job_id WHERE j.user_id=? AND p.status='running'`,
+      FROM job_preview_requests p JOIN jobs j ON j.id=p.job_id WHERE j.user_id=? AND p.status='running' ${visibleOnly ? `AND ${userJobSql("j")}` : ""}`,
       )
       .get(id) as { bytes: number };
-    const trees = this.db
-      .prepare(
-        "SELECT COALESCE(SUM(reserved_bytes),0) AS bytes FROM source_trees WHERE owner_user_id=?",
-      )
-      .get(id) as { bytes: number };
+    const trees = visibleOnly
+      ? { bytes: 0 }
+      : (this.db
+          .prepare(
+            "SELECT COALESCE(SUM(reserved_bytes),0) AS bytes FROM source_trees WHERE owner_user_id=?",
+          )
+          .get(id) as { bytes: number });
     const draftWork = this.db
       .prepare(
         "SELECT COALESCE(SUM(bytes),0) AS bytes FROM draft_work_cache WHERE user_id=?",
       )
       .get(id) as { bytes: number };
-    return (
-      sourceBytes + jobBytes + previews.bytes + trees.bytes + draftWork.bytes
-    );
+    return {
+      sourceBytes,
+      jobAndReservationBytes: jobBytes,
+      previewReservationBytes: previews.bytes,
+      sourceTreeBytes: trees.bytes,
+      draftCacheBytes: draftWork.bytes,
+      totalBytes:
+        sourceBytes + jobBytes + previews.bytes + trees.bytes + draftWork.bytes,
+    };
   }
 
   statusCounts(): Array<{ status: JobStatus; count: number }> {
@@ -588,6 +600,93 @@ export class JobsRepository {
         input.source.engine,
         input.reservedOutputBytes,
       );
+    const profile = this.reproducibility(input.source.id);
+    if (profile)
+      this.setReproducibility(
+        input.id,
+        profile.mode,
+        profile.mode === "latest"
+          ? Math.floor(Date.parse(input.timestamp) / 1000)
+          : profile.epochSeconds,
+      );
+  }
+
+  recordStageObservation(input: {
+    jobId: string;
+    stage: "pdf" | "svg";
+    generation: number;
+    rendererMs: number | null;
+    validationMs?: number;
+    publicationMs?: number;
+    sourcePrepareMs?: number;
+    workCacheUsed?: boolean;
+    containerSample?: object | undefined;
+  }) {
+    this.db
+      .prepare(
+        `INSERT INTO job_stage_observations VALUES (?,?,?,?,?,?,?,?,?)
+       ON CONFLICT(job_id,stage) DO UPDATE SET generation=excluded.generation,
+       renderer_wall_ms=excluded.renderer_wall_ms,validation_wall_ms=excluded.validation_wall_ms,
+       publication_wall_ms=excluded.publication_wall_ms,source_prepare_wall_ms=excluded.source_prepare_wall_ms,
+       work_cache_used=excluded.work_cache_used,container_sample_json=excluded.container_sample_json WHERE excluded.generation>job_stage_observations.generation`,
+      )
+      .run(
+        input.jobId,
+        input.stage,
+        input.generation,
+        input.rendererMs,
+        input.validationMs ?? null,
+        input.publicationMs ?? null,
+        input.sourcePrepareMs ?? null,
+        input.workCacheUsed === undefined ? null : Number(input.workCacheUsed),
+      input.containerSample === undefined ? null : JSON.stringify(input.containerSample),
+      );
+  }
+
+  stageObservations(jobId: string) {
+    return this.db
+      .prepare(
+        `SELECT stage,generation,renderer_wall_ms AS rendererMs,validation_wall_ms AS validationMs,
+       publication_wall_ms AS publicationMs,source_prepare_wall_ms AS sourcePrepareMs,
+       work_cache_used AS cache,container_sample_json AS sample FROM job_stage_observations WHERE job_id=? ORDER BY stage`,
+      )
+      .all(jobId)
+      .map((record) => {
+        const { cache, sample, ...row } = record as {
+          stage: "pdf" | "svg";
+          generation: number;
+          rendererMs: number | null;
+          validationMs: number | null;
+          publicationMs: number | null;
+          sourcePrepareMs: number | null;
+          cache: number | null;
+        sample: string | null;
+        };
+        return { ...row, workCacheUsed: cache === null ? null : cache === 1,
+        containerSample: sample === null ? null : JSON.parse(sample) as unknown,
+      };
+      });
+  }
+
+  setReproducibility(
+    jobId: string,
+    mode: "fixed" | "latest",
+    epochSeconds: number,
+  ) {
+    this.db
+      .prepare(
+        "INSERT INTO job_reproducibility(job_id,mode,epoch_seconds) VALUES (?,?,?)",
+      )
+      .run(jobId, mode, epochSeconds);
+  }
+
+  reproducibility(jobId: string) {
+    return this.db
+      .prepare(
+        "SELECT mode,epoch_seconds AS epochSeconds FROM job_reproducibility WHERE job_id=?",
+      )
+      .get(jobId) as
+      { mode: "fixed" | "latest"; epochSeconds: number } | undefined;
   }
 
   findRetrySource(id: string): JobRow | undefined {

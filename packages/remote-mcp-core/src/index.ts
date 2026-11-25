@@ -1,3 +1,13 @@
+import {
+  DocumentRequirementInventory,
+  requirementsFingerprint,
+  staticEntrypointRequirements,
+  type DocumentRequirement,
+} from "./document-requirements.js";
+import {
+  attachmentOrigins,
+  downloadAttachment,
+} from "./attachment-download.js";
 import { createHash, randomUUID } from "node:crypto";
 import {
   mkdir,
@@ -12,7 +22,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { constants, createReadStream, createWriteStream } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, extname, join } from "node:path";
 import { PassThrough, Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type {
@@ -27,11 +37,15 @@ import type {
 import {
   ProjectOperations,
   ProjectDraftOperations,
+  ProjectDocumentState,
+  ProjectStorage,
   type ProjectActor,
   SvgRetryOperations,
   artifactStoragePath,
   protectArtifactDownloadLeases,
   ARTIFACT_DOWNLOAD_LEASE_MS,
+  artifactRetentionExpiresAt,
+  PDF_INSPECTOR_VERSION,
   waitForPreview,
   assertSourceWritable,
 } from "@latex-renderer/database";
@@ -49,16 +63,27 @@ import {
   validateAndExtract,
   extractValidatedSourceFiles,
   readValidatedSourceFile,
+  listValidatedSourceFiles,
   validateEntrypointPath,
   validateSourceFilePath,
 } from "@latex-renderer/zip-validation";
 import {
   defaultRenderEngine,
+  diagnosticCoverageSchema,
+  documentProbeSchema,
+  type DocumentProbe,
+  pdfInspectionInputSchema,
+  type PdfInspectionInput,
   renderEngineSchema,
+  renderOutputsSchema,
+  type ProjectDocumentCondition,
+  type ProjectReviewCheck,
   type RenderEngine,
   type RenderOutput,
+  type RenderReproducibility,
 } from "@latex-renderer/contracts";
 import yazl from "yazl";
+export type { DocumentRequirement } from "./document-requirements.js";
 export {
   RemoteMcpLoginContinuations,
   oauthLoginCookie,
@@ -716,6 +741,7 @@ export interface RemoteJobSummary {
   queuedAt: string | null;
   startedAt: string | null;
   finishedAt: string | null;
+  retentionExpiresAt: string | null;
   exitCode: number | null;
   retryOf: string | null;
   errorCode: string | null;
@@ -743,6 +769,9 @@ export interface RemoteRenderDiagnostic {
   line: number | null;
   column: number | null;
   message: string;
+  logLine?: number;
+  messageTruncated?: boolean;
+  tool?: string;
 }
 
 export interface RemoteRenderDiagnostics {
@@ -752,6 +781,15 @@ export interface RemoteRenderDiagnostics {
   diagnostics: RemoteRenderDiagnostic[];
   logExcerpt: string;
   rawLogResourceUri: string | null;
+  coverage: {
+    parser: ReturnType<typeof diagnosticCoverageSchema.parse> | null;
+    storedItems: number;
+    offset: number;
+    nextOffset: number | null;
+    storedListOmitted: number;
+    logStatus: "absent" | "available" | "unavailable";
+    logExcerptTruncated: boolean;
+  };
   retryable: boolean;
   stage?: "pdf" | "svg";
 }
@@ -794,6 +832,9 @@ export interface RemoteSourceUpload {
 export interface RemoteRendererCapabilities {
   rendererVersion: string;
   texliveVersion: string;
+  runtimeDigest: string | null;
+  engineVerification: "verified" | "unknown";
+  maxInlineArtifactBytes: number;
   engines: readonly RenderEngine[];
   engineOutputs?: ReadonlyArray<{
     engine: RenderEngine;
@@ -807,6 +848,7 @@ export interface RemoteRendererCapabilities {
   maxPdfPages: number;
   outputs: readonly ["pdf", "svg"];
   sourceLimits: {
+    inlineBytes: number;
     directBytes: number;
     directFiles: number;
     directFileBytes: number;
@@ -823,6 +865,60 @@ export interface RemoteEnvironmentSearch {
   nextCursor: string | null;
 }
 
+type OperationRequest = {
+  keyHash: string;
+  requestHash: string;
+  operation:
+    | "remote_mcp.create_render"
+    | "remote_mcp.retry_render"
+    | "remote_mcp.render_project_revision"
+    | "remote_mcp.apply_project_changes"
+    | "remote_mcp.import_source_attachment";
+};
+
+function operationRequest(
+  operation: OperationRequest["operation"],
+  key: string | undefined,
+  input: object,
+): OperationRequest | undefined {
+  if (key === undefined) return undefined;
+  if (key.length < 16 || key.length > 200)
+    throw new AppError(
+      "INVALID_IDEMPOTENCY_KEY",
+      "Idempotency key must contain 16 to 200 characters",
+      400,
+    );
+  return {
+    operation,
+    keyHash: sha256Hex(key),
+    requestHash: sha256Hex(JSON.stringify(input)),
+  };
+}
+
+type DraftFileChange =
+  | { path: string; remove: true }
+  | RemoteSourceFileInput
+  | {
+      path: string;
+      patch: {
+        expectedSha256: string;
+        original: string;
+        replacement: string;
+        expectedMatches: number;
+      };
+    };
+
+type RenderInput = {
+  entrypoint?: string | undefined;
+  outputs?: Array<"pdf" | "svg"> | undefined;
+  engine?: RenderEngine | undefined;
+  reproducibility?: RenderReproducibility | undefined;
+} & (
+  | { inlineSource: string }
+  | { sourceRef: string }
+  | { sourceId: string; project?: { projectId: string; revisionId: string } }
+);
+
 export class RemoteRenderService {
   private environmentIndexPromise:
     Promise<{ packages: string[]; fonts: string[] }> | undefined;
@@ -835,6 +931,7 @@ export class RemoteRenderService {
     | undefined;
   private readonly maxInlineArtifactBytes: number;
   private inlineArtifactBytesInFlight = 0;
+  private attachmentImportsInFlight = 0;
   private readonly inlineArtifactWaiters: Array<{
     bytes: number;
     resolve: (release: () => void) => void;
@@ -919,6 +1016,115 @@ export class RemoteRenderService {
   ): { sourceRef: string; expiresAt: string } {
     requireScope(identity.scopes, "mcp:render");
     return this.createSourceRef(identity.userId, sourceId);
+  }
+
+  hasAttachmentImport(): boolean {
+    return attachmentOrigins(process.env.REMOTE_MCP_FILE_ORIGINS).size > 0;
+  }
+
+  async importSourceAttachment(
+    identity: RemoteMcpIdentity,
+    attachment: { download_url: string; file_id: string },
+    idempotencyKey: string,
+  ) {
+    requireScope(identity.scopes, "mcp:render");
+    const origins = attachmentOrigins(process.env.REMOTE_MCP_FILE_ORIGINS);
+    if (origins.size === 0)
+      throw new AppError(
+        "ATTACHMENT_UNSUPPORTED",
+        "Attachment import is not configured for this connection",
+        501,
+      );
+    const request = operationRequest(
+      "remote_mcp.import_source_attachment",
+      idempotencyKey,
+      {
+        fileId: attachment.file_id,
+        urlHash: sha256Hex(attachment.download_url),
+      },
+    );
+    const replay = this.findOperationRequest(
+      identity.userId,
+      request,
+      nowIso(),
+    );
+    if (replay)
+      return this.summarizeSource(
+        this.resolveOwnedSource(identity.userId, replay),
+        null,
+      );
+    assertSourceWritable(this.database);
+    if (this.attachmentImportsInFlight >= 2)
+      throw new AppError("ATTACHMENT_IMPORT_BUSY", "Attachment import capacity is in use", 503);
+    this.attachmentImportsInFlight += 1;
+    let root: string | undefined;
+    try {
+      root = await mkdtemp(join(this.storageRoot, ".remote-attachment-"));
+      const archive = join(root, "source.zip");
+      try {
+        await downloadAttachment(
+          attachment.download_url,
+          origins,
+          archive,
+          this.resourceLimits.maxUploadBytes,
+        );
+      } catch (error) {
+        if (error instanceof AppError) throw error;
+        throw new AppError(
+          "ATTACHMENT_UNAVAILABLE",
+          "Could not retrieve the attachment. Attach it again or upload the ZIP directly.",
+          409,
+        );
+      }
+      const validated = await validateAndExtract(
+        archive,
+        join(root, "inspection"),
+        this.zipLimits(),
+        "",
+      );
+      let accepted: string | undefined;
+      const source = await this.storeReadySourceArchive(
+        identity.userId,
+        archive,
+        validated.paths,
+        (sourceId) => {
+          const timestamp = nowIso();
+          accepted = this.findOperationRequest(
+            identity.userId,
+            request,
+            timestamp,
+          );
+          if (accepted !== undefined && accepted !== sourceId)
+            throw new AppError(
+              "ATTACHMENT_REPLAY",
+              "The attachment was already accepted",
+              409,
+            );
+          if (accepted === undefined)
+            this.recordOperationRequest(
+              identity.userId,
+              request,
+              sourceId,
+              timestamp,
+            );
+        },
+      ).catch((error: unknown) => {
+        if (
+          error instanceof AppError &&
+          error.code === "ATTACHMENT_REPLAY" &&
+          accepted !== undefined
+        )
+          return this.resolveOwnedSource(identity.userId, accepted);
+        throw error;
+      });
+      return this.summarizeSource(source, null);
+    } finally {
+      try {
+        if (root !== undefined) await rm(root, { recursive: true, force: true });
+      } finally {
+        this.attachmentImportsInFlight -= 1;
+      }
+    }
   }
 
   async createSource(
@@ -1006,6 +1212,424 @@ export class RemoteRenderService {
     } finally {
       await rm(archiveRoot, { recursive: true, force: true });
     }
+  }
+
+  projectStorageUsage(identity: RemoteMcpIdentity, projectId: string) {
+    requireScope(identity.scopes, "mcp:read");
+    return new ProjectStorage(this.database).usage(
+      this.projectActor(identity),
+      projectId,
+      this.maxUserStorageBytes,
+    );
+  }
+
+  protectSavedRevision(
+    identity: RemoteMcpIdentity,
+    projectId: string,
+    revisionId: string,
+    value: boolean,
+  ) {
+    requireScope(identity.scopes, "mcp:render");
+    return new ProjectStorage(this.database).protect(
+      this.projectActor(identity),
+      projectId,
+      revisionId,
+      value,
+    );
+  }
+
+  planRevisionCleanup(
+    identity: RemoteMcpIdentity,
+    projectId: string,
+    revisionIds: string[],
+  ) {
+    requireScope(identity.scopes, "mcp:read");
+    return new ProjectStorage(this.database).cleanupPlan(
+      this.projectActor(identity),
+      projectId,
+      revisionIds,
+    );
+  }
+
+  applyRevisionCleanup(
+    identity: RemoteMcpIdentity,
+    projectId: string,
+    revisionIds: string[],
+    planHash: string,
+  ) {
+    requireScope(identity.scopes, "mcp:delete");
+    return new ProjectStorage(this.database).applyCleanup(
+      this.projectActor(identity),
+      projectId,
+      revisionIds,
+      planHash,
+    );
+  }
+
+  projectDocumentState(
+    identity: RemoteMcpIdentity,
+    projectId: string,
+    conditionsVersion?: number,
+    history?: { revisionId: string; offset?: number | undefined },
+  ) {
+    requireScope(identity.scopes, "mcp:read");
+    const state = new ProjectDocumentState(this.database);
+    const actor = this.projectActor(identity);
+    return {
+      ...state.get(actor, projectId, conditionsVersion),
+      revisionChanges:
+        history === undefined
+          ? null
+          : state.revisionChanges(
+              actor,
+              projectId,
+              history.revisionId,
+              history.offset ?? 0,
+            ),
+    };
+  }
+
+  updateProjectDocumentConditions(
+    identity: RemoteMcpIdentity,
+    projectId: string,
+    expectedVersion: number,
+    entries: ProjectDocumentCondition[],
+  ) {
+    requireScope(identity.scopes, "mcp:render");
+    return new ProjectDocumentState(this.database).updateConditions(
+      this.projectActor(identity),
+      projectId,
+      expectedVersion,
+      entries,
+    );
+  }
+
+  adoptProjectRevision(
+    identity: RemoteMcpIdentity,
+    projectId: string,
+    revisionId: string | null,
+    expectedRevisionId: string | null,
+  ) {
+    requireScope(identity.scopes, "mcp:render");
+    return new ProjectDocumentState(this.database).adopt(
+      this.projectActor(identity),
+      projectId,
+      revisionId,
+      expectedRevisionId,
+    );
+  }
+
+  recordProjectPdfReview(
+    identity: RemoteMcpIdentity,
+    projectId: string,
+    input: {
+      revisionId: string;
+      jobId: string;
+      pdfSha256: string;
+      conditionsVersion: number | null;
+      checks: ProjectReviewCheck[];
+      guideVersion: string | null;
+    },
+  ) {
+    requireScope(identity.scopes, "mcp:render");
+    return new ProjectDocumentState(this.database).recordReview(
+      this.projectActor(identity),
+      projectId,
+      input,
+      this.artifactRetentionHours,
+    );
+  }
+
+  projectPdfReviews(
+    identity: RemoteMcpIdentity,
+    projectId: string,
+    offset?: number,
+  ) {
+    requireScope(identity.scopes, "mcp:read");
+    return new ProjectDocumentState(this.database).reviews(
+      this.projectActor(identity),
+      projectId,
+      offset,
+    );
+  }
+
+  getSharedDraft(identity: RemoteMcpIdentity, projectId: string) {
+    requireScope(identity.scopes, "mcp:read");
+    return this.draftOperations().get(this.projectActor(identity), projectId);
+  }
+
+  async startSharedDraft(
+    identity: RemoteMcpIdentity,
+    projectId: string,
+    revisionId?: string,
+    replaceVersion?: number,
+  ) {
+    requireScope(identity.scopes, "mcp:render");
+    const actor = this.projectActor(identity);
+    if (replaceVersion !== undefined) {
+      if (revisionId === undefined)
+        throw new AppError(
+          "DRAFT_SOURCE_REQUIRED",
+          "Choose a saved revision to replace the draft",
+          400,
+        );
+      return this.draftOperations().replaceFromRevision(
+        actor,
+        projectId,
+        revisionId,
+        replaceVersion,
+      );
+    }
+    return revisionId === undefined
+      ? this.openProjectDraft(actor, projectId)
+      : this.draftOperations().open(actor, projectId, revisionId, true);
+  }
+
+  async getSharedDraftText(
+    identity: RemoteMcpIdentity,
+    projectId: string,
+    version: number,
+    path: string,
+    offset = 0,
+  ) {
+    requireScope(identity.scopes, "mcp:read");
+    if (sourceFileKind(path) === "binary")
+      throw new AppError("SOURCE_FILE_BINARY", "Source file is binary", 422);
+    const file = await this.readDraftText(
+      this.projectActor(identity),
+      projectId,
+      version,
+      path,
+    );
+    return {
+      projectId,
+      path: file.path,
+      version,
+      sha256: sha256Hex(file.text),
+      ...sourceTextPage(file.text, offset),
+    };
+  }
+
+  async applyProjectChanges(
+    identity: RemoteMcpIdentity,
+    input: {
+      projectId: string;
+      version: number;
+      idempotencyKey: string;
+      files: readonly DraftFileChange[];
+      entrypoint?: string | undefined;
+      outputs?: readonly RenderOutput[] | undefined;
+      engine?: RenderEngine | undefined;
+    },
+  ) {
+    requireScope(identity.scopes, "mcp:render");
+    const actor = this.projectActor(identity);
+    const drafts = this.draftOperations();
+    const draft = drafts.get(actor, input.projectId);
+    if (draft === null)
+      throw new AppError("DRAFT_NOT_FOUND", "Draft does not exist", 404);
+    const request = operationRequest(
+      "remote_mcp.apply_project_changes",
+      input.idempotencyKey,
+      {
+        projectId: input.projectId,
+        version: input.version,
+        entrypoint: input.entrypoint,
+        outputs: input.outputs,
+        engine: input.engine,
+        files: input.files.map((change) =>
+          "remove" in change
+            ? { path: change.path, remove: true }
+            : "patch" in change
+              ? { path: change.path, patch: change.patch }
+              : { path: change.path, text: change.text, base64: change.base64 },
+        ),
+      },
+    );
+    const result = (version: number) => ({
+      projectId: input.projectId,
+      baseVersion: input.version,
+      version,
+      changedPaths: input.files.map(({ path }) => path),
+    });
+    const replay = this.findOperationRequest(actor.userId, request, nowIso());
+    if (replay !== undefined) return result(Number(replay));
+    if (draft.version !== input.version)
+      throw draftVersionConflict(draft.version);
+    const limits = this.directSourceLimits();
+    const names = new Set<string>(),
+      files: { path: string; bytes: Buffer }[] = [];
+    let totalBytes = 0;
+    for (const change of input.files) {
+      const path = validateSourceFilePath(change.path, this.zipLimits());
+      if (names.has(path))
+        throw new AppError(
+          "DRAFT_DUPLICATE_CHANGE",
+          "A path was changed more than once",
+          422,
+        );
+      names.add(path);
+      if ("remove" in change) continue;
+      let bytes: Buffer;
+      if ("patch" in change) {
+        if (sourceFileKind(path) === "binary")
+          throw new AppError(
+            "SOURCE_FILE_BINARY",
+            "Source file is binary",
+            422,
+          );
+        const original = await this.readDraftText(
+          actor,
+          input.projectId,
+          input.version,
+          path,
+        );
+        bytes = replaceExactDraftText(
+          original.text,
+          change.patch,
+          limits.fileBytes,
+        );
+      } else {
+        if ((change.text === undefined) === (change.base64 === undefined))
+          throw new AppError(
+            "SOURCE_FILE_CONTENT",
+            "Specify exactly one of text or base64",
+            400,
+          );
+        bytes =
+          change.text === undefined
+            ? decodeBase64(change.base64 as string)
+            : Buffer.from(change.text, "utf8");
+      }
+      if (bytes.length > limits.fileBytes)
+        throw new AppError(
+          "SOURCE_FILE_SIZE",
+          "Draft file exceeds the direct file limit",
+          422,
+        );
+      totalBytes += bytes.length;
+      if (totalBytes > limits.contentBytes || files.length >= limits.files)
+        throw new AppError(
+          "SOURCE_TOTAL_SIZE",
+          "Draft changes exceed the direct upload limits",
+          422,
+        );
+      files.push({ path, bytes });
+    }
+    const apply = (sourceId: string, rollbackIfReplayed = false) => {
+      const timestamp = nowIso();
+      const accepted = this.findOperationRequest(
+        actor.userId,
+        request,
+        timestamp,
+      );
+      if (accepted !== undefined) {
+        if (rollbackIfReplayed) throw new DraftEditReplayed(Number(accepted));
+        return result(Number(accepted));
+      }
+      const current = this.database.drafts.getOwned(
+        input.projectId,
+        actor.userId,
+      );
+      if (current?.version !== input.version)
+        throw draftVersionConflict(current?.version);
+      const updated = drafts.updateInTransaction(actor, input.projectId, {
+        version: input.version,
+        entrypoint: input.entrypoint,
+        engine: input.engine,
+        outputs: input.outputs,
+        files: input.files.map((change) =>
+          "remove" in change
+            ? { path: change.path, remove: true }
+            : { path: change.path, sourceId, sourcePath: change.path },
+        ),
+      });
+      this.recordOperationRequest(
+        actor.userId,
+        request,
+        String(updated.version),
+        timestamp,
+      );
+      return result(updated.version);
+    };
+    if (files.length === 0) return this.database.transaction(() => apply(""));
+    const archive = await zipFiles(files);
+    if (archive.length > this.resourceLimits.maxUploadBytes)
+      throw new AppError(
+        "SOURCE_ARCHIVE_SIZE",
+        "Draft changes exceed the archive limit",
+        422,
+      );
+    let accepted: ReturnType<typeof apply> | undefined;
+    try {
+      await this.storeReadySource(
+        actor.userId,
+        archive,
+        files.map(({ path }) => path),
+        (sourceId) => {
+          accepted = apply(sourceId, true);
+        },
+      );
+    } catch (error) {
+      if (error instanceof DraftEditReplayed) return result(error.version);
+      throw error;
+    }
+    if (accepted === undefined) throw new Error("Draft changes did not commit");
+    return accepted;
+  }
+
+  queueSharedDraftPreview(
+    identity: RemoteMcpIdentity,
+    projectId: string,
+    version: number,
+  ) {
+    requireScope(identity.scopes, "mcp:render");
+    const actor = this.projectActor(identity);
+    const principal = this.ensurePrincipal(actor.userId);
+    return this.draftOperations().queuePreview(actor, projectId, version, {
+      apiKeyId: principal.api_key_id,
+      serviceAccountId: principal.service_account_id,
+      rendererVersion: this.rendererVersion,
+      runtime: process.env.RENDERER_IMAGE ?? null,
+      retentionHours: this.artifactRetentionHours,
+      reservedOutputBytes: this.maxOutputBytes,
+      admit: () => this.assertQueue(actor.userId, principal.service_account_id),
+    });
+  }
+
+  async persistSharedDraft(
+    identity: RemoteMcpIdentity,
+    projectId: string,
+    version: number,
+    displayName: string,
+    description?: string,
+  ) {
+    requireScope(identity.scopes, "mcp:render");
+    const revision = await this.saveDraftRevision(
+      this.projectActor(identity),
+      projectId,
+      version,
+      displayName,
+      undefined,
+      description,
+    );
+    return {
+      id: revision.id,
+      projectId,
+      sourceId: revision.source_id,
+      revisionNumber: revision.revision_number,
+      entrypoint: revision.entrypoint,
+      outputs: this.database.projects.renderOutputs(revision),
+      engine: revision.engine,
+    };
+  }
+
+  private draftOperations() {
+    return new ProjectDraftOperations(
+      this.database,
+      this.resourceLimits.maxFileCount,
+      this.resourceLimits.maxZipEntries,
+    );
   }
 
   async openProjectDraft(
@@ -1318,6 +1942,7 @@ export class RemoteRenderService {
     version: number,
     displayName: string,
     outputs?: readonly RenderOutput[],
+    changeDescription?: string,
   ) {
     assertSourceWritable(this.database);
     const drafts = new ProjectDraftOperations(
@@ -1341,27 +1966,33 @@ export class RemoteRenderService {
       groups.set(file.sourceId, files);
     }
     const save = (sourceId: string) => {
-      if (
-        this.database.drafts.getOwned(projectId, actor.userId)?.version !==
-        version
-      )
+      const current = this.database.drafts.getOwned(projectId, actor.userId);
+      if (current?.version !== version)
         throw new AppError(
           "DRAFT_VERSION_CONFLICT",
           "The draft has changed since it was loaded",
           409,
         );
-      return new ProjectOperations(this.database).attachRevisionInTransaction(
-        actor,
-        {
-          projectId,
-          sourceId,
-          displayName,
-          entrypoint: draft.entrypoint,
-          engine: draft.engine,
-          originalFilename: draft.entrypoint.split("/").at(-1) ?? "source.zip",
-          outputs: outputs ?? draft.outputs,
-        },
-      );
+      const revision = new ProjectOperations(
+        this.database,
+      ).attachRevisionInTransaction(actor, {
+        projectId,
+        sourceId,
+        displayName,
+        entrypoint: draft.entrypoint,
+        engine: draft.engine,
+        originalFilename: draft.entrypoint.split("/").at(-1) ?? "source.zip",
+        outputs: outputs ?? draft.outputs,
+      });
+      new ProjectDocumentState(this.database).recordRevisionChange(actor, {
+        projectId,
+        revisionId: revision.id,
+        parentRevisionId: current.base_revision_id ?? null,
+        draftVersion: version,
+        description: changeDescription ?? "",
+      });
+      this.database.drafts.setBaseRevision(projectId, version, revision.id);
+      return revision;
     };
     const [group] = groups;
     if (groups.size === 1 && group !== undefined) {
@@ -1546,6 +2177,38 @@ export class RemoteRenderService {
     };
   }
 
+  sourceUploadStatus(identity: RemoteMcpIdentity, uploadId: string) {
+    requireScope(identity.scopes, "mcp:render");
+    const source = this.database.sources.getVisible(uploadId);
+    if (source?.owner_user_id !== identity.userId)
+      throw new AppError(
+        "SOURCE_NOT_FOUND",
+        "Source upload does not exist",
+        404,
+      );
+    const now = nowIso();
+    const ready = this.database.sources.getOwnedReady(
+      uploadId,
+      identity.userId,
+      now,
+    );
+    const status =
+      ready !== undefined
+        ? "ready"
+        : source.status !== "deleted" &&
+            source.status !== "deleting" &&
+            source.expires_at <= now
+          ? "expired"
+          : source.status;
+    return {
+      ...uploadProgress(
+        source,
+        status === "ready" ? source.size : source.upload_received_bytes,
+      ),
+      status,
+    };
+  }
+
   async uploadSourceChunk(
     identity: RemoteMcpIdentity,
     uploadId: string,
@@ -1651,6 +2314,192 @@ export class RemoteRenderService {
       projectId,
       options,
     );
+  }
+
+  private savedRevisionSource(
+    identity: RemoteMcpIdentity,
+    projectId: string,
+    revisionId: string,
+  ) {
+    requireScope(identity.scopes, "mcp:read");
+    const { revision } = new ProjectOperations(this.database).revision(
+      this.projectActor(identity),
+      projectId,
+      revisionId,
+    );
+    const source = this.resolveOwnedSource(identity.userId, revision.source_id);
+    return {
+      source,
+      path: this.sourcePath(source),
+      entrypoint: revision.entrypoint,
+      engine: revision.engine,
+      revision: {
+        projectId,
+        revisionId,
+        sourceId: source.id,
+        sourceSha256: source.sha256,
+      },
+    };
+  }
+
+  projectDelivery(
+    identity: RemoteMcpIdentity,
+    projectId: string,
+    revisionId: string,
+    jobId?: string,
+  ) {
+    const { source, revision, entrypoint, engine } = this.savedRevisionSource(
+      identity,
+      projectId,
+      revisionId,
+    );
+    const url = (path: string) =>
+      new URL(`/app/api/v1/${path}`, this.publicOrigin).href;
+    const sourceZip = {
+      size: source.size,
+      sha256: source.sha256,
+      filename: `${revisionId}.zip`,
+      availability: "available" as const,
+      mimeType: "application/zip",
+      downloadUrl: url(
+        `projects/${projectId}/revisions/${revisionId}/source.zip`,
+      ),
+    };
+    if (jobId === undefined) return { ...revision, sourceZip, pdf: null };
+    const job = this.assertReadableJob(identity.userId, jobId);
+    if (
+      job.project_revision_id !== revisionId ||
+      job.source_id !== source.id ||
+      job.source_sha256 !== source.sha256 ||
+      job.entrypoint !== entrypoint ||
+      job.engine !== engine
+    )
+      throw new AppError(
+        "DELIVERY_TARGET_MISMATCH",
+        "The Job does not match the requested saved Source and revision",
+        409,
+      );
+    const pdf = this.database.artifacts.getDownloadable(jobId, "result.pdf", {
+      retentionHours: this.artifactRetentionHours,
+    });
+    const expiresAt = pdf !== undefined || job.completed_at !== null ? this.artifactExpiry(job) : null;
+    return {
+      ...revision,
+      sourceZip,
+      pdf:
+        pdf === undefined
+          ? {
+              jobId,
+              availability:
+                job.status === "expired" || (expiresAt !== null && expiresAt <= nowIso()) ? "expired" as const :
+                ["queued", "validating", "running"].includes(job.status) ? "pending" as const :
+                "unavailable" as const,
+              status: job.status,
+            }
+          : {
+              jobId,
+              availability: "available" as const,
+              status: job.status,
+              size: pdf.size,
+              sha256: pdf.sha256,
+              filename: "result.pdf",
+              mimeType: "application/pdf",
+              expiresAt: this.artifactExpiry(job),
+              inlineMaxBytes: this.maxInlineArtifactBytes,
+              manifestResourceUri: `latex-renderer://jobs/${jobId}/manifest/${pdf.sha256}`,
+              downloadUrl: url(`jobs/${jobId}/artifacts/result.pdf`),
+              resourceUri:
+                pdf.size <= this.maxInlineArtifactBytes
+                  ? resourceUri(jobId, "result.pdf")
+                  : null,
+            },
+    };
+  }
+
+  async listProjectRevisionFiles(
+    identity: RemoteMcpIdentity,
+    projectId: string,
+    revisionId: string,
+    offset = 0,
+    limit = 25,
+  ) {
+    const { path, revision } = this.savedRevisionSource(
+      identity,
+      projectId,
+      revisionId,
+    );
+    const files = await readSavedSource(() =>
+      listValidatedSourceFiles(path, this.zipLimits()),
+    );
+    if (
+      !Number.isSafeInteger(offset) ||
+      offset < 0 ||
+      offset > files.length ||
+      !Number.isSafeInteger(limit) ||
+      limit < 1 ||
+      limit > 25
+    )
+      throw new AppError(
+        "SOURCE_FILE_RANGE",
+        "Invalid Source file list range",
+        416,
+      );
+    const items = files.slice(offset, offset + limit).map((file) => ({
+      ...file,
+      kind: sourceFileKind(file.path),
+    }));
+    return {
+      ...revision,
+      items,
+      totalFiles: files.length,
+      nextOffset:
+        offset + items.length < files.length ? offset + items.length : null,
+    };
+  }
+
+  async getProjectRevisionFile(
+    identity: RemoteMcpIdentity,
+    projectId: string,
+    revisionId: string,
+    requestedPath: string,
+    offset = 0,
+  ) {
+    const { source, path, revision } = this.savedRevisionSource(
+      identity,
+      projectId,
+      revisionId,
+    );
+    const target = validateSourceFilePath(requestedPath, this.zipLimits());
+    if (!this.database.sources.paths(source).includes(target))
+      throw new AppError(
+        "SOURCE_FILE_NOT_FOUND",
+        "Source file does not exist",
+        404,
+      );
+    if (sourceFileKind(target) === "binary")
+      throw new AppError("SOURCE_FILE_BINARY", "Source file is binary", 422);
+    const bytes = await readSavedSource(() =>
+      readValidatedSourceFile(path, target, this.zipLimits()),
+    );
+    let text: string;
+    try {
+      text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
+        bytes,
+      );
+    } catch {
+      throw new AppError(
+        "SOURCE_FILE_ENCODING",
+        "Source file is not UTF-8",
+        422,
+      );
+    }
+    return {
+      ...revision,
+      path: target,
+      sha256: sha256Hex(bytes),
+      size: bytes.byteLength,
+      ...sourceTextPage(text, offset),
+    };
   }
 
   projectRevisionJobs(
@@ -1854,52 +2703,98 @@ export class RemoteRenderService {
     projectId: string,
     revisionId: string,
     outputs?: Array<"pdf" | "svg">,
+    idempotencyKey?: string,
+    reproducibility?: RenderReproducibility,
   ) {
     requireScope(identity.scopes, "mcp:render");
+    const request = operationRequest(
+      "remote_mcp.render_project_revision",
+      idempotencyKey,
+      {
+        projectId,
+        revisionId,
+        outputs,
+        reproducibility,
+      },
+    );
+    const replay = this.findRenderRequest(identity.userId, request, nowIso());
+    if (replay) return this.summarize(replay);
     const projects = new ProjectOperations(this.database),
       selected = projects.revision(
         this.projectActor(identity),
         projectId,
         revisionId,
       );
-    return this.createRender(identity, {
-      sourceId: selected.revision.source_id,
-      entrypoint: selected.revision.entrypoint,
-      outputs: outputs ?? projects.renderOutputs(selected.revision),
-      engine: selected.revision.engine,
-      project: { projectId, revisionId },
-    });
+    return this.queueRender(
+      identity,
+      {
+        sourceId: selected.revision.source_id,
+        entrypoint: selected.revision.entrypoint,
+        outputs: outputs ?? projects.renderOutputs(selected.revision),
+        engine: selected.revision.engine,
+        reproducibility,
+        project: { projectId, revisionId },
+      },
+      request,
+    );
   }
 
   async createRender(
     identity: RemoteMcpIdentity,
-    input:
-      | {
-          inlineSource: string;
-          entrypoint?: string | undefined;
-          outputs?: Array<"pdf" | "svg">;
-          engine?: RenderEngine | undefined;
-        }
-      | {
-          sourceRef: string;
-          entrypoint?: string | undefined;
-          outputs?: Array<"pdf" | "svg">;
-          engine?: RenderEngine | undefined;
-        }
-      | {
-          sourceId: string;
-          entrypoint?: string | undefined;
-          outputs?: Array<"pdf" | "svg">;
-          engine?: RenderEngine | undefined;
-          project?: { projectId: string; revisionId: string };
-        },
+    input: RenderInput,
+    idempotencyKey?: string,
   ): Promise<RemoteJobSummary> {
     requireScope(identity.scopes, "mcp:render");
+    const request = operationRequest(
+      "remote_mcp.create_render",
+      idempotencyKey,
+      {
+        ...("inlineSource" in input
+          ? { inlineSourceHash: sha256Hex(input.inlineSource) }
+          : "sourceRef" in input
+            ? { sourceRef: input.sourceRef }
+            : { sourceId: input.sourceId, project: input.project }),
+        entrypoint: input.entrypoint,
+        outputs: input.outputs,
+        engine: input.engine,
+        reproducibility: input.reproducibility,
+      },
+    );
+    return this.queueRender(identity, input, request);
+  }
+
+  private async queueRender(
+    identity: RemoteMcpIdentity,
+    input: RenderInput,
+    request: OperationRequest | undefined,
+  ): Promise<RemoteJobSummary> {
+    const replay = this.findRenderRequest(identity.userId, request, nowIso());
+    if (replay) return this.summarize(replay);
     this.assertMaintenance();
     const entrypoint = validateEntrypointPath(input.entrypoint ?? "main.tex"),
       outputs = normalizeRenderOutputs(input.outputs),
       engine = input.engine ?? defaultRenderEngine,
-      principal = this.ensurePrincipal(identity.userId),
+      dateProfile = input.reproducibility,
+      fixedEpoch =
+        dateProfile?.mode === "fixed"
+          ? Math.floor(Date.parse(dateProfile.date) / 1000)
+          : null;
+    if (dateProfile && engine !== "lualatex")
+      throw new AppError(
+        "DATE_PROFILE_UNSUPPORTED",
+        "The date profile requires LuaLaTeX",
+        422,
+      );
+    if (
+      fixedEpoch !== null &&
+      (!Number.isSafeInteger(fixedEpoch) || fixedEpoch < 0)
+    )
+      throw new AppError(
+        "DATE_PROFILE_INVALID",
+        "Use a valid UTC date on or after the Unix epoch",
+        422,
+      );
+    const principal = this.ensurePrincipal(identity.userId),
       source =
         "sourceRef" in input
           ? this.resolveSourceRef(identity.userId, input.sourceRef)
@@ -1916,9 +2811,15 @@ export class RemoteRenderService {
         "Source does not contain the requested entrypoint",
         422,
       );
-    const jobId = newId("job"),
-      timestamp = nowIso();
-    this.database.transaction(() => {
+    const acceptedId = this.database.transaction(() => {
+      const timestamp = nowIso();
+      const replay = this.findRenderRequest(
+        identity.userId,
+        request,
+        timestamp,
+      );
+      if (replay) return replay.id;
+      const jobId = newId("job");
       this.assertQueue(identity.userId, principal.service_account_id);
       const currentSource = this.database.sources.getOwnedReady(
         source.id,
@@ -1989,45 +2890,72 @@ export class RemoteRenderService {
         result: "success",
         metadata: { sourceId: currentSource.id, entrypoint, outputs },
       });
+      if (dateProfile)
+        this.database.jobs.setReproducibility(
+          jobId,
+          dateProfile.mode,
+          fixedEpoch ?? Math.floor(Date.parse(timestamp) / 1000),
+        );
+      this.recordOperationRequest(identity.userId, request, jobId, timestamp);
+      return jobId;
     });
-    const created = this.database.jobs.get(jobId);
+    const created = this.database.jobs.get(acceptedId);
     if (created === undefined)
       throw new AppError("JOB_CREATE_FAILED", "Render job was not created");
     return this.summarize(created);
   }
 
-  retryRender(identity: RemoteMcpIdentity, jobId: string): RemoteJobSummary {
+  retryRender(
+    identity: RemoteMcpIdentity,
+    jobId: string,
+    idempotencyKey?: string,
+  ): RemoteJobSummary {
     requireScope(identity.scopes, "mcp:render");
-    this.assertMaintenance();
-    const previous = this.assertOwned(identity.userId, jobId);
-    if (
-      ![
-        "succeeded",
-        "failed",
-        "timeout",
-        "canceled",
-        "rejected",
-        "expired",
-      ].includes(previous.status)
-    )
-      throw new AppError(
-        "JOB_NOT_RETRYABLE",
-        "Only a terminal Job can be retried",
-        409,
+    const request = operationRequest(
+      "remote_mcp.retry_render",
+      idempotencyKey,
+      {
+        jobId,
+      },
+    );
+    const acceptedId = this.database.transaction(() => {
+      const timestamp = nowIso();
+      const replay = this.findRenderRequest(
+        identity.userId,
+        request,
+        timestamp,
       );
-    if (previous.source_id === null)
-      throw new AppError(
-        "SOURCE_NOT_READY",
-        "The previous Job has no reusable Source",
-        409,
-      );
-    const sourceId = previous.source_id;
-    this.resolveOwnedSource(identity.userId, sourceId);
-    const retryId = newId("job"),
-      timestamp = nowIso();
-    this.database.transaction(() => {
+      if (replay) return replay.id;
+      const previous = this.assertOwned(identity.userId, jobId);
+      if (
+        ![
+          "succeeded",
+          "failed",
+          "timeout",
+          "canceled",
+          "rejected",
+          "expired",
+        ].includes(previous.status)
+      )
+        throw new AppError(
+          "JOB_NOT_RETRYABLE",
+          "Only a terminal Job can be retried",
+          409,
+        );
+      if (previous.source_id === null)
+        throw new AppError(
+          "SOURCE_NOT_READY",
+          "The previous Job has no reusable Source",
+          409,
+        );
+      const sourceId = previous.source_id;
+      const retryId = newId("job");
       this.assertQueue(identity.userId, previous.service_account_id);
-      const currentSource = this.database.sources.getReady(sourceId, timestamp);
+      const currentSource = this.database.sources.getOwnedReady(
+        sourceId,
+        identity.userId,
+        timestamp,
+      );
       if (currentSource === undefined)
         throw new AppError(
           "SOURCE_NOT_READY",
@@ -2050,11 +2978,69 @@ export class RemoteRenderService {
         result: "success",
         metadata: { retryOf: previous.id, sourceId: previous.source_id },
       });
+      this.recordOperationRequest(identity.userId, request, retryId, timestamp);
+      return retryId;
     });
-    const retry = this.database.jobs.get(retryId);
+    const retry = this.database.jobs.get(acceptedId);
     if (retry === undefined)
       throw new AppError("JOB_CREATE_FAILED", "Retry Job was not created");
     return this.summarize(retry);
+  }
+
+  private findOperationRequest(
+    userId: string,
+    request: OperationRequest | undefined,
+    timestamp: string,
+  ): string | undefined {
+    if (!request) return undefined;
+    const record = this.database.security.idempotency(
+      "oauth",
+      userId,
+      request.operation,
+      request.keyHash,
+      timestamp,
+    );
+    if (!record) return undefined;
+    if (record.request_hash !== request.requestHash)
+      throw new AppError(
+        "IDEMPOTENCY_CONFLICT",
+        "Idempotency key was reused with different inputs",
+        409,
+      );
+    if (!record.resource_id)
+      throw new AppError(
+        "REQUEST_UNAVAILABLE",
+        "The accepted request is unavailable",
+        409,
+      );
+    return record.resource_id;
+  }
+
+  private findRenderRequest(
+    userId: string,
+    request: OperationRequest | undefined,
+    timestamp: string,
+  ): JobRow | undefined {
+    const jobId = this.findOperationRequest(userId, request, timestamp);
+    return jobId === undefined ? undefined : this.assertOwned(userId, jobId);
+  }
+
+  private recordOperationRequest(
+    userId: string,
+    request: OperationRequest | undefined,
+    resourceId: string,
+    timestamp: string,
+  ): void {
+    if (!request) return;
+    this.database.security.insertIdempotency({
+      actorType: "oauth",
+      actorId: userId,
+      ...request,
+      resourceId,
+      responseCode: 202,
+      createdAt: timestamp,
+      expiresAt: new Date(Date.parse(timestamp) + 86_400_000).toISOString(),
+    });
   }
 
   retrySvgRender(
@@ -2087,24 +3073,235 @@ export class RemoteRenderService {
 
   job(identity: RemoteMcpIdentity, jobId: string): RemoteJobSummary {
     requireScope(identity.scopes, "mcp:read");
-    const principal = this.ensurePrincipal(identity.userId),
-      row = this.database.jobs.getOwned(
+    return this.summarize(this.assertReadableJob(identity.userId, jobId));
+  }
+
+  pdfInspection(
+    identity: RemoteMcpIdentity,
+    jobId: string,
+    sha256: string,
+    request = false,
+    params?: PdfInspectionInput,
+  ) {
+    requireScope(identity.scopes, "mcp:read");
+    const geometry =
+      params === undefined ? undefined : pdfInspectionInputSchema.parse(params);
+    const lookup = () => {
+      const job = this.assertReadableJob(identity.userId, jobId);
+      const pdf = this.database.artifacts.getDownloadable(jobId, "result.pdf", {
+        retentionHours: this.artifactRetentionHours,
+      });
+      if (!pdf)
+        throw new AppError(
+          "PDF_UNAVAILABLE",
+          "The canonical PDF is not available",
+          410,
+        );
+      if (pdf.sha256 !== sha256)
+        throw new AppError(
+          "PDF_CHECKSUM_MISMATCH",
+          "The canonical PDF does not match the requested digest",
+          409,
+        );
+      const expiresAt = this.artifactExpiry(job);
+      const document = this.database.previews.document(jobId);
+      if (geometry && "direction" in geometry) {
+        if (!this.database.artifacts.sourceMap(pdf))
+          throw new AppError(
+            "SYNCTEX_UNAVAILABLE",
+            "No source map for this PDF",
+            410,
+          );
+        if (geometry.direction === "source_to_pdf")
+          geometry.path = validateSourceFilePath(
+            geometry.path,
+            this.zipLimits(),
+          );
+      }
+      if (
+        geometry &&
+        "page" in geometry &&
+        document?.pdf_sha256 === pdf.sha256 &&
+        geometry.page > document.page_count
+      )
+        throw new AppError(
+          "PREVIEW_PAGE_INVALID",
+          "Preview page is outside the PDF",
+          404,
+        );
+      if (
+        geometry &&
+        "pages" in geometry &&
+        document?.pdf_sha256 === pdf.sha256 &&
+        geometry.pages.some((page) => page > document.page_count)
+      )
+        throw new AppError(
+          "PREVIEW_PAGE_INVALID",
+          "A contact sheet page is outside the PDF",
+          404,
+        );
+      const row = request
+        ? this.database.pdfInspections.request(
+            pdf,
+            expiresAt,
+            nowIso(),
+            geometry,
+          )
+        : this.database.pdfInspections.forArtifact(pdf, geometry);
+      return {
         jobId,
-        identity.userId,
-        principal.service_account_id,
-      );
-    if (row === undefined)
-      throw new AppError("JOB_NOT_FOUND", "Job does not exist", 404);
-    return this.summarize(row);
+        revisionId: job.project_revision_id,
+        pdfSha256: pdf.sha256,
+        generation: pdf.storage_generation ?? null,
+        inspectorVersion: PDF_INSPECTOR_VERSION,
+        expiresAt,
+        state: row?.status ?? ("not_requested" as const),
+        errorCode: row?.error_code ?? null,
+        report: row?.result_json
+          ? (JSON.parse(row.result_json) as unknown)
+          : null,
+      };
+    };
+    return request ? this.database.transaction(lookup) : lookup();
+  }
+
+  comparePdfInspections(
+    identity: RemoteMcpIdentity,
+    before: { jobId: string; pdfSha256: string },
+    after: { jobId: string; pdfSha256: string },
+  ) {
+    const left = this.pdfInspection(identity, before.jobId, before.pdfSha256);
+    const right = this.pdfInspection(identity, after.jobId, after.pdfSha256);
+    const observations = (value: unknown) => {
+      if (typeof value !== "object" || value === null || !("checks" in value))
+        return {};
+      return value.checks as Record<
+        string,
+        { text: string | null; truncated: boolean }
+      >;
+    };
+    const leftChecks = observations(left.report),
+      rightChecks = observations(right.report);
+    const compare = (name: string) => {
+      const a = leftChecks[name],
+        b = rightChecks[name];
+      if (
+        !a ||
+        !b ||
+        a.text === null ||
+        b.text === null ||
+        a.truncated ||
+        b.truncated
+      )
+        return "not_checked" as const;
+      return a.text === b.text
+        ? ("same_observation" as const)
+        : ("changed_observation" as const);
+    };
+    const rasterVersion = compare("versions");
+    const pageRasters = (checks: ReturnType<typeof observations>) => {
+      const sample = checks["page-rasters"];
+      if (sample?.text == null || sample.truncated) return [];
+      return sample.text
+        .trim()
+        .split("\n")
+        .filter((hash) => /^[a-f0-9]{64}$/.test(hash));
+    };
+    const leftPages = pageRasters(leftChecks),
+      rightPages = pageRasters(rightChecks);
+    const comparedPages =
+      rasterVersion === "same_observation"
+        ? Math.min(leftPages.length, rightPages.length)
+        : 0;
+    const changedPreviewPages = Array.from(
+      { length: comparedPages },
+      (_, i) => i + 1,
+    ).filter((page) => leftPages[page - 1] !== rightPages[page - 1]);
+    const leftJob = this.assertReadableJob(identity.userId, before.jobId);
+    const rightJob = this.assertReadableJob(identity.userId, after.jobId);
+    return {
+      before: { ...before, revisionId: left.revisionId, state: left.state },
+      after: { ...after, revisionId: right.revisionId, state: right.state },
+      samePdfBytes: left.pdfSha256 === right.pdfSha256,
+      extractedText: compare("extracted-text"),
+      fontInventory: compare("font-info"),
+      pageInfoAndMetadata: compare("page-info"),
+      navigation: compare("navigation"),
+      visual:
+        comparedPages === 0
+          ? ("not_checked" as const)
+          : changedPreviewPages.length > 0
+            ? ("changed_observation" as const)
+            : ("same_observation" as const),
+      visualCoverage: {
+        comparedPages,
+        changedPreviewPages,
+        maxPageSidePixels: 512,
+        pagePairing: "physical_page_number" as const,
+      },
+      sourceComparison:
+        leftJob.source_id !== null && rightJob.source_id !== null
+          ? leftJob.source_sha256 === rightJob.source_sha256 &&
+            leftJob.entrypoint === rightJob.entrypoint
+            ? ("same_observation" as const)
+            : ("changed_observation" as const)
+          : ("not_checked" as const),
+      documentMeaning: "not_checked" as const,
+      sameEngine: leftJob.engine === rightJob.engine,
+      sameRuntime:
+        leftJob.runtime_digest === null || rightJob.runtime_digest === null
+          ? null
+          : leftJob.runtime_digest === rightJob.runtime_digest,
+    };
+  }
+
+  renderManifest(identity: RemoteMcpIdentity, jobId: string) {
+    requireScope(identity.scopes, "mcp:read");
+    const row = this.assertReadableJob(identity.userId, jobId);
+    const summary = this.summarize(row);
+    return {
+      schemaVersion: 1 as const,
+      jobId,
+      status: summary.status,
+      projectRevisionId: row.project_revision_id,
+      sourceId: row.source_id,
+      inputSha256: row.source_sha256,
+      inputKind: row.source_id
+        ? ("source_zip" as const)
+        : this.database.drafts.isPreviewJob(jobId)
+          ? ("draft_manifest" as const)
+          : ("unknown" as const),
+      entrypoint: row.entrypoint,
+      engine: row.engine,
+      runtimeDigest: row.runtime_digest,
+      outputs: summary.outputs,
+      pdfSha256:
+        summary.artifacts.find(
+          ({ relativePath }) => relativePath === "result.pdf",
+        )?.sha256 ?? null,
+      artifacts: summary.artifacts,
+      stages: summary.stages ?? null,
+      recordedTiming: {
+        createdAt: row.created_at,
+        queuedAt: row.queued_at,
+        startedAt: row.started_at,
+        finishedAt: row.completed_at,
+      },
+      workerObservations: this.database.jobs.stageObservations(jobId),
+      reproducibility: this.database.jobs.reproducibility(jobId) ?? null,
+      pdfSvgMatch: "not_checked" as const,
+    };
   }
 
   async diagnostics(
     identity: RemoteMcpIdentity,
     jobId: string,
     stage?: "pdf" | "svg",
+    offset?: number,
+    limit?: number,
   ): Promise<RemoteRenderDiagnostics> {
     requireScope(identity.scopes, "mcp:read");
-    const row = this.assertOwned(identity.userId, jobId),
+    const row = this.assertReadableJob(identity.userId, jobId),
       stages = this.database.outputStages.publicState(jobId),
       selectedStage =
         stage ??
@@ -2124,7 +3321,7 @@ export class RemoteRenderService {
       ),
       parsed =
         errorsArtifact === undefined
-          ? { errors: [], warnings: [] }
+          ? { errors: [], warnings: [], coverage: null, storedListOmitted: 0 }
           : parseDiagnosticsJson(
               (
                 await this.artifact(
@@ -2134,41 +3331,73 @@ export class RemoteRenderService {
                 )
               ).bytes.toString("utf8"),
             ),
-      diagnostics: RemoteRenderDiagnostic[] = [
+      entries: RemoteRenderDiagnostic[] = [
         ...parsed.errors.map((item) => ({
+          ...item,
           severity: "error" as const,
-          type: "latex-error",
-          file: item.file,
-          line: item.line,
           column: null,
-          message: item.message,
         })),
         ...parsed.warnings.map((item) => ({
+          ...item,
           severity: "warning" as const,
-          type: item.type,
-          file: item.file,
-          line: item.line,
           column: null,
-          message: item.message,
         })),
-      ],
-      log =
-        logArtifact === undefined
-          ? ""
-          : (
-              await this.artifact(identity, jobId, logArtifact.relative_path)
-            ).bytes.toString("utf8"),
-      rawLogResourceUri =
-        logArtifact === undefined
-          ? null
-          : resourceUri(jobId, logArtifact.relative_path);
+      ];
+    const start = offset ?? 0;
+    if (
+      !Number.isSafeInteger(start) ||
+      start < 0 ||
+      start > entries.length ||
+      (limit !== undefined &&
+        (!Number.isSafeInteger(limit) || limit < 1 || limit > 25))
+    )
+      throw new AppError(
+        "DIAGNOSTICS_RANGE",
+        "Diagnostic page is outside stored results",
+        416,
+      );
+    const diagnostics = entries.slice(
+      start,
+      start + (limit ?? (offset === undefined ? entries.length : 25)),
+    );
+    const log =
+      logArtifact === undefined
+        ? null
+        : await this.logWindow(logArtifact, undefined, undefined, 16_384).catch(
+            () => null,
+          );
+    const excerpt =
+      log === null ? null : diagnosticLogExcerpt(log.text, entries);
+    const rawLogResourceUri =
+      logArtifact === undefined ||
+      logArtifact.size > this.maxInlineArtifactBytes
+        ? null
+        : resourceUri(jobId, logArtifact.relative_path);
     return {
       jobId,
       status: row.status,
       engine: row.engine,
       diagnostics,
-      logExcerpt: logExcerpt(log, diagnostics),
+      logExcerpt: excerpt?.text ?? "",
       rawLogResourceUri,
+      coverage: {
+        parser: parsed.coverage,
+        storedItems: entries.length,
+        offset: start,
+        nextOffset:
+          start + diagnostics.length < entries.length
+            ? start + diagnostics.length
+            : null,
+        storedListOmitted: parsed.storedListOmitted,
+        logStatus:
+          logArtifact === undefined
+            ? "absent"
+            : log
+              ? "available"
+              : "unavailable",
+        logExcerptTruncated:
+          log !== null && (log.startByte > 0 || excerpt?.truncated === true),
+      },
       retryable:
         ["failed", "timeout", "rejected"].includes(row.status) ||
         (row.status === "canceled" &&
@@ -2180,13 +3409,112 @@ export class RemoteRenderService {
     };
   }
 
+  previewPages(
+    identity: RemoteMcpIdentity,
+    jobId: string,
+    pdfSha256: string,
+    requested: number[],
+  ) {
+    requireScope(identity.scopes, "mcp:read");
+    const job = this.assertReadableJob(identity.userId, jobId);
+    if (
+      requested.length < 1 ||
+      requested.length > 8 ||
+      new Set(requested).size !== requested.length ||
+      requested.some(
+        (page) => !Number.isSafeInteger(page) || page < 1 || page > 100,
+      )
+    )
+      throw new AppError(
+        "PREVIEW_PAGE_INVALID",
+        "Select 1 to 8 distinct PDF pages",
+        400,
+      );
+    const policy = { retentionHours: this.artifactRetentionHours };
+    return this.database.transaction(() => {
+      const pdf = this.database.artifacts.getDownloadable(
+        jobId,
+        "result.pdf",
+        policy,
+      );
+      if (!pdf)
+        throw new AppError(
+          "PDF_UNAVAILABLE",
+          "The canonical PDF is not available",
+          410,
+        );
+      if (pdf.sha256 !== pdfSha256)
+        throw new AppError(
+          "PDF_CHECKSUM_MISMATCH",
+          "The canonical PDF does not match the requested digest",
+          409,
+        );
+      const document = this.database.previews.document(jobId);
+      const available = this.database.artifacts.listDownloadable(jobId, policy);
+      const pages = requested.map((page) => {
+        const ready = available.find(
+          (artifact) => artifact.relative_path === `previews/page-${page}.png`,
+        );
+        if (ready)
+          return {
+            page,
+            state: "ready" as const,
+            sha256: ready.sha256,
+            resourceUri:
+              ready.size <= this.maxInlineArtifactBytes
+                ? resourceUri(jobId, ready.relative_path)
+                : null,
+            errorCode: null,
+            retryable: false,
+          };
+        try {
+          this.database.previews.request(jobId, page, nowIso(), policy);
+          return {
+            page,
+            state: "pending" as const,
+            sha256: null,
+            resourceUri: null,
+            errorCode: null,
+            retryable: true,
+          };
+        } catch (error) {
+          if (!(error instanceof AppError)) throw error;
+          const busy = error.code === "PREVIEW_QUEUE_FULL";
+          return {
+            page,
+            state: busy
+              ? ("busy" as const)
+              : error.code === "PREVIEW_FAILED"
+                ? ("failed" as const)
+                : ("unavailable" as const),
+            sha256: null,
+            resourceUri: null,
+            errorCode:
+              typeof error.details?.previewErrorCode === "string"
+                ? error.details.previewErrorCode
+                : error.code,
+            retryable: busy || error.details?.retryable === true,
+          };
+        }
+      });
+      return {
+        jobId,
+        projectRevisionId: job.project_revision_id,
+        pdfSha256,
+        pageCount:
+          document?.pdf_sha256 === pdf.sha256 ? document.page_count : null,
+        pages,
+      };
+    });
+  }
+
   async artifact(
     identity: RemoteMcpIdentity,
     jobId: string,
     relativePath: string,
   ): Promise<RemoteArtifactContent> {
     requireScope(identity.scopes, "mcp:read");
-    this.assertOwned(identity.userId, jobId);
+    this.assertReadableJob(identity.userId, jobId);
     let artifact = this.database.artifacts.getDownloadable(
       jobId,
       relativePath,
@@ -2225,13 +3553,171 @@ export class RemoteRenderService {
         413,
       );
     const release = await this.acquireInlineArtifactBytes(artifact.size);
+    try {
+      return {
+        jobId,
+        relativePath: artifact.relative_path,
+        mimeType: artifactMimeType(artifact.type),
+        size: artifact.size,
+        sha256: artifact.sha256,
+        bytes: await this.withArtifactLease(artifact, (path, signal) =>
+          readBoundedArtifact(
+            path,
+            artifact.size,
+            this.maxInlineArtifactBytes,
+            signal,
+          ),
+        ),
+      };
+    } finally {
+      release();
+    }
+  }
+
+  async readRenderLog(
+    identity: RemoteMcpIdentity,
+    jobId: string,
+    stage: "pdf" | "svg",
+    startByte?: number,
+    startLine?: number,
+    sha256?: string,
+  ) {
+    requireScope(identity.scopes, "mcp:read");
+    const job = this.assertReadableJob(identity.userId, jobId);
+    const path = stage === "svg" ? "svg/compile.log" : "compile.log";
+    const artifact = this.database.artifacts.getDownloadable(jobId, path, {
+      retentionHours: this.artifactRetentionHours,
+    });
+    if (artifact === undefined) {
+      const stored =
+        job.status === "expired" ||
+        job.status === "deleted" ||
+        job.status === "deleting";
+      throw new AppError(
+        stored ? "LOG_EXPIRED" : "LOG_NOT_FOUND",
+        stored
+          ? "The compile log has expired"
+          : "The compile log is not available",
+        stored ? 410 : 404,
+      );
+    }
+    if (sha256 !== undefined && artifact.sha256 !== sha256)
+      throw new AppError(
+        "LOG_CHANGED",
+        "The stored log changed; start a new read",
+        409,
+      );
+    return {
+      jobId,
+      stage,
+      sha256: artifact.sha256,
+      ...(await this.logWindow(artifact, startByte, startLine, 8192)),
+    };
+  }
+
+  private async logWindow(
+    artifact: ArtifactRow,
+    startByte: number | undefined,
+    startLine: number | undefined,
+    maxBytes: number,
+  ) {
+    if (
+      (startByte !== undefined &&
+        (!Number.isSafeInteger(startByte) ||
+          startByte < 0 ||
+          startByte > artifact.size ||
+          startLine !== undefined)) ||
+      (startLine !== undefined &&
+        (!Number.isSafeInteger(startLine) || startLine < 1))
+    )
+      throw new AppError("LOG_RANGE_INVALID", "Invalid compile log range", 416);
+
+    const release = await this.acquireInlineArtifactBytes(maxBytes);
+    try {
+      return await this.withArtifactLease(artifact, async (path, signal) => {
+        const file = await open(
+          path,
+          constants.O_RDONLY | constants.O_NOFOLLOW,
+        );
+        try {
+          const info = await file.stat();
+          if (!info.isFile() || info.size !== artifact.size)
+            throw new AppError(
+              "LOG_UNAVAILABLE",
+              "The stored compile log cannot be read",
+              409,
+            );
+          let start = startByte ?? Math.max(0, artifact.size - maxBytes);
+          if (startLine !== undefined)
+            start = await locateLogLine(
+              file,
+              startLine,
+              AbortSignal.any([signal, AbortSignal.timeout(3000)]),
+            );
+          const bytes = Buffer.alloc(Math.min(maxBytes, artifact.size - start));
+          const { bytesRead } = await file.read(bytes, 0, bytes.length, start);
+          signal.throwIfAborted();
+          if (bytesRead !== bytes.length)
+            throw new AppError(
+              "LOG_UNAVAILABLE",
+              "The stored compile log cannot be read",
+              409,
+            );
+          // Avoid cutting a UTF-8 code point at the end of a requested page.
+          let end = bytesRead;
+          if (start + bytesRead < artifact.size) {
+            const leading = Buffer.alloc(1);
+            while (end > 0) {
+              const next = await file.read(leading, 0, 1, start + end);
+              if (next.bytesRead !== 1)
+                throw new AppError(
+                  "LOG_UNAVAILABLE",
+                  "The stored compile log cannot be read",
+                  409,
+                );
+              if ((leading.readUInt8(0) & 0xc0) !== 0x80) break;
+              end--;
+            }
+          }
+          let begin = 0;
+          if (start > 0 && startLine === undefined)
+            while (begin < end && (bytes.readUInt8(begin) & 0xc0) === 0x80)
+              begin++;
+          return {
+            startByte: start + begin,
+            endByte: start + end,
+            totalBytes: artifact.size,
+            startLine: startLine ?? (start === 0 ? 1 : null),
+            nextByte: start + end < artifact.size ? start + end : null,
+            text: sanitizeLog(bytes.subarray(begin, end).toString("utf8")),
+          };
+        } finally {
+          await file.close();
+        }
+      });
+    } catch (error) {
+      if (error instanceof AppError) throw error;
+      throw new AppError(
+        "LOG_UNAVAILABLE",
+        "The stored compile log cannot be read",
+        409,
+      );
+    } finally {
+      release();
+    }
+  }
+
+  private async withArtifactLease<T>(
+    artifact: ArtifactRow,
+    read: (path: string, signal: AbortSignal) => Promise<T>,
+  ): Promise<T> {
     let releaseLease: (() => void) | undefined;
     try {
       // Admission may wait behind other reads. Recheck retention and register
       // protection together only after the memory budget is actually acquired.
       const leaseId = this.database.transaction(() => {
         const current = this.database.artifacts.getDownloadable(
-          jobId,
+          artifact.job_id,
           artifact.relative_path,
           { retentionHours: this.artifactRetentionHours },
         );
@@ -2244,7 +3730,7 @@ export class RemoteRenderService {
         const id = newId("download");
         this.database.artifacts.createLease({
           id,
-          jobId,
+          jobId: artifact.job_id,
           artifactId: current.id,
           createdAt: nowIso(),
           expiresAt: new Date(
@@ -2266,23 +3752,14 @@ export class RemoteRenderService {
             ),
           ),
       );
-      return {
-        jobId,
-        relativePath: artifact.relative_path,
-        mimeType: artifactMimeType(artifact.type),
-        size: artifact.size,
-        sha256: artifact.sha256,
-        bytes: await readBoundedArtifact(
-          this.artifactPath(artifact),
-          artifact.size,
-          this.maxInlineArtifactBytes,
-          controller.signal,
-        ),
-      };
+      return await read(this.artifactPath(artifact), controller.signal);
     } finally {
       releaseLease?.();
-      release();
     }
+  }
+
+  private runtimeDigest() {
+    return this.rendererVersion.match(/(?:^|@)(sha256:[a-f0-9]{64})$/)?.[1] ?? null;
   }
 
   capabilities(identity: RemoteMcpIdentity): RemoteRendererCapabilities {
@@ -2291,6 +3768,9 @@ export class RemoteRenderService {
     return {
       rendererVersion: this.rendererVersion,
       texliveVersion: "2026",
+      runtimeDigest: this.runtimeDigest(),
+      engineVerification: "unknown",
+      maxInlineArtifactBytes: this.maxInlineArtifactBytes,
       engines: ["lualatex"],
       shellEscape: false,
       networkAccess: false,
@@ -2298,6 +3778,11 @@ export class RemoteRenderService {
       maxPdfPages: 100,
       outputs: ["pdf", "svg"],
       sourceLimits: {
+        inlineBytes: Math.min(
+          INLINE_SOURCE_MAX_BYTES,
+          direct.fileBytes,
+          direct.contentBytes,
+        ),
         directBytes: direct.contentBytes,
         directFiles: direct.files,
         directFileBytes: direct.fileBytes,
@@ -2313,8 +3798,7 @@ export class RemoteRenderService {
     identity: RemoteMcpIdentity,
   ): Promise<RemoteRendererCapabilities> {
     const capabilities = this.capabilities(identity);
-    if (!/^sha256:[a-f0-9]{64}$/.test(this.rendererVersion))
-      return capabilities;
+    if (capabilities.runtimeDigest === null) return capabilities;
     try {
       const file = await open(
         join(this.environmentRoot, "engines.json"),
@@ -2373,7 +3857,12 @@ export class RemoteRenderService {
           .filter(({ pdf }) => pdf)
           .map(({ engine }) => engine);
         return engines.includes(defaultRenderEngine)
-          ? { ...capabilities, engines, engineOutputs }
+          ? {
+              ...capabilities,
+              engines,
+              engineOutputs,
+              engineVerification: "verified",
+            }
           : capabilities;
       } finally {
         await file.close();
@@ -2382,6 +3871,163 @@ export class RemoteRenderService {
       return capabilities;
     }
   }
+
+  async taggedJapaneseProfile(
+    identity: RemoteMcpIdentity,
+    fixtureSha256: string,
+  ) {
+    requireScope(identity.scopes, "mcp:read");
+    const runtimeDigest = this.capabilities(identity).runtimeDigest;
+    let verified = false;
+    if (runtimeDigest !== null) {
+      try {
+        const file = await open(
+          join(this.environmentRoot, "authoring-profiles.json"),
+          "r",
+        );
+        try {
+          const info = await file.stat();
+          if (info.isFile() && info.size <= 4096) {
+            const bytes = Buffer.alloc(info.size);
+            if ((await file.read(bytes)).bytesRead === info.size) {
+              const value = JSON.parse(bytes.toString("utf8")) as {
+                schemaVersion?: number;
+                runtimeImage?: string;
+                profile?: string;
+                fixtureSha256?: string;
+                machineChecks?: unknown;
+              } | null;
+              verified =
+                value?.schemaVersion === 1 &&
+                value.runtimeImage === this.rendererVersion &&
+                value.profile === "tagged-ja-v1" &&
+                value.fixtureSha256 === fixtureSha256 &&
+                Array.isArray(value.machineChecks) &&
+                ["pdf-structure", "tagged", "japanese-text"].every((check) =>
+                  (value.machineChecks as unknown[]).includes(check),
+                );
+            }
+          }
+        } finally {
+          await file.close();
+        }
+      } catch {
+        // Missing or stale evidence leaves this profile unavailable.
+      }
+    }
+    return {
+      id: "tagged-ja-v1",
+      runtimeDigest,
+      fixtureSha256,
+      engine: "lualatex" as const,
+      documentClass: "article",
+      state: verified
+        ? ("verified_tagged_fixture" as const)
+        : ("not_checked" as const),
+      guideTopic: "accessibility",
+      templateTopic: "japanese-tagged",
+      readingOrder: "not_checked" as const,
+      pdfUa: "not_checked" as const,
+    };
+  }
+
+  async documentRequirements(
+    identity: RemoteMcpIdentity,
+    engine: RenderEngine,
+    requirements: readonly DocumentRequirement[],
+    revision?: {
+      projectId: string;
+      revisionId: string;
+      inspectEntrypoint?: boolean | undefined;
+    },
+  ) {
+    requireScope(identity.scopes, "mcp:read");
+    const saved =
+      revision === undefined
+        ? null
+        : this.savedRevisionSource(
+            identity,
+            revision.projectId,
+            revision.revisionId,
+          );
+    const entrypoint =
+      saved && revision?.inspectEntrypoint
+        ? await this.getProjectRevisionFile(
+            identity,
+            saved.revision.projectId,
+            saved.revision.revisionId,
+            saved.entrypoint,
+          )
+        : null;
+    const sourceCandidates = entrypoint && {
+      path: entrypoint.path,
+      sha256: entrypoint.sha256,
+      coverage: "literal_entrypoint_declarations" as const,
+      ...staticEntrypointRequirements(
+        entrypoint.text,
+        entrypoint.nextOffset !== null,
+      ),
+    };
+    const capabilities = await this.verifiedCapabilities(identity);
+    const inventory = await (this.requirementInventory ??=
+      new DocumentRequirementInventory(
+        this.environmentRoot,
+        this.rendererVersion,
+      )).check(requirements);
+    return {
+      version: 1 as const,
+      runtimeDigest: capabilities.runtimeDigest,
+      engine,
+      engineState: capabilities.engineOutputs?.some(
+        (item) => item.engine === engine && item.pdf,
+      )
+        ? ("verified" as const)
+        : ("not_checked" as const),
+      inventoryVersion: inventory.inventoryVersion,
+      requirementFingerprint: requirementsFingerprint({
+        engine,
+        requirements,
+        saved: saved?.revision ?? null,
+        inspectEntrypoint: revision?.inspectEntrypoint === true,
+      }),
+      revision: saved?.revision ?? null,
+      sourceCandidates,
+      items: inventory.items,
+    };
+  }
+
+  documentProbe(identity: RemoteMcpIdentity, input: DocumentProbe) {
+    requireScope(identity.scopes, "mcp:render");
+    this.assertMaintenance();
+    const probe = documentProbeSchema.parse(input);
+    const runtimeDigest = this.runtimeDigest();
+    if (runtimeDigest === null)
+      throw new AppError(
+        "DOCUMENT_PROBE_RUNTIME_UNVERIFIED",
+        "The active Runtime is not pinned",
+        503,
+      );
+    const result = this.database.transaction(() =>
+      this.database.documentProbes.request(
+        identity.userId,
+        this.rendererVersion,
+        probe,
+        nowIso(),
+      ),
+    );
+    return {
+      probeId: result.id,
+      requestFingerprint: result.fingerprint,
+      runtimeDigest,
+      input: probe,
+      scope: "isolated_synthetic_document" as const,
+      state: result.status,
+      code: result.result_code,
+      expiresAt: result.expires_at,
+    };
+  }
+
+  private requirementInventory?: DocumentRequirementInventory;
 
   async checkPackages(
     identity: RemoteMcpIdentity,
@@ -2495,16 +4141,7 @@ export class RemoteRenderService {
         "Source upload has expired",
         410,
       );
-    if (source.status === "ready")
-      return {
-        uploadId: source.id,
-        sourceId: source.id,
-        expectedBytes: source.size,
-        receivedBytes: source.size,
-        expiresAt: source.expires_at,
-        maxChunkBytes: SOURCE_UPLOAD_CHUNK_MAX_BYTES,
-      };
-    if (source.status !== "uploading")
+    if (source.status !== "ready" && source.status !== "uploading")
       throw new AppError(
         "SOURCE_UPLOAD_STATE",
         "Source upload is not active",
@@ -2526,6 +4163,25 @@ export class RemoteRenderService {
         "Chunk must contain between 1 byte and 512 KiB",
         400,
       );
+    if (source.status === "ready") {
+      if (offset + bytes.byteLength > source.size)
+        throw uploadOffsetMismatch(source.size);
+      const handle = await open(this.sourcePath(source), "r");
+      try {
+        const received = Buffer.alloc(bytes.byteLength);
+        const { bytesRead } = await handle.read(
+          received,
+          0,
+          received.length,
+          offset,
+        );
+        if (bytesRead !== bytes.length || !received.equals(bytes))
+          throw uploadOffsetMismatch(source.size);
+      } finally {
+        await handle.close();
+      }
+      return uploadProgress(source, source.size);
+    }
     const leaseOwner = `remote-mcp:${process.pid}:${randomUUID()}`,
       timestamp = nowIso(),
       leaseExpiresAt = new Date(
@@ -2568,13 +4224,21 @@ export class RemoteRenderService {
           409,
         );
       }
-      if (offset !== expectedOffset)
-        throw new AppError(
-          "SOURCE_UPLOAD_OFFSET",
-          "Chunk offset does not match received bytes",
-          409,
-          { expectedOffset },
+      if (offset < expectedOffset && offset + bytes.length <= expectedOffset) {
+        const prior = await readFile(join(chunks, String(offset))).catch(
+          (error: unknown) => {
+            if (
+              error instanceof Error &&
+              "code" in error &&
+              error.code === "ENOENT"
+            )
+              return undefined;
+            throw error;
+          },
         );
+        if (prior?.equals(bytes)) return uploadProgress(leased, expectedOffset);
+      }
+      if (offset !== expectedOffset) throw uploadOffsetMismatch(expectedOffset);
       if (offset + bytes.byteLength > leased.size)
         throw new AppError(
           "SOURCE_UPLOAD_OVERFLOW",
@@ -2600,14 +4264,7 @@ export class RemoteRenderService {
           "Source upload lease expired or changed while writing",
           409,
         );
-      return {
-        uploadId: leased.id,
-        sourceId: leased.id,
-        expectedBytes: leased.size,
-        receivedBytes: nextOffset,
-        expiresAt: leased.expires_at,
-        maxChunkBytes: SOURCE_UPLOAD_CHUNK_MAX_BYTES,
-      };
+      return uploadProgress(leased, nextOffset);
     } finally {
       this.database.sources.releaseUploadLease(uploadId, leaseOwner);
     }
@@ -3295,6 +4952,17 @@ export class RemoteRenderService {
     return new Date(Date.now() + minutes * 60_000).toISOString();
   }
 
+  private assertReadableJob(userId: string, jobId: string): JobRow {
+    const visible = this.database.jobs.getVisible(jobId);
+    if (
+      visible?.user_id === userId &&
+      visible.deleted_at === null &&
+      this.database.drafts.isOwnedProjectPreview(jobId, userId)
+    )
+      return visible;
+    return this.assertOwned(userId, jobId);
+  }
+
   private assertOwned(userId: string, jobId: string): JobRow {
     const principal = this.ensurePrincipal(userId),
       row = this.database.jobs.getOwned(
@@ -3305,6 +4973,13 @@ export class RemoteRenderService {
     if (row === undefined)
       throw new AppError("JOB_NOT_FOUND", "Job does not exist", 404);
     return row;
+  }
+
+  private artifactExpiry(job: JobRow) {
+    return artifactRetentionExpiresAt(
+      this.database.outputStages.retentionStart(job.id, job.completed_at ?? job.updated_at),
+      this.artifactRetentionHours,
+    );
   }
 
   private summarize(row: JobRow): RemoteJobSummary {
@@ -3339,6 +5014,9 @@ export class RemoteRenderService {
       queuedAt: row.queued_at,
       startedAt: row.started_at,
       finishedAt: row.completed_at,
+      retentionExpiresAt: artifacts.length > 0 || row.completed_at !== null
+        ? this.artifactExpiry(row)
+        : null,
       exitCode: row.exit_code,
       retryOf: row.retry_of_job_id,
       errorCode: row.error_code,
@@ -3496,15 +5174,10 @@ async function readBoundedArtifact(
 function normalizeRenderOutputs(
   value: Array<"pdf" | "svg"> | undefined,
 ): Array<"pdf" | "svg"> {
-  const outputs = value ?? ["pdf"];
-  if (
-    outputs.length < 1 ||
-    outputs.length > 2 ||
-    !outputs.includes("pdf") ||
-    new Set(outputs).size !== outputs.length
-  )
+  const result = renderOutputsSchema.safeParse(value);
+  if (!result.success)
     throw new AppError("INVALID_OUTPUTS", "Render outputs are invalid", 400);
-  return outputs;
+  return result.data;
 }
 
 function previewPage(relativePath: string): number | null {
@@ -3522,17 +5195,9 @@ function resourceUri(jobId: string, relativePath: string): string {
   return `latex-renderer://jobs/${jobId}/artifact/${encodeURIComponent(relativePath)}`;
 }
 
-interface ParsedDiagnosticItem {
-  type: string;
-  file: string | null;
-  line: number | null;
-  message: string;
-}
+type ParsedDiagnosticItem = Omit<RemoteRenderDiagnostic, "severity" | "column">;
 
-function parseDiagnosticsJson(value: string): {
-  errors: ParsedDiagnosticItem[];
-  warnings: ParsedDiagnosticItem[];
-} {
+function parseDiagnosticsJson(value: string) {
   let parsed: unknown;
   try {
     parsed = JSON.parse(value);
@@ -3541,10 +5206,19 @@ function parseDiagnosticsJson(value: string): {
   }
   if (typeof parsed !== "object" || parsed === null)
     throw new AppError("DIAGNOSTICS_INVALID", "Stored diagnostics are invalid");
-  const object = parsed as { errors?: unknown; warnings?: unknown };
+  const object = parsed as {
+    errors?: unknown;
+    warnings?: unknown;
+    coverage?: unknown;
+  };
+  const coverage = diagnosticCoverageSchema.safeParse(object.coverage);
+  const count = (entries: unknown): number =>
+    Array.isArray(entries) ? Math.max(0, entries.length - 500) : 0;
   return {
     errors: diagnosticItems(object.errors, "latex-error"),
     warnings: diagnosticItems(object.warnings, "latex-warning"),
+    coverage: coverage.success ? coverage.data : null,
+    storedListOmitted: count(object.errors) + count(object.warnings),
   };
 }
 
@@ -3557,6 +5231,7 @@ function diagnosticItems(
     if (typeof item !== "object" || item === null) return [];
     const candidate = item as Record<string, unknown>;
     if (typeof candidate.message !== "string") return [];
+    const logLine = candidate.logLine;
     return [
       {
         type:
@@ -3573,28 +5248,72 @@ function diagnosticItems(
             ? candidate.line
             : null,
         message: candidate.message.slice(0, 2000),
+        ...(typeof logLine === "number" &&
+        Number.isSafeInteger(logLine) &&
+        logLine > 0
+          ? { logLine }
+          : {}),
+        ...(candidate.messageTruncated === true ||
+        candidate.message.length > 2000
+          ? { messageTruncated: true }
+          : {}),
+        ...(typeof candidate.tool === "string"
+          ? { tool: candidate.tool.slice(0, 50) }
+          : {}),
       },
     ];
   });
 }
 
-function logExcerpt(
-  log: string,
-  diagnostics: readonly RemoteRenderDiagnostic[],
-): string {
-  const sanitized = log
-      // eslint-disable-next-line no-control-regex -- renderer logs are untrusted input.
-      .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\u009b]/g, "")
-      .slice(0, 4 * 1024 * 1024),
-    lines = sanitized.split(/\r?\n/),
-    needle = diagnostics.find((item) => item.severity === "error")?.message,
-    matched =
-      needle === undefined
-        ? -1
-        : lines.findIndex((line) => line.includes(needle.slice(0, 160))),
-    end = matched >= 0 ? Math.min(lines.length, matched + 12) : lines.length,
-    start = matched >= 0 ? Math.max(0, matched - 12) : Math.max(0, end - 80);
-  return lines.slice(start, end).join("\n").slice(0, 16_384);
+function diagnosticLogExcerpt(
+  text: string,
+  entries: readonly RemoteRenderDiagnostic[],
+) {
+  const lines = text.split(/\r?\n/);
+  const needle = entries
+    .find((item) => item.severity === "error")
+    ?.message.slice(0, 160);
+  const match = needle ? lines.findIndex((line) => line.includes(needle)) : -1;
+  const start =
+    match < 0 ? Math.max(0, lines.length - 80) : Math.max(0, match - 12);
+  const end = match < 0 ? lines.length : Math.min(lines.length, match + 12);
+  return {
+    text: lines.slice(start, end).join("\n"),
+    truncated: start > 0 || end < lines.length,
+  };
+}
+
+function sanitizeLog(value: string): string {
+  return value.replace(
+    // eslint-disable-next-line no-control-regex -- renderer logs are untrusted input.
+    /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\u009b]/g,
+    "",
+  );
+}
+
+async function locateLogLine(
+  file: Awaited<ReturnType<typeof open>>,
+  line: number,
+  signal: AbortSignal,
+): Promise<number> {
+  if (line === 1) return 0;
+  const bytes = Buffer.alloc(64 * 1024);
+  let position = 0;
+  let current = 1;
+  for (;;) {
+    signal.throwIfAborted();
+    const { bytesRead } = await file.read(bytes, 0, bytes.length, position);
+    if (bytesRead === 0)
+      throw new AppError(
+        "LOG_RANGE_INVALID",
+        "Log line is outside the stored log",
+        416,
+      );
+    const window = bytes.subarray(0, bytesRead);
+    for (let at = window.indexOf(10); at >= 0; at = window.indexOf(10, at + 1))
+      if (++current === line) return position + at + 1;
+    position += bytesRead;
+  }
 }
 
 function requireScope(
@@ -3716,6 +5435,29 @@ async function sha256File(path: string): Promise<string> {
   for await (const chunk of createReadStream(path) as AsyncIterable<Buffer>)
     hash.update(chunk);
   return hash.digest("hex");
+}
+
+function uploadProgress(
+  source: SourceRow,
+  receivedBytes: number,
+): RemoteSourceUpload {
+  return {
+    uploadId: source.id,
+    sourceId: source.id,
+    expectedBytes: source.size,
+    receivedBytes,
+    expiresAt: source.expires_at,
+    maxChunkBytes: SOURCE_UPLOAD_CHUNK_MAX_BYTES,
+  };
+}
+
+function uploadOffsetMismatch(expectedOffset: number): AppError {
+  return new AppError(
+    "SOURCE_UPLOAD_OFFSET",
+    "Chunk does not match the accepted Source data or offset",
+    409,
+    { expectedOffset },
+  );
 }
 
 async function writeUploadChunk(
@@ -4188,5 +5930,139 @@ function searchEnvironmentNames(
     query,
     matches,
     nextCursor: next < all.length ? String(next) : null,
+  };
+}
+
+function sourceFileKind(path: string): "text" | "binary" {
+  return [".png", ".jpg", ".jpeg", ".pdf"].includes(extname(path).toLowerCase())
+    ? "binary"
+    : "text";
+}
+
+async function readSavedSource<T>(read: () => Promise<T>): Promise<T> {
+  try {
+    return await read();
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      "code" in error &&
+      (error.code === "ENOENT" || error.code === "EACCES")
+    )
+      throw new AppError(
+        "SOURCE_ARCHIVE_UNAVAILABLE",
+        "Saved Source archive is unavailable",
+        409,
+      );
+    throw error;
+  }
+}
+
+function replaceExactDraftText(
+  text: string,
+  patch: Extract<DraftFileChange, { patch: unknown }>["patch"],
+  maxBytes: number,
+): Buffer {
+  if (sha256Hex(text) !== patch.expectedSha256)
+    throw new AppError(
+      "DRAFT_PATCH_MISMATCH",
+      "The draft file does not match the expected digest",
+      409,
+    );
+  if (
+    !Number.isSafeInteger(patch.expectedMatches) ||
+    patch.expectedMatches < 1 ||
+    patch.expectedMatches > 100 ||
+    patch.original.length === 0
+  )
+    throw new AppError(
+      "DRAFT_PATCH_INVALID",
+      "Invalid patch match requirement",
+      422,
+    );
+  let matches = 0;
+  for (
+    let offset = text.indexOf(patch.original);
+    offset !== -1;
+    offset = text.indexOf(patch.original, offset + patch.original.length)
+  ) {
+    if (++matches > patch.expectedMatches) break;
+  }
+  if (
+    matches !== patch.expectedMatches ||
+    countOverlappingMatches(text, patch.original, matches) !== matches
+  )
+    throw new AppError(
+      "DRAFT_PATCH_MISMATCH",
+      "The patch does not match the expected number of non-overlapping locations",
+      409,
+    );
+  const resultBytes =
+    Buffer.byteLength(text) +
+    matches *
+      (Buffer.byteLength(patch.replacement) -
+        Buffer.byteLength(patch.original));
+  if (resultBytes > maxBytes)
+    throw new AppError(
+      "SOURCE_FILE_SIZE",
+      "Patched file exceeds the direct file limit",
+      422,
+    );
+  return Buffer.from(
+    text.replaceAll(patch.original, () => patch.replacement),
+    "utf8",
+  );
+}
+
+function countOverlappingMatches(
+  text: string,
+  value: string,
+  limit: number,
+): number {
+  let matches = 0;
+  for (
+    let offset = text.indexOf(value);
+    offset !== -1;
+    offset = text.indexOf(value, offset + 1)
+  ) {
+    if (++matches > limit) break;
+  }
+  return matches;
+}
+
+class DraftEditReplayed extends Error {
+  constructor(readonly version: number) {
+    super("The edit was accepted by another request");
+  }
+}
+
+function draftVersionConflict(currentVersion: number | undefined) {
+  return new AppError(
+    "DRAFT_VERSION_CONFLICT",
+    "The draft has changed since it was loaded",
+    409,
+    {
+      currentVersion: currentVersion ?? null,
+    },
+  );
+}
+
+function sourceTextPage(text: string, offset: number) {
+  const isLowSurrogate = (at: number) =>
+    (text.charCodeAt(at) & 0xfc00) === 0xdc00;
+  if (
+    !Number.isSafeInteger(offset) ||
+    offset < 0 ||
+    offset > text.length ||
+    isLowSurrogate(offset)
+  )
+    throw new AppError("SOURCE_FILE_RANGE", "Invalid UTF-16 offset", 416);
+  let end = Math.min(offset + 4000, text.length);
+  if (isLowSurrogate(end)) end--;
+  return {
+    text: text.slice(offset, end),
+    unit: "utf16" as const,
+    offset,
+    nextOffset: end < text.length ? end : null,
+    totalUnits: text.length,
   };
 }

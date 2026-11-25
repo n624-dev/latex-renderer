@@ -58,6 +58,11 @@ export const renderOutputsSchema = z
     message: "PDF output is required",
   })
   .default(["pdf"]);
+export const renderReproducibilitySchema = z.discriminatedUnion("mode", [
+  z.object({ mode: z.literal("fixed"), date: z.iso.datetime() }).strict(),
+  z.object({ mode: z.literal("latest") }).strict(),
+]);
+export type RenderReproducibility = z.infer<typeof renderReproducibilitySchema>;
 export const sourceRenderTicketRequestSchema = z
   .object({
     sourceId: z.string().regex(/^source_[a-f0-9]{32}$/),
@@ -134,6 +139,123 @@ export function createProjectDraftUpdateRequestSchema(maxChanges = 1000) {
     ])).max(maxChanges),
   }).strict();
 }
+export const pdfCropRequestSchema = z
+  .object({
+    page: z.number().int().min(1).max(100),
+    x: z.number().min(0).max(1),
+    y: z.number().min(0).max(1),
+    width: z.number().min(0.001).max(1),
+    height: z.number().min(0.001).max(1),
+  })
+  .strict()
+  .refine(({ x, y, width, height }) => x + width <= 1 && y + height <= 1, {
+    message: "The crop must fit in the displayed page",
+  });
+export type PdfCropRequest = z.infer<typeof pdfCropRequestSchema>;
+export const pdfSyncQuerySchema = z.discriminatedUnion("direction", [
+  z
+    .object({
+      direction: z.literal("pdf_to_source"),
+      page: z.number().int().min(1).max(100),
+      x: z.number().min(0).max(12000),
+      y: z.number().min(0).max(12000),
+    })
+    .strict(),
+  z
+    .object({
+      direction: z.literal("source_to_pdf"),
+      path: z.string().min(1).max(200),
+      line: z.number().int().min(1).max(1000000),
+    })
+    .strict(),
+]);
+export type PdfSyncQuery = z.infer<typeof pdfSyncQuerySchema>;
+export const pdfSheetQuerySchema = z
+  .object({
+    pages: z
+      .array(z.number().int().min(1).max(100))
+      .min(1)
+      .max(4)
+      .refine(
+        (pages) => new Set(pages).size === pages.length,
+        "Select distinct page numbers",
+      ),
+  })
+  .strict();
+export type PdfSheetQuery = z.infer<typeof pdfSheetQuerySchema>;
+export const pdfInspectionInputSchema = z.union([
+  pdfCropRequestSchema,
+  pdfSyncQuerySchema,
+  pdfSheetQuerySchema,
+]);
+export type PdfInspectionInput = z.infer<typeof pdfInspectionInputSchema>;
+const probeTeXName = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.+-]{0,99}$/);
+const probeFontName = z
+  .string()
+  .regex(/^[\p{L}\p{N} ._+-]{1,100}$/u)
+  .refine((name) => name.trim() === name && name.length > 0);
+export const documentProbeSchema = z
+  .object({
+    engine: renderEngineSchema,
+    documentClass: probeTeXName.default("article"),
+    packages: z.array(probeTeXName).max(12).default([]),
+    font: probeFontName.optional(),
+    mathFont: probeFontName.optional(),
+    japanese: z.boolean().default(false),
+  })
+  .strict()
+  .refine(
+    (input) =>
+      (!input.font && !input.mathFont && !input.japanese) ||
+      input.engine === "lualatex" ||
+      (input.engine === "xelatex" && !input.japanese),
+    "Named font probes require LuaLaTeX or XeLaTeX; the Japanese font sample uses LuaLaTeX",
+  );
+export type DocumentProbe = z.infer<typeof documentProbeSchema>;
+export const projectDocumentConditionsSchema = z
+  .array(
+    z
+      .object({
+        kind: z.enum([
+          "purpose",
+          "format",
+          "required",
+          "excluded",
+          "change",
+          "preserve",
+          "unresolved",
+        ]),
+        basis: z.enum(["user_specified", "existing_document", "unconfirmed"]),
+        text: z.string().trim().min(1).max(1000),
+      })
+      .strict(),
+  )
+  .max(50);
+export const projectReviewChecksSchema = z
+  .array(
+    z
+      .object({
+        type: z.enum(["machine", "visual", "source_comparison"]),
+        status: z.enum([
+          "passed",
+          "needs_attention",
+          "not_checked",
+          "unavailable",
+          "accepted_issue",
+        ]),
+        pages: z.array(z.number().int().min(1).max(100)).max(100).optional(),
+        note: z.string().trim().max(1000).optional(),
+      })
+      .strict(),
+  )
+  .min(1)
+  .max(100);
+export type ProjectDocumentCondition = z.infer<
+  typeof projectDocumentConditionsSchema
+>[number];
+export type ProjectReviewCheck = z.infer<
+  typeof projectReviewChecksSchema
+>[number];
 export const projectJobSummarySchema = z
   .object({
     id: z.string().regex(/^job_[a-f0-9]{32}$/),
@@ -406,14 +528,29 @@ export const maintenanceModeSchema = z.enum([
 ]);
 export type MaintenanceMode = z.infer<typeof maintenanceModeSchema>;
 
+const logDiagnosticLocation = {
+  logLine: z.number().int().positive().optional(),
+  messageTruncated: z.boolean().optional(),
+  tool: z.string().optional(),
+};
+
+export const diagnosticCoverageSchema = z.object({
+  scannedLines: z.number().int().nonnegative(),
+  errorsOmitted: z.number().int().nonnegative(),
+  warningsOmitted: z.number().int().nonnegative(),
+  messagesTruncated: z.number().int().nonnegative(),
+});
+
 export const structuredErrorsSchema = z.object({
   success: z.boolean(),
   exitCode: z.number().int().nullable(),
+  coverage: diagnosticCoverageSchema.optional(),
   errors: z.array(
     z.object({
       file: z.string(),
       line: z.number().int().nullable(),
       message: z.string(),
+      ...logDiagnosticLocation,
     }),
   ),
   warnings: z.array(
@@ -422,6 +559,7 @@ export const structuredErrorsSchema = z.object({
       file: z.string().nullable(),
       line: z.number().int().nullable(),
       message: z.string(),
+      ...logDiagnosticLocation,
     }),
   ),
 });

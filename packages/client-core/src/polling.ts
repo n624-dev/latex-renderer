@@ -44,11 +44,13 @@ export async function pollUntilTerminal(
     );
   const startedAt = now(),
     controller = new AbortController();
+  let lastStatus: JobResponse["status"] | undefined;
   const timeoutError = () =>
     new AppError(
       "RENDER_POLL_TIMEOUT",
       "Local status-wait timeout. This client did not cancel the server Job; check its status or cancel it explicitly",
       504,
+      { jobId: ticket.jobId, lastStatus: lastStatus ?? null },
     );
   let timer: ReturnType<typeof setTimeout> | undefined;
   const assertDeadline = () => {
@@ -120,6 +122,7 @@ export async function pollUntilTerminal(
         job = await readStatus();
       }
       assertDeadline();
+      lastStatus = job.status;
       options.onEvent?.({
         type: "job.status",
         jobId: ticket.jobId,

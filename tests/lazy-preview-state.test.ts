@@ -73,6 +73,44 @@ describe("lazy preview durable state (conversion boundary is deterministic, not 
       await f.close();
     }
   });
+  it("reports storage failure during the wait and on a later request", async () => {
+    const f = await fixture();
+    try {
+      const pending = waitForPreview(
+        f.database,
+        f.job.id,
+        2,
+        {},
+        { timeoutMs: 500 },
+      );
+      const now = new Date().toISOString();
+      const claim = f.database.previews.claim("worker", now);
+      if (!claim) throw new Error("Missing preview claim");
+      expect(
+        f.database.previews.finish(
+          claim,
+          "worker",
+          now,
+          "INSUFFICIENT_STORAGE",
+        ),
+      ).toBe(true);
+      const failure = {
+        code: "PREVIEW_FAILED",
+        status: 409,
+        details: { previewErrorCode: "INSUFFICIENT_STORAGE", retryable: true },
+      };
+      await expect(pending).rejects.toMatchObject(failure);
+      await expect(
+        waitForPreview(f.database, f.job.id, 2),
+      ).rejects.toMatchObject(failure);
+      expect(
+        f.database.artifacts.getDownloadable(f.job.id, "result.pdf")?.sha256,
+      ).toBe(f.pdf.sha256);
+    } finally {
+      await f.close();
+    }
+  });
+
   it.each([0, 4, 101, 1.5, NaN])(
     "rejects an invalid page %s before queueing",
     async (page) => {

@@ -362,6 +362,9 @@ importers:
 
   apps/renderer-worker:
     dependencies:
+      '@latex-renderer/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
       '@latex-renderer/database':
         specifier: workspace:*
         version: link:../../packages/database

@@ -9,6 +9,7 @@ import {
 } from "@latex-renderer/shared";
 
 export interface WorkerConfig extends ResourceLimits {
+  reproducibilityEpoch?: number;
   databasePath: string;
   storageRoot: string;
   image: string;

@@ -986,8 +986,28 @@ describe("Remote MCP HTTP server", () => {
         params: {},
       });
       expect(listed.result.tools?.map((tool) => tool.name)).toEqual([
+        "get_authoring_guide",
+        "list_authoring_profiles",
         "list_projects",
         "get_project",
+        "get_project_document_state",
+        "update_project_document_conditions",
+        "adopt_project_revision",
+        "record_project_pdf_review",
+        "list_project_pdf_reviews",
+        "get_project_storage_usage",
+        "protect_project_revision",
+        "plan_project_revision_cleanup",
+        "apply_project_revision_cleanup",
+        "get_project_draft",
+        "open_project_draft",
+        "get_project_draft_file",
+        "apply_project_changes",
+        "render_project_draft",
+        "save_project_draft",
+        "get_project_revision_downloads",
+        "list_project_revision_files",
+        "get_project_revision_file",
         "get_project_revision_jobs",
         "create_project",
         "rename_project",
@@ -1000,6 +1020,7 @@ describe("Remote MCP HTTP server", () => {
         "create_source",
         "begin_source_upload",
         "upload_source_chunk",
+        "get_source_upload_status",
         "finalize_source_upload",
         "update_source_file",
         "delete_source_file",
@@ -1008,10 +1029,21 @@ describe("Remote MCP HTTP server", () => {
         "retry_render",
         "retry_svg_render",
         "get_render_status",
+        "request_render_quality_report",
+        "get_render_quality_report",
+        "get_render_preview_crop",
+        "locate_render_source",
+        "get_render_preview_sheet",
+        "compare_render_quality",
+        "get_render_manifest",
         "get_render_diagnostics",
+        "read_render_log",
+        "get_render_preview_pages",
         "get_render_preview",
         "get_render_artifacts",
         "get_renderer_capabilities",
+        "check_document_requirements",
+        "probe_document_requirements",
         "check_packages",
         "search_packages",
         "check_fonts",
@@ -1023,6 +1055,490 @@ describe("Remote MCP HTTP server", () => {
       expect(JSON.stringify(listed)).not.toContain("apiKey");
     },
   );
+
+  it("recovers a lost render and upload reply through the real MCP tool routes", async () => {
+    const f = await createFixture();
+    const token = issueAccessToken(f.oauth);
+    const input = {
+      inlineSource: "\\documentclass{article}",
+      idempotencyKey: "render-retry-fixture-001",
+    };
+    const call = (id: number, name: string, args: Record<string, unknown>) =>
+      callTool(f.app, token, id, name, args);
+    const first = await call(1, "create_render", input);
+    const replay = await call(2, "create_render", input);
+    expect(first.result.structuredContent).toMatchObject({ success: true });
+    expect(replay.result.structuredContent).toEqual(
+      first.result.structuredContent,
+    );
+    expect(f.database.jobs.countActive()).toBe(1);
+    const conflict = await call(3, "create_render", {
+      ...input,
+      engine: "xelatex",
+    });
+    expect(conflict.result.structuredContent).toMatchObject({
+      error: { code: "IDEMPOTENCY_CONFLICT" },
+    });
+    const identity = { userId: "user_test", scopes: ["mcp:render"] as const };
+    const upload = await f.renders.beginSourceUpload(
+      identity,
+      8,
+      "b".repeat(64),
+    );
+    const chunk = {
+      uploadId: upload.uploadId,
+      offset: 0,
+      base64: Buffer.from("ABCD").toString("base64"),
+    };
+    await call(4, "upload_source_chunk", chunk);
+    expect(
+      (await call(5, "upload_source_chunk", chunk)).result.structuredContent,
+    ).toMatchObject({ result: { upload: { receivedBytes: 4 } } });
+    const mismatch = await call(6, "upload_source_chunk", {
+      ...chunk,
+      base64: Buffer.from("EFGH").toString("base64"),
+    });
+    expect(mismatch.result.structuredContent).toMatchObject({
+      error: { code: "SOURCE_UPLOAD_OFFSET", expectedOffset: 4 },
+    });
+    expect(JSON.stringify(mismatch.result.content)).toContain(
+      "Resume at byte 4",
+    );
+    expect(
+      (await call(7, "get_source_upload_status", { uploadId: upload.uploadId }))
+        .result.structuredContent,
+    ).toMatchObject({
+      result: {
+        upload: {
+          status: "uploading",
+          expectedBytes: 8,
+          receivedBytes: 4,
+          expiresAt: upload.expiresAt,
+        },
+      },
+    });
+  });
+
+  it.each(["latest", "fixed"] as const)(
+    "records the %s date on a new retry and preserves it on retransmission",
+    async (mode) => {
+      const f = await createFixture();
+      const token = issueAccessToken(f.oauth);
+      const acceptedAt = new Date();
+      const fixedDate = "2024-05-06T12:34:56Z";
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(acceptedAt);
+      const invoke = (
+        id: number,
+        name: string,
+        args: Record<string, unknown>,
+      ) => callTool(f.app, token, id, name, args);
+      const created = await invoke(1, "create_render", {
+        inlineSource: "\\documentclass{article}",
+        reproducibility:
+          mode === "latest" ? { mode } : { mode, date: fixedDate },
+      });
+      const jobId = contentIdentifier(created, "Job ID", /^job_[a-f0-9]{32}$/);
+      const originalEpoch = Math.floor(
+        (mode === "latest" ? acceptedAt.getTime() : Date.parse(fixedDate)) /
+          1000,
+      );
+      expect(
+        (await invoke(2, "get_render_manifest", { jobId })).result
+          .structuredContent,
+      ).toMatchObject({
+        result: { reproducibility: { mode, epochSeconds: originalEpoch } },
+      });
+      await invoke(3, "cancel_render", { jobId });
+
+      vi.setSystemTime(acceptedAt.getTime() + 2_000);
+      const request = { jobId, idempotencyKey: "retry-date-fixture-001" };
+      const retried = await invoke(4, "retry_render", request);
+      const retryId = contentIdentifier(
+        retried,
+        "Job ID",
+        /^job_[a-f0-9]{32}$/,
+      );
+      expect(retryId).not.toBe(jobId);
+      const retryEpoch = mode === "latest" ? originalEpoch + 2 : originalEpoch;
+      expect(
+        (await invoke(5, "get_render_manifest", { jobId: retryId })).result
+          .structuredContent,
+      ).toMatchObject({
+        result: { reproducibility: { mode, epochSeconds: retryEpoch } },
+      });
+
+      vi.setSystemTime(acceptedAt.getTime() + 4_000);
+      const replayed = await invoke(6, "retry_render", request);
+      expect(replayed.result.structuredContent).toEqual(
+        retried.result.structuredContent,
+      );
+      expect(f.database.jobs.reproducibility(retryId)).toEqual({
+        mode,
+        epochSeconds: retryEpoch,
+      });
+    },
+  );
+
+  it("keeps document conditions versioned and invalidates changed cleanup plans", async () => {
+    const f = await createFixture(),
+      token = issueAccessToken(f.oauth);
+    const identity = {
+      userId: "user_test",
+      scopes: ["mcp:render", "mcp:read", "mcp:delete"] as const,
+    };
+    const projectId = f.renders.createProject(identity, "Retention project").id;
+    const create = async (text: string) => {
+      const source = await f.renders.createSource(identity, [
+        { path: "main.tex", text },
+      ]);
+      return f.renders.attachProjectRevision(identity, {
+        sourceId: source.id,
+        projectId,
+        entrypoint: "main.tex",
+        displayName: text,
+        originalFilename: "source.zip",
+        outputs: ["pdf"],
+      });
+    };
+    const first = await create("version one");
+    const latest = await create("version two");
+    const call = (id: number, name: string, args: Record<string, unknown>) =>
+      callTool(f.app, token, id, name, { projectId, ...args });
+    const condition = {
+      kind: "preserve",
+      basis: "user_specified",
+      text: "Preserve math fonts",
+    };
+    expect(
+      (
+        await call(1, "update_project_document_conditions", {
+          expectedVersion: 0,
+          entries: [condition],
+        })
+      ).result.structuredContent,
+    ).toMatchObject({ result: { version: 1, entries: [condition] } });
+    expect(
+      (
+        await call(2, "update_project_document_conditions", {
+          expectedVersion: 0,
+          entries: [],
+        })
+      ).result.structuredContent,
+    ).toMatchObject({
+      error: { code: "DOCUMENT_CONDITIONS_CONFLICT", currentVersion: 1 },
+    });
+    expect(
+      (
+        await call(3, "get_project_revision_downloads", {
+          revisionId: first.id,
+        })
+      ).result.structuredContent,
+    ).toMatchObject({
+      result: {
+        sourceZip: {
+          downloadUrl: expect.stringContaining(
+            `${first.id}/source.zip`,
+          ) as unknown,
+        },
+        pdf: null,
+      },
+    });
+
+    const selection = { revisionIds: [first.id] };
+    const original = structuredResult(
+      await call(4, "plan_project_revision_cleanup", selection),
+    );
+    expect(original.estimatedSourceBytes).toBeGreaterThan(0);
+    await call(5, "adopt_project_revision", {
+      revisionId: first.id,
+      expectedRevisionId: null,
+    });
+    const changed = await call(6, "apply_project_revision_cleanup", {
+      ...selection,
+      planHash: original.planHash,
+    });
+    expect(changed.result.structuredContent).toMatchObject({
+      error: { code: "REVISION_CLEANUP_CHANGED" },
+    });
+    const protectedPlan = await call(7, "plan_project_revision_cleanup", {
+      revisionIds: [first.id, latest.id],
+    });
+    expect(protectedPlan.result.structuredContent).toMatchObject({
+      result: {
+        estimatedSourceBytes: 0,
+        entries: expect.arrayContaining([
+          expect.objectContaining({
+            revisionId: first.id,
+            reasons: ["adopted"],
+          }),
+          expect.objectContaining({
+            revisionId: latest.id,
+            reasons: ["latest"],
+          }),
+        ]) as unknown,
+      },
+    });
+    await call(8, "adopt_project_revision", {
+      revisionId: null,
+      expectedRevisionId: first.id,
+    });
+    const plan = structuredResult(
+      await call(9, "plan_project_revision_cleanup", selection),
+    );
+    const removed = await call(10, "apply_project_revision_cleanup", {
+      ...selection,
+      planHash: plan.planHash,
+    });
+    expect(removed.result.structuredContent).toMatchObject({
+      result: { removed: [first.id] },
+    });
+    expect(f.database.sources.get(first.sourceId)?.status).toBe("ready");
+    expect(f.renders.getProject(identity, projectId).latestRevision?.id).toBe(
+      latest.id,
+    );
+  });
+
+  it("updates a shared Draft atomically and replays the accepted draft version", async () => {
+    const f = await createFixture(),
+      token = issueAccessToken(f.oauth);
+    const identity = {
+      userId: "user_test",
+      scopes: ["mcp:render", "mcp:read"] as const,
+    };
+    const projectId = f.renders.createProject(identity, "Shared").id;
+    const source = await f.renders.createSource(identity, [
+      { path: "main.tex", text: "original" },
+    ]);
+    const base = f.renders.attachProjectRevision(identity, {
+      projectId,
+      sourceId: source.id,
+      entrypoint: "main.tex",
+      displayName: "Initial",
+      originalFilename: "source.zip",
+      outputs: ["pdf"],
+    });
+    const call = (id: number, name: string, args: Record<string, unknown>) =>
+      callTool(f.app, token, id, name, { projectId, ...args });
+    await call(1, "open_project_draft", { revisionId: base.id });
+    const changes = {
+      version: 1,
+      idempotencyKey: "draft-batch-fixture-01",
+      entrypoint: "final.tex",
+      files: [
+        { path: "main.tex", remove: true },
+        { path: "final.tex", text: "edited" },
+        { path: "notes.txt", text: "supporting material" },
+      ],
+    };
+    const first = await call(2, "apply_project_changes", changes);
+    expect(first.result.structuredContent).toMatchObject({
+      success: true,
+      result: { version: 2, baseVersion: 1 },
+    });
+    const replay = await call(3, "apply_project_changes", changes);
+    expect(replay.result.structuredContent).toEqual(
+      first.result.structuredContent,
+    );
+    const stale = await call(4, "open_project_draft", {
+      revisionId: base.id,
+      replaceVersion: 1,
+    });
+    expect(stale.result.structuredContent).toMatchObject({
+      success: false,
+      error: { code: "DRAFT_VERSION_CONFLICT" },
+    });
+    const broken = await call(5, "apply_project_changes", {
+      ...changes,
+      version: 2,
+      idempotencyKey: "draft-batch-fixture-02",
+      files: [{ path: "final.tex", remove: true }],
+    });
+    expect(broken.result.structuredContent).toMatchObject({ success: false });
+    expect(f.renders.getSharedDraft(identity, projectId)).toMatchObject({
+      version: 2,
+      entrypoint: "final.tex",
+    });
+    const saved = await call(6, "save_project_draft", {
+      version: 2,
+      displayName: "Edited",
+      description: "Moved the entrypoint and added notes",
+    });
+    expect(saved.result.structuredContent).toMatchObject({
+      success: true,
+      result: { revision: { revisionNumber: 2, entrypoint: "final.tex" } },
+    });
+    const latest = f.renders.getProject(identity, projectId).latestRevision;
+    expect(latest?.id).toBeDefined();
+    const history = await call(7, "get_project_document_state", {
+      history: { revisionId: latest?.id },
+    });
+    expect(history.result.structuredContent).toMatchObject({
+      result: {
+        revisionChanges: {
+          revisionId: latest?.id,
+          items: [
+            {
+              parentRevisionId: base.id,
+              draftVersion: 2,
+              description: "Moved the entrypoint and added notes",
+            },
+          ],
+          nextOffset: null,
+        },
+      },
+    });
+    expect(
+      await f.renders.getProjectRevisionFile(
+        identity,
+        projectId,
+        base.id,
+        "main.tex",
+      ),
+    ).toMatchObject({ text: "original" });
+  });
+
+  it("delivers the authoring guide and reads only the selected immutable revision", async () => {
+    const f = await createFixture();
+    const token = issueAccessToken(f.oauth);
+    const identity = {
+      userId: "user_test",
+      scopes: ["mcp:render", "mcp:read"] as const,
+    };
+    const text = "日".repeat(3999) + "𠮷終";
+    const project = f.renders.createProject(identity, "Saved");
+    const source = await f.renders.createSource(identity, [
+      { path: "main.tex", text },
+      { path: "節/style.sty", text: "saved style" },
+    ]);
+    const revision = f.renders.attachProjectRevision(identity, {
+      projectId: project.id,
+      sourceId: source.id,
+      entrypoint: "main.tex",
+      displayName: "Saved",
+      originalFilename: "source.zip",
+      outputs: ["pdf"],
+    });
+    const other = f.renders.createProject(identity, "Unrelated");
+    const selector = { projectId: project.id, revisionId: revision.id };
+    const call = (id: number, name: string, args: Record<string, unknown>) =>
+      callTool(f.app, token, id, name, args);
+    const guide = await call(1, "get_authoring_guide", { topic: "remote" });
+    expect(guide.result.structuredContent).toMatchObject({
+      success: true,
+      result: {
+        topic: "remote",
+        body: expect.stringContaining("list_project_revision_files") as unknown,
+      },
+    });
+    expect(JSON.stringify(guide.result.content)).toContain(
+      "get_project_revision_file",
+    );
+    const first = await call(2, "get_project_revision_file", {
+      ...selector,
+      path: "main.tex",
+    });
+    expect(first.result.structuredContent).toMatchObject({
+      result: {
+        revisionId: revision.id,
+        sourceId: source.id,
+        nextOffset: 3999,
+        text: "日".repeat(3999),
+      },
+    });
+    const second = await call(3, "get_project_revision_file", {
+      ...selector,
+      path: "main.tex",
+      offset: 3999,
+    });
+    expect(second.result.structuredContent).toMatchObject({
+      result: { text: "𠮷終", nextOffset: null },
+    });
+    const files = await call(4, "list_project_revision_files", {
+      ...selector,
+      limit: 1,
+    });
+    expect(files.result.structuredContent).toMatchObject({
+      result: {
+        items: [
+          { path: "main.tex", kind: "text", size: Buffer.byteLength(text) },
+        ],
+        totalFiles: 2,
+        nextOffset: 1,
+      },
+    });
+    const invalid = await call(5, "get_project_revision_file", {
+      ...selector,
+      projectId: other.id,
+      path: "main.tex",
+    });
+    expect(invalid.result.structuredContent).toMatchObject({
+      error: { code: "PROJECT_REVISION_NOT_FOUND" },
+    });
+    expect(f.database.jobs.countActive()).toBe(0);
+    expect(
+      f.database.drafts.getOwned(project.id, identity.userId),
+    ).toBeUndefined();
+  });
+
+  it("reports literal declarations from an exact saved entrypoint separately from explicit requirements", async () => {
+    const f = await createFixture();
+    const token = issueAccessToken(f.oauth);
+    const identity = { userId: "user_test", scopes: ["mcp:render"] as const };
+    const { id: projectId } = f.renders.createProject(
+      identity,
+      "Session requirements",
+    );
+    const source = await f.renders.createSource(identity, [
+      {
+        path: "document.tex",
+        text: String.raw`\documentclass[a5paper]{article}
+\usepackage{amsmath,luatexja}
+% \usepackage{ignored}
+\usepackage{\selectedPackage}
+\setmainjfont{Harano Aji Mincho}
+\input{chapter}`,
+      },
+      { path: "chapter.tex", text: String.raw`\usepackage{included}` },
+    ]);
+    const { id: revisionId } = f.renders.attachProjectRevision(identity, {
+      projectId,
+      sourceId: source.id,
+      entrypoint: "document.tex",
+      displayName: "First",
+      originalFilename: "document.tex",
+      outputs: ["pdf"],
+    });
+    const response = await callTool(
+      f.app,
+      token,
+      1,
+      "check_document_requirements",
+      {
+        engine: "lualatex",
+        revision: { projectId, revisionId, inspectEntrypoint: true },
+      },
+    );
+    expect(response.result.structuredContent).toMatchObject({
+      success: true,
+      result: {
+        items: [],
+        revision: { projectId, revisionId },
+        sourceCandidates: {
+          path: "document.tex",
+          coverage: "literal_entrypoint_declarations",
+          truncated: false,
+          items: [
+            { kind: "class", name: "article", line: 1 },
+            { kind: "package", name: "amsmath", line: 2 },
+            { kind: "package", name: "luatexja", line: 2 },
+            { kind: "font", name: "Harano Aji Mincho", line: 5 },
+          ],
+        },
+      },
+    });
+    expect(f.database.jobs.countActive()).toBe(0);
+  });
 
   it.each(["2025-06-18", "2025-03-26"])(
     "completes every Remote MCP workflow from content only with protocol %s",
@@ -2224,7 +2740,11 @@ describe("Remote MCP HTTP server", () => {
           identity,
           upload.uploadId,
           0,
-          "ignored",
+          (
+            await readFile(
+              join(fixture.storage, "sources", source.id, "source.zip"),
+            )
+          ).toString("base64"),
         ),
       ).resolves.toMatchObject({
         sourceId: source.id,
@@ -2618,6 +3138,151 @@ describe("Remote MCP HTTP server", () => {
       }
     },
   );
+
+  it("keeps the reviewed PDF identity when Job history is deleted", async () => {
+    const f = await createFixture();
+    const token = issueAccessToken(f.oauth);
+    const identity = { userId: "user_test", scopes: ["mcp:render"] as const };
+    const jobId = await seedCompletedRemoteJob(f, "succeeded");
+    const sourceId = f.database.jobs.get(jobId)?.source_id;
+    const pdf = f.database.artifacts.getDownloadable(jobId, "result.pdf");
+    if (!sourceId || !pdf) throw new Error("Incomplete PDF fixture");
+    const { id: projectId } = f.renders.createProject(identity, "Reviewed");
+    const { id: revisionId } = f.renders.attachProjectRevision(identity, {
+      projectId,
+      sourceId,
+      entrypoint: "main.tex",
+      displayName: "Original",
+      originalFilename: "main.tex",
+      outputs: ["pdf"],
+    });
+    const runtimeDigest = "sha256:" + "b".repeat(64);
+    f.database.raw
+      .prepare(
+        "UPDATE jobs SET project_revision_id=?,runtime_digest=? WHERE id=?",
+      )
+      .run(revisionId, runtimeDigest, jobId);
+    const input = {
+      projectId,
+      revisionId,
+      jobId,
+      pdfSha256: pdf.sha256,
+      conditionsVersion: null,
+      checks: [{ type: "visual", status: "not_checked" }],
+      guideVersion: null,
+    };
+    const recorded = await callTool(
+      f.app,
+      token,
+      1,
+      "record_project_pdf_review",
+      input,
+    );
+    expect(recorded.result.structuredContent).toMatchObject({
+      result: { review: { ...input, runtimeDigest } },
+    });
+    f.database.raw.prepare("DELETE FROM artifacts WHERE job_id=?").run(jobId);
+    f.database.raw.prepare("DELETE FROM used_nonces WHERE job_id=?").run(jobId);
+    f.database.raw.prepare("DELETE FROM jobs WHERE id=?").run(jobId);
+    const listed = await callTool(f.app, token, 2, "list_project_pdf_reviews", {
+      projectId,
+    });
+    expect(listed.result.structuredContent).toMatchObject({
+      result: { items: [{ ...input, runtimeDigest }] },
+    });
+  });
+
+  it("queues one inspection for the exact artifact without creating a new render", async () => {
+    const f = await createFixture(),
+      token = issueAccessToken(f.oauth);
+    const jobId = await seedCompletedRemoteJob(f, "succeeded");
+    const sha256 = f.database.artifacts.getDownloadable(
+      jobId,
+      "result.pdf",
+    )?.sha256;
+    if (!sha256) throw new Error("Missing fixture PDF");
+    const count = f.database.jobs.countActive();
+    const request = await callTool(
+      f.app,
+      token,
+      8,
+      "request_render_quality_report",
+      { jobId, pdfSha256: sha256 },
+    );
+    expect(request.result.structuredContent).toMatchObject({
+      result: {
+        jobId,
+        pdfSha256: sha256,
+        state: "queued",
+        report: null,
+      },
+    });
+    expect(
+      (
+        await callTool(f.app, token, 9, "request_render_quality_report", {
+          jobId,
+          pdfSha256: sha256,
+        })
+      ).result.structuredContent,
+    ).toEqual(request.result.structuredContent);
+    expect(
+      (
+        await callTool(f.app, token, 10, "get_render_quality_report", {
+          jobId,
+          pdfSha256: "0".repeat(64),
+        })
+      ).result.structuredContent,
+    ).toMatchObject({ error: { code: "PDF_CHECKSUM_MISMATCH" } });
+    expect(f.database.jobs.countActive()).toBe(count);
+  });
+
+  it("reads a fatal log line beyond the inline cap without dropping diagnostics", async () => {
+    const f = await createFixture(),
+      token = issueAccessToken(f.oauth);
+    const jobId = await seedCompletedRemoteJob(f, "failed");
+    const filler = Buffer.alloc(16 * 1024 * 1024, 32);
+    const log = Buffer.concat([
+      filler,
+      Buffer.from("\nFatal error at end of source\n"),
+    ]);
+    f.database.raw
+      .prepare(
+        "DELETE FROM artifacts WHERE job_id=? AND relative_path='compile.log'",
+      )
+      .run(jobId);
+    await seedRemoteArtifact(f, jobId, "log", "compile.log", log);
+    const diagnostics = await callTool(
+      f.app,
+      token,
+      9,
+      "get_render_diagnostics",
+      { jobId },
+    );
+    expect(diagnostics.result.structuredContent).toMatchObject({
+      result: {
+        diagnostics: {
+          coverage: { logStatus: "available", logExcerptTruncated: true },
+          logExcerpt: expect.stringContaining(
+            "Fatal error at end of source",
+          ) as unknown,
+          rawLogResourceUri: null,
+        },
+      },
+    });
+    const range = await callTool(f.app, token, 10, "read_render_log", {
+      jobId,
+      startLine: 2,
+    });
+    expect(range.result.structuredContent).toMatchObject({
+      result: {
+        log: {
+          text: "Fatal error at end of source\n",
+          startByte: filler.length + 1,
+          nextByte: null,
+        },
+      },
+    });
+  });
 
   it("rejects artifacts larger than the MCP inline resource cap", async () => {
     const fixture = await createFixture(),

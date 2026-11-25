@@ -211,6 +211,51 @@ describe("renderer worker config", () => {
       normal.some((value) => value.startsWith("LATEX_PREVIEW_PAGE=")),
     ).toBe(false);
   });
+  it("uses the accepted date for both TeX stages and leaves conversion and ordinary jobs alone", () => {
+    stubRequiredEnvironment();
+    const normal = loadWorkerConfig();
+    const epoch = 1_793_296_800;
+    const profiled = { ...normal, reproducibilityEpoch: epoch };
+    for (const stage of [
+      { mode: "pdf" },
+      { mode: "svg", pdfDirectory: "/checkpoint" },
+    ] as const) {
+      const args = rendererRunArguments(
+        profiled,
+        "job_test",
+        "/input",
+        "/output",
+        "main.tex",
+        ["pdf", "svg"],
+        1,
+        stage,
+        "lualatex",
+      );
+      expect(args).toContain(`SOURCE_DATE_EPOCH=${epoch}`);
+      expect(args).toContain("FORCE_SOURCE_DATE=1");
+      expect(args).toContain("TZ=UTC");
+    }
+    const preview = rendererRunArguments(
+      profiled,
+      "job_test",
+      "/input",
+      "/output",
+      "main.tex",
+      ["pdf"],
+      1,
+      { mode: "preview", page: 1, pdfDirectory: "/checkpoint" },
+    );
+    const ordinary = rendererRunArguments(
+      normal,
+      "job_test",
+      "/input",
+      "/output",
+    );
+    for (const args of [preview, ordinary])
+      expect(args.some((arg) => arg.startsWith("SOURCE_DATE_EPOCH="))).toBe(
+        false,
+      );
+  });
   it.each([undefined, 0, -1, 101, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
     "rejects an invalid preview page %s",
     (page) => {
