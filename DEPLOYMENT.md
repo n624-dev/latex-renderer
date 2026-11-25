@@ -91,8 +91,9 @@ Existing artifacts keep their old locations and public URLs. See
 ## Authoring tools and tagged PDF
 
 Run `pnpm build:authoring-plugin` to package the authoring Skill, templates,
-and Remote MCP connection metadata in `client-dist/`. The archive uses the
-public service URL and contains no credentials. Install or update the
+and Remote MCP connection metadata in `client-dist/`. The release workflow
+adds the same archive to the checksum and attestation set. The archive uses
+the public service URL and contains no credentials. Install or update the
 archive separately from refreshing a registered MCP connection.
 
 Check templates on an isolated host with the exact Runtime image ID.

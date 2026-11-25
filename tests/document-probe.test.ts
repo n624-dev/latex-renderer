@@ -1,4 +1,4 @@
-import { documentProbeSchema } from "@latex-renderer/contracts";
+import { documentProbeSchema } from "../packages/contracts/src/index.js";
 import { RendererDatabase } from "@latex-renderer/database";
 import { describe, expect, it } from "vitest";
 import { documentProbeSource } from "../apps/renderer-worker/src/pdf-inspection.js";

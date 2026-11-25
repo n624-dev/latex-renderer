@@ -2397,6 +2397,7 @@ export class RemoteRenderService {
               mimeType: "application/pdf",
               expiresAt: this.artifactExpiry(job),
               inlineMaxBytes: this.maxInlineArtifactBytes,
+              manifestResourceUri: `latex-renderer://jobs/${jobId}/manifest/${pdf.sha256}`,
               downloadUrl: url(`jobs/${jobId}/artifacts/result.pdf`),
               resourceUri:
                 pdf.size <= this.maxInlineArtifactBytes

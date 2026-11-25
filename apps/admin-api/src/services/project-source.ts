@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { open } from "node:fs/promises";
 import { join } from "node:path";
@@ -46,9 +47,33 @@ export async function downloadProjectSource(
       source.sha256 !== current.sha256
     )
       throw unavailable();
+    const hash = createHash("sha256");
+    const buffer = Buffer.alloc(128 * 1024);
+    let position = 0;
+    while (position < stat.size) {
+      signal.throwIfAborted();
+      const read = await file.read(
+        buffer,
+        0,
+        Math.min(buffer.length, stat.size - position),
+        position,
+      );
+      if (read.bytesRead === 0) throw unavailable();
+      hash.update(buffer.subarray(0, read.bytesRead));
+      position += read.bytesRead;
+    }
+    const checked = await file.stat();
+    signal.throwIfAborted();
+    if (
+      checked.size !== stat.size ||
+      checked.mtimeMs !== stat.mtimeMs ||
+      checked.ctimeMs !== stat.ctimeMs ||
+      hash.digest("hex") !== source.sha256
+    )
+      throw unavailable();
     // The open descriptor remains valid even if the owner deletes the Project
     // while streaming. Close it on completion, failure, or client disconnect.
-    const stream = file.createReadStream({ autoClose: true, signal });
+    const stream = file.createReadStream({ autoClose: true, signal, start: 0 });
     return new Response(Readable.toWeb(stream) as ReadableStream<Uint8Array>, {
       headers: {
         "Content-Type": "application/zip",

@@ -141,7 +141,11 @@ jobs:
             node deploy/winget/build-package.mjs "$arch" \
               client-dist/latex-renderer-client "$RUNNER_TEMP/release-assets"
           done
-          (cd "$RUNNER_TEMP/release-assets" && sha256sum n624-latex-*-windows-*.zip >> SHA256SUMS)
+          pnpm build:authoring-plugin
+          plugin="latex-renderer-authoring-plugin-${RELEASE_TAG#v}.zip"
+          unzip -tq "client-dist/$plugin"
+          install -m 0644 "client-dist/$plugin" "$RUNNER_TEMP/release-assets/$plugin"
+          (cd "$RUNNER_TEMP/release-assets" && sha256sum n624-latex-*-windows-*.zip "$plugin" >> SHA256SUMS)
       - name: Attest release assets with Sigstore provenance
         id: attest
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
@@ -158,6 +162,7 @@ jobs:
             "$RUNNER_TEMP/release-assets/latex-renderer-server-$version.tar.gz" \
             "$RUNNER_TEMP/release-assets/latex-renderer-client-$version.zip" \
             "$RUNNER_TEMP/release-assets/latex-renderer-local-$version.mcpb" \
+            "$RUNNER_TEMP/release-assets/latex-renderer-authoring-plugin-$version.zip" \
             "$RUNNER_TEMP/release-assets/n624-latex-$version-windows-x64.zip" \
             "$RUNNER_TEMP/release-assets/n624-latex-$version-windows-arm64.zip"; do
             gh attestation verify "$asset" \
@@ -558,6 +563,7 @@ jobs:
             "$RUNNER_TEMP/release-assets/latex-renderer-server-$version.tar.gz" \
             "$RUNNER_TEMP/release-assets/latex-renderer-client-$version.zip" \
             "$RUNNER_TEMP/release-assets/latex-renderer-local-$version.mcpb" \
+            "$RUNNER_TEMP/release-assets/latex-renderer-authoring-plugin-$version.zip" \
             "$RUNNER_TEMP/release-assets/n624-latex-$version-windows-x64.zip" \
             "$RUNNER_TEMP/release-assets/n624-latex-$version-windows-arm64.zip" \
             "$RUNNER_TEMP/release-assets/SHA256SUMS" \

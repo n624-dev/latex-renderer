@@ -2611,6 +2611,7 @@ function registerProjectTools(
                     mimeType: z.string(),
                     expiresAt: z.string(),
                     inlineMaxBytes: z.number().int().positive(),
+                    manifestResourceUri: z.string(),
                     downloadUrl: z.url(),
                     resourceUri: z.string().nullable(),
                   })
@@ -3094,6 +3095,26 @@ function registerJobResources(
           "result.pdf",
         ),
       ),
+  );
+  server.registerResource(
+    "render-manifest",
+    new ResourceTemplate("latex-renderer://jobs/{jobId}/manifest/{pdfSha256}", { list: undefined }),
+    {
+      title: "Render manifest for the exact PDF",
+      description: "Input, Runtime, artifact digests and Worker observations for an owned PDF.",
+      mimeType: "application/json",
+    },
+    (uri, variables) => {
+      const id = resourceJobId(variables.jobId);
+      const sha256 = resourceVariable(variables.pdfSha256);
+      if (!/^[a-f0-9]{64}$/.test(sha256))
+        throw new AppError("PDF_CHECKSUM_INVALID", "The PDF digest is invalid", 400);
+      renders.enforceRateLimit(identity.userId, "read_render_manifest_resource", 60);
+      const manifest = renders.renderManifest(identity, id);
+      if (manifest.pdfSha256 !== sha256)
+        throw new AppError("PDF_CHECKSUM_MISMATCH", "The requested PDF is unavailable or has changed", 409);
+      return { contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(manifest) }] };
+    },
   );
   server.registerResource(
     "compile-log",

@@ -413,7 +413,7 @@ export async function sourcePipelineFixture(
     const renders = new RemoteRenderService(
       database,
       storage,
-      "pipeline-test",
+      realPipelineImage ?? "pipeline-test",
       origin,
       20,
       20 * 1024 * 1024,
