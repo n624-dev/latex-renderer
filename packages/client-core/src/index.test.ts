@@ -351,6 +351,7 @@ describe("client core", () => {
     });
     await expect(download).rejects.toMatchObject({
       code: "RENDER_POLL_TIMEOUT",
+      details: { jobId: "job_test", lastStatus: "running" },
     });
     await expect(download).rejects.toThrow("did not cancel the server Job");
     expect(await readFile(join(output, "job.json"), "utf8")).toBe(previous);

@@ -17,6 +17,10 @@ import { diagnosticWriter } from "../../../deploy/scripts/service-diagnostics.mj
 import { workerHasDemand } from "../../../deploy/scripts/worker-demand.mjs";
 import { performance } from "node:perf_hooks";
 import { recoverStaleLeases } from "./recovery.js";
+import {
+  processPdfInspection,
+  recoverPdfInspections,
+} from "./pdf-inspection.js";
 import { processPreview, recoverPreviewRequests } from "./preview-processor.js";
 import {
   collectSourceTrees,
@@ -65,6 +69,7 @@ export async function runWorker(
   }
   await recoverStaleLeases(database, config);
   await recoverPreviewRequests(database, config);
+  await recoverPdfInspections(database, config);
   console.log(
     JSON.stringify({
       event: "renderer_worker.started",
@@ -116,6 +121,7 @@ export async function runWorker(
       }
       if (Date.now() >= nextPreviewRecovery) {
         await recoverPreviewRequests(database, config);
+        await recoverPdfInspections(database, config);
         nextPreviewRecovery = Date.now() + 10_000;
       }
       if (isShuttingDown()) break;
@@ -143,7 +149,7 @@ export async function runWorker(
         )
           awaitingRecovery.delete(id);
       }
-      if (awaitingRecovery.size) {
+      if (awaitingRecovery.size || database.pdfInspections.hasRunning()) {
         await idleDelay();
         continue;
       }
@@ -238,6 +244,25 @@ export async function runWorker(
           assessHostResources(readHostResources(), 384 * 1024 * 1024) ===
             "ready")
       ) {
+        const inspection = database.transaction(() =>
+          database.previews.busy()
+            ? undefined
+            : database.pdfInspections.claim(config.workerId, nowIso()),
+        );
+        if (inspection) {
+          preferPreview = false;
+          try {
+            await processPdfInspection(database, config, inspection);
+          } catch (error) {
+            if (!(error instanceof RendererCleanupDeferred)) throw error;
+            diagnostic({
+              event: "renderer_worker.pdf_inspection_cleanup_deferred",
+              jobId: inspection.job_id,
+            });
+          }
+          lastWork = clock();
+          continue;
+        }
         const preview = database.transaction(() =>
           database.previews.claim(config.workerId, nowIso()),
         );

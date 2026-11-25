@@ -12,6 +12,7 @@
     "dev": "tsx src/index.ts"
   },
   "dependencies": {
+    "@latex-renderer/contracts": "workspace:*",
     "@latex-renderer/database": "workspace:*",
     "@latex-renderer/log-parser": "workspace:*",
     "@latex-renderer/shared": "workspace:*",

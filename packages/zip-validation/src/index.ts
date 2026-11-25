@@ -213,6 +213,42 @@ export async function validateAndExtract(
   }
 }
 
+/** Read the central directory of an already validated immutable Source. */
+export async function listValidatedSourceFiles(
+  archivePath: string,
+  limits: ZipLimits,
+): Promise<{ path: string; size: number }[]> {
+  const zip = await openZip(archivePath);
+  const files: { path: string; size: number }[] = [];
+  try {
+    for (let count = 0; ; count++) {
+      const entry = await nextEntry(zip);
+      if (entry === null) return files;
+      if (count >= limits.maxEntries)
+        throw new AppError(
+          "ZIP_TOO_MANY_ENTRIES",
+          "ZIP entry count exceeds limit",
+          422,
+        );
+      const path = normalizeEntry(entry.fileName, limits);
+      assertEntryType(entry, path);
+      if (path.endsWith("/")) continue;
+      if (
+        files.length >= limits.maxFiles ||
+        entry.uncompressedSize > limits.maxFileBytes
+      )
+        throw new AppError(
+          "INVALID_SOURCE_ARCHIVE",
+          "Source archive exceeds file limits",
+          422,
+        );
+      files.push({ path, size: entry.uncompressedSize });
+    }
+  } finally {
+    zip.close();
+  }
+}
+
 /** Read a bounded single file from an already validated immutable Source. */
 export async function readValidatedSourceFile(
   archivePath: string,

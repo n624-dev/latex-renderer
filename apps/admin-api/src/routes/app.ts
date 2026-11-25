@@ -8,12 +8,15 @@ import {
 import { RemoteRenderService } from "@latex-renderer/remote-mcp-core";
 import {
   ProjectDraftOperations,
+  ProjectDocumentState,
   type JobRow,
   type OwnedJobListRow,
 } from "@latex-renderer/database";
 import {
   createProjectDraftUpdateRequestSchema,
   projectDraftOpenRequestSchema,
+  projectDocumentConditionsSchema,
+  projectRevisionIdSchema,
   renderEngineSchema,
   renderOutputsSchema,
 } from "@latex-renderer/contracts";
@@ -30,6 +33,7 @@ import {
   adminPreviewResponse,
 } from "../services/artifacts.js";
 import { AdminJobsService } from "../services/jobs.js";
+import { downloadProjectSource } from "../services/project-source.js";
 import { AppProjectsService } from "../services/app-projects.js";
 import type { AdminDependencies, AppActor } from "../types.js";
 import { parse, readJson } from "./helpers.js";
@@ -301,6 +305,44 @@ export function createAppV1Router(deps: AdminDependencies): Hono {
       }),
     );
   });
+  router.get("/projects/:id/document-state", async (c) => {
+    const actor = await requireAppActor(deps, c);
+    return c.json(
+      new ProjectDocumentState(deps.database).get(
+        actor,
+        parse(projectId, c.req.param("id")),
+      ),
+    );
+  });
+  router.patch("/projects/:id/document-state/conditions", async (c) => {
+    const actor = await requireAppActor(deps, c);
+    const input = parse(
+      z
+        .object({
+          expectedVersion: z.number().int().nonnegative(),
+          entries: projectDocumentConditionsSchema,
+        })
+        .strict(),
+      await readJson(c),
+    );
+    return c.json(
+      new ProjectDocumentState(deps.database).updateConditions(
+        actor,
+        parse(projectId, c.req.param("id")),
+        input.expectedVersion,
+        input.entries,
+      ),
+    );
+  });
+  router.get("/projects/:id/revisions/:revisionId/source.zip", async (c) =>
+    downloadProjectSource(
+      deps,
+      await requireAppActor(deps, c),
+      parse(projectId, c.req.param("id")),
+      parse(projectRevisionIdSchema, c.req.param("revisionId")),
+      c.req.raw.signal,
+    ),
+  );
   router.get("/projects/:id/draft", async (c) => {
     const actor = await requireAppActor(deps, c);
     return c.json(drafts.get(actor, parse(projectId, c.req.param("id"))));

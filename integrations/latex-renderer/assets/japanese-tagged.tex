@@ -1,0 +1,29 @@
+\DocumentMetadata{lang=ja,tagging=on}
+\documentclass{article}
+\usepackage{luatexja}
+\usepackage{amsmath}
+\usepackage{tikz}
+\title{長方形の面積}
+\begin{document}
+\maketitle
+\section{考え方}
+長方形の横の長さを $a$、縦の長さを $b$ とします。
+\begin{equation}
+  A = ab
+\end{equation}
+\begin{figure}[htbp]
+  \centering
+  \begin{tikzpicture}[alt={横の辺に a、縦の辺に b と書かれた長方形}]
+    \draw (0,0) rectangle (3,2);
+    \node[below] at (1.5,0) {$a$};
+    \node[left] at (0,1) {$b$};
+  \end{tikzpicture}
+  \caption{面積を求める長方形}
+\end{figure}
+\tagpdfsetup{table/header-rows={1}}
+\begin{tabular}{ll}
+  記号 & 意味 \\
+  $a$ & 横の長さ \\
+  $b$ & 縦の長さ
+\end{tabular}
+\end{document}

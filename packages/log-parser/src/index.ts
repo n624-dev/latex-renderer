@@ -8,34 +8,120 @@ export function parseCompileLog(
 ): StructuredErrors {
   const errors: StructuredErrors["errors"] = [];
   const warnings: StructuredErrors["warnings"] = [];
-  for (const raw of log.split(/\r?\n/)) {
-    const line = sanitize(raw);
+  const coverage = {
+    scannedLines: 0,
+    errorsOmitted: 0,
+    warningsOmitted: 0,
+    messagesTruncated: 0,
+  };
+  let continued: StructuredErrors["warnings"][number] | undefined;
+  let continuationPrefix: string | undefined;
+  const bound = (
+    item: { message: string; messageTruncated?: boolean | undefined },
+    message: string,
+  ) => {
+    if (message.length > 2000 && item.messageTruncated !== true) {
+      item.messageTruncated = true;
+      coverage.messagesTruncated++;
+    }
+    item.message = message.slice(0, 2000);
+  };
+  for (let start = 0; start < log.length;) {
+    const newline = log.indexOf("\n", start);
+    const end = newline < 0 ? log.length : newline;
+    const line = sanitize(log.slice(start, end)).replace(/\r$/, "");
+    start = end + 1;
+    const logLine = ++coverage.scannedLines;
+    if (
+      continued &&
+      continuationPrefix &&
+      line.startsWith(continuationPrefix)
+    ) {
+      bound(
+        continued,
+        `${continued.message} ${line.slice(continuationPrefix.length).trim()}`,
+      );
+      continue;
+    }
+    continued = undefined;
+    continuationPrefix = undefined;
     const fileError = parseFileError(line);
     if (fileError !== null) {
-      if (errors.length < 200) errors.push(fileError);
-    } else {
-      const box = /^(Overfull|Underfull) \\[hv]box\b/.exec(line);
-      if (box !== null && warnings.length < 500) {
-        const affectedLine = /\bat lines? (\d+)(?:--\d+)?\b/.exec(line);
-        warnings.push({
-          type: String(box[1]).toLowerCase(),
-          file: null,
-          line: affectedLine === null ? null : Number(affectedLine[1]),
-          message: line.slice(0, 2000),
-        });
-      } else if (
-        warnings.length < 500 &&
-        /^(LaTeX|Package .*?) Warning:/.test(line)
-      ) {
-        warnings.push({
-          type: "latex-warning",
-          file: null,
-          line: null,
-          message: line.slice(0, 2000),
-        });
+      if (errors.length >= 200) {
+        coverage.errorsOmitted++;
+      } else {
+        // Keep the existing shape for short errors. A cut message includes its
+        // physical line in compile.log for recovery.
+        if (fileError.message.length > 2000) fileError.logLine = logLine;
+        bound(fileError, fileError.message);
+        errors.push(fileError);
       }
+      continue;
     }
-    if (errors.length >= 200 && warnings.length >= 500) break;
+    const match = /^(Overfull|Underfull) \\[hv]box\b/.exec(line);
+    const latex =
+      /^(LaTeX(?: Font)?|Package ([^ ]+)|Class ([^ ]+)) Warning:/.exec(line);
+    const biberSeverity = /^(?:\[\d+\] [^\n]{0,200}? - )?(WARN|ERROR) - /.exec(
+      line,
+    )?.[1];
+    if (biberSeverity === "ERROR") {
+      if (errors.length >= 200) coverage.errorsOmitted++;
+      else {
+        const item: StructuredErrors["errors"][number] = {
+          file: projectPath(entrypoint),
+          line: null,
+          logLine,
+          tool: "biber",
+          message: "",
+        };
+        bound(item, line);
+        errors.push(item);
+      }
+      continue;
+    }
+    const tool =
+      biberSeverity === "WARN"
+        ? "biber"
+        : /^Warning--/.test(line)
+          ? "bibtex"
+          : /^dvipdfmx:warning:/.test(line)
+            ? "dvipdfmx"
+            : undefined;
+    const missing = line.startsWith("Missing character:");
+    if (!match && !latex && !tool && !missing) continue;
+    if (warnings.length >= 500) {
+      coverage.warningsOmitted++;
+      continue;
+    }
+    const affectedLine = /\b(?:at lines?|on input line) (\d+)(?:--\d+)?\b/.exec(
+      line,
+    );
+    const item: StructuredErrors["warnings"][number] = {
+      type:
+        match?.[1]?.toLowerCase() ??
+        (missing
+          ? "missing-character"
+          : tool
+            ? `${tool}-warning`
+            : latex?.[1] === "LaTeX Font"
+              ? "font-warning"
+              : "latex-warning"),
+      file: null,
+      line: affectedLine ? Number(affectedLine[1]) : null,
+      logLine,
+      message: "",
+      ...(tool === undefined ? {} : { tool }),
+    };
+    bound(item, line);
+    warnings.push(item);
+    const prefix =
+      latex?.[2] ??
+      latex?.[3] ??
+      (latex?.[1] === "LaTeX Font" ? "Font" : undefined);
+    if (prefix !== undefined) {
+      continued = item;
+      continuationPrefix = `(${prefix})`;
+    }
   }
   if (exitCode !== null && exitCode !== 0 && errors.length === 0) {
     errors.push({
@@ -45,7 +131,7 @@ export function parseCompileLog(
         fallbackMessage ?? `Compilation failed with exit code ${exitCode}`,
     });
   }
-  return { success: exitCode === 0, exitCode, errors, warnings };
+  return { success: exitCode === 0, exitCode, errors, warnings, coverage };
 }
 
 function parseFileError(
@@ -61,7 +147,7 @@ function parseFileError(
   return {
     file: projectPath(line.slice(0, extensionEnd)),
     line: lineNumber,
-    message: message.slice(0, 2000),
+    message,
   };
 }
 

@@ -1060,7 +1060,35 @@ async function collectInventory(runtimeRef, engineCapabilities = null) {
   ]);
   if (!packages.trim() || !fonts.trim())
     throw new Error("Renderer environment inventory generation failed");
-  return { packages, fonts, engineCapabilities };
+  const requirements = await dockerCapture([
+    "run",
+    "--rm",
+    "--network",
+    "none",
+    "--read-only",
+    "--entrypoint",
+    "/bin/sh",
+    runtimeRef,
+    "-ec",
+    String.raw`
+      installed=$(tlmgr info --only-installed --data name 2>/dev/null)
+      printf '%s\n' "$installed" | sed 's/^name: //; /^$/d; s/^/distribution\t/'
+      find /opt/texlive/2026/texmf-dist/tex -type f -name '*.sty' -printf 'package\t%f\n' | sed 's/\.sty$//'
+      find /opt/texlive/2026/texmf-dist/tex -type f -name '*.cls' -printf 'class\t%f\n' | sed 's/\.cls$//'
+      fc-list --format 'font\t%{family}\t%{style}\t%{charset}\n'
+      find /opt/texlive/2026/texmf-dist/fonts -type f \( -name '*.otf' -o -name '*.ttf' \) -print0 |
+        xargs -0 -r fc-scan --format 'font\t%{family}\t%{style}\t%{charset}\n'
+    `,
+  ]).catch(() => null);
+  const documentRequirements =
+    requirements === null || Buffer.byteLength(requirements) > 2 * 1024 * 1024
+      ? null
+      : JSON.stringify({
+          version: 1,
+          runtime: engineCapabilities?.runtimeImage ?? runtimeRef,
+          entries: requirements,
+        }) + "\n";
+  return { packages, fonts, engineCapabilities, documentRequirements };
 }
 
 async function readInventorySnapshot() {
@@ -1083,6 +1111,13 @@ async function readInventorySnapshot() {
     if (error?.code !== "ENOENT") throw error;
     return null;
   });
+  result.documentRequirements = await readFile(
+    join(environmentRoot, "document-requirements.json"),
+    "utf8",
+  ).catch((error) => {
+    if (error?.code !== "ENOENT") throw error;
+    return null;
+  });
   return result;
 }
 
@@ -1093,6 +1128,11 @@ async function writeInventory(inventory) {
     0o640,
   );
   await writeAtomic(join(environmentRoot, "fonts.txt"), inventory.fonts, 0o640);
+  const requirementsPath = join(environmentRoot, "document-requirements.json");
+  if (inventory.documentRequirements == null)
+    await rm(requirementsPath, { force: true });
+  else
+    await writeAtomic(requirementsPath, inventory.documentRequirements, 0o640);
   const enginePath = join(environmentRoot, "engines.json");
   if (inventory.engineCapabilities === null)
     await rm(enginePath, { force: true });
@@ -1110,6 +1150,11 @@ async function restoreInventory(snapshot) {
     if (snapshot[name] === null) await rm(path, { force: true });
     else await writeAtomic(path, snapshot[name], 0o640);
   }
+  const requirementsPath = join(environmentRoot, "document-requirements.json");
+  if (snapshot.documentRequirements == null)
+    await rm(requirementsPath, { force: true });
+  else
+    await writeAtomic(requirementsPath, snapshot.documentRequirements, 0o640);
   const enginePath = join(environmentRoot, "engines.json");
   if (snapshot.engineCapabilities == null)
     await rm(enginePath, { force: true });

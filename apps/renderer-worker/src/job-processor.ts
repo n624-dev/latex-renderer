@@ -31,6 +31,10 @@ export async function processJob(
   config: WorkerConfig,
   job: WorkerJobRow,
 ): Promise<void> {
+  const profile = database.jobs.reproducibility(job.id);
+  if (profile !== undefined)
+    config = { ...config, reproducibilityEpoch: profile.epochSeconds };
+
   const subject = database.worker.subjectState(job.id);
   if (
     subject === undefined ||

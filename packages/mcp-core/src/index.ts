@@ -107,6 +107,11 @@ const errorSchema = z
     code: z.string(),
     message: z.string(),
     status: z.number().int(),
+    jobId: z
+      .string()
+      .regex(/^job_[a-f0-9]{32}$/)
+      .optional(),
+    lastStatus: z.string().nullable().optional(),
   })
   .strict();
 const artifactSchema = z
@@ -443,13 +448,29 @@ export function createMcpOperations(
         allowedRoots(),
         true,
       );
+      let recovery: { jobId: string; lastStatus: string | null } | undefined;
       const rendered = await renderProject(await client(), localDirectory, {
         entrypoint,
         ...(outputs === undefined ? {} : { outputs }),
         engine,
+        onEvent: (event) => {
+          if (event.type === "job.queued")
+            recovery = { jobId: event.jobId, lastStatus: null };
+          if (event.type === "job.status")
+            recovery = { jobId: event.jobId, lastStatus: event.status };
+        },
         ...(options.renderTimeoutMs === undefined
           ? {}
           : { pollTimeoutMs: options.renderTimeoutMs }),
+      }).catch((error: unknown) => {
+        if (recovery === undefined) throw error;
+        const normalized = safeError(error);
+        throw new AppError(
+          normalized.code,
+          normalized.message,
+          normalized.status,
+          recovery,
+        );
       });
       const result = {
         job: summarizeJob(rendered.job),
@@ -583,15 +604,24 @@ export function mcpFailure<T extends McpToolName>(
 ): {
   success: false;
   operation: T;
-  error: { code: string; message: string; status: number };
+  error: z.infer<typeof errorSchema>;
 } {
   const normalized = safeError(error);
+  const details = error instanceof AppError ? error.details : undefined;
+  const jobId = details?.jobId;
+  const lastStatus = details?.lastStatus;
   return {
     success: false,
     operation,
     error: {
       ...normalized,
       message: redactSecrets(normalized.message),
+      ...(typeof jobId === "string" && /^job_[a-f0-9]{32}$/.test(jobId)
+        ? {
+            jobId,
+            lastStatus: typeof lastStatus === "string" ? lastStatus : null,
+          }
+        : {}),
     },
   };
 }

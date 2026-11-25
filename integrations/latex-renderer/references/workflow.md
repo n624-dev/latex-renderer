@@ -1,15 +1,17 @@
-# Workflow
+# Local MCP and CLI workflow
 
 Use one interface for a task; do not mix direct REST calls with CLI/MCP state. A Source is one uploaded directory or ZIP. Each render Job selects exactly one `.tex` entrypoint from that Source.
 
 - MCP, one document: call `render_project` with `directory` and, when requested, `entrypoint`. The default entrypoint is `main.tex`. Poll with `get_render_status`, then call `download_render_artifacts`. Prefer each tool's `structuredContent`; use its short text only for compatibility.
 - MCP, multiple explicitly requested documents: call `upload_source` once, then call `create_render_job` once for each selected `entrypoint` using the returned `sourceId`. Poll and download each Job separately. Tool results expose Source and Job IDs but never API keys or upload/job tickets.
-- CLI, one document: run `latex-render render <directory-or-zip> [--entrypoint <path>]`. Results are written to `<directory>/.render/`, beside a ZIP as `.render/`, or to `--output` when supplied.
-- CLI, multiple explicitly requested documents: run `latex-render source upload <directory-or-zip>` once. Reuse its `sourceId` with `latex-render render --source <source-id> --entrypoint <path> --output <unique-directory>` for each selected document.
+- CLI, one document: run `n624-latex render <directory-or-zip> [--entrypoint <path>]`. Results are written to `<directory>/.render/`, beside a ZIP as `.render/`, or to `--output` when supplied.
+- CLI, multiple explicitly requested documents: run `n624-latex source upload <directory-or-zip>` once. Reuse its `sourceId` with `n624-latex render --source <source-id> --entrypoint <path> --output <unique-directory>` for each selected document.
 - CLI automation: add `--json` and consume the single JSON object instead of parsing human progress text. The JSON never contains API keys or tickets.
-- Setup diagnosis: run `latex-render doctor --json`. Treat `setup`, `setup repair`, and `setup remove` as installation changes requiring the user's request.
-- Existing job: use `latex-render jobs get <job-id>` and `latex-render jobs download <job-id>`.
+- Setup diagnosis: run `n624-latex doctor --json`. Treat `setup`, `setup repair`, and `setup remove` as installation changes requiring the user's request.
+- Existing job: use `n624-latex jobs get <job-id>` and `n624-latex jobs download <job-id>`.
 - Cancellation and deletion change server state. Only perform them after the user explicitly requests the action.
+
+For a CLI installation that exposes the legacy command, use `latex-render` in place of `n624-latex`. If local waiting ends after a server Job was accepted, use its ID with `get_render_status` or `n624-latex jobs get <job-id>` to resume.
 
 Expected files include `job.json`, `result.pdf`, `errors.json`, `compile.log`, and preview PNGs. A failed job may omit `result.pdf` while still providing diagnostics.
 

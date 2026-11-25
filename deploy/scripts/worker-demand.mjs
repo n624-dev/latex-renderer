@@ -29,6 +29,20 @@ export function workerIdleConfiguration(environment = process.env) {
 // The database, including cleanup leases, is authoritative. Notifications only
 // reduce latency; neither a lost hint nor an old heartbeat can erase work.
 export function workerHasDemand(database) {
+  const inspections = database
+    .prepare(
+      "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='pdf_inspections'",
+    )
+    .get();
+  if (
+    inspections &&
+    database
+      .prepare(
+        "SELECT 1 FROM pdf_inspections WHERE status='running' OR (status='queued' AND expires_at>?) LIMIT 1",
+      )
+      .get(new Date().toISOString())
+  )
+    return true;
   return (
     database
       .prepare(

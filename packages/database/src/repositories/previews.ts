@@ -26,6 +26,37 @@ export interface PreviewRequest {
   updated_at: string;
 }
 
+const permanentPreviewFailures = new Set([
+  "ARTIFACT_NOT_FOUND",
+  "PDF_CHECKSUM_MISMATCH",
+  "OUTPUT_LIMIT",
+]);
+const publicPreviewFailures = new Set([
+  ...permanentPreviewFailures,
+  "INSUFFICIENT_STORAGE",
+  "USER_STORAGE_QUOTA_EXCEEDED",
+  "PREVIEW_INTERRUPTED",
+  "PREVIEW_CONVERSION_FAILED",
+]);
+
+export function previewFailure(row: PreviewRequest): AppError {
+  const previewErrorCode =
+    row.error_code !== null && publicPreviewFailures.has(row.error_code)
+      ? row.error_code
+      : "PREVIEW_FAILED";
+  const retryable =
+    row.attempt < 3 && !permanentPreviewFailures.has(previewErrorCode);
+  const message =
+    previewErrorCode === "INSUFFICIENT_STORAGE" ||
+    previewErrorCode === "USER_STORAGE_QUOTA_EXCEEDED"
+      ? "Preview could not be generated because storage is insufficient. The original PDF is still available."
+      : "Preview could not be generated. The original PDF is still available.";
+  return new AppError("PREVIEW_FAILED", message, 409, {
+    previewErrorCode,
+    retryable,
+  });
+}
+
 /** All mutating methods run inside the caller's short management transaction.
  * No PDF conversion, filesystem work or waiting is allowed in that transaction. */
 export class PreviewsRepository {
@@ -90,16 +121,14 @@ export class PreviewsRepository {
       );
     const prior = this.get(jobId, page);
     if (prior && prior.status !== "failed") return;
-    if (
-      prior &&
-      (prior.attempt >= 3 ||
-        Date.parse(timestamp) - Date.parse(prior.updated_at) < 60_000)
-    )
-      throw new AppError(
-        "PREVIEW_UNAVAILABLE",
-        "Preview generation is temporarily unavailable",
-        503,
-      );
+    if (prior) {
+      const failure = previewFailure(prior);
+      if (
+        failure.details?.retryable !== true ||
+        Date.parse(timestamp) - Date.parse(prior.updated_at) < 60_000
+      )
+        throw failure;
+    }
     const queued = this.db
       .prepare(
         `SELECT COUNT(*) AS total,

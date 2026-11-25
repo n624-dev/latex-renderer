@@ -138,6 +138,18 @@ export class AppError extends Error {
   }
 }
 
+/** Allowlisted public metadata for a failed preview, never generic error details. */
+export function publicPreviewErrorDetails(
+  error: unknown,
+): { previewErrorCode: string; retryable: boolean } | undefined {
+  if (!(error instanceof AppError) || error.code !== "PREVIEW_FAILED")
+    return undefined;
+  const { previewErrorCode, retryable } = error.details ?? {};
+  if (typeof previewErrorCode !== "string" || typeof retryable !== "boolean")
+    return undefined;
+  return { previewErrorCode, retryable };
+}
+
 export function newId(prefix: string): string {
   return `${prefix}_${randomUUID().replaceAll("-", "")}`;
 }

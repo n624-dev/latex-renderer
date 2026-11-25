@@ -166,6 +166,14 @@ Verify schema 27 after a restore test and private-copy migration
 preflight. Deploy the application, Worker and cleanup together. Downgrades
 require the verified full recovery point.
 
+## Migration 028: Project document state and PDF inspection
+
+Migration 028 adds project document conditions, adopted revisions, PDF review
+records, saved revision metadata, and revision protection. It also adds
+on-demand PDF inspection and crop requests bound to a specific PDF, and records
+the selected date profile for reproducible renders. Existing jobs and projects
+keep their default behavior. Verify schema 28 after startup.
+
 ## Migration 022: PDF-bound preview requests
 
 The same migration adds bounded `source_trees` and `source_tree_readers` for
