@@ -42,8 +42,10 @@ it.skipIf(browserSettings().engine !== "chromium")(
       });
       await expect.poll(() => source.textContent()).toContain("日本語");
       await page
-        .locator<HTMLSelectElement>("#editor-language")
+        .locator("#editor-language")
         .evaluate((select) => {
+          if (!(select instanceof HTMLSelectElement))
+            throw new Error("Language picker is not a select element");
           select.value = "de";
           select.dispatchEvent(new Event("change", { bubbles: true }));
         });
