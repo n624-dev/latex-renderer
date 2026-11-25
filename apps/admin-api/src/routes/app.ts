@@ -1,8 +1,22 @@
 import { Hono } from "hono";
 import { z } from "zod";
+import {
+  displayLocales,
+  preferredDisplayLanguages,
+  resolveDisplayLocale,
+} from "@latex-renderer/shared/locale";
 import { RemoteRenderService } from "@latex-renderer/remote-mcp-core";
-import type { JobRow, OwnedJobListRow } from "@latex-renderer/database";
-import { renderOutputsSchema } from "@latex-renderer/contracts";
+import {
+  ProjectDraftOperations,
+  type JobRow,
+  type OwnedJobListRow,
+} from "@latex-renderer/database";
+import {
+  createProjectDraftUpdateRequestSchema,
+  projectDraftOpenRequestSchema,
+  renderEngineSchema,
+  renderOutputsSchema,
+} from "@latex-renderer/contracts";
 import {
   AppError,
   DEFAULT_RESOURCE_LIMITS,
@@ -41,17 +55,59 @@ const jobId = z.string().regex(/^job_[a-f0-9]{32}$/),
 export function createAppV1Router(deps: AdminDependencies): Hono {
   const router = new Hono(),
     jobs = new AdminJobsService(deps),
-    projects = new AppProjectsService(deps);
+    projects = new AppProjectsService(deps),
+    drafts = new ProjectDraftOperations(
+      deps.database,
+      deps.maxFileCount,
+      deps.maxZipEntries,
+    ),
+    draftUpdate = createProjectDraftUpdateRequestSchema(
+      (deps.maxFileCount ?? DEFAULT_RESOURCE_LIMITS.maxFileCount) * 2,
+    );
 
   router.get("/me", async (c) => {
     const actor = await requireAppActor(deps, c),
-      user = deps.database.users.get(actor.userId);
+      user = deps.database.users.get(actor.userId),
+      displayLocale = deps.database.users.displayLocale(actor.userId);
     return c.json({
       userId: actor.userId,
       displayName: user?.display_name ?? actor.userId,
+      displayLocale,
+      resolvedDisplayLocale: resolveDisplayLocale({
+        selected: c.req.query("locale"),
+        saved: displayLocale ?? undefined,
+        preferred: preferredDisplayLanguages(c.req.header("Accept-Language")),
+      }),
       role: actor.role,
       isAdmin: actor.role === "owner" || actor.role === "admin",
     });
+  });
+
+  router.patch("/me/locale", async (c) => {
+    const actor = await requireAppActor(deps, c),
+      input = parse(
+        z.object({ locale: z.enum(displayLocales) }).strict(),
+        await readJson(c),
+      );
+    deps.database.transaction(() => {
+      const maintenance = deps.database.settings.value<string>(
+        "maintenance_mode",
+        "normal",
+      );
+      if (maintenance !== "normal" && maintenance !== "reject-new-jobs")
+        throw new AppError(
+          "MAINTENANCE",
+          "Account settings cannot be changed during maintenance",
+          503,
+        );
+      if (!deps.database.users.setDisplayLocale(actor.userId, input.locale))
+        throw new AppError(
+          "APP_FORBIDDEN",
+          "Application access is not permitted",
+          403,
+        );
+    });
+    return c.json({ displayLocale: input.locale });
   });
 
   router.get("/jobs", async (c) => {
@@ -72,7 +128,11 @@ export function createAppV1Router(deps: AdminDependencies): Hono {
   router.get("/jobs/:id", async (c) => {
     const actor = await requireAppActor(deps, c),
       id = parse(jobId, c.req.param("id"));
-    return c.json(jobSummary(deps, assertOwnedJob(deps, actor, id)));
+    const job = assertOwnedJob(deps, actor, id);
+    return c.json({
+      ...jobSummary(deps, job),
+      pdfPageCount: deps.database.previews.document(id)?.page_count ?? null,
+    });
   });
   router.get("/jobs/:id/archive", async (c) => {
     const actor = await requireAppActor(deps, c),
@@ -96,6 +156,7 @@ export function createAppV1Router(deps: AdminDependencies): Hono {
       c.req.param("*") || c.req.path.split("/artifacts/").at(-1) || "",
       false,
       c.req.query("disposition") === "inline",
+      { range: c.req.header("Range"), ifRange: c.req.header("If-Range") },
     );
   });
   router.get("/jobs/:id/previews/:name", async (c) => {
@@ -173,6 +234,7 @@ export function createAppV1Router(deps: AdminDependencies): Hono {
             displayName,
             originalFilename: filename,
             outputs: renderOutputsSchema,
+            engine: renderEngineSchema.optional(),
           })
           .strict(),
         await readJson(c),
@@ -186,6 +248,7 @@ export function createAppV1Router(deps: AdminDependencies): Hono {
           sourceId: input.sourceId,
           entrypoint,
           outputs: input.outputs,
+          engine: input.engine,
           project: {
             projectId: input.projectId,
             displayName: input.displayName,
@@ -226,10 +289,7 @@ export function createAppV1Router(deps: AdminDependencies): Hono {
   });
   router.post("/projects", async (c) => {
     const actor = await requireAppActor(deps, c),
-      input = parse(
-        z.object({ displayName }).strict(),
-        await readJson(c),
-      );
+      input = parse(z.object({ displayName }).strict(), await readJson(c));
     return c.json(projects.create(actor, input.displayName), 201);
   });
   router.get("/projects/:id", async (c) => {
@@ -240,6 +300,170 @@ export function createAppV1Router(deps: AdminDependencies): Hono {
         limit: pageSize(c.req.query("pageSize")),
       }),
     );
+  });
+  router.get("/projects/:id/draft", async (c) => {
+    const actor = await requireAppActor(deps, c);
+    return c.json(drafts.get(actor, parse(projectId, c.req.param("id"))));
+  });
+  router.post("/projects/:id/draft", async (c) => {
+    const actor = await requireAppActor(deps, c),
+      input = parse(projectDraftOpenRequestSchema, await readJson(c, true));
+    return c.json(
+      await environmentService(deps).openProjectDraft(
+        actor,
+        parse(projectId, c.req.param("id")),
+        input.revisionId,
+      ),
+    );
+  });
+  router.post("/projects/:id/draft/replace", async (c) => {
+    const actor = await requireAppActor(deps, c);
+    const input = parse(
+      z
+        .object({
+          revisionId: z.string().regex(/^revision_[a-f0-9]{32}$/),
+          version: z.number().int().positive(),
+        })
+        .strict(),
+      await readJson(c),
+    );
+    return c.json(
+      drafts.replaceFromRevision(
+        actor,
+        parse(projectId, c.req.param("id")),
+        input.revisionId,
+        input.version,
+      ),
+    );
+  });
+  router.patch("/projects/:id/draft", async (c) => {
+    const actor = await requireAppActor(deps, c),
+      input = parse(draftUpdate, await readJson(c));
+    return c.json(
+      drafts.update(actor, parse(projectId, c.req.param("id")), input),
+    );
+  });
+  router.get("/projects/:id/draft/file", async (c) => {
+    const actor = await requireAppActor(deps, c),
+      id = parse(projectId, c.req.param("id")),
+      path = parse(z.string().min(1).max(2048), c.req.query("path")),
+      version = parse(
+        z.coerce.number().int().positive(),
+        c.req.query("version"),
+      );
+    return c.json(
+      await environmentService(deps).readDraftText(actor, id, version, path),
+    );
+  });
+  router.put("/projects/:id/draft/file", async (c) => {
+    const actor = await requireAppActor(deps, c),
+      id = parse(projectId, c.req.param("id")),
+      input = parse(
+        z
+          .object({
+            version: z.number().int().positive(),
+            path: z.string().min(1).max(2048),
+            text: z.string(),
+          })
+          .strict(),
+        await readJson(c),
+      );
+    return c.json(
+      await environmentService(deps).saveDraftText(
+        actor,
+        id,
+        input.version,
+        input.path,
+        input.text,
+      ),
+    );
+  });
+  router.put("/projects/:id/draft/file/content", async (c) => {
+    const actor = await requireAppActor(deps, c),
+      id = parse(projectId, c.req.param("id")),
+      path = parse(z.string().min(1).max(2048), c.req.query("path")),
+      version = parse(
+        z.coerce.number().int().positive(),
+        c.req.query("version"),
+      ),
+      size = parse(z.coerce.number().int().nonnegative(), c.req.query("size"));
+    const type = c.req.header("Content-Type");
+    if (
+      type !== "application/octet-stream" &&
+      type !== "text/plain; charset=utf-8"
+    )
+      throw new AppError(
+        "INVALID_REQUEST",
+        "Unsupported Draft file content type",
+        415,
+      );
+    const length = c.req.header("Content-Length");
+    if (
+      length !== undefined &&
+      (!/^(?:0|[1-9][0-9]{0,9})$/.test(length) || Number(length) !== size)
+    )
+      throw new AppError(
+        "CONTENT_LENGTH_MISMATCH",
+        "Content-Length does not match the declared file size",
+        400,
+      );
+    const result = await environmentService(deps).saveDraftFileContent(
+      actor,
+      id,
+      { version, path, size, utf8: type.startsWith("text/") },
+      c.req.raw.body,
+      c.req.raw.signal,
+    );
+    return c.json(result);
+  });
+  router.get("/projects/:id/draft/preview", async (c) => {
+    const actor = await requireAppActor(deps, c);
+    return c.json(
+      drafts.previewActivity(
+        actor,
+        parse(projectId, c.req.param("id")),
+        process.env.RENDERER_IMAGE ?? null,
+        deps.artifactRetentionHours ?? 24,
+      ),
+    );
+  });
+  router.post("/projects/:id/draft/preview", async (c) => {
+    const actor = await requireAppActor(deps, c),
+      id = parse(projectId, c.req.param("id")),
+      input = parse(
+        z.object({ version: z.number().int().positive() }).strict(),
+        await readJson(c),
+      ),
+      principal = ensureWebPrincipal(deps, actor),
+      result = await jobs.createDraftPreview(
+        actor,
+        id,
+        input.version,
+        principal,
+      );
+    return c.json(result, result.reused ? 200 : 202);
+  });
+  router.post("/projects/:id/draft/revisions", async (c) => {
+    const actor = await requireAppActor(deps, c),
+      id = parse(projectId, c.req.param("id")),
+      input = parse(
+        z
+          .object({
+            version: z.number().int().positive(),
+            displayName,
+            outputs: renderOutputsSchema.unwrap().optional(),
+          })
+          .strict(),
+        await readJson(c),
+      );
+    const revision = await environmentService(deps).saveDraftRevision(
+      actor,
+      id,
+      input.version,
+      input.displayName,
+      input.outputs,
+    );
+    return c.json({ revisionId: revision.id });
   });
   router.get("/projects/:id/revisions/:revisionId/jobs", async (c) => {
     const actor = await requireAppActor(deps, c),
@@ -258,10 +482,7 @@ export function createAppV1Router(deps: AdminDependencies): Hono {
   router.patch("/projects/:id", async (c) => {
     const actor = await requireAppActor(deps, c),
       id = parse(projectId, c.req.param("id")),
-      input = parse(
-        z.object({ displayName }).strict(),
-        await readJson(c),
-      );
+      input = parse(z.object({ displayName }).strict(), await readJson(c));
     projects.rename(actor, id, input.displayName);
     return c.json({ id, displayName: input.displayName });
   });
@@ -292,6 +513,7 @@ export function createAppV1Router(deps: AdminDependencies): Hono {
           sourceId: selected.revision.source_id,
           entrypoint: selected.revision.entrypoint,
           outputs: input.outputs ?? projects.renderOutputs(selected.revision),
+          engine: selected.revision.engine,
           project: { projectId: id, revisionId },
         },
         key,
@@ -314,7 +536,9 @@ export function createAppV1Router(deps: AdminDependencies): Hono {
   router.get("/environment", async (c) => {
     const actor = await requireAppActor(deps, c),
       service = environmentService(deps);
-    return c.json(service.capabilities(environmentIdentity(actor)));
+    return c.json(
+      await service.verifiedCapabilities(environmentIdentity(actor)),
+    );
   });
   router.post("/environment/packages/check", async (c) => {
     const actor = await requireAppActor(deps, c),
@@ -427,6 +651,7 @@ function jobSummary(
       ? (row.project_revision_id ?? null)
       : (revision?.id ?? null),
     entrypoint: row.entrypoint,
+    engine: row.engine,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     errorCode: row.error_code,
@@ -453,6 +678,17 @@ function environmentService(deps: AdminDependencies) {
     deps.maxQueueLength,
     deps.maxUserStorageBytes,
     deps.environmentRoot ?? "/var/lib/latex-renderer/environment",
+    {
+      maxUploadBytes:
+        deps.maxUploadBytes ?? DEFAULT_RESOURCE_LIMITS.maxUploadBytes,
+      maxExtractedBytes:
+        deps.maxExtractedBytes ?? DEFAULT_RESOURCE_LIMITS.maxExtractedBytes,
+      maxFileCount: deps.maxFileCount ?? DEFAULT_RESOURCE_LIMITS.maxFileCount,
+      maxZipEntries:
+        deps.maxZipEntries ?? DEFAULT_RESOURCE_LIMITS.maxZipEntries,
+    },
+    deps.maxOutputBytes,
+    deps.artifactRetentionHours,
   );
 }
 

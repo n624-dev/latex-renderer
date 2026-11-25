@@ -15,7 +15,7 @@ Before migrations on production:
    node deploy/scripts/preflight-users-migration.mjs /var/lib/latex-renderer/renderer.sqlite3
    ```
 
-4. Confirm the preflight reports target version 22. Deploy the application; the
+4. Confirm the preflight reports target version 27. Deploy the application; the
    first process holding `BEGIN IMMEDIATE` performs the migration and later
    processes observe it as already applied.
 5. Verify `PRAGMA integrity_check`, `PRAGMA foreign_key_check`, migration version,
@@ -79,3 +79,21 @@ Preview conversion must remain in the sandboxed Worker; queuing or retrying a
 page must not extend PDF retention or change the Job result. Historical eager
 previews remain usable without backfilling. Keep `rollbackCompatible: false`;
 see [migration 22 recovery](022_lazy_previews.rollback.md).
+
+Migration 23 records the TeX engine on Jobs and Project revisions. Existing
+records default to LuaLaTeX. Existing revision IDs and Job references are
+preserved. Revisions can record different engines or output settings while
+sharing the same Source. Earlier applications cannot interpret these settings.
+Restore the matching application, database and storage from a verified recovery
+point to return to an earlier release.
+
+Migration 24 stores each active Project draft and its immutable file references.
+Draft references keep their Sources available for editing. Upgrade the backup,
+restore verification and Source cleanup together with the application.
+
+Migration 25 preserves the account's chosen display language across devices.
+
+Migration 26 records the file versions used by queued and active draft previews.
+Migration 27 accounts for bounded, disposable preview work-cache entries.
+The Worker reads these records to keep each preview stable while editing continues.
+Accounts without a preference continue to use device language negotiation.

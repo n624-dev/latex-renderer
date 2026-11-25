@@ -15,7 +15,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import type { AccessJwtVerifier } from "@latex-renderer/auth";
-import { RendererDatabase } from "@latex-renderer/database";
+import {
+  ProjectDraftOperations,
+  RendererDatabase,
+} from "@latex-renderer/database";
 import { AppError, type ResourceLimits } from "@latex-renderer/shared";
 import { validateAndExtract } from "@latex-renderer/zip-validation";
 import {
@@ -1273,7 +1276,7 @@ describe("Remote MCP HTTP server", () => {
     },
   );
 
-  it("creates an inline Job and returns metadata plus a protected resource link", async () => {
+  it.each([undefined, "lualatex", "pdflatex", "xelatex", "platex", "uplatex"])("returns the effective engine for inline MCP Job %s with a protected resource link", async (engine) => {
     const fixture = await createFixture(),
       token = issueAccessToken(fixture.oauth),
       created = await mcpRequest(fixture.app, token, {
@@ -1286,6 +1289,7 @@ describe("Remote MCP HTTP server", () => {
             inlineSource:
               "\\documentclass{article}\\begin{document}remote\\end{document}",
             entrypoint: "main.tex",
+            ...(engine ? { engine } : {}),
           },
         },
       });
@@ -1295,7 +1299,7 @@ describe("Remote MCP HTTP server", () => {
       result: {
         job: {
           status: "queued",
-          engine: "lualatex",
+          engine: engine ?? "lualatex",
           rendererVersion: "renderer:test",
           entrypoint: "main.tex",
           startedAt: null,
@@ -1355,6 +1359,201 @@ describe("Remote MCP HTTP server", () => {
       status: "ready",
       paths: files.map((file) => file.path).sort(),
     });
+  });
+
+  it("exposes engine support only from proof for the configured immutable Runtime", async () => {
+    const { database, storage } = await createFixture();
+    const environment = join(storage, "environment");
+    const runtime = "sha256:" + "a".repeat(64);
+    const service = new RemoteRenderService(
+      database,
+      storage,
+      runtime,
+      ORIGIN,
+      100,
+      10_000_000,
+      environment,
+    );
+    const identity = { userId: "user_test", scopes: ["mcp:read"] as const };
+    const capabilities = () => service.verifiedCapabilities(identity);
+    const pdf = { engine: "lualatex", pdf: true, svg: true, placement: true };
+    const xe = { engine: "xelatex", pdf: true, svg: true, placement: false };
+    const path = join(environment, "engines.json");
+    const write = (runtimeImage: string, engines: unknown[]) =>
+      writeFile(
+        path,
+        JSON.stringify({ schemaVersion: 1, runtimeImage, engines }),
+      );
+    expect(await capabilities()).toMatchObject({ engines: ["lualatex"] });
+    await write(runtime, [pdf, xe]);
+    expect(await capabilities()).toMatchObject({
+      engines: ["lualatex", "xelatex"],
+      engineOutputs: [pdf, xe],
+    });
+    await write(runtime, [pdf, { ...xe, svg: false, placement: true }]);
+    expect(await capabilities()).not.toHaveProperty("engineOutputs");
+    await write("sha256:" + "b".repeat(64), [pdf, xe]);
+    expect(await capabilities()).toMatchObject({ engines: ["lualatex"] });
+  });
+
+  it("reads and saves one Draft file and leaves the saved revision intact", async () => {
+    const { database, renders } = await createFixture(),
+      identity = {
+        userId: "user_test",
+        scopes: ["mcp:render", "mcp:read"] as const,
+      },
+      actor = { userId: identity.userId, type: "user", id: identity.userId };
+    const source = await renders.createSource(identity, [
+      { path: "main.tex", text: "Original TeX" },
+      { path: "ref.bib", text: "Original references" },
+    ]);
+    const project = renders.createProject(identity, "Editor input");
+    renders.attachProjectRevision(identity, {
+      projectId: project.id,
+      sourceId: source.id,
+      entrypoint: "main.tex",
+      displayName: "Original input",
+      originalFilename: "source.zip",
+      outputs: ["pdf"],
+    });
+    const draft = new ProjectDraftOperations(database).open(actor, project.id);
+    await expect(
+      renders.readDraftText(actor, project.id, draft.version, "ref.bib"),
+    ).resolves.toMatchObject({ text: "Original references" });
+    const changed = await renders.saveDraftText(
+      actor,
+      project.id,
+      draft.version,
+      "ref.bib",
+      "New references",
+    );
+    await expect(
+      renders.readDraftText(actor, project.id, changed.version, "ref.bib"),
+    ).resolves.toMatchObject({ text: "New references" });
+    await expect(
+      renders.readDraftText(actor, project.id, changed.version, "main.tex"),
+    ).resolves.toMatchObject({ text: "Original TeX" });
+    await expect(
+      renders.saveDraftText(
+        actor,
+        project.id,
+        draft.version,
+        "main.tex",
+        "Outdated",
+      ),
+    ).rejects.toMatchObject({ code: "DRAFT_VERSION_CONFLICT" });
+    expect(
+      changed.files.find(({ path }) => path === "main.tex")?.sourceId,
+    ).toBe(source.id);
+    expect(database.projects.latestRevision(project.id)?.source_id).toBe(
+      source.id,
+    );
+    const saved = await renders.saveDraftRevision(
+      actor,
+      project.id,
+      changed.version,
+      "Edited input",
+    );
+    expect(saved).toMatchObject({ revision_number: 2, entrypoint: "main.tex" });
+    expect(saved.source_id).not.toBe(source.id);
+    const repeated = await renders.saveDraftRevision(
+      actor,
+      project.id,
+      changed.version,
+      "Edited input repeated",
+    );
+    expect(repeated.id).toBe(saved.id);
+    const withSvg = await renders.saveDraftRevision(
+      actor,
+      project.id,
+      changed.version,
+      "Edited input with SVG",
+      ["pdf", "svg"],
+    );
+    expect(withSvg).toMatchObject({
+      revision_number: 3,
+      source_id: saved.source_id,
+      outputs_json: '["pdf","svg"]',
+    });
+    const opened = database.sources.get(saved.source_id);
+    expect(opened && database.sources.paths(opened)).toEqual([
+      "main.tex",
+      "ref.bib",
+    ]);
+  });
+
+  it("streams large Draft files and preserves the previous version on malformed uploads", async () => {
+    const { database, renders } = await createFixture();
+    const identity = {
+      userId: "user_test",
+      scopes: ["mcp:render", "mcp:read"] as const,
+    };
+    const actor = {
+      userId: identity.userId,
+      type: "user",
+      id: identity.userId,
+    };
+    const source = await renders.createSource(identity, [
+      { path: "main.tex", text: "Original" },
+    ]);
+    const project = renders.createProject(identity, "Draft upload");
+    renders.attachProjectRevision(identity, {
+      projectId: project.id,
+      sourceId: source.id,
+      entrypoint: "main.tex",
+      displayName: "Original",
+      originalFilename: "main.tex",
+      outputs: ["pdf"],
+    });
+    const drafts = new ProjectDraftOperations(database);
+    const draft = drafts.open(actor, project.id);
+    const abort = new AbortController();
+    const send = (bytes: Uint8Array, size: number, path = "chapter.tex") => {
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          for (let offset = 0; offset < bytes.length; offset += 1021)
+            controller.enqueue(bytes.subarray(offset, offset + 1021));
+          controller.close();
+        },
+      });
+      return renders.saveDraftFileContent(
+        actor,
+        project.id,
+        {
+          version: draft.version,
+          path,
+          size,
+          utf8: true,
+        },
+        body,
+        abort.signal,
+      );
+    };
+    const longText = "日本語の編集\n".repeat(6000),
+      bytes = Buffer.from(longText);
+    expect(bytes.length).toBeGreaterThan(65536);
+    await expect(send(bytes, bytes.length + 1)).rejects.toMatchObject({
+      code: "SOURCE_FILE_SIZE",
+    });
+    await expect(send(new Uint8Array([0xe3, 0x81]), 2)).rejects.toMatchObject({
+      code: "DRAFT_TEXT_ENCODING",
+    });
+    await expect(
+      send(bytes, bytes.length, "../main.tex"),
+    ).rejects.toBeInstanceOf(Error);
+    expect(drafts.get(actor, project.id)?.version).toBe(1);
+    const changed = await send(bytes, bytes.length);
+    expect(changed.version).toBe(2);
+    expect(
+      await renders.readDraftText(actor, project.id, 2, "chapter.tex"),
+    ).toMatchObject({ text: longText });
+    expect(
+      database.raw
+        .prepare(
+          "SELECT COUNT(*) AS total FROM sources WHERE status='reserved'",
+        )
+        .get(),
+    ).toMatchObject({ total: 0 });
   });
 
   it("creates, revises, renders, hands off, and retries a multi-file Source", async () => {

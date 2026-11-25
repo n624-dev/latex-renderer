@@ -1,56 +1,68 @@
-import type { ClientPackageManager } from "@latex-renderer/setup-core";
+import type { DisplayLocale } from "@latex-renderer/shared/locale";
+import { clientSetupMessages } from "./messages.js";
+import { setupDiagnosticCatalog, type ClientPackageManager } from "@latex-renderer/setup-core";
 
 export const setupHtml = clientSetupHtml();
 
-export function clientSetupHtml(packageManager?: ClientPackageManager): string {
+function escapeSetupHtml(value: string): string {
+  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+}
+
+export function clientSetupHtml(
+  packageManager?: ClientPackageManager,
+  locale: DisplayLocale = "ja",
+): string {
+  const catalog = clientSetupMessages(locale);
+  const t = (key: keyof typeof catalog) => catalog[key];
   return `<!doctype html>
-<html lang="ja">
+<html lang="${locale}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>クライアント設定 | LaTeX Renderer</title>
+  <title>${escapeSetupHtml(t("clientSettingsLatexRenderer"))}</title>
   <link rel="stylesheet" href="/assets/setup.css">
 </head>
 <body>
   <main>
     <header>
-      <h1>クライアント設定</h1>
-      <button id="close" class="quiet" type="button">セットアップを終了</button>
+      <h1>${escapeSetupHtml(t("clientSettings"))}</h1>
+      <button id="close" class="quiet" type="button">${escapeSetupHtml(t("exitSetup"))}</button>
     </header>
-    <p id="connection" class="notice">安全なローカルセッションを開始しています…</p>
+    <p id="connection" class="notice">${escapeSetupHtml(t("startingASecureLocalSession"))}</p>
     <section>
-      <div class="section-heading"><h2>状態と診断</h2><button id="refresh" type="button">再診断</button></div>
-      <div id="status-summary" role="status" aria-live="polite">待機中</div>
-      <details><summary>診断の詳細データ</summary><pre id="status"></pre></details>
+      <div class="section-heading"><h2>${escapeSetupHtml(t("statusAndDiagnostics"))}</h2><button id="refresh" type="button">${escapeSetupHtml(t("runDiagnosticsAgain"))}</button></div>
+      <div id="status-summary" role="status" aria-live="polite">${escapeSetupHtml(t("waiting"))}</div>
+      <details><summary>${escapeSetupHtml(t("detailedDiagnosticData"))}</summary><pre id="status"></pre></details>
     </section>
     <div class="grid">
       <section>
-        <h2>認証</h2>
-        <p>キーは安全に保存され、再表示されません。</p>
-        <label for="api-key">レンダリング用APIキー</label>
+        <h2>${escapeSetupHtml(t("authentication"))}</h2>
+        <p>${escapeSetupHtml(t("theKeyIsStoredSecurelyAnd"))}</p>
+        <label for="api-key">${escapeSetupHtml(t("renderApiKey"))}</label>
         <input id="api-key" type="password" autocomplete="off" spellcheck="false" placeholder="lrk_…">
-        <div class="actions"><button id="save-key" type="button">保存</button><button id="remove-key" class="quiet" type="button">削除</button></div>
+        <div class="actions"><button id="save-key" type="button">${escapeSetupHtml(t("save"))}</button><button id="remove-key" class="quiet" type="button">${escapeSetupHtml(t("delete"))}</button></div>
       </section>
       <section>
-        <h2>AI連携</h2>
+        <h2>${escapeSetupHtml(t("aiIntegrations"))}</h2>
         ${
           packageManager === "apt"
-            ? "<p>APT版のLocal MCPは手動で登録します。</p>"
+            ? `<p>${escapeSetupHtml(t("registerLocalMcpManuallyForApt"))}</p>`
             : `
-        <p>選択した連携だけを設定します。他の設定は削除しません。</p>
-        <label for="skill-target">Skill</label>
-        <select id="skill-target"><option value="both">Codex + Claude</option><option value="codex">Codex</option><option value="claude">Claude</option><option value="none">設定しない</option></select>
+        <p>${escapeSetupHtml(t("onlyTheSelectedIntegrationsAreConfigured"))}</p>
+        <label for="skill-target">${escapeSetupHtml(t("skill"))}</label>
+        <select id="skill-target"><option value="both">Codex + Claude</option><option value="codex">Codex</option><option value="claude">Claude</option><option value="none">${escapeSetupHtml(t("doNotConfigure"))}</option></select>
         <label for="mcp-target">MCP</label>
-        <select id="mcp-target"><option value="both">Codex + Claude</option><option value="codex">Codex</option><option value="claude">Claude</option><option value="none">設定しない</option></select>
-        <div class="actions"><button id="repair" type="button">${packageManager ? "連携を設定" : "修復・連携"}</button>${packageManager ? "" : '<button id="update" class="quiet" type="button">クライアント更新</button>'}</div>
+        <select id="mcp-target"><option value="both">Codex + Claude</option><option value="codex">Codex</option><option value="claude">Claude</option><option value="none">${escapeSetupHtml(t("doNotConfigure"))}</option></select>
+        <div class="actions"><button id="repair" type="button">${escapeSetupHtml(t(packageManager ? "configureIntegrations" : "repairAndIntegrate"))}</button>${packageManager ? "" : `<button id="update" class="quiet" type="button">${escapeSetupHtml(t("clientUpdate"))}</button>`}</div>
         `
         }
       </section>
     </div>
     <section>
-      <div class="section-heading"><div><h2>サンプルレンダリング</h2><p>固定された日本語・英語のサンプルで認証からPDF生成まで確認します。</p></div><button id="sample" type="button">実行</button></div>
-      <div id="result-summary" role="status" aria-live="polite">未実行</div>
-      <details><summary>実行結果の詳細データ</summary><pre id="result"></pre></details>
+      <div class="section-heading"><div><h2>${escapeSetupHtml(t("sampleRender"))}</h2><p>${escapeSetupHtml(t("testTheFullPathFromAuthentication"))}</p></div><button id="sample" type="button">${escapeSetupHtml(t("run"))}</button></div>
+      <div id="result-summary" role="status" aria-live="polite">${escapeSetupHtml(t("notRun"))}</div>
+      <details><summary>${escapeSetupHtml(t("detailedResultData"))}</summary><pre id="result"></pre></details>
     </section>
   </main>
   <script src="/assets/setup.js" defer></script>
@@ -100,7 +112,7 @@ button { min-width:44px; min-height:44px; font:inherit; font-weight:700; }
 @media(max-width:480px) { main { width:calc(100% - 1.5rem); padding-top:1.25rem; padding-bottom:max(3rem,env(safe-area-inset-bottom)); } section { padding:1rem; } .actions > button { flex:1 1 10rem; } }
 `;
 
-export const setupJavaScript = `"use strict";
+const setupController = `"use strict";
 (() => {
   const byId = (id) => document.getElementById(id);
   const connection = byId("connection");
@@ -114,21 +126,21 @@ export const setupJavaScript = `"use strict";
     target.textContent = JSON.stringify(value, null, 2);
     const summary = byId(target === status ? "status-summary" : "result-summary");
     summary.replaceChildren();
-    const labels = { healthy:"正常", degraded:"要確認", not_installed:"未導入", pass:"正常", warn:"注意", fail:"失敗", succeeded:"成功", failed:"失敗", timeout:"時間超過", canceled:"中止", rejected:"受付拒否", queued:"待機中", running:"処理中" };
+    const labels = { healthy:setupMessage("healthy"), degraded:setupMessage("needsAttention"), not_installed:setupMessage("notInstalled"), pass:setupMessage("healthy"), warn:setupMessage("warning"), fail:setupMessage("failed"), succeeded:setupMessage("succeeded"), failed:setupMessage("failed"), timeout:setupMessage("timedOut"), canceled:setupMessage("canceled"), rejected:setupMessage("rejected"), queued:setupMessage("queued"), running:setupMessage("processing") };
     const message = document.createElement("p");
     const report = value?.doctor || value?.setup || value;
     const state = value?.job?.status || report?.status;
-    message.textContent = value?.success === false ? "失敗: " + (value.message || "処理を完了できませんでした。") : labels[state] || "処理が完了しました。詳細データを確認できます。";
+    message.textContent = value?.success === false ? setupMessage("failurePrefix") + (value.message || setupMessage("operationFailed")) : labels[state] || setupMessage("operationCompleted");
     summary.append(message);
     if (value?.job?.errorMessage) { const error = document.createElement("p"); error.textContent = value.job.errorMessage; summary.append(error); }
     const checks = Array.isArray(report?.checks) ? report.checks : [];
     if (checks.length) {
       const list = document.createElement("ul");
-      const names = { installation:"インストール", client:"クライアント", credential:"認証情報", skill:"Skill連携", mcp:"MCP連携", launcher:"起動コマンド" };
+      const names = { installation:setupMessage("installation"), client:setupMessage("client"), credential:setupMessage("credentials"), skill:setupMessage("skillIntegration"), mcp:setupMessage("mcpIntegration"), launcher:setupMessage("launcher") };
       for (const check of checks) {
         const item = document.createElement("li");
-        const name = names[String(check.id).split(".")[0]] || "診断項目";
-        item.textContent = name + ": " + (labels[check.status] || "未確認") + (check.status === "pass" ? "" : " — " + check.message);
+        const name = names[String(check.id).split(".")[0]] || setupMessage("diagnosticCheck");
+        item.textContent = name + ": " + (labels[check.status] || setupMessage("unverified")) + (check.status === "pass" ? "" : " — " + setupDiagnostic(check.message));
         list.append(item);
       }
       summary.append(list);
@@ -152,7 +164,7 @@ export const setupJavaScript = `"use strict";
       body: JSON.stringify(body)
     });
     const value = await response.json();
-    if (!response.ok || value.success !== true) throw new Error(value.error?.message || "Request failed");
+    if (!response.ok || value.success !== true) throw new Error(setupDiagnostic(value.error?.message || "Request failed"));
     return value.result;
   };
   const refresh = async () => {
@@ -173,7 +185,7 @@ export const setupJavaScript = `"use strict";
   const bootstrap = async () => {
     const bootstrapToken = location.hash.slice(1);
     history.replaceState(null, "", location.pathname);
-    if (!bootstrapToken) throw new Error("Bootstrap tokenがありません。CLIからセットアップを再起動してください。");
+    if (!bootstrapToken) throw new Error(setupMessage("tokenMissing"));
     const response = await fetch("/api/session", {
       method: "POST", credentials: "omit", cache: "no-store", redirect: "error",
       headers: { "Content-Type": "application/json" },
@@ -183,7 +195,7 @@ export const setupJavaScript = `"use strict";
     if (!response.ok || value.success !== true) throw new Error(value.error?.message || "Session bootstrap failed");
     sessionToken = value.result.sessionToken;
     csrfToken = value.result.csrfToken;
-    connection.textContent = "このブラウザで設定できます。終了時は「セットアップを終了」を押してください。";
+    connection.textContent = setupMessage("browserSetup");
     await refresh();
   };
 
@@ -206,7 +218,7 @@ export const setupJavaScript = `"use strict";
   byId("update")?.addEventListener("click", () => run(() => api("/api/update", targets())));
   byId("sample").addEventListener("click", () => run(() => api("/api/sample-render")));
   byId("close").addEventListener("click", async () => {
-    try { await api("/api/close"); } finally { document.body.textContent = "セットアップを終了しました。このタブを閉じてください。"; }
+    try { await api("/api/close"); } finally { document.body.textContent = setupMessage("closed"); }
   });
   void bootstrap().catch((error) => {
     connection.classList.add("error");
@@ -214,3 +226,14 @@ export const setupJavaScript = `"use strict";
     setBusy(true);
   });
 })();`;
+
+export function clientSetupScript(locale: DisplayLocale): string {
+  return `"use strict";
+const setupMessages = ${JSON.stringify(clientSetupMessages(locale))};
+const setupMessage = (key) => setupMessages[key];
+const setupDiagnostics = ${JSON.stringify(setupDiagnosticCatalog(locale))};
+const setupDiagnostic = (value) => Object.hasOwn(setupDiagnostics, value) ? setupDiagnostics[value] : value;
+${setupController}`;
+}
+
+export const setupJavaScript = clientSetupScript("ja");

@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { createServer, type Server } from "node:http";
 import type { Browser, Page } from "playwright";
 import { launchTestBrowser, newTestPage } from "../helpers/browser-engine.js";
+import { routeWebFonts } from "../helpers/browser-web-fonts.js";
 import { readFixtureBody } from "../helpers/fixture-http.js";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import yazl from "yazl";
@@ -201,6 +202,10 @@ async function fixture(beforeSession?: (page: Page) => Promise<void>) {
       await json({ items: [], hasMore: false });
       return;
     }
+    if (path === "/app/api/v1/environment") {
+      await json({ engines: ["lualatex", "xelatex"] });
+      return;
+    }
     if (path === "/app/api/v1/source-tickets") {
       state.sources.push(
         request.postDataJSON() as { size: number; sha256: string },
@@ -394,6 +399,7 @@ async function fixture(beforeSession?: (page: Page) => Promise<void>) {
     errors.push(`unexpected route ${path}`);
     await route.fulfill({ status: 404 });
   });
+  await routeWebFonts(page, origin);
   await page.goto(`${origin}/app/`);
   try {
     await beforeSession?.(page);
@@ -473,13 +479,14 @@ describe("App render in the selected browser", () => {
   it.each(["tex", "zip"])(
     "inspects the %s selected before session initialization completes",
     async (kind) => {
-      const file = kind === "tex"
-        ? tex("early.tex")
-        : {
-            name: "early.zip",
-            mimeType: "application/zip",
-            buffer: await zip(["main.tex"]),
-          };
+      const file =
+        kind === "tex"
+          ? tex("early.tex")
+          : {
+              name: "early.zip",
+              mimeType: "application/zip",
+              buffer: await zip(["main.tex"]),
+            };
       const { page, state, errors } = await fixture(async (page) => {
         await page.locator("#app-files").setInputFiles(file);
         expect(await start(page).isDisabled()).toBe(true);
@@ -556,10 +563,12 @@ describe("App render in the selected browser", () => {
     state.complete = false;
     expect(await page.locator("#app-render-svg").isVisible()).toBe(false);
     await page.locator("#app-render-options > summary").click();
+    await page.locator("#app-render-engine").selectOption("xelatex");
     await page.locator("#app-files").setInputFiles(tex("staged.tex"));
     await ready(page);
     await page.locator("#app-render-svg").check();
     await start(page).click();
+    await expect.poll(() => state.requests[0]?.body.engine).toBe("xelatex");
     await expect
       .poll(() =>
         page.getByRole("button", { name: "PDF", exact: true }).count(),

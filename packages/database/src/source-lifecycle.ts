@@ -29,10 +29,30 @@ export function sourceReferenceCountSql(
      WHERE retained_job.source_id=${alias}.id
        AND retained_job.status NOT IN ('deleted','expired')
        ${ownerScoped ? `AND retained_job.user_id=${alias}.owner_user_id` : ""}) +
+    ${projectSourceReferenceCountSql(alias, ownerScoped)}
+    + (SELECT COUNT(DISTINCT df.job_id) FROM job_draft_input_files df
+      JOIN jobs pinned_job ON pinned_job.id=df.job_id
+      WHERE df.source_id=${alias}.id
+      AND (pinned_job.status IN ('queued','validating','running') OR pinned_job.lease_owner IS NOT NULL)
+      ${ownerScoped ? `AND pinned_job.user_id=${alias}.owner_user_id` : ""})
+  )`;
+}
+
+export function projectSourceReferenceCountSql(
+  alias: "s" | "sources",
+  ownerScoped = false,
+): string {
+  if (!["s", "sources"].includes(alias))
+    throw new Error("Invalid Source SQL alias");
+  return `(
     (SELECT COUNT(*) FROM project_revisions retained_revision
      JOIN projects retained_project ON retained_project.id=retained_revision.project_id
      WHERE retained_revision.source_id=${alias}.id AND retained_project.deleted_at IS NULL
-       ${ownerScoped ? `AND retained_project.owner_user_id=${alias}.owner_user_id` : ""})
+       ${ownerScoped ? `AND retained_project.owner_user_id=${alias}.owner_user_id` : ""}) +
+    (SELECT COUNT(DISTINCT draft_file.project_id) FROM project_draft_files draft_file
+     JOIN projects draft_project ON draft_project.id=draft_file.project_id
+     WHERE draft_file.source_id=${alias}.id AND draft_project.deleted_at IS NULL
+       ${ownerScoped ? `AND draft_project.owner_user_id=${alias}.owner_user_id` : ""})
   )`;
 }
 

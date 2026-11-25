@@ -3,6 +3,16 @@ import { AppError } from "@latex-renderer/shared";
 
 export function installBodyLimit(app: Hono, maximum: number): void {
   app.use("*", async (c, next) => {
+    // The Draft upload handler reserves disk and counts bytes as it streams.
+    if (
+      c.req.method === "PUT" &&
+      /^\/app\/api\/v1\/projects\/project_[a-f0-9]{32}\/draft\/file\/content$/.test(
+        c.req.path,
+      )
+    ) {
+      await next();
+      return;
+    }
     c.req.raw = await boundedRequest(c.req.raw, maximum);
     await next();
   });

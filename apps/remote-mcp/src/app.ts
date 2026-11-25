@@ -23,6 +23,11 @@ import {
   safeError,
 } from "@latex-renderer/shared";
 import {
+  preferredDisplayLanguages,
+  resolveDisplayLocale,
+  type DisplayLocale,
+} from "@latex-renderer/shared/locale";
+import {
   SUPPORTED_PROTOCOL_VERSIONS,
   type McpHttpHandler,
 } from "@modelcontextprotocol/server";
@@ -33,6 +38,7 @@ import {
   type McpStage,
 } from "./diagnostics.js";
 import { observeMcpResponse } from "./response-diagnostics.js";
+import { consentCatalog } from "./consent-messages.js";
 
 export interface RemoteMcpAppDependencies {
   registrationLimiter?: AnonymousRegistrationLimiter;
@@ -308,9 +314,12 @@ export function createRemoteMcpApp(dependencies: RemoteMcpAppDependencies) {
       `${OAUTH_CSRF_COOKIE}=${csrf}; Path=/oauth/authorize; HttpOnly; Secure; SameSite=Lax; Max-Age=300`,
       { append: true },
     );
-    return c.html(
-      consentPage(request, request.clientName, session.principal.user.id, csrf),
-    );
+    const accountLocale = deps.database.users.displayLocale(session.principal.user.id);
+    const language = resolveDisplayLocale({
+      saved: accountLocale ?? parseCookie(c.req.header("Cookie"), "latex_renderer_locale"),
+      preferred: preferredDisplayLanguages(c.req.header("Accept-Language")),
+    });
+    return c.html(consentPage(request, request.clientName, csrf, language));
   });
 
   app.get("/oauth/continue/:handle", async (c) => {
@@ -651,9 +660,10 @@ async function establishOrRedirect(
 function consentPage(
   request: AuthorizationRequest,
   clientName: string,
-  _userId: string,
   csrf: string,
+  locale: DisplayLocale,
 ): string {
+  const text = consentCatalog(locale);
   const fields: Record<string, string | undefined> = {
     response_type: "code",
     client_id: request.clientId,
@@ -666,9 +676,10 @@ function consentPage(
     csrf,
   };
   const scopes = request.scopes
-    .map((scope) => `<li>${escapeHtml(scopeDescription(scope))}</li>`)
+    .map((scope) => `<li>${escapeHtml(scopeDescription(scope, text))}</li>`)
     .join("");
-  return `<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>Remote MCPを承認 | LaTeX Renderer</title><link rel="stylesheet" href="/assets/styles.css"></head><body><header class="site-header"><strong><a href="/">LaTeX Renderer</a></strong></header><main><div class="hero"><h1>接続を承認</h1><p><strong>${escapeHtml(clientName)}</strong> がLaTeX Rendererへの接続を要求しています。</p></div><section class="card"><h2>許可する操作</h2><ul>${scopes}</ul><p class="muted">許可すると、この接続はあなたが所有する入力ファイルと変換だけを操作できます。</p><details><summary>権限の識別子</summary><ul>${request.scopes.map((scope) => `<li><code>${escapeHtml(scope)}</code></li>`).join("")}</ul></details><form class="actions" method="post" action="/oauth/authorize">${Object.entries(
+  const heading = escapeHtml(text.request.replace("{clientName}", () => clientName));
+  return `<!doctype html><html lang="${locale}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>${escapeHtml(text.title)} | LaTeX Renderer</title><link rel="stylesheet" href="/assets/styles.css"></head><body><header class="site-header"><strong><a href="/">LaTeX Renderer</a></strong></header><main><div class="hero"><h1>${escapeHtml(text.authorize)}</h1><p>${heading}</p></div><section class="card"><h2>${escapeHtml(text.actions)}</h2><ul>${scopes}</ul><p class="muted">${escapeHtml(text.ownership)}</p><details><summary>${escapeHtml(text.identifiers)}</summary><ul>${request.scopes.map((scope) => `<li><code>${escapeHtml(scope)}</code></li>`).join("")}</ul></details><form class="actions" method="post" action="/oauth/authorize">${Object.entries(
     fields,
   )
     .filter((entry): entry is [string, string] => entry[1] !== undefined)
@@ -678,18 +689,18 @@ function consentPage(
     )
     .join(
       "",
-    )}<button type="submit" name="decision" value="approve">接続を許可</button><button class="secondary" type="submit" name="decision" value="deny">拒否</button></form></section></main></body></html>`;
+    )}<button type="submit" name="decision" value="approve">${escapeHtml(text.approve)}</button><button class="secondary" type="submit" name="decision" value="deny">${escapeHtml(text.deny)}</button></form></section></main></body></html>`;
 }
 
-function scopeDescription(scope: string): string {
+function scopeDescription(scope: string, text: ReturnType<typeof consentCatalog>): string {
   const descriptions: Record<string, string> = {
-    mcp: "レンダリングの作成・確認・中止・削除",
-    "mcp:render": "レンダリングジョブの作成",
-    "mcp:read": "ジョブ状態と成果物メタデータの確認",
-    "mcp:cancel": "実行中ジョブの中止",
-    "mcp:delete": "終了済みジョブの削除",
+    mcp: text.all,
+    "mcp:render": text.render,
+    "mcp:read": text.read,
+    "mcp:cancel": text.cancel,
+    "mcp:delete": text.delete,
   };
-  return descriptions[scope] ?? scope;
+  return Object.hasOwn(descriptions, scope) ? descriptions[scope] ?? scope : scope;
 }
 
 function stringField(value: unknown): string {

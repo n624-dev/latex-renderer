@@ -9,6 +9,7 @@ import type { ValidatedArtifact } from "./artifact-validator.js";
 export async function previewPageCount(
   directory: string,
   artifacts: readonly ValidatedArtifact[],
+  allowDeferred = false,
 ): Promise<number | undefined> {
   let handle;
   try {
@@ -29,15 +30,23 @@ export async function previewPageCount(
         "Preview metadata is invalid",
       );
     const value = data as Record<string, unknown>;
+    const eager =
+      value.schemaVersion === 1 &&
+      artifacts.some(
+        (a) => a.path === "previews/page-1.png" && a.type === "preview",
+      );
+    const deferred =
+      allowDeferred &&
+      value.schemaVersion === 2 &&
+      value.firstPage === "on-demand" &&
+      artifacts.some((a) => a.path === "result.pdf" && a.type === "pdf") &&
+      !artifacts.some((a) => a.type === "preview");
     if (
-      value.schemaVersion !== 1 ||
+      !(eager || deferred) ||
       value.dpi !== 150 ||
       !Number.isSafeInteger(value.pages) ||
       Number(value.pages) < 1 ||
-      Number(value.pages) > 100 ||
-      !artifacts.some(
-        (a) => a.path === "previews/page-1.png" && a.type === "preview",
-      )
+      Number(value.pages) > 100
     )
       throw new AppError(
         "PREVIEW_METADATA_INVALID",

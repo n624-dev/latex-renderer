@@ -2,11 +2,19 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { displayLocales } from "./packages/shared/src/locale.js";
+import { renderEngineSchema } from "./packages/contracts/src/index.js";
 import {
   assertPublicDocsValid,
   type DocsValidationInput,
 } from "./apps/admin-web/src/docs-validation.js";
-import { publicDocs } from "./apps/admin-web/src/markdown-docs.js";
+import {
+  getPublicDocs,
+  publicDocs,
+} from "./apps/admin-web/src/markdown-docs.js";
+import { validateSiteCatalogs } from "./apps/admin-web/src/site-messages.js";
+import { validateAppCatalogs } from "./apps/admin-web/src/app-messages.js";
+import { validateAdminCatalogs } from "./apps/admin-web/src/admin-messages.js";
 import {
   parseReleaseVersion,
   validStableVersion,
@@ -18,6 +26,10 @@ const repositoryRoot = dirname(fileURLToPath(import.meta.url));
 export function repositoryDocsValidationInput(): DocsValidationInput {
   return {
     docs: publicDocs,
+    localizedDocs: displayLocales.map((locale) => ({
+      root: `/${locale}/docs/`,
+      docs: getPublicDocs(locale),
+    })),
     publicPaths: [
       "/",
       "/downloads/",
@@ -38,6 +50,12 @@ export function repositoryDocsValidationInput(): DocsValidationInput {
 }
 
 export function checkRepositoryDocs(): void {
+  const catalogProblems = [
+    ...validateSiteCatalogs(),
+    ...validateAppCatalogs(),
+    ...validateAdminCatalogs(),
+  ];
+  if (catalogProblems.length) throw new Error(catalogProblems.join("\n"));
   assertPublicDocsValid(repositoryDocsValidationInput());
   const root = JSON.parse(
     readFileSync(join(repositoryRoot, "package.json"), "utf8"),
@@ -129,7 +147,11 @@ function cliHelp(commandPath: string): string | undefined {
       encoding: "utf8",
       env: {
         ...process.env,
-        N624_LATEX_COMMAND: commandPath === "compile" ? "1" : "0",
+        N624_LATEX_COMMAND:
+          commandPath === "compile" ||
+          renderEngineSchema.safeParse(commandPath).success
+            ? "1"
+            : "0",
       },
     },
   );
@@ -139,6 +161,6 @@ function cliHelp(commandPath: string): string | undefined {
 if (resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) {
   checkRepositoryDocs();
   process.stdout.write(
-    `Public documentation validation passed (${publicDocs.length} pages).\n`,
+    `Public documentation validation passed (${publicDocs.length} guides in ${displayLocales.length} languages).\n`,
   );
 }

@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { SQLInputValue } from "node:sqlite";
-import type { JobStatus } from "@latex-renderer/contracts";
+import type { JobStatus, RenderEngine } from "@latex-renderer/contracts";
 
 export interface WorkerJobRow {
   id: string;
@@ -10,6 +10,7 @@ export interface WorkerJobRow {
   source_id: string | null;
   source_storage_key: string | null;
   entrypoint: string;
+  engine: RenderEngine;
   outputs_json: string;
   lease_generation: number;
 }
@@ -35,6 +36,7 @@ export interface StaleLeaseRow {
 
 const WORKER_UPDATE_COLUMNS = new Set([
   "started_at",
+  "runtime_digest",
   "completed_at",
   "output_size",
   "exit_code",
@@ -45,6 +47,14 @@ const WORKER_UPDATE_COLUMNS = new Set([
   "heartbeat_at",
   "render_status",
 ]);
+
+const queuedDraftCanStart = `NOT EXISTS (
+  SELECT 1 FROM job_draft_inputs requested
+  JOIN job_draft_inputs other ON other.project_id=requested.project_id AND other.job_id<>j.id
+  JOIN jobs current ON current.id=other.job_id
+  WHERE requested.job_id=j.id
+    AND (current.status IN ('validating','running') OR current.lease_owner IS NOT NULL)
+)`;
 
 export class WorkerRepository {
   constructor(private readonly db: DatabaseSync) {}
@@ -79,8 +89,8 @@ export class WorkerRepository {
       return undefined;
     const job = this.db
       .prepare(
-        `SELECT j.id,j.source_size,j.source_sha256,j.status,j.source_id,j.entrypoint,j.outputs_json,j.lease_generation,s.storage_key AS source_storage_key
-      FROM jobs j LEFT JOIN sources s ON s.id=j.source_id WHERE j.status='queued' AND (? IS NULL OR j.queued_at<=?) AND (? IS NULL OR j.id=?) ORDER BY j.queued_at,j.id LIMIT 1`,
+        `SELECT j.id,j.source_size,j.source_sha256,j.status,j.source_id,j.entrypoint,j.engine,j.outputs_json,j.lease_generation,s.storage_key AS source_storage_key
+      FROM jobs j LEFT JOIN sources s ON s.id=j.source_id WHERE j.status='queued' AND ${queuedDraftCanStart} AND (? IS NULL OR j.queued_at<=?) AND (? IS NULL OR j.id=?) ORDER BY j.queued_at,j.id LIMIT 1`,
       )
       .get(
         queuedBefore ?? null,
@@ -114,11 +124,14 @@ export class WorkerRepository {
     source_sha256: string;
     entrypoint: string;
     outputs_json: string;
+    engine: RenderEngine;
     queued_at: string;
   }[] {
     return this.db
       .prepare(
-        "SELECT id,user_id,source_sha256,entrypoint,outputs_json,queued_at FROM jobs WHERE status='queued' AND (? IS NULL OR queued_at>? OR (queued_at=? AND id>?)) ORDER BY queued_at,id LIMIT 32",
+        `SELECT j.id,j.user_id,j.source_sha256,j.entrypoint,j.outputs_json,j.engine,j.queued_at FROM jobs j
+         WHERE status='queued' AND ${queuedDraftCanStart}
+         AND (? IS NULL OR queued_at>? OR (queued_at=? AND id>?)) ORDER BY queued_at,id LIMIT 32`,
       )
       .all(
         after?.queued_at ?? null,
@@ -131,6 +144,7 @@ export class WorkerRepository {
       source_sha256: string;
       entrypoint: string;
       outputs_json: string;
+      engine: RenderEngine;
       queued_at: string;
     }[];
   }

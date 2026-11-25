@@ -1,3 +1,6 @@
+import type { DisplayLocale } from "@latex-renderer/shared/locale";
+import { adminCatalog, createAdminMessage } from "../admin-messages.js";
+import { browserLocaleScript } from "../browser-locale.js";
 import { part1 } from "./admin-script-parts/part-1.js";
 import { part2 } from "./admin-script-parts/part-2.js";
 import { part3 } from "./admin-script-parts/part-3.js";
@@ -6,4 +9,12 @@ import { part5 } from "./admin-script-parts/part-5.js";
 import { part6 } from "./admin-script-parts/part-6.js";
 import { part7 } from "./admin-script-parts/part-7.js";
 
-export const adminScript = [part1, part2, part3, part5, part6, part7, part4].join("");
+const adminController = [part1, part2, part3, part5, part6, part7, part4].join("");
+
+export function localizedAdminScript(locale: DisplayLocale): string {
+  return `${browserLocaleScript}
+const adminMessage = (${createAdminMessage.toString()})(${JSON.stringify(adminCatalog(locale))});
+${adminController}`;
+}
+
+export const adminScript = localizedAdminScript("ja");

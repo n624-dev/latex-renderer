@@ -1,6 +1,7 @@
 import type { Browser } from "playwright";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { launchTestBrowser, newTestPage } from "../helpers/browser-engine.js";
+import { routeWebFonts } from "../helpers/browser-web-fonts.js";
 import {
   publicDocsSearchJson,
   renderPublicDoc,
@@ -34,6 +35,7 @@ it.each([320, 390, 768, 821, 960, 1100, 1200])(
               : { contentType: "text/html", body: renderPublicDoc("index") };
         return route.fulfill(resource);
       });
+      await routeWebFonts(page, "https://renderer.invalid");
       await page.goto("https://renderer.invalid/docs/");
       const menu = page.locator(".docs-menu");
       expect(
@@ -99,6 +101,7 @@ it("opens relocated technical details for an existing heading fragment", async (
       );
     });
     const id = "v1-2-xのroot-updaterから権限分離updaterへ移行する場合";
+    await routeWebFonts(page, "https://renderer.invalid");
     await page.goto(
       `https://renderer.invalid/docs/reference/#${encodeURIComponent(id)}`,
     );
@@ -154,6 +157,7 @@ it("keeps dense API examples usable and searchable on a small screen", async () 
       });
     });
 
+    await routeWebFonts(page, "https://renderer.invalid");
     await page.goto("https://renderer.invalid/docs/api/");
     const toc = page.locator(".docs-toc");
     const curl = toc.getByRole("link", { name: "curlの例" });

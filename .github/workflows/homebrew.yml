@@ -41,11 +41,15 @@ jobs:
           - runner: macos-15-intel
             arch: x64
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 20
+    timeout-minutes: 24
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        id: source
         with:
           persist-credentials: false
+      - uses: ./.github/actions/macos-diagnostics
+        with:
+          phase: start
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: "26.13.0"
@@ -84,10 +88,12 @@ jobs:
             printf 'HOMEBREW_LEGACY_ARCHIVE=%s\n' "$legacy_dir/$legacy"
           } >>"$GITHUB_ENV"
       - name: Install, migrate, convert, upgrade, and uninstall
+        timeout-minutes: 20
         shell: bash
         run: |
           set -euo pipefail
-          node deploy/homebrew/test-macos.mjs "$HOMEBREW_CLIENT_ARCHIVE" "$HOMEBREW_LEGACY_ARCHIVE"
+          node deploy/homebrew/test-macos.mjs "$HOMEBREW_CLIENT_ARCHIVE" "$HOMEBREW_LEGACY_ARCHIVE" \
+            2>&1 | tee "$MACOS_DIAGNOSTICS_DIR/native-homebrew.log"
       - name: Verify the published Homebrew formula
         if: inputs.verify_public_tap
         shell: bash
@@ -110,3 +116,7 @@ jobs:
           brew uninstall "$formula"
           trap 'brew untap "$tap"' EXIT
           test ! -e "$(brew --prefix)/bin/n624-latex"
+      - uses: ./.github/actions/macos-diagnostics
+        if: always() && steps.source.outcome == 'success'
+        with:
+          phase: finish

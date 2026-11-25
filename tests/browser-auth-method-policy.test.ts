@@ -107,6 +107,7 @@ describe("per-method browser authentication policy", () => {
           headers: {
             Host: new URL(origin).host,
             Cookie: `${SESSION_COOKIE}=${session.token}; ${CSRF_COOKIE}=${session.csrfToken}`,
+            "Accept-Language": "ja",
           },
         },
       );

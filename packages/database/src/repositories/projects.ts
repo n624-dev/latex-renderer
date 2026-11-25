@@ -1,5 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { RenderOutput } from "@latex-renderer/contracts";
+import {
+  defaultRenderEngine,
+  renderOutputsSchema,
+  type RenderEngine,
+  type RenderOutput,
+} from "@latex-renderer/contracts";
 import {
   AppError,
   decodePageCursor,
@@ -24,6 +29,7 @@ export interface ProjectRevisionRow {
   display_name: string;
   original_filename: string;
   entrypoint: string;
+  engine: RenderEngine;
   outputs_json: string;
   created_at: string;
 }
@@ -35,6 +41,7 @@ export interface ProjectSummaryRow extends ProjectRow {
   latest_revision_display_name: string | null;
   latest_revision_original_filename: string | null;
   latest_revision_entrypoint: string | null;
+  latest_revision_engine: RenderEngine | null;
   latest_revision_created_at: string | null;
 }
 
@@ -83,6 +90,8 @@ export class ProjectsRepository {
                ORDER BY r2.revision_number DESC,r2.id DESC LIMIT 1) AS latest_revision_original_filename,
              (SELECT r2.entrypoint FROM project_revisions r2 WHERE r2.project_id=p.id
                ORDER BY r2.revision_number DESC,r2.id DESC LIMIT 1) AS latest_revision_entrypoint,
+             (SELECT r2.engine FROM project_revisions r2 WHERE r2.project_id=p.id
+               ORDER BY r2.revision_number DESC,r2.id DESC LIMIT 1) AS latest_revision_engine,
              (SELECT r2.created_at FROM project_revisions r2 WHERE r2.project_id=p.id
                ORDER BY r2.revision_number DESC,r2.id DESC LIMIT 1) AS latest_revision_created_at
            FROM projects p LEFT JOIN project_revisions r ON r.project_id=p.id
@@ -256,14 +265,21 @@ export class ProjectsRepository {
     projectId: string,
     sourceId: string,
     entrypoint: string,
+    engine: RenderEngine,
+    outputs: readonly RenderOutput[],
   ): ProjectRevisionRow | undefined {
     return this.db
       .prepare(
         `SELECT * FROM project_revisions
-         WHERE project_id=? AND source_id=? AND entrypoint=?`,
+         WHERE project_id=? AND source_id=? AND entrypoint=? AND engine=? AND outputs_json=?`,
       )
-      .get(projectId, sourceId, entrypoint) as unknown as
-      ProjectRevisionRow | undefined;
+      .get(
+        projectId,
+        sourceId,
+        entrypoint,
+        engine,
+        revisionOutputsJson(outputs),
+      ) as unknown as ProjectRevisionRow | undefined;
   }
 
   insertRevision(input: {
@@ -273,10 +289,12 @@ export class ProjectsRepository {
     displayName: string;
     originalFilename: string;
     entrypoint: string;
+    engine?: RenderEngine;
     outputs?: readonly RenderOutput[];
     timestamp: string;
   }): ProjectRevisionRow {
-    const outputs = input.outputs ?? ["pdf"];
+    const outputsJson = revisionOutputsJson(input.outputs ?? ["pdf"]),
+      engine = input.engine ?? defaultRenderEngine;
     const revisionNumber = (
       this.db
         .prepare(
@@ -287,8 +305,8 @@ export class ProjectsRepository {
     this.db
       .prepare(
         `INSERT INTO project_revisions
-        (id,project_id,source_id,revision_number,display_name,original_filename,entrypoint,outputs_json,created_at)
-        VALUES (?,?,?,?,?,?,?,?,?)`,
+        (id,project_id,source_id,revision_number,display_name,original_filename,entrypoint,engine,outputs_json,created_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?)`,
       )
       .run(
         input.id,
@@ -298,7 +316,8 @@ export class ProjectsRepository {
         input.displayName,
         input.originalFilename,
         input.entrypoint,
-        JSON.stringify(outputs),
+        engine,
+        outputsJson,
         input.timestamp,
       );
     return {
@@ -309,7 +328,8 @@ export class ProjectsRepository {
       display_name: input.displayName,
       original_filename: input.originalFilename,
       entrypoint: input.entrypoint,
-      outputs_json: JSON.stringify(outputs),
+      engine,
+      outputs_json: outputsJson,
       created_at: input.timestamp,
     };
   }
@@ -348,4 +368,10 @@ export class ProjectsRepository {
       .prepare("UPDATE projects SET updated_at=? WHERE id=?")
       .run(timestamp, id);
   }
+}
+
+function revisionOutputsJson(outputs: readonly RenderOutput[]): string {
+  return renderOutputsSchema.parse(outputs).includes("svg")
+    ? '["pdf","svg"]'
+    : '["pdf"]';
 }

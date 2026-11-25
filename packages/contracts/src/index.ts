@@ -36,6 +36,15 @@ export function createLegacyRenderTicketRequestSchema(
 }
 export const legacyRenderTicketRequestSchema =
   createLegacyRenderTicketRequestSchema();
+export const renderEngineSchema = z.enum([
+  "lualatex",
+  "pdflatex",
+  "xelatex",
+  "uplatex",
+  "platex",
+]);
+export type RenderEngine = z.infer<typeof renderEngineSchema>;
+export const defaultRenderEngine = "lualatex" satisfies RenderEngine;
 export const renderOutputSchema = z.enum(["pdf", "svg"]);
 export type RenderOutput = z.infer<typeof renderOutputSchema>;
 export const renderOutputsSchema = z
@@ -54,6 +63,7 @@ export const sourceRenderTicketRequestSchema = z
     sourceId: z.string().regex(/^source_[a-f0-9]{32}$/),
     entrypoint: z.string().min(1).max(2048).optional(),
     outputs: renderOutputsSchema,
+    engine: renderEngineSchema.optional(),
   })
   .strict();
 export const svgRetryTicketRequestSchema = z
@@ -67,6 +77,7 @@ export function createRenderTicketRequestSchema(
   return z.union([
     createLegacyRenderTicketRequestSchema(maxUploadBytes).extend({
       outputs: renderOutputsSchema,
+      engine: renderEngineSchema.optional(),
     }),
     sourceRenderTicketRequestSchema,
     svgRetryTicketRequestSchema,
@@ -107,6 +118,22 @@ export const projectIdSchema = z.string().regex(/^project_[a-f0-9]{32}$/);
 export const projectRevisionIdSchema = z
   .string()
   .regex(/^revision_[a-f0-9]{32}$/);
+export const projectDraftOpenRequestSchema = z.object({
+  revisionId: projectRevisionIdSchema.optional(),
+}).strict();
+export function createProjectDraftUpdateRequestSchema(maxChanges = 1000) {
+  const path = z.string().min(1).max(2048);
+  return z.object({
+    version: z.number().int().positive(),
+    entrypoint: path.optional(),
+    engine: renderEngineSchema.optional(),
+    outputs: renderOutputsSchema.unwrap().optional(),
+    files: z.array(z.union([
+      z.object({ path, remove: z.literal(true) }).strict(),
+      z.object({ path, sourceId: z.string().regex(/^source_[a-f0-9]{32}$/), sourcePath: path }).strict(),
+    ])).max(maxChanges),
+  }).strict();
+}
 export const projectJobSummarySchema = z
   .object({
     id: z.string().regex(/^job_[a-f0-9]{32}$/),
@@ -116,6 +143,7 @@ export const projectJobSummarySchema = z
     retryOfJobId: z.string().nullable(),
     errorCode: z.string().nullable(),
     outputs: z.array(renderOutputSchema),
+    engine: renderEngineSchema.optional(),
   })
   .loose();
 export const projectRevisionJobsPageSchema = z.object({
@@ -132,6 +160,7 @@ export const projectRevisionSummarySchema = z
     originalFilename: z.string(),
     entrypoint: z.string(),
     outputs: z.array(renderOutputSchema),
+    engine: renderEngineSchema.optional(),
     createdAt: z.string(),
     jobs: z.array(projectJobSummarySchema),
     jobCount: z.number().int().nonnegative(),
@@ -151,6 +180,7 @@ export const projectSummarySchema = z
         id: projectRevisionIdSchema,
         revisionNumber: z.number().int().positive(),
         entrypoint: z.string(),
+        engine: renderEngineSchema.optional(),
         displayName: z.string(),
         originalFilename: z.string(),
         createdAt: z.string(),
@@ -179,6 +209,7 @@ export const attachProjectRevisionResponseSchema = z.object({
   revisionNumber: z.number().int().positive(),
   entrypoint: z.string(),
   outputs: z.array(renderOutputSchema),
+  engine: renderEngineSchema.optional(),
 });
 export type ProjectPage = z.infer<typeof projectPageSchema>;
 export type ProjectDetail = z.infer<typeof projectDetailSchema>;
@@ -231,6 +262,16 @@ export const jobResponseSchema = z.object({
   sourceId: z.string().nullable().optional(),
   entrypoint: z.string().optional(),
   outputs: z.array(renderOutputSchema).optional(),
+  engine: renderEngineSchema.optional(),
+  runtimeDigest: z
+    .string()
+    .regex(/^sha256:[a-f0-9]{64}$/)
+    .nullable()
+    .optional(),
+  previousRuntimeDigest: z
+    .string()
+    .regex(/^sha256:[a-f0-9]{64}$/)
+    .optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
   errorCode: z.string().nullable(),

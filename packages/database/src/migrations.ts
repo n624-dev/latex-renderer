@@ -5,6 +5,11 @@ import {
   remoteMcpLoginContinuationsSql,
   outputStagesV21Sql,
   lazyPreviewsV22Sql,
+  renderEngineSettingsV23Sql,
+  projectDraftsV24Sql,
+  accountLocaleV25Sql,
+  draftRenderInputsV26Sql,
+  draftWorkCacheV27Sql,
 } from "./schema.js";
 
 const usersAccessSubjectV2Sql = `
@@ -73,6 +78,37 @@ export function applyDatabaseMigrations(db: DatabaseSync): void {
   } catch (error) {
     db.exec("ROLLBACK");
     throw error;
+  }
+  applyRenderEngineSettingsV23(db);
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    if (!db.prepare("SELECT 1 FROM schema_migrations WHERE version=24").get())
+      db.exec(projectDraftsV24Sql);
+    if (!db.prepare("SELECT 1 FROM schema_migrations WHERE version=25").get())
+      db.exec(accountLocaleV25Sql);
+    if (!db.prepare("SELECT 1 FROM schema_migrations WHERE version=26").get())
+      db.exec(draftRenderInputsV26Sql);
+    if (!db.prepare("SELECT 1 FROM schema_migrations WHERE version=27").get())
+      db.exec(draftWorkCacheV27Sql);
+    db.exec("COMMIT");
+  } catch (error) {
+    if (db.isTransaction) db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+function applyRenderEngineSettingsV23(db: DatabaseSync): void {
+  db.exec("PRAGMA foreign_keys=OFF");
+  try {
+    db.exec("BEGIN IMMEDIATE");
+    if (!db.prepare("SELECT 1 FROM schema_migrations WHERE version=23").get())
+      db.exec(renderEngineSettingsV23Sql);
+    db.exec("COMMIT");
+  } catch (error) {
+    if (db.isTransaction) db.exec("ROLLBACK");
+    throw error;
+  } finally {
+    db.exec("PRAGMA foreign_keys=ON");
   }
 }
 

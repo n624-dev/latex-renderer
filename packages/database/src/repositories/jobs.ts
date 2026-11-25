@@ -1,7 +1,12 @@
 import type { DatabaseSync } from "node:sqlite";
 import { userJobSql } from "../user-visible.js";
 import { readySourceSql } from "../source-lifecycle.js";
-import type { JobStatus, RenderOutput } from "@latex-renderer/contracts";
+import {
+  defaultRenderEngine,
+  type JobStatus,
+  type RenderEngine,
+  type RenderOutput,
+} from "@latex-renderer/contracts";
 import {
   decodePageCursor,
   encodePageCursor,
@@ -35,6 +40,8 @@ export interface JobRow {
   deleted_at: string | null;
   source_id: string | null;
   entrypoint: string;
+  engine: RenderEngine;
+  runtime_digest: string | null;
   project_revision_id: string | null;
   outputs_json: string;
   reserved_output_bytes: number;
@@ -58,6 +65,7 @@ export interface OwnedJobListRow extends Pick<
   | "error_code"
   | "source_id"
   | "entrypoint"
+  | "engine"
   | "project_revision_id"
 > {
   project_id: string | null;
@@ -74,6 +82,8 @@ export type RevisionJobSummary = Pick<
   | "retry_of_job_id"
   | "error_code"
   | "outputs_json"
+  | "engine"
+  | "runtime_digest"
 >;
 
 export type SourceJobSummary = Pick<
@@ -237,7 +247,7 @@ export class JobsRepository {
       .prepare(
         `SELECT id,user_id,service_account_id,api_key_id,status,renderer_version,source_size,source_sha256,
       created_at,updated_at,queued_at,started_at,completed_at,exit_code,error_code,error_message,output_size,
-      cancel_requested_at,retry_of_job_id,lease_owner,lease_expires_at,heartbeat_at,lease_generation,deleted_at,source_id,entrypoint,project_revision_id,outputs_json,reserved_output_bytes,
+      cancel_requested_at,retry_of_job_id,lease_owner,lease_expires_at,heartbeat_at,lease_generation,deleted_at,source_id,entrypoint,project_revision_id,outputs_json,engine,runtime_digest,reserved_output_bytes,
       render_status,deletion_status,deletion_attempts,deletion_error,deletion_next_attempt_at FROM jobs WHERE id=?`,
       )
       .get(id) as unknown as JobRow | undefined;
@@ -249,6 +259,48 @@ export class JobsRepository {
       .get(id) as unknown as JobRow | undefined;
   }
 
+  renderProvenance(
+    row: Pick<
+      JobRow,
+      | "id"
+      | "engine"
+      | "runtime_digest"
+      | "retry_of_job_id"
+      | "project_revision_id"
+      | "user_id"
+    >,
+  ) {
+    let previous: { runtime_digest: string | null } | undefined;
+    if (row.runtime_digest !== null && row.retry_of_job_id !== null) {
+      previous = this.db
+        .prepare("SELECT runtime_digest FROM jobs WHERE id=? AND user_id=?")
+        .get(row.retry_of_job_id, row.user_id) as typeof previous;
+    } else if (
+      row.runtime_digest !== null &&
+      row.project_revision_id !== null
+    ) {
+      previous = this.db
+        .prepare(
+          `SELECT previous.runtime_digest
+          FROM jobs previous JOIN jobs current ON current.id=?
+          WHERE previous.project_revision_id=? AND previous.user_id=?
+            AND previous.runtime_digest IS NOT NULL
+            AND (previous.created_at < current.created_at OR
+              (previous.created_at = current.created_at AND previous.rowid < current.rowid))
+          ORDER BY previous.created_at DESC,previous.rowid DESC LIMIT 1`,
+        )
+        .get(row.id, row.project_revision_id, row.user_id) as typeof previous;
+    }
+    return {
+      engine: row.engine,
+      runtimeDigest: row.runtime_digest,
+      ...(previous?.runtime_digest &&
+      previous.runtime_digest !== row.runtime_digest
+        ? { previousRuntimeDigest: previous.runtime_digest }
+        : {}),
+    };
+  }
+
   getOwned(
     id: string,
     userId: string,
@@ -258,7 +310,7 @@ export class JobsRepository {
       .prepare(
         `SELECT id,user_id,service_account_id,api_key_id,status,renderer_version,source_size,source_sha256,
       created_at,updated_at,queued_at,started_at,completed_at,exit_code,error_code,error_message,output_size,
-      cancel_requested_at,retry_of_job_id,lease_owner,lease_expires_at,heartbeat_at,lease_generation,deleted_at,source_id,entrypoint,project_revision_id,outputs_json,reserved_output_bytes,
+      cancel_requested_at,retry_of_job_id,lease_owner,lease_expires_at,heartbeat_at,lease_generation,deleted_at,source_id,entrypoint,project_revision_id,outputs_json,engine,runtime_digest,reserved_output_bytes,
       render_status,deletion_status,deletion_attempts,deletion_error,deletion_next_attempt_at FROM jobs
       WHERE id=? AND user_id=? AND service_account_id=? AND deleted_at IS NULL`,
       )
@@ -335,7 +387,14 @@ export class JobsRepository {
         "SELECT COALESCE(SUM(reserved_bytes),0) AS bytes FROM source_trees WHERE owner_user_id=?",
       )
       .get(id) as { bytes: number };
-    return sourceBytes + jobBytes + previews.bytes + trees.bytes;
+    const draftWork = this.db
+      .prepare(
+        "SELECT COALESCE(SUM(bytes),0) AS bytes FROM draft_work_cache WHERE user_id=?",
+      )
+      .get(id) as { bytes: number };
+    return (
+      sourceBytes + jobBytes + previews.bytes + trees.bytes + draftWork.bytes
+    );
   }
 
   statusCounts(): Array<{ status: JobStatus; count: number }> {
@@ -392,12 +451,13 @@ export class JobsRepository {
     entrypoint?: string;
     projectRevisionId?: string;
     outputs?: readonly RenderOutput[];
+    engine?: RenderEngine;
     reservedOutputBytes: number;
   }): void {
     this.db
       .prepare(
-        `INSERT INTO jobs(id,user_id,service_account_id,api_key_id,status,renderer_version,source_size,source_sha256,created_at,updated_at,source_id,entrypoint,project_revision_id,outputs_json,reserved_output_bytes)
-      VALUES (?,?,?,?, 'reserved',?,?,?,?,?,?,?,?,?,?)`,
+        `INSERT INTO jobs(id,user_id,service_account_id,api_key_id,status,renderer_version,source_size,source_sha256,created_at,updated_at,source_id,entrypoint,project_revision_id,outputs_json,engine,reserved_output_bytes)
+      VALUES (?,?,?,?, 'reserved',?,?,?,?,?,?,?,?,?,?,?)`,
       )
       .run(
         input.id,
@@ -413,6 +473,7 @@ export class JobsRepository {
         input.entrypoint ?? "main.tex",
         input.projectRevisionId ?? null,
         JSON.stringify(input.outputs ?? ["pdf"]),
+        input.engine ?? defaultRenderEngine,
         input.reservedOutputBytes,
       );
   }
@@ -429,14 +490,15 @@ export class JobsRepository {
     retryOfJobId?: string;
     projectRevisionId?: string;
     outputs?: readonly RenderOutput[];
+    engine?: RenderEngine;
     reservedOutputBytes: number;
   }): number {
     return Number(
       this.db
         .prepare(
           `INSERT INTO jobs(id,user_id,service_account_id,api_key_id,status,renderer_version,source_size,source_sha256,
-      created_at,updated_at,queued_at,retry_of_job_id,source_id,entrypoint,project_revision_id,outputs_json,reserved_output_bytes)
-      SELECT ?,?,?,?,'queued',?,s.size,s.sha256,?,?,?,?,s.id,?,?,?,?
+      created_at,updated_at,queued_at,retry_of_job_id,source_id,entrypoint,project_revision_id,outputs_json,engine,reserved_output_bytes)
+      SELECT ?,?,?,?,'queued',?,s.size,s.sha256,?,?,?,?,s.id,?,?,?,?,?
       FROM sources s WHERE s.id=? AND s.owner_user_id=? AND ${readySourceSql("s")}`,
         )
         .run(
@@ -452,12 +514,47 @@ export class JobsRepository {
           input.entrypoint,
           input.projectRevisionId ?? null,
           JSON.stringify(input.outputs ?? ["pdf"]),
+          input.engine ?? defaultRenderEngine,
           input.reservedOutputBytes,
           input.sourceId,
           input.userId,
           input.timestamp,
         ).changes,
     );
+  }
+
+  insertDraftRender(input: {
+    id: string;
+    userId: string;
+    serviceAccountId: string;
+    apiKeyId: string;
+    rendererVersion: string;
+    manifestSha256: string;
+    entrypoint: string;
+    engine: RenderEngine;
+    timestamp: string;
+    reservedOutputBytes: number;
+  }): void {
+    this.db
+      .prepare(
+        `INSERT INTO jobs(id,user_id,service_account_id,api_key_id,status,renderer_version,source_size,source_sha256,
+       created_at,updated_at,queued_at,entrypoint,engine,reserved_output_bytes)
+       VALUES (?,?,?,?,'queued',?,0,?,?,?,?,?,?,?)`,
+      )
+      .run(
+        input.id,
+        input.userId,
+        input.serviceAccountId,
+        input.apiKeyId,
+        input.rendererVersion,
+        input.manifestSha256,
+        input.timestamp,
+        input.timestamp,
+        input.timestamp,
+        input.entrypoint,
+        input.engine,
+        input.reservedOutputBytes,
+      );
   }
 
   insertRetry(input: {
@@ -470,7 +567,7 @@ export class JobsRepository {
     this.db
       .prepare(
         `INSERT INTO jobs(id,user_id,service_account_id,api_key_id,status,renderer_version,source_size,source_sha256,
-      created_at,updated_at,queued_at,retry_of_job_id,source_id,entrypoint,project_revision_id,outputs_json,reserved_output_bytes) VALUES (?,?,?,?, 'queued',?,?,?,?,?,?,?,?,?,?,?,?)`,
+      created_at,updated_at,queued_at,retry_of_job_id,source_id,entrypoint,project_revision_id,outputs_json,engine,reserved_output_bytes) VALUES (?,?,?,?, 'queued',?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       )
       .run(
         input.id,
@@ -488,6 +585,7 @@ export class JobsRepository {
         input.source.entrypoint,
         input.source.project_revision_id,
         input.source.outputs_json,
+        input.source.engine,
         input.reservedOutputBytes,
       );
   }
@@ -497,7 +595,7 @@ export class JobsRepository {
       .prepare(
         `SELECT id,user_id,service_account_id,api_key_id,status,renderer_version,source_size,source_sha256,
       created_at,updated_at,queued_at,started_at,completed_at,exit_code,error_code,error_message,output_size,
-      cancel_requested_at,retry_of_job_id,lease_owner,lease_expires_at,heartbeat_at,lease_generation,deleted_at,source_id,entrypoint,project_revision_id,outputs_json,reserved_output_bytes,
+      cancel_requested_at,retry_of_job_id,lease_owner,lease_expires_at,heartbeat_at,lease_generation,deleted_at,source_id,entrypoint,project_revision_id,outputs_json,engine,runtime_digest,reserved_output_bytes,
       render_status,deletion_status,deletion_attempts,deletion_error,deletion_next_attempt_at FROM jobs
       WHERE id=? AND ${userJobSql()} AND status IN ('succeeded','failed','timeout','canceled','rejected')`,
       )
@@ -509,9 +607,11 @@ export class JobsRepository {
       .prepare(
         `SELECT id,user_id,service_account_id,api_key_id,status,renderer_version,source_size,source_sha256,
         created_at,updated_at,queued_at,started_at,completed_at,exit_code,error_code,error_message,output_size,
-        cancel_requested_at,retry_of_job_id,lease_owner,lease_expires_at,heartbeat_at,lease_generation,deleted_at,source_id,entrypoint,project_revision_id,outputs_json,reserved_output_bytes,
+        cancel_requested_at,retry_of_job_id,lease_owner,lease_expires_at,heartbeat_at,lease_generation,deleted_at,source_id,entrypoint,project_revision_id,outputs_json,engine,runtime_digest,reserved_output_bytes,
         render_status,deletion_status,deletion_attempts,deletion_error,deletion_next_attempt_at
-        FROM jobs WHERE user_id=? AND ${userJobSql()} AND deleted_at IS NULL ORDER BY created_at DESC LIMIT ?`,
+        FROM jobs WHERE user_id=? AND ${userJobSql()} AND deleted_at IS NULL
+        AND NOT EXISTS (SELECT 1 FROM job_draft_inputs d WHERE d.job_id=jobs.id)
+        ORDER BY created_at DESC LIMIT ?`,
       )
       .all(userId, limit) as unknown as JobRow[];
   }
@@ -532,13 +632,14 @@ export class JobsRepository {
       rows = this.db
         .prepare(
           `SELECT j.id,j.user_id,j.service_account_id,j.status,j.source_size,j.created_at,j.updated_at,
-             j.error_code,j.source_id,j.entrypoint,j.project_revision_id,
+             j.error_code,j.source_id,j.entrypoint,j.engine,j.project_revision_id,
              p.id AS project_id,p.display_name AS project_name,
              r.display_name AS revision_display_name
            FROM jobs j
            LEFT JOIN project_revisions r ON r.id=j.project_revision_id
            LEFT JOIN projects p ON p.id=r.project_id AND p.deleted_at IS NULL
-           WHERE j.user_id=? AND ${userJobSql("j")} AND j.deleted_at IS NULL${condition}
+           WHERE j.user_id=? AND ${userJobSql("j")} AND j.deleted_at IS NULL
+             AND NOT EXISTS (SELECT 1 FROM job_draft_inputs d WHERE d.job_id=j.id)${condition}
            ORDER BY j.created_at DESC,j.id DESC LIMIT ?`,
         )
         .all(...params) as unknown as OwnedJobListRow[];
@@ -566,7 +667,7 @@ export class JobsRepository {
     const rows = this.db
       .prepare(
         `WITH ranked AS (
-           SELECT j.id,j.project_revision_id,j.status,j.created_at,j.updated_at,j.retry_of_job_id,j.error_code,j.outputs_json,
+           SELECT j.id,j.project_revision_id,j.status,j.created_at,j.updated_at,j.retry_of_job_id,j.error_code,j.outputs_json,j.engine,j.runtime_digest,
              ROW_NUMBER() OVER (
                PARTITION BY j.project_revision_id
                ORDER BY j.created_at DESC,j.id DESC
@@ -574,7 +675,7 @@ export class JobsRepository {
            FROM jobs j
            WHERE j.project_revision_id IN (${placeholders}) AND ${userJobSql("j")} AND j.deleted_at IS NULL
          )
-         SELECT id,project_revision_id,status,created_at,updated_at,retry_of_job_id,error_code,outputs_json
+         SELECT id,project_revision_id,status,created_at,updated_at,retry_of_job_id,error_code,outputs_json,engine,runtime_digest
          FROM ranked WHERE row_number<=?
          ORDER BY project_revision_id,created_at DESC,id DESC`,
       )
@@ -591,6 +692,8 @@ export class JobsRepository {
         retry_of_job_id: row.retry_of_job_id,
         error_code: row.error_code,
         outputs_json: row.outputs_json,
+        engine: row.engine,
+        runtime_digest: row.runtime_digest,
       });
       result.set(row.project_revision_id, list);
     }
@@ -629,7 +732,7 @@ export class JobsRepository {
         : [revisionId, limit + 1],
       rows = this.db
         .prepare(
-          `SELECT id,status,created_at,updated_at,retry_of_job_id,error_code,outputs_json
+          `SELECT id,status,created_at,updated_at,retry_of_job_id,error_code,outputs_json,engine,runtime_digest
            FROM jobs WHERE project_revision_id=? AND ${userJobSql()} AND deleted_at IS NULL${condition}
            ORDER BY created_at DESC,id DESC LIMIT ?`,
         )
@@ -663,7 +766,7 @@ export class JobsRepository {
       .prepare(
         `SELECT id,user_id,service_account_id,api_key_id,status,renderer_version,source_size,source_sha256,
         created_at,updated_at,queued_at,started_at,completed_at,exit_code,error_code,error_message,output_size,
-        cancel_requested_at,retry_of_job_id,lease_owner,lease_expires_at,heartbeat_at,lease_generation,deleted_at,source_id,entrypoint,project_revision_id,outputs_json,reserved_output_bytes,
+        cancel_requested_at,retry_of_job_id,lease_owner,lease_expires_at,heartbeat_at,lease_generation,deleted_at,source_id,entrypoint,project_revision_id,outputs_json,engine,runtime_digest,reserved_output_bytes,
         render_status,deletion_status,deletion_attempts,deletion_error,deletion_next_attempt_at
         FROM jobs WHERE project_revision_id=? AND ${userJobSql()} AND deleted_at IS NULL ORDER BY created_at DESC`,
       )

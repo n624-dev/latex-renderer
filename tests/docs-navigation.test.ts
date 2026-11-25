@@ -90,7 +90,9 @@ describe("documentation navigation", () => {
   });
 
   it("supports keyboard-native search and code-copy controls on mobile", () => {
-    expect(siteScript).toContain("fetch('/assets/docs-search.json')");
+    expect(siteScript).toContain(
+      "fetch(search.dataset.indexUrl || '/assets/docs-search.json')",
+    );
     expect(siteScript).toContain("navigator.clipboard.writeText");
     expect(siteScript).toContain("document.createElement('button')");
     expect(styles).toContain(

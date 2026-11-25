@@ -112,8 +112,9 @@ describe("administrator external identity lifecycle", () => {
     expect(adminScript).toContain("メールによる自動再連携は行いません");
     expect(adminScript).toContain("me.role==='owner'&&x.identities?.length");
     expect(adminScript).toContain("外部ログインを解除");
-    expect(adminScript).toContain('name="reason"');
-    expect(adminScript).toContain('name="confirm" required');
+    const markup = adminScript.replaceAll(String.raw`\"`, '"');
+    expect(markup).toContain('name="reason"');
+    expect(markup).toContain('name="confirm" required');
     expect(adminScript).toContain("秘密値は入力しないでください");
     expect(adminScript).toContain("/identities/");
     expect(adminScript).toContain("/unlink");

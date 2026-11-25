@@ -42,6 +42,8 @@ export interface WorkerConfig extends ResourceLimits {
   sourceTreeMaxBytes?: number;
   sourceTreeUserMaxBytes?: number;
   sourceTreeTtlMs?: number;
+  draftWorkCacheBytes?: number;
+  draftPreviewSupersedeAfterMs?: number;
   diagnostic?: (record: Readonly<Record<string, unknown>>) => void;
 }
 
@@ -156,6 +158,21 @@ export function loadWorkerConfig(): WorkerConfig {
         60,
         86400,
       ) * 1000,
+    draftWorkCacheBytes: boundedIntegerEnvironment(
+      process.env,
+      "DRAFT_WORK_CACHE_BYTES",
+      0,
+      0,
+      256 * 1024 ** 2,
+    ),
+    draftPreviewSupersedeAfterMs:
+      boundedIntegerEnvironment(
+        process.env,
+        "DRAFT_PREVIEW_SUPERSEDE_AFTER_SECONDS",
+        30,
+        0,
+        86400,
+      ) * 1000,
     minimumAvailableMemoryBytes: positiveBytesEnvironment(
       process.env,
       "RENDERER_MIN_AVAILABLE_MEMORY_BYTES",
@@ -202,7 +219,7 @@ export function loadWorkerConfig(): WorkerConfig {
       "SOURCE_TREE_USER_MAX_BYTES must not exceed SOURCE_TREE_MAX_BYTES",
     );
   if (
-    !isImmutableImageReference(config.image) &&
+    rendererRuntimeDigest(config.image) === null &&
     process.env.ALLOW_MUTABLE_RENDERER_IMAGE !== "true"
   )
     throw new Error(
@@ -220,8 +237,6 @@ function optional(name: string): string | undefined {
   const value = process.env[name];
   return value === undefined || value.length === 0 ? undefined : value;
 }
-function isImmutableImageReference(value: string): boolean {
-  return (
-    /^sha256:[a-f0-9]{64}$/.test(value) || /@sha256:[a-f0-9]{64}$/.test(value)
-  );
+export function rendererRuntimeDigest(image: string): string | null {
+  return /(?:^|@)(sha256:[a-f0-9]{64})$/.exec(image)?.[1] ?? null;
 }

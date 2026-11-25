@@ -2125,16 +2125,23 @@ def _sync_attempt(
                     config,
                     state,
                     "sync_success",
-                    {"snapshotId": snapshot_id, "newBytesEstimated": new_bytes},
+                    {
+                        "snapshotId": snapshot_id,
+                        "newBytesEstimated": new_bytes,
+                        "estimatedPeakBytes": peak,
+                    },
                     now,
                 )
                 save_state(config, state)
                 publish_latest_metadata(config, state)
-            gc(config, now)
+            collected = gc(config, now)
             return {
                 "status": "published",
                 "snapshotId": snapshot_id,
                 "url": f"{config.public_base_url}/snapshots/{snapshot_id}/tlnet",
+                "estimatedPeakBytes": peak,
+                "managedBytesBeforeGc": collected["before"]["managedBytes"],
+                "managedBytesAfterGc": collected["after"]["managedBytes"],
             }
         except BaseException as error:
             with contextlib.suppress(Exception):

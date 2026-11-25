@@ -17,6 +17,7 @@ import { DatabaseSync } from "node:sqlite";
 import {
   assertBackupDatabase,
   openBackupFile,
+  projectSourceRows,
   projectSourceStorageKey,
   validateBackupArchive,
 } from "./backup-boundary.mjs";
@@ -136,16 +137,7 @@ async function copyProjectSources(database) {
        ORDER BY r.project_id,r.revision_number,r.id`,
     )
     .all();
-  const sources = database
-    .prepare(
-      `SELECT DISTINCT s.id,s.storage_key,s.size,s.sha256
-       FROM sources s
-       JOIN project_revisions r ON r.source_id=s.id
-       JOIN projects p ON p.id=r.project_id
-       WHERE p.deleted_at IS NULL
-       ORDER BY s.id`,
-    )
-    .all();
+  const sources = projectSourceRows(database);
   const copied = [];
   for (const source of sources) {
     const storageKey = projectSourceStorageKey(source);

@@ -325,7 +325,8 @@ with sqlite3.connect('/var/lib/latex-renderer/renderer.sqlite3') as db:
         result["cancelPassed"] = True
         interrupted = fixture.queue(slow)
         fixture.wait(interrupted, "running")
-        run(["/usr/bin/systemctl", "kill", "--signal=KILL", "--kill-whom=all", "latex-renderer-worker.service"])
+        # Kill the Worker without relying on systemd signaling each auxiliary process.
+        run(["/usr/bin/systemctl", "kill", "--signal=KILL", "--kill-whom=main", "latex-renderer-worker.service"])
         recovered = fixture.wait(interrupted, timeout=360)
         assert recovered["status"] in ("succeeded", "failed")
         fixture.wait_cleanup(interrupted)

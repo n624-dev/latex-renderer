@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { humanText, humanDiagnostic } from "./messages.js";
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import {
@@ -50,7 +51,7 @@ program
     if (!/^lra_[a-f0-9]{32}_[A-Za-z0-9_-]{43}$/.test(key))
       throw new AppError("INVALID_KEY", "Input is not an admin API key", 400);
     await saveKey(key);
-    process.stdout.write("Admin credential stored.\n");
+    process.stdout.write(humanText("adminCredentialStored") + "\n");
   });
 
 const users = program.command("users");
@@ -61,12 +62,12 @@ users
   .requiredOption("--display-name <name>")
   .requiredOption("--role <role>")
   .requiredOption("--authentication <type>", "password or external")
-  .option("--login-name <name>", "password login name")
+  .option("--login-name <name>", humanText("passwordLoginName"))
   .option(
     "--password-stdin",
-    "read the initial password from standard input, never argv",
+    humanText("readTheInitialPasswordFromStandard"),
   )
-  .option("--subject <subject>", "external provider subject")
+  .option("--subject <subject>", humanText("externalProviderSubject"))
   .option("--preferred-username <name>")
   .option("--email-at-provider <email>")
   .action(
@@ -261,7 +262,7 @@ for (const action of ["pause", "resume", "drain"] as const)
 
 const tex = program
   .command("tex")
-  .description("Manage the TeX Live base image and language collections");
+  .description(humanText("manageTheTexLiveBaseImage"));
 tex
   .command("status")
   .action(async () => print(await request("GET", "/tex-environment/state")));
@@ -272,7 +273,7 @@ tex
   .command("languages")
   .option(
     "--search <query>",
-    "filter the shared language catalog without changing its server-provided order",
+    humanText("filterTheSharedLanguageCatalogWithout"),
   )
   .action(async (o: { search?: string }) => {
     const value = asRecord(await request("GET", "/tex-environment/languages"));
@@ -313,13 +314,13 @@ tex
   .option("--language <collection...>")
   .option(
     "--all-languages",
-    "select every language collection returned by the common API",
+    humanText("selectEveryLanguageCollectionReturnedBy"),
   )
-  .option("--clear-languages", "select zero optional language collections")
+  .option("--clear-languages", humanText("selectZeroOptionalLanguageCollections"))
   .requiredOption("--auto-update <on|off>")
   .option(
     "--rebuild-if-missing <on|off>",
-    "rebuild an unavailable dated image locally",
+    humanText("rebuildAnUnavailableDatedImageLocally"),
     "on",
   )
   .requiredOption("--reason <reason>", "reason recorded in the audit log")
@@ -421,7 +422,7 @@ tex
 const update = program
   .command("update")
   .description(
-    "Update the self-hosted latex-renderer application from immutable GitHub Releases",
+    humanText("updateTheSelfHostedLatexRenderer"),
   );
 update
   .command("status")
@@ -495,7 +496,7 @@ update
 
 await program.parseAsync().catch((error: unknown) => {
   process.stderr.write(
-    `latex-render-admin: ${error instanceof Error ? error.message : "Unknown error"}\n`,
+    `latex-render-admin: ${error instanceof Error ? humanDiagnostic(error.message) : humanDiagnostic("Unknown error")}\n`,
   );
   process.exitCode = 1;
 });
@@ -581,7 +582,7 @@ async function waitTexOperation(initial: unknown): Promise<unknown> {
       failures += 1;
       if (failures >= 60) throw error;
       if (lastStatus !== "reconnecting") {
-        process.stderr.write("TeX environment: reconnecting to Admin API...\n");
+        process.stderr.write(humanText("texEnvironmentReconnectingToAdminApi") + "\n");
         lastStatus = "reconnecting";
       }
       await sleep(1_000);

@@ -11,9 +11,10 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
-import { createReadStream, createWriteStream } from "node:fs";
+import { constants, createReadStream, createWriteStream } from "node:fs";
 import { dirname, join } from "node:path";
 import { PassThrough, Readable, Transform } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import type {
   ArtifactRow,
   JobRow,
@@ -25,6 +26,8 @@ import type {
 } from "@latex-renderer/database";
 import {
   ProjectOperations,
+  ProjectDraftOperations,
+  type ProjectActor,
   SvgRetryOperations,
   artifactStoragePath,
   protectArtifactDownloadLeases,
@@ -44,9 +47,17 @@ import {
 } from "@latex-renderer/shared";
 import {
   validateAndExtract,
+  extractValidatedSourceFiles,
+  readValidatedSourceFile,
   validateEntrypointPath,
   validateSourceFilePath,
 } from "@latex-renderer/zip-validation";
+import {
+  defaultRenderEngine,
+  renderEngineSchema,
+  type RenderEngine,
+  type RenderOutput,
+} from "@latex-renderer/contracts";
 import yazl from "yazl";
 export {
   RemoteMcpLoginContinuations,
@@ -692,7 +703,9 @@ export interface RemoteMcpIdentity {
 export interface RemoteJobSummary {
   id: string;
   status: JobRow["status"];
-  engine: "lualatex";
+  engine: RenderEngine;
+  runtimeDigest: string | null;
+  previousRuntimeDigest?: string;
   rendererVersion: string;
   sourceId: string | null;
   projectRevisionId: string | null;
@@ -735,7 +748,7 @@ export interface RemoteRenderDiagnostic {
 export interface RemoteRenderDiagnostics {
   jobId: string;
   status: JobRow["status"];
-  engine: "lualatex";
+  engine: RenderEngine;
   diagnostics: RemoteRenderDiagnostic[];
   logExcerpt: string;
   rawLogResourceUri: string | null;
@@ -781,7 +794,13 @@ export interface RemoteSourceUpload {
 export interface RemoteRendererCapabilities {
   rendererVersion: string;
   texliveVersion: string;
-  engines: readonly ["lualatex"];
+  engines: readonly RenderEngine[];
+  engineOutputs?: ReadonlyArray<{
+    engine: RenderEngine;
+    pdf: boolean;
+    svg: boolean;
+    placement: boolean;
+  }>;
   shellEscape: false;
   networkAccess: false;
   maxCompileSeconds: number;
@@ -987,6 +1006,455 @@ export class RemoteRenderService {
     } finally {
       await rm(archiveRoot, { recursive: true, force: true });
     }
+  }
+
+  async openProjectDraft(
+    actor: ProjectActor,
+    projectId: string,
+    revisionId?: string,
+  ) {
+    const drafts = new ProjectDraftOperations(
+      this.database,
+      this.resourceLimits.maxFileCount,
+      this.resourceLimits.maxZipEntries,
+    );
+    try {
+      return drafts.open(actor, projectId, revisionId);
+    } catch (error) {
+      if (
+        !(error instanceof AppError) ||
+        error.code !== "DRAFT_SOURCE_REQUIRED" ||
+        revisionId !== undefined
+      )
+        throw error;
+    }
+    const path = "main.tex";
+    const archive = await zipFiles([{ path, bytes: Buffer.alloc(0) }]);
+    let draft:
+      ReturnType<ProjectDraftOperations["startEmptyInTransaction"]> | undefined;
+    await this.storeReadySource(actor.userId, archive, [path], (sourceId) => {
+      draft = drafts.startEmptyInTransaction(actor, projectId, sourceId);
+    });
+    if (!draft) throw new Error("Draft initialization did not commit");
+    return draft;
+  }
+
+  async readDraftText(
+    actor: ProjectActor,
+    projectId: string,
+    version: number,
+    path: string,
+  ) {
+    const { draft, path: target } = this.requireDraftVersion(
+      actor,
+      projectId,
+      version,
+      path,
+    );
+    const file = draft.files.find((entry) => entry.path === target);
+    if (file === undefined)
+      throw new AppError(
+        "SOURCE_FILE_NOT_FOUND",
+        "Draft file does not exist",
+        404,
+      );
+    const source = this.resolveOwnedSource(actor.userId, file.sourceId);
+    const bytes = await readValidatedSourceFile(
+      this.sourcePath(source),
+      file.sourcePath,
+      this.zipLimits(),
+    );
+    try {
+      return {
+        path: target,
+        version,
+        text: new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
+          bytes,
+        ),
+      };
+    } catch {
+      throw new AppError(
+        "DRAFT_TEXT_ENCODING",
+        "Draft file is not UTF-8. Convert it explicitly before editing.",
+        422,
+      );
+    }
+  }
+
+  async saveDraftText(
+    actor: ProjectActor,
+    projectId: string,
+    version: number,
+    path: string,
+    text: string,
+  ) {
+    assertSourceWritable(this.database);
+    const { drafts, path: target } = this.requireDraftVersion(
+      actor,
+      projectId,
+      version,
+      path,
+    );
+    if (Buffer.byteLength(text) > this.directSourceLimits().fileBytes)
+      throw new AppError(
+        "SOURCE_FILE_SIZE",
+        "Draft text exceeds the direct file limit",
+        422,
+      );
+    const archive = await zipFiles([
+      { path: target, bytes: Buffer.from(text, "utf8") },
+    ]);
+    let updated: ReturnType<ProjectDraftOperations["update"]> | undefined;
+    await this.storeReadySource(actor.userId, archive, [target], (sourceId) => {
+      updated = drafts.updateInTransaction(actor, projectId, {
+        version,
+        files: [{ path: target, sourceId, sourcePath: target }],
+      });
+    });
+    if (updated === undefined) throw new Error("Draft update did not commit");
+    return updated;
+  }
+
+  async saveDraftFileContent(
+    actor: ProjectActor,
+    projectId: string,
+    file: { version: number; path: string; size: number; utf8: boolean },
+    body: ReadableStream<Uint8Array> | null,
+    signal: AbortSignal,
+  ) {
+    assertSourceWritable(this.database);
+    const { drafts, path: target } = this.requireDraftVersion(
+      actor,
+      projectId,
+      file.version,
+      file.path,
+    );
+    const maximum = this.resourceLimits.maxUploadBytes;
+    if (
+      !Number.isSafeInteger(file.size) ||
+      file.size < 0 ||
+      file.size > maximum
+    )
+      throw new AppError(
+        "SOURCE_FILE_SIZE",
+        "Draft file exceeds the upload limit",
+        413,
+      );
+    const id = newId("source");
+    const storageKey = `sources/${id}/source.zip`;
+    const archive = join(this.storageRoot, storageKey);
+    const timestamp = nowIso();
+    const reservedBytes = Math.min(
+      maximum,
+      file.size +
+        Math.ceil(file.size / 100) +
+        Buffer.byteLength(target) * 2 +
+        1024,
+    );
+    this.database.transaction(() => {
+      assertSourceWritable(this.database);
+      this.assertStorageQuota(actor.userId, reservedBytes);
+      this.database.sources.insertReserved({
+        id,
+        ownerUserId: actor.userId,
+        storageKey,
+        timestamp,
+        size: reservedBytes,
+        sha256: "0".repeat(64),
+        expiresAt: new Date(Date.now() + SOURCE_UPLOAD_MS).toISOString(),
+        dedupeEligible: false,
+      });
+    });
+    let retained = false;
+    try {
+      await mkdir(dirname(archive), { recursive: true, mode: 0o770 });
+      // The DOM and Node declarations use different BYOB reader signatures.
+      const input =
+        body === null
+          ? Readable.from([])
+          : Readable.fromWeb(
+              body as unknown as Parameters<typeof Readable.fromWeb>[0],
+            );
+      const decoder = file.utf8
+        ? new TextDecoder("utf-8", { fatal: true })
+        : undefined;
+      let received = 0;
+      const checked = new Transform({
+        transform(chunk: Buffer, _encoding, callback) {
+          received += chunk.byteLength;
+          if (received > file.size) {
+            callback(
+              new AppError(
+                "SOURCE_FILE_SIZE",
+                "Draft file is longer than declared",
+                413,
+              ),
+            );
+            return;
+          }
+          try {
+            decoder?.decode(chunk, { stream: true });
+            callback(null, chunk);
+          } catch {
+            callback(
+              new AppError(
+                "DRAFT_TEXT_ENCODING",
+                "Draft text must be UTF-8",
+                422,
+              ),
+            );
+          }
+        },
+        flush(callback) {
+          if (received !== file.size) {
+            callback(
+              new AppError(
+                "SOURCE_FILE_SIZE",
+                "Draft file is shorter than declared",
+                422,
+              ),
+            );
+            return;
+          }
+          try {
+            decoder?.decode();
+            callback();
+          } catch {
+            callback(
+              new AppError(
+                "DRAFT_TEXT_ENCODING",
+                "Draft text must be UTF-8",
+                422,
+              ),
+            );
+          }
+        },
+      });
+      const zip = new yazl.ZipFile();
+      const compressed = zip.outputStream as Readable;
+      const abort = AbortSignal.any([
+        signal,
+        AbortSignal.timeout(SOURCE_UPLOAD_MS),
+      ]);
+      const inputResult = pipeline(input, checked, { signal: abort });
+      zip.on("error", (error: Error) => compressed.destroy(error));
+      zip.addReadStreamLazy(
+        target,
+        { mtime: new Date(0), mode: 0o600, size: file.size },
+        (callback) => callback(null, checked),
+      );
+      const outputResult = pipeline(
+        compressed,
+        boundedArchiveStream(reservedBytes),
+        createWriteStream(archive, { flags: "wx", mode: 0o660 }),
+        { signal: abort },
+      );
+      try {
+        zip.end();
+        await Promise.all([inputResult, outputResult]);
+      } catch (error) {
+        checked.destroy();
+        compressed.destroy();
+        await Promise.allSettled([inputResult, outputResult]);
+        throw error;
+      }
+      const metadata = await stat(archive);
+      const sha256 = await sha256File(archive);
+      const handle = await open(archive, "r");
+      try {
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+      await syncDirectory(dirname(archive));
+      await syncDirectory(dirname(dirname(archive)));
+      const saved = this.database.transaction(() => {
+        assertSourceWritable(this.database);
+        const now = nowIso();
+        const existing = this.database.sources.findReady(
+          actor.userId,
+          sha256,
+          metadata.size,
+          now,
+        );
+        if (existing === undefined)
+          this.database.sources.transitionBeforeExpiry(
+            id,
+            ["reserved"],
+            "ready",
+            now,
+            {
+              sha256,
+              size: String(metadata.size),
+              dedupe_eligible: "1",
+              expires_at: this.sourceRetentionExpiresAt(),
+              uploaded_at: now,
+              paths_json: JSON.stringify([target]),
+            },
+          );
+        const next = drafts.updateInTransaction(actor, projectId, {
+          version: file.version,
+          files: [
+            { path: target, sourceId: existing?.id ?? id, sourcePath: target },
+          ],
+        });
+        return { next, keep: existing === undefined };
+      });
+      retained = saved.keep;
+      return saved.next;
+    } finally {
+      if (!retained) {
+        await rm(dirname(archive), { recursive: true, force: true });
+        this.database.transaction(() => {
+          this.database.sources.discardReservation(id);
+        });
+      }
+    }
+  }
+
+  async saveDraftRevision(
+    actor: ProjectActor,
+    projectId: string,
+    version: number,
+    displayName: string,
+    outputs?: readonly RenderOutput[],
+  ) {
+    assertSourceWritable(this.database);
+    const drafts = new ProjectDraftOperations(
+      this.database,
+      this.resourceLimits.maxFileCount,
+      this.resourceLimits.maxZipEntries,
+    );
+    const draft = drafts.get(actor, projectId);
+    if (draft === null)
+      throw new AppError("DRAFT_NOT_FOUND", "Draft does not exist", 404);
+    if (draft.version !== version)
+      throw new AppError(
+        "DRAFT_VERSION_CONFLICT",
+        "The draft has changed since it was loaded",
+        409,
+      );
+    const groups = new Map<string, typeof draft.files>();
+    for (const file of draft.files) {
+      const files = groups.get(file.sourceId) ?? [];
+      files.push(file);
+      groups.set(file.sourceId, files);
+    }
+    const save = (sourceId: string) => {
+      if (
+        this.database.drafts.getOwned(projectId, actor.userId)?.version !==
+        version
+      )
+        throw new AppError(
+          "DRAFT_VERSION_CONFLICT",
+          "The draft has changed since it was loaded",
+          409,
+        );
+      return new ProjectOperations(this.database).attachRevisionInTransaction(
+        actor,
+        {
+          projectId,
+          sourceId,
+          displayName,
+          entrypoint: draft.entrypoint,
+          engine: draft.engine,
+          originalFilename: draft.entrypoint.split("/").at(-1) ?? "source.zip",
+          outputs: outputs ?? draft.outputs,
+        },
+      );
+    };
+    const [group] = groups;
+    if (groups.size === 1 && group !== undefined) {
+      const [sourceId, files] = group;
+      const source = this.resolveOwnedSource(actor.userId, sourceId);
+      if (
+        files.length === this.database.sources.paths(source).length &&
+        files.every(({ path, sourcePath }) => path === sourcePath)
+      )
+        return this.database.transaction(() => save(source.id));
+    }
+    const directory = await mkdtemp(join(this.storageRoot, ".remote-archive-"));
+    try {
+      const input = join(directory, "input");
+      await mkdir(input, { mode: 0o700 });
+      const limits = this.zipLimits();
+      let remaining = limits.maxExtractedBytes;
+      for (const [sourceId, files] of groups) {
+        const source = this.resolveOwnedSource(actor.userId, sourceId);
+        const archive = this.sourcePath(source);
+        const info = await stat(archive);
+        if (
+          !info.isFile() ||
+          info.size !== source.size ||
+          (await sha256File(archive)) !== source.sha256
+        )
+          throw new AppError(
+            "SOURCE_CHECKSUM_INVALID",
+            "Source changed after validation",
+            409,
+          );
+        remaining -= await extractValidatedSourceFiles(archive, input, files, {
+          ...limits,
+          maxExtractedBytes: remaining,
+        });
+      }
+      const files = await readDirectoryFiles(input, "", {
+        files: 0,
+        bytes: 0,
+        maxFiles: limits.maxFiles,
+        maxBytes: limits.maxExtractedBytes,
+        maxFileBytes: limits.maxFileBytes,
+      });
+      const archive = join(directory, "source.zip");
+      await writeZipFiles(files, archive, {
+        maxArchiveBytes: this.resourceLimits.maxUploadBytes,
+        maxExtractedBytes: limits.maxExtractedBytes,
+        maxFileBytes: limits.maxFileBytes,
+      });
+      const handle = await open(archive, "r");
+      try {
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+      let revision: ReturnType<typeof save> | undefined;
+      await this.storeReadySourceArchive(
+        actor.userId,
+        archive,
+        draft.files.map(({ path }) => path),
+        (sourceId) => {
+          revision = save(sourceId);
+        },
+      );
+      if (revision === undefined)
+        throw new Error("Draft revision did not commit");
+      return revision;
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+
+  private requireDraftVersion(
+    actor: ProjectActor,
+    projectId: string,
+    version: number,
+    candidate: string,
+  ) {
+    const drafts = new ProjectDraftOperations(
+      this.database,
+      this.resourceLimits.maxFileCount,
+      this.resourceLimits.maxZipEntries,
+    );
+    const draft = drafts.get(actor, projectId);
+    if (draft === null)
+      throw new AppError("DRAFT_NOT_FOUND", "Draft does not exist", 404);
+    if (draft.version !== version)
+      throw new AppError(
+        "DRAFT_VERSION_CONFLICT",
+        "The draft has changed since it was loaded",
+        409,
+      );
+    return { drafts, draft, path: validateSourceFilePath(candidate) };
   }
 
   async beginSourceUpload(
@@ -1240,6 +1708,7 @@ export class RemoteRenderService {
       displayName: string;
       originalFilename: string;
       outputs: Array<"pdf" | "svg">;
+      engine?: RenderEngine | undefined;
     },
   ) {
     requireScope(identity.scopes, "mcp:render");
@@ -1254,6 +1723,7 @@ export class RemoteRenderService {
       revisionNumber: revision.revision_number,
       entrypoint: revision.entrypoint,
       outputs: this.database.projects.renderOutputs(revision),
+      engine: revision.engine,
     };
   }
 
@@ -1354,6 +1824,7 @@ export class RemoteRenderService {
             displayName: selected.revision.display_name,
             originalFilename: selected.revision.original_filename,
             outputs: this.database.projects.renderOutputs(selected.revision),
+            engine: selected.revision.engine,
           },
         );
       },
@@ -1373,6 +1844,7 @@ export class RemoteRenderService {
         revisionNumber: projectRevision.revision_number,
         entrypoint: projectRevision.entrypoint,
         outputs: this.database.projects.renderOutputs(projectRevision),
+        engine: projectRevision.engine,
       },
     };
   }
@@ -1394,6 +1866,7 @@ export class RemoteRenderService {
       sourceId: selected.revision.source_id,
       entrypoint: selected.revision.entrypoint,
       outputs: outputs ?? projects.renderOutputs(selected.revision),
+      engine: selected.revision.engine,
       project: { projectId, revisionId },
     });
   }
@@ -1405,16 +1878,19 @@ export class RemoteRenderService {
           inlineSource: string;
           entrypoint?: string | undefined;
           outputs?: Array<"pdf" | "svg">;
+          engine?: RenderEngine | undefined;
         }
       | {
           sourceRef: string;
           entrypoint?: string | undefined;
           outputs?: Array<"pdf" | "svg">;
+          engine?: RenderEngine | undefined;
         }
       | {
           sourceId: string;
           entrypoint?: string | undefined;
           outputs?: Array<"pdf" | "svg">;
+          engine?: RenderEngine | undefined;
           project?: { projectId: string; revisionId: string };
         },
   ): Promise<RemoteJobSummary> {
@@ -1422,6 +1898,7 @@ export class RemoteRenderService {
     this.assertMaintenance();
     const entrypoint = validateEntrypointPath(input.entrypoint ?? "main.tex"),
       outputs = normalizeRenderOutputs(input.outputs),
+      engine = input.engine ?? defaultRenderEngine,
       principal = this.ensurePrincipal(identity.userId),
       source =
         "sourceRef" in input
@@ -1474,7 +1951,8 @@ export class RemoteRenderService {
           undefined ||
           revision?.project_id !== project.projectId ||
           revision.source_id !== currentSource.id ||
-          revision.entrypoint !== entrypoint)
+          revision.entrypoint !== entrypoint ||
+          revision.engine !== engine)
       )
         throw new AppError(
           "PROJECT_REVISION_NOT_FOUND",
@@ -1491,6 +1969,7 @@ export class RemoteRenderService {
           sourceId: currentSource.id,
           entrypoint,
           outputs,
+          engine,
           ...(revision === undefined ? {} : { projectRevisionId: revision.id }),
           timestamp,
           reservedOutputBytes: this.maxOutputBytes,
@@ -1590,6 +2069,7 @@ export class RemoteRenderService {
       maxUserStorageBytes: this.maxUserStorageBytes,
       maxOutputBytes: this.maxOutputBytes,
       artifactRetentionHours: this.artifactRetentionHours,
+      runtimeImage: process.env.RENDERER_IMAGE,
     }).retry(
       {
         userId: identity.userId,
@@ -1685,7 +2165,7 @@ export class RemoteRenderService {
     return {
       jobId,
       status: row.status,
-      engine: "lualatex",
+      engine: row.engine,
       diagnostics,
       logExcerpt: logExcerpt(log, diagnostics),
       rawLogResourceUri,
@@ -1827,6 +2307,80 @@ export class RemoteRenderService {
         chunkBytes: SOURCE_UPLOAD_CHUNK_MAX_BYTES,
       },
     };
+  }
+
+  async verifiedCapabilities(
+    identity: RemoteMcpIdentity,
+  ): Promise<RemoteRendererCapabilities> {
+    const capabilities = this.capabilities(identity);
+    if (!/^sha256:[a-f0-9]{64}$/.test(this.rendererVersion))
+      return capabilities;
+    try {
+      const file = await open(
+        join(this.environmentRoot, "engines.json"),
+        constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+      );
+      try {
+        const metadata = await file.stat();
+        if (!metadata.isFile() || metadata.size > 4096) return capabilities;
+        const bytes = Buffer.alloc(metadata.size);
+        const { bytesRead } = await file.read(bytes);
+        if (bytesRead !== metadata.size) return capabilities;
+        const proof = JSON.parse(bytes.toString("utf8")) as {
+          schemaVersion?: unknown;
+          runtimeImage?: unknown;
+          engines?: unknown;
+        } | null;
+        if (
+          proof?.schemaVersion !== 1 ||
+          proof.runtimeImage !== this.rendererVersion ||
+          !Array.isArray(proof.engines) ||
+          proof.engines.length > renderEngineSchema.options.length
+        )
+          return capabilities;
+        const engineOutputs: NonNullable<
+          RemoteRendererCapabilities["engineOutputs"]
+        >[number][] = [];
+        const seen = new Set<RenderEngine>();
+        for (const entry of proof.engines as unknown[]) {
+          if (typeof entry !== "object" || entry === null) return capabilities;
+          const item = entry as {
+            engine?: unknown;
+            pdf?: unknown;
+            svg?: unknown;
+            placement?: unknown;
+          };
+          const result = renderEngineSchema.safeParse(item.engine);
+          if (
+            !result.success ||
+            seen.has(result.data) ||
+            typeof item.pdf !== "boolean" ||
+            typeof item.svg !== "boolean" ||
+            typeof item.placement !== "boolean" ||
+            (item.placement && !item.svg) ||
+            (item.svg && !item.pdf)
+          )
+            return capabilities;
+          seen.add(result.data);
+          engineOutputs.push({
+            engine: result.data,
+            pdf: item.pdf,
+            svg: item.svg,
+            placement: item.placement,
+          });
+        }
+        const engines = engineOutputs
+          .filter(({ pdf }) => pdf)
+          .map(({ engine }) => engine);
+        return engines.includes(defaultRenderEngine)
+          ? { ...capabilities, engines, engineOutputs }
+          : capabilities;
+      } finally {
+        await file.close();
+      }
+    } catch {
+      return capabilities;
+    }
   }
 
   async checkPackages(
@@ -2233,6 +2787,7 @@ export class RemoteRenderService {
     userId: string,
     archive: Buffer,
     paths: readonly string[],
+    onReady?: (sourceId: string) => void,
   ): Promise<SourceRow> {
     assertSourceWritable(this.database);
     const sha256 = sha256Hex(archive),
@@ -2242,7 +2797,11 @@ export class RemoteRenderService {
         archive.byteLength,
         nowIso(),
       );
-    if (existing !== undefined) return existing;
+    if (existing !== undefined) {
+      if (onReady !== undefined)
+        this.database.transaction(() => onReady(existing.id));
+      return existing;
+    }
     const sourceId = newId("source"),
       storageKey = `sources/${sourceId}/source.zip`,
       path = join(this.storageRoot, storageKey),
@@ -2264,7 +2823,15 @@ export class RemoteRenderService {
     });
     try {
       await mkdir(dirname(path), { recursive: true, mode: 0o770 });
-      await writeFile(path, archive, { flag: "wx", mode: 0o660 });
+      await writeFile(path, archive, {
+        flag: "wx",
+        mode: 0o660,
+        flush: onReady !== undefined,
+      });
+      if (onReady !== undefined) {
+        await syncDirectory(dirname(path));
+        await syncDirectory(dirname(dirname(path)));
+      }
       this.database.transaction(() => {
         assertSourceWritable(this.database);
         this.database.sources.transitionBeforeExpiry(
@@ -2278,6 +2845,7 @@ export class RemoteRenderService {
             paths_json: JSON.stringify(paths),
           },
         );
+        onReady?.(sourceId);
       });
     } catch (error) {
       await rm(dirname(path), { recursive: true, force: true });
@@ -2354,6 +2922,7 @@ export class RemoteRenderService {
       await mkdir(dirname(path), { recursive: true, mode: 0o770 });
       await rename(archive, path);
       await syncDirectory(dirname(path));
+      if (onReady !== undefined) await syncDirectory(dirname(dirname(path)));
       this.database.transaction(() => {
         assertSourceWritable(this.database);
         this.database.sources.transitionBeforeExpiry(
@@ -2759,7 +3328,7 @@ export class RemoteRenderService {
     return {
       id: row.id,
       status: row.status,
-      engine: "lualatex",
+      ...this.database.jobs.renderProvenance(row),
       rendererVersion: row.renderer_version,
       sourceId: row.source_id,
       projectRevisionId: row.project_revision_id,
@@ -3299,13 +3868,36 @@ async function writeZipFiles(
     maxFileBytes: number;
   },
 ): Promise<void> {
-  const zip = new yazl.ZipFile(),
-    output = createWriteStream(destination, { flags: "wx", mode: 0o660 });
+  const zip = new yazl.ZipFile();
+  const outputStream = zip.outputStream as Readable;
+  addZipFiles(zip, files, {
+    maxExtractedBytes: limits.maxExtractedBytes,
+    maxFileBytes: limits.maxFileBytes,
+  });
+  zip.on("error", (error: Error) => outputStream.destroy(error));
+  const completed = pipeline(
+    outputStream,
+    boundedArchiveStream(limits.maxArchiveBytes),
+    createWriteStream(destination, { flags: "wx", mode: 0o660 }),
+  );
+  try {
+    zip.end();
+    await completed;
+    await assertZipInputsUnchanged(files);
+  } catch (error) {
+    outputStream.destroy();
+    await completed.catch(() => {});
+    await rm(destination, { force: true });
+    throw error;
+  }
+}
+
+function boundedArchiveStream(maximum: number) {
   let totalBytes = 0;
-  const bound = new Transform({
+  return new Transform({
     transform(chunk: Buffer, _encoding, callback) {
       totalBytes += chunk.byteLength;
-      if (totalBytes > limits.maxArchiveBytes) {
+      if (totalBytes > maximum) {
         callback(
           new AppError(
             "SOURCE_ARCHIVE_SIZE",
@@ -3318,26 +3910,6 @@ async function writeZipFiles(
       callback(null, chunk);
     },
   });
-  addZipFiles(zip, files, {
-    maxExtractedBytes: limits.maxExtractedBytes,
-    maxFileBytes: limits.maxFileBytes,
-  });
-  const completed = new Promise<void>((resolve, reject) => {
-    output.once("finish", resolve);
-    output.once("error", reject);
-    bound.once("error", reject);
-    zip.outputStream.once("error", reject);
-    zip.once("error", reject);
-  });
-  zip.outputStream.pipe(bound).pipe(output);
-  zip.end();
-  try {
-    await completed;
-    await assertZipInputsUnchanged(files);
-  } catch (error) {
-    await rm(destination, { force: true });
-    throw error;
-  }
 }
 
 function addZipFiles(

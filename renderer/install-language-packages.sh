@@ -1,6 +1,24 @@
 #!/bin/sh
 set -eu
 [ "$#" -gt 0 ] || exit 64
+# Older immutable Base images do not include Poppler's Adobe-Japan1 data.
+# Reuse the signed Debian snapshot configured by that Base only when the
+# Japanese collection is selected. Current Base images skip this download.
+if [ "$1" = --prepare-poppler-data ]; then
+  [ "$#" -eq 1 ] || exit 64
+  if ! grep -Fxq 'collection-langjapanese' /opt/renderer/language-collections.txt ||
+      [ -s /usr/share/poppler/cidToUnicode/Adobe-Japan1 ]; then
+    exit 0
+  fi
+  export DEBIAN_FRONTEND=noninteractive
+  timeout -s TERM -k 5 180 apt-get -o Acquire::https::Timeout=25 -o Acquire::Retries=2 \
+      -o Acquire::Languages=none update --error-on=any
+  timeout -s TERM -k 5 90 apt-get -o Acquire::https::Timeout=25 -o Acquire::Retries=2 \
+      -y --no-install-recommends install poppler-data
+  test -s /usr/share/poppler/cidToUnicode/Adobe-Japan1
+  rm -rf /var/lib/apt/lists/*
+  exit 0
+fi
 # Packed Biber executes its bundled Perl interpreter from the PAR cache. Build
 # that cache into the read-only Runtime rather than extracting into noexec /tmp.
 if [ "$1" = --prepare-biber-cache ]; then

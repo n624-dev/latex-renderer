@@ -430,6 +430,98 @@ INSERT OR IGNORE INTO system_settings(key, value_json, updated_by, updated_at)
 VALUES ('source_orphan_retention_minutes', '60', 'migration', strftime('%Y-%m-%dT%H:%M:%fZ','now'));
 `;
 
+export const renderEngineSettingsV23Sql = `
+ALTER TABLE jobs ADD COLUMN engine TEXT NOT NULL DEFAULT 'lualatex'
+CHECK(engine IN ('lualatex','pdflatex','xelatex','uplatex','platex'));
+ALTER TABLE jobs ADD COLUMN runtime_digest TEXT;
+CREATE TABLE project_revisions_v23 (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  source_id TEXT NOT NULL REFERENCES sources(id),
+  revision_number INTEGER NOT NULL CHECK(revision_number > 0),
+  display_name TEXT NOT NULL CHECK(length(display_name) BETWEEN 1 AND 200),
+  original_filename TEXT NOT NULL CHECK(length(original_filename) BETWEEN 1 AND 240),
+  entrypoint TEXT NOT NULL CHECK(length(entrypoint) BETWEEN 1 AND 240),
+  outputs_json TEXT NOT NULL DEFAULT '["pdf"]' CHECK(outputs_json IN ('["pdf"]','["pdf","svg"]')),
+  engine TEXT NOT NULL DEFAULT 'lualatex' CHECK(engine IN ('lualatex','pdflatex','xelatex','uplatex','platex')),
+  created_at TEXT NOT NULL,
+  UNIQUE(project_id,revision_number),
+  UNIQUE(project_id,source_id,entrypoint,engine,outputs_json)
+);
+INSERT INTO project_revisions_v23
+  (id,project_id,source_id,revision_number,display_name,original_filename,entrypoint,outputs_json,created_at)
+SELECT id,project_id,source_id,revision_number,display_name,original_filename,entrypoint,
+  CASE json(outputs_json) WHEN '["svg","pdf"]' THEN '["pdf","svg"]' ELSE json(outputs_json) END,
+  created_at
+FROM project_revisions;
+DROP TABLE project_revisions;
+ALTER TABLE project_revisions_v23 RENAME TO project_revisions;
+CREATE INDEX idx_project_revisions_project_number ON project_revisions(project_id,revision_number DESC);
+CREATE INDEX idx_project_revisions_source ON project_revisions(source_id);
+CREATE TEMP TABLE migration_23_integrity (
+  violation INTEGER CONSTRAINT migration_23_foreign_keys_valid CHECK(violation=0)
+);
+INSERT OR ROLLBACK INTO migration_23_integrity SELECT 1 FROM pragma_foreign_key_check LIMIT 1;
+DROP TABLE migration_23_integrity;
+INSERT INTO schema_migrations(version,applied_at)
+VALUES (23,strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+`;
+
+export const projectDraftsV24Sql = `
+CREATE TABLE project_drafts (
+  project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+  version INTEGER NOT NULL CHECK(version > 0),
+  entrypoint TEXT NOT NULL,
+  engine TEXT NOT NULL CHECK(engine IN ('lualatex','pdflatex','xelatex','uplatex','platex')),
+  outputs_json TEXT NOT NULL CHECK(outputs_json IN ('["pdf"]','["pdf","svg"]')),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE project_draft_files (
+  project_id TEXT NOT NULL REFERENCES project_drafts(project_id) ON DELETE CASCADE,
+  path TEXT NOT NULL,
+  source_id TEXT NOT NULL REFERENCES sources(id),
+  source_path TEXT NOT NULL,
+  PRIMARY KEY(project_id,path)
+);
+CREATE INDEX idx_project_draft_files_source ON project_draft_files(source_id,project_id);
+INSERT INTO schema_migrations(version,applied_at)
+VALUES (24,strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+`;
+
+export const accountLocaleV25Sql = `
+ALTER TABLE users ADD COLUMN display_locale TEXT
+CHECK(display_locale IN ('en','ja','zh-CN','ko','es','pt','fr','de','it','ru','tr','pl','cs','nl','sv','no','da','fi'));
+INSERT INTO schema_migrations(version,applied_at)
+VALUES (25,strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+`;
+
+export const draftRenderInputsV26Sql = `
+CREATE TABLE job_draft_inputs (
+  job_id TEXT PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  draft_version INTEGER NOT NULL CHECK(draft_version>0),
+  requested_runtime TEXT
+);
+CREATE INDEX idx_job_draft_inputs_project ON job_draft_inputs(project_id,draft_version);
+CREATE TABLE job_draft_input_files (
+  job_id TEXT NOT NULL REFERENCES job_draft_inputs(job_id) ON DELETE CASCADE,
+  path TEXT NOT NULL,
+  source_id TEXT NOT NULL REFERENCES sources(id),
+  source_path TEXT NOT NULL,
+  PRIMARY KEY(job_id,path)
+);
+CREATE INDEX idx_job_draft_input_files_source ON job_draft_input_files(source_id,job_id);
+CREATE TRIGGER job_draft_input_release
+AFTER UPDATE OF status,lease_owner ON jobs
+WHEN NEW.status NOT IN ('queued','validating','running') AND NEW.lease_owner IS NULL
+BEGIN
+  DELETE FROM job_draft_input_files WHERE job_id=NEW.id;
+END;
+INSERT INTO schema_migrations(version,applied_at)
+VALUES (26,strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+`;
+
 // Applied by migration 18, not schemaSql: existing rows must be backfilled in
 // the same transaction that installs the triggers and records the migration.
 export const auditExportSequenceSql = `
@@ -517,4 +609,19 @@ BEGIN
 END;
 INSERT INTO schema_migrations(version,applied_at)
 VALUES (21,strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+`;
+
+export const draftWorkCacheV27Sql = `
+CREATE TABLE draft_work_cache (
+  job_id TEXT NOT NULL REFERENCES job_draft_inputs(job_id) ON DELETE CASCADE,
+  generation INTEGER NOT NULL CHECK(generation>0),
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  user_id TEXT NOT NULL REFERENCES users(id),
+  cache_key TEXT NOT NULL CHECK(length(cache_key)=64),
+  bytes INTEGER NOT NULL CHECK(bytes>0),
+  PRIMARY KEY(job_id,generation)
+);
+CREATE INDEX idx_draft_work_cache_lookup ON draft_work_cache(user_id,project_id,cache_key);
+INSERT INTO schema_migrations(version,applied_at)
+VALUES (27,strftime('%Y-%m-%dT%H:%M:%fZ','now'));
 `;

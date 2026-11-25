@@ -499,7 +499,7 @@ cache_buster="release=$release_id&fresh=$(date +%s)"
 deployment_checkpoint public-installer-content
 deployment_expect_body "$client_base/install.mjs?$cache_buster" 'installDistribution'
 deployment_checkpoint public-downloads-content
-deployment_expect_body "$public_origin/downloads/?$cache_buster" '最新版ZIP'
+deployment_expect_body "$public_origin/downloads/?$cache_buster" 'href="/downloads/client/latest.zip"'
 
 deployment_checkpoint client-smoke-directory
 client_smoke_root=$(mktemp -d /tmp/latex-renderer-client-smoke.XXXXXX)
@@ -554,7 +554,7 @@ deployment_checkpoint client-uninstall-json
 deployment_checkpoint client-uninstall-directory
 test ! -e "$client_smoke_root/client"
 deployment_checkpoint local-home
-deployment_expect_body http://127.0.0.1:3101/ 'LaTeXをPDFに変換'
+deployment_expect_body http://127.0.0.1:3101/ 'data-public-page="home"'
 deployment_checkpoint local-admin
 deployment_expect_body http://127.0.0.1:3101/admin/ 'data-page="dashboard"'
 deployment_checkpoint local-tex
@@ -563,7 +563,7 @@ deployment_checkpoint local-health
 deployment_expect_body http://127.0.0.1:3104/health '"status":"ok"'
 deployment_checkpoint public-rendering-status
 attempt=0
-until deployment_expect_body "$public_origin/status/?$cache_buster&attempt=$attempt" 'レンダリング処理：応答中'; do
+until deployment_expect_body "$public_origin/status/?$cache_buster&attempt=$attempt" 'data-rendering-status="online"'; do
   attempt=$((attempt + 1))
   [ "$attempt" -lt 10 ] || { echo "Public rendering status did not become healthy" >&2; exit 1; }
   sleep 2

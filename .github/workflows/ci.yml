@@ -30,7 +30,7 @@ jobs:
         run: |
           corepack enable
           pnpm install --frozen-lockfile
-          pnpm --filter @latex-renderer/web... build
+          pnpm --filter @latex-renderer/web... --filter @latex-renderer/setup-web... build
       - name: Install WebKit and its disposable-runner prerequisites
         run: |
           # Keep Ubuntu signature verification; avoid a slow regional mirror

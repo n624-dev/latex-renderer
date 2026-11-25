@@ -37,6 +37,9 @@ export interface AdminDependencies {
   imageManager?: ImageManagerClient;
   updateManager?: UpdateManagerClient;
   maxUploadBytes?: number;
+  maxExtractedBytes?: number;
+  maxFileCount?: number;
+  maxZipEntries?: number;
   maxOutputBytes: number;
   maxQueueLength: number;
   maxUserStorageBytes: number;

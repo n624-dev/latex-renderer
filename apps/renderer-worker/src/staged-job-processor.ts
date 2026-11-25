@@ -13,7 +13,7 @@ import { join } from "node:path";
 import type { RendererDatabase, WorkerJobRow } from "@latex-renderer/database";
 import { AppError, newId, nowIso } from "@latex-renderer/shared";
 import { prepareSourceInput } from "./source-tree-cache.js";
-import type { WorkerConfig } from "./config.js";
+import { rendererRuntimeDigest, type WorkerConfig } from "./config.js";
 import {
   inspectOutputTree,
   publishArtifacts,
@@ -109,6 +109,7 @@ export async function processStagedJob(
     const prepared = await prepareSourceInput(db, config, job, source, input);
     const rendererInput = prepared.input;
     releaseInput = prepared.release;
+    let checkpoint = db.outputStages.checkpoint(job.id);
     if (
       db.worker.transitionOwned(
         job.id,
@@ -117,12 +118,18 @@ export async function processStagedJob(
         ["validating"],
         "running",
         nowIso(),
-        { started_at: nowIso() },
+        {
+          started_at: nowIso(),
+          runtime_digest: rendererRuntimeDigest(
+            checkpoint?.pdf_status === "succeeded"
+              ? checkpoint.renderer_image
+              : config.image,
+          ),
+        },
       ) !== 1
     )
       return;
     const deadline = Date.now() + config.jobTimeoutMs;
-    let checkpoint = db.outputStages.checkpoint(job.id);
     if (checkpoint?.pdf_status !== "succeeded") {
       if (
         !db.outputStages.start(

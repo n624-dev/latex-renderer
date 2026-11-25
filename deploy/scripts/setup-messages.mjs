@@ -1,0 +1,238 @@
+import { readFileSync } from "node:fs";
+import { URL } from "node:url";
+import {
+  preferredDisplayLanguages,
+  resolveDisplayLocale,
+  terminalDisplayLocale,
+} from "../../packages/shared/src/locale.ts";
+
+const english = {
+  acceptTheSelectedCertificateAuthorityS:
+    "Accept the selected certificate authority’s terms",
+  additionalSwapLimit0DisablesIt: "Additional swap limit (0 disables it)",
+  adminAudience: "Administration authentication audience",
+  administratorAndCredentials: "Administrator and credentials",
+  advancedSettingsJson: "Advanced settings (JSON)",
+  akebiKeylessSigning: "Akebi: Keyless signing",
+  akebiObtainALocalCertificateAutomatically:
+    "Akebi: obtain a local certificate automatically",
+  allowedNetworks: "Allowed networks",
+  applied:
+    "Settings applied and setup shut down. Verify owner sign-in and a representative render.",
+  appliedVerifyOwnerLoginAndA:
+    "Applied. Verify owner login and a representative render.",
+  applyStopsTheFixedServiceSet:
+    "Apply stops the fixed service set, validates existing credentials/owner and recovers failures. No credentials are collected here.",
+  applyTheseSettings: "Apply these settings",
+  applyUnconfirmed:
+    "The result could not be confirmed. Check with the recovery button below before submitting again.",
+  applying: "Applying… The worker may need time to stop.",
+  artifactDirectoryCount: "Artifact directory count",
+  artifactFileCount: "Artifact file count",
+  artifactSizeLimit: "Artifact size limit (bytes)",
+  authorityAcmeIssuerId: "Authority ACME issuer ID:",
+  authorityHttpsOrigin: "Authority HTTPS origin:",
+  authorityInvitationHiddenOptionalForOpen:
+    "Authority invitation (hidden, optional for open registration):",
+  cancelledNoSettingsApplied: "Cancelled; no settings applied.",
+  capacityAndTimeLimits: "Capacity and time limits",
+  certificateAuthority1Shared2Self:
+    "Certificate authority: 1 shared / 2 self-hosted [1]:",
+  certificateAuthorityId: "Certificate authority ID",
+  certificatePem: "Certificate PEM",
+  certificatePemFile: "Certificate PEM file:",
+  certificateServer: "Certificate server",
+  chooseATemplate: "Choose a template",
+  closed: "Setup has closed.",
+  completeFormat4JsonOrType:
+    "Complete format-4 JSON, or type LAN for guided LAN HTTPS:",
+  confirmOwnerPasswordHidden: "Confirm owner password (hidden):",
+  confirmPassword: "Confirm password",
+  confirmTheSelectedCaTermsType:
+    "Confirm the selected CA terms. Type AGREE to enable account registration:",
+  connecting: "Connecting…",
+  customServerInvitationCodeOnlyIf:
+    "Custom server invitation code (only if required)",
+  databasePath: "Database path",
+  delegatedLanDnsDomain: "Delegated LAN DNS domain:",
+  destination: "Destination",
+  detailsOfReviewedSettings: "Details of reviewed settings",
+  disabled: "Disabled",
+  displayName: "Display name",
+  doNotEnterSecrets: "Do not enter secrets",
+  enabled: "Enabled",
+  exactIdpSubjectOidcOnlyOr: "Exact IdP subject (OIDC only or Access)",
+  exactProviderSubjectNotEmail: "Exact provider subject (not email):",
+  executionRam: "Runtime RAM limit (MiB)",
+  existingNonRootDeploymentUserFor:
+    "Existing non-root deployment user for Updater builds:",
+  existingNonRootUserForUpdater: "Existing non-root user for Updater builds",
+  existingPreparedHostOnlyNoOs:
+    "Existing prepared host only. No OS, user, Docker, disk, owner, key or ingress changes. Blank input retains a value.",
+  exitAndDiscardUnappliedChanges: "Exit and discard unapplied changes",
+  extractLimit: "Extracted size limit (bytes)",
+  freeDisk: "Reserved free disk space (bytes)",
+  freeRam: "Free RAM required to start (MiB)",
+  freeRamRequiredToStart: "Free RAM required to start",
+  httpsCertificate: "HTTPS certificate",
+  httpsMethod: "HTTPS method",
+  httpsPort: "HTTPS port",
+  httpsPort443: "HTTPS port [443]:",
+  ingressScope:
+    "Change HTTPS and network exposure for the existing Standalone installation. The owner, authentication and image are retained. A failure restores the previous settings.",
+  initialOwnerDisplayName: "Initial owner display name:",
+  initialScope:
+    "Set up a prepared host. Configure the HTTPS origin, network exposure and immutable image, then create the initial owner. The OS, Docker, system users and disks remain as configured.",
+  inputFileCount: "Input file count",
+  interfaceNumber: "Interface number:",
+  internet: "Internet",
+  invalidSettings: "Check the settings JSON.",
+  invalidStart:
+    "The setup URL is invalid or expired, or the host has not been prepared.",
+  issuerUrl: "Identity provider URL",
+  lanDnsDomain: "LAN DNS domain",
+  lanInterface: "LAN interface",
+  lanInterfaces: "LAN interfaces:",
+  listenAddress: "Listen address",
+  localNetwork: "Local network",
+  logLimit: "Log limit (bytes)",
+  loginMethodsBlankKeepsCurrentPassword:
+    "Login methods [blank keeps current; password / oidc / both]:",
+  loginNameWhenUsingPasswordAuthentication:
+    "Login name (when using password authentication)",
+  longWait: "Long-wait notice delay (seconds, jobs continue)",
+  managementApiHttpsOrigin: "Management API HTTPS origin",
+  mcpAudience: "MCP authentication audience",
+  networkExposure: "Network exposure",
+  networkExposureAndHttps: "Network exposure and HTTPS",
+  noOwnerWasCommittedReviewThe:
+    "No owner was committed. Review the same settings and resubmit credentials.",
+  notSet: "Not set",
+  oidcAuthentication: "oidc authentication",
+  oidcClientId: "Authentication client ID",
+  oidcClientIdValue: "OIDC client ID [{value}]:",
+  oidcClientSecret: "OIDC client secret",
+  oidcClientSecretHidden: "OIDC client secret (hidden):",
+  oidcDisplayNameValue: "OIDC display name [{value}]:",
+  oidcHttpsIssuerValue: "OIDC HTTPS issuer [{value}]:",
+  oidcIssuerHttpsUrl: "OIDC issuer HTTPS URL:",
+  optionalFullFormat4JsonOn:
+    "Optional full format-4 JSON on one line (no secrets; blank keeps the fields above):",
+  ownerDisplayName: "Owner display name",
+  ownerEmailOptionalNeverUsedFor:
+    "Owner email (optional, never used for automatic account linking)",
+  ownerEmailOptionalNeverUsedTo:
+    "Owner email (optional; never used to link identity):",
+  ownerLoginName: "Owner login name:",
+  ownerPassword: "Owner password",
+  ownerPasswordHidden: "Owner password (hidden):",
+  password: "Password",
+  passwordAndOidc: "Password and OIDC",
+  passwordAuthentication: "password authentication",
+  passwordMismatch: "The passwords do not match.",
+  pinnedTexImage: "Pinned TeX image",
+  preparedImmutableRuntimeDigestValue:
+    "Prepared immutable Runtime digest [{value}]:",
+  preparedInfrastructureOnlyNoOsAccount:
+    "Prepared infrastructure only. No OS, account, Docker or disk changes. Select automatic LAN HTTPS, custom HTTPS, or existing Cloudflare ingress.",
+  privateKeyPem: "Private key PEM",
+  privateKeyPemFileNeverDisplayed: "Private key PEM file (never displayed):",
+  publicExposure: "Network exposure",
+  publicOriginValue: "Public origin: {value}",
+  publicUrl: "Public URL",
+  queuedJobs: "Queued jobs",
+  recoverInterruptedSetup: "Recover interrupted setup",
+  recovered:
+    "Recovery completed. HTTPS and service health were verified, and setup shut down.",
+  recoveredAndVerified: "Recovered and verified.",
+  recovering: "Recovering…",
+  recoveryFailed:
+    "Recovery failed. The private recovery record was kept. Ask an administrator to check the status.",
+  renderTimeout: "Conversion timeout (seconds, up to 840)",
+  requireAuthority:
+    "Enter the certificate server, LAN domain and certificate authority ID.",
+  requireExposure: "Select the network exposure.",
+  requireInterface: "Select a LAN interface.",
+  resultsUrl: "Artifact download URL",
+  reviewBeforeApplying: "Review before applying",
+  reviewCapacityTimeLimitsAndAuthentication:
+    "Review capacity, time limits and authentication",
+  reviewChanges:
+    "Enter and review your changes. Unapplied changes are discarded.",
+  reviewRecovery:
+    "The recovery record was checked. Review the settings and re-enter any required secrets.",
+  reviewSettings: "Review changes",
+  reviewed: "Review complete. Use the button below to apply.",
+  runtimeRamLimit: "Runtime RAM limit",
+  scopeOfChangesAndPrecautions: "Scope of changes and precautions",
+  secretsAreExcludedFromTheReview:
+    "Secrets are excluded from the review screen, browser storage and logs. Automatic HTTPS generates its private key on the installation host. Supply your own certificate in PEM format.",
+  selectAnOption: "Select an option",
+  selectTheNetworkExposure: "Select the network exposure",
+  selfHostedOrCustomServer: "Self-hosted or custom server",
+  serverSettings: "Server settings",
+  servicesStopBrieflyToApplyThe:
+    "Services stop briefly to apply the settings. Keep this page open until the operation finishes.",
+  setStorageAndTimeLimitsFor:
+    "Set storage and time limits for the existing environment.",
+  setupCompletedWithServiceAndHttps:
+    "Setup completed with service and HTTPS health verified. Verify owner login and a representative render.",
+  setupFailedTypeRecoverToReconcile:
+    "Setup failed. Type RECOVER to reconcile private state now:",
+  sharedServer: "Shared server",
+  signInMethod: "Sign-in method",
+  signingMode: "Signing method",
+  supplyYourOwnCertificate: "Supply your own certificate",
+  svgCount: "SVG count",
+  svgItemLimit: "Limit per SVG (bytes)",
+  svgTimeout: "SVG conversion timeout (seconds)",
+  svgTotalLimit: "Total SVG limit (bytes)",
+  swapLimit: "Additional swap limit (MiB, 0 disables it)",
+  theDestinationIpDeterminesTheUrl:
+    "The destination IP determines the URL. Different networks with the same IP share browser storage, so sign in again after moving networks if necessary. The private key is stored on this installation.",
+  theFirstCertificateRequestMayTake:
+    "The first certificate request may take a few minutes. Setup finishes only after both HTTPS and service checks complete.",
+  theOsDockerUsersAndDisk:
+    "The OS, Docker, users and disk layout stay as they are. Normal setup preserves secrets, administrators, storage paths, the public URL and HTTPS. Set the processing time to 840 seconds or less to fit the service shutdown grace period.",
+  theStartThresholdChecksAvailableRam:
+    "The start threshold checks available RAM. During execution, RAM is used as needed up to its limit. Additional swap uses existing swap space. Set it to 0 to disable it. 1 GiB = 1024 MiB.",
+  thisComputerOnly: "This computer only",
+  tls1LocalCertificate2Keyless: "TLS: 1 local certificate / 2 Keyless [1]:",
+  typeApplyToApplyAnythingElse: "Type APPLY to apply; anything else cancels:",
+  typeApplyToCreateTheOwner:
+    "Type APPLY to create the owner and activate HTTPS/services:",
+  typeRecoverToRecoverAnInterrupted:
+    "Type RECOVER to recover an interrupted setup; Enter to configure:",
+  unchangedSettings:
+    "No settings changed. Initial setup and certificate configuration will be applied after this review.",
+  uploadLimit: "Upload limit (bytes)",
+  useKeylessSigningWhileNoLocal:
+    "Use Keyless signing while no local certificate is usable",
+  useKeylessWhileNoLocalCertificate:
+    "Use Keyless while no local certificate is usable? yes/no [no]:",
+  userQuota: "Storage quota per user (bytes)",
+  zipEntryCount: "ZIP entry count",
+};
+let cached;
+export function setupTexts(locale) {
+  if (locale === "en") return english;
+  if (cached?.locale !== locale) {
+    const file = new URL(`./setup-locales/${locale}.json`, import.meta.url);
+    cached = {
+      locale,
+      messages: { ...english, ...JSON.parse(readFileSync(file, "utf8")) },
+    };
+  }
+  return cached.messages;
+}
+export function browserSetupLocale(header) {
+  return resolveDisplayLocale({ preferred: preferredDisplayLanguages(header) });
+}
+export function terminalSetupText(key, values = {}) {
+  const catalog = setupTexts(terminalDisplayLocale(process.env));
+  return catalog[key].replaceAll(
+    /\{([a-zA-Z][a-zA-Z0-9]*)\}/g,
+    (match, name) =>
+      Object.hasOwn(values, name) ? String(values[name]) : match,
+  );
+}

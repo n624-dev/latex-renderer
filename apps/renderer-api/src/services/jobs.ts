@@ -40,6 +40,7 @@ export class RendererJobsService {
       sourceId: row.source_id,
       entrypoint: row.entrypoint,
       outputs: this.deps.database.jobs.outputs(row),
+      ...this.deps.database.jobs.renderProvenance(row),
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       errorCode: row.error_code,

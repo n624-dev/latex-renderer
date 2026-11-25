@@ -1,8 +1,10 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath, URL } from "node:url";
+import type { DisplayLocale } from "@latex-renderer/shared/locale";
 import matter from "gray-matter";
 import { Marked, Renderer, type Token, type Tokens } from "marked";
+import { siteText } from "./site-messages.js";
 import { escapeHtml, shell } from "./templates-shared.js";
 
 export interface PublicDocMetadata {
@@ -21,6 +23,7 @@ export interface PublicDoc extends PublicDocMetadata {
   html: string;
   headings: readonly PublicDocHeading[];
   searchableMarkdown: string;
+  anchorAliases?: Readonly<Record<string, string>>;
 }
 
 export interface PublicDocHeading {
@@ -58,7 +61,7 @@ const sourceFiles = [
 
 const navigationGroups = [
   {
-    title: "利用する",
+
     slugs: [
       "index",
       "web",
@@ -73,7 +76,7 @@ const navigationGroups = [
     ],
   },
   {
-    title: "サーバーを運用する",
+
     slugs: [
       "self-hosting",
       "server-setup",
@@ -84,69 +87,98 @@ const navigationGroups = [
     ],
   },
   {
-    title: "連携・開発",
+
     slugs: ["api", "security", "contributing", "reference"],
   },
 ];
 
-export function renderPublicDoc(slug: string): string {
-  const document = docsBySlug.get(slug);
+const englishAliases: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+  index: { "make-your-first-pdf": "最短でpdfを作る" },
+  web: {
+    "convert-files-to-a-pdf": "ブラウザでpdfへ変換",
+    "edit-a-project": "ブラウザーで文書を編集する",
+  },
+};
+
+export function renderPublicDoc(
+  slug: string,
+  language?: DisplayLocale,
+): string {
+  const locale = language ?? "ja";
+  const t = siteText(locale);
+  const documents = getPublicDocs(locale);
+  const bySlug = new Map(documents.map((doc) => [doc.slug, doc]));
+  const url = (item: string) => docUrl(item, language);
+  const document = bySlug.get(slug);
   if (document === undefined)
     throw new Error(`Unknown public document: ${slug}`);
+  const titles = [t("docsUsing"), t("docsRunning"), t("docsIntegration")];
   const navigation = navigationGroups
-    .map(
-      ({ title, slugs }) =>
-        `<section class="docs-nav-group"><h2>${escapeHtml(title)}</h2>${slugs
-          .map((itemSlug) => docsBySlug.get(itemSlug))
-          .filter((item): item is PublicDoc => item !== undefined)
-          .map(
-            (item) =>
-              `<a href="${docUrl(item.slug)}"${item.slug === slug ? ' aria-current="page"' : ""}>${escapeHtml(item.title)}</a>`,
-          )
-          .join("")}</section>`,
-    )
+    .map(({ slugs }, index) => {
+      const links = slugs
+        .map((itemSlug) => bySlug.get(itemSlug))
+        .filter((item): item is PublicDoc => item !== undefined)
+        .map(
+          (item) =>
+            `<a href="${url(item.slug)}"${item.slug === slug ? ' aria-current="page"' : ""}>${escapeHtml(item.title)}</a>`,
+        )
+        .join("");
+      return links
+        ? `<section class="docs-nav-group"><h2>${escapeHtml(titles[index] ?? "")}</h2>${links}</section>`
+        : "";
+    })
     .join("");
+  const contents = escapeHtml(t("docsContents"));
   const toc =
     document.headings.length < 5
       ? ""
-      : `<details class="docs-toc"><summary>ページ内目次</summary><nav aria-label="ページ内目次">${document.headings.map((heading) => `<a class="toc-depth-${heading.depth}" href="#${escapeHtml(heading.id)}">${escapeHtml(heading.text)}</a>`).join("")}</nav></details>`;
-  const index = publicDocs.indexOf(document);
-  const previous = publicDocs[index - 1];
-  const next = publicDocs[index + 1];
-  const pager = `<nav class="docs-pager" aria-label="前後のページ">${previous === undefined ? "<span></span>" : `<a rel="prev" href="${docUrl(previous.slug)}"><small>前のページ</small>${escapeHtml(previous.title)}</a>`}${next === undefined ? "" : `<a rel="next" href="${docUrl(next.slug)}"><small>次のページ</small>${escapeHtml(next.title)}</a>`}</nav>`;
+      : `<details class="docs-toc"><summary>${contents}</summary><nav aria-label="${contents}">${document.headings.map((heading) => `<a class="toc-depth-${heading.depth}" href="#${escapeHtml(heading.id)}">${escapeHtml(heading.text)}</a>`).join("")}</nav></details>`;
+  const index = documents.indexOf(document);
+  const previous = documents[index - 1];
+  const next = documents[index + 1];
+  const pager = `<nav class="docs-pager" aria-label="${escapeHtml(t("docsRelated"))}">${previous === undefined ? "<span></span>" : `<a rel="prev" href="${url(previous.slug)}"><small>${escapeHtml(t("docsPrevious"))}</small>${escapeHtml(previous.title)}</a>`}${next === undefined ? "" : `<a rel="next" href="${url(next.slug)}"><small>${escapeHtml(t("docsNext"))}</small>${escapeHtml(next.title)}</a>`}</nav>`;
   const footer =
     document.slug === "contributing"
       ? ""
-      : '<p><a href="/docs/contributing/">このガイドへのフィードバック</a></p>';
+      : `<p><a href="${url("contributing")}">${escapeHtml(t("docsFeedback"))}</a></p>`;
+  const indexUrl = language === undefined
+    ? "/assets/docs-search.json"
+    : `/${language}/assets/docs-search.json`;
+  const html = language === "ja"
+    ? document.html.replaceAll('href="/docs/', 'href="/ja/docs/')
+    : document.html;
   return shell(
     document.title,
     `<div class="docs-layout">
       <aside class="docs-sidebar">
         <div class="docs-search">
-          <label for="docs-search">ガイド内を検索</label>
-          <input id="docs-search" type="search" autocomplete="off" placeholder="例：日本語、API キー" aria-controls="docs-search-results">
+          <label for="docs-search">${escapeHtml(t("docsSearch"))}</label>
+          <input id="docs-search" type="search" autocomplete="off" placeholder="${escapeHtml(t("docsExample"))}" aria-controls="docs-search-results" data-index-url="${indexUrl}">
           <div id="docs-search-results" class="docs-search-results" role="status" aria-live="polite"></div>
         </div>
-        <details class="docs-menu"><summary>ガイド一覧</summary><nav class="docs-nav" aria-label="ドキュメント内ナビゲーション">${navigation}</nav></details>
+        <details class="docs-menu"><summary>${escapeHtml(t("docsAll"))}</summary><nav class="docs-nav" aria-label="${escapeHtml(t("docsNavigation"))}">${navigation}</nav></details>
       </aside>
       <div class="docs-main">
         <div class="docs-hero"><h1>${escapeHtml(document.title)}</h1><p>${escapeHtml(document.description)}</p></div>
         ${toc}
-        <article class="docs-content">${document.html}</article>
+        <article class="docs-content">${html}</article>
         ${pager}
-        <footer class="docs-meta"><p>更新日 <time datetime="${escapeHtml(document.updated)}">${escapeHtml(document.updated)}</time></p><p><a href="https://github.com/n624-dev/latex-renderer/blob/main/${document.sourcePath}">GitHub で原稿を見る</a></p>${footer}</footer>
+        <footer class="docs-meta"><p>${escapeHtml(t("docsUpdated"))} <time datetime="${escapeHtml(document.updated)}">${escapeHtml(document.updated)}</time></p><p><a href="https://github.com/n624-dev/latex-renderer/blob/main/${document.sourcePath}">${escapeHtml(t("docsSource"))}</a></p>${footer}</footer>
       </div>
     </div>`,
+    locale,
+    { docsRoot: url("index"), languageUrl: (choice) => docUrl(slug, choice) },
   );
 }
 
-export function publicDocsSearchJson(): string {
+export function publicDocsSearchJson(language?: DisplayLocale): string {
+  const documents = getPublicDocs(language ?? "ja");
   return `${JSON.stringify(
-    publicDocs.map((document) => ({
+    documents.map((document) => ({
       title: document.title,
       description: document.description,
       category: document.category,
-      url: docUrl(document.slug),
+      url: docUrl(document.slug, language),
       headings: document.headings.filter(({ historical }) => !historical),
       text: document.searchableMarkdown
         .replaceAll(/[`*_>#|(){}~-]/g, " ")
@@ -166,18 +198,24 @@ export const projectsDocsPage = () => renderPublicDoc("projects");
 export const troubleshootingDocsPage = () => renderPublicDoc("troubleshooting");
 export const apiDocsPage = () => renderPublicDoc("api");
 
-function loadPublicDoc(filename: string): PublicDoc {
-  const sourcePath = `docs/public/${filename}`;
-  const parsed = matter(readFileSync(join(contentDirectory, filename), "utf8"));
+function loadPublicDoc(
+  filename: string,
+  language: DisplayLocale = "ja",
+): PublicDoc {
+  const path = language === "ja" ? filename : `${language}/${filename}`;
+  const sourcePath = `docs/public/${path}`;
+  const parsed = matter(readFileSync(join(contentDirectory, path), "utf8"));
   const metadata = validateMetadata(parsed.data, sourcePath);
   if (filename !== `${metadata.slug}.md`) {
     throw new Error(`${sourcePath}: frontmatter slug must match its filename`);
   }
+  const aliases = language === "en" ? englishAliases[metadata.slug] : undefined;
   return {
     ...metadata,
     sourcePath,
     markdown: parsed.content,
-    ...renderMarkdownDocument(parsed.content),
+    ...renderMarkdownDocument(parsed.content, language, aliases),
+    ...(aliases === undefined ? {} : { anchorAliases: aliases }),
   };
 }
 
@@ -224,9 +262,11 @@ export function renderMarkdown(markdown: string): string {
 
 function renderMarkdownDocument(
   markdown: string,
+  locale: DisplayLocale = "ja",
+  aliases?: Readonly<Record<string, string>>,
 ): Pick<PublicDoc, "html" | "headings" | "searchableMarkdown"> {
   const headings: PublicDocHeading[] = [];
-  const renderer = new DocsRenderer(headings);
+  const renderer = new DocsRenderer(headings, locale, aliases);
   const marked = new Marked();
   const tokens = marked.lexer(markdown, { gfm: true });
   const rendered = marked.parser(tokens, { gfm: true, renderer });
@@ -247,7 +287,11 @@ class DocsRenderer extends Renderer {
   readonly #headings: PublicDocHeading[];
   #historical = false;
 
-  constructor(headings: PublicDocHeading[]) {
+  constructor(
+    headings: PublicDocHeading[],
+    private readonly locale: DisplayLocale,
+    private readonly aliases?: Readonly<Record<string, string>>,
+  ) {
     super();
     this.#headings = headings;
   }
@@ -272,7 +316,12 @@ class DocsRenderer extends Renderer {
     const body = explicitId
       ? rendered.slice(0, -explicitId[0].length)
       : rendered;
-    return `<h${depth} id="${escapeHtml(id)}">${body}<a class="heading-permalink" href="#${escapeHtml(id)}" aria-label="この見出しへのリンク">#</a></h${depth}>\n`;
+    const alternateAnchors = Object.entries(this.aliases ?? {})
+      .filter(([, target]) => target === id)
+      .map(([alias]) => `<span id="${escapeHtml(alias)}" aria-hidden="true"></span>`)
+      .join("");
+    const labelLink = escapeHtml(siteText(this.locale)("headingLink"));
+    return `<h${depth} id="${escapeHtml(id)}">${alternateAnchors}${body}<a class="heading-permalink" href="#${escapeHtml(id)}" aria-label="${labelLink}">#</a></h${depth}>\n`;
   }
 
   override blockquote(quote: Tokens.Blockquote): string {
@@ -284,7 +333,10 @@ class DocsRenderer extends Renderer {
       this.#historical = wasHistorical || historicalDetails(quote);
       const body = this.parser.parse(quote.tokens.slice(1));
       this.#historical = wasHistorical;
-      return `<details class="docs-details"><summary>${escapeHtml(title)}</summary>${body}</details>\n`;
+      const label = historicalDetails(quote)
+        ? title.replace(/^履歴資料/u, siteText(this.locale)("historical"))
+        : title;
+      return `<details class="docs-details"><summary>${escapeHtml(label)}</summary>${body}</details>\n`;
     }
     const rendered = this.parser.parse(quote.tokens);
     const match = rendered.match(/^<p>\[!(NOTE|WARNING)\]\s*/);
@@ -322,14 +374,28 @@ function headingSlug(value: string): string {
   return slug || "section";
 }
 
-function docUrl(slug: string): string {
-  return slug === "index" ? "/docs/" : `/docs/${slug}/`;
+export function docUrl(slug: string, language?: DisplayLocale): string {
+  const root = language === undefined ? "/docs/" : `/${language}/docs/`;
+  return slug === "index" ? root : `${root}${slug}/`;
 }
 
-export const publicDocs: readonly PublicDoc[] = sourceFiles
-  .map(loadPublicDoc)
-  .sort((left, right) => left.navOrder - right.navOrder);
+function loadDocs(locale: DisplayLocale): readonly PublicDoc[] {
+  return sourceFiles
+    .map((filename) => loadPublicDoc(filename, locale))
+    .sort((left, right) => left.navOrder - right.navOrder);
+}
 
-const docsBySlug = new Map(
-  publicDocs.map((document) => [document.slug, document]),
-);
+export const publicDocs = loadDocs("ja");
+
+// The process keeps the legacy Japanese set and the most recently used
+// localized set. Generating the static site also reads one language at a time.
+let localized: { locale: DisplayLocale; documents: readonly PublicDoc[] } | undefined;
+
+export function getPublicDocs(locale: DisplayLocale): readonly PublicDoc[] {
+  if (locale === "ja") return publicDocs;
+  if (localized?.locale !== locale)
+    localized = { locale, documents: loadDocs(locale) };
+  return localized.documents;
+}
+
+export const publicDocSlugs = sourceFiles.map((filename) => filename.slice(0, -3));

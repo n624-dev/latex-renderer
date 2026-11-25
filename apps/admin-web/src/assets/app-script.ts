@@ -1,3 +1,9 @@
+import type { DisplayLocale } from "@latex-renderer/shared/locale";
+import { appCatalog, type AppMessage } from "../app-messages.js";
+import {
+  browserLocaleScript,
+  synchronizeDisplayLocale,
+} from "../browser-locale.js";
 import {
   JOB_STATUSES,
   crc32,
@@ -19,6 +25,20 @@ type Fetcher = (
 ) => Promise<Response>;
 type Job = ReturnType<typeof parseJobStatus>;
 let csrfToken = "";
+const appMessages = appCatalog("ja");
+
+function appMessage(
+  key: AppMessage,
+  values: Readonly<Record<string, string | number>> = {},
+): string {
+  return appMessages[key].replaceAll(/\{([a-zA-Z][a-zA-Z0-9]*)\}/g, (match, name: string) =>
+    Object.hasOwn(values, name) ? String(values[name]) : match,
+  );
+}
+
+function appLanguage(): string {
+  return typeof document === "undefined" ? "ja" : document.documentElement.lang || "en";
+}
 
 async function json(
   fetcher: Fetcher,
@@ -28,14 +48,15 @@ async function json(
 ): Promise<unknown> {
   const headers = new Headers(init.headers);
   headers.set("Accept", "application/json");
+  headers.set("Accept-Language", appLanguage());
   headers.set("Cache-Control", "no-store");
   const method = init.method ?? "GET";
-  if (init.body !== undefined) {
+  if (init.body !== undefined && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
   if (!["GET", "HEAD", "OPTIONS"].includes(method)) {
     if (mutationCsrf.length === 0)
-      throw new Error("セッションを再読み込みしてください。");
+      throw new Error(appMessage("reloadThePageToRefreshYour"));
     headers.set("X-CSRF-Token", mutationCsrf);
   }
   const response = await fetcher(path, {
@@ -47,7 +68,7 @@ async function json(
   });
   if (!response.ok) {
     let code = "HTTP_ERROR",
-      message = `サーバーがHTTP ${response.status}を返しました。`;
+      message = appMessage("theServerReturnedHttpStatus", { status: response.status });
     try {
       const body = (await response.json()) as {
         error?: { code?: string; message?: string };
@@ -72,26 +93,26 @@ function friendly(error: unknown): { message: string; detail: string } {
   const value = error as { code?: string; message?: string },
     messages: Record<string, string> = {
       ENTRYPOINT_MISSING:
-        "PDFを作成できませんでした。変換するTeXファイルを選択してください。",
+        appMessage("couldNotCreateThePdfSelect"),
       SOURCE_NOT_READY:
-        "ファイルの準備が完了していません。少し待ってからもう一度お試しください。",
+        appMessage("filesAreNotReadyYetWait"),
       QUEUE_FULL:
-        "現在変換が混み合っています。しばらく待ってからお試しください。",
+        appMessage("theConversionQueueIsCurrentlyBusy"),
       ACCOUNT_QUEUE_LIMIT:
-        "同時に変換できる件数を超えています。実行中の変換が終わるまでお待ちください。",
+        appMessage("concurrentConversionLimitReachedWaitFor"),
       USER_STORAGE_QUOTA:
-        "保存容量の上限に達しました。不要な履歴を整理してください。",
+        appMessage("storageQuotaReachedDeleteUnneededJobs"),
       STORAGE_PRESSURE:
-        "現在サーバーの空き容量が不足しています。管理者へお問い合わせください。",
-      JOB_UNAVAILABLE: "この変換結果は保存期間を過ぎたため利用できません。",
-      JOB_IDENTITY_REVOKED: "この変換結果へのアクセス権が失効しました。",
+        appMessage("theServerIsLowOnDisk"),
+      JOB_UNAVAILABLE: appMessage("thisConversionResultHasExpiredAnd"),
+      JOB_IDENTITY_REVOKED: appMessage("accessToThisConversionResultHas"),
     };
   return {
     message:
       messages[value.code ?? ""] ??
       (value.code === undefined && value.message
         ? value.message
-        : "処理を完了できませんでした。もう一度お試しください。"),
+        : appMessage("couldNotCompleteTheOperationPlease")),
     detail: [value.code, value.message].filter(Boolean).join(": "),
   };
 }
@@ -105,7 +126,7 @@ function showError(error: unknown) {
     const details = document.createElement("details"),
       summary = document.createElement("summary"),
       code = document.createElement("code");
-    summary.textContent = "技術情報を表示";
+    summary.textContent = appMessage("showTechnicalDetails");
     code.textContent = shown.detail;
     details.append(summary, code);
     output.append(details);
@@ -138,7 +159,7 @@ function jobStatusLabel(status: string, stages: unknown): string {
       typeof s.svg?.status === "string" &&
       ["failed", "timeout", "canceled"].includes(s.svg.status)
     )
-      return `部分成功（PDF成功・SVG${statusLabel(s.svg.status)}）`;
+      return appMessage("partialSuccessPdfSucceededSvgSvgstatus", { svgStatus: statusLabel(s.svg.status) });
   }
   return statusLabel(status);
 }
@@ -146,21 +167,21 @@ function jobStatusLabel(status: string, stages: unknown): string {
 function statusLabel(value: string): string {
   return (
     {
-      reserved: "準備中",
-      uploading: "送信中",
-      queued: "待機中",
-      validating: "確認中",
-      running: "変換中",
-      succeeded: "変換成功",
-      failed: "変換失敗",
-      timeout: "時間切れ",
-      canceled: "中止",
-      not_requested: "未指定",
-      skipped: "未実行",
-      rejected: "受付不可",
-      deleting: "削除中",
-      deleted: "削除済み",
-      expired: "保存期限切れ",
+      reserved: appMessage("preparing"),
+      uploading: appMessage("uploading"),
+      queued: appMessage("queued"),
+      validating: appMessage("validating"),
+      running: appMessage("converting"),
+      succeeded: appMessage("succeeded"),
+      failed: appMessage("failed"),
+      timeout: appMessage("timedOut"),
+      canceled: appMessage("canceled"),
+      not_requested: appMessage("notRequested"),
+      skipped: appMessage("notRun"),
+      rejected: appMessage("rejected"),
+      deleting: appMessage("deleting"),
+      deleted: appMessage("deleted"),
+      expired: appMessage("expired"),
     }[value] ?? value
   );
 }
@@ -181,12 +202,16 @@ async function establishSession(fetcher: Fetcher) {
     error?: { message?: string };
   };
   if (!response.ok || typeof session.csrfToken !== "string")
-    throw new Error(session.error?.message ?? "ログインできませんでした。");
+    throw new Error(session.error?.message ?? appMessage("couldNotSignIn"));
   csrfToken = session.csrfToken;
-  const me = (await json(fetcher, "/app/api/v1/me")) as { isAdmin: boolean };
+  const me = (await json(fetcher, "/app/api/v1/me")) as {
+    isAdmin: boolean;
+    displayLocale?: DisplayLocale | null;
+    resolvedDisplayLocale?: string;
+  };
   const admin = document.querySelector<HTMLElement>("#admin-link");
   if (admin) admin.hidden = !me.isAdmin;
-  return true;
+  return me;
 }
 
 async function createSource(fetcher: Fetcher, bytes: Uint8Array, key: string) {
@@ -214,7 +239,7 @@ function parseRender(value: unknown) {
     typeof row.jobTicket !== "string" ||
     typeof row.expiresAt !== "string"
   )
-    throw new Error("変換開始の応答形式が不正です。");
+    throw new Error(appMessage("invalidResponseWhenStartingConversion"));
   return {
     jobId: row.jobId,
     jobTicket: row.jobTicket,
@@ -274,7 +299,7 @@ async function rendererJob(fetcher: Fetcher, id: string, ticket: string) {
   });
   if (!response.ok) {
     const error = new Error(
-      `ジョブ状態を取得できませんでした (HTTP ${response.status})。`,
+      appMessage("couldNotRetrieveJobStatusHttp", { status: response.status }),
     ) as Error & {
       status: number;
     };
@@ -348,7 +373,7 @@ function artifactButton(
   button.textContent = label;
   button.onclick = () => {
     button.disabled = true;
-    const opensInWindow = label === "PDF" || label === "プレビュー",
+    const opensInWindow = label === "PDF" || label === appMessage("preview"),
       popup = opensInWindow ? window.open("about:blank", "_blank") : null;
     void (async () => {
       try {
@@ -356,7 +381,7 @@ function artifactButton(
           found = [...current.artifacts, ...current.previews].find(
             (item) => item.relativePath === path,
           );
-        if (!found && !lazyPage) throw new Error("成果物が見つかりません。");
+        if (!found && !lazyPage) throw new Error(appMessage("artifactNotFound"));
         const access = await issueAccess(fetcher, job.id),
           url =
             found?.downloadUrl ??
@@ -370,12 +395,12 @@ function artifactButton(
           });
           if (!lazyPage || response.status !== 503 || attempt === 4) break;
           await response.body?.cancel();
-          button.textContent = "プレビュー生成を待っています…";
+          button.textContent = appMessage("waitingForPreviewGeneration");
           await new Promise((resolve) => setTimeout(resolve, 2000));
         }
         if (!response.ok)
           throw new Error(
-            `成果物を取得できませんでした (HTTP ${response.status})。`,
+            appMessage("couldNotDownloadArtifactHttpStatus", { status: response.status }),
           );
         const blob = await response.blob();
         if (lazyPage) {
@@ -383,7 +408,7 @@ function artifactButton(
             (a) => a.relativePath === path,
           );
           if (!published || published.size !== blob.size)
-            throw new Error("プレビューの検証情報が一致しません。");
+            throw new Error(appMessage("previewVerificationMetadataDoesNotMatch"));
           const digest = [
             ...new Uint8Array(
               await crypto.subtle.digest("SHA-256", await blob.arrayBuffer()),
@@ -392,7 +417,7 @@ function artifactButton(
             .map((v) => v.toString(16).padStart(2, "0"))
             .join("");
           if (digest !== published.sha256)
-            throw new Error("プレビューのSHA-256が一致しません。");
+            throw new Error(appMessage("previewSha256ChecksumDoesNot"));
         }
         const objectUrl = URL.createObjectURL(blob);
         if (opensInWindow && popup) {
@@ -441,14 +466,14 @@ function renderJobResult(
     state = document.createElement("p"),
     actions = document.createElement("div");
   heading.textContent = title;
-  state.textContent = `${statusLabel(job.status)}${resourceWaitLabel(job)}${connection === "connected" ? "" : " — 接続が切れました。再接続しています…"}`;
+  state.textContent = `${statusLabel(job.status)}${resourceWaitLabel(job)}${connection === "connected" ? "" : appMessage("connectionLostReconnecting")}`;
   if (job.stages) {
     const partial =
       job.stages.pdf.status === "succeeded" &&
       ["failed", "timeout", "canceled", "skipped"].includes(
         job.stages.svg.status,
       );
-    state.textContent = `${partial ? "部分成功 — " : ""}PDF: ${statusLabel(job.stages.pdf.status)} / SVG: ${statusLabel(job.stages.svg.status)}${resourceWaitLabel(job)}${connection === "connected" ? "" : " — 再接続中"}`;
+    state.textContent = `${partial ? appMessage("partialSuccess") : ""}PDF: ${statusLabel(job.stages.pdf.status)} / SVG: ${statusLabel(job.stages.svg.status)}${resourceWaitLabel(job)}${connection === "connected" ? "" : appMessage("reconnecting")}`;
   }
   actions.className = "actions";
   const firstPreview = job.previews
@@ -463,12 +488,12 @@ function renderJobResult(
   const links: Array<readonly [string, string]> = [
     ["result.pdf", "PDF"],
     ...(firstPreview && (job.previewPageCount ?? 1) <= 1
-      ? [[firstPreview, "プレビュー"] as const]
+      ? [[firstPreview, appMessage("preview")] as const]
       : []),
-    ["compile.log", "ログ"],
-    ["errors.json", "エラー詳細"],
-    ["svg/compile.log", "SVGログ"],
-    ["svg/errors.json", "SVGエラー詳細"],
+    ["compile.log", appMessage("log")],
+    ["errors.json", appMessage("errorDetails")],
+    ["svg/compile.log", appMessage("svgLog")],
+    ["svg/errors.json", appMessage("svgErrorDetails")],
   ];
   for (const [path, label] of links) {
     const button = artifactButton(fetcher, tracker, job, path, label);
@@ -478,7 +503,7 @@ function renderJobResult(
     const label = document.createElement("label"),
       select = document.createElement("select"),
       selected = document.createElement("span");
-    label.textContent = "プレビューのページ";
+    label.textContent = appMessage("previewPage");
     for (let page = 1; page <= (job.previewPageCount ?? 0); page++) {
       const option = document.createElement("option");
       option.value = String(page);
@@ -494,7 +519,7 @@ function renderJobResult(
         tracker,
         job,
         `previews/page-${select.value}.png`,
-        "プレビュー",
+        appMessage("preview"),
       );
       selected.replaceChildren(...(button ? [button] : []));
     };
@@ -513,21 +538,37 @@ function renderJobResult(
   ) {
     const retry = document.createElement("button");
     retry.type = "button";
-    retry.textContent = "SVGだけ再試行";
     retry.className = "secondary";
+    let fullRetry =
+      job.errorCode === "SVG_RUNTIME_CHANGED" ||
+      job.stages.svg.errorCode === "SVG_RUNTIME_CHANGED";
+    retry.textContent = fullRetry
+      ? appMessage("generatePdfAndSvgInA")
+      : appMessage("retrySvgOnly");
     const key = crypto.randomUUID();
     retry.onclick = () => {
       retry.disabled = true;
       void json(
         fetcher,
-        `/app/api/v1/jobs/${encodeURIComponent(job.id)}/retry-svg`,
+        `/app/api/v1/jobs/${encodeURIComponent(job.id)}/${fullRetry ? "retry" : "retry-svg"}`,
         { method: "POST", headers: { "Idempotency-Key": key }, body: "{}" },
       )
-        .then((value) =>
-          followJob(fetcher, job.id, container, title, parseRender(value)),
-        )
+        .then((value) => {
+          const ticket = parseRender(value);
+          if (fullRetry) {
+            location.assign(`/app/jobs/${encodeURIComponent(ticket.jobId)}/`);
+            return;
+          }
+          return followJob(fetcher, job.id, container, title, ticket);
+        })
         .catch((error: unknown) => {
           retry.disabled = false;
+          if (
+            (error as { code?: string } | null)?.code === "SVG_RUNTIME_CHANGED"
+          ) {
+            fullRetry = true;
+            retry.textContent = appMessage("generatePdfAndSvgInA");
+          }
           showError(error);
         });
     };
@@ -540,7 +581,7 @@ function renderJobResult(
     const details = document.createElement("details"),
       summary = document.createElement("summary"),
       list = document.createElement("div");
-    summary.textContent = `SVG成果物 (${svgArtifacts.length})`;
+    summary.textContent = appMessage("svgArtifactsCount", { count: svgArtifacts.length });
     details.className = "svg-artifacts";
     details.open = svgOpen;
     list.className = "actions";
@@ -562,12 +603,29 @@ function renderJobResult(
   const detail = document.createElement("details"),
     summary = document.createElement("summary"),
     code = document.createElement("code");
-  summary.textContent = "技術情報を表示";
+  summary.textContent = appMessage("showTechnicalDetails");
   detail.className = "job-technical";
   detail.open = technicalOpen;
-  code.textContent = `Job ID: ${job.id}${job.errorCode ? `\n${job.errorCode}: ${job.errorMessage ?? ""}` : ""}`;
+  code.textContent = [
+    appMessage("jobIdId", { id: job.id }),
+    job.engine ? appMessage("engineEngine", { engine: job.engine ?? "" }) : "",
+    job.runtimeDigest ? `Runtime: ${job.runtimeDigest}` : "",
+    job.previousRuntimeDigest
+      ? appMessage("previousRuntimeDigest", { digest: job.previousRuntimeDigest ?? "" })
+      : "",
+    job.errorCode ? `${job.errorCode}: ${job.errorMessage ?? ""}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
   detail.append(summary, code);
-  section.append(heading, state, actions, detail);
+  section.append(heading, state);
+  if (job.previousRuntimeDigest) {
+    const runtimeChange = document.createElement("p");
+    runtimeChange.textContent =
+      appMessage("thisRerunUsedADifferentTex");
+    section.append(runtimeChange);
+  }
+  section.append(actions, detail);
   container.append(section);
 }
 
@@ -612,7 +670,7 @@ async function followJob(
         );
       else
         container.textContent =
-          "変換処理への接続が切れました。処理は継続しているため、再接続しています…";
+          appMessage("lostConnectionToTheConversionService");
       if (failures >= 8) {
         showError(error);
         return false;
@@ -628,17 +686,17 @@ async function loadJobs(fetcher: Fetcher, container: HTMLElement, limit = 50) {
   let cursor: string | null = null;
   const render = (items: Array<Record<string, unknown>>, hasMore: boolean) => {
     if (items.length === 0) {
-      container.textContent = "変換履歴はありません。";
+      container.textContent = appMessage("noConversionHistory");
       return;
     }
-    container.innerHTML = `<div class="table-wrap"><table class="responsive-table"><thead><tr><th>文書</th><th>プロジェクト</th><th>状態</th><th>日時</th><th>操作</th></tr></thead><tbody>${items
+    container.innerHTML = `<div class="table-wrap"><table class="responsive-table"><thead><tr><th>${escape(appMessage("document"))}</th><th>${escape(appMessage("project"))}</th><th>${escape(appMessage("status"))}</th><th>${escape(appMessage("date"))}</th><th>${escape(appMessage("actions"))}</th></tr></thead><tbody>${items
       .map(
         (item) =>
-          `<tr><td data-label="文書">${escape(item.documentName)}</td><td data-label="プロジェクト">${escape(item.projectName ?? "—")}</td><td data-label="状態">${escape(jobStatusLabel(String(item.status), item.stages))}</td><td data-label="日時">${escape(new Date(String(item.createdAt)).toLocaleString("ja-JP"))}</td><td data-label="操作"><a class="button secondary" href="/app/jobs/${encodeURIComponent(String(item.id))}/">結果</a></td></tr>`,
+          `<tr><td data-label="${escape(appMessage("document"))}">${escape(item.documentName)}</td><td data-label="${escape(appMessage("project"))}">${escape(item.projectName ?? "—")}</td><td data-label="${escape(appMessage("status"))}">${escape(jobStatusLabel(String(item.status), item.stages))}</td><td data-label="${escape(appMessage("date"))}">${escape(new Date(String(item.createdAt)).toLocaleString(appLanguage()))}</td><td data-label="${escape(appMessage("actions"))}"><a class="button secondary" href="/app/jobs/${encodeURIComponent(String(item.id))}/">${escape(appMessage("result"))}</a></td></tr>`,
       )
       .join(
         "",
-      )}</tbody></table></div>${hasMore ? '<div class="actions"><button type="button" class="secondary" id="app-jobs-next">次のページ</button></div>' : ""}`;
+      )}</tbody></table></div>${hasMore ? `<div class="actions"><button type="button" class="secondary" id="app-jobs-next">${escape(appMessage("nextPage"))}</button></div>` : ""}`;
     const next = document.querySelector<HTMLButtonElement>("#app-jobs-next");
     if (next)
       next.onclick = () => {
@@ -670,6 +728,12 @@ function installRender(fetcher: Fetcher) {
   const form = document.querySelector<HTMLFormElement>("#app-render-form"),
     input = document.querySelector<HTMLInputElement>("#app-files"),
     svgOutput = document.querySelector<HTMLInputElement>("#app-render-svg"),
+    options = document.querySelector<HTMLDetailsElement>("#app-render-options"),
+    engineSelect =
+      document.querySelector<HTMLSelectElement>("#app-render-engine"),
+    engineNotice = document.querySelector<HTMLElement>(
+      "#app-render-engine-notice",
+    ),
     start = document.querySelector<HTMLButtonElement>("#app-render-start"),
     projectName = document.querySelector<HTMLInputElement>("#app-project-name"),
     projectSelect = document.querySelector<HTMLSelectElement>(
@@ -724,7 +788,7 @@ function installRender(fetcher: Fetcher) {
         const file = files[0],
           bytes = new Uint8Array(await file.arrayBuffer());
         if (bytes.length > 20 * 1024 * 1024)
-          throw new Error("ZIPは20 MiB以下にしてください。");
+          throw new Error(appMessage("zipArchiveMustBe20Mib"));
         const inspected = inspectZipCandidates(bytes),
           entrypoints = inspected.hasMainTex
             ? ["main.tex"]
@@ -738,7 +802,7 @@ function installRender(fetcher: Fetcher) {
         }));
       } else {
         if (files.some((file) => !file.name.toLowerCase().endsWith(".tex")))
-          throw new Error("複数選択ではTeXファイルだけを選択してください。");
+          throw new Error(appMessage("whenSelectingMultipleFilesSelectOnly"));
         inspectedTasks = await Promise.all(
           files.map(async (file) => ({
             label: file.name,
@@ -751,7 +815,7 @@ function installRender(fetcher: Fetcher) {
       }
       if (current !== generation) return;
       tasks = inspectedTasks;
-      projectName.value ||= (files[0]?.name ?? "文書").replace(
+      projectName.value ||= (files[0]?.name ?? appMessage("document")).replace(
         /\.(?:zip|tex)$/i,
         "",
       );
@@ -760,7 +824,7 @@ function installRender(fetcher: Fetcher) {
         choices.hidden = false;
         const heading = document.createElement("strong");
         heading.textContent =
-          files.length === 1 ? "どの文書をPDFにしますか？" : "変換する文書";
+          files.length === 1 ? appMessage("whichDocumentDoYouWantTo") : appMessage("documentToConvert");
         choices.append(heading);
         tasks.forEach((task) => {
           const label = document.createElement("label"),
@@ -785,6 +849,35 @@ function installRender(fetcher: Fetcher) {
   };
   input.onchange = () => void inspect();
   void inspect();
+  if (options && engineSelect) {
+    let loaded = false;
+    const svgSupport = new Map<string, boolean>();
+    engineSelect.onchange = () => {
+      svgOutput.disabled = svgSupport.get(engineSelect.value) === false;
+      if (engineNotice) engineNotice.hidden = !svgOutput.disabled;
+    };
+    options.ontoggle = () => {
+      if (!options.open || loaded) return;
+      loaded = true;
+      void json(fetcher, "/app/api/v1/environment")
+        .then((raw) => {
+          const { engines, engineOutputs } = raw as {
+            engines?: string[];
+            engineOutputs?: Array<{ engine: string; svg: boolean }>;
+          };
+          for (const { engine, svg } of engineOutputs ?? [])
+            svgSupport.set(engine, svg);
+          for (const engine of new Set(engines ?? [])) {
+            if (engine !== "lualatex")
+              engineSelect.add(new Option(engine, engine));
+          }
+          engineSelect.dispatchEvent(new Event("change"));
+        })
+        .catch(() => {
+          loaded = false;
+        });
+    };
+  }
   projectSelect.onchange = () => {
     projectNameField.hidden = projectSelect.value !== "";
   };
@@ -831,7 +924,9 @@ function installRender(fetcher: Fetcher) {
     if (selected.length === 0) return;
     const projectId = projectSelect.value,
       name = projectName.value.trim(),
-      outputs = svgOutput.checked ? ["pdf", "svg"] : ["pdf"];
+      engine = engineSelect?.value ?? "lualatex",
+      outputs =
+        svgOutput.checked && !svgOutput.disabled ? ["pdf", "svg"] : ["pdf"];
     busy = true;
     updateStart();
     results.hidden = false;
@@ -839,7 +934,7 @@ function installRender(fetcher: Fetcher) {
     const cards = selected.map((task) => {
       const container = document.createElement("div");
       container.className = "render-result-card";
-      container.textContent = `${task.label}: 開始待ち…`;
+      container.textContent = appMessage("taskWaitingToStart", { task: task.label });
       items.append(container);
       return { task, container };
     });
@@ -849,10 +944,10 @@ function installRender(fetcher: Fetcher) {
     let trackingLost = false;
     void runBoundedBatch(cards, 3, async ({ task, container }) => {
       if (trackingLost) {
-        container.textContent = `${task.label}: 状態確認が途切れたため開始していません。履歴を確認してください。`;
+        container.textContent = appMessage("taskTheStatusCheckWasInterrupted", { task: task.label });
         return;
       }
-      container.textContent = `${task.label} を準備しています…`;
+      container.textContent = appMessage("preparingTask", { task: task.label });
       try {
         let sourcePromise = sources.get(task.bytes);
         if (!sourcePromise) {
@@ -872,7 +967,7 @@ function installRender(fetcher: Fetcher) {
                   displayName:
                     selected.length === 1
                       ? name || task.label
-                      : `${name || "文書"} - ${task.label}`,
+                      : `${name || appMessage("document")} - ${task.label}`,
                 }),
               })) as { id: string });
         const request = {
@@ -886,6 +981,7 @@ function installRender(fetcher: Fetcher) {
             projectId: project.id,
             displayName: task.label,
             originalFilename: task.original,
+            ...(engine !== "lualatex" ? { engine } : {}),
             outputs,
           }),
         };
@@ -893,7 +989,7 @@ function installRender(fetcher: Fetcher) {
           await retryRenderCapacity(
             () => json(fetcher, "/app/api/v1/render-tickets", request),
             () => {
-              container.textContent = `${task.label}: 混雑のため再試行を待っています…`;
+              container.textContent = appMessage("taskServerBusyWaitingToRetry", { task: task.label });
             },
           ),
         );
@@ -910,7 +1006,7 @@ function installRender(fetcher: Fetcher) {
           trackingLost = true;
         }
       } catch (error) {
-        container.textContent = `${task.label}: 変換を開始できませんでした。`;
+        container.textContent = appMessage("taskCouldNotStartConversion", { task: task.label });
         showError(error);
       }
     })
@@ -936,7 +1032,7 @@ function installJob(fetcher: Fetcher) {
       await followJob(fetcher, match[1] as string, container, meta.entrypoint);
     } catch (error) {
       showError(error);
-      container.textContent = "変換結果を読み込めませんでした。";
+      container.textContent = appMessage("couldNotLoadConversionResult");
     }
   })();
 }
@@ -965,8 +1061,8 @@ function installProjects(fetcher: Fetcher) {
       items = append ? [...items, ...value.items] : value.items;
       cursor = value.nextCursor;
       list.innerHTML = items.length
-        ? `<div class="grid">${items.map((project) => `<article><h2>${escape(project.displayName)}</h2><p>${project.revisionCount} 改訂・${escape(new Date(project.updatedAt).toLocaleString("ja-JP"))}</p><a class="button secondary" href="/app/projects/${encodeURIComponent(project.id)}/">開く</a></article>`).join("")}</div>${value.hasMore ? '<div class="actions"><button type="button" class="secondary" id="app-projects-next">次のページ</button></div>' : ""}`
-        : "プロジェクトはありません。";
+        ? `<div class="grid">${items.map((project) => `<article><h2>${escape(project.displayName)}</h2><p>${escape(appMessage("countRevisionsDate", { count: project.revisionCount, date: new Date(project.updatedAt).toLocaleString(appLanguage()) }))}</p><a class="button secondary" href="/app/projects/${encodeURIComponent(project.id)}/">${escape(appMessage("open"))}</a></article>`).join("")}</div>${value.hasMore ? `<div class="actions"><button type="button" class="secondary" id="app-projects-next">${escape(appMessage("nextPage"))}</button></div>` : ""}`
+        : appMessage("noProjectsYet");
       const next =
         document.querySelector<HTMLButtonElement>("#app-projects-next");
       if (next)
@@ -995,13 +1091,14 @@ function installProjects(fetcher: Fetcher) {
         })
         .catch(showError);
     };
-    void load();
+    void load().catch(showError);
   }
   if (detail) {
     const match = /^\/app\/projects\/(project_[a-f0-9]{32})\/$/.exec(
       location.pathname,
     );
-    if (!match) return;
+    const projectId = match?.[1];
+    if (!projectId) return;
     let revisionCursor: string | null = null,
       project: {
         displayName: string;
@@ -1011,6 +1108,7 @@ function installProjects(fetcher: Fetcher) {
           displayName: string;
           originalFilename: string;
           entrypoint: string;
+          engine?: string;
           createdAt: string;
           jobs: Array<{
             id: string;
@@ -1036,7 +1134,7 @@ function installProjects(fetcher: Fetcher) {
       if (append && revisionCursor) query.set("cursor", revisionCursor);
       let raw: unknown;
       try {
-        raw = await json(fetcher, `/app/api/v1/projects/${match[1]}?${query}`);
+        raw = await json(fetcher, `/app/api/v1/projects/${projectId}?${query}`);
       } finally {
         pendingRevisionPage = false;
       }
@@ -1063,14 +1161,14 @@ function installProjects(fetcher: Fetcher) {
         ].map((select) => [select.id, select.value] as const),
       );
       const currentProject = project;
-      detail.innerHTML = `<div class="hero"><h1>${escape(project.displayName)}</h1></div>${
+      detail.innerHTML = `<div class="hero"><h1>${escape(project.displayName)}</h1><a class="button secondary" href="/app/projects/${encodeURIComponent(projectId)}/edit/">${escape(appMessage("editTex"))}</a></div>${
         project.revisions
           .map(
             (revision) =>
-              `<section><div class="page-heading"><div><h2>改訂 ${revision.revisionNumber}: ${escape(revision.displayName)}</h2><p>${escape(revision.originalFilename)}・${escape(new Date(revision.createdAt).toLocaleString("ja-JP"))}</p></div><label>出力形式<select id="outputs-${escape(revision.id)}"><option value="">初回の設定</option><option value="pdf">PDF</option><option value="svg">PDF＋SVG</option></select></label><button type="button" class="secondary" data-rerender="${escape(revision.id)}">もう一度変換</button></div><ul>${revision.jobs.map((job) => `<li>${escape(jobStatusLabel(job.status, job.stages))}・${escape((job.outputs ?? []).join("＋").toUpperCase())} <a href="/app/jobs/${encodeURIComponent(job.id)}/">${escape(new Date(job.createdAt).toLocaleString("ja-JP"))}</a></li>`).join("") || "<li>変換履歴はありません。</li>"}</ul>${revision.jobsHasMore && revision.jobsNextCursor ? `<div class="actions"><button type="button" class="secondary" data-revision-jobs-next="${escape(revision.id)}">この改訂の履歴をさらに表示</button><span class="muted">${revision.jobs.length} / ${revision.jobCount}件</span></div>` : ""}</section>`,
+              `<section><div class="page-heading"><div><h2>${escape(appMessage("revisionRevisionName", { revision: revision.revisionNumber, name: revision.displayName }))}</h2><p>${escape(revision.originalFilename)}・${escape(revision.engine ?? "lualatex")}・${escape(new Date(revision.createdAt).toLocaleString(appLanguage()))}</p></div><label>${escape(appMessage("outputFormat"))}<select id="outputs-${escape(revision.id)}"><option value="">${escape(appMessage("revisionDefault"))}</option><option value="pdf">PDF</option><option value="svg">PDF＋SVG</option></select></label><button type="button" class="secondary" data-rerender="${escape(revision.id)}">${escape(appMessage("convertAgain"))}</button><a class="button secondary" href="/app/projects/${encodeURIComponent(projectId)}/edit/?revision=${encodeURIComponent(revision.id)}">${escape(appMessage("editFromThisRevision"))}</a></div><ul>${revision.jobs.map((job) => `<li>${escape(jobStatusLabel(job.status, job.stages))}・${escape((job.outputs ?? []).join("＋").toUpperCase())} <a href="/app/jobs/${encodeURIComponent(job.id)}/">${escape(new Date(job.createdAt).toLocaleString(appLanguage()))}</a></li>`).join("") || `<li>${escape(appMessage("noConversionHistory"))}</li>`}</ul>${revision.jobsHasMore && revision.jobsNextCursor ? `<div class="actions"><button type="button" class="secondary" data-revision-jobs-next="${escape(revision.id)}">${escape(appMessage("showMoreHistoryForThisRevision"))}</button><span class="muted">${escape(appMessage("countTotal", { count: revision.jobs.length, total: revision.jobCount }))}</span></div>` : ""}</section>`,
           )
-          .join("") || "<section>改訂はありません。</section>"
-      }${project.revisionsHasMore ? '<div class="actions"><button type="button" class="secondary" id="app-revisions-next">次の改訂ページ</button></div>' : ""}`;
+          .join("") || `<section>${escape(appMessage("noRevisionsYet"))}</section>`
+      }${project.revisionsHasMore ? `<div class="actions"><button type="button" class="secondary" id="app-revisions-next">${escape(appMessage("nextRevisionsPage"))}</button></div>` : ""}`;
       for (const button of detail.querySelectorAll<HTMLButtonElement>(
         "[data-revision-jobs-next]",
       )) {
@@ -1096,7 +1194,7 @@ function installProjects(fetcher: Fetcher) {
           });
           void json(
             fetcher,
-            `/app/api/v1/projects/${match[1]}/revisions/${encodeURIComponent(revision.id)}/jobs?${query}`,
+            `/app/api/v1/projects/${projectId}/revisions/${encodeURIComponent(revision.id)}/jobs?${query}`,
           )
             .then((raw) => {
               const page = raw as {
@@ -1144,7 +1242,7 @@ function installProjects(fetcher: Fetcher) {
           )?.value;
           void json(
             fetcher,
-            `/app/api/v1/projects/${match[1]}/revisions/${encodeURIComponent(revisionId)}/render`,
+            `/app/api/v1/projects/${projectId}/revisions/${encodeURIComponent(revisionId)}/render`,
             {
               method: "POST",
               headers: {
@@ -1179,17 +1277,17 @@ function installProjects(fetcher: Fetcher) {
         actions.className = "actions";
         rename.type = "button";
         rename.className = "secondary";
-        rename.textContent = "名前を変更";
+        rename.textContent = appMessage("rename");
         remove.type = "button";
         remove.className = "danger";
-        remove.textContent = "プロジェクトを削除";
+        remove.textContent = appMessage("deleteProject");
         rename.onclick = () => {
           const next = prompt(
-            "新しいプロジェクト名",
+            appMessage("newProjectName2"),
             currentProject.displayName,
           )?.trim();
           if (!next) return;
-          void json(fetcher, `/app/api/v1/projects/${match[1]}`, {
+          void json(fetcher, `/app/api/v1/projects/${projectId}`, {
             method: "PATCH",
             body: JSON.stringify({ displayName: next }),
           })
@@ -1199,11 +1297,11 @@ function installProjects(fetcher: Fetcher) {
         remove.onclick = () => {
           if (
             !confirm(
-              "このプロジェクトを一覧から削除しますか？\n\nプロジェクトの記録だけを削除します。入力ファイルと変換結果は、各自の保存期限まで残ります。完全削除が必要な場合は管理者へ相談してください。",
+              appMessage("removeThisProjectFromYourList"),
             )
           )
             return;
-          void json(fetcher, `/app/api/v1/projects/${match[1]}`, {
+          void json(fetcher, `/app/api/v1/projects/${projectId}`, {
             method: "DELETE",
             body: "{}",
           })
@@ -1251,10 +1349,28 @@ function installEnvironment(fetcher: Fetcher) {
       const value = raw as {
         texliveVersion: string;
         engines: string[];
+        engineOutputs?: Array<{
+          engine: string;
+          pdf: boolean;
+          svg: boolean;
+          placement: boolean;
+        }>;
         shellEscape: boolean;
         networkAccess: boolean;
       };
-      summary.innerHTML = `<h2>現在の環境</h2><dl class="details"><dt>TeX Live</dt><dd>${escape(value.texliveVersion)}</dd><dt>エンジン</dt><dd>${escape(value.engines.join(", "))}</dd><dt>外部コマンド実行</dt><dd>${value.shellEscape ? "有効" : "無効"}</dd><dt>ネットワーク</dt><dd>${value.networkAccess ? "有効" : "無効"}</dd></dl>`;
+      summary.innerHTML = `<h2>${escape(appMessage("currentEnvironment"))}</h2><dl class="details"><dt>TeX Live</dt><dd>${escape(value.texliveVersion)}</dd><dt>${escape(appMessage("engines"))}</dt><dd>${escape(value.engines.join(", "))}</dd><dt>${escape(appMessage("shellEscape"))}</dt><dd>${escape(appMessage(value.shellEscape ? "enabled" : "disabled"))}</dd><dt>${escape(appMessage("networkAccess"))}</dt><dd>${escape(appMessage(value.networkAccess ? "enabled" : "disabled"))}</dd></dl>`;
+      if (value.engineOutputs?.length) {
+        const features = value.engineOutputs
+          .map(
+            ({ engine, pdf, svg, placement }) =>
+              `<tr><th scope="row">${escape(engine)}</th>${[pdf, svg, placement].map((verified) => `<td>${escape(appMessage(verified ? "verified" : "unverified"))}</td>`).join("")}</tr>`,
+          )
+          .join("");
+        summary.insertAdjacentHTML(
+          "beforeend",
+          `<div class="table-wrap"><table><caption>${escape(appMessage("verificationByEngine"))}</caption><thead><tr><th>${escape(appMessage("engines"))}</th><th>PDF</th><th>SVG</th><th>${escape(appMessage("svgPlacement"))}</th></tr></thead><tbody>${features}</tbody></table></div>`,
+        );
+      }
     })
     .catch(showError);
   for (const [kind, formId, outputId] of [
@@ -1276,7 +1392,7 @@ function installEnvironment(fetcher: Fetcher) {
           const value = raw as { matches: string[] };
           output.textContent = value.matches.length
             ? value.matches.join("、")
-            : "一致する項目はありません。";
+            : appMessage("noMatchingItems");
         })
         .catch(showError);
     };
@@ -1286,17 +1402,36 @@ function installEnvironment(fetcher: Fetcher) {
 function installApp() {
   const fetcher = globalThis.fetch.bind(globalThis);
   void establishSession(fetcher)
-    .then((authenticated) => {
+    .then(async (authenticated) => {
       if (!authenticated) return;
+      const selected = synchronizeDisplayLocale(
+        authenticated.displayLocale,
+        (locale) => json(fetcher, "/app/api/v1/me/locale", {
+          method: "PATCH",
+          body: JSON.stringify({ locale }),
+        }),
+        showError,
+      );
+      if (selected === false) return;
       const page = document.body.dataset.appPage;
       if (page === "render") installRender(fetcher);
       if (page === "history") {
         const history = document.querySelector<HTMLElement>("#app-history");
-        if (history) void loadJobs(fetcher, history);
+        if (history) void loadJobs(fetcher, history).catch(showError);
         installJob(fetcher);
       }
       if (page === "projects") installProjects(fetcher);
       if (page === "environment") installEnvironment(fetcher);
+      if (page === "editor") {
+        const path = document.getElementById("app-editor-script")?.dataset.editorEntrypoint ?? "/app/assets/editor.js";
+        const editor = (await import(
+          path
+        )) as typeof import("../editor/index.js");
+        await editor.installEditor(
+          (url, init) => json(fetcher, url, init),
+          selected ?? authenticated.resolvedDisplayLocale,
+        );
+      }
     })
     .catch(showError);
   document.querySelector("#app-logout")?.addEventListener("click", () => {
@@ -1311,9 +1446,14 @@ function installApp() {
   });
 }
 
-export const appScript = `
+export function localizedAppScript(locale: DisplayLocale): string {
+  return `
 (() => {
   let csrfToken = "";
+  ${browserLocaleScript}
+  const appMessages = ${JSON.stringify(appCatalog(locale))};
+  const appMessage = ${appMessage.toString()};
+  const appLanguage = ${appLanguage.toString()};
   const JOB_STATUSES = ${JSON.stringify(JOB_STATUSES)};
   const crc32 = ${crc32.toString()};
   const inspectZipCandidates = ${inspectZipCandidates.toString()};
@@ -1350,3 +1490,6 @@ export const appScript = `
   (${installApp.toString()})();
 })();
 `;
+}
+
+export const appScript = localizedAppScript("ja");

@@ -164,6 +164,7 @@ export function adminArtifactResponse(
   name: string,
   preview: boolean,
   inline: boolean,
+  pdfRequest?: { range?: string | undefined; ifRange?: string | undefined },
 ): Response {
   if (!/^job_[a-f0-9]{32}$/.test(jobId))
     throw new AppError("JOB_NOT_FOUND", "Job does not exist", 404);
@@ -197,7 +198,15 @@ export function adminArtifactResponse(
     });
     if (row === undefined)
       throw new AppError("ARTIFACT_NOT_FOUND", "Artifact does not exist", 404);
-    artifactStoragePath(deps.storageRoot, row);
+    assertStoredArtifactPath(row.relative_path, relativePath);
+    const path = artifactStoragePath(deps.storageRoot, row);
+    const etag =
+      pdfRequest && row.type === "pdf" ? `"sha256:${row.sha256}"` : undefined;
+    const range =
+      etag && (pdfRequest?.ifRange === undefined || pdfRequest.ifRange === etag)
+        ? pdfByteRange(pdfRequest?.range, row.size)
+        : undefined;
+    if (range === "unsatisfied") return { row, etag, range } as const;
     const leaseId = newId("download");
     deps.database.artifacts.createLease({
       id: leaseId,
@@ -217,17 +226,29 @@ export function adminArtifactResponse(
       result: "success",
       metadata: { relativePath, size: row.size, sha256: row.sha256 },
     });
-    return { row, leaseId };
+    return { row, path, leaseId, etag, range } as const;
   });
-  try {
-    assertStoredArtifactPath(leased.row.relative_path, relativePath);
-  } catch (error) {
-    deps.database.artifacts.deleteLease(leased.leaseId);
-    throw error;
-  }
-  const input = createReadStream(
-    artifactStoragePath(deps.storageRoot, leased.row),
-  );
+  const cache = {
+    "Cache-Control":
+      "private, no-store, no-cache, max-age=0, must-revalidate, no-transform",
+    "Cloudflare-CDN-Cache-Control": "no-store",
+    "CDN-Cache-Control": "no-store",
+    Pragma: "no-cache",
+    Expires: "0",
+    "X-Content-Type-Options": "nosniff",
+    ...(leased.etag ? { ETag: leased.etag, "Accept-Ranges": "bytes" } : {}),
+  };
+  if (leased.range === "unsatisfied")
+    return new Response(null, {
+      status: 416,
+      headers: {
+        ...cache,
+        "Content-Range": `bytes */${leased.row.size}`,
+        "Content-Length": "0",
+      },
+    });
+  const { range } = leased;
+  const input = createReadStream(leased.path, range);
   bindArtifactDownloadLeases(deps.database.artifacts, [leased.leaseId], input);
   const digest = Buffer.from(leased.row.sha256, "hex").toString("base64"),
     disposition =
@@ -235,21 +256,41 @@ export function adminArtifactResponse(
         ? "inline"
         : "attachment";
   return new Response(Readable.toWeb(input) as ReadableStream, {
+    status: range ? 206 : 200,
     headers: {
+      ...cache,
       "Content-Type": artifactContentType(leased.row.type),
-      "Content-Length": String(leased.row.size),
-      "Content-Digest": `sha-256=:${digest}:`,
+      "Content-Length": String(
+        range ? range.end - range.start + 1 : leased.row.size,
+      ),
+      ...(range
+        ? {
+            "Content-Range": `bytes ${range.start}-${range.end}/${leased.row.size}`,
+            "Repr-Digest": `sha-256=:${digest}:`,
+          }
+        : { "Content-Digest": `sha-256=:${digest}:` }),
       "X-Artifact-SHA256": leased.row.sha256,
       "Content-Disposition": `${disposition}; filename="${basename(name).replaceAll('"', "")}"`,
-      "Cache-Control":
-        "private, no-store, no-cache, max-age=0, must-revalidate",
-      "Cloudflare-CDN-Cache-Control": "no-store",
-      "CDN-Cache-Control": "no-store",
-      Pragma: "no-cache",
-      Expires: "0",
-      "X-Content-Type-Options": "nosniff",
     },
   });
+}
+
+function pdfByteRange(header: string | undefined, size: number) {
+  // Ignore unsupported units, malformed fields and multiple ranges. The
+  // browser viewer uses one contiguous range in each request.
+  if (!header || header.length > 1024) return;
+  const match = /^bytes=(\d*)-(\d*)$/i.exec(header.trim());
+  if (!match || (!match[1] && !match[2])) return;
+  if (!match[1]) {
+    const suffix = Number(match[2]);
+    if (size === 0 || suffix === 0) return "unsatisfied" as const;
+    return { start: Math.max(0, size - suffix), end: size - 1 };
+  }
+  const start = Number(match[1]),
+    end = match[2] ? Number(match[2]) : size - 1;
+  if (match[2] && end < start) return;
+  if (start >= size) return "unsatisfied" as const;
+  return { start, end: Math.min(end, size - 1) };
 }
 
 function assertStoredArtifactPath(path: string, expected = path): void {

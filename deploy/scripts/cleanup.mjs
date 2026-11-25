@@ -24,6 +24,24 @@ try {
   );
 }
 const artifactHours = positive("ARTIFACT_RETENTION_HOURS", 24);
+const draftHours = Math.min(
+  artifactHours,
+  positive("DRAFT_PREVIEW_RETENTION_HOURS", artifactHours),
+);
+const draftGenerations = boundedIntegerEnvironment(
+  process.env,
+  "DRAFT_PREVIEW_KEEP_GENERATIONS",
+  3,
+  0,
+  1000,
+);
+const draftProjectBytes = boundedIntegerEnvironment(
+  process.env,
+  "DRAFT_PREVIEW_MAX_RETAINED_BYTES_PER_PROJECT",
+  32 * 1024 ** 2,
+  0,
+  Number.MAX_SAFE_INTEGER,
+);
 const historyDays = positive("JOB_HISTORY_RETENTION_DAYS", 30);
 const auditRetentionDays = positive("AUDIT_LOG_RETENTION_DAYS", 365);
 const auditPruneBatchSize = boundedIntegerEnvironment(
@@ -40,6 +58,11 @@ const db = new DatabaseSync(databasePath, {
   enableForeignKeyConstraints: true,
 });
 db.exec("PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON");
+// Resolve the current schema before any filesystem deletion. An interrupted
+// application migration must not erase outputs while SQL still cannot retire them.
+const deleteDraftCacheAccounting = db.prepare(
+  "DELETE FROM draft_work_cache WHERE job_id=?",
+);
 
 const itemFailures = [];
 let itemFailureCount = 0;
@@ -131,6 +154,68 @@ const cutoff = new Date(Date.now() - artifactHours * 3_600_000).toISOString();
 const terminalStatuses =
     "'succeeded','failed','timeout','canceled','rejected','expired'",
   maxCleanupAttempts = 10;
+let draftPreviewsScheduled = 0;
+try {
+  const draftCutoff = new Date(
+    Date.parse(now) - draftHours * 3_600_000,
+  ).toISOString();
+  draftPreviewsScheduled = Number(
+    db
+      .prepare(
+        `
+    WITH terminal_drafts AS (
+      SELECT j.id,d.project_id,d.draft_version,j.created_at,
+        COALESCE(j.completed_at,j.updated_at) AS finished_at,
+        j.error_code,p.deleted_at AS project_deleted,
+        (j.status='succeeded' AND EXISTS (
+          SELECT 1 FROM artifacts a WHERE a.job_id=j.id AND a.type='pdf' AND a.relative_path='result.pdf'
+        )) AS usable_pdf,
+        COALESCE((SELECT SUM(a.size) FROM artifacts a WHERE a.job_id=j.id),0) +
+          COALESCE((SELECT SUM(w.bytes) FROM draft_work_cache w WHERE w.job_id=j.id),0) AS bytes
+      FROM job_draft_inputs d JOIN jobs j ON j.id=d.job_id JOIN projects p ON p.id=d.project_id
+      WHERE j.status IN (${terminalStatuses}) AND j.deletion_status='retained'
+        AND j.lease_owner IS NULL
+    ), ranked AS (
+      SELECT *,
+        ROW_NUMBER() OVER (PARTITION BY project_id,usable_pdf ORDER BY draft_version DESC,created_at DESC,id DESC) AS kind_generation
+      FROM terminal_drafts
+      WHERE project_deleted IS NULL AND error_code IS NOT 'DRAFT_SUPERSEDED' AND finished_at>?
+    ), retained AS (
+      SELECT *, ROW_NUMBER() OVER retention_order AS generation,
+        SUM(bytes) OVER (retention_order ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_bytes
+      FROM ranked
+      WINDOW retention_order AS (PARTITION BY project_id ORDER BY
+        (usable_pdf=1 AND kind_generation=1) DESC,draft_version DESC,created_at DESC,id DESC)
+    ), eligible AS (
+      SELECT id,finished_at FROM terminal_drafts
+        WHERE project_deleted IS NOT NULL OR error_code='DRAFT_SUPERSEDED' OR finished_at<=?
+      UNION ALL
+      SELECT id,finished_at FROM retained
+        WHERE NOT (usable_pdf=1 AND kind_generation=1)
+          AND ((?>0 AND generation>?) OR (?>0 AND running_bytes>?))
+    )
+    UPDATE jobs SET deletion_status='pending',deletion_next_attempt_at=NULL
+    WHERE id IN (
+      SELECT e.id FROM eligible e
+      WHERE NOT EXISTS (SELECT 1 FROM artifact_download_leases l WHERE l.job_id=e.id AND l.expires_at>?)
+        AND NOT EXISTS (SELECT 1 FROM job_preview_requests q WHERE q.job_id=e.id AND q.status='running')
+      ORDER BY e.finished_at,e.id LIMIT 100
+    )
+  `,
+      )
+      .run(
+        draftCutoff,
+        draftCutoff,
+        draftGenerations,
+        draftGenerations,
+        draftProjectBytes,
+        draftProjectBytes,
+        now,
+      ).changes,
+  );
+} catch (error) {
+  recordFailure("draft-preview-gc", "draft-jobs", error);
+}
 const jobs = db
   .prepare(
     `SELECT j.id FROM jobs j WHERE (
@@ -139,7 +224,7 @@ const jobs = db
       OR (j.status='deleting' AND j.deletion_status IN ('retained','pending','deleting'))
       OR (j.deletion_status IN ('pending','deleting','retry')
           AND (j.deletion_next_attempt_at IS NULL OR j.deletion_next_attempt_at<=?))
-    ) AND NOT EXISTS
+    ) AND j.lease_owner IS NULL AND NOT EXISTS
     (SELECT 1 FROM artifact_download_leases l WHERE l.job_id=j.id AND l.expires_at>?)
     AND NOT EXISTS (SELECT 1 FROM job_preview_requests p WHERE p.job_id=j.id AND p.status='running')
     ORDER BY COALESCE(j.deletion_next_attempt_at,j.completed_at,j.updated_at),j.id LIMIT 100`,
@@ -162,7 +247,7 @@ for (const record of jobs) {
           OR (status='deleting' AND deletion_status IN ('retained','pending','deleting'))
           OR (deletion_status IN ('pending','deleting','retry')
               AND (deletion_next_attempt_at IS NULL OR deletion_next_attempt_at<=?))
-        ) AND NOT EXISTS
+        ) AND lease_owner IS NULL AND NOT EXISTS
           (SELECT 1 FROM artifact_download_leases WHERE job_id=? AND expires_at>?)
           AND NOT EXISTS (SELECT 1 FROM job_preview_requests p WHERE p.job_id=jobs.id AND p.status='running')`,
       )
@@ -197,6 +282,7 @@ for (const record of jobs) {
       await rm(join(storageRoot, "jobs", id), { recursive: true, force: true });
     db.exec("BEGIN IMMEDIATE");
     db.prepare("DELETE FROM artifacts WHERE job_id=?").run(id);
+    deleteDraftCacheAccounting.run(id);
     const source = db.prepare("SELECT source_id FROM jobs WHERE id=?").get(id);
     const deleted = db
       .prepare(
@@ -321,7 +407,9 @@ const historyCutoff = new Date(
 ).toISOString();
 const old = db
   .prepare(
-    "SELECT id FROM jobs WHERE status='deleted' AND deleted_at<? LIMIT 1000",
+    `SELECT j.id FROM jobs j WHERE j.status='deleted' AND j.lease_owner IS NULL
+       AND (j.deleted_at<? OR EXISTS (SELECT 1 FROM job_draft_inputs d WHERE d.job_id=j.id))
+       LIMIT 1000`,
   )
   .all(historyCutoff)
   .map((row) => String(row.id));
@@ -401,6 +489,7 @@ console.log(
     event: "cleanup.completed",
     result: itemFailureCount === 0 ? "success" : "partial",
     artifactsDeleted,
+    draftPreviewsScheduled,
     sourcesDeleted,
     historyDeleted,
     auditLogsDeleted,

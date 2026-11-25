@@ -15,6 +15,10 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { describe, it } from "vitest";
+import {
+  defaultRenderEngine,
+  renderEngineSchema,
+} from "../packages/contracts/src/index.js";
 
 const execute = promisify(execFile);
 
@@ -29,14 +33,29 @@ describe("renderer audit regressions", () => {
   const cases = [
     ["main.tex", "pdf", 1],
     ["main.tex", "pdf", 10],
+    ["main.tex", "pdf", 3, undefined, undefined, "deferred"],
+    ["main.tex", "pdf", 3, undefined, undefined, "deferred", "warm"],
+    ["main.tex", "pdf", 3, undefined, undefined, "deferred", "fallback"],
     ["Main.TEX", "pdf", 100],
     ["compile.tex", "pdf", 1],
     ["docs/main.tex", "pdf", 1],
     ["result.tex", "pdf,svg", 10],
     ["result.TeX", "pdf,svg", 1],
+    ["docs/本文 section.tex", "pdf,svg", 1, "pdflatex", "-pdf"],
+    ["docs/本文 section.tex", "pdf,svg", 1, "xelatex", "-xelatex"],
+    ["docs/本文 section.tex", "pdf,svg", 1, "uplatex", "-pdfdvi"],
+    ["docs/本文 section.tex", "pdf,svg", 1, "platex", "-pdfdvi"],
   ] as const;
-  for (const [entrypoint, outputs, pages] of cases) {
-    it(`compiles ${entrypoint} (${outputs}, ${pages} pages) with canonical output names`, async () => {
+  for (const [
+    entrypoint,
+    outputs,
+    pages,
+    engine,
+    mode,
+    firstPreview,
+    workCache,
+  ] of cases) {
+    it(`compiles ${entrypoint} (${engine ?? defaultRenderEngine}, ${outputs}, ${pages} pages, ${firstPreview ?? "eager"}, ${workCache ?? "clean"}) with canonical output names`, async () => {
       const root = await mkdtemp(join(tmpdir(), "renderer-script-regression-"));
       try {
         const work = join(root, "work"),
@@ -44,11 +63,22 @@ describe("renderer audit regressions", () => {
           scratch = join(root, "tmp"),
           bin = join(root, "bin");
         await mkdir(join(work, "input"), { recursive: true });
+        if (workCache) {
+          await mkdir(join(work, "seed"));
+          await writeFile(join(work, "seed", "main.aux"), "seed");
+        }
         await mkdir(scratch);
-        await mkdir(
-          join(opt, "texlive/2026/texmf-var/luatex-cache/generic/names"),
-          { recursive: true },
-        );
+        await mkdir(join(opt, "renderer"), { recursive: true });
+        if (engine === "platex" || engine === "uplatex")
+          await writeFile(
+            join(opt, "renderer/language-collections.txt"),
+            "collection-langjapanese\n",
+          );
+        if (engine === undefined)
+          await mkdir(
+            join(opt, "texlive/2026/texmf-var/luatex-cache/generic/names"),
+            { recursive: true },
+          );
         await mkdir(dirname(join(work, "input", entrypoint)), {
           recursive: true,
         });
@@ -67,11 +97,21 @@ const fs = require('node:fs'), path = require('node:path');
 const args = process.argv.slice(2);
 const out = args.find(x => x.startsWith('-outdir=')).slice(8);
 const name = args.find(x => x.startsWith('-jobname='))?.slice(9) ?? path.basename(args.at(-1)).replace(/\\.[^.]*$/, '');
+if (process.env.LATEX_ENGINE !== process.env.TEST_ENGINE || !args.includes(process.env.TEST_LATEXMK_MODE) || !args.includes('-norc')) process.exit(94);
 if (name !== 'objects' && (process.cwd() !== process.env.TEST_PROJECT_ROOT || args.at(-1) !== process.env.TEST_ENTRYPOINT_ABSOLUTE)) process.exit(96);
+if (name === 'objects' && fs.readFileSync('renderer-entrypoint.path', 'utf8') !== process.env.TEST_ENTRYPOINT_ABSOLUTE + '\\n') process.exit(96);
 for (const nested of ['chapters/section space', 'cafe\\u0301']) {
   if (!fs.statSync(path.join(out, nested)).isDirectory()) process.exit(97);
 }
 if (fs.existsSync(path.join(out, 'external'))) process.exit(98);
+if (process.env.TEST_WORK_CACHE && args.includes('-g')) {
+  if (fs.readFileSync(path.join(out, name + '.aux'), 'utf8') !== 'seed') process.exit(93);
+  if (process.env.TEST_WORK_CACHE === 'fallback') {
+    console.log('./main.tex:3: discarded warm error');
+    process.exit(1);
+  }
+}
+if (process.env.TEST_WORK_CACHE === 'fallback' && !args.includes('-g') && fs.existsSync(path.join(out, name + '.aux'))) process.exit(92);
 fs.writeFileSync(path.join(out, name + '.pdf'), '%PDF-1.4\\n');
 fs.writeFileSync(path.join(out, name + '.synctex.gz'), 'map');
 fs.writeFileSync(path.join(out, name + '.log'), 'TeX-owned log');
@@ -120,8 +160,16 @@ fs.writeFileSync(prefix + '.png', 'preview');`,
             ...process.env,
             PATH: `${bin}:${process.env.PATH ?? "/usr/bin:/bin"}`,
             LATEX_ENTRYPOINT: entrypoint,
+            LATEX_ENGINE: engine,
             LATEX_OUTPUTS: outputs,
+            LATEX_RENDER_STAGE: firstPreview === "deferred" ? "pdf" : "all",
+            LATEX_FIRST_PREVIEW: firstPreview ?? "eager",
+            TEST_ENGINE: renderEngineSchema.parse(
+              engine ?? defaultRenderEngine,
+            ),
+            TEST_LATEXMK_MODE: mode ?? "-lualatex",
             TEST_PAGE_COUNT: String(pages),
+            TEST_WORK_CACHE: workCache,
             TEST_PROJECT_ROOT: join(work, "input"),
             TEST_ENTRYPOINT_ABSOLUTE: join(work, "input", entrypoint),
           },
@@ -148,15 +196,31 @@ fs.writeFileSync(prefix + '.png', 'preview');`,
           assert.match(log, /renderer stdout/);
           assert.doesNotMatch(log, /TeX-owned log/);
         }
+        if (workCache) {
+          const log = await readFile(join(work, "output/compile.log"), "utf8");
+          assert.match(
+            log,
+            workCache === "warm"
+              ? /work cache used/
+              : /retrying from empty output/,
+          );
+          assert.doesNotMatch(log, /discarded warm error/);
+          assert.equal(
+            await readFile(join(work, "seed/main.aux"), "utf8"),
+            "seed",
+          );
+        }
         assert.deepEqual(
           (await readdir(join(work, "output/previews"))).sort(),
-          ["page-1.png"],
+          firstPreview === "deferred" ? [] : ["page-1.png"],
         );
         assert.deepEqual(
           JSON.parse(
             await readFile(join(work, "output/.preview-info.json"), "utf8"),
           ),
-          { schemaVersion: 1, pages, dpi: 150 },
+          firstPreview === "deferred"
+            ? { schemaVersion: 2, pages, dpi: 150, firstPage: "on-demand" }
+            : { schemaVersion: 1, pages, dpi: 150 },
         );
         if (outputs.includes("svg"))
           assert.equal(
@@ -168,6 +232,27 @@ fs.writeFileSync(prefix + '.png', 'preview');`,
       }
     });
   }
+
+  it.each(["latex", "", "LuaLaTeX"])(
+    "rejects unsupported engine %j before using the work directories",
+    async (engine) => {
+      assert.equal(renderEngineSchema.safeParse(engine).success, false);
+      await assert.rejects(
+        execute(
+          "sh",
+          [fileURLToPath(new URL("../renderer/compile.sh", import.meta.url))],
+          {
+            env: {
+              ...process.env,
+              LATEX_ENGINE: engine,
+              LATEX_RENDER_STAGE: "pdf",
+            },
+          },
+        ),
+        { code: 78, stderr: "renderer: unsupported TeX engine\n" },
+      );
+    },
+  );
 
   for (const status of [0, 1]) {
     it(`marks ambiguous SyncTeX placement unknown and checks the query exit status (${status})`, async () => {

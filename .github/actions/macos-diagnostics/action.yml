@@ -1,0 +1,20 @@
+name: macOS diagnostics
+description: Record the runner, resources, and relevant system logs for native macOS checks
+inputs:
+  phase:
+    description: Start telemetry or collect and upload the diagnostics
+    required: true
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        DIAGNOSTICS_PHASE: ${{ inputs.phase }}
+      run: bash "$GITHUB_ACTION_PATH/collect.sh" "$DIAGNOSTICS_PHASE"
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      if: always() && inputs.phase == 'finish'
+      with:
+        name: macos-diagnostics-${{ github.job }}-${{ runner.arch }}-attempt-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/macos-diagnostics/
+        if-no-files-found: warn
+        retention-days: 3

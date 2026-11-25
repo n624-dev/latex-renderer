@@ -1,4 +1,9 @@
-import type { RenderOutput, JobStages } from "@latex-renderer/contracts";
+import {
+  defaultRenderEngine,
+  type RenderEngine,
+  type RenderOutput,
+  type JobStages,
+} from "@latex-renderer/contracts";
 import {
   AppError,
   encodePageCursor,
@@ -112,6 +117,8 @@ export class ProjectOperations {
         retryOfJobId: job.retry_of_job_id,
         errorCode: job.error_code,
         outputs: this.database.jobs.outputs(job),
+        engine: job.engine,
+        runtimeDigest: job.runtime_digest,
         ...(stages.has(job.id) ? { stages: stages.get(job.id) } : {}),
       })),
     };
@@ -168,6 +175,7 @@ export class ProjectOperations {
       this.assertWritable();
       if (this.database.projects.softDelete(id, actor.userId, nowIso()) !== 1)
         throw new AppError("PROJECT_NOT_FOUND", "Project does not exist", 404);
+      this.database.drafts.delete(id);
       this.database.audit({
         actorType: actor.type,
         actorId: actor.id,
@@ -177,7 +185,7 @@ export class ProjectOperations {
         result: "success",
         metadata: {
           lifecycle:
-            "metadata-only; Sources and Jobs retain their existing retention policy",
+            "Project and Draft removed; Sources and Jobs retain their existing retention policy",
         },
       });
     });
@@ -216,6 +224,7 @@ export class ProjectOperations {
       displayName: string;
       originalFilename: string;
       outputs: readonly RenderOutput[];
+      engine?: RenderEngine | undefined;
     },
   ): ProjectRevisionRow {
     this.assertWritable();
@@ -249,10 +258,13 @@ export class ProjectOperations {
         "Source does not contain the requested entrypoint",
         422,
       );
+    const engine = input.engine ?? defaultRenderEngine;
     let revision = this.database.projects.revisionForSource(
       input.projectId,
       input.sourceId,
       input.entrypoint,
+      engine,
+      input.outputs,
     );
     if (revision === undefined) {
       revision = this.database.projects.insertRevision({
@@ -262,6 +274,7 @@ export class ProjectOperations {
         displayName: input.displayName,
         originalFilename: input.originalFilename,
         entrypoint: input.entrypoint,
+        engine,
         outputs: input.outputs,
         timestamp: nowIso(),
       });
@@ -288,6 +301,7 @@ export class ProjectOperations {
       displayName: string;
       originalFilename: string;
       outputs: readonly RenderOutput[];
+      engine?: RenderEngine | undefined;
     },
   ) {
     return this.database.transaction(() =>
@@ -327,6 +341,7 @@ export class ProjectOperations {
               displayName: project.latest_revision_display_name,
               originalFilename: project.latest_revision_original_filename,
               entrypoint: project.latest_revision_entrypoint,
+              engine: project.latest_revision_engine ?? defaultRenderEngine,
               createdAt: project.latest_revision_created_at,
             },
     };
@@ -346,6 +361,7 @@ export class ProjectOperations {
       displayName: revision.display_name,
       originalFilename: revision.original_filename,
       entrypoint: revision.entrypoint,
+      engine: revision.engine,
       outputs: this.database.projects.renderOutputs(revision),
       createdAt: revision.created_at,
       jobs: jobs.map((job) => ({
@@ -356,6 +372,8 @@ export class ProjectOperations {
         retryOfJobId: job.retry_of_job_id,
         errorCode: job.error_code,
         outputs: this.database.jobs.outputs(job),
+        engine: job.engine,
+        runtimeDigest: job.runtime_digest,
         ...(stages.has(job.id) ? { stages: stages.get(job.id) } : {}),
       })),
       jobCount,

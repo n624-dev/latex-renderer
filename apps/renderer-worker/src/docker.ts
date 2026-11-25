@@ -4,11 +4,14 @@ import type { WorkerConfig } from "./config.js";
 import { containerMemoryProbe } from "./container-memory.js";
 import { MIB, RENDER_MEMORY_MAX } from "./memory-plan.js";
 import { withContainerEngine } from "../../../deploy/scripts/on-demand-engine.mjs";
+import type { WorkerJobRow } from "@latex-renderer/database";
 
 export interface RendererStageOptions {
   mode: "pdf" | "svg" | "preview";
   pdfDirectory?: string;
   page?: number;
+  deferFirstPreview?: boolean;
+  workSeed?: string;
 }
 
 export function spawnRenderer(
@@ -20,6 +23,7 @@ export function spawnRenderer(
   entrypoint = "main.tex",
   outputs: readonly string[] = ["pdf"],
   stage?: RendererStageOptions,
+  engine?: WorkerJobRow["engine"],
 ) {
   const containerName = rendererContainerName(
     jobId,
@@ -35,6 +39,7 @@ export function spawnRenderer(
     outputs,
     leaseGeneration,
     stage,
+    engine,
   );
   const process = spawn("docker", args, {
     stdio: ["ignore", "pipe", "pipe"],
@@ -84,6 +89,7 @@ export function rendererRunArguments(
   outputs: readonly string[] = ["pdf"],
   leaseGeneration = 0,
   stage?: RendererStageOptions,
+  engine?: WorkerJobRow["engine"],
 ): string[] {
   const maximum = config.maximumMemoryBytes ?? RENDER_MEMORY_MAX;
   const memory = config.containerMemoryBytes ?? maximum;
@@ -125,6 +131,11 @@ export function rendererRunArguments(
       (stage.page ?? 0) > 100)
   )
     throw new Error("Invalid preview page");
+  if (
+    stage?.workSeed !== undefined &&
+    (stage.mode !== "pdf" || !stage.deferFirstPreview)
+  )
+    throw new Error("Work cache requires a Draft PDF stage");
   const securityOptions = [
     "--security-opt",
     "no-new-privileges",
@@ -182,6 +193,18 @@ export function rendererRunArguments(
     `LATEX_ENTRYPOINT=${entrypoint}`,
     "--env",
     `LATEX_OUTPUTS=${outputs.join(",")}`,
+    // Older images lack this entrypoint. They must fail instead of silently
+    // ignoring a non-Lua engine and compiling with their LuaLaTeX default.
+    ...(engine === undefined ||
+    engine === "lualatex" ||
+    stage?.mode === "preview"
+      ? []
+      : [
+          "--entrypoint",
+          "/opt/renderer/compile-with-engine.sh",
+          "--env",
+          `LATEX_ENGINE=${engine}`,
+        ]),
     "--env",
     `MAX_SVG_OBJECTS=${config.maxSvgObjects}`,
     "--env",
@@ -197,6 +220,12 @@ export function rendererRunArguments(
     ...(stage === undefined
       ? []
       : ["--env", `LATEX_RENDER_STAGE=${stage.mode}`]),
+    ...(stage?.mode === "pdf" && stage.deferFirstPreview
+      ? ["--env", "LATEX_FIRST_PREVIEW=deferred"]
+      : []),
+    ...(stage?.workSeed === undefined
+      ? []
+      : ["--mount", `type=bind,src=${stage.workSeed},dst=/work/seed,readonly`]),
     ...(stage?.mode === "preview"
       ? ["--env", `LATEX_PREVIEW_PAGE=${stage.page ?? 0}`]
       : []),

@@ -1,6 +1,17 @@
 my $gc = ($ENV{RENDERER_LUA_GC_SCRIPT} // '') eq '/tmp/renderer-memory.lua'
     ? '-fmt=lualatex -lua=/tmp/renderer-memory.lua ' : '';
 $lualatex = 'lualatex -no-shell-escape ' . $gc . '%O %S';
+$pdflatex = 'pdflatex -no-shell-escape %O %S';
+$xelatex = 'xelatex -no-shell-escape %O %S';
+my $engine = $ENV{LATEX_ENGINE} // 'lualatex';
+if ($engine eq 'platex') {
+    $latex = 'platex -no-shell-escape %O %S';
+    $bibtex = 'pbibtex %O %B';
+} elsif ($engine eq 'uplatex') {
+    $latex = 'uplatex -no-shell-escape %O %S';
+    $bibtex = 'upbibtex %O %B';
+}
+$dvipdf = 'dvipdfmx %O -o %D %S';
 $pdf_mode = 4;
 $max_repeat = 5;
 $bibtex_use = 2;

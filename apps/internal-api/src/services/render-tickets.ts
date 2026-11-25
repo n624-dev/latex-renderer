@@ -1,6 +1,10 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { AuthenticatedServiceAccount } from "@latex-renderer/auth";
-import type { RenderOutput } from "@latex-renderer/contracts";
+import {
+  defaultRenderEngine,
+  type RenderEngine,
+  type RenderOutput,
+} from "@latex-renderer/contracts";
 import { AppError, nowIso } from "@latex-renderer/shared";
 import { SvgRetryOperations } from "@latex-renderer/database";
 import { validateEntrypointPath } from "@latex-renderer/zip-validation";
@@ -12,11 +16,17 @@ export class RenderTicketsService {
     actor: AuthenticatedServiceAccount,
     input:
       | { retrySvgJobId: string }
-      | { size: number; sha256: string; outputs?: RenderOutput[] }
+      | {
+          size: number;
+          sha256: string;
+          outputs?: RenderOutput[];
+          engine?: RenderEngine | undefined;
+        }
       | {
           sourceId: string;
           entrypoint?: string | undefined;
           outputs?: RenderOutput[];
+          engine?: RenderEngine | undefined;
           project?: { projectId: string; revisionId: string };
         },
     idempotencyKey: string,
@@ -26,7 +36,7 @@ export class RenderTicketsService {
       this.requireOwnedJob(actor, input.retrySvgJobId);
       const result = new SvgRetryOperations(
         this.deps.database,
-        this.deps,
+        { ...this.deps, runtimeImage: process.env.RENDERER_IMAGE },
       ).retry(
         {
           userId: actor.userId,
@@ -48,15 +58,26 @@ export class RenderTicketsService {
   }
   private async createLegacy(
     actor: AuthenticatedServiceAccount,
-    input: { size: number; sha256: string; outputs?: RenderOutput[] },
+    input: {
+      size: number;
+      sha256: string;
+      outputs?: RenderOutput[];
+      engine?: RenderEngine | undefined;
+    },
     idempotencyKey: string,
   ) {
-    const outputs: RenderOutput[] = input.outputs ?? ["pdf"],
+    const engine = input.engine ?? defaultRenderEngine,
+      outputs: RenderOutput[] = input.outputs ?? ["pdf"],
       normalized = outputs.includes("svg")
         ? { size: input.size, sha256: input.sha256, outputs }
         : { size: input.size, sha256: input.sha256 },
       requestHash = createHash("sha256")
-        .update(JSON.stringify(normalized))
+        .update(
+          JSON.stringify({
+            ...normalized,
+            ...(engine === defaultRenderEngine ? {} : { engine }),
+          }),
+        )
         .digest("hex"),
       keyHash = createHash("sha256").update(idempotencyKey).digest("hex"),
       existing = this.deps.database.security.idempotency(
@@ -124,6 +145,7 @@ export class RenderTicketsService {
           timestamp,
           sourceId,
           outputs,
+          engine,
           reservedOutputBytes: this.deps.maxOutputBytes,
         });
         this.deps.database.security.insertNonce(nonce, jobId, expiresAt);
@@ -180,11 +202,13 @@ export class RenderTicketsService {
       sourceId: string;
       entrypoint?: string | undefined;
       outputs?: RenderOutput[];
+      engine?: RenderEngine | undefined;
       project?: { projectId: string; revisionId: string };
     },
     idempotencyKey: string,
   ) {
     const entrypoint = validateEntrypointPath(input.entrypoint ?? "main.tex"),
+      engine = input.engine ?? defaultRenderEngine,
       outputs: RenderOutput[] = input.outputs ?? ["pdf"],
       normalized = outputs.includes("svg")
         ? {
@@ -195,7 +219,12 @@ export class RenderTicketsService {
           }
         : { sourceId: input.sourceId, entrypoint, project: input.project };
     const requestHash = createHash("sha256")
-        .update(JSON.stringify(normalized))
+        .update(
+          JSON.stringify({
+            ...normalized,
+            ...(engine === defaultRenderEngine ? {} : { engine }),
+          }),
+        )
         .digest("hex"),
       keyHash = createHash("sha256").update(idempotencyKey).digest("hex"),
       existing = this.deps.database.security.idempotency(
@@ -282,7 +311,8 @@ export class RenderTicketsService {
           ) === undefined ||
             revision?.project_id !== input.project.projectId ||
             revision.source_id !== currentSource.id ||
-            revision.entrypoint !== entrypoint)
+            revision.entrypoint !== entrypoint ||
+            revision.engine !== engine)
         )
           throw new AppError(
             "PROJECT_REVISION_NOT_FOUND",
@@ -299,6 +329,7 @@ export class RenderTicketsService {
             sourceId: currentSource.id,
             entrypoint,
             outputs,
+            engine,
             ...(revision === undefined
               ? {}
               : { projectRevisionId: revision.id }),
@@ -333,6 +364,7 @@ export class RenderTicketsService {
             sourceId: currentSource.id,
             entrypoint,
             outputs,
+            engine,
             ...(revision === undefined
               ? {}
               : { projectRevisionId: revision.id }),

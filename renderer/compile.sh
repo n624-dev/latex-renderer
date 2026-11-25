@@ -21,6 +21,21 @@ if [ "${LATEX_RENDER_STAGE:-all}" = preview ]; then
   exit 0
 fi
 
+export LATEX_ENGINE=${LATEX_ENGINE-lualatex}
+case "$LATEX_ENGINE" in
+  lualatex) latexmk_mode=-lualatex ;;
+  pdflatex) latexmk_mode=-pdf ;;
+  xelatex) latexmk_mode=-xelatex ;;
+  uplatex|platex)
+    if ! grep -Fxq 'collection-langjapanese' /opt/renderer/language-collections.txt 2>/dev/null; then
+      printf '%s\n' 'renderer: the selected TeX engine requires the Japanese Runtime collection' >&2
+      exit 78
+    fi
+    latexmk_mode=-pdfdvi
+    ;;
+  *) printf '%s\n' 'renderer: unsupported TeX engine' >&2; exit 78 ;;
+esac
+
 export HOME=/tmp/home
 export TEXMFHOME=/tmp/texlive/texmf-home
 export TEXMFCONFIG=/tmp/texlive/texmf-config
@@ -51,9 +66,11 @@ prepare_output_dirs() {
   ' sh "$output_root" {} +
 }
 prepare_output_dirs /work/output
-mkdir -p "$TEXMFVAR/luatex-cache/generic"
-cp -R /opt/texlive/2026/texmf-var/luatex-cache/generic/names \
-  "$TEXMFVAR/luatex-cache/generic/"
+if [ "$LATEX_ENGINE" = lualatex ]; then
+  mkdir -p "$TEXMFVAR/luatex-cache/generic"
+  cp -R /opt/texlive/2026/texmf-var/luatex-cache/generic/names \
+    "$TEXMFVAR/luatex-cache/generic/"
+fi
 
 # Lua's default collector waits for the live heap to double between cycles.
 # A smaller pause can release transient font-loader tables earlier. It does
@@ -130,7 +147,7 @@ publish_renderer_log() {
 }
 trap publish_renderer_log EXIT
 entrypoint=${LATEX_ENTRYPOINT:-main.tex}
-case "$entrypoint" in /*|*\\*) printf '%s\n' 'renderer: invalid entrypoint' >> "$renderer_log"; exit 78 ;; esac
+case "$entrypoint" in /*|*\\*|*[[:cntrl:]]*) printf '%s\n' 'renderer: invalid entrypoint' >> "$renderer_log"; exit 78 ;; esac
 case "/$entrypoint/" in */../*|*/./*|*//*) printf '%s\n' 'renderer: invalid entrypoint' >> "$renderer_log"; exit 78 ;; esac
 case "$entrypoint" in *.[tT][eE][xX]) ;; *) printf '%s\n' 'renderer: invalid entrypoint' >> "$renderer_log"; exit 78 ;; esac
 output_name=${entrypoint##*/}
@@ -178,14 +195,33 @@ if ! awk '{total+=$1} END {if(total>100) exit 1}' /tmp/pdf-pages; then
   exit 76
 fi
 
-set +e
+run_latex() {
+  timeout -s TERM -k 2 "$1" latexmk -norc -r /opt/renderer/latexmkrc "$latexmk_mode" -interaction=nonstopmode -halt-on-error \
+    -file-line-error -recorder -synctex=1 -outdir=/work/output ${2:+-g} "/work/input/$entrypoint"
+}
+
 record_stage
 renderer_stage=compile
-timeout -s TERM -k 2 300 latexmk -norc -r /opt/renderer/latexmkrc -lualatex -interaction=nonstopmode -halt-on-error \
-  -file-line-error -recorder -synctex=1 -outdir=/work/output "/work/input/$entrypoint" \
-  >> "$renderer_log" 2>&1
-compile_status=$?
-set -e
+compile_status=0
+if [ -d /work/seed ] && [ "$render_stage" = pdf ] && [ "${LATEX_FIRST_PREVIEW:-eager}" = deferred ]; then
+  warm_log=/tmp/renderer-warm-compile.log
+  # The seed contains only bounded, private files copied by the Worker. TeX
+  # sees the same paths as in the earlier run, and must regenerate the PDF.
+  if cp -R --no-preserve=mode /work/seed/. /work/output &&
+      run_latex 60 force > "$warm_log" 2>&1 && [ -s "/work/output/$output_name" ]; then
+    printf '%s\n' 'renderer: work cache used' >> "$renderer_log"
+    cat "$warm_log" >> "$renderer_log"
+  else
+    printf '%s\n' 'renderer: work cache failed, retrying from empty output' >> "$renderer_log"
+    find /work/output -mindepth 1 -maxdepth 1 -exec rm -r -- {} +
+    mkdir -p /work/output/previews
+    prepare_output_dirs /work/output
+    run_latex 238 "" >> "$renderer_log" 2>&1 || compile_status=$?
+  fi
+  rm -f -- "$warm_log"
+else
+  run_latex 300 "" >> "$renderer_log" 2>&1 || compile_status=$?
+fi
 
 if [ "$compile_status" -ne 0 ]; then
   if [ "$compile_status" -eq 124 ] || [ "$compile_status" -eq 137 ]; then
@@ -232,10 +268,20 @@ pages=$(awk '/^Pages:/ {print $2}' /tmp/output-pdf-info)
 case "$pages" in
   ''|*[!0-9]*) exit 71 ;;
 esac
-if [ "$pages" -gt 100 ]; then
+if [ "$pages" -lt 1 ] || [ "$pages" -gt 100 ]; then
   printf '%s\n' 'renderer: PDF page limit exceeded' >> "$renderer_log"
   exit 72
 fi
+
+case "${LATEX_FIRST_PREVIEW:-eager}" in
+  eager) ;;
+  deferred)
+    [ "$render_stage" = pdf ] && [ "$outputs" = pdf ] || exit 78
+    printf '{"schemaVersion":2,"pages":%s,"dpi":150,"firstPage":"on-demand"}\n' "$pages" > /work/output/.preview-info.json
+    exit 0
+    ;;
+  *) exit 78 ;;
+esac
 
 set +e
 record_stage
@@ -271,17 +317,19 @@ fi
 [ "$render_stage" != pdf ] || exit 0
 
 if [ "$svg_requested" = true ]; then
-  capture=/tmp/svg-capture
+  capture_root=/tmp/svg-capture
+  capture=$capture_root/output
   record_stage
   renderer_stage=svg_capture
-  rm -rf "$capture"
+  rm -rf "$capture_root"
   mkdir -p "$capture"
   prepare_output_dirs "$capture"
-  export LATEX_ENTRYPOINT_ABSOLUTE="/work/input/$entrypoint"
+  # Pass the validated path as data. The wrapper reads it with inert catcodes.
+  printf '%s\n' "/work/input/$entrypoint" > "$capture_root/renderer-entrypoint.path"
   export TEXINPUTS="/work/input//:"
   set +e
-  (cd "$capture" && timeout -s TERM -k 2 "${SVG_CONVERSION_TIMEOUT_SECONDS:-120}" \
-    latexmk -norc -r /opt/renderer/latexmkrc -lualatex -interaction=nonstopmode \
+  (cd "$capture_root" && timeout -s TERM -k 2 "${SVG_CONVERSION_TIMEOUT_SECONDS:-120}" \
+    latexmk -norc -r /opt/renderer/latexmkrc "$latexmk_mode" -interaction=nonstopmode \
       -halt-on-error -file-line-error -recorder -jobname=objects \
       -outdir="$capture" /opt/renderer/svg-wrapper.tex) \
     >> "$renderer_log" 2>&1

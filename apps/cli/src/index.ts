@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { humanText, humanDiagnostic, humanJobStatus } from "./messages.js";
 import { Writable } from "node:stream";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -11,12 +12,14 @@ import {
   openLocalTarget,
   getJob,
   renderProject,
+  renderEngineSchema,
   renderSource,
   requestJobAction,
   retrySvgJob,
   uploadProjectSource,
   type ClientCoreEvent,
   type RenderProjectResult,
+  type RenderEngine,
 } from "@latex-renderer/client-core";
 import { stripVTControlCharacters } from "node:util";
 import {
@@ -73,14 +76,15 @@ const program = new Command()
   })
   .name(commandName)
   .version(CLIENT_VERSION)
-  .option("--json", "write one structured JSON result to stdout");
+  .option("--json", humanText("writeOneStructuredJsonResultTo"));
 
 if (publicCommand) {
-  program.addHelpText("after", "\nCompile a document: n624-latex main.tex");
-  program
-    .command("compile", { hidden: true })
+  program.addHelpText("after", "\n" + humanText("compileADocumentN624LatexMain"));
+  const compile = (name: string, engine?: RenderEngine) => program
+    .command(name, { hidden: engine === undefined })
+    .description(humanText("compileATexDocumentWithThis"))
     .argument("<file>")
-    .option("-o, --output <file>", "write the PDF to this path")
+    .option("-o, --output <file>", humanText("writeThePdfToThisPath"))
     .action(async (input: string, options: { output?: string }) => {
       let client: RendererClient;
       try {
@@ -97,7 +101,7 @@ if (publicCommand) {
           );
         throw error;
       }
-      const result = await compileProjectPdf(client, input, options);
+      const result = await compileProjectPdf(client, input, { ...options, engine });
       if (result.pdf !== undefined) {
         emitSuccess("compile", { jobId: result.job.id, pdf: result.pdf }, () =>
           process.stdout.write(`${result.pdf}\n`),
@@ -114,9 +118,12 @@ if (publicCommand) {
       else {
         const terminalText = (value: string) =>
           stripVTControlCharacters(value).replaceAll(/\s+/g, " ").slice(0, 500);
-        process.stderr.write(
-          `${terminalText(error.message)} (${result.job.id})\n`,
+        const message = humanDiagnostic(
+          result.job.errorMessage ?? humanText("renderEnded", {
+            status: humanJobStatus(result.job.status),
+          }),
         );
+        process.stderr.write(`${terminalText(message)} (${result.job.id})\n`);
         for (const item of result.diagnostics?.errors.slice(0, 10) ?? [])
           process.stderr.write(
             `${terminalText(item.file)}${item.line === null ? "" : `:${item.line}`}: ${terminalText(item.message)}\n`,
@@ -124,6 +131,8 @@ if (publicCommand) {
       }
       process.exitCode = 2;
     });
+  compile("compile");
+  for (const engine of renderEngineSchema.options) compile(engine, engine);
 }
 
 const auth = program.command("auth");
@@ -134,24 +143,24 @@ authLogin.action(async () => {
     throw new AppError("INVALID_API_KEY", "Input is not a render API key", 400);
   await saveCredential(secret);
   emitSuccess("auth.login", { stored: true }, () => {
-    process.stdout.write("Credential stored.\n");
+    process.stdout.write(humanText("credentialStored") + "\n");
   });
 });
 
 auth.command("status").action(async () => {
   await loadCredential();
   emitSuccess("auth.status", { configured: true }, () => {
-    process.stdout.write("Credential is configured.\n");
+    process.stdout.write(humanText("credentialIsConfigured") + "\n");
   });
 });
 
 auth
   .command("logout")
-  .description("remove the stored API key")
+  .description(humanText("removeTheStoredApiKey"))
   .action(async () => {
     await deleteCredential();
     emitSuccess("auth.logout", { removed: true }, () => {
-      process.stdout.write("Credential removed.\n");
+      process.stdout.write(humanText("credentialRemoved") + "\n");
     });
   });
 
@@ -169,14 +178,14 @@ interface SetupCommandOptions {
 
 const setup = program
   .command("setup")
-  .description("install or update the managed cross-platform client")
-  .option("--base-uri <url>", "client distribution base URL")
-  .option("--install-directory <path>", "managed installation directory")
-  .option("--bin-directory <path>", "command launcher directory")
+  .description(humanText("installOrUpdateTheManagedCross"))
+  .option("--base-uri <url>", humanText("clientDistributionBaseUrl"))
+  .option("--install-directory <path>", humanText("managedInstallationDirectory"))
+  .option("--bin-directory <path>", humanText("commandLauncherDirectory"))
   .option("--skill-target <target>", "both, codex, claude, or none")
   .option("--mcp-target <target>", "both, codex, claude, or none")
-  .option("--api-key-stdin", "store a render API key read from standard input")
-  .option("--gui", "open the loopback-only Local Setup Web UI")
+  .option("--api-key-stdin", humanText("storeARenderApiKeyRead"))
+  .option("--gui", humanText("openTheLoopbackOnlyLocalSetup"))
   .action(async (options: SetupCommandOptions) => {
     if (
       packageManager &&
@@ -185,7 +194,7 @@ const setup = program
     ) {
       await saveCredential((await readStdin()).trim());
       emitSuccess("setup", { configured: true }, () =>
-        process.stdout.write("Credential stored.\n"),
+        process.stdout.write(humanText("credentialStored") + "\n"),
       );
       return;
     }
@@ -260,7 +269,7 @@ const setup = program
 setup
   .command("integrations")
   .description(
-    "configure AI integrations for a WinGet or Homebrew installation",
+    humanText("configureAiIntegrationsForAWinget"),
   )
   .action(async (options: SetupCommandOptions) => {
     const merged = setupSubcommandOptions(options);
@@ -280,15 +289,15 @@ setup
     });
     emitSuccess("setup.integrations", result, () => {
       for (const item of result.repaired)
-        process.stdout.write(`Configured: ${item}\n`);
+        process.stdout.write(humanText("configuredIntegration", { item }) + "\n");
       for (const item of result.preserved)
-        process.stdout.write(`Preserved: ${item}\n`);
+        process.stdout.write(humanText("preservedIntegration", { item }) + "\n");
     });
   });
 
 setup
   .command("status")
-  .description("inspect the managed client without changing it")
+  .description(humanText("inspectTheManagedClientWithoutChanging"))
   .action(async (options: SetupCommandOptions) => {
     const result = await inspectSetup(
       setupCoreOptions(setupSubcommandOptions(options)),
@@ -299,7 +308,7 @@ setup
 
 setup
   .command("repair")
-  .description("repair only settings owned by this installation")
+  .description(humanText("repairOnlySettingsOwnedByThis"))
   .action(async (options: SetupCommandOptions) => {
     if (packageManager) throw packageManagedError();
     const merged = setupSubcommandOptions(options);
@@ -317,11 +326,11 @@ setup
       await saveCredential((await readStdin()).trim());
     emitSuccess("setup.repair", result, () => {
       process.stdout.write(
-        `Repaired ${result.repaired.length} managed item(s).\n`,
+        humanText("repairedItems", { count: result.repaired.length }) + "\n",
       );
       if (result.preserved.length > 0)
         process.stdout.write(
-          `Preserved ${result.preserved.length} unowned or modified item(s).\n`,
+          humanText("preservedItems", { count: result.preserved.length }) + "\n",
         );
       printSetupStatus(result.status);
     });
@@ -329,10 +338,10 @@ setup
 
 setup
   .command("remove")
-  .description("remove the managed client and owned integrations")
-  .requiredOption("--yes", "confirm removal")
-  .option("--keep-credential", "keep the stored render API key")
-  .option("--keep-skills", "keep installed Codex and Claude skills")
+  .description(humanText("removeTheManagedClientAndOwned"))
+  .requiredOption("--yes", humanText("confirmRemoval"))
+  .option("--keep-credential", humanText("keepTheStoredRenderApiKey"))
+  .option("--keep-skills", humanText("keepInstalledCodexAndClaudeSkills"))
   .action(async (options: SetupCommandOptions) => {
     if (packageManager) throw packageManagedError();
     const merged = setupSubcommandOptions(options);
@@ -344,10 +353,10 @@ setup
     });
     emitSuccess("setup.remove", result, () => {
       if (!result.removed)
-        process.stdout.write("Managed client is not installed.\n");
+        process.stdout.write(humanText("managedClientIsNotInstalled") + "\n");
       if (result.preserved.length > 0)
         process.stdout.write(
-          `Preserved ${result.preserved.length} unowned or modified item(s).\n`,
+          humanText("preservedItems", { count: result.preserved.length }) + "\n",
         );
     });
   });
@@ -355,10 +364,10 @@ setup
 program
   .command("doctor")
   .description(
-    "diagnose runtime, installation, credential, Skill, and MCP setup",
+    humanText("diagnoseRuntimeInstallationCredentialSkillAnd"),
   )
-  .option("--install-directory <path>", "managed installation directory")
-  .option("--bin-directory <path>", "command launcher directory")
+  .option("--install-directory <path>", humanText("managedInstallationDirectory"))
+  .option("--bin-directory <path>", humanText("commandLauncherDirectory"))
   .action(async (options: SetupCommandOptions) => {
     const result = await doctorSetup(setupCoreOptions(options));
     emitSuccess("doctor", result, () => printSetupStatus(result));
@@ -367,12 +376,12 @@ program
 
 program
   .command("render")
-  .argument("[path]", "project directory or ZIP")
-  .option("--source <id>", "reuse an uploaded Source")
-  .option("--entrypoint <path>", "TeX entrypoint", "main.tex")
-  .option("--output <directory>", "output directory")
-  .option("--svg", "also export each outermost math and TikZ object as SVG")
-  .option("--open", "open the PDF after success")
+  .argument("[path]", humanText("projectDirectoryOrZip"))
+  .option("--source <id>", humanText("reuseAnUploadedSource"))
+  .option("--entrypoint <path>", humanText("texEntrypoint"), "main.tex")
+  .option("--output <directory>", humanText("outputDirectory"))
+  .option("--svg", humanText("alsoExportEachOutermostMathAnd"))
+  .option("--open", humanText("openThePdfAfterSuccess"))
   .action(
     async (
       path: string | undefined,
@@ -413,7 +422,7 @@ program
         !(await openLocalTarget(pdf))
       )
         process.stderr.write(
-          "PDF was saved, but opening it failed. Open the saved PDF manually.\n",
+          humanText("pdfWasSavedButOpeningIt") + "\n",
         );
       if (result.job.status === "succeeded") {
         emitSuccess("render", result, () => undefined);
@@ -427,7 +436,7 @@ program
 const sources = program.command("source");
 sources
   .command("upload")
-  .argument("<path>", "project directory or ZIP")
+  .argument("<path>", humanText("projectDirectoryOrZip"))
   .action(async (path: string) => {
     const result = await uploadProjectSource(
       await configuredClient(),
@@ -436,14 +445,16 @@ sources
     );
     emitSuccess("source.upload", result, () => {
       process.stdout.write(
-        `${result.sourceId}${result.uploadRequired ? " uploaded" : " reused"}.\n`,
+        humanText(result.uploadRequired ? "inputUploaded" : "inputReused", {
+          id: result.sourceId,
+        }) + "\n",
       );
     });
   });
 
 const projects = program
   .command("projects")
-  .description("manage saved Projects shared with Web and MCP");
+  .description(humanText("manageSavedProjectsSharedWithWeb"));
 projects
   .command("list")
   .option("--cursor <cursor>")
@@ -508,17 +519,17 @@ projects
   .action(async (id: string) => {
     await (await configuredClient()).deleteProject(id);
     emitSuccess("projects.delete", { id, deleted: true }, () =>
-      process.stdout.write(`${id} deleted.\n`),
+    process.stdout.write(humanText("projectDeleted", { id }) + "\n"),
     );
   });
 projects
   .command("save")
-  .description("upload a local Source and attach an immutable Project revision")
+  .description(humanText("uploadALocalSourceAndAttach"))
   .argument("<project-id>")
   .argument("<path>")
-  .option("--entrypoint <path>", "TeX entrypoint", "main.tex")
-  .option("--name <name>", "revision display name")
-  .option("--svg", "use PDF and SVG as initial output defaults")
+  .option("--entrypoint <path>", humanText("texEntrypoint"), "main.tex")
+  .option("--name <name>", humanText("revisionDisplayName"))
+  .option("--svg", humanText("usePdfAndSvgAsInitial"))
   .action(
     async (
       projectId: string,
@@ -543,10 +554,10 @@ projects
   );
 projects
   .command("render")
-  .description("queue a Job for an exact saved revision")
+  .description(humanText("queueAJobForAnExact"))
   .argument("<project-id>")
   .argument("<revision-id>")
-  .option("--svg", "use PDF and SVG instead of the revision defaults")
+  .option("--svg", humanText("usePdfAndSvgInsteadOf"))
   .action(
     async (
       projectId: string,
@@ -590,7 +601,7 @@ jobs
       "cancel",
     );
     emitSuccess("jobs.cancel", result, () => {
-      process.stdout.write(`Cancel requested for ${id}.\n`);
+      process.stdout.write(humanText("cancelRequested", { id: id }) + "\n");
     });
   });
 
@@ -605,18 +616,18 @@ jobs
       "delete",
     );
     emitSuccess("jobs.delete", result, () => {
-      process.stdout.write(`Delete requested for ${id}.\n`);
+      process.stdout.write(humanText("deleteRequested", { id: id }) + "\n");
     });
   });
 
 jobs
   .command("download")
   .argument("<id>")
-  .option("--output <directory>", "output directory", ".render")
-  .option("--pdf-only", "download the committed PDF without waiting for SVG")
+  .option("--output <directory>", humanText("outputDirectory"), ".render")
+  .option("--pdf-only", humanText("downloadTheCommittedPdfWithoutWaiting"))
   .option(
     "--preview-page <pages...>",
-    "generate selected preview pages (1..100), not every page",
+    humanText("generateSelectedPreviewPages1100"),
   )
   .action(
     async (
@@ -637,7 +648,7 @@ jobs
       );
       emitSuccess("jobs.download", result, () => {
         process.stdout.write(
-          `Artifacts downloaded to ${result.outputDirectory}.\n`,
+          humanText("downloadComplete", { directory: result.outputDirectory }) + "\n",
         );
       });
     },
@@ -646,7 +657,7 @@ jobs
 jobs
   .command("retry-svg")
   .argument("<id>")
-  .option("--output <directory>", "output directory", ".render")
+  .option("--output <directory>", humanText("outputDirectory"), ".render")
   .action(async (id: string, options: { output: string }) => {
     const result = await retrySvgJob(
       await configuredClient(),
@@ -657,8 +668,8 @@ jobs
     emitSuccess("jobs.retry-svg", result, () => {
       process.stdout.write(
         result.job.status === "succeeded"
-          ? "SVG retry succeeded; original PDF retained.\n"
-          : "Partial success: original PDF retained; SVG retry failed.\n",
+          ? humanText("svgRetrySucceededOriginalPdfRetained") + "\n"
+          : humanText("partialSuccessOriginalPdfRetainedSvg") + "\n",
       );
     });
     if (result.job.status !== "succeeded") process.exitCode = 2;
@@ -668,7 +679,7 @@ const userArgs = process.argv.slice(2);
 if (publicCommand && userArgs[0] === "admin") {
   const entry = join(dirname(process.argv[1] ?? ""), "latex-render-admin.mjs");
   if (!existsSync(entry)) {
-    process.stderr.write("This installation does not contain the Admin CLI.\n");
+    process.stderr.write(humanText("thisInstallationDoesNotContainThe") + "\n");
     process.exitCode = 1;
   } else {
     const child = spawnSync(process.execPath, [entry, ...userArgs.slice(1)], {
@@ -707,7 +718,7 @@ if (publicCommand && userArgs[0] === "admin") {
         });
       } else if (!(error instanceof CommanderError)) {
         process.stderr.write(
-          `${commandName}: ${error instanceof Error ? error.message : "Unknown error"}\n`,
+          `${commandName}: ${error instanceof Error ? humanDiagnostic(error.message) : humanDiagnostic("Unknown error")}\n`,
         );
       }
       process.exitCode = error instanceof CommanderError ? error.exitCode : 1;
@@ -722,12 +733,14 @@ async function configuredClient(): Promise<RendererClient> {
 function humanRenderEvent(event: ClientCoreEvent): void {
   if (event.type === "source.ready") {
     process.stdout.write(
-      `Source ${event.sourceId} ${event.uploadRequired ? "uploaded" : "reused"}.\n`,
+      humanText(event.uploadRequired ? "sourceUploaded" : "sourceReused", {
+        id: event.sourceId,
+      }) + "\n",
     );
     return;
   }
   if (event.type === "job.queued") {
-    process.stdout.write(`Job ${event.jobId} queued.\n`);
+    process.stdout.write(humanText("jobQueued", { id: event.jobId }) + "\n");
     return;
   }
   if (event.type !== "job.status") return;
@@ -735,7 +748,7 @@ function humanRenderEvent(event: ClientCoreEvent): void {
     ?.replace(/[\p{Cc}\p{Cf}]/gu, " ")
     .slice(0, 300);
   process.stdout.write(
-    `\r${`${event.status}${wait ? ` — ${wait}` : ""}`.padEnd(160)}`,
+    `\r${`${humanJobStatus(event.status)}${wait ? ` — ${wait}` : ""}`.padEnd(160)}`,
   );
   if (isTerminalStatus(event.status)) process.stdout.write("\n");
 }
@@ -759,7 +772,7 @@ function emitRenderFailure(result: RenderProjectResult): void {
     writeJson({ success: false, command: "render", result, error });
   else if (result.job.stages?.pdf.status === "succeeded")
     process.stderr.write(
-      "Partial success: PDF and previews were saved. SVG failed; use jobs retry-svg to retry SVG without recompiling the PDF.\n",
+      humanText("partialSuccessPdfAndPreviewsWere") + "\n",
     );
 }
 
@@ -883,10 +896,10 @@ function parseTarget(value: string | undefined, label: string): SkillTarget {
 }
 
 function printSetupStatus(status: SetupStatus): void {
-  process.stdout.write(`Setup status: ${status.status}\n`);
+  process.stdout.write(humanText("setupStatus", { status: status.status }) + "\n");
   for (const check of status.checks)
     process.stdout.write(
-      `${check.status.toUpperCase().padEnd(4)} ${check.id}: ${check.message}${
+      `${check.status.toUpperCase().padEnd(4)} ${check.id}: ${humanDiagnostic(check.message)}${
         check.path ? ` (${check.path})` : ""
       }\n`,
     );

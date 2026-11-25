@@ -19,6 +19,12 @@ import { generateMetadata } from "./metadata.js";
 import { classifyRenderResult } from "./render-result.js";
 import { processStagedJob } from "./staged-job-processor.js";
 import { previewPageCount } from "./preview-metadata.js";
+import { rendererRuntimeDigest } from "./config.js";
+import {
+  identifyDraftWorkCache,
+  loadDraftWorkCache,
+  storeDraftWorkCache,
+} from "./draft-work-cache.js";
 
 export async function processJob(
   database: RendererDatabase,
@@ -92,14 +98,18 @@ export async function processJob(
     attempt = join(root, "attempts", String(job.lease_generation)),
     work = join(attempt, "work"),
     extracted = join(work, "input"),
+    workSeed = join(attempt, "seed"),
     staging = join(attempt, "staging"),
     candidateOutput = join(attempt, "output"),
     output = join(root, "outputs", String(job.lease_generation));
   let published = false,
-    committed = false;
+    committed = false,
+    workCacheStored = false;
   let rendererInput = extracted,
     releaseInput = () => {};
   const needsOutputCleanup = (): boolean => published && !committed;
+  const needsWorkCacheRelease = (): boolean =>
+    workCacheStored && (!published || !committed);
   const rendererState: {
     spawned?: ReturnType<typeof spawnRenderer>;
     closed: boolean;
@@ -111,6 +121,7 @@ export async function processJob(
   try {
     await (async () => {
       const outputs = renderOutputs(job.outputs_json);
+      const prepareBegan = performance.now();
       await rm(attempt, { recursive: true, force: true });
       await mkdir(work, { recursive: true, mode: 0o770 });
       await chmod(work, 0o770);
@@ -130,6 +141,7 @@ export async function processJob(
       rendererInput = prepared.input;
       releaseInput = prepared.release;
       const startedAt = nowIso();
+      const sourcePrepareMs = Math.round(performance.now() - prepareBegan);
       if (
         leaseIsLost() ||
         database.worker.transitionOwned(
@@ -139,10 +151,26 @@ export async function processJob(
           ["validating"],
           "running",
           startedAt,
-          { started_at: startedAt },
+          {
+            started_at: startedAt,
+            runtime_digest: rendererRuntimeDigest(config.image),
+          },
         ) !== 1
       )
         return;
+      const deferFirstPreview = database.drafts.isPreviewJob(job.id);
+      const workCache = deferFirstPreview
+        ? await identifyDraftWorkCache(database, config, job, rendererInput)
+        : undefined;
+      const warm =
+        workCache &&
+        (await loadDraftWorkCache(
+          database,
+          config,
+          workCache,
+          job.entrypoint,
+          workSeed,
+        ));
       const spawned = spawnRenderer(
         config,
         job.id,
@@ -151,6 +179,14 @@ export async function processJob(
         staging,
         job.entrypoint,
         outputs,
+        deferFirstPreview
+          ? {
+              mode: "pdf",
+              deferFirstPreview: true,
+              ...(warm ? { workSeed } : {}),
+            }
+          : undefined,
+        job.engine,
       );
       rendererState.spawned = spawned;
       spawned.process.stdout.resume();
@@ -162,16 +198,31 @@ export async function processJob(
       let monitoring = false,
         monitorFailure: unknown,
         monitorRun: Promise<void> | undefined;
+      const renderBegan = performance.now();
+      const supersedeAfter = config.draftPreviewSupersedeAfterMs ?? 0;
       const monitor = setInterval(() => {
         if (monitoring) return;
         monitoring = true;
-        monitorRun = monitorJob(
-          database,
-          config,
-          job,
-          staging,
-          spawned.containerName,
-        )
+        monitorRun = (async () => {
+          if (
+            deferFirstPreview &&
+            supersedeAfter > 0 &&
+            performance.now() - renderBegan >= supersedeAfter
+          )
+            database.drafts.requestOutdatedPreviewStop(
+              job.id,
+              config.workerId,
+              job.lease_generation,
+              nowIso(),
+            );
+          await monitorJob(
+            database,
+            config,
+            job,
+            staging,
+            spawned.containerName,
+          );
+        })()
           .catch(async (error: unknown) => {
             monitorFailure ??= error;
             console.error(
@@ -254,6 +305,8 @@ export async function processJob(
         return;
       }
       const result = classifyRenderResult(exitCode, timedOut, stderr);
+      const validationBegan = performance.now();
+      const compileMs = Math.round(validationBegan - renderBegan);
       config.diagnostic?.({
         event: "renderer_worker.render_result",
         jobId: job.id,
@@ -281,9 +334,19 @@ export async function processJob(
       );
       const pageCount =
         result.status === "succeeded"
-          ? await previewPageCount(staging, artifacts)
+          ? await previewPageCount(staging, artifacts, deferFirstPreview)
           : undefined;
+      const publishBegan = performance.now();
       await publishArtifacts(staging, candidateOutput, artifacts);
+      if (workCache && result.status === "succeeded")
+        workCacheStored = await storeDraftWorkCache(
+          database,
+          config,
+          workCache,
+          job,
+          staging,
+          candidateOutput,
+        );
       renewLease();
       if (leaseIsLost()) return;
       await mkdir(join(root, "outputs"), { recursive: true, mode: 0o770 });
@@ -374,6 +437,26 @@ export async function processJob(
         });
         return true;
       });
+      if (committed && deferFirstPreview && result.status === "succeeded") {
+        const queuedAt = database.jobs.get(job.id)?.queued_at;
+        config.diagnostic?.({
+          event: "renderer_worker.draft_preview_completed",
+          jobId: job.id,
+          ...(queuedAt
+            ? {
+                queueAndPrepareMs: Math.max(
+                  0,
+                  Date.parse(startedAt) - Date.parse(queuedAt),
+                ),
+              }
+            : {}),
+          sourcePrepareMs,
+          compileMs,
+          validationMs: Math.round(publishBegan - validationBegan),
+          publishMs: Math.round(performance.now() - publishBegan),
+          workCacheHit: warm === true,
+        });
+      }
     })();
   } catch (error) {
     processingFailed = true;
@@ -401,6 +484,8 @@ export async function processJob(
   }
   if (needsOutputCleanup()) await rm(output, { recursive: true, force: true });
   await rm(attempt, { recursive: true, force: true });
+  if (needsWorkCacheRelease())
+    database.drafts.releaseWorkCache(job.id, job.lease_generation);
   releaseInput();
   const finalState = database.worker.runtimeState(job.id);
   if (finalState?.cancel_requested_at != null)

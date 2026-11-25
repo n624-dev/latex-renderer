@@ -20,7 +20,16 @@ import {
   recoverSourceTreeReaders,
 } from "../apps/renderer-worker/src/source-tree-cache.js";
 import * as docker from "../apps/renderer-worker/src/docker.js";
-import type { SourceTreeRow } from "@latex-renderer/database";
+import {
+  identifyDraftWorkCache,
+  loadDraftWorkCache,
+  storeDraftWorkCache,
+} from "../apps/renderer-worker/src/draft-work-cache.js";
+import {
+  ProjectDraftOperations,
+  ProjectOperations,
+  type SourceTreeRow,
+} from "@latex-renderer/database";
 afterEach(() => vi.restoreAllMocks());
 const identity = {
   userId: "pipeline_user",
@@ -76,6 +85,292 @@ async function fixture() {
   }
 }
 describe("bounded owner-bound Source input reuse (fixture renderer, no Docker)", () => {
+  it("seeds only committed owner-bound Draft builds and falls back after a preamble, Runtime or file change", async () => {
+    const f = await fixture();
+    try {
+      const runtime = "sha256:" + "1".repeat(64);
+      f.config.image = runtime;
+      f.config.draftWorkCacheBytes = 1024 ** 2;
+      const actor = {
+        userId: identity.userId,
+        type: "user",
+        id: identity.userId,
+      };
+      const projects = new ProjectOperations(f.database);
+      const drafts = new ProjectDraftOperations(f.database);
+      const project = projects.create(actor, "Warm preview");
+      projects.attachRevision(actor, {
+        projectId: project.id,
+        sourceId: f.source.id,
+        entrypoint: "main.tex",
+        displayName: "Initial",
+        originalFilename: "preview.zip",
+        outputs: ["pdf"],
+      });
+      let draft = drafts.open(actor, project.id);
+      const original = await f.renders.createRender(identity, {
+        sourceId: f.source.id,
+        entrypoint: "main.tex",
+      });
+      const principal = defined(f.database.jobs.get(original.id));
+      f.database.raw
+        .prepare("UPDATE jobs SET status='canceled' WHERE id=?")
+        .run(original.id);
+      const claim = async () => {
+        const created = drafts.queuePreview(actor, project.id, draft.version, {
+          serviceAccountId: principal.service_account_id,
+          apiKeyId: principal.api_key_id,
+          rendererVersion: "fixture",
+          runtime,
+          reservedOutputBytes: 1024,
+          admit: () => {},
+        });
+        const time = new Date().toISOString();
+        const job = defined(
+          f.database.worker.claimNext(
+            f.config.workerId,
+            time,
+            new Date(Date.now() + 30000).toISOString(),
+          ),
+        );
+        expect(job.id).toBe(created.jobId);
+        const path = join(f.root, `preview-${job.id}`);
+        await prepareSourceInput(
+          f.database,
+          f.config,
+          job,
+          "/unused.zip",
+          path,
+        );
+        f.database.raw
+          .prepare(
+            "UPDATE jobs SET status='running',runtime_digest=? WHERE id=?",
+          )
+          .run(runtime, job.id);
+        return {
+          job,
+          time,
+          path,
+          key: defined(
+            await identifyDraftWorkCache(f.database, f.config, job, path),
+          ),
+        };
+      };
+      const first = await claim();
+      const staging = join(f.root, "work-cache-staging");
+      const output = join(
+        f.storage,
+        "jobs",
+        first.job.id,
+        "outputs",
+        String(first.job.lease_generation),
+      );
+      await mkdir(staging);
+      await mkdir(output, { recursive: true });
+      await writeFile(join(staging, "main.aux"), "auxiliary");
+      await writeFile(join(staging, "main.pdf"), "never seed public output");
+      expect(
+        await storeDraftWorkCache(
+          f.database,
+          f.config,
+          first.key,
+          first.job,
+          staging,
+          output,
+        ),
+      ).toBe(true);
+      const reader = { ...first.key, version: first.key.version + 1 };
+      const seed = join(f.root, "seed-copy");
+      const load = (key = reader) =>
+        loadDraftWorkCache(f.database, f.config, key, "main.tex", seed);
+      expect(await load()).toBe(false);
+      f.database.artifacts.insert({
+        id: "draft-pdf",
+        job_id: first.job.id,
+        type: "pdf",
+        relative_path: "result.pdf",
+        storage_generation: first.job.lease_generation,
+        size: 5,
+        sha256: "1".repeat(64),
+        created_at: first.time,
+      });
+      f.database.raw
+        .prepare(
+          "UPDATE jobs SET status='succeeded',lease_owner=NULL,completed_at=? WHERE id=?",
+        )
+        .run(first.time, first.job.id);
+      expect(await load({ ...reader, userId: "pipeline_other" })).toBe(false);
+      expect(
+        await load({ ...reader, projectId: "not-the-owner-project" }),
+      ).toBe(false);
+      draft = await f.renders.saveDraftText(
+        actor,
+        project.id,
+        draft.version,
+        "main.tex",
+        pipelineDocument(1, "Edited"),
+      );
+      const second = await claim();
+      expect(second.key.key).toBe(first.key.key);
+      expect(await load(second.key)).toBe(true);
+      expect(await readFile(join(seed, "main.aux"), "utf8")).toBe("auxiliary");
+      await expect(lstat(join(seed, "main.pdf"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      const newRuntime = await identifyDraftWorkCache(
+        f.database,
+        { ...f.config, image: "sha256:" + "2".repeat(64) },
+        second.job,
+        second.path,
+      );
+      expect(newRuntime?.key).not.toBe(first.key.key);
+      expect(
+        await storeDraftWorkCache(
+          f.database,
+          { ...f.config, draftWorkCacheBytes: 8 },
+          second.key,
+          second.job,
+          staging,
+          output,
+        ),
+      ).toBe(false);
+      f.database.raw
+        .prepare(
+          "DELETE FROM job_draft_input_files WHERE job_id=? AND path='other.tex'",
+        )
+        .run(second.job.id);
+      const withoutAttachment = await identifyDraftWorkCache(
+        f.database,
+        f.config,
+        second.job,
+        second.path,
+      );
+      expect(withoutAttachment?.key).not.toBe(first.key.key);
+      await writeFile(
+        join(second.path, "main.tex"),
+        "% preamble changed\n" + pipelineDocument(1, "Edited"),
+      );
+      expect(
+        (
+          await identifyDraftWorkCache(
+            f.database,
+            f.config,
+            second.job,
+            second.path,
+          )
+        )?.key,
+      ).not.toBe(withoutAttachment?.key);
+      f.database.raw
+        .prepare("UPDATE jobs SET deletion_status='pending' WHERE id=?")
+        .run(first.job.id);
+      expect(await load(second.key)).toBe(false);
+      expect(
+        f.database.artifacts.hasActiveTransfers(first.job.id, second.time),
+      ).toBe(false);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it("materializes the frozen preview instead of reusing edited files or the original Source tree", async () => {
+    const f = await fixture();
+    try {
+      const actor = {
+        userId: identity.userId,
+        type: "user",
+        id: identity.userId,
+      };
+      const projects = new ProjectOperations(f.database),
+        drafts = new ProjectDraftOperations(f.database);
+      const project = projects.create(actor, "Preview");
+      projects.attachRevision(actor, {
+        projectId: project.id,
+        sourceId: f.source.id,
+        entrypoint: "main.tex",
+        displayName: "Initial",
+        originalFilename: "source.zip",
+        outputs: ["pdf"],
+      });
+      let draft = drafts.open(actor, project.id);
+      draft = await f.renders.saveDraftText(
+        actor,
+        project.id,
+        draft.version,
+        "notes.bib",
+        "frozen",
+      );
+      const principalJob = await f.renders.createRender(identity, {
+        sourceId: f.source.id,
+        entrypoint: "main.tex",
+      });
+      const principal = defined(f.database.jobs.get(principalJob.id));
+      f.database.raw
+        .prepare("UPDATE jobs SET status='canceled' WHERE id=?")
+        .run(principalJob.id);
+      const preview = drafts.queuePreview(actor, project.id, draft.version, {
+        serviceAccountId: principal.service_account_id,
+        apiKeyId: principal.api_key_id,
+        rendererVersion: "fixture",
+        runtime: f.config.image,
+        reservedOutputBytes: 1024,
+        admit: () => {},
+      });
+      await f.renders.saveDraftText(
+        actor,
+        project.id,
+        draft.version,
+        "notes.bib",
+        "new text",
+      );
+      const job = defined(
+        f.database.worker.claimNext(
+          f.config.workerId,
+          new Date().toISOString(),
+          new Date(Date.now() + 60000).toISOString(),
+        ),
+      );
+      expect(job.id).toBe(preview.jobId);
+      const destination = join(f.root, "preview-input");
+      const prepared = await prepareSourceInput(
+        f.database,
+        f.config,
+        job,
+        "/unused.zip",
+        destination,
+      );
+      expect(prepared).toMatchObject({ input: destination, hit: false });
+      expect(await readFile(join(destination, "main.tex"), "utf8")).toBe(
+        pipelineDocument(),
+      );
+      expect(await readFile(join(destination, "notes.bib"), "utf8")).toBe(
+        "frozen",
+      );
+      expect(f.rows()).toEqual([]);
+
+      const file = defined(
+        f.database.drafts
+          .renderInput(job.id)
+          ?.files.find(({ path }) => path === "notes.bib"),
+      );
+      await writeFile(
+        join(f.storage, file.storage_key),
+        Buffer.alloc(file.size),
+      );
+      await expect(
+        prepareSourceInput(
+          f.database,
+          f.config,
+          job,
+          "/unused.zip",
+          join(f.root, "second-input"),
+        ),
+      ).rejects.toMatchObject({
+        code: "SOURCE_CHECKSUM_INVALID",
+      });
+    } finally {
+      await f.close();
+    }
+  });
   it("collects unpinned inputs after lowering the configured budget without starting another Job", async () => {
     const f = await fixture();
     try {

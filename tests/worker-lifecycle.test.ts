@@ -31,6 +31,7 @@ const job: WorkerJobRow = {
   source_id: null,
   source_storage_key: null,
   entrypoint: "main.tex",
+  engine: "lualatex",
   outputs_json: '["pdf"]',
   lease_generation: 1,
 };
@@ -124,6 +125,7 @@ describe("worker stop and orphan-recovery lifecycle", () => {
       user_id: "owner",
       source_sha256: "b".repeat(64),
       entrypoint: "main.tex",
+      engine: "lualatex" as const,
       outputs_json: '["pdf"]',
       queued_at: new Date().toISOString(),
     };
@@ -164,6 +166,7 @@ describe("worker stop and orphan-recovery lifecycle", () => {
       user_id: "owner",
       source_sha256: "b".repeat(64),
       entrypoint: "main.tex",
+      engine: "lualatex" as const,
       outputs_json: '["pdf"]',
       queued_at: new Date(Date.now() - 1000000).toISOString(),
     };
@@ -202,6 +205,7 @@ describe("worker stop and orphan-recovery lifecycle", () => {
       user_id: "owner",
       source_sha256: "b".repeat(64),
       entrypoint: "main.tex",
+      engine: "lualatex" as const,
       outputs_json: '["pdf"]',
       queued_at: new Date().toISOString(),
     };

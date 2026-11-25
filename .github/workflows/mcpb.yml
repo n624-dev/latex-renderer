@@ -69,9 +69,14 @@ jobs:
           - runner: windows-2025
             platform: win32
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 15
+    timeout-minutes: ${{ matrix.platform == 'darwin' && 19 || 15 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        id: source
+      - uses: ./.github/actions/macos-diagnostics
+        if: runner.os == 'macOS'
+        with:
+          phase: start
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: "26.13.0"
@@ -99,5 +104,14 @@ jobs:
         run: pnpm exec vitest run tests/windows-credentials.test.ts tests/windows-credentials-native.test.ts
       - name: Validate, pack, sign, and verify MCPB
         run: pnpm build:mcpb && pnpm verify:mcpb
+      - name: Exercise clean local server install on macOS
+        if: runner.os == 'macOS'
+        shell: bash
+        run: pnpm test:mcpb:clean -- darwin 2>&1 | tee "$MACOS_DIAGNOSTICS_DIR/mcpb-clean-install.log"
       - name: Exercise clean local server install
+        if: runner.os != 'macOS'
         run: pnpm test:mcpb:clean -- ${{ matrix.platform }}
+      - uses: ./.github/actions/macos-diagnostics
+        if: always() && runner.os == 'macOS' && steps.source.outcome == 'success'
+        with:
+          phase: finish

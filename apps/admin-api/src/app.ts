@@ -1,3 +1,4 @@
+import { localizedDiagnostic } from "@latex-renderer/shared/diagnostic-locale";
 import { Hono } from "hono";
 import { secureHeaders } from "hono/secure-headers";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
@@ -47,12 +48,12 @@ export function createAdminApp(deps: AdminDependencies): Hono {
       }),
     );
     return c.json(
-      { error: { code: safe.code, message: safe.message } },
+      { error: { code: safe.code, message: localizedDiagnostic(safe.message, c.req.header("Accept-Language")) } },
       safe.status as ContentfulStatusCode,
     );
   });
   app.notFound((c) =>
-    c.json({ error: { code: "NOT_FOUND", message: "Route not found" } }, 404),
+    c.json({ error: { code: "NOT_FOUND", message: localizedDiagnostic("Route not found", c.req.header("Accept-Language")) } }, 404),
   );
   return app;
 }

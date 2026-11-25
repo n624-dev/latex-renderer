@@ -1,3 +1,4 @@
+import { japaneseAdminMessage } from "./helpers/admin-message.js";
 import { describe, expect, it } from "vitest";
 import { runInNewContext } from "node:vm";
 import { part6 } from "../apps/admin-web/src/assets/admin-script-parts/part-6.js";
@@ -15,6 +16,7 @@ describe("concise public UI", () => {
     const out = { innerHTML: "" };
     await new Promise<void>((resolve, reject) => {
       runInNewContext(`${part6}\ntexEnvironment().then(done, fail)`, {
+        adminMessage: japaneseAdminMessage,
         request: (path: string) =>
           Promise.resolve(
             path.endsWith("/state")
@@ -41,6 +43,7 @@ describe("concise public UI", () => {
         section: (title: string, body: string) =>
           `<section><h2>${title}</h2>${body}</section>`,
         document: {
+          documentElement: { lang: "ja" },
           querySelector: () => ({
             value: "latest",
             disabled: false,
@@ -72,6 +75,7 @@ describe("concise public UI", () => {
     const selectionFlags: boolean[] = [];
     await new Promise<void>((resolve, reject) => {
       runInNewContext(`${part5}\njobs().then(done, fail)`, {
+        adminMessage: japaneseAdminMessage,
         location: { search: "" },
         URLSearchParams,
         request: () => Promise.resolve({ items: [] }),
@@ -88,7 +92,7 @@ describe("concise public UI", () => {
         },
         nextPage: () => "",
         esc: escapeHtml,
-        document: { querySelector: () => ({ onsubmit: null }) },
+        document: { documentElement: { lang: "ja" }, querySelector: () => ({ onsubmit: null }) },
         bindAction: () => {},
         done: resolve,
         fail: reject,
@@ -101,6 +105,7 @@ describe("concise public UI", () => {
     const html: unknown = runInNewContext(
       `${part6}\ntexRuntimeCard(runtime, '現在の環境')`,
       {
+        adminMessage: japaneseAdminMessage,
         runtime: {
           languages: ["collection-langjapanese"],
           effectiveLanguageCollections: [
@@ -131,15 +136,15 @@ describe("concise public UI", () => {
     expect(html).toContain("管理者が用意したアカウント");
     for (const path of [
       "/app/",
-      "/downloads/",
-      "/docs/",
-      "/docs/web/",
-      "/docs/mcp/",
-      "/docs/api/",
+      "/ja/downloads/",
+      "/ja/docs/",
+      "/ja/docs/web/",
+      "/ja/docs/mcp/",
+      "/ja/docs/api/",
     ]) {
       expect(html).toContain(`href="${path}"`);
     }
-    expect(html.match(/href="\/"/g)).toHaveLength(1);
+    expect(html).toContain('href="/ja/">LaTeX Renderer');
   });
 
   it("retains latest and exact-version downloads while moving detailed instructions to docs", () => {
@@ -159,10 +164,10 @@ describe("concise public UI", () => {
     }
     expect(html).toContain("クライアント 1.2.3");
     expect(html).toContain(
-      'href="/docs/client/#debian-ubuntu-の-apt-パッケージ">Debian・Ubuntu に APT でインストール</a>（Node.js 同梱）',
+      'href="/ja/docs/client/#debian-ubuntu-の-apt-パッケージ">Debian・Ubuntu に APT でインストール</a> （Node.js 同梱）',
     );
-    expect(html).toContain('href="/docs/client/#linux-macos"');
-    expect(html).toContain('href="/docs/windows/"');
+    expect(html).toContain('href="/ja/docs/client/#linux-macos"');
+    expect(html).toContain('href="/ja/docs/windows/"');
     expect(html).not.toContain('class="eyebrow"');
     expect(html).not.toContain("DPAPI");
     expect(downloadsPage("1.2.3", "client.zip")).not.toContain(
@@ -179,7 +184,7 @@ describe("concise public UI", () => {
     });
     expect(html).toContain("レンダリング処理：停止または確認不可");
     expect(html).toContain('datetime="2026-10-19T00:00:00.000Z"');
-    expect(html).toContain('href="/docs/troubleshooting/"');
+    expect(html).toContain('href="/ja/docs/troubleshooting/"');
     expect(html).not.toContain("APIキーを確認");
     expect(html).not.toContain('class="eyebrow"');
   });

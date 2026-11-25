@@ -1,8 +1,16 @@
 import { constants } from "node:fs";
-import { chmod, mkdir, open, realpath, rm } from "node:fs/promises";
+import {
+  chmod,
+  link,
+  lstat,
+  mkdir,
+  open,
+  realpath,
+  rm,
+} from "node:fs/promises";
 import { dirname, extname, resolve, sep } from "node:path";
 import { pipeline } from "node:stream/promises";
-import { Transform } from "node:stream";
+import { Transform, type Readable } from "node:stream";
 import yauzl, { type Entry, type ZipFile } from "yauzl";
 import { AppError } from "@latex-renderer/shared";
 export {
@@ -202,6 +210,158 @@ export async function validateAndExtract(
   } finally {
     zip.close();
     await zipHandle.close();
+  }
+}
+
+/** Read a bounded single file from an already validated immutable Source. */
+export async function readValidatedSourceFile(
+  archivePath: string,
+  sourcePath: string,
+  limits: ZipLimits,
+): Promise<Buffer> {
+  return withValidatedSourceFile(
+    archivePath,
+    sourcePath,
+    limits,
+    async (stream, size) => {
+      const result = Buffer.alloc(size);
+      let offset = 0;
+      for await (const chunk of stream) {
+        const bytes = chunk as Buffer;
+        if (bytes.length > result.length - offset)
+          throw new AppError(
+            "ZIP_SIZE_MISMATCH",
+            "Source file size differs from its archive",
+            422,
+          );
+        bytes.copy(result, offset);
+        offset += bytes.length;
+      }
+      if (offset !== result.length)
+        throw new AppError(
+          "ZIP_SIZE_MISMATCH",
+          "Source file size differs from its archive",
+          422,
+        );
+      return result;
+    },
+  );
+}
+
+export async function withValidatedSourceFile<T>(
+  archivePath: string,
+  sourcePath: string,
+  limits: ZipLimits,
+  read: (stream: Readable, size: number) => Promise<T>,
+): Promise<T> {
+  const path = validateSourceFilePath(sourcePath, limits);
+  const zip = await openZip(archivePath);
+  try {
+    for (let count = 0; count < limits.maxEntries; count++) {
+      const entry = await nextEntry(zip);
+      if (entry === null) break;
+      if (normalizeEntry(entry.fileName, limits) !== path) continue;
+      assertEntryType(entry, path);
+      if (entry.uncompressedSize > limits.maxFileBytes)
+        throw new AppError(
+          "ZIP_FILE_TOO_LARGE",
+          "Source file exceeds the file limit",
+          422,
+        );
+      const stream = await openEntry(zip, entry);
+      try {
+        return await read(stream, entry.uncompressedSize);
+      } finally {
+        stream.destroy();
+      }
+    }
+    throw new AppError(
+      "SOURCE_FILE_NOT_FOUND",
+      "Source file does not exist",
+      404,
+    );
+  } finally {
+    zip.close();
+  }
+}
+
+/** Copy selected files in one archive scan into a fresh worker-owned tree. */
+export async function extractValidatedSourceFiles(
+  archivePath: string,
+  destination: string,
+  selections: readonly { path: string; sourcePath: string }[],
+  limits: ZipLimits,
+): Promise<number> {
+  const root = await realpath(destination),
+    paths = new Map<string, string[]>();
+  for (const selection of selections) {
+    const sourcePath = validateSourceFilePath(selection.sourcePath, limits),
+      path = validateSourceFilePath(selection.path, limits);
+    const files = paths.get(sourcePath) ?? [];
+    files.push(resolve(root, path));
+    paths.set(sourcePath, files);
+  }
+  let bytes = 0;
+  const zip = await openZip(archivePath);
+  try {
+    for (let count = 0; paths.size > 0 && count < limits.maxEntries; count++) {
+      const entry = await nextEntry(zip);
+      if (entry === null) break;
+      const name = normalizeEntry(entry.fileName, limits);
+      const targets = paths.get(name);
+      if (targets === undefined) continue;
+      assertEntryType(entry, name);
+      if (entry.uncompressedSize > limits.maxFileBytes)
+        throw new AppError(
+          "ZIP_FILE_TOO_LARGE",
+          "Source file exceeds the file limit",
+          422,
+        );
+      bytes += entry.uncompressedSize * targets.length;
+      if (bytes > limits.maxExtractedBytes)
+        throw new AppError(
+          "ZIP_TOO_LARGE",
+          "Draft exceeds the extracted size limit",
+          422,
+        );
+      const [first, ...aliases] = targets;
+      if (first === undefined) throw new Error("Draft file has no output path");
+      await mkdir(dirname(first), { recursive: true, mode: 0o770 });
+      const input = await openEntry(zip, entry);
+      try {
+        const output = await open(
+          first,
+          constants.O_WRONLY |
+            constants.O_CREAT |
+            constants.O_EXCL |
+            constants.O_NOFOLLOW,
+          0o660,
+        );
+        await pipeline(input, output.createWriteStream());
+      } finally {
+        input.destroy();
+      }
+      if ((await lstat(first)).size !== entry.uncompressedSize)
+        throw new AppError(
+          "ZIP_SIZE_MISMATCH",
+          "Source file size differs from its archive",
+          422,
+        );
+      for (const alias of aliases) {
+        await mkdir(dirname(alias), { recursive: true, mode: 0o770 });
+        await link(first, alias);
+      }
+      paths.delete(name);
+    }
+    if (paths.size !== 0)
+      throw new AppError(
+        "SOURCE_FILE_NOT_FOUND",
+        "A file is missing from the Draft Source",
+        422,
+      );
+    return bytes;
+  } finally {
+    zip.close();
   }
 }
 
@@ -443,7 +603,7 @@ function nextEntry(zip: ZipFile): Promise<Entry | null> {
   });
 }
 
-function openEntry(zip: ZipFile, entry: Entry): Promise<NodeJS.ReadableStream> {
+function openEntry(zip: ZipFile, entry: Entry): Promise<Readable> {
   return new Promise((resolvePromise, reject) => {
     zip.openReadStream(entry, (error, stream) => {
       if (error !== null)

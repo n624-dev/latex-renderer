@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   createRenderTicketRequestSchema,
   createSourceTicketRequestSchema,
+  renderEngineSchema,
   renderOutputsSchema,
 } from "@latex-renderer/contracts";
 import { ProjectOperations } from "@latex-renderer/database";
@@ -125,6 +126,7 @@ export function createInternalV1Router(deps: InternalApiDependencies): Hono {
             displayName,
             originalFilename,
             outputs: renderOutputsSchema,
+            engine: renderEngineSchema.optional(),
           })
           .strict(),
         await c.req.json<unknown>(),
@@ -136,6 +138,7 @@ export function createInternalV1Router(deps: InternalApiDependencies): Hono {
         displayName: input.displayName,
         originalFilename: input.originalFilename,
         outputs: input.outputs,
+        engine: input.engine,
       });
     return c.json(
       {
@@ -145,6 +148,7 @@ export function createInternalV1Router(deps: InternalApiDependencies): Hono {
         revisionNumber: revision.revision_number,
         entrypoint: revision.entrypoint,
         outputs: projects.renderOutputs(revision),
+        engine: revision.engine,
       },
       201,
     );
@@ -183,6 +187,7 @@ export function createInternalV1Router(deps: InternalApiDependencies): Hono {
         sourceId: selected.revision.source_id,
         entrypoint: selected.revision.entrypoint,
         outputs: input.outputs ?? projects.renderOutputs(selected.revision),
+        engine: selected.revision.engine,
         project: { projectId: id, revisionId: revision },
       },
       key,

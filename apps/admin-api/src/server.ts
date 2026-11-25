@@ -90,7 +90,7 @@ const app = createAdminApp({
   rendererVersion: required("RENDERER_IMAGE"),
   ...(imageManager ? { imageManager } : {}),
   ...(updateManager ? { updateManager } : {}),
-  maxUploadBytes: loadResourceLimits(process.env).maxUploadBytes,
+  ...loadResourceLimits(process.env),
   maxOutputBytes: positiveBytesEnvironment(
     process.env,
     "MAX_OUTPUT_BYTES",

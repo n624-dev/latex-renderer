@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import type { Browser, Page } from "playwright";
 import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
 import { launchTestBrowser, newTestPage } from "../helpers/browser-engine.js";
+import { routeWebFonts } from "../helpers/browser-web-fonts.js";
 import { adminRenderPage } from "../../apps/admin-web/src/templates-admin.js";
 import { styles } from "../../apps/admin-web/src/assets/styles.js";
 import { siteScript } from "../../apps/admin-web/src/assets/site-script.js";
@@ -138,6 +139,7 @@ it.each([true, false])(
       errors.push(`Unexpected fixture request ${url.pathname}`);
       return route.abort();
     });
+    await routeWebFonts(page, origin);
     await page.goto(`${origin}/admin/render`);
     const document = Buffer.from(
       "\\documentclass{article}\\begin{document}Fixture\\end{document}",

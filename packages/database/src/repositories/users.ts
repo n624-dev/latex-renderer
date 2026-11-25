@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import type { DisplayLocale } from "@latex-renderer/shared/locale";
 import {
   decodePageCursor,
   encodePageCursor,
@@ -102,6 +103,19 @@ export class UsersRepository {
         .prepare("SELECT 1 FROM users WHERE id=? AND status='active'")
         .get(id) !== undefined
     );
+  }
+
+  displayLocale(id: string): DisplayLocale | null {
+    const row = this.db.prepare(
+      "SELECT display_locale FROM users WHERE id=? AND status='active'",
+    ).get(id) as { display_locale: DisplayLocale | null } | undefined;
+    return row?.display_locale ?? null;
+  }
+
+  setDisplayLocale(id: string, locale: DisplayLocale): boolean {
+    return this.db.prepare(
+      "UPDATE users SET display_locale=? WHERE id=? AND status='active'",
+    ).run(locale, id).changes === 1;
   }
 
   countActiveOwners(): number {

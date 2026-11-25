@@ -1,3 +1,4 @@
+import { terminalSetupText as setupText } from "./setup-messages.mjs";
 import {
   createServerSetupSession,
   serverSetupInitialOwnerPlan,
@@ -15,25 +16,25 @@ export async function runServerInitialCui(host, io) {
   try {
     const state = await session.status();
     io.print(
-      "Prepared infrastructure only. No OS, account, Docker or disk changes. Select automatic LAN HTTPS, custom HTTPS, or existing Cloudflare ingress.",
+      setupText("preparedInfrastructureOnlyNoOsAccount"),
     );
     if (
       (await io.ask(
-        "Type RECOVER to recover an interrupted setup; Enter to configure: ",
+        setupText("typeRecoverToRecoverAnInterrupted") + " ",
       )) === "RECOVER"
     ) {
       const result = await session.recover();
       if (result.phase === "complete") {
-        io.print("Recovered and verified.");
+        io.print(setupText("recoveredAndVerified"));
         return { applied: true };
       }
       io.print(
-        "No owner was committed. Review the same settings and resubmit credentials.",
+        setupText("noOwnerWasCommittedReviewThe"),
       );
     }
     io.print(JSON.stringify(state.review, null, 2));
     const entry = await io.ask(
-      "Complete format-4 JSON, or type LAN for guided LAN HTTPS: ",
+      setupText("completeFormat4JsonOrType") + " ",
     );
     const review =
       entry.trim().toUpperCase() === "LAN"
@@ -47,42 +48,42 @@ export async function runServerInitialCui(host, io) {
     const ingressOnly = host.scope === "ingress-prepared-host";
     const owner = ingressOnly
       ? {}
-      : { displayName: await io.ask("Initial owner display name: ") };
+      : { displayName: await io.ask(setupText("initialOwnerDisplayName") + " ") };
     if (!ingressOnly) {
       const email = await io.ask(
-        "Owner email (optional; never used to link identity): ",
+        setupText("ownerEmailOptionalNeverUsedTo") + " ",
       );
       if (email) owner.email = email;
       const plan = serverSetupInitialOwnerPlan(
         checked.review.deployment.authentication,
       );
       if (plan.bootstrapMethod === "password") {
-        owner.loginName = await io.ask("Owner login name: ");
-        owner.password = await io.askSecret("Owner password (hidden): ");
+        owner.loginName = await io.ask(setupText("ownerLoginName") + " ");
+        owner.password = await io.askSecret(setupText("ownerPasswordHidden") + " ");
         if (
           owner.password !==
-          (await io.askSecret("Confirm owner password (hidden): "))
+          (await io.askSecret(setupText("confirmOwnerPasswordHidden") + " "))
         )
           throw new Error("Password confirmation differs");
       } else
-        owner.subject = await io.ask("Exact provider subject (not email): ");
+        owner.subject = await io.ask(setupText("exactProviderSubjectNotEmail") + " ");
     }
     const credentials = ingressOnly ? {} : { owner };
     if (!ingressOnly)
       credentials.deploymentUser = await io.ask(
-        "Existing non-root deployment user for Updater builds: ",
+        setupText("existingNonRootDeploymentUserFor") + " ",
       );
     const auth = checked.review.deployment.authentication.authentication;
     if (!ingressOnly && auth.backend === "native" && auth.oidcEnabled)
       credentials.oidcClientSecret = await io.askSecret(
-        "OIDC client secret (hidden): ",
+        setupText("oidcClientSecretHidden") + " ",
       );
     if (
       checked.review.deployment.ingress.mode === "standalone" &&
       checked.review.deployment.ingress.tlsProvider === "automatic"
     ) {
       const invitation = await io.askSecret(
-        "Authority invitation (hidden, optional for open registration): ",
+        setupText("authorityInvitationHiddenOptionalForOpen") + " ",
       );
       if (invitation) credentials.lanInvitation = invitation;
     }
@@ -92,11 +93,11 @@ export async function runServerInitialCui(host, io) {
     ) {
       credentials.tls = {
         certificate: await io.readFile(
-          await io.ask("Certificate PEM file: "),
+          await io.ask(setupText("certificatePemFile") + " "),
           512 * 1024,
         ),
         privateKey: await io.readFile(
-          await io.ask("Private key PEM file (never displayed): "),
+          await io.ask(setupText("privateKeyPemFileNeverDisplayed") + " "),
           16 * 1024,
         ),
       };
@@ -104,7 +105,7 @@ export async function runServerInitialCui(host, io) {
     io.print(JSON.stringify(checked.review, null, 2));
     if (
       (await io.ask(
-        "Type APPLY to create the owner and activate HTTPS/services: ",
+        setupText("typeApplyToCreateTheOwner") + " ",
       )) !== "APPLY"
     )
       return { applied: false };
@@ -113,7 +114,7 @@ export async function runServerInitialCui(host, io) {
     } catch {
       if (
         (await io.ask(
-          "Setup failed. Type RECOVER to reconcile private state now: ",
+          setupText("setupFailedTypeRecoverToReconcile") + " ",
         )) !== "RECOVER"
       )
         throw new Error("Recovery required");
@@ -127,7 +128,7 @@ export async function runServerInitialCui(host, io) {
       credentials.lanInvitation = undefined;
     }
     io.print(
-      "Setup completed with service and HTTPS health verified. Verify owner login and a representative render.",
+      setupText("setupCompletedWithServiceAndHttps"),
     );
     return { applied: true };
   } finally {
@@ -144,19 +145,19 @@ async function guidedLanReview(current, initial, io) {
     throw new Error(
       "No eligible private LAN interface is assigned; configure the host interface first",
     );
-  io.print("LAN interfaces:");
+  io.print(setupText("lanInterfaces"));
   choices.forEach((entry, index) =>
     io.print(
       `${index + 1}: ${entry.interfaceName} ${entry.address} ${entry.network}`,
     ),
   );
-  const selected = Number(await io.ask("Interface number: "));
+  const selected = Number(await io.ask(setupText("interfaceNumber") + " "));
   const entry = choices[selected - 1];
   if (!Number.isSafeInteger(selected) || !entry)
     throw new Error("Choose an explicit LAN interface");
   const source =
     (
-      await io.ask("Certificate authority: 1 shared / 2 self-hosted [1]: ")
+      await io.ask(setupText("certificateAuthority1Shared2Self") + " ")
     ).trim() || "1";
   if (!["1", "2"].includes(source))
     throw new Error("Choose shared or self-hosted authority");
@@ -164,24 +165,24 @@ async function guidedLanReview(current, initial, io) {
   const serverOrigin =
     source === "1"
       ? common.serverOrigin
-      : await io.ask("Authority HTTPS origin: ");
+      : await io.ask(setupText("authorityHttpsOrigin") + " ");
   const lanDomain =
     source === "1"
       ? common.lanDomain
-      : await io.ask("Delegated LAN DNS domain: ");
+      : await io.ask(setupText("delegatedLanDnsDomain") + " ");
   const issuerId =
     source === "1"
       ? common.issuerId
-      : await io.ask("Authority ACME issuer ID: ");
+      : await io.ask(setupText("authorityAcmeIssuerId") + " ");
   const mode =
-    (await io.ask("TLS: 1 local certificate / 2 Keyless [1]: ")).trim() || "1";
+    (await io.ask(setupText("tls1LocalCertificate2Keyless") + " ")).trim() || "1";
   if (!["1", "2"].includes(mode)) throw new Error("Choose a TLS provider");
   const fallback =
     mode === "2" ||
     (await io.ask(
-      "Use Keyless while no local certificate is usable? yes/no [no]: ",
+      setupText("useKeylessWhileNoLocalCertificate") + " ",
     )) === "yes";
-  const port = Number((await io.ask("HTTPS port [443]: ")).trim() || "443");
+  const port = Number((await io.ask(setupText("httpsPort443") + " ")).trim() || "443");
   const provider = validateLanHttpsProvider({
     format: 1,
     provider: mode === "1" ? "akebi-local-acme" : "akebi-keyless",
@@ -194,7 +195,7 @@ async function guidedLanReview(current, initial, io) {
   const termsAccepted =
     mode === "1" &&
     (await io.ask(
-      "Confirm the selected CA terms. Type AGREE to enable account registration: ",
+      setupText("confirmTheSelectedCaTermsType") + " ",
     )) === "AGREE";
   review.deployment.ingress = {
     format: 1,
@@ -224,14 +225,14 @@ async function guidedLanReview(current, initial, io) {
     };
     if (method !== "password")
       authentication.oidc = {
-        issuer: await io.ask("OIDC issuer HTTPS URL: "),
-        clientId: await io.ask("OIDC client ID: "),
+        issuer: await io.ask(setupText("oidcIssuerHttpsUrl") + " "),
+        clientId: await io.ask(setupText("oidcClientId") + " "),
         allowedAlgorithms: ["RS256", "ES256"],
         displayName: "OIDC",
       };
     review.deployment.authentication.authentication = authentication;
     const image = await io.ask(
-      `Prepared immutable Runtime digest [${review.runtime.rendererImage}]: `,
+      setupText("preparedImmutableRuntimeDigestValue", { value: review.runtime.rendererImage }) + " ",
     );
     if (image) review.runtime.rendererImage = image;
   }

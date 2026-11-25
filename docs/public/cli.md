@@ -90,6 +90,35 @@ n624-latex chapters/report.tex -o build/report.pdf
 - `-o` を省略すると、実行したフォルダに入力ファイルと同名の PDF（例：`main.pdf`）が出力されます。
 - LaTeX エラーが発生した場合は、特定できたファイル名・行番号・ジョブ ID が表示されます。変換や取得に失敗した場合でも、前回正常に保存された PDF は消えずに保持されます。
 
+#### LaTeX のエンジンを選ぶ
+
+XeLaTeX を使うときは、ファイル名の前にエンジン名を書きます。
+
+```sh
+n624-latex xelatex main.tex
+```
+
+エンジンを省略した場合は、文書冒頭の `% !TeX program = xelatex` または
+`% !TEX TS-program = xelatex` を参照します。文書に指定がなければ、実行する
+プロジェクトの直下にある `.n624-latex.json` を参照します。このファイルを
+Git で共有すると、別の端末でも同じエンジンを選べます。
+
+```json
+{"engine":"xelatex"}
+```
+
+指定がなければ LuaLaTeX を使います。pLaTeX と upLaTeX は、接続先の
+Runtime に日本語コレクションがある場合に使えます。
+
+| エンジン | 文書を移すときの確認 |
+| --- | --- |
+| LuaLaTeX | `fontspec` や LuaTeX-ja を使う文書の設定を確認します。 |
+| pdfLaTeX | `fontspec` は使えません。pdfLaTeX 用のフォント設定を使います。 |
+| XeLaTeX | `fontspec` を使えます。LuaTeX 専用のパッケージがないか確認します。 |
+| pLaTeX / upLaTeX | エンジンに対応した日本語クラスを使います。`jsarticle` を upLaTeX で使う場合はクラスに `uplatex` を指定します。 |
+
+書誌処理は文書のパッケージと設定に従います。`.bib` や独自の `.bst` は文書と一緒に送ります。pLaTeX と upLaTeX の BibTeX 文書では、対応する pBibTeX と upBibTeX が使われます。PDF・SVG・SVG の配置は、接続先の[レンダリング環境](/app/environment/)でそれぞれ確認できます。
+
 ### ZIP・複数の出力を指定する
 
 ログ・プレビュー・SVG を含む成果物一式を取得する場合や、ZIP ファイルを指定する場合は `render` サブコマンドを使います。

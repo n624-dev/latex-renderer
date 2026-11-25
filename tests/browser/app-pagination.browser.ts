@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import type { Browser, Page } from "playwright";
 import { launchTestBrowser, newTestPage } from "../helpers/browser-engine.js";
+import { routeWebFonts } from "../helpers/browser-web-fonts.js";
 import {
   afterAll,
   afterEach,
@@ -222,6 +223,7 @@ async function fixture(kind: Kind) {
     errors.push(`unexpected path: ${url.pathname}`);
     await route.abort();
   });
+  await routeWebFonts(page, origin);
   await page.goto(`${origin}${pageFor(kind)}`);
   return { page, errors, cursors, releaseSecond };
 }

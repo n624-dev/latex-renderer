@@ -4,6 +4,10 @@
     "noEmit": true,
     "paths": {
       "@latex-renderer/shared": ["./packages/shared/src/index.ts"],
+      "@latex-renderer/shared/locale": ["./packages/shared/src/locale.ts"],
+      "@latex-renderer/shared/diagnostic-locale": [
+        "./packages/shared/src/diagnostic-locale.ts"
+      ],
       "@latex-renderer/contracts": ["./packages/contracts/src/index.ts"],
       "@latex-renderer/database": ["./packages/database/src/index.ts"],
       "@latex-renderer/auth": ["./packages/auth/src/index.ts"],

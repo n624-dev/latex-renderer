@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import type { Browser, Route } from "playwright";
 import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
 import { launchTestBrowser, newTestPage } from "../helpers/browser-engine.js";
+import { routeWebFonts } from "../helpers/browser-web-fonts.js";
 import { adminRenderPage } from "../../apps/admin-web/src/templates-admin.js";
 import { siteScript } from "../../apps/admin-web/src/assets/site-script.js";
 import { styles } from "../../apps/admin-web/src/assets/styles.js";
@@ -137,6 +138,7 @@ async function fixture(
     errors.push(`Unexpected request: ${url.pathname}`);
     return route.abort();
   });
+  await routeWebFonts(page, origin);
   await page.goto(`${origin}/admin/render`);
   return { page, errors };
 }

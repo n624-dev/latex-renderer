@@ -91,6 +91,9 @@ export interface BrowserJobStatus {
   artifacts: BrowserJobArtifact[];
   previews: BrowserJobArtifact[];
   previewPageCount?: number;
+  engine?: string;
+  runtimeDigest?: string;
+  previousRuntimeDigest?: string;
   sourceId?: string | null;
   entrypoint?: string;
   stages?: import("@latex-renderer/contracts").JobStages;
@@ -506,6 +509,9 @@ export function parseJobStatus(
       ? {}
       : { previewPageCount: record.previewPageCount }),
     ...(stages === undefined ? {} : { stages }),
+    ...(typeof record.engine === "string" ? { engine: record.engine } : {}),
+    ...(typeof record.runtimeDigest === "string" && /^sha256:[a-f0-9]{64}$/.test(record.runtimeDigest) ? { runtimeDigest: record.runtimeDigest } : {}),
+    ...(typeof record.previousRuntimeDigest === "string" && /^sha256:[a-f0-9]{64}$/.test(record.previousRuntimeDigest) ? { previousRuntimeDigest: record.previousRuntimeDigest } : {}),
   };
 }
 

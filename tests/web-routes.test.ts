@@ -23,6 +23,11 @@ describe("unified web", () => {
       "/docs/web/",
       "/docs/windows/",
       "/docs/cli/",
+      "/ja/docs/",
+      "/ja/docs/cli/",
+      "/en/docs/",
+      "/en/docs/web/",
+      "/en/assets/docs-search.json",
       "/docs/integrations/",
       "/docs/mcp/",
       "/docs/projects/",
@@ -42,12 +47,38 @@ describe("unified web", () => {
     ])
       expect((await app.request(path)).status).toBe(200);
   });
+  it("exposes deployment check markers independently of the display language", async () => {
+    const createApp = (rendering: boolean) =>
+      createWebApp(dist, () => Promise.resolve({
+        api: true,
+        rendering,
+        downloads: true,
+        checkedAt: "2026-11-25T00:00:00Z",
+      }));
+    const ready = createApp(true), unavailable = createApp(false);
+    for (const locale of ["en", "ja"]) {
+      const init = { headers: { "Accept-Language": locale } };
+      const home = await (await ready.request("/", init)).text();
+      expect(home).toContain(`lang="${locale}"`);
+      expect(home).toContain('data-public-page="home"');
+      expect(await (await ready.request("/downloads/", init)).text()).toContain(
+        'href="/downloads/client/latest.zip"',
+      );
+      const online = await (await ready.request("/status/", init)).text();
+      const offline = await (await unavailable.request("/status/", init)).text();
+      expect(online).toContain('data-rendering-status="online"');
+      expect(offline).toContain('data-rendering-status="offline"');
+      expect(offline).not.toContain('data-rendering-status="online"');
+    }
+  });
   it("serves user rendering separately from administrator operations", async () => {
     const app = createWebApp(dist),
       legacy = await app.request("/render/", { redirect: "manual" });
     expect(legacy.status).toBe(308);
     expect(legacy.headers.get("location")).toBe("/app/");
-    const renderPage = await (await app.request("/app/")).text();
+    const renderPage = await (await app.request("/app/", {
+      headers: { "Accept-Language": "ja" },
+    })).text();
     expect(renderPage).toContain("LaTeXをPDFに変換");
     expect(renderPage).toContain("TeX / ZIPをここにドロップ");
     expect(renderPage).toContain('id="app-project-select"');
@@ -64,6 +95,40 @@ describe("unified web", () => {
     expect((await app.request("/app/assets/app.js")).status).toBe(200);
     expect((await app.request("/admin/assets/render.js")).status).toBe(200);
     expect((await app.request("/assets/render.js")).status).toBe(404);
+  });
+  it("uses explicit locale, device preference, browser locale and English fallback in order", async () => {
+    const app = createWebApp(dist);
+    const headers = {
+      Cookie: "latex_renderer_locale=fr",
+      "Accept-Language": "ja,en;q=0.5",
+    };
+    const explicit = await app.request("/login/?locale=de&return_to=%2Fapp%2F", { headers });
+    expect(explicit.headers.get("set-cookie")).toContain("latex_renderer_locale=de");
+    const login = await explicit.text();
+    expect(login).toContain('<html lang="de">');
+    expect(login).toContain('href="?locale=fr&amp;return_to=%2Fapp%2F"');
+    expect(await (await app.request("/app/", { headers })).text()).toContain('<html lang="fr">');
+    expect(await (await app.request("/", {
+      headers: { "Accept-Language": "zh-Hant, ko;q=0.8" },
+    })).text()).toContain('<html lang="ko">');
+    expect(await (await app.request("/", {
+      headers: { "Accept-Language": "ar,zh-Hant;q=0.9" },
+    })).text()).toContain('<html lang="en">');
+  });
+  it("serves localized guides and search without changing legacy routes or anchors", async () => {
+    const app = createWebApp(dist);
+    const french = await (await app.request("/fr/docs/web/")).text();
+    expect(french).toContain('<html lang="fr">');
+    expect(french).toContain('href="/en/docs/web/"');
+    expect(french).toContain('data-index-url="/fr/assets/docs-search.json"');
+    const japanese = await (await app.request("/docs/web/", {
+      headers: { "Accept-Language": "fr" },
+    })).text();
+    expect(japanese).toContain('<html lang="ja">');
+    expect((await app.request("/fr/docs/web", { redirect: "manual" })).headers.get("location"))
+      .toBe("/fr/docs/web/");
+    expect(await (await app.request("/en/docs/web/")).text()).toContain('id="edit-a-project"');
+    expect(await (await app.request("/fr/assets/docs-search.json")).text()).toContain('"url":"/fr/docs/web/"');
   });
   it("serves the login controller without pre-rendering inactive methods", async () => {
     const app = createWebApp(dist),
@@ -91,7 +156,7 @@ describe("unified web", () => {
     const app = createWebApp(dist);
     const page = await app.request("/admin/");
     const html = await page.text();
-    expect(html).toContain('src="/admin/assets/admin.js"');
+    expect(html).toContain('src="/admin/assets/admin.js?locale=en"');
     expect(html).toContain('data-cfasync="false"');
     expect((await app.request("/admin/assets/admin.js")).status).toBe(200);
     expect((await app.request("/admin/assets/site.js")).status).toBe(200);

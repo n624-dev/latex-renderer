@@ -156,3 +156,39 @@ function archiveListing(args) {
     );
   });
 }
+export function projectSourceRows(database) {
+  const hasDrafts =
+    database
+      .prepare(
+        "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='project_draft_files'",
+      )
+      .get() !== undefined;
+  const hasPreviewInputs =
+    database
+      .prepare(
+        "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='job_draft_input_files'",
+      )
+      .get() !== undefined;
+  return database
+    .prepare(
+      `SELECT s.id,s.storage_key,s.size,s.sha256 FROM sources s WHERE s.id IN (
+       SELECT r.source_id FROM project_revisions r JOIN projects p ON p.id=r.project_id
+       WHERE p.deleted_at IS NULL
+       ${
+         hasDrafts
+           ? `UNION
+       SELECT f.source_id FROM project_draft_files f JOIN projects p ON p.id=f.project_id
+       WHERE p.deleted_at IS NULL`
+           : ""
+       }
+       ${
+         hasPreviewInputs
+           ? `UNION
+       SELECT f.source_id FROM job_draft_input_files f JOIN jobs j ON j.id=f.job_id
+       WHERE j.status IN ('queued','validating','running') OR j.lease_owner IS NOT NULL`
+           : ""
+       }
+     ) ORDER BY s.id`,
+    )
+    .all();
+}

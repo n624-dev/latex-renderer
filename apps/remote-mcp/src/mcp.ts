@@ -1,3 +1,5 @@
+import type { DisplayLocale } from "@latex-renderer/shared/locale";
+import { mcpText } from "./mcp-messages.js";
 import {
   McpServer,
   ResourceTemplate,
@@ -19,6 +21,7 @@ import {
   projectIdSchema,
   projectRevisionIdSchema,
   projectRevisionJobsPageSchema,
+  renderEngineSchema,
   renderOutputsSchema,
   jobStagesSchema,
 } from "@latex-renderer/contracts";
@@ -99,7 +102,15 @@ const jobSchema = z
   .object({
     id: jobId,
     status: jobStatus,
-    engine: z.literal("lualatex"),
+    engine: renderEngineSchema,
+    runtimeDigest: z
+      .string()
+      .regex(/^sha256:[a-f0-9]{64}$/)
+      .nullable(),
+    previousRuntimeDigest: z
+      .string()
+      .regex(/^sha256:[a-f0-9]{64}$/)
+      .optional(),
     rendererVersion: z.string(),
     sourceId: z.string().nullable(),
     projectRevisionId: projectRevisionIdSchema.nullable(),
@@ -136,14 +147,19 @@ const MAX_INLINE_RESOURCE_BASE64_BYTES = Math.ceil(
 // encoding. Keep the transport bounded while allowing ordinary direct uploads.
 const MAX_MCP_REQUEST_BODY_BYTES = 8 * 1024 * 1024;
 
+type LocalizedMcpIdentity = RemoteMcpIdentity & { locale: DisplayLocale };
+
 export function createRemoteMcpHandler(
   renders: RemoteRenderService,
   version: string,
+  userLocale: (userId: string) => DisplayLocale = () => "en",
 ): McpHttpHandler {
   return createMcpHandler(
     (context) => {
-      const identity = identityFromAuth(context.authInfo),
-        server = new McpServer(
+      const authenticated = identityFromAuth(context.authInfo);
+      const locale = userLocale(authenticated.userId);
+      const identity: LocalizedMcpIdentity = { ...authenticated, locale };
+      const server = new McpServer(
           { name: "latex-renderer-remote", version },
           {
             instructions:
@@ -154,8 +170,8 @@ export function createRemoteMcpHandler(
         "remote-mcp-guide",
         "latex-renderer://remote-mcp/guide",
         {
-          title: "LaTeX Renderer Remote MCP guide",
-          description: "Safe Remote MCP Source and Job workflow",
+          title: mcpText(locale, "latexRendererRemoteMcpGuide"),
+          description: mcpText(locale, "safeRemoteMcpSourceAndJob"),
           mimeType: "text/plain",
         },
         (uri) =>
@@ -174,9 +190,9 @@ export function createRemoteMcpHandler(
       server.registerTool(
         "get_profile",
         {
-          title: "Get connected profile",
+          title: mcpText(locale, "getConnectedProfile"),
           description:
-            "Return the stable opaque identity of the authenticated account.",
+            mcpText(locale, "returnTheStableOpaqueIdentityOf"),
           inputSchema: z.object({}).strict(),
           outputSchema: z.object({ id: z.string().min(1) }).strict(),
           annotations: {
@@ -199,9 +215,9 @@ export function createRemoteMcpHandler(
         "create_source",
         {
           _meta: oauthToolMeta("mcp:render"),
-          title: "Create a multi-file LaTeX Source",
+          title: mcpText(locale, "createAMultiFileLatexSource"),
           description:
-            "Create an immutable Source from small text or base64 files. Use chunk upload for archives larger than 4 MiB.",
+            mcpText(locale, "createAnImmutableSourceFromSmall"),
           inputSchema: z
             .object({ files: z.array(sourceFileSchema).min(1).max(100) })
             .strict(),
@@ -225,8 +241,8 @@ export function createRemoteMcpHandler(
         "begin_source_upload",
         {
           _meta: oauthToolMeta("mcp:render"),
-          title: "Begin a chunked Source ZIP upload",
-          description: `Reserve an owner-scoped upload for a validated ZIP up to ${renders.maxSourceUploadBytes} bytes. Uploads expire after 10 minutes.`,
+          title: mcpText(locale, "beginAChunkedSourceZipUpload"),
+          description: mcpText(locale, "reserveAnOwnerScopedUploadFor", { value: renders.maxSourceUploadBytes }),
           inputSchema: z
             .object({
               expectedBytes: z
@@ -261,9 +277,9 @@ export function createRemoteMcpHandler(
         "upload_source_chunk",
         {
           _meta: oauthToolMeta("mcp:render"),
-          title: "Append a Source ZIP chunk",
+          title: mcpText(locale, "appendASourceZipChunk"),
           description:
-            "Append one sequential base64 chunk of at most 512 KiB to an active owner-scoped upload.",
+            mcpText(locale, "appendOneSequentialBase64ChunkOf"),
           inputSchema: z
             .object({
               uploadId: sourceId,
@@ -296,9 +312,9 @@ export function createRemoteMcpHandler(
         "finalize_source_upload",
         {
           _meta: oauthToolMeta("mcp:render"),
-          title: "Validate and finalize a Source ZIP upload",
+          title: mcpText(locale, "validateAndFinalizeASourceZip"),
           description:
-            "Verify size and SHA-256, apply existing ZIP security validation, and publish an immutable Source.",
+            mcpText(locale, "verifySizeAndSha256Apply"),
           inputSchema: z.object({ uploadId: sourceId }).strict(),
           outputSchema: operationOutput(
             "finalize_source_upload",
@@ -326,9 +342,9 @@ export function createRemoteMcpHandler(
         "update_source_file",
         {
           _meta: oauthToolMeta("mcp:render"),
-          title: "Create a Source revision with one updated file",
+          title: mcpText(locale, "createASourceRevisionWithOne"),
           description:
-            "Copy an owned immutable Source into a new revision and replace or add one text/base64 file.",
+            mcpText(locale, "copyAnOwnedImmutableSourceInto"),
           inputSchema: z.object({ sourceId, file: sourceFileSchema }).strict(),
           outputSchema: operationOutput(
             "update_source_file",
@@ -350,9 +366,9 @@ export function createRemoteMcpHandler(
         "delete_source_file",
         {
           _meta: oauthToolMeta("mcp:render"),
-          title: "Create a Source revision without one file",
+          title: mcpText(locale, "createASourceRevisionWithoutOne"),
           description:
-            "Copy an owned immutable Source into a new revision and remove one file.",
+            mcpText(locale, "copyAnOwnedImmutableSourceInto2"),
           inputSchema: z
             .object({ sourceId, path: z.string().min(1).max(2048) })
             .strict(),
@@ -376,9 +392,9 @@ export function createRemoteMcpHandler(
         "create_source_ref",
         {
           _meta: oauthToolMeta("mcp:render"),
-          title: "Create a short-lived Source handoff reference",
+          title: mcpText(locale, "createAShortLivedSourceHandoff"),
           description:
-            "Create an owner-scoped 15-minute handoff reference for an owned ready Source.",
+            mcpText(locale, "createAnOwnerScoped15Minute"),
           inputSchema: z.object({ sourceId }).strict(),
           outputSchema: operationOutput(
             "create_source_ref",
@@ -400,9 +416,9 @@ export function createRemoteMcpHandler(
         "create_render",
         {
           _meta: oauthToolMeta("mcp:render"),
-          title: "Create remote LaTeX render",
+          title: mcpText(locale, "createRemoteLatexRender"),
           description:
-            "Create one render from small inline LaTeX, an owned sourceId, or an owner-scoped sourceRef. Local filesystem paths are not accepted.",
+            mcpText(locale, "createOneRenderFromSmallInline"),
           inputSchema: z
             .object({
               inlineSource: z.string().min(1).max(65_536).optional(),
@@ -412,6 +428,7 @@ export function createRemoteMcpHandler(
                 .regex(/^source_ref_[a-f0-9]{32}$/)
                 .optional(),
               entrypoint: z.string().min(1).max(2048).default("main.tex"),
+              engine: renderEngineSchema.optional(),
               outputs: z
                 .array(z.enum(["pdf", "svg"]))
                 .min(1)
@@ -446,17 +463,20 @@ export function createRemoteMcpHandler(
                     inlineSource: input.inlineSource,
                     entrypoint: input.entrypoint,
                     outputs: input.outputs,
+                    engine: input.engine,
                   }
                 : input.sourceId !== undefined
                   ? {
                       sourceId: input.sourceId,
                       entrypoint: input.entrypoint,
                       outputs: input.outputs,
+                      engine: input.engine,
                     }
                   : {
                       sourceRef: input.sourceRef as string,
                       entrypoint: input.entrypoint,
                       outputs: input.outputs,
+                      engine: input.engine,
                     },
             ),
           })),
@@ -465,9 +485,9 @@ export function createRemoteMcpHandler(
         "retry_render",
         {
           _meta: oauthToolMeta("mcp:render"),
-          title: "Retry a render with the same Source",
+          title: mcpText(locale, "retryARenderWithTheSame"),
           description:
-            "Create a new queued Job using an owned terminal Job's Source and entrypoint without uploading again.",
+            mcpText(locale, "createANewQueuedJobUsing"),
           inputSchema: z.object({ jobId }).strict(),
           outputSchema: operationOutput(
             "retry_render",
@@ -489,9 +509,9 @@ export function createRemoteMcpHandler(
         "retry_svg_render",
         {
           _meta: oauthToolMeta("mcp:render"),
-          title: "Retry SVG without recompiling the PDF",
+          title: mcpText(locale, "retrySvgWithoutRecompilingThePdf"),
           description:
-            "Retry a failed SVG stage on the same owned Job, keeping its immutable verified PDF. Reuse the same idempotencyKey only when retrying this request after a lost response; use a new key for another SVG attempt. At most 8 SVG attempts including the initial run, within the original PDF retention window.",
+            mcpText(locale, "retryAFailedSvgStageOn"),
           inputSchema: z
             .object({ jobId, idempotencyKey: z.string().min(16).max(200) })
             .strict(),
@@ -517,9 +537,9 @@ export function createRemoteMcpHandler(
         "get_render_status",
         {
           _meta: oauthToolMeta("mcp:read"),
-          title: "Get remote render status",
+          title: mcpText(locale, "getRemoteRenderStatus"),
           description:
-            "Read the status and safe metadata for an owned Remote MCP Job.",
+            mcpText(locale, "readTheStatusAndSafeMetadata"),
           inputSchema: z.object({ jobId: jobId }).strict(),
           outputSchema: operationOutput(
             "get_render_status",
@@ -541,9 +561,9 @@ export function createRemoteMcpHandler(
         "get_render_diagnostics",
         {
           _meta: oauthToolMeta("mcp:read"),
-          title: "Get structured render diagnostics",
+          title: mcpText(locale, "getStructuredRenderDiagnostics"),
           description:
-            "Return owned Job errors, warnings, and a bounded compile-log excerpt without opening the Web UI.",
+            mcpText(locale, "returnOwnedJobErrorsWarningsAnd"),
           inputSchema: z
             .object({ jobId, stage: z.enum(["pdf", "svg"]).optional() })
             .strict(),
@@ -555,7 +575,7 @@ export function createRemoteMcpHandler(
                   .object({
                     jobId,
                     status: jobStatus,
-                    engine: z.literal("lualatex"),
+                    engine: renderEngineSchema,
                     diagnostics: z.array(
                       z
                         .object({
@@ -599,9 +619,9 @@ export function createRemoteMcpHandler(
         "get_render_preview",
         {
           _meta: oauthToolMeta("mcp:read"),
-          title: "Get a rendered PDF page preview",
+          title: mcpText(locale, "getARenderedPdfPagePreview"),
           description:
-            "Return one owned PDF page as PNG image content for direct visual inspection.",
+            mcpText(locale, "returnOneOwnedPdfPageAs"),
           inputSchema: z
             .object({
               jobId,
@@ -625,9 +645,9 @@ export function createRemoteMcpHandler(
         "get_render_artifacts",
         {
           _meta: oauthToolMeta("mcp:read"),
-          title: "Get remote render artifacts",
+          title: mcpText(locale, "getRemoteRenderArtifacts"),
           description:
-            "Return artifact metadata and owner-scoped MCP resource links. A protected Web result link is included only as a human fallback.",
+            mcpText(locale, "returnArtifactMetadataAndOwnerScoped"),
           inputSchema: z.object({ jobId: jobId }).strict(),
           outputSchema: operationOutput(
             "get_render_artifacts",
@@ -649,9 +669,9 @@ export function createRemoteMcpHandler(
         "get_renderer_capabilities",
         {
           _meta: oauthToolMeta("mcp:read"),
-          title: "Get renderer capabilities and limits",
+          title: mcpText(locale, "getRendererCapabilitiesAndLimits"),
           description:
-            "Return supported engine, TeX Live version, sandbox constraints, and Source limits.",
+            mcpText(locale, "returnSupportedEngineTexLiveVersion"),
           inputSchema: z.object({}).strict(),
           outputSchema: operationOutput(
             "get_renderer_capabilities",
@@ -661,7 +681,19 @@ export function createRemoteMcpHandler(
                   .object({
                     rendererVersion: z.string(),
                     texliveVersion: z.string(),
-                    engines: z.array(z.literal("lualatex")),
+                    engines: z.array(renderEngineSchema),
+                    engineOutputs: z
+                      .array(
+                        z
+                          .object({
+                            engine: renderEngineSchema,
+                            pdf: z.boolean(),
+                            svg: z.boolean(),
+                            placement: z.boolean(),
+                          })
+                          .strict(),
+                      )
+                      .optional(),
                     shellEscape: z.literal(false),
                     networkAccess: z.literal(false),
                     maxCompileSeconds: z.number().int().positive(),
@@ -691,8 +723,14 @@ export function createRemoteMcpHandler(
           },
         },
         () =>
-          execute("get_renderer_capabilities", identity, renders, 60, () =>
-            Promise.resolve({ capabilities: renders.capabilities(identity) }),
+          execute(
+            "get_renderer_capabilities",
+            identity,
+            renders,
+            60,
+            async () => ({
+              capabilities: await renders.verifiedCapabilities(identity),
+            }),
           ),
       );
       registerEnvironmentTools(server, renders, identity);
@@ -700,8 +738,8 @@ export function createRemoteMcpHandler(
         "cancel_render",
         {
           _meta: oauthToolMeta("mcp:cancel"),
-          title: "Cancel remote render",
-          description: "Cancel an owned active Remote MCP Job.",
+          title: mcpText(locale, "cancelRemoteRender"),
+          description: mcpText(locale, "cancelAnOwnedActiveRemoteMcp"),
           inputSchema: z.object({ jobId: jobId }).strict(),
           outputSchema: operationOutput(
             "cancel_render",
@@ -723,8 +761,8 @@ export function createRemoteMcpHandler(
         "delete_render",
         {
           _meta: oauthToolMeta("mcp:delete"),
-          title: "Delete remote render",
-          description: "Schedule deletion of an owned terminal Remote MCP Job.",
+          title: mcpText(locale, "deleteRemoteRender"),
+          description: mcpText(locale, "scheduleDeletionOfAnOwnedTerminal"),
           inputSchema: z.object({ jobId: jobId }).strict(),
           outputSchema: operationOutput(
             "delete_render",
@@ -764,8 +802,9 @@ function oauthToolMeta(scope?: RemoteMcpScope) {
 function registerEnvironmentTools(
   server: McpServer,
   renders: RemoteRenderService,
-  identity: RemoteMcpIdentity,
+  identity: LocalizedMcpIdentity,
 ): void {
+  const { locale } = identity;
   const namesInput = z
       .object({ names: z.array(z.string().min(1).max(200)).min(1).max(50) })
       .strict(),
@@ -795,8 +834,8 @@ function registerEnvironmentTools(
     "check_packages",
     {
       _meta: oauthToolMeta("mcp:read"),
-      title: "Check LaTeX package availability",
-      description: "Check up to 50 exact package or import names.",
+      title: mcpText(locale, "checkLatexPackageAvailability"),
+      description: mcpText(locale, "checkUpTo50ExactPackage"),
       inputSchema: namesInput,
       outputSchema: operationOutput(
         "check_packages",
@@ -813,8 +852,8 @@ function registerEnvironmentTools(
     "search_packages",
     {
       _meta: oauthToolMeta("mcp:read"),
-      title: "Search available LaTeX packages",
-      description: "Search package and import names in pages of at most 50.",
+      title: mcpText(locale, "searchAvailableLatexPackages"),
+      description: mcpText(locale, "searchPackageAndImportNamesIn"),
       inputSchema: searchInput,
       outputSchema: operationOutput(
         "search_packages",
@@ -835,8 +874,8 @@ function registerEnvironmentTools(
     "check_fonts",
     {
       _meta: oauthToolMeta("mcp:read"),
-      title: "Check font availability",
-      description: "Check up to 50 exact installed font family names.",
+      title: mcpText(locale, "checkFontAvailability"),
+      description: mcpText(locale, "checkUpTo50ExactInstalled"),
       inputSchema: namesInput,
       outputSchema: operationOutput(
         "check_fonts",
@@ -853,8 +892,8 @@ function registerEnvironmentTools(
     "search_fonts",
     {
       _meta: oauthToolMeta("mcp:read"),
-      title: "Search installed fonts",
-      description: "Search installed font family names in pages of at most 50.",
+      title: mcpText(locale, "searchInstalledFonts"),
+      description: mcpText(locale, "searchInstalledFontFamilyNamesIn"),
       inputSchema: searchInput,
       outputSchema: operationOutput(
         "search_fonts",
@@ -876,8 +915,9 @@ function registerEnvironmentTools(
 function registerProjectTools(
   server: McpServer,
   renders: RemoteRenderService,
-  identity: RemoteMcpIdentity,
+  identity: LocalizedMcpIdentity,
 ): void {
+  const { locale } = identity;
   const projectId = projectIdSchema,
     revisionId = projectRevisionIdSchema,
     displayName = z.string().trim().min(1).max(200),
@@ -915,9 +955,9 @@ function registerProjectTools(
     "list_projects",
     {
       _meta: oauthToolMeta("mcp:read"),
-      title: "List saved Projects",
+      title: mcpText(locale, "listSavedProjects"),
       description:
-        "List owner-scoped saved Projects shared with the Web application.",
+        mcpText(locale, "listOwnerScopedSavedProjectsShared"),
       inputSchema: pageInput,
       outputSchema: operationOutput(
         "list_projects",
@@ -936,9 +976,9 @@ function registerProjectTools(
     "get_project",
     {
       _meta: oauthToolMeta("mcp:read"),
-      title: "Get saved Project",
+      title: mcpText(locale, "getSavedProject"),
       description:
-        "Read saved Project revisions, immutable Source IDs and Job history.",
+        mcpText(locale, "readSavedProjectRevisionsImmutableSource"),
       inputSchema: pageInput.extend({ projectId }),
       outputSchema: operationOutput(
         "get_project",
@@ -960,9 +1000,9 @@ function registerProjectTools(
     "get_project_revision_jobs",
     {
       _meta: oauthToolMeta("mcp:read"),
-      title: "List Project revision Jobs",
+      title: mcpText(locale, "listProjectRevisionJobs"),
       description:
-        "Page through the complete Job history of one saved revision.",
+        mcpText(locale, "pageThroughTheCompleteJobHistory"),
       inputSchema: pageInput.extend({ projectId, revisionId }),
       outputSchema: operationOutput(
         "get_project_revision_jobs",
@@ -984,9 +1024,9 @@ function registerProjectTools(
     "create_project",
     {
       _meta: oauthToolMeta("mcp:render"),
-      title: "Create saved Project",
+      title: mcpText(locale, "createSavedProject"),
       description:
-        "Create a user-owned saved Project; temporary renders remain available without one.",
+        mcpText(locale, "createAUserOwnedSavedProject"),
       inputSchema: z.object({ displayName }).strict(),
       outputSchema: operationOutput(
         "create_project",
@@ -1003,9 +1043,9 @@ function registerProjectTools(
     "rename_project",
     {
       _meta: oauthToolMeta("mcp:render"),
-      title: "Rename saved Project",
+      title: mcpText(locale, "renameSavedProject"),
       description:
-        "Change the display name without rewriting revision history.",
+        mcpText(locale, "changeTheDisplayNameWithoutRewriting"),
       inputSchema: z.object({ projectId, displayName }).strict(),
       outputSchema: operationOutput(
         "rename_project",
@@ -1026,9 +1066,9 @@ function registerProjectTools(
     "delete_project",
     {
       _meta: oauthToolMeta("mcp:delete"),
-      title: "Delete saved Project",
+      title: mcpText(locale, "deleteSavedProject"),
       description:
-        "Hide a saved Project after explicit user approval; Source and Job retention remains unchanged.",
+        mcpText(locale, "hideASavedProjectAfterExplicit"),
       inputSchema: z.object({ projectId }).strict(),
       outputSchema: operationOutput(
         "delete_project",
@@ -1051,9 +1091,9 @@ function registerProjectTools(
     "attach_project_revision",
     {
       _meta: oauthToolMeta("mcp:render"),
-      title: "Save Source as Project revision",
+      title: mcpText(locale, "saveSourceAsProjectRevision"),
       description:
-        "Attach an owned ready immutable Source to a saved Project without queuing a Job.",
+        mcpText(locale, "attachAnOwnedReadyImmutableSource"),
       inputSchema: z
         .object({
           projectId,
@@ -1062,6 +1102,7 @@ function registerProjectTools(
           displayName,
           originalFilename,
           outputs: renderOutputsSchema,
+          engine: renderEngineSchema.optional(),
         })
         .strict(),
       outputSchema: operationOutput(
@@ -1081,9 +1122,9 @@ function registerProjectTools(
     "update_project_file",
     {
       _meta: oauthToolMeta("mcp:render"),
-      title: "Edit saved Project file",
+      title: mcpText(locale, "editSavedProjectFile"),
       description:
-        "Copy an exact saved revision, replace one file and atomically attach the new immutable Source and Project revision.",
+        mcpText(locale, "copyAnExactSavedRevisionReplace"),
       inputSchema: z
         .object({ projectId, revisionId, file: sourceFileSchema })
         .strict(),
@@ -1107,9 +1148,9 @@ function registerProjectTools(
     "delete_project_file",
     {
       _meta: oauthToolMeta("mcp:render"),
-      title: "Remove saved Project file",
+      title: mcpText(locale, "removeSavedProjectFile"),
       description:
-        "Copy an exact saved revision, remove one file and atomically attach the new immutable Source and Project revision.",
+        mcpText(locale, "copyAnExactSavedRevisionRemove"),
       inputSchema: z
         .object({ projectId, revisionId, path: z.string().min(1).max(2048) })
         .strict(),
@@ -1133,9 +1174,9 @@ function registerProjectTools(
     "render_project_revision",
     {
       _meta: oauthToolMeta("mcp:render"),
-      title: "Render saved Project revision",
+      title: mcpText(locale, "renderSavedProjectRevision"),
       description:
-        "Queue a Job bound to the exact saved revision and its Source.",
+        mcpText(locale, "queueAJobBoundToThe"),
       inputSchema: z
         .object({
           projectId,
@@ -1178,7 +1219,7 @@ function operationOutput<T extends z.ZodType>(operation: string, result: T) {
 
 async function execute(
   operation: RemoteToolOperation,
-  identity: RemoteMcpIdentity,
+  identity: LocalizedMcpIdentity,
   renders: RemoteRenderService,
   limit: number,
   action: () => Promise<Record<string, unknown>>,
@@ -1190,7 +1231,7 @@ async function execute(
     renders.auditToolCall(identity, operation, "success");
     return {
       structuredContent: output,
-      content: modelReadableContent(operation, result),
+      content: modelReadableContent(identity.locale, operation, result),
     };
   } catch (error) {
     const safe = safeError(error),
@@ -1212,13 +1253,13 @@ async function execute(
       isError: true,
       ...authenticationFailure(identity, safe),
       structuredContent: output,
-      content: modelReadableFailure(operation, structuredError),
+      content: modelReadableFailure(identity.locale, operation, structuredError),
     };
   }
 }
 
 async function executePreview(
-  identity: RemoteMcpIdentity,
+  identity: LocalizedMcpIdentity,
   renders: RemoteRenderService,
   id: string,
   page: number,
@@ -1270,7 +1311,7 @@ async function executePreview(
 
 function toolFailure(
   operation: RemoteToolOperation,
-  identity: RemoteMcpIdentity,
+  identity: LocalizedMcpIdentity,
   renders: RemoteRenderService,
   error: unknown,
 ) {
@@ -1293,23 +1334,24 @@ function toolFailure(
     isError: true,
     ...authenticationFailure(identity, safe),
     structuredContent: output,
-    content: modelReadableFailure(operation, structuredError),
+    content: modelReadableFailure(identity.locale, operation, structuredError),
   };
 }
 
 function registerJobResources(
   server: McpServer,
   renders: RemoteRenderService,
-  identity: RemoteMcpIdentity,
+  identity: LocalizedMcpIdentity,
 ): void {
+  const { locale } = identity;
   server.registerResource(
     "rendered-pdf",
     new ResourceTemplate("latex-renderer://jobs/{jobId}/output.pdf", {
       list: undefined,
     }),
     {
-      title: "Rendered PDF",
-      description: "Owned rendered PDF output",
+      title: mcpText(locale, "renderedPdf"),
+      description: mcpText(locale, "ownedRenderedPdfOutput"),
       mimeType: "application/pdf",
     },
     async (uri, variables) =>
@@ -1329,9 +1371,9 @@ function registerJobResources(
       list: undefined,
     }),
     {
-      title: "Compile log",
+      title: mcpText(locale, "compileLog"),
       description:
-        "Sanitized untrusted LaTeX compile log (terminal controls removed)",
+        mcpText(locale, "sanitizedUntrustedLatexCompileLogTerminal"),
       mimeType: "text/plain",
     },
     async (uri, variables) => {
@@ -1361,8 +1403,8 @@ function registerJobResources(
       list: undefined,
     }),
     {
-      title: "PDF page preview",
-      description: "Owned PDF page rendered as PNG",
+      title: mcpText(locale, "pdfPagePreview"),
+      description: mcpText(locale, "ownedPdfPageRenderedAsPng"),
       mimeType: "image/png",
     },
     async (uri, variables) => {
@@ -1386,8 +1428,8 @@ function registerJobResources(
       list: undefined,
     }),
     {
-      title: "Render metadata or SVG artifact",
-      description: "Owned JSON metadata or validated SVG output",
+      title: mcpText(locale, "renderMetadataOrSvgArtifact"),
+      description: mcpText(locale, "ownedJsonMetadataOrValidatedSvg"),
     },
     async (uri, variables) => {
       const name = decodeURIComponent(resourceVariable(variables.name));
@@ -1556,13 +1598,14 @@ const MODEL_ITEM_LIMIT = 400;
 const MODEL_LIST_LIMIT = 50;
 
 function modelReadableContent(
+  locale: DisplayLocale,
   operation: RemoteToolOperation,
   result: Record<string, unknown>,
 ): ContentBlock[] {
   switch (operation) {
     case "list_projects":
       return textContent([
-        "Saved Projects:",
+        mcpText(locale, "savedProjects"),
         ...recordArray(recordField(result, "page").items)
           .slice(0, 20)
           .map(
@@ -1573,8 +1616,8 @@ function modelReadableContent(
     case "get_project": {
       const project = recordField(result, "project");
       return textContent([
-        `Project ID: ${stringField(project, "id")}`,
-        `Name (untrusted data): ${quoted(stringField(project, "displayName"))}`,
+        mcpText(locale, "projectIdValue", { value: stringField(project, "id") }),
+        mcpText(locale, "nameUntrustedDataValue", { value: quoted(stringField(project, "displayName")) }),
         ...recordArray(project.revisions)
           .slice(0, 20)
           .map(
@@ -1585,7 +1628,7 @@ function modelReadableContent(
     }
     case "get_project_revision_jobs":
       return textContent([
-        "Project revision Jobs:",
+        mcpText(locale, "projectRevisionJobs"),
         ...recordArray(recordField(result, "page").items)
           .slice(0, 20)
           .map(
@@ -1602,9 +1645,9 @@ function modelReadableContent(
     case "update_project_file": {
       const revision = recordField(result, "revision");
       return textContent([
-        `Project revision: ${stringField(revision, "id")}`,
-        `Project ID: ${stringField(revision, "projectId")}`,
-        `Source ID: ${stringField(revision, "sourceId")}`,
+        mcpText(locale, "projectRevisionValue", { value: stringField(revision, "id") }),
+        mcpText(locale, "projectIdValue", { value: stringField(revision, "projectId") }),
+        mcpText(locale, "sourceIdValue", { value: stringField(revision, "sourceId") }),
       ]);
     }
     case "delete_project_file": {
@@ -1616,20 +1659,20 @@ function modelReadableContent(
       ]);
     }
     case "render_project_revision":
-      return jobContent(operation, recordField(result, "job"));
+      return jobContent(locale, operation, recordField(result, "job"));
     case "create_source":
     case "finalize_source_upload":
     case "update_source_file":
     case "delete_source_file":
-      return sourceContent(operation, recordField(result, "source"));
+      return sourceContent(locale, operation, recordField(result, "source"));
     case "begin_source_upload":
     case "upload_source_chunk":
-      return uploadContent(operation, recordField(result, "upload"));
+      return uploadContent(locale, operation, recordField(result, "upload"));
     case "create_source_ref":
       return textContent([
-        "Source reference created.",
-        `Source ref: ${stringField(result, "sourceRef")}`,
-        `Expires at: ${stringField(result, "expiresAt")}`,
+        mcpText(locale, "sourceReferenceCreated"),
+        mcpText(locale, "sourceRefValue", { value: stringField(result, "sourceRef") }),
+        mcpText(locale, "expiresAtValue", { value: stringField(result, "expiresAt") }),
       ]);
     case "create_render":
     case "retry_render":
@@ -1637,31 +1680,32 @@ function modelReadableContent(
     case "get_render_status":
     case "get_render_artifacts":
     case "cancel_render":
-      return jobContent(operation, recordField(result, "job"));
+      return jobContent(locale, operation, recordField(result, "job"));
     case "get_render_diagnostics":
-      return diagnosticsContent(recordField(result, "diagnostics"));
+      return diagnosticsContent(locale, recordField(result, "diagnostics"));
     case "get_render_preview":
-      return textContent(["Render preview ready."]);
+      return textContent([mcpText(locale, "renderPreviewReady")]);
     case "get_renderer_capabilities":
-      return capabilitiesContent(recordField(result, "capabilities"));
+      return capabilitiesContent(locale, recordField(result, "capabilities"));
     case "check_packages":
       return availabilityContent("Package", arrayField(result, "packages"));
     case "check_fonts":
       return availabilityContent("Font", arrayField(result, "fonts"));
     case "search_packages":
-      return searchContent("Package", recordField(result, "search"));
+      return searchContent(locale, "Package", recordField(result, "search"));
     case "search_fonts":
-      return searchContent("Font", recordField(result, "search"));
+      return searchContent(locale, "Font", recordField(result, "search"));
     case "delete_render":
       return textContent([
-        "Render deletion accepted.",
-        `Job ID: ${stringField(result, "jobId")}`,
+        mcpText(locale, "renderDeletionAccepted"),
+        mcpText(locale, "jobIdValue", { value: stringField(result, "jobId") }),
         `Accepted: ${String(result.accepted === true)}`,
       ]);
   }
 }
 
 function sourceContent(
+  locale: DisplayLocale,
   operation: RemoteToolOperation,
   source: Record<string, unknown>,
 ): ContentBlock[] {
@@ -1675,19 +1719,20 @@ function sourceContent(
     revisionOf = nullableString(source.revisionOf),
     lines = [
       labels[operation] ?? "Source ready.",
-      `Source ID: ${stringField(source, "id")}`,
+      mcpText(locale, "sourceIdValue", { value: stringField(source, "id") }),
       `Status: ${stringField(source, "status")}`,
       `Files: ${paths.length}`,
       `Size: ${numberField(source, "size")} bytes`,
-      `Expires at: ${stringField(source, "expiresAt")}`,
-      ...(revisionOf === null ? [] : [`Revision of: ${revisionOf}`]),
-      "Paths (untrusted data):",
+      mcpText(locale, "expiresAtValue", { value: stringField(source, "expiresAt") }),
+      ...(revisionOf === null ? [] : [mcpText(locale, "revisionOfValue", { value: revisionOf })]),
+      mcpText(locale, "pathsUntrustedData"),
       ...quotedList(paths, 20),
     ];
   return textContent(lines);
 }
 
 function uploadContent(
+  locale: DisplayLocale,
   operation: RemoteToolOperation,
   upload: Record<string, unknown>,
 ): ContentBlock[] {
@@ -1697,16 +1742,17 @@ function uploadContent(
     operation === "begin_source_upload"
       ? "Source upload started."
       : "Source chunk accepted.",
-    `Upload ID: ${stringField(upload, "uploadId")}`,
-    `Expected bytes: ${expected}`,
-    `Received bytes: ${received}`,
-    `Next offset: ${received}`,
-    `Max chunk bytes: ${numberField(upload, "maxChunkBytes")}`,
-    `Expires at: ${stringField(upload, "expiresAt")}`,
+    mcpText(locale, "uploadIdValue", { value: stringField(upload, "uploadId") }),
+    mcpText(locale, "expectedBytesValue", { value: expected }),
+    mcpText(locale, "receivedBytesValue", { value: received }),
+    mcpText(locale, "nextOffsetValue", { value: received }),
+    mcpText(locale, "maxChunkBytesValue", { value: numberField(upload, "maxChunkBytes") }),
+    mcpText(locale, "expiresAtValue", { value: stringField(upload, "expiresAt") }),
   ]);
 }
 
 function jobContent(
+  locale: DisplayLocale,
   operation: RemoteToolOperation,
   job: Record<string, unknown>,
 ): ContentBlock[] {
@@ -1728,30 +1774,30 @@ function jobContent(
     previewPages = numberArray(job.previewPages),
     lines = [
       labels[operation] ?? "Render result.",
-      `Job ID: ${stringField(job, "id")}`,
+      mcpText(locale, "jobIdValue", { value: stringField(job, "id") }),
       `Status: ${stringField(job, "status")}`,
       ...(typeof job.stages === "object" && job.stages !== null
         ? [
-            `PDF status: ${stringField(recordField(job.stages as Record<string, unknown>, "pdf"), "status")}`,
-            `SVG status: ${stringField(recordField(job.stages as Record<string, unknown>, "svg"), "status")}`,
+            mcpText(locale, "pdfStatusValue", { value: stringField(recordField(job.stages as Record<string, unknown>, "pdf"), "status") }),
+            mcpText(locale, "svgStatusValue", { value: stringField(recordField(job.stages as Record<string, unknown>, "svg"), "status") }),
           ]
         : []),
-      ...(source === null ? [] : [`Source ID: ${source}`]),
+      ...(source === null ? [] : [mcpText(locale, "sourceIdValue", { value: source })]),
       ...(projectRevision === null
         ? []
-        : [`Project revision ID: ${projectRevision}`]),
-      `Entrypoint (untrusted data): ${quoted(stringField(job, "entrypoint"))}`,
+        : [mcpText(locale, "projectRevisionIdValue", { value: projectRevision })]),
+      mcpText(locale, "entrypointUntrustedDataValue", { value: quoted(stringField(job, "entrypoint")) }),
       `Outputs: ${stringArray(job.outputs).join(", ")}`,
-      ...(retryOf === null ? [] : [`Retry of: ${retryOf}`]),
-      `Exit code: ${exitCode === null ? "not available" : exitCode}`,
-      ...(errorCode === null ? [] : [`Error code: ${safeValue(errorCode)}`]),
+      ...(retryOf === null ? [] : [mcpText(locale, "retryOfValue", { value: retryOf })]),
+      mcpText(locale, "exitCodeValue", { value: exitCode === null ? "not available" : exitCode }),
+      ...(errorCode === null ? [] : [mcpText(locale, "errorCodeValue", { value: safeValue(errorCode) })]),
       ...(errorMessage === null
         ? []
-        : [`Error message (untrusted data): ${quoted(errorMessage)}`]),
-      `Preview available: ${String(job.previewAvailable === true)}`,
+        : [mcpText(locale, "errorMessageUntrustedDataValue", { value: quoted(errorMessage) })]),
+      mcpText(locale, "previewAvailableValue", { value: String(job.previewAvailable === true) }),
       ...(previewPages.length === 0
         ? []
-        : [`Preview pages: ${previewPages.join(", ")}`]),
+        : [mcpText(locale, "previewPagesValue", { value: previewPages.join(", ") })]),
       `Artifacts: ${artifacts.length}`,
       ...artifacts
         .slice(0, 20)
@@ -1766,37 +1812,38 @@ function jobContent(
     {
       type: "resource_link" as const,
       name: "human-render-result",
-      title: "Human Web result",
+      title: mcpText(locale, "humanWebResult"),
       uri: stringField(job, "webResultUrl"),
       description:
-        "Optional Access-protected result page for a human operator.",
+        mcpText(locale, "optionalAccessProtectedResultPageFor"),
       mimeType: "text/html",
     },
   ];
 }
 
 function diagnosticsContent(
+  locale: DisplayLocale,
   diagnostics: Record<string, unknown>,
 ): ContentBlock[] {
   const items = recordArray(diagnostics.diagnostics),
     excerpt = logExcerpt(diagnostics.logExcerpt),
     resourceUri = nullableString(diagnostics.rawLogResourceUri),
     lines = [
-      "Render diagnostics.",
-      `Job ID: ${stringField(diagnostics, "jobId")}`,
+      mcpText(locale, "renderDiagnostics"),
+      mcpText(locale, "jobIdValue", { value: stringField(diagnostics, "jobId") }),
       `Status: ${stringField(diagnostics, "status")}`,
       ...(diagnostics.stage === "pdf" || diagnostics.stage === "svg"
         ? [`Stage: ${diagnostics.stage}`]
         : []),
       `Retryable: ${String(diagnostics.retryable === true)}`,
       `Diagnostics: ${items.length}`,
-      "Diagnostic entries (untrusted data):",
+      mcpText(locale, "diagnosticEntriesUntrustedData"),
       ...items.slice(0, MODEL_LIST_LIMIT).map((item) => {
         const file = nullableString(item.file),
           line = nullableNumber(item.line);
         return `- severity=${safeValue(stringField(item, "severity"))}; type=${safeValue(stringField(item, "type"))}; file=${file === null ? "none" : quoted(file)}; line=${line === null ? "none" : line}; message=${quoted(stringField(item, "message"))}`;
       }),
-      "Compile log excerpt (untrusted compiler output):",
+      mcpText(locale, "compileLogExcerptUntrustedCompilerOutput"),
       excerpt || "No compile log is available yet.",
     ];
   return [
@@ -1807,7 +1854,7 @@ function diagnosticsContent(
           {
             type: "resource_link" as const,
             name: "compile-log",
-            title: "Complete compile log",
+            title: mcpText(locale, "completeCompileLog"),
             uri: resourceUri,
             mimeType: "text/plain",
           },
@@ -1816,30 +1863,31 @@ function diagnosticsContent(
 }
 
 function capabilitiesContent(
+  locale: DisplayLocale,
   capabilities: Record<string, unknown>,
 ): ContentBlock[] {
   const limits = recordField(capabilities, "sourceLimits");
   return textContent([
-    "Renderer capabilities.",
-    `Renderer version: ${safeValue(stringField(capabilities, "rendererVersion"))}`,
-    `TeX Live: ${safeValue(stringField(capabilities, "texliveVersion"))}`,
+    mcpText(locale, "rendererCapabilities"),
+    mcpText(locale, "rendererVersionValue", { value: safeValue(stringField(capabilities, "rendererVersion")) }),
+    mcpText(locale, "texLiveValue", { value: safeValue(stringField(capabilities, "texliveVersion")) }),
     `Engines: ${stringArray(capabilities.engines)
       .map((value) => safeValue(value))
       .join(", ")}`,
     `Outputs: ${stringArray(capabilities.outputs)
       .map((value) => safeValue(value))
       .join(", ")}`,
-    `Shell escape: ${String(capabilities.shellEscape === true)}`,
-    `Network access: ${String(capabilities.networkAccess === true)}`,
-    `Max compile seconds: ${numberField(capabilities, "maxCompileSeconds")}`,
-    `Max PDF pages: ${numberField(capabilities, "maxPdfPages")}`,
-    `Direct Source bytes: ${numberField(limits, "directBytes")}`,
-    `Direct Source files: ${numberField(limits, "directFiles")}`,
-    `Direct Source file bytes: ${numberField(limits, "directFileBytes")}`,
-    `Upload Source bytes: ${numberField(limits, "uploadBytes")}`,
-    `Max Source files: ${numberField(limits, "files")}`,
-    `Max file bytes: ${numberField(limits, "fileBytes")}`,
-    `Max chunk bytes: ${numberField(limits, "chunkBytes")}`,
+    mcpText(locale, "shellEscapeValue", { value: String(capabilities.shellEscape === true) }),
+    mcpText(locale, "networkAccessValue", { value: String(capabilities.networkAccess === true) }),
+    mcpText(locale, "maxCompileSecondsValue", { value: numberField(capabilities, "maxCompileSeconds") }),
+    mcpText(locale, "maxPdfPagesValue", { value: numberField(capabilities, "maxPdfPages") }),
+    mcpText(locale, "directSourceBytesValue", { value: numberField(limits, "directBytes") }),
+    mcpText(locale, "directSourceFilesValue", { value: numberField(limits, "directFiles") }),
+    mcpText(locale, "directSourceFileBytesValue", { value: numberField(limits, "directFileBytes") }),
+    mcpText(locale, "uploadSourceBytesValue", { value: numberField(limits, "uploadBytes") }),
+    mcpText(locale, "maxSourceFilesValue", { value: numberField(limits, "files") }),
+    mcpText(locale, "maxFileBytesValue", { value: numberField(limits, "fileBytes") }),
+    mcpText(locale, "maxChunkBytesValue", { value: numberField(limits, "chunkBytes") }),
   ]);
 }
 
@@ -1857,21 +1905,23 @@ function availabilityContent(label: string, values: unknown[]): ContentBlock[] {
 }
 
 function searchContent(
+  locale: DisplayLocale,
   label: string,
   search: Record<string, unknown>,
 ): ContentBlock[] {
   const matches = stringArray(search.matches),
     cursor = nullableString(search.nextCursor);
   return textContent([
-    `${label} search results.`,
-    `Query (untrusted data): ${quoted(stringField(search, "query"))}`,
+    mcpText(locale, "valueSearchResults", { value: label }),
+    mcpText(locale, "queryUntrustedDataValue", { value: quoted(stringField(search, "query")) }),
     `Matches: ${matches.length}`,
     ...quotedList(matches, MODEL_LIST_LIMIT),
-    `Next cursor: ${cursor ?? "none"}`,
+    mcpText(locale, "nextCursorValue", { value: cursor ?? "none" }),
   ]);
 }
 
 function modelReadableFailure(
+  locale: DisplayLocale,
   operation: RemoteToolOperation,
   error: {
     code: string;
@@ -1881,14 +1931,14 @@ function modelReadableFailure(
   },
 ): ContentBlock[] {
   return textContent([
-    "Tool operation failed.",
+    mcpText(locale, "toolOperationFailed"),
     `Operation: ${operation}`,
     `Code: ${safeValue(error.code)}`,
     `Status: ${error.status}`,
-    `Message (untrusted data): ${quoted(error.message)}`,
+    mcpText(locale, "messageUntrustedDataValue", { value: quoted(error.message) }),
     ...(error.retryAfterSeconds === undefined
       ? []
-      : [`Retry after seconds: ${error.retryAfterSeconds}`]),
+      : [mcpText(locale, "retryAfterSecondsValue", { value: error.retryAfterSeconds })]),
   ]);
 }
 

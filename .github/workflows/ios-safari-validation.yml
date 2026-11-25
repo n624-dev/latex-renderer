@@ -1,0 +1,88 @@
+name: ios-safari-validation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-safari-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mobile-safari:
+    runs-on: macos-26
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        id: source
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/macos-diagnostics
+        with:
+          phase: start
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: "26.13.0"
+          package-manager-cache: false
+      - name: Check the installed Simulator toolchain
+        run: |
+          xcodebuild -version
+          xcrun simctl list runtimes available
+          xcrun simctl list -j >"$MACOS_DIAGNOSTICS_DIR/simulator-inventory.json"
+      - name: Build the Web fixture
+        run: |
+          set -euo pipefail
+          {
+            corepack enable
+            pnpm install --frozen-lockfile
+            pnpm --filter @latex-renderer/web... build
+          } 2>&1 | tee "$MACOS_DIAGNOSTICS_DIR/web-build.log"
+      - name: Install the Safari automation driver
+        env:
+          APPIUM_HOME: ${{ runner.temp }}/appium-home
+        run: |
+          set -euo pipefail
+          {
+            npm install --prefix "$RUNNER_TEMP/appium" --no-audit --no-fund appium@4.0.1
+            "$RUNNER_TEMP/appium/node_modules/.bin/appium" driver install xcuitest@13.7.0
+            "$RUNNER_TEMP/appium/node_modules/.bin/appium" driver list --installed --json
+          } 2>&1 | tee "$MACOS_DIAGNOSTICS_DIR/appium-install.log"
+      - name: Build WebDriverAgent before starting a Simulator
+        timeout-minutes: 6
+        env:
+          APPIUM_HOME: ${{ runner.temp }}/appium-home
+        run: |
+          set -euo pipefail
+          project="$APPIUM_HOME/node_modules/appium-xcuitest-driver/node_modules/appium-webdriveragent/WebDriverAgent.xcodeproj"
+          if [ ! -d "$project" ]; then
+            project="$APPIUM_HOME/node_modules/appium-webdriveragent/WebDriverAgent.xcodeproj"
+          fi
+          test -d "$project"
+          xcodebuild build-for-testing -project "$project" -scheme WebDriverAgentRunner \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/ios-safari-wda" \
+            -resultBundlePath "$MACOS_DIAGNOSTICS_DIR/wda-build.xcresult" \
+            ARCHS=arm64 CODE_SIGNING_ALLOWED=NO 2>&1 | tee "$MACOS_DIAGNOSTICS_DIR/wda-build.log"
+      - name: Check iOS Safari keyboard, rotation and pinch on iPhone and iPad
+        timeout-minutes: 40
+        env:
+          APPIUM_HOME: ${{ runner.temp }}/appium-home
+        run: |
+          set -euo pipefail
+          export IOS_SAFARI_DIAGNOSTICS="$MACOS_DIAGNOSTICS_DIR/safari"
+          export IOS_SAFARI_APPIUM="$RUNNER_TEMP/appium/node_modules/.bin/appium"
+          export IOS_SAFARI_WDA_BUILD="$RUNNER_TEMP/ios-safari-wda"
+          if ! node tests/ios-safari-validation.mjs 2>&1 | tee "$MACOS_DIAGNOSTICS_DIR/safari-tests.log"; then
+            for log in "$IOS_SAFARI_DIAGNOSTICS/"*/appium.log; do
+              if [ -f "$log" ]; then
+                tail -n 100 "$log"
+              fi
+            done
+            exit 1
+          fi
+      - uses: ./.github/actions/macos-diagnostics
+        if: always() && steps.source.outcome == 'success'
+        with:
+          phase: finish

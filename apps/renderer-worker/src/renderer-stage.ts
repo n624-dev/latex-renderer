@@ -13,7 +13,8 @@ import {
 export async function runRendererStage(
   database: RendererDatabase,
   config: WorkerConfig,
-  job: WorkerJobRow,
+  job: Pick<WorkerJobRow, "id" | "lease_generation" | "entrypoint"> &
+    Partial<Pick<WorkerJobRow, "engine">>,
   input: string,
   staging: string,
   options: RendererStageOptions,
@@ -29,6 +30,7 @@ export async function runRendererStage(
     job.entrypoint,
     ["pdf", "svg"],
     options,
+    job.engine,
   );
   const state: {
     closed: boolean;

@@ -202,8 +202,15 @@ describe("managed TeX Live image pipeline", () => {
         expect(read("renderer/install-language-packages.sh")).toContain(
           "export PAR_GLOBAL_TEMP=/opt/renderer/biber-cache",
         );
+      } else if (match[1] === "language-collections.txt") {
+        expect(builder).toContain(
+          "COPY languages.txt /opt/renderer/language-collections.txt",
+        );
+        expect(builder).toContain("for language in $languages; do printf");
       } else {
-        expect(buildFiles, `compile.sh requires ${match[1]}`).toContain(match[1]);
+        expect(buildFiles, `compile.sh requires ${match[1]}`).toContain(
+          match[1],
+        );
       }
     }
   });
@@ -544,7 +551,7 @@ describe("Web and CLI TeX environment parity", () => {
   it("shows desired/effective language state and retains operation logs in both clients", () => {
     const cli = read("apps/admin-cli/src/index.ts");
     expect(cli).toContain("waitTexOperation");
-    expect(cli).toContain("reconnecting to Admin API");
+    expect(cli).toContain('humanText("texEnvironmentReconnectingToAdminApi")');
     expect(cli).toMatch(/tex\s*\.command\("operation"\)/);
     expect(adminScript).toContain("effectiveLanguageCollections");
     expect(adminScript).toContain("依存言語collection");
