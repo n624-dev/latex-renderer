@@ -1,6 +1,7 @@
 import {
   processDocumentProbe,
   processPdfInspection,
+  recoverPdfInspections,
 } from "../apps/renderer-worker/src/pdf-inspection.js";
 import {
   documentProbeSchema,
@@ -8,6 +9,8 @@ import {
 } from "../packages/contracts/src/index.js";
 import {
   artifactStoragePath,
+  pdfInspectionUploadDirectory,
+  pdfInspectionUploadResult,
   ProjectDraftOperations,
   ProjectOperations,
 } from "@latex-renderer/database";
@@ -36,6 +39,49 @@ import {
 } from "../apps/renderer-worker/src/memory-plan.js";
 
 describe(`Source pipeline HTTP/DB/Worker E2E (${realPipelineImage === undefined ? "deterministic renderer, NOT TeX" : "real TeX container"})`, () => {
+  it("removes an expired attached PDF, report and crop from private storage", async () => {
+    const f = await sourcePipelineFixture();
+    try {
+      const timestamp = new Date(Date.now() - 3_601_000).toISOString();
+      const db = f.database.pdfInspections;
+      const { upload } = db.reserveUpload(
+        "pipeline_user",
+        "a".repeat(64),
+        "b".repeat(64),
+        timestamp,
+      );
+      const pdf = db.completeUpload(upload.id, "c".repeat(64), 15, timestamp);
+      const report = db.requestUpload(pdf, timestamp);
+      const crop = db.requestUpload(pdf, timestamp, {
+        page: 1,
+        x: 0.1,
+        y: 0.1,
+        width: 0.5,
+        height: 0.5,
+      });
+      const directory = pdfInspectionUploadDirectory(
+        f.config.storageRoot,
+        pdf.id,
+      );
+      await mkdir(join(directory, "original"), { recursive: true });
+      await writeFile(
+        join(directory, "original", "result.pdf"),
+        "%PDF-1.7\n%%EOF",
+      );
+      await writeFile(pdfInspectionUploadResult(directory, report.id), "{}");
+      await writeFile(pdfInspectionUploadResult(directory, crop.id), "{}");
+
+      await recoverPdfInspections(f.database, f.config);
+
+      expect(db.upload(pdf.id)).toBeUndefined();
+      expect(db.get(report.id)).toBeUndefined();
+      expect(db.get(crop.id)).toBeUndefined();
+      await expect(stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await f.close();
+    }
+  });
+
   it.skipIf(realPipelineImage === undefined)(
     "inspects, crops and maps an exact PDF and probes a real font combination",
     async () => {
@@ -63,6 +109,7 @@ describe(`Source pipeline HTTP/DB/Worker E2E (${realPipelineImage === undefined 
         };
         expect(await inspect()).toMatchObject({
           checks: { "page-rasters": { status: "observed", truncated: false } },
+          coverage: { totalPages: 2, pageDetailsThrough: 2, sampledPages: 2, maxSampleSidePixels: 512 },
         });
         expect(await inspect({ pages: [2, 1] })).toMatchObject({
           pages: [2, 1], columns: 2, mimeType: "image/jpeg",
@@ -77,6 +124,54 @@ describe(`Source pipeline HTTP/DB/Worker E2E (${realPipelineImage === undefined 
         expect(f.renders.comparePdfInspections(identity, target, target)).toMatchObject({
           visual: "same_observation", samePdfBytes: true,
           visualCoverage: { comparedPages: 2, changedPreviewPages: [] },
+        });
+
+        const timestamp = new Date().toISOString();
+        const db = f.database.pdfInspections;
+        const { upload } = db.reserveUpload(
+          identity.userId,
+          "d".repeat(64),
+          "e".repeat(64),
+          timestamp,
+        );
+        const bytes = await readFile(artifactStoragePath(f.config.storageRoot, pdf));
+        const directory = join(
+          pdfInspectionUploadDirectory(f.config.storageRoot, upload.id),
+          "original",
+        );
+        await mkdir(directory, { recursive: true });
+        await writeFile(join(directory, "result.pdf"), bytes);
+        db.requestUpload(
+          db.completeUpload(upload.id, pdf.sha256, bytes.length, timestamp),
+          timestamp,
+        );
+        const runInspection = async () => {
+          const row = defined(db.claim(f.config.workerId, new Date().toISOString()));
+          expect(row).toMatchObject({ upload_id: upload.id, job_id: null });
+          await processPdfInspection(f.database, f.config, row);
+        };
+        await runInspection();
+        expect(
+          await f.renders.attachedPdfInspection(identity, upload.id, pdf.sha256),
+        ).toMatchObject({
+          state: "ready",
+          pdfSha256: pdf.sha256,
+          report: {
+            checks: { structure: { text: "passed\n" } },
+            coverage: { totalPages: 2, pageDetailsThrough: 2, sampledPages: 2 },
+          },
+        });
+        const crop = { page: 2, x: 0.1, y: 0.1, width: 0.5, height: 0.5 };
+        expect(
+          (await f.renders.attachedPdfInspection(identity, upload.id, pdf.sha256, crop))
+            .state,
+        ).toBe("queued");
+        await runInspection();
+        expect(
+          await f.renders.attachedPdfInspection(identity, upload.id, pdf.sha256, crop),
+        ).toMatchObject({
+          state: "ready",
+          report: { page: 2, mimeType: "image/jpeg" },
         });
 
         const input = documentProbeSchema.parse({

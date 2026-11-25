@@ -18,6 +18,8 @@ import type { AccessJwtVerifier } from "@latex-renderer/auth";
 import {
   ProjectDraftOperations,
   RendererDatabase,
+  pdfInspectionUploadDirectory,
+  pdfInspectionUploadResult,
 } from "@latex-renderer/database";
 import { AppError, type ResourceLimits } from "@latex-renderer/shared";
 import { validateAndExtract } from "@latex-renderer/zip-validation";
@@ -25,6 +27,8 @@ import {
   RemoteOAuthService,
   RemoteRenderService,
 } from "../packages/remote-mcp-core/src/index.js";
+import * as attachmentDownload from "../packages/remote-mcp-core/src/attachment-download.js";
+import { projectDocumentStateV28Sql } from "../packages/database/src/schema.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createRemoteMcpApp,
@@ -53,6 +57,7 @@ afterEach(async () => {
   }
   vi.useRealTimers();
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   for (const database of databases.splice(0)) database.close();
   await Promise.all(
     temporary
@@ -62,6 +67,201 @@ afterEach(async () => {
 });
 
 describe("Remote MCP HTTP server", () => {
+  it.each(["runtime", "numbered"])("keeps existing inspection records through the %s migration", async (migration) => {
+    const f = await createFixture();
+    const identity = { userId: "user_test", scopes: ["mcp:render"] as const };
+    const job = await f.renders.createRender(identity, { inlineSource: "\\documentclass{article}\n\\begin{document}Test\\end{document}" });
+    const v28 = projectDocumentStateV28Sql.match(
+      /CREATE TABLE pdf_inspections \([\s\S]+?CREATE INDEX idx_pdf_inspections_queue[^;]+;/,
+    )?.[0];
+    if (!v28) throw new Error("Missing original inspection schema");
+    f.database.raw.exec(`
+      DROP TABLE pdf_inspections; DROP TABLE pdf_inspection_uploads;
+      DELETE FROM schema_migrations WHERE version=29;
+      ${v28}
+    `);
+    const time = new Date().toISOString();
+    f.database.raw.prepare(`INSERT INTO pdf_inspections
+      (id,job_id,artifact_id,pdf_sha256,inspector_version,request_key,status,requested_at,expires_at,result_json)
+      VALUES ('legacy-inspection',?,'legacy-artifact',?,2,'quality','ready',?,?,?)`)
+      .run(job.id, "1".repeat(64), time, time, '{"version":2}');
+    if (migration === "numbered")
+      f.database.raw.exec(await readFile(new URL("../deploy/migrations/029_attached_pdf_inspections.sql", import.meta.url), "utf8"));
+    f.database.migrate();
+    expect(f.database.pdfInspections.get("legacy-inspection")).toMatchObject({
+      job_id: job.id, artifact_id: "legacy-artifact", upload_id: null,
+      status: "ready", result_json: '{"version":2}',
+    });
+    expect(f.database.raw.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+  });
+
+  it("reveals only the attachment delivery origin to the designated account", async () => {
+    vi.stubEnv("REMOTE_MCP_FILE_ORIGINS", "");
+    const f = await createFixture();
+    const token = issueAccessToken(f.oauth);
+    const tools = async () =>
+      (
+        await mcpRequest(f.app, token, {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/list",
+        })
+      ).result.tools?.map(({ name }) => name);
+    vi.stubEnv("REMOTE_MCP_ATTACHMENT_VERIFICATION_USER", "another-user");
+    expect(await tools()).not.toContain("verify_attachment_delivery_origin");
+    vi.stubEnv("REMOTE_MCP_ATTACHMENT_VERIFICATION_USER", "user_test");
+    const names = await tools();
+    expect(names).toContain("verify_attachment_delivery_origin");
+    expect(names).not.toContain("request_attached_pdf_inspection");
+    const sendFile = (download_url: string) =>
+      callTool(f.app, token, 2, "verify_attachment_delivery_origin", {
+        file: { file_id: "file-test", download_url },
+      });
+    const verified = await sendFile(
+      "https://files.example.test/doc.pdf?signature=private",
+    );
+    expect(verified.result.structuredContent).toMatchObject({
+      success: true,
+      result: { origin: "https://files.example.test" },
+    });
+    expect(JSON.stringify(verified)).not.toContain("signature");
+    const invalid = await sendFile("http://files.example.test/doc.pdf");
+    expect(invalid.result.structuredContent).toMatchObject({
+      success: false,
+      error: { code: "ATTACHMENT_ORIGIN_INVALID" },
+    });
+  });
+
+  it("receives an attached PDF once, verifies its digest, and restricts its report to its owner", async () => {
+    vi.stubEnv("REMOTE_MCP_FILE_ORIGINS", "https://files.example.test");
+    const file = {
+      file_id: "file-test",
+      download_url: "https://files.example.test/file?temporary=secret",
+    };
+    const bytes = Buffer.from("%PDF-1.7\n%%EOF\n");
+    const download = vi
+      .spyOn(attachmentDownload, "downloadAttachment")
+      .mockImplementation(async (_url, _origins, destination) =>
+        writeFile(destination, bytes),
+      );
+    const f = await createFixture();
+    const token = issueAccessToken(f.oauth);
+    const listed = await mcpRequest(f.app, token, {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/list",
+    });
+    expect(
+      listed.result.tools?.find(
+        ({ name }) => name === "request_attached_pdf_inspection",
+      )?._meta,
+    ).toMatchObject({ "openai/fileParams": ["file"] });
+    const arguments_ = { file, idempotencyKey: "attached-pdf-request-0001" };
+    const first = await callTool(
+      f.app,
+      token,
+      2,
+      "request_attached_pdf_inspection",
+      arguments_,
+    );
+    const data = first.result.structuredContent as {
+      result: {
+        uploadId: string;
+        pdfSha256: string;
+        expiresAt: string;
+        state: string;
+      };
+    };
+    const { uploadId, pdfSha256, expiresAt } = data.result;
+    const directory = pdfInspectionUploadDirectory(f.storage, uploadId);
+    expect(data.result.state).toBe("queued");
+    expect(pdfSha256).toBe(createHash("sha256").update(bytes).digest("hex"));
+    expect(Date.parse(expiresAt) - Date.now()).toBeGreaterThan(3_599_000);
+    expect(await readFile(join(directory, "original", "result.pdf"))).toEqual(
+      bytes,
+    );
+    const again = await callTool(
+      f.app,
+      token,
+      3,
+      "request_attached_pdf_inspection",
+      arguments_,
+    );
+    expect(again.result.structuredContent).toEqual(
+      first.result.structuredContent,
+    );
+    expect(download).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(first)).not.toContain(file.download_url);
+    const unauthorized = {
+      userId: "another-user",
+      scopes: ["mcp:read"] as const,
+    };
+    await expect(
+      f.renders.attachedPdfInspection(unauthorized, uploadId, pdfSha256),
+    ).rejects.toMatchObject({ code: "PDF_UPLOAD_NOT_FOUND" });
+    const badDigest = await callTool(
+      f.app,
+      token,
+      4,
+      "get_attached_pdf_inspection",
+      { uploadId, pdfSha256: "0".repeat(64) },
+    );
+    expect(badDigest.result.structuredContent).toMatchObject({
+      success: false,
+      error: { code: "PDF_CHECKSUM_MISMATCH" },
+    });
+
+    const claimed = f.database.pdfInspections.claim(
+      "inspection-worker",
+      new Date().toISOString(),
+    );
+    if (!claimed) throw new Error("Expected an attachment inspection");
+    expect(claimed).toMatchObject({ job_id: null, upload_id: uploadId });
+    await writeFile(
+      pdfInspectionUploadResult(directory, claimed.id),
+      JSON.stringify({
+        version: claimed.inspector_version,
+        runtimeImage: "fixture",
+        checks: {
+          structure: { status: "observed", text: "passed", truncated: false },
+        },
+        visual: "not_checked",
+        sourceComparison: "not_checked",
+      }),
+    );
+    expect(
+      f.database.pdfInspections.finish(claimed.id, "inspection-worker", {
+        uploaded: true,
+      }),
+    ).toBe(true);
+    expect(f.database.pdfInspections.get(claimed.id)?.result_json).toBeNull();
+    const ready = await callTool(f.app, token, 5, "get_attached_pdf_inspection", {
+      uploadId,
+      pdfSha256,
+    });
+    expect(ready.result.structuredContent).toMatchObject({
+      success: true,
+      result: {
+        state: "ready",
+        report: { checks: { structure: { text: "passed" } } },
+      },
+    });
+    f.database.raw
+      .prepare("UPDATE pdf_inspection_uploads SET expires_at=? WHERE id=?")
+      .run("2000-01-01T00:00:00.000Z", uploadId);
+    const expired = await callTool(
+      f.app,
+      token,
+      6,
+      "get_attached_pdf_inspection",
+      { uploadId, pdfSha256 },
+    );
+    expect(expired.result.structuredContent).toMatchObject({
+      success: false,
+      error: { code: "PDF_INSPECTION_EXPIRED" },
+    });
+  });
+
   it("keeps registration windows until expiry without extending them on repeated calls", () => {
     const now = Date.now(),
       clock = vi.spyOn(Date, "now").mockReturnValue(now);

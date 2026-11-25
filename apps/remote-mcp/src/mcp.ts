@@ -53,6 +53,14 @@ const idempotencyKey = z
   .describe(
     "Reuse this key with exactly the same inputs after a lost reply. Use a new key for an intentional new run. Keys are scoped per user and operation for 24 hours.",
   );
+const chatGptFile = z
+  .object({
+    download_url: z.string().min(1).max(8192),
+    file_id: z.string().min(1).max(256),
+    mime_type: z.string().max(256).optional(),
+    file_name: z.string().max(1024).optional(),
+  })
+  .strict();
 const jobStatus = z.enum([
   "reserved",
   "uploading",
@@ -333,6 +341,35 @@ export function createRemoteMcpHandler(
           };
         },
       );
+      if (renders.canVerifyAttachmentOrigin(identity)) {
+        server.registerTool(
+          "verify_attachment_delivery_origin",
+          {
+            _meta: { ...oauthToolMeta("mcp:read"), "openai/fileParams": ["file"] },
+            title: "Verify attachment delivery origin",
+            description:
+              "For the configured operator only. Reports the HTTPS origin of a file attached in ChatGPT without downloading it. Use only when the operator requests a delivery check.",
+            inputSchema: z.object({ file: chatGptFile }).strict(),
+            outputSchema: operationOutput(
+              "verify_attachment_delivery_origin",
+              z.object({ origin: z.string() }).strict(),
+            ),
+            annotations: {
+              readOnlyHint: true,
+              destructiveHint: false,
+              idempotentHint: true,
+              openWorldHint: false,
+            },
+          },
+          ({ file }) =>
+            execute("verify_attachment_delivery_origin", identity, renders, 10, () =>
+              Promise.resolve(
+                renders.verifyAttachmentOrigin(identity, file.download_url),
+              ),
+            ),
+        );
+      }
+
       if (renders.hasAttachmentImport()) {
         server.registerTool(
           "import_source_attachment",
@@ -347,14 +384,7 @@ export function createRemoteMcpHandler(
             inputSchema: z
               .object({
                 idempotencyKey: idempotencyKey.unwrap(),
-                file: z
-                  .object({
-                    download_url: z.string().min(1).max(8192),
-                    file_id: z.string().min(1).max(256),
-                    mime_type: z.string().max(256).optional(),
-                    file_name: z.string().max(1024).optional(),
-                  })
-                  .strict(),
+                file: chatGptFile,
               })
               .strict(),
             outputSchema: operationOutput(
@@ -815,6 +845,12 @@ export function createRemoteMcpHandler(
               version: z.number().int(),
               runtimeImage: z.string(),
               checks: z.record(z.string(), reportPart),
+              coverage: z.object({
+                totalPages: z.number().int().positive().nullable(),
+                pageDetailsThrough: z.number().int().positive().max(100).nullable(),
+                sampledPages: z.number().int().min(0).max(12),
+                maxSampleSidePixels: z.literal(512),
+              }).strict().optional(),
               visual: z.literal("not_checked"),
               sourceComparison: z.literal("not_checked"),
             })
@@ -861,6 +897,23 @@ export function createRemoteMcpHandler(
           height: z.number(),
         })
         .strict();
+      const cropResponse = z
+        .object({
+          page: z.number().int().positive(),
+          normalizedCrop: pdfCropRequestSchema,
+          cropPixels: cropRect,
+          displayPagePoints: z
+            .object({ width: z.number(), height: z.number() })
+            .strict(),
+          rotation: z.number(),
+          dpi: z.number(),
+          pixelWidth: z.number(),
+          pixelHeight: z.number(),
+          mimeType: z.literal("image/jpeg"),
+          sha256: z.string(),
+        })
+        .strict()
+        .nullable();
       server.registerTool(
         "get_render_preview_crop",
         {
@@ -874,23 +927,7 @@ export function createRemoteMcpHandler(
             z
               .object({
                 ...reportSchema.omit({ report: true }).shape,
-                crop: z
-                  .object({
-                    page: z.number().int().positive(),
-                    normalizedCrop: pdfCropRequestSchema,
-                    cropPixels: cropRect,
-                    displayPagePoints: z
-                      .object({ width: z.number(), height: z.number() })
-                      .strict(),
-                    rotation: z.number(),
-                    dpi: z.number(),
-                    pixelWidth: z.number(),
-                    pixelHeight: z.number(),
-                    mimeType: z.literal("image/jpeg"),
-                    sha256: z.string(),
-                  })
-                  .strict()
-                  .nullable(),
+                crop: cropResponse,
               })
               .strict(),
           ),
@@ -933,6 +970,115 @@ export function createRemoteMcpHandler(
           return output;
         },
       );
+      if (renders.hasAttachmentImport()) {
+        const attachedTarget = z
+          .object({
+            uploadId: z.string().regex(/^pdfupload_[a-f0-9]{32}$/),
+            pdfSha256: z.string().regex(/^[a-f0-9]{64}$/),
+          })
+          .strict();
+        const attachedReport = attachedTarget.extend({
+          expiresAt: reportSchema.shape.expiresAt,
+          state: reportSchema.shape.state,
+          errorCode: reportSchema.shape.errorCode,
+          report: reportSchema.shape.report,
+        });
+        server.registerTool(
+          "request_attached_pdf_inspection",
+          {
+            _meta: {
+              ...oauthToolMeta("mcp:render"),
+              "openai/fileParams": ["file"],
+            },
+            title: "Inspect an attached PDF",
+            description:
+              "Inspect the exact PDF the user attached. Reuse the request key after an interrupted reply. Use the returned upload ID and PDF digest to poll the report or zoom in. The PDF, report and preview expire one hour after acceptance.",
+            inputSchema: z
+              .object({
+                idempotencyKey: idempotencyKey.unwrap(),
+                file: chatGptFile,
+              })
+              .strict(),
+            outputSchema: operationOutput(
+              "request_attached_pdf_inspection",
+              attachedReport,
+            ),
+            annotations: {
+              readOnlyHint: false,
+              destructiveHint: false,
+              idempotentHint: true,
+              openWorldHint: true,
+            },
+          },
+          ({ file, idempotencyKey }) =>
+            execute(
+              "request_attached_pdf_inspection",
+              identity,
+              renders,
+              8,
+              () =>
+                renders.requestAttachedPdfInspection(
+                  identity,
+                  file,
+                  idempotencyKey,
+                ),
+            ),
+        );
+        server.registerTool(
+          "get_attached_pdf_inspection",
+          {
+            _meta: oauthToolMeta("mcp:read"),
+            title: "Read the attached PDF report or zoom in",
+            description:
+              "Use the exact upload ID and PDF digest. Omit crop for quality observations, or supply a physical page and a rectangle of 0–1 fractions from the displayed page’s top left. Repeat the same request if the crop is preparing. A machine report does not check the meaning or correctness of the content.",
+            inputSchema: attachedTarget.extend({
+              crop: pdfCropRequestSchema.optional(),
+            }),
+            outputSchema: operationOutput(
+              "get_attached_pdf_inspection",
+              attachedReport.extend({ crop: cropResponse }),
+            ),
+            annotations: {
+              readOnlyHint: false,
+              destructiveHint: false,
+              idempotentHint: true,
+              openWorldHint: false,
+            },
+          },
+          async ({ uploadId, pdfSha256, crop }) => {
+            let image: string | undefined;
+            const output = await execute(
+              "get_attached_pdf_inspection",
+              identity,
+              renders,
+              20,
+              async () => {
+                const result = await renders.attachedPdfInspection(
+                  identity,
+                  uploadId,
+                  pdfSha256,
+                  crop,
+                );
+                if (crop === undefined) return { ...result, crop: null };
+                const { base64, ...metadata } = asRecord(result.report);
+                if (typeof base64 === "string") image = base64;
+                return {
+                  ...result,
+                  report: null,
+                  crop: image === undefined ? null : metadata,
+                };
+              },
+            );
+            if (image !== undefined && !("isError" in output))
+              output.content.push({
+                type: "image",
+                data: image,
+                mimeType: "image/jpeg",
+              });
+            return output;
+          },
+        );
+      }
       server.registerTool(
         "locate_render_source",
         {
@@ -3352,6 +3498,7 @@ type RemoteToolOperation =
   | "render_project_revision"
   | "create_source"
   | "import_source_attachment"
+  | "verify_attachment_delivery_origin"
   | "begin_source_upload"
   | "upload_source_chunk"
   | "get_source_upload_status"
@@ -3366,6 +3513,8 @@ type RemoteToolOperation =
   | "get_render_diagnostics"
   | "request_render_quality_report"
   | "get_render_quality_report"
+  | "request_attached_pdf_inspection"
+  | "get_attached_pdf_inspection"
   | "get_render_manifest"
   | "compare_render_quality"
   | "read_render_log"
@@ -3395,6 +3544,8 @@ function modelReadableContent(
   result: Record<string, unknown>,
 ): ContentBlock[] {
   switch (operation) {
+    case "verify_attachment_delivery_origin":
+      return textContent([`Attachment delivery origin: ${stringField(result, "origin")}.`]);
     case "get_project_document_state":
     case "update_project_document_conditions": {
       const condition =
@@ -3659,11 +3810,18 @@ function modelReadableContent(
       ]);
     }
     case "request_render_quality_report":
-    case "get_render_quality_report": {
+    case "get_render_quality_report":
+    case "request_attached_pdf_inspection":
+    case "get_attached_pdf_inspection": {
       const report = recordField(result, "report");
       const checks = recordField(report, "checks");
+      const coverage = recordField(report, "coverage");
       return textContent([
-        `PDF inspection: ${stringField(result, "state")}. Job ${stringField(result, "jobId")}; PDF SHA-256 ${stringField(result, "pdfSha256")}.`,
+        `PDF inspection: ${stringField(result, "state")}. ${typeof result.uploadId === "string" ? `Attachment ${result.uploadId}` : `Job ${stringField(result, "jobId")}`}; PDF SHA-256 ${stringField(result, "pdfSha256")}.`,
+        `Expires at ${stringField(result, "expiresAt")}.`,
+        ...(typeof coverage.sampledPages === "number"
+          ? [`Total pages: ${String(coverage.totalPages)}. Page details attempted through page ${String(coverage.pageDetailsThrough)}. Raster samples: ${coverage.sampledPages} at up to 512 px on the long side.`]
+          : []),
         ...(typeof result.errorCode === "string"
           ? [`Inspection failure: ${result.errorCode}.`]
           : []),

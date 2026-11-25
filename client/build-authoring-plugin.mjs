@@ -17,16 +17,26 @@ const output = join(repository, "client-dist");
 const archive = join(output, `latex-renderer-authoring-plugin-${version}.zip`);
 const temp = `${archive}.${process.pid}.tmp`;
 const publicOrigin = "https://latex-render.n624.jp";
+const description =
+  "LaTeX文書の作成・編集、PDFへの変換、仕上がりの確認を支援します";
 const manifest = {
   $schema: "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   name: "latex-renderer",
   version,
-  description:
-    "Write, revise, render, and check LaTeX documents with LaTeX Renderer.",
+  description,
   author: { name: "n624-dev", url: "https://github.com/n624-dev" },
   homepage: publicOrigin,
   repository: "https://github.com/n624-dev/latex-renderer",
   license: "Apache-2.0",
+  extensions: {
+    "com.openai": {
+      interface: {
+        displayName: "LaTeX Renderer",
+        developerName: "n624-dev",
+        longDescription: description,
+      },
+    },
+  },
 };
 const mcp = {
   $schema: "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",

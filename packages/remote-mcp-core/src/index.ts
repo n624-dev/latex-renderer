@@ -5,9 +5,14 @@ import {
   type DocumentRequirement,
 } from "./document-requirements.js";
 import {
+  attachmentOriginForVerification,
   attachmentOrigins,
   downloadAttachment,
 } from "./attachment-download.js";
+import {
+  readUploadedPdfInspection,
+  validateUploadedPdf,
+} from "./attachment-pdf.js";
 import { createHash, randomUUID } from "node:crypto";
 import {
   mkdir,
@@ -16,8 +21,10 @@ import {
   open,
   readFile,
   readdir,
+  realpath,
   rename,
   rm,
+  rmdir,
   stat,
   writeFile,
 } from "node:fs/promises";
@@ -46,6 +53,8 @@ import {
   ARTIFACT_DOWNLOAD_LEASE_MS,
   artifactRetentionExpiresAt,
   PDF_INSPECTOR_VERSION,
+  pdfInspectionUploadDirectory,
+  pdfInspectionUploadResult,
   waitForPreview,
   assertSourceWritable,
 } from "@latex-renderer/database";
@@ -74,6 +83,8 @@ import {
   type DocumentProbe,
   pdfInspectionInputSchema,
   type PdfInspectionInput,
+  pdfCropRequestSchema,
+  type PdfCropRequest,
   renderEngineSchema,
   renderOutputsSchema,
   type ProjectDocumentCondition,
@@ -1022,6 +1033,22 @@ export class RemoteRenderService {
     return attachmentOrigins(process.env.REMOTE_MCP_FILE_ORIGINS).size > 0;
   }
 
+  canVerifyAttachmentOrigin(identity: RemoteMcpIdentity): boolean {
+    const verifier = process.env.REMOTE_MCP_ATTACHMENT_VERIFICATION_USER;
+    return Boolean(verifier && identity.userId === verifier);
+  }
+
+  verifyAttachmentOrigin(identity: RemoteMcpIdentity, downloadUrl: string) {
+    requireScope(identity.scopes, "mcp:read");
+    if (!this.canVerifyAttachmentOrigin(identity))
+      throw new AppError(
+        "ATTACHMENT_UNSUPPORTED",
+        "Attachment verification is disabled",
+        404,
+      );
+    return { origin: attachmentOriginForVerification(downloadUrl) };
+  }
+
   async importSourceAttachment(
     identity: RemoteMcpIdentity,
     attachment: { download_url: string; file_id: string },
@@ -1125,6 +1152,192 @@ export class RemoteRenderService {
         this.attachmentImportsInFlight -= 1;
       }
     }
+  }
+
+  async requestAttachedPdfInspection(
+    identity: RemoteMcpIdentity,
+    attachment: { download_url: string; file_id: string },
+    idempotencyKey: string,
+  ) {
+    requireScope(identity.scopes, "mcp:render");
+    const origins = attachmentOrigins(process.env.REMOTE_MCP_FILE_ORIGINS);
+    if (origins.size === 0)
+      throw new AppError(
+        "ATTACHMENT_UNSUPPORTED",
+        "Attachment import is not configured for this connection",
+        501,
+      );
+    assertSourceWritable(this.database);
+    if (this.attachmentImportsInFlight >= 2)
+      throw new AppError(
+        "ATTACHMENT_IMPORT_BUSY",
+        "Attachment import capacity is in use",
+        503,
+      );
+    const { upload, existing } = this.database.transaction(() =>
+      this.database.pdfInspections.reserveUpload(
+        identity.userId,
+        sha256Hex(idempotencyKey),
+        sha256Hex(attachment.file_id),
+        nowIso(),
+      ),
+    );
+    if (existing) {
+      if (upload.pdf_sha256 === null)
+        throw new Error("Existing PDF upload is incomplete");
+      const row = this.database.pdfInspections.forUpload(upload);
+      if (!row) throw new Error("Existing PDF upload is missing its inspection");
+      return {
+        uploadId: upload.id,
+        pdfSha256: upload.pdf_sha256,
+        expiresAt: upload.expires_at,
+        state: row.status,
+        errorCode: row.error_code,
+        report: null,
+      };
+    }
+    const directory = pdfInspectionUploadDirectory(this.storageRoot, upload.id);
+    const original = join(directory, "original");
+    const path = join(original, "result.pdf");
+    let created = false;
+    this.attachmentImportsInFlight += 1;
+    try {
+      const parent = dirname(directory);
+      await mkdir(parent, { mode: 0o770, recursive: true });
+      if ((await realpath(parent)) !== parent)
+        throw new Error("Invalid PDF upload directory");
+      await mkdir(directory, { mode: 0o770 });
+      created = true;
+      await mkdir(original, { mode: 0o770 });
+      const maxBytes = Math.min(
+        this.resourceLimits.maxUploadBytes,
+        20 * 1024 ** 2,
+      );
+      try {
+        await downloadAttachment(
+          attachment.download_url,
+          origins,
+          path,
+          maxBytes,
+          "PDF",
+        );
+      } catch (error) {
+        if (error instanceof AppError) throw error;
+        throw new AppError(
+          "ATTACHMENT_UNAVAILABLE",
+          "Could not retrieve the PDF attachment",
+          409,
+        );
+      }
+      const pdf = await validateUploadedPdf(path, maxBytes);
+      const row = this.database.transaction(() => {
+        assertSourceWritable(this.database);
+        const timestamp = nowIso();
+        const completed = this.database.pdfInspections.completeUpload(
+          upload.id,
+          pdf.sha256,
+          pdf.size,
+          timestamp,
+        );
+        return this.database.pdfInspections.requestUpload(completed, timestamp);
+      });
+      return {
+        uploadId: upload.id,
+        pdfSha256: pdf.sha256,
+        expiresAt: upload.expires_at,
+        state: row.status,
+        errorCode: row.error_code,
+        report: null,
+      };
+    } catch (error) {
+      if (created) {
+        await rm(path, { force: true });
+        await rmdir(original).catch((failure: unknown) => {
+          if ((failure as NodeJS.ErrnoException).code !== "ENOENT")
+            throw failure;
+        });
+        await rmdir(directory);
+      }
+      this.database.pdfInspections.discardUpload(upload.id);
+      throw error;
+    } finally {
+      this.attachmentImportsInFlight -= 1;
+    }
+  }
+
+  async attachedPdfInspection(
+    identity: RemoteMcpIdentity,
+    uploadId: string,
+    sha256: string,
+    crop?: PdfCropRequest,
+  ) {
+    requireScope(identity.scopes, "mcp:read");
+    const lookup = () => {
+      const upload = this.database.pdfInspections.upload(uploadId);
+      if (
+        !upload ||
+        upload.user_id !== identity.userId ||
+        upload.pdf_sha256 === null
+      )
+        throw new AppError(
+          "PDF_UPLOAD_NOT_FOUND",
+          "The uploaded PDF is unavailable",
+          404,
+        );
+      if (upload.expires_at <= nowIso())
+        throw new AppError(
+          "PDF_INSPECTION_EXPIRED",
+          "The uploaded PDF has expired",
+          410,
+        );
+      if (upload.pdf_sha256 !== sha256)
+        throw new AppError(
+          "PDF_CHECKSUM_MISMATCH",
+          "The attached PDF does not match the requested digest",
+          409,
+        );
+      return upload;
+    };
+    const row = crop
+      ? this.database.transaction(() => {
+          const upload = lookup();
+          const params = pdfCropRequestSchema.parse(crop);
+          return (
+            this.database.pdfInspections.forUpload(upload, params) ??
+            this.database.pdfInspections.requestUpload(upload, nowIso(), params)
+          );
+        })
+      : this.database.pdfInspections.forUpload(lookup());
+    const upload = lookup();
+    let report: unknown = null;
+    if (row?.status === "ready") {
+      const directory = pdfInspectionUploadDirectory(
+        this.storageRoot,
+        upload.id,
+      );
+      try {
+        if ((await realpath(directory)) !== directory)
+          throw new Error("Invalid PDF upload directory");
+        report = await readUploadedPdfInspection(
+          pdfInspectionUploadResult(directory, row.id),
+        );
+      } catch {
+        throw new AppError(
+          "PDF_INSPECTION_UNAVAILABLE",
+          "The PDF inspection report is unavailable",
+          410,
+        );
+      }
+      lookup();
+    }
+    return {
+      uploadId: upload.id,
+      pdfSha256: sha256,
+      expiresAt: upload.expires_at,
+      state: row?.status ?? ("not_requested" as const),
+      errorCode: row?.error_code ?? null,
+      report,
+    };
   }
 
   async createSource(

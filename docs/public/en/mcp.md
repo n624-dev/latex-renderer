@@ -23,6 +23,12 @@ Use **Remote MCP** to connect ChatGPT or Claude (web or desktop) to the server. 
 4. When the LaTeX Renderer sign-in page opens in your browser, use the method specified by your administrator. Review the requested permissions and approve the connection.
 5. Select the connected app in the AI client and test it with a request such as “Use LaTeX Renderer to convert a small sample document to PDF and tell me the result.”
 
+### Inspect a PDF attached in ChatGPT {#chatgptに添付したpdfを検査する}
+
+When attachment import is enabled on the connected server, attach a PDF and ask LaTeX Renderer to inspect it. The report covers page dimensions, fonts, extracted text, bookmarks, and PDF structure. Ask for a close-up by page number and region to inspect a formula or figure.
+
+Use the reported SHA-256 to identify the original PDF. Access to the PDF and its inspection results expires one hour after acceptance. The server removes the files automatically. Use the report's coverage and truncation information to see which checks were performed.
+
 ## Check a connection from ChatGPT or another client {#chatgptなどの接続を確認する}
 
 If you cannot connect, check the following.

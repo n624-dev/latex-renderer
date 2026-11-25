@@ -118,10 +118,17 @@ times for two distinct epochs. Use it when validating the Runtime used by
 sh deploy/scripts/smoke-test-renderer-authoring.sh "$runtime_image_id" date-profile
 ```
 
-`REMOTE_MCP_FILE_ORIGINS` is empty by default. If the deployment has confirmed
-ChatGPT attachment delivery origins, list those exact HTTPS origins separated
-by commas in the Remote MCP service environment. Test an attachment through
-the connected client before offering automatic import to users.
+`REMOTE_MCP_FILE_ORIGINS` is empty by default. To verify delivery, set
+`REMOTE_MCP_ATTACHMENT_VERIFICATION_USER` to the test account ID returned by
+`get_profile`. Restart Remote MCP, refresh the tool list with that account, attach a sample file in
+ChatGPT, and call `verify_attachment_delivery_origin`. This returns the HTTPS
+origin only and leaves the file at its source.
+
+List the confirmed HTTPS origins, separated by commas, in
+`REMOTE_MCP_FILE_ORIGINS` and remove the verification account setting. Refresh
+the client tools again after restarting Remote MCP and test a ZIP import and a PDF inspection. The uploaded
+PDF and results expire one hour after acceptance. They are stored outside
+Project data and collected by Worker maintenance.
 
 ## Build and validation
 

@@ -42,6 +42,19 @@ export function workerHasDemand(database) {
         .get(new Date().toISOString())
     )
       return true;
+  if (
+    database
+      .prepare(
+        "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='pdf_inspection_uploads'",
+      )
+      .get() &&
+    database
+      .prepare(
+        "SELECT 1 FROM pdf_inspection_uploads WHERE expires_at<=? LIMIT 1",
+      )
+      .get(new Date().toISOString())
+  )
+    return true;
   return (
     database
       .prepare(
