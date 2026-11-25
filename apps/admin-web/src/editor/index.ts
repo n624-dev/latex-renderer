@@ -287,6 +287,14 @@ export async function installEditor(
     saving = false,
     conflicted = false,
     composing = false;
+  let refreshEditorPhrases = false;
+  function updateEditorPhrases() {
+    refreshEditorPhrases = composing;
+    if (!composing && isAlive())
+      editor?.dispatch({
+        effects: phrases.reconfigure(EditorState.phrases.of(catalog.phrases)),
+      });
+  }
   let latest: Preview | undefined, watch: AbortController | undefined;
   let diagnosticsTicket: Preview | undefined;
   let shownVersion = 0;
@@ -342,9 +350,7 @@ export async function installEditor(
       locale = selectedLocale;
       numbers = new Intl.NumberFormat(locale);
       displayLanguage();
-      editor?.dispatch({
-        effects: phrases.reconfigure(EditorState.phrases.of(catalog.phrases)),
-      });
+      updateEditorPhrases();
       refreshFileList(current());
       files.value = selected;
     })()
@@ -486,6 +492,7 @@ export async function installEditor(
               },
               compositionend: () => {
                 composing = false;
+                if (refreshEditorPhrases) queueMicrotask(updateEditorPhrases);
                 schedule();
               },
             }),
