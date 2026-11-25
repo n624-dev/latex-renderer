@@ -58,6 +58,12 @@ TEX
       [ -s /tmp/smoke-text ]
       if [ -n "${EXPECTED_DATE_TEXT:-}" ]; then
         grep -Fx "$EXPECTED_DATE_TEXT" /tmp/smoke-text
+        synctex view -i 3:0:/work/input/main.tex -o /work/output/result.pdf > /tmp/sync-view
+        grep -qx "Page:1" /tmp/sync-view
+        point=$(awk -F: "/^x:/ {x=\$2} /^y:/ {print x \":\" \$2; exit}" /tmp/sync-view)
+        [ -n "$point" ]
+        synctex edit -o "1:$point:/work/output/result.pdf" > /tmp/sync-edit
+        grep -Eq "^Input:(/work/input/|[.]/)?main[.]tex$" /tmp/sync-edit
       fi
       if [ "$SAMPLE" = japanese-tagged ]; then
         grep -F "長方形" /tmp/smoke-text

@@ -1,16 +1,16 @@
-import type { PdfCropRequest } from "@latex-renderer/contracts";
+import type { PdfInspectionInput } from "@latex-renderer/contracts";
 import type { DatabaseSync } from "node:sqlite";
 import { AppError, newId, sha256Hex } from "@latex-renderer/shared";
 import type { ArtifactRow } from "./artifacts.js";
 
-export const PDF_INSPECTOR_VERSION = 1;
+export const PDF_INSPECTOR_VERSION = 2;
 export type PdfInspectionRow = {
   id: string;
   job_id: string;
   artifact_id: string;
   pdf_sha256: string;
   inspector_version: number;
-  crop_json: string | null;
+  params_json: string | null;
   status: "queued" | "running" | "ready" | "failed";
   requested_at: string;
   expires_at: string;
@@ -31,7 +31,7 @@ export class PdfInspectionsRepository {
 
   forArtifact(
     artifact: ArtifactRow,
-    crop?: PdfCropRequest,
+    params?: PdfInspectionInput,
   ): PdfInspectionRow | undefined {
     return this.db
       .prepare(
@@ -43,7 +43,7 @@ export class PdfInspectionsRepository {
         artifact.id,
         artifact.sha256,
         PDF_INSPECTOR_VERSION,
-        cropKey(crop),
+        inspectionKey(params),
       ) as PdfInspectionRow | undefined;
   }
 
@@ -51,9 +51,9 @@ export class PdfInspectionsRepository {
     artifact: ArtifactRow,
     expiresAt: string,
     timestamp: string,
-    crop?: PdfCropRequest,
+    params?: PdfInspectionInput,
   ) {
-    const existing = this.forArtifact(artifact, crop);
+    const existing = this.forArtifact(artifact, params);
     if (existing) return existing;
     const pending = this.db
       .prepare(
@@ -70,24 +70,24 @@ export class PdfInspectionsRepository {
         503,
       );
     if (
-      crop &&
+      params &&
       this.db
         .prepare(
-          `SELECT id FROM pdf_inspections WHERE job_id=? AND crop_json IS NOT NULL
+          `SELECT id FROM pdf_inspections WHERE job_id=? AND params_json IS NOT NULL
        AND expires_at>? LIMIT 1 OFFSET 31`,
         )
         .get(artifact.job_id, timestamp)
     )
       throw new AppError(
-        "PDF_CROP_LIMIT",
-        "The PDF has reached its saved crop limit",
+        "PDF_INSPECTION_LIMIT",
+        "The PDF has reached its saved inspection limit",
         409,
       );
     const id = newId("inspect");
     this.db
       .prepare(
         `INSERT INTO pdf_inspections
-      (id,job_id,artifact_id,pdf_sha256,inspector_version,request_key,crop_json,status,requested_at,expires_at)
+      (id,job_id,artifact_id,pdf_sha256,inspector_version,request_key,params_json,status,requested_at,expires_at)
       VALUES (?,?,?,?,?,?,?,'queued',?,?)`,
       )
       .run(
@@ -96,8 +96,8 @@ export class PdfInspectionsRepository {
         artifact.id,
         artifact.sha256,
         PDF_INSPECTOR_VERSION,
-        cropKey(crop),
-        crop ? JSON.stringify(crop) : null,
+        inspectionKey(params),
+        params ? JSON.stringify(params) : null,
         timestamp,
         expiresAt,
       );
@@ -206,10 +206,17 @@ export class PdfInspectionsRepository {
   }
 }
 
-function cropKey(crop?: PdfCropRequest): string {
-  return crop === undefined
-    ? "quality"
-    : sha256Hex(
-        JSON.stringify([crop.page, crop.x, crop.y, crop.width, crop.height]),
-      );
+function inspectionKey(params?: PdfInspectionInput): string {
+  if (params === undefined) return "quality";
+  if ("direction" in params || "pages" in params)
+    return sha256Hex(JSON.stringify(params));
+  return sha256Hex(
+    JSON.stringify([
+      params.page,
+      params.x,
+      params.y,
+      params.width,
+      params.height,
+    ]),
+  );
 }

@@ -1,11 +1,13 @@
-import { chmod, mkdir, rename, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { chmod, copyFile, lstat, mkdir, rename, rm } from "node:fs/promises";
+import { constants } from "node:fs";
+import { basename, join } from "node:path";
 import type { RendererDatabase, WorkerJobRow } from "@latex-renderer/database";
 import { newId, nowIso } from "@latex-renderer/shared";
 import { prepareSourceInput } from "./source-tree-cache.js";
 import {
   inspectOutputTree,
   publishArtifacts,
+  readArtifactSinglePass,
   validateArtifacts,
 } from "./artifact-validator.js";
 import type { WorkerConfig } from "./config.js";
@@ -342,6 +344,47 @@ export async function processJob(
           : undefined;
       const publishBegan = performance.now();
       await publishArtifacts(staging, candidateOutput, artifacts);
+      const publicBytes = artifacts.reduce((sum, item) => sum + item.size, 0);
+      const mapName = basename(job.entrypoint).replace(
+        /\.[tT][eE][xX]$/,
+        ".synctex.gz",
+      );
+      const sourceMapPath = join(staging, mapName);
+      const mapLimit = Math.min(
+        8 * 1024 ** 2,
+        config.maxOutputBytes - publicBytes,
+      );
+      const sourceMapInfo =
+        result.status === "succeeded" && mapLimit > 0
+          ? await lstat(sourceMapPath).catch((error: unknown) => {
+              if ((error as NodeJS.ErrnoException | null)?.code === "ENOENT")
+                return undefined;
+              throw error;
+            })
+          : undefined;
+      let sourceMap: { size: number; sha256: string } | undefined;
+      if (
+        sourceMapInfo?.isFile() &&
+        sourceMapInfo.nlink === 1 &&
+        sourceMapInfo.size > 0 &&
+        sourceMapInfo.size <= mapLimit
+      ) {
+        const target = join(candidateOutput, "result.synctex.gz");
+        const { sha256 } = await readArtifactSinglePass(
+          sourceMapPath,
+          "synctex",
+          sourceMapInfo,
+        );
+        await copyFile(sourceMapPath, target, constants.COPYFILE_EXCL);
+        const copied = await lstat(target);
+        if (
+          copied.size !== sourceMapInfo.size ||
+          (await readArtifactSinglePass(target, "synctex", copied)).sha256 !==
+            sha256
+        )
+          throw new Error("SyncTeX map changed during publication");
+        sourceMap = { size: copied.size, sha256 };
+      }
       if (workCache && result.status === "succeeded")
         workCacheStored = await storeDraftWorkCache(
           database,
@@ -393,6 +436,12 @@ export async function processJob(
             sha256: artifact.sha256,
             created_at: timestamp,
           });
+          if (artifact.type === "pdf" && sourceMap !== undefined)
+            database.artifacts.recordSourceMap(
+              artifactId,
+              sourceMap.sha256,
+              sourceMap.size,
+            );
           if (artifact.type === "pdf" && pageCount !== undefined)
             database.previews.register({
               job_id: job.id,
@@ -403,7 +452,17 @@ export async function processJob(
               created_at: timestamp,
             });
         }
-        const total = artifacts.reduce((sum, item) => sum + item.size, 0);
+        database.jobs.recordStageObservation({
+          jobId: job.id,
+          stage: "pdf",
+          generation: job.lease_generation,
+          rendererMs: compileMs,
+          sourcePrepareMs,
+          validationMs: Math.round(publishBegan - validationBegan),
+          publicationMs: Math.round(performance.now() - publishBegan),
+          workCacheUsed: warm === true,
+        });
+        const total = publicBytes + (sourceMap?.size ?? 0);
         if (
           database.worker.transitionOwned(
             job.id,

@@ -152,6 +152,66 @@ export const pdfCropRequestSchema = z
     message: "The crop must fit in the displayed page",
   });
 export type PdfCropRequest = z.infer<typeof pdfCropRequestSchema>;
+export const pdfSyncQuerySchema = z.discriminatedUnion("direction", [
+  z
+    .object({
+      direction: z.literal("pdf_to_source"),
+      page: z.number().int().min(1).max(100),
+      x: z.number().min(0).max(12000),
+      y: z.number().min(0).max(12000),
+    })
+    .strict(),
+  z
+    .object({
+      direction: z.literal("source_to_pdf"),
+      path: z.string().min(1).max(200),
+      line: z.number().int().min(1).max(1000000),
+    })
+    .strict(),
+]);
+export type PdfSyncQuery = z.infer<typeof pdfSyncQuerySchema>;
+export const pdfSheetQuerySchema = z
+  .object({
+    pages: z
+      .array(z.number().int().min(1).max(100))
+      .min(1)
+      .max(4)
+      .refine(
+        (pages) => new Set(pages).size === pages.length,
+        "Select distinct page numbers",
+      ),
+  })
+  .strict();
+export type PdfSheetQuery = z.infer<typeof pdfSheetQuerySchema>;
+export const pdfInspectionInputSchema = z.union([
+  pdfCropRequestSchema,
+  pdfSyncQuerySchema,
+  pdfSheetQuerySchema,
+]);
+export type PdfInspectionInput = z.infer<typeof pdfInspectionInputSchema>;
+const probeTeXName = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.+-]{0,99}$/);
+const probeFontName = z
+  .string()
+  .regex(/^[\p{L}\p{N} ._+-]{1,100}$/u)
+  .refine((name) => name.trim() === name && name.length > 0);
+export const documentProbeSchema = z
+  .object({
+    engine: renderEngineSchema,
+    documentClass: probeTeXName.default("article"),
+    packages: z.array(probeTeXName).max(12).default([]),
+    font: probeFontName.optional(),
+    mathFont: probeFontName.optional(),
+    japanese: z.boolean().default(false),
+  })
+  .strict()
+  .refine(
+    (input) =>
+      (!input.font && !input.mathFont && !input.japanese) ||
+      input.engine === "lualatex" ||
+      (input.engine === "xelatex" && !input.japanese),
+    "Named font probes require LuaLaTeX or XeLaTeX; the Japanese font sample uses LuaLaTeX",
+  );
+export type DocumentProbe = z.infer<typeof documentProbeSchema>;
 export const projectDocumentConditionsSchema = z
   .array(
     z

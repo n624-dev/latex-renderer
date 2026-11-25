@@ -65,6 +65,12 @@ run_stage engines sh "$script_root/smoke-test-renderer-engines.sh" "$validation_
 run_stage svg sh "$script_root/smoke-test-renderer-svg.sh" "$validation_runtime"
 run_stage biber sh "$script_root/smoke-test-renderer-biber.sh" "$validation_runtime"
 run_stage compat sh "$script_root/smoke-test-renderer-compat.sh" "$validation_runtime"
+if [ "${CI_RENDERER_AUTHORING:-0}" = 1 ]; then
+  runtime_id=$(docker image inspect --format '{{.Id}}' "$validation_runtime")
+  run_stage authoring-templates sh "$script_root/smoke-test-renderer-authoring.sh" "$runtime_id" templates
+  run_stage authoring-date-and-synctex sh "$script_root/smoke-test-renderer-authoring.sh" "$runtime_id" date-profile
+  run_stage authoring-tagged-ja sh "$script_root/smoke-test-renderer-authoring.sh" "$runtime_id" tagged-ja
+fi
 run_stage font-cache sh "$script_root/ci-font-cache-benchmark.sh" "$validation_runtime"
 # Reuse this exact immutable local Runtime before the existing cleanup trap;
 # Source/client integration success is also mandatory before Base publication.

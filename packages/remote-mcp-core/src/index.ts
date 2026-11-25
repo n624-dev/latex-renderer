@@ -70,8 +70,10 @@ import {
 import {
   defaultRenderEngine,
   diagnosticCoverageSchema,
-  pdfCropRequestSchema,
-  type PdfCropRequest,
+  documentProbeSchema,
+  type DocumentProbe,
+  pdfInspectionInputSchema,
+  type PdfInspectionInput,
   renderEngineSchema,
   renderOutputsSchema,
   type ProjectDocumentCondition,
@@ -3069,11 +3071,11 @@ export class RemoteRenderService {
     jobId: string,
     sha256: string,
     request = false,
-    crop?: PdfCropRequest,
+    params?: PdfInspectionInput,
   ) {
     requireScope(identity.scopes, "mcp:read");
     const geometry =
-      crop === undefined ? undefined : pdfCropRequestSchema.parse(crop);
+      params === undefined ? undefined : pdfInspectionInputSchema.parse(params);
     const lookup = () => {
       const job = this.assertReadableJob(identity.userId, jobId);
       const pdf = this.database.artifacts.getDownloadable(jobId, "result.pdf", {
@@ -3093,14 +3095,39 @@ export class RemoteRenderService {
         );
       const expiresAt = this.artifactExpiry(job);
       const document = this.database.previews.document(jobId);
+      if (geometry && "direction" in geometry) {
+        if (!this.database.artifacts.sourceMap(pdf))
+          throw new AppError(
+            "SYNCTEX_UNAVAILABLE",
+            "No source map for this PDF",
+            410,
+          );
+        if (geometry.direction === "source_to_pdf")
+          geometry.path = validateSourceFilePath(
+            geometry.path,
+            this.zipLimits(),
+          );
+      }
       if (
         geometry &&
+        "page" in geometry &&
         document?.pdf_sha256 === pdf.sha256 &&
         geometry.page > document.page_count
       )
         throw new AppError(
           "PREVIEW_PAGE_INVALID",
           "Preview page is outside the PDF",
+          404,
+        );
+      if (
+        geometry &&
+        "pages" in geometry &&
+        document?.pdf_sha256 === pdf.sha256 &&
+        geometry.pages.some((page) => page > document.page_count)
+      )
+        throw new AppError(
+          "PREVIEW_PAGE_INVALID",
+          "A contact sheet page is outside the PDF",
           404,
         );
       const row = request
@@ -3161,6 +3188,27 @@ export class RemoteRenderService {
         ? ("same_observation" as const)
         : ("changed_observation" as const);
     };
+    const rasterVersion = compare("versions");
+    const pageRasters = (checks: ReturnType<typeof observations>) => {
+      const sample = checks["page-rasters"];
+      if (sample?.text == null || sample.truncated) return [];
+      return sample.text
+        .trim()
+        .split("\n")
+        .filter((hash) => /^[a-f0-9]{64}$/.test(hash));
+    };
+    const leftPages = pageRasters(leftChecks),
+      rightPages = pageRasters(rightChecks);
+    const comparedPages =
+      rasterVersion === "same_observation"
+        ? Math.min(leftPages.length, rightPages.length)
+        : 0;
+    const changedPreviewPages = Array.from(
+      { length: comparedPages },
+      (_, i) => i + 1,
+    ).filter((page) => leftPages[page - 1] !== rightPages[page - 1]);
+    const leftJob = this.assertReadableJob(identity.userId, before.jobId);
+    const rightJob = this.assertReadableJob(identity.userId, after.jobId);
     return {
       before: { ...before, revisionId: left.revisionId, state: left.state },
       after: { ...after, revisionId: right.revisionId, state: right.state },
@@ -3169,8 +3217,31 @@ export class RemoteRenderService {
       fontInventory: compare("font-info"),
       pageInfoAndMetadata: compare("page-info"),
       navigation: compare("navigation"),
-      visual: "not_checked" as const,
-      sourceComparison: "not_checked" as const,
+      visual:
+        comparedPages === 0
+          ? ("not_checked" as const)
+          : changedPreviewPages.length > 0
+            ? ("changed_observation" as const)
+            : ("same_observation" as const),
+      visualCoverage: {
+        comparedPages,
+        changedPreviewPages,
+        maxPageSidePixels: 512,
+        pagePairing: "physical_page_number" as const,
+      },
+      sourceComparison:
+        leftJob.source_id !== null && rightJob.source_id !== null
+          ? leftJob.source_sha256 === rightJob.source_sha256 &&
+            leftJob.entrypoint === rightJob.entrypoint
+            ? ("same_observation" as const)
+            : ("changed_observation" as const)
+          : ("not_checked" as const),
+      documentMeaning: "not_checked" as const,
+      sameEngine: leftJob.engine === rightJob.engine,
+      sameRuntime:
+        leftJob.runtime_digest === null || rightJob.runtime_digest === null
+          ? null
+          : leftJob.runtime_digest === rightJob.runtime_digest,
     };
   }
 
@@ -3206,6 +3277,7 @@ export class RemoteRenderService {
         startedAt: row.started_at,
         finishedAt: row.completed_at,
       },
+      workerObservations: this.database.jobs.stageObservations(jobId),
       reproducibility: this.database.jobs.reproducibility(jobId) ?? null,
       pdfSvgMatch: "not_checked" as const,
     };
@@ -3676,15 +3748,17 @@ export class RemoteRenderService {
     }
   }
 
+  private runtimeDigest() {
+    return this.rendererVersion.match(/(?:^|@)(sha256:[a-f0-9]{64})$/)?.[1] ?? null;
+  }
+
   capabilities(identity: RemoteMcpIdentity): RemoteRendererCapabilities {
     requireScope(identity.scopes, "mcp:read");
     const direct = this.directSourceLimits();
     return {
       rendererVersion: this.rendererVersion,
       texliveVersion: "2026",
-      runtimeDigest:
-        this.rendererVersion.match(/(?:^|@)(sha256:[a-f0-9]{64})$/)?.[1] ??
-        null,
+      runtimeDigest: this.runtimeDigest(),
       engineVerification: "unknown",
       maxInlineArtifactBytes: this.maxInlineArtifactBytes,
       engines: ["lualatex"],
@@ -3909,6 +3983,37 @@ export class RemoteRenderService {
       revision: saved?.revision ?? null,
       sourceCandidates,
       items: inventory.items,
+    };
+  }
+
+  documentProbe(identity: RemoteMcpIdentity, input: DocumentProbe) {
+    requireScope(identity.scopes, "mcp:render");
+    this.assertMaintenance();
+    const probe = documentProbeSchema.parse(input);
+    const runtimeDigest = this.runtimeDigest();
+    if (runtimeDigest === null)
+      throw new AppError(
+        "DOCUMENT_PROBE_RUNTIME_UNVERIFIED",
+        "The active Runtime is not pinned",
+        503,
+      );
+    const result = this.database.transaction(() =>
+      this.database.documentProbes.request(
+        identity.userId,
+        this.rendererVersion,
+        probe,
+        nowIso(),
+      ),
+    );
+    return {
+      probeId: result.id,
+      requestFingerprint: result.fingerprint,
+      runtimeDigest,
+      input: probe,
+      scope: "isolated_synthetic_document" as const,
+      state: result.status,
+      code: result.result_code,
+      expiresAt: result.expires_at,
     };
   }
 

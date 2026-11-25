@@ -672,6 +672,11 @@ CREATE TABLE project_pdf_reviews (
     REFERENCES project_document_conditions(project_id,version)
 );
 CREATE INDEX idx_project_pdf_reviews_project ON project_pdf_reviews(project_id, created_at, id);
+CREATE TABLE pdf_source_maps (
+  artifact_id TEXT PRIMARY KEY REFERENCES artifacts(id) ON DELETE CASCADE,
+  sha256 TEXT NOT NULL CHECK(length(sha256)=64),
+  size INTEGER NOT NULL CHECK(size>0)
+);
 CREATE TABLE pdf_inspections (
   id TEXT PRIMARY KEY,
   job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
@@ -679,7 +684,7 @@ CREATE TABLE pdf_inspections (
   pdf_sha256 TEXT NOT NULL CHECK(length(pdf_sha256)=64),
   inspector_version INTEGER NOT NULL,
   request_key TEXT NOT NULL,
-  crop_json TEXT CHECK(crop_json IS NULL OR json_valid(crop_json)),
+  params_json TEXT CHECK(params_json IS NULL OR json_valid(params_json)),
   status TEXT NOT NULL CHECK(status IN ('queued','running','ready','failed')),
   requested_at TEXT NOT NULL,
   expires_at TEXT NOT NULL,
@@ -690,6 +695,32 @@ CREATE TABLE pdf_inspections (
   UNIQUE(job_id,artifact_id,pdf_sha256,inspector_version,request_key)
 );
 CREATE INDEX idx_pdf_inspections_queue ON pdf_inspections(status,requested_at,id);
+CREATE TABLE job_stage_observations (
+  job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  stage TEXT NOT NULL CHECK(stage IN ('pdf','svg')),
+  generation INTEGER NOT NULL CHECK(generation>0),
+  renderer_wall_ms INTEGER CHECK(renderer_wall_ms>=0),
+  validation_wall_ms INTEGER CHECK(validation_wall_ms>=0),
+  publication_wall_ms INTEGER CHECK(publication_wall_ms>=0),
+  source_prepare_wall_ms INTEGER CHECK(source_prepare_wall_ms>=0),
+  work_cache_used INTEGER CHECK(work_cache_used IN (0,1)),
+  PRIMARY KEY(job_id,stage)
+);
+CREATE TABLE document_probes (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  runtime_image TEXT NOT NULL,
+  fingerprint TEXT NOT NULL CHECK(length(fingerprint)=64),
+  input_json TEXT NOT NULL CHECK(json_valid(input_json) AND length(input_json)<=4096),
+  status TEXT NOT NULL CHECK(status IN ('queued','running','ready','failed')),
+  requested_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  lease_owner TEXT,
+  lease_until TEXT,
+  result_code TEXT,
+  UNIQUE(user_id,runtime_image,fingerprint)
+);
+CREATE INDEX idx_document_probes_queue ON document_probes(status,requested_at,id);
 CREATE TABLE job_reproducibility (
   job_id TEXT PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,
   mode TEXT NOT NULL CHECK(mode IN ('fixed','latest')),

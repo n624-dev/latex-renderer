@@ -11,8 +11,10 @@ export interface RendererStageOptions {
   pdfDirectory?: string;
   page?: number;
   deferFirstPreview?: boolean;
+  outputs?: readonly ("pdf" | "svg")[];
   workSeed?: string;
   inspectionScript?: string;
+  inspectionArguments?: readonly string[];
 }
 
 export function spawnRenderer(
@@ -255,7 +257,14 @@ export function rendererRunArguments(
         ]),
     ...(stage?.mode === "inspection" ? ["--entrypoint", "/bin/sh"] : []),
     config.image,
-    ...(inspectionScript === undefined ? [] : ["-ec", inspectionScript]),
+    ...(inspectionScript === undefined
+      ? []
+      : [
+          "-ec",
+          inspectionScript,
+          "pdf-inspector",
+          ...(stage?.inspectionArguments ?? []),
+        ]),
   ];
 }
 export function rendererContainerName(

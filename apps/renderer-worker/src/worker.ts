@@ -19,6 +19,7 @@ import { performance } from "node:perf_hooks";
 import { recoverStaleLeases } from "./recovery.js";
 import {
   processPdfInspection,
+  processDocumentProbe,
   recoverPdfInspections,
 } from "./pdf-inspection.js";
 import { processPreview, recoverPreviewRequests } from "./preview-processor.js";
@@ -149,7 +150,11 @@ export async function runWorker(
         )
           awaitingRecovery.delete(id);
       }
-      if (awaitingRecovery.size || database.pdfInspections.hasRunning()) {
+      if (
+        awaitingRecovery.size ||
+        database.pdfInspections.hasRunning() ||
+        database.documentProbes.running()
+      ) {
         await idleDelay();
         continue;
       }
@@ -276,6 +281,33 @@ export async function runWorker(
               event: "renderer_worker.preview_cleanup_deferred",
               jobId: preview.job_id,
               page: preview.page,
+            });
+          }
+          lastWork = clock();
+          continue;
+        }
+      }
+      if (
+        (preferPreview || !database.worker.nextQueued()) &&
+        (config.minimumAvailableMemoryBytes === undefined ||
+          assessHostResources(
+            readHostResources(),
+            config.minimumAvailableMemoryBytes,
+          ) === "ready")
+      ) {
+        const probe = database.transaction(() =>
+          database.previews.busy()
+            ? undefined
+            : database.documentProbes.claim(config.workerId, nowIso()),
+        );
+        if (probe) {
+          preferPreview = false;
+          try {
+            await processDocumentProbe(database, config, probe);
+          } catch (error) {
+            if (!(error instanceof RendererCleanupDeferred)) throw error;
+            diagnostic({
+              event: "renderer_worker.document_probe_cleanup_deferred",
             });
           }
           lastWork = clock();

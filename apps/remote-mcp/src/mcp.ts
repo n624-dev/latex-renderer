@@ -29,6 +29,9 @@ import {
   renderReproducibilitySchema,
   diagnosticCoverageSchema,
   pdfCropRequestSchema,
+  pdfSyncQuerySchema,
+  pdfSheetQuerySchema,
+  documentProbeSchema,
   renderOutputsSchema,
   jobStagesSchema,
 } from "@latex-renderer/contracts";
@@ -930,6 +933,126 @@ export function createRemoteMcpHandler(
           return output;
         },
       );
+      server.registerTool(
+        "locate_render_source",
+        {
+          _meta: oauthToolMeta("mcp:read"),
+          title: "Find correspondence between a PDF and its TeX source",
+          description:
+            "Query the exact PDF digest for candidate source lines or page positions. PDF coordinates are unrotated points from the top left of the page, before a viewer applies cropping or rotation. Repeat the same request until ready; older PDFs without a retained source map report unavailable.",
+          inputSchema: targetPdf.extend({ query: pdfSyncQuerySchema }),
+          outputSchema: operationOutput(
+            "locate_render_source",
+            reportSchema.omit({ report: true }).extend({
+              matches: z
+                .object({
+                  evidence: z.literal("canonical_synctex"),
+                  state: z.enum(["candidate", "unknown"]),
+                  coordinateSystem: z.literal("unrotated_page_points_top_left"),
+                  sources: z.array(
+                    z
+                      .object({
+                        path: z.string(),
+                        line: z.number().int().positive(),
+                        column: z.number().int().positive().nullable(),
+                      })
+                      .strict(),
+                  ),
+                  locations: z.array(
+                    z
+                      .object({
+                        page: z.number().int().positive(),
+                        x: z.number(),
+                        y: z.number(),
+                      })
+                      .strict(),
+                  ),
+                  truncated: z.boolean(),
+                })
+                .strict()
+                .nullable(),
+            }),
+          ),
+          annotations: {
+            readOnlyHint: false,
+            destructiveHint: false,
+            idempotentHint: true,
+            openWorldHint: false,
+          },
+        },
+        ({ jobId: id, pdfSha256, query }) =>
+          execute("locate_render_source", identity, renders, 20, () => {
+            const { report, ...result } = renders.pdfInspection(
+              identity,
+              id,
+              pdfSha256,
+              true,
+              query,
+            );
+            return Promise.resolve({ ...result, matches: report });
+          }),
+      );
+      server.registerTool(
+        "get_render_preview_sheet",
+        {
+          _meta: oauthToolMeta("mcp:read"),
+          title: "Request a contact sheet for selected PDF pages",
+          description:
+            "Request up to four physical pages from the exact PDF. Repeat the same ordered page list to poll. The image reads left to right in rows in returned page order. Use full-size pages or crops for detailed checks.",
+          inputSchema: targetPdf.extend({ sheet: pdfSheetQuerySchema }),
+          outputSchema: operationOutput(
+            "get_render_preview_sheet",
+            reportSchema.omit({ report: true }).extend({
+              sheet: z
+                .object({
+                  pages: z.array(z.number().int().positive()),
+                  columns: z.number().int().min(1).max(2),
+                  mimeType: z.literal("image/jpeg"),
+                  sha256: z.string(),
+                })
+                .strict()
+                .nullable(),
+            }),
+          ),
+          annotations: {
+            readOnlyHint: false,
+            destructiveHint: false,
+            idempotentHint: true,
+            openWorldHint: false,
+          },
+        },
+        async ({ jobId: id, pdfSha256, sheet }) => {
+          let image: string | undefined;
+          const output = await execute(
+            "get_render_preview_sheet",
+            identity,
+            renders,
+            20,
+            () => {
+              const { report, ...status } = renders.pdfInspection(
+                identity,
+                id,
+                pdfSha256,
+                true,
+                sheet,
+              );
+              const { base64, ...metadata } = asRecord(report);
+              if (typeof base64 === "string") image = base64;
+              return Promise.resolve({
+                ...status,
+                sheet: image === undefined ? null : metadata,
+              });
+            },
+          );
+          if (image !== undefined && !("isError" in output))
+            output.content.push({
+              type: "image",
+              data: image,
+              mimeType: "image/jpeg",
+            });
+          return output;
+        },
+      );
       const inspectionComparison = z.enum([
         "not_checked",
         "same_observation",
@@ -945,7 +1068,7 @@ export function createRemoteMcpHandler(
           _meta: oauthToolMeta("mcp:read"),
           title: "Compare recorded observations for two exact PDFs",
           description:
-            "Compare recorded text, font, page and navigation observations for the two digests. Each report must be requested separately. A match on extracted text is not a visual or semantic comparison.",
+            "Compare recorded observations for two exact PDFs. Request each report first. Image sampling compares corresponding physical pages at 512 pixels on the longest side and cannot determine whether text or mathematics has the same meaning.",
           inputSchema: z
             .object({ before: targetPdf, after: targetPdf })
             .strict(),
@@ -960,8 +1083,19 @@ export function createRemoteMcpHandler(
                 fontInventory: inspectionComparison,
                 pageInfoAndMetadata: inspectionComparison,
                 navigation: inspectionComparison,
-                visual: z.literal("not_checked"),
-                sourceComparison: z.literal("not_checked"),
+                visual: inspectionComparison,
+                visualCoverage: z
+                  .object({
+                    comparedPages: z.number().int().nonnegative(),
+                    changedPreviewPages: z.array(z.number().int().positive()),
+                    maxPageSidePixels: z.literal(512),
+                    pagePairing: z.literal("physical_page_number"),
+                  })
+                  .strict(),
+                sourceComparison: inspectionComparison,
+                documentMeaning: z.literal("not_checked"),
+                sameEngine: z.boolean(),
+                sameRuntime: z.boolean().nullable(),
               })
               .strict(),
           ),
@@ -1013,6 +1147,23 @@ export function createRemoteMcpHandler(
                     finishedAt: z.string().nullable(),
                   })
                   .strict(),
+                workerObservations: z.array(
+                  z
+                    .object({
+                      stage: z.enum(["pdf", "svg"]),
+                      generation: z.number().int().positive(),
+                      rendererMs: z.number().int().nonnegative().nullable(),
+                      validationMs: z.number().int().nonnegative().nullable(),
+                      publicationMs: z.number().int().nonnegative().nullable(),
+                      sourcePrepareMs: z
+                        .number()
+                        .int()
+                        .nonnegative()
+                        .nullable(),
+                      workCacheUsed: z.boolean().nullable(),
+                    })
+                    .strict(),
+                ),
                 pdfSvgMatch: z.literal("not_checked"),
                 reproducibility: z
                   .object({
@@ -1510,6 +1661,42 @@ export function createRemoteMcpHandler(
               input.requirements,
               input.revision,
             ),
+          ),
+      );
+      server.registerTool(
+        "probe_document_requirements",
+        {
+          _meta: oauthToolMeta("mcp:render"),
+          title:
+            "Test loading a class, packages and fonts in the active Runtime",
+          description:
+            "Request a small synthetic document in the selected engine. No Project, source upload, or render history is created. Repeat the same input for results. A successful probe covers this combination and sample only.",
+          inputSchema: documentProbeSchema,
+          outputSchema: operationOutput(
+            "probe_document_requirements",
+            z
+              .object({
+                probeId: z.string(),
+                requestFingerprint: z.string(),
+                runtimeDigest: z.string(),
+                input: documentProbeSchema,
+                scope: z.literal("isolated_synthetic_document"),
+                state: z.enum(["queued", "running", "ready", "failed"]),
+                code: z.string().nullable(),
+                expiresAt: z.string(),
+              })
+              .strict(),
+          ),
+          annotations: {
+            readOnlyHint: false,
+            destructiveHint: false,
+            idempotentHint: true,
+            openWorldHint: false,
+          },
+        },
+        (input) =>
+          execute("probe_document_requirements", identity, renders, 10, () =>
+            Promise.resolve(renders.documentProbe(identity, input)),
           ),
       );
       registerEnvironmentTools(server, renders, identity);
@@ -3154,6 +3341,9 @@ type RemoteToolOperation =
   | "compare_render_quality"
   | "read_render_log"
   | "get_render_preview_crop"
+  | "locate_render_source"
+  | "get_render_preview_sheet"
+  | "probe_document_requirements"
   | "get_render_preview_pages"
   | "get_render_preview"
   | "get_render_artifacts"
@@ -3469,6 +3659,43 @@ function modelReadableContent(
       ]);
     case "get_render_diagnostics":
       return diagnosticsContent(locale, recordField(result, "diagnostics"));
+    case "probe_document_requirements":
+      return textContent([
+        `Probe ${stringField(result, "probeId")}: ${stringField(result, "state")}; Runtime ${stringField(result, "runtimeDigest")}.`,
+        ...(typeof result.code === "string"
+          ? [result.code]
+          : ["Repeat the same input to read the result."]),
+      ]);
+    case "get_render_preview_sheet": {
+      const sheet = recordField(result, "sheet");
+      return textContent([
+        `Contact sheet: ${stringField(result, "state")}. Job: ${stringField(result, "jobId")}. PDF SHA-256: ${stringField(result, "pdfSha256")}.`,
+        ...(Array.isArray(sheet.pages)
+          ? [
+              `Physical pages in image order: ${sheet.pages.join(", ")}. Use get_render_preview for details.`,
+            ]
+          : []),
+      ]);
+    }
+    case "locate_render_source": {
+      const matches = recordField(result, "matches");
+      return textContent([
+        `Source map request: ${stringField(result, "state")}. Job: ${stringField(result, "jobId")}. PDF SHA-256: ${stringField(result, "pdfSha256")}.`,
+        ...(result.matches === null
+          ? []
+          : [
+              `SyncTeX match: ${stringField(matches, "state")}.`,
+              ...recordArray(matches.sources).map(
+                (item) =>
+                  `${quoted(stringField(item, "path"))}, line ${numberField(item, "line")}`,
+              ),
+              ...recordArray(matches.locations).map(
+                (item) =>
+                  `Page ${numberField(item, "page")}, x=${numberField(item, "x")}, y=${numberField(item, "y")} points from unrotated top left.`,
+              ),
+            ]),
+      ]);
+    }
     case "get_render_preview_crop":
       return textContent([
         `PDF crop: ${stringField(result, "state")}. Job ${stringField(result, "jobId")}; PDF SHA-256 ${stringField(result, "pdfSha256")}.`,

@@ -28,7 +28,7 @@ export async function runRendererStage(
     input,
     staging,
     job.entrypoint,
-    ["pdf", "svg"],
+    options.outputs ?? ["pdf", "svg"],
     options,
     job.engine,
   );

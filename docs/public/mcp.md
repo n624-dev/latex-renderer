@@ -60,9 +60,9 @@ AI に文書のテキストを送って PDF や SVG に変換し、エラー診�
 > | 保存版の整理 | `get_project_storage_usage`、`protect_project_revision`、`plan_project_revision_cleanup`、`apply_project_revision_cleanup` |
 > | アップロード再開と添付 | `get_source_upload_status`、`import_source_attachment`（管理者が設定した場合） |
 > | 診断と結果 | `get_render_diagnostics`、`read_render_log`、`get_render_artifacts`、`get_render_manifest` |
-> | プレビュー | `get_render_preview`、`get_render_preview_pages`、`get_render_preview_crop` |
+> | プレビュー | `get_render_preview`、`get_render_preview_pages`、`get_render_preview_crop`、`locate_render_source`、`get_render_preview_sheet` |
 > | PDF品質検査 | `request_render_quality_report`、`get_render_quality_report`、`compare_render_quality` |
-> | 環境とガイド | `get_renderer_capabilities`、`get_authoring_guide`、`list_authoring_profiles`、`check_document_requirements`、`check_packages`、`search_packages`、`check_fonts`、`search_fonts` |
+> | 環境とガイド | `get_renderer_capabilities`、`get_authoring_guide`、`list_authoring_profiles`、`check_document_requirements`、`probe_document_requirements`、`check_packages`、`search_packages`、`check_fonts`、`search_fonts` |
 >
 > - **利用者識別とスコープ**：`get_profile` は認証済み利用者を識別する不透明な固定 ID だけを返します（トークン更新や再接続後も同一ですが、メールアドレスや表示名は返しません）。各ツールが必要とする OAuth スコープはツール一覧で宣言され、実行時に検査されます。
 > - **Source の作成と上限**：
@@ -73,6 +73,8 @@ AI に文書のテキストを送って PDF や SVG に変換し、エラー診�
 > - **PDF の先行公開と SVG 再試行**：PDF＋SVG の Job は PDF 確定後に先行取得でき、個別状態を `stages.pdf` / `stages.svg` に、全体の成否を Job の状態に返します。SVG のみ失敗した場合は `retry_svg_render` で確定済み PDF と同じ Job ID・Source を保ったまま SVG だけを再試行できます（再送は同じ `idempotencyKey`、別試行は新しいキーを指定。初回含め最大 8 回、PDF 保持期限の延長なし。旧版で完了した Job には単独再試行用 checkpoint がないため `retry_render` を使用）。`get_render_diagnostics` の `stage` に `pdf` / `svg` を指定すると個別ログを確認でき、省略時は SVG 失敗を優先します。
 > - **プレビューと Resource 取得**：プレビューは初期 1 ページのみ生成し、`get_render_preview` や preview Resource で明示したページを追加生成します（準備中なら同じ Job・ページを再取得し、別 Job を作り直さないでください。既存の全ページ生成済み Job も利用可）。`previewPages` と PDF の `pageCount` は総ページ数を表し、成果物一覧は生成済みファイルの実際のサイズ・SHA-256 のみを返します。完全な PDF・ログ・SVG は対応クライアントから Resource 経由で取得できます（詳細：[MCPの結果とResource](/docs/reference/#mcpの結果とresource)）。
 > - **標準ワークフローと環境検索**：Web UI を開かず、`create_source` → `create_render` → `get_render_status` → `get_render_diagnostics` / `get_render_preview` → Source revision → `retry_render`（または再 render）→ Resource 読取の順で完結できます（Web 結果リンクは人間用の補助です）。利用できるエンジンと出力形式は `get_renderer_capabilities` で確認できます。既定は `lualatex` です。パッケージ・フォント検索は1回最大50件を返し、続きがある場合は cursor を返します。
+> - **PDFとソースの確認**。`get_render_preview_sheet` は指定順で最大4ページを並べます。`locate_render_source` の位置は表示時の回転・トリミング前のページ左上からのポイント値です。同じ版で保存されたSyncTeXの候補を返します。`compare_render_quality` は最大12ページを同じ解像度で比較します。細部は個別ページや拡大画像で確認してください。
+> - **パッケージとフォントの確認**。`check_document_requirements` はインストール済み項目を確認します。`probe_document_requirements` は指定したクラス・パッケージ・フォントを小さな検証用文書で読み込みます。同じ入力で再度呼び出すと結果が得られます。
 > - **組版で使う日時**。LuaLaTeX では `reproducibility` に `latest` または UTC日時を指定した `fixed` を選べます。`latest` は新規ジョブを受理した時点の日時を使います。`retry_render` で作る再実行ジョブにも、その再実行を受理した時点の日時を使います。同じ再送キー（`idempotencyKey`）で再送したときは、受理済みのジョブと日時を返します。同じジョブの中で SVG だけを再試行するときは、確定済みのPDFと日時をそろえます。ジョブに記録された日時は `get_render_manifest` で確認できます。
 > - **レート制限とエラー**：ツールごとの 1 分間上限を超えると `REMOTE_MCP_RATE_LIMIT`（status `429`）と再試行秒数が `structuredContent` と標準 `content` の両方に返ります。他人の Source や Job は存在しないものとして扱われます。
 

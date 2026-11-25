@@ -611,6 +611,58 @@ export class JobsRepository {
       );
   }
 
+  recordStageObservation(input: {
+    jobId: string;
+    stage: "pdf" | "svg";
+    generation: number;
+    rendererMs: number | null;
+    validationMs?: number;
+    publicationMs?: number;
+    sourcePrepareMs?: number;
+    workCacheUsed?: boolean;
+  }) {
+    this.db
+      .prepare(
+        `INSERT INTO job_stage_observations VALUES (?,?,?,?,?,?,?,?)
+       ON CONFLICT(job_id,stage) DO UPDATE SET generation=excluded.generation,
+       renderer_wall_ms=excluded.renderer_wall_ms,validation_wall_ms=excluded.validation_wall_ms,
+       publication_wall_ms=excluded.publication_wall_ms,source_prepare_wall_ms=excluded.source_prepare_wall_ms,
+       work_cache_used=excluded.work_cache_used WHERE excluded.generation>job_stage_observations.generation`,
+      )
+      .run(
+        input.jobId,
+        input.stage,
+        input.generation,
+        input.rendererMs,
+        input.validationMs ?? null,
+        input.publicationMs ?? null,
+        input.sourcePrepareMs ?? null,
+        input.workCacheUsed === undefined ? null : Number(input.workCacheUsed),
+      );
+  }
+
+  stageObservations(jobId: string) {
+    return this.db
+      .prepare(
+        `SELECT stage,generation,renderer_wall_ms AS rendererMs,validation_wall_ms AS validationMs,
+       publication_wall_ms AS publicationMs,source_prepare_wall_ms AS sourcePrepareMs,
+       work_cache_used AS cache FROM job_stage_observations WHERE job_id=? ORDER BY stage`,
+      )
+      .all(jobId)
+      .map((record) => {
+        const { cache, ...row } = record as {
+          stage: "pdf" | "svg";
+          generation: number;
+          rendererMs: number | null;
+          validationMs: number | null;
+          publicationMs: number | null;
+          sourcePrepareMs: number | null;
+          cache: number | null;
+        };
+        return { ...row, workCacheUsed: cache === null ? null : cache === 1 };
+      });
+  }
+
   setReproducibility(
     jobId: string,
     mode: "fixed" | "latest",

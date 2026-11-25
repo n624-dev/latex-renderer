@@ -70,6 +70,33 @@ export class ArtifactsRepository {
     );
   }
 
+  recordSourceMap(artifactId: string, sha256: string, size: number): void {
+    this.db
+      .prepare(
+        "INSERT INTO pdf_source_maps(artifact_id,sha256,size) VALUES (?,?,?)",
+      )
+      .run(artifactId, sha256, size);
+  }
+
+  sourceMap(
+    artifact: ArtifactRow,
+  ): { sha256: string; size: number } | undefined {
+    const row = this.db
+      .prepare("SELECT sha256,size FROM pdf_source_maps WHERE artifact_id=?")
+      .get(artifact.id) as { sha256: string; size: number } | undefined;
+    if (row !== undefined) return row;
+    return this.db
+      .prepare(
+        `SELECT synctex_sha256 AS sha256,synctex_bytes AS size FROM job_output_stages
+       WHERE job_id=? AND pdf_status='succeeded' AND pdf_generation=? AND pdf_sha256=?`,
+      )
+      .get(
+        artifact.job_id,
+        artifact.storage_generation ?? null,
+        artifact.sha256,
+      ) as { sha256: string; size: number } | undefined;
+  }
+
   hasPublishedPdf(jobId: string): boolean {
     return (
       this.db

@@ -11,6 +11,7 @@ on:
       - "deploy/texlive-mirror/**"
       - "deploy/scripts/build-language-runtime.sh"
       - "deploy/scripts/smoke-test-renderer-*.sh"
+      - "integrations/latex-renderer/assets/*.tex"
       - "tests/fixtures/svg/**"
       - "tests/fixtures/font-cache/**"
       - "tests/fixtures/source-pipeline-renderer.mjs"
@@ -30,6 +31,7 @@ on:
       - "deploy/texlive-mirror/**"
       - "deploy/scripts/build-language-runtime.sh"
       - "deploy/scripts/smoke-test-renderer-*.sh"
+      - "integrations/latex-renderer/assets/*.tex"
       - "tests/fixtures/svg/**"
       - "tests/fixtures/font-cache/**"
       - "tests/fixtures/source-pipeline-renderer.mjs"
@@ -227,6 +229,7 @@ jobs:
           # hosted runner instead of exporting it to Actions cache storage.
       - name: Validate Base and temporary English/Japanese Runtime
         env:
+          CI_RENDERER_AUTHORING: "1"
           TEXLIVE_DOWNLOAD_REPOSITORY: ${{ steps.mirror.outputs.repository }}
           TEXLIVE_REPOSITORY: ${{ steps.snapshot.outputs.repository }}
           BUILDX_BUILDER: ${{ steps.renderer-builder.outputs.name }}

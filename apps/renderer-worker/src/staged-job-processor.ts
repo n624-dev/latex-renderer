@@ -145,6 +145,7 @@ export async function processStagedJob(
       const staging = join(attempt, "pdf");
       await mkdir(staging, { mode: 0o770 });
       await chmod(staging, 0o770);
+      const renderBegan = performance.now();
       const execution = await runRendererStage(
         db,
         config,
@@ -154,6 +155,8 @@ export async function processStagedJob(
         { mode: "pdf" },
         deadline - Date.now(),
       );
+      const validationBegan = performance.now();
+      const rendererMs = Math.round(validationBegan - renderBegan);
       if (!owns()) return;
       if (db.worker.runtimeState(job.id)?.cancel_requested_at !== null) {
         db.worker.markCanceled(
@@ -194,6 +197,12 @@ export async function processStagedJob(
           committed = db.transaction(() => {
             if (!owns() || canceled()) return false;
             insertArtifacts(artifacts, generation, timestamp);
+            db.jobs.recordStageObservation({
+              jobId: job.id,
+              stage: "pdf",
+              generation,
+              rendererMs,
+            });
             if (
               db.worker.transitionOwned(
                 job.id,
@@ -249,6 +258,7 @@ export async function processStagedJob(
       const generation = storageGeneration(job.lease_generation, false),
         candidate = join(attempt, "pdf-candidate"),
         output = join(root, "outputs", String(generation));
+      const publicationBegan = performance.now();
       await publishArtifacts(staging, candidate, artifacts);
       await copyFile(
         join(staging, "result.synctex.gz"),
@@ -282,6 +292,14 @@ export async function processStagedJob(
         )
           return false;
         insertArtifacts(artifacts, generation, timestamp, pageCount);
+        db.jobs.recordStageObservation({
+          jobId: job.id,
+          stage: "pdf",
+          generation,
+          rendererMs,
+          validationMs: Math.round(publicationBegan - validationBegan),
+          publicationMs: Math.round(performance.now() - publicationBegan),
+        });
         if (
           db.worker.transitionOwned(
             job.id,
@@ -376,7 +394,9 @@ export async function processStagedJob(
     await mkdir(staging, { mode: 0o770 });
     await chmod(staging, 0o770);
     let result: ReturnType<typeof classifyRenderResult>, exitCode: number;
+    let rendererMs: number | null = null;
     try {
+      const renderBegan = performance.now();
       const execution = await runRendererStage(
         db,
         config,
@@ -386,6 +406,7 @@ export async function processStagedJob(
         { mode: "svg", pdfDirectory },
         deadline - Date.now(),
       );
+      rendererMs = Math.round(performance.now() - renderBegan);
       exitCode = execution.exitCode;
       result = classifyRenderResult(
         exitCode,
@@ -550,6 +571,12 @@ export async function processStagedJob(
       )
         return false;
       insertArtifacts(artifacts, generation, timestamp);
+      db.jobs.recordStageObservation({
+        jobId: job.id,
+        stage: "svg",
+        generation,
+        rendererMs,
+      });
       if (
         db.worker.transitionOwned(
           job.id,

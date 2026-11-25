@@ -2,6 +2,8 @@ export {
   PDF_INSPECTOR_VERSION,
   type PdfInspectionRow,
 } from "./repositories/pdf-inspections.js";
+export type { DocumentProbeRow } from "./repositories/document-probes.js";
+import { DocumentProbesRepository } from "./repositories/document-probes.js";
 import { PdfInspectionsRepository } from "./repositories/pdf-inspections.js";
 export { ProjectStorage } from "./project-storage.js";
 export { ProjectDocumentState } from "./project-document-state.js";
@@ -76,6 +78,7 @@ export class RendererDatabase {
   public readonly browserAuth: BrowserAuthRepository;
   public readonly outputStages: OutputStagesRepository;
   public readonly pdfInspections: PdfInspectionsRepository;
+  public readonly documentProbes: DocumentProbesRepository;
   public readonly previews: PreviewsRepository;
   public readonly sourceTrees: SourceTreesRepository;
 
@@ -103,6 +106,7 @@ export class RendererDatabase {
     this.outputStages = new OutputStagesRepository(this.raw);
     this.previews = new PreviewsRepository(this.raw);
     this.pdfInspections = new PdfInspectionsRepository(this.raw);
+    this.documentProbes = new DocumentProbesRepository(this.raw);
     this.sourceTrees = new SourceTreesRepository(this.raw);
   }
 
