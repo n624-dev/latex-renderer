@@ -118,4 +118,10 @@ describe("display locale", () => {
       ),
     ).toEqual(["fr-CA", "ja", "de"]);
   });
+
+  it("accepts whitespace around a single quality parameter and ignores extra parameters", () => {
+    expect(
+      preferredDisplayLanguages("ja \t ; \t q=0.5, de;q=1;ignored, en"),
+    ).toEqual(["en", "ja"]);
+  });
 });

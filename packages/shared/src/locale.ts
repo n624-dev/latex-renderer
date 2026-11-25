@@ -84,7 +84,9 @@ export function preferredDisplayLanguages(
   return header
     .split(",")
     .flatMap((entry, index) => {
-      const [language, quality, ...extra] = entry.trim().split(/\s*;\s*/);
+      const [language, quality, ...extra] = entry
+        .split(";")
+        .map((field) => field.trim());
       if (!language || language === "*" || extra.length > 0) return [];
       const match =
         quality === undefined

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Script } from "node:vm";
+import { execFileSync } from "node:child_process";
 import { ApiKeyService, type AccessJwtVerifier } from "@latex-renderer/auth";
 import { RendererDatabase } from "@latex-renderer/database";
 import { createApiKeySchema } from "../packages/contracts/src/index.js";
@@ -378,7 +378,12 @@ describe("public and administrative Web", () => {
   });
 
   it("keeps the administrative module valid and exposes guarded operations", () => {
-    expect(() => new Script(`(async () => {${adminScript}\n})`)).not.toThrow();
+    expect(() =>
+      execFileSync(process.execPath, ["--input-type=module", "--check"], {
+        input: adminScript,
+        timeout: 5000,
+      }),
+    ).not.toThrow();
     expect(adminScript).not.toMatch(/\b(?:prompt|confirm|alert)\s*\(/);
     expect(adminScript).toContain("openAdminDialog");
     expect(adminScript).toContain("formDialog");
