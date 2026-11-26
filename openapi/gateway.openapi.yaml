@@ -163,6 +163,24 @@ paths:
         "409": { $ref: "#/components/responses/Error" }
         "503": { $ref: "#/components/responses/Error" }
   /api/v1/source-tickets:
+    get:
+      summary: Read the current Source ZIP upload and extraction limits
+      security: [{ renderApiKey: [] }]
+      responses:
+        "200":
+          description: Effective Source limits in bytes and file counts
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [maxUploadBytes, maxExtractedBytes, maxFileCount, maxZipEntries]
+                properties:
+                  maxUploadBytes: { type: integer, minimum: 1 }
+                  maxExtractedBytes: { type: integer, minimum: 1 }
+                  maxFileCount: { type: integer, minimum: 1 }
+                  maxZipEntries: { type: integer, minimum: 1 }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
     post:
       summary: Reserve or deduplicate an immutable Source
       security: [{ renderApiKey: [] }]

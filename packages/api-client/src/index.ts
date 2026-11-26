@@ -29,6 +29,7 @@ import {
   PUBLIC_API_PREFIX,
   credentialUrl,
   trustedCredentialUrl,
+  type ResourceLimits,
 } from "@latex-renderer/shared";
 import { z } from "zod";
 
@@ -105,6 +106,30 @@ export class RendererClient {
     } as RequestInit & { duplex: "half" });
     if (!response.ok) await throwResponse(response);
   }
+  async sourceLimits(options?: RendererRequestOptions): Promise<ResourceLimits | undefined> {
+    const response = await fetch(
+      new URL(`${PUBLIC_API_PREFIX}/source-tickets`, this.#baseUrl),
+      {
+        headers: noStoreRequestHeaders(this.headers()),
+        redirect: "error",
+        ...(options?.signal ? { signal: options.signal } : {}),
+      },
+    );
+    if (response.status === 404 || response.status === 405) {
+      await response.body?.cancel();
+      return undefined;
+    }
+    const limits = z.object({
+      maxUploadBytes: z.int().positive(),
+      maxExtractedBytes: z.int().positive(),
+      maxFileCount: z.int().positive(),
+      maxZipEntries: z.int().positive(),
+    }).safeParse(await responseJson(response));
+    if (!limits.success)
+      throw new AppError("INVALID_RESPONSE", "Server returned invalid Source limits", 502);
+    return limits.data;
+  }
+
   async createSource(
     size: number,
     sha256: string,
@@ -313,7 +338,7 @@ export class RendererClient {
     originalFilename: string;
     outputs?: readonly RenderOutput[];
     engine?: RenderEngine | undefined;
-  }): Promise<AttachProjectRevisionResponse> {
+  }, options?: RendererRequestOptions): Promise<AttachProjectRevisionResponse> {
     const response = await fetch(
       new URL(
         `${PUBLIC_API_PREFIX}/projects/${encodeURIComponent(input.projectId)}/revisions`,
@@ -331,6 +356,7 @@ export class RendererClient {
           engine: input.engine,
         }),
         redirect: "error",
+        ...(options?.signal ? { signal: options.signal } : {}),
       },
     );
     return attachProjectRevisionResponseSchema.parse(

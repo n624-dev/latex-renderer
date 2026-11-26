@@ -99,7 +99,8 @@ def snapshot(database=DB, states=service_states, health=read_worker_health):
             if mode not in ("running", "paused", "draining"):
                 raise ValueError("Invalid Worker mode")
             pending = worker == "idle" and worker_has_demand(
-                db, now.isoformat(timespec="milliseconds").replace("+00:00", "Z"))
+                db, now.isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+                include_maintenance=False)
             if worker == "idle" and not pending:
                 value["worker"] = "idle" if mode == "running" else mode
                 value["rendering"] = mode == "running"

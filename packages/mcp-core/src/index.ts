@@ -11,6 +11,7 @@ import {
   renderProject,
   requestJobAction,
   uploadProjectSource,
+  withClientOperationDeadline,
   type ArtifactPaths,
 } from "@latex-renderer/client-core";
 import {
@@ -423,7 +424,7 @@ export function createMcpOperations(
         await loadCredential(),
       ));
   return {
-    uploadSource: async (path, signal) => {
+    uploadSource: (path, requestSignal) => withClientOperationDeadline(async (signal) => {
       const localPath = await resolveAllowedMcpPath(path, allowedRoots(), true);
       return {
         success: true,
@@ -432,8 +433,9 @@ export function createMcpOperations(
           source: await uploadProjectSource(await client(), localPath, { signal }),
         },
       };
-    },
-    createRenderJob: async (sourceId, entrypoint, outputs, engine, signal) => ({
+    }, { signal: requestSignal }),
+    createRenderJob: (sourceId, entrypoint, outputs, engine, requestSignal) =>
+      withClientOperationDeadline(async (signal) => ({
       success: true,
       operation: "create_render_job",
       result: {
@@ -446,8 +448,9 @@ export function createMcpOperations(
           ),
         ),
       },
-    }),
-    renderProject: async (directory, entrypoint, outputs, engine, signal) => {
+    }), { signal: requestSignal }),
+    renderProject: (directory, entrypoint, outputs, engine, requestSignal) =>
+      withClientOperationDeadline(async (signal) => {
       const localDirectory = await resolveAllowedMcpPath(
         directory,
         allowedRoots(),
@@ -469,6 +472,7 @@ export function createMcpOperations(
           ? {}
           : { pollTimeoutMs: options.renderTimeoutMs }),
       }).catch((error: unknown) => {
+        if (acceptedJobRecovery(error) !== undefined) throw error;
         if (recovery === undefined) throw error;
         const normalized = safeError(error);
         throw new AppError(
@@ -496,13 +500,14 @@ export function createMcpOperations(
           status: 422,
         },
       };
-    },
-    getRenderStatus: async (jobId, signal) => ({
+    }, { signal: requestSignal }),
+    getRenderStatus: (jobId, requestSignal) => withClientOperationDeadline(async (signal) => ({
       success: true,
       operation: "get_render_status",
       result: { job: summarizeJob(await getJob(await client(), jobId, signal)) },
-    }),
-    downloadRenderArtifacts: async (jobId, outputDirectory, previewPages, signal) => {
+    }), { signal: requestSignal }),
+    downloadRenderArtifacts: (jobId, outputDirectory, previewPages, requestSignal) =>
+      withClientOperationDeadline(async (signal) => {
       const localOutput = await resolveAllowedMcpPath(
         outputDirectory,
         allowedRoots(),
@@ -529,7 +534,7 @@ export function createMcpOperations(
           artifacts: summarizeLocalArtifacts(downloaded.artifacts),
         },
       };
-    },
+    }, { signal: requestSignal }),
     cancelRender: async (jobId) => ({
       success: true,
       operation: "cancel_render",

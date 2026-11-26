@@ -21,7 +21,7 @@ import type { InternalApiDependencies } from "./types.js";
 export function createInternalV1Router(deps: InternalApiDependencies): Hono {
   const r = new Hono(),
     maxUploadBytes =
-      deps.maxUploadBytes ?? DEFAULT_RESOURCE_LIMITS.maxUploadBytes,
+      deps.maxUploadBytes ?? deps.sourceLimits?.maxUploadBytes ?? DEFAULT_RESOURCE_LIMITS.maxUploadBytes,
     service = new RenderTicketsService(deps),
     sources = new SourceTicketsService(deps),
     projects = new ProjectOperations(deps.database);
@@ -201,6 +201,14 @@ export function createInternalV1Router(deps: InternalApiDependencies): Hono {
       { ...result.value, projectId: id, revisionId: revision },
       result.status,
     );
+  });
+  r.get("/source-tickets", (c) => {
+    deps.apiKeys.authenticate(parseBearer(c.req.header("Authorization")), "render:create");
+    return c.json({
+      ...DEFAULT_RESOURCE_LIMITS,
+      ...deps.sourceLimits,
+      maxUploadBytes,
+    });
   });
   r.post("/source-tickets", async (c) => {
     const actor = deps.apiKeys.authenticate(

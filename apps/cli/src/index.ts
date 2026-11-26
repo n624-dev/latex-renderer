@@ -18,6 +18,7 @@ import {
   requestJobAction,
   retrySvgJob,
   uploadProjectSource,
+  withClientOperationDeadline,
   type ClientCoreEvent,
   type RenderProjectResult,
   type RenderEngine,
@@ -102,7 +103,9 @@ if (publicCommand) {
           );
         throw error;
       }
-      const result = await compileProjectPdf(client, input, { ...options, engine });
+      const result = await runLocalRenderOperation((signal) =>
+        compileProjectPdf(client, input, { ...options, engine, signal }),
+      );
       if (result.pdf !== undefined) {
         emitSuccess("compile", { jobId: result.job.id, pdf: result.pdf }, () =>
           process.stdout.write(`${result.pdf}\n`),
@@ -412,10 +415,11 @@ program
             : { outputDirectory: options.output }),
           ...(isJsonMode() ? {} : { onEvent: humanRenderEvent }),
         },
-        result =
+        result = await runLocalRenderOperation((signal) =>
           options.source === undefined
-            ? await renderProject(client, path ?? ".", renderOptions)
-            : await renderSource(client, options.source, renderOptions);
+            ? renderProject(client, path ?? ".", { ...renderOptions, signal })
+            : renderSource(client, options.source, { ...renderOptions, signal }),
+        );
       const pdf = result.artifacts.pdf;
       if (
         options.open === true &&
@@ -439,10 +443,11 @@ sources
   .command("upload")
   .argument("<path>", humanText("projectDirectoryOrZip"))
   .action(async (path: string) => {
-    const result = await uploadProjectSource(
-      await configuredClient(),
-      path,
-      isJsonMode() ? {} : { onEvent: humanRenderEvent },
+    const result = await runLocalRenderOperation(async (signal) =>
+      uploadProjectSource(await configuredClient(), path, {
+        signal,
+        ...(isJsonMode() ? {} : { onEvent: humanRenderEvent }),
+      }),
     );
     emitSuccess("source.upload", result, () => {
       process.stdout.write(
@@ -537,16 +542,19 @@ projects
       path: string,
       options: { entrypoint: string; name?: string; svg?: boolean },
     ) => {
-      const client = await configuredClient(),
-        source = await uploadProjectSource(client, path),
-        filename = basename(resolve(path));
-      const revision = await client.attachProjectRevision({
-        projectId,
-        sourceId: source.sourceId,
-        entrypoint: options.entrypoint,
-        displayName: options.name ?? filename,
-        originalFilename: filename,
-        outputs: options.svg ? ["pdf", "svg"] : ["pdf"],
+      const { source, revision } = await runLocalRenderOperation(async (signal) => {
+        const client = await configuredClient();
+        const source = await uploadProjectSource(client, path, { signal });
+        const filename = basename(resolve(path));
+        const revision = await client.attachProjectRevision({
+          projectId,
+          sourceId: source.sourceId,
+          entrypoint: options.entrypoint,
+          displayName: options.name ?? filename,
+          originalFilename: filename,
+          outputs: options.svg ? ["pdf", "svg"] : ["pdf"],
+        }, { signal });
+        return { source, revision };
       });
       emitSuccess("projects.save", { source, revision }, () =>
         process.stdout.write(`${revision.id} (${source.sourceId})\n`),
@@ -635,17 +643,15 @@ jobs
       id: string,
       options: { output: string; pdfOnly?: boolean; previewPage?: string[] },
     ) => {
-      const result = await downloadJobArtifacts(
-        await configuredClient(),
-        id,
-        options.output,
-        {
+      const result = await runLocalRenderOperation(async (signal) =>
+        downloadJobArtifacts(await configuredClient(), id, options.output, {
+          signal,
           ...(isJsonMode() ? {} : { onEvent: humanRenderEvent }),
           ...(options.pdfOnly === true ? { pdfOnly: true } : {}),
           ...(options.previewPage === undefined
             ? {}
             : { previewPages: options.previewPage.map(Number) }),
-        },
+        }),
       );
       emitSuccess("jobs.download", result, () => {
         process.stdout.write(
@@ -660,11 +666,11 @@ jobs
   .argument("<id>")
   .option("--output <directory>", humanText("outputDirectory"), ".render")
   .action(async (id: string, options: { output: string }) => {
-    const result = await retrySvgJob(
-      await configuredClient(),
-      id,
-      options.output,
-      isJsonMode() ? {} : { onEvent: humanRenderEvent },
+    const result = await runLocalRenderOperation(async (signal) =>
+      retrySvgJob(await configuredClient(), id, options.output, {
+        signal,
+        ...(isJsonMode() ? {} : { onEvent: humanRenderEvent }),
+      }),
     );
     emitSuccess("jobs.retry-svg", result, () => {
       process.stdout.write(
@@ -722,8 +728,30 @@ if (publicCommand && userArgs[0] === "admin") {
           `${commandName}: ${error instanceof Error ? humanDiagnostic(error.message) : humanDiagnostic("Unknown error")}\n`,
         );
       }
-      process.exitCode = error instanceof CommanderError ? error.exitCode : 1;
+      process.exitCode =
+        error instanceof CommanderError
+          ? error.exitCode
+          : error instanceof AppError && error.code === "CLIENT_OPERATION_INTERRUPTED"
+            ? 130
+            : 1;
     });
+}
+
+async function runLocalRenderOperation<T>(
+  operation: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const controller = new AbortController();
+  const interrupt = () => controller.abort(new AppError(
+    "CLIENT_OPERATION_INTERRUPTED",
+    "Local operation interrupted. Check the status of any accepted Job before submitting again.",
+    499,
+  ));
+  process.once("SIGINT", interrupt);
+  try {
+    return await withClientOperationDeadline(operation, { signal: controller.signal });
+  } finally {
+    process.off("SIGINT", interrupt);
+  }
 }
 
 async function configuredClient(): Promise<RendererClient> {

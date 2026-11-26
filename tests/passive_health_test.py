@@ -38,8 +38,8 @@ class PassiveHealthTests(unittest.TestCase):
         self.assertTrue(state["rendering"])
         self.assertEqual(state["worker"], "idle")
 
-    def test_pending_or_cleanup_is_not_healthy_idle(self):
-        for status, owner in (("queued", None), ("running", "owner"), ("failed", "cleanup")):
+    def test_pending_user_work_is_not_healthy_idle(self):
+        for status, owner in (("queued", None), ("running", "owner")):
             with self.subTest(status=status):
                 self.db.execute("INSERT INTO jobs VALUES (?,?)", (status, owner))
                 self.db.commit()
@@ -72,6 +72,16 @@ class PassiveHealthTests(unittest.TestCase):
             self.db.execute(f"UPDATE {table} SET status='queued'")
         self.db.execute("UPDATE document_probes SET expires_at='2026-11-27T00:01:00.000Z'")
         self.assertTrue(health.worker_has_demand(self.db, now, include_maintenance=False))
+    def test_cleanup_does_not_count_as_user_facing_downtime(self):
+        self.db.execute("INSERT INTO source_trees VALUES ('deleting')")
+        self.db.execute("INSERT INTO system_settings VALUES ('maintenance_mode','\"reject-new-jobs\"')")
+        self.db.commit()
+        self.assertTrue(self.snapshot()["rendering"])
+        self.assertEqual(self.snapshot()["worker"], "idle")
+        self.db.execute("INSERT INTO jobs VALUES ('queued',NULL)")
+        self.db.commit()
+        self.assertFalse(self.snapshot()["rendering"])
+
     def test_failed_missing_and_stopped_listener_are_unavailable(self):
         for state in ("failed", "inactive"):
             self.states["latex-renderer-worker.socket"]["ActiveState"] = state

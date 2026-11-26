@@ -190,11 +190,11 @@ export function gatewayRoute(
     pathname === "/api/v1/source-tickets" ||
     pathname === "/v1/source-tickets"
   ) {
-    if (method !== "POST") return "method-not-allowed";
+    if (method !== "POST" && method !== "GET") return "method-not-allowed";
     return {
       upstreamPath: "/internal/v1/source-tickets",
-      idempotencyRequired: true,
-      bodyRequired: true,
+      idempotencyRequired: method === "POST",
+      bodyRequired: method === "POST",
     };
   }
   const projectPath =

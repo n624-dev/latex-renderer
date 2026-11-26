@@ -40,6 +40,7 @@ Independently issued keys receive `404` for these operations, even when they bel
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` / `HEAD` | `/api/v1/health` | Check whether the gateway responds. No authentication required. HEAD returns no body. |
+| `GET` | `/api/v1/source-tickets` | Read current ZIP limits with a rendering API key |
 | `POST` | `/api/v1/source-tickets` | Reserve a source or reuse an existing ZIP owned by the same user |
 | `PUT` | `/api/v1/sources/{sourceId}/content` | Upload and validate a source ZIP |
 | `POST` | `/api/v1/render-tickets` | Create a job from a source, retry SVG extraction, or reserve a legacy single-job upload |

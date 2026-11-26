@@ -8,6 +8,19 @@ import { RendererClient } from "./index.js";
 afterEach(() => vi.unstubAllGlobals());
 
 describe("RendererClient cache safety", () => {
+  it.each([404, 405])("falls back only when Source limit discovery is unavailable (%i)", async (status) => {
+    const fetcher = vi.fn((url: URL, init?: RequestInit) => {
+      expect(url.pathname).toBe("/api/v1/source-tickets");
+      expect(init?.redirect).toBe("error");
+      expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer fixture");
+      return Promise.resolve(Response.json({}, { status }));
+    });
+    vi.stubGlobal("fetch", fetcher);
+    await expect(new RendererClient("https://renderer.example.test", "fixture").sourceLimits())
+      .resolves.toBeUndefined();
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
   it("uses owner-scoped saved Project endpoints without changing temporary render requests", async () => {
     const projectId = `project_${"a".repeat(32)}`,
       revisionId = `revision_${"b".repeat(32)}`,

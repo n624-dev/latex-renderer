@@ -35,8 +35,9 @@ import {
   structuredErrorsSchema,
   type StructuredErrors,
 } from "@latex-renderer/contracts";
-import { AppError, DEFAULT_RESOURCE_LIMITS } from "@latex-renderer/shared";
+import { AppError, DEFAULT_RESOURCE_LIMITS, type ResourceLimits } from "@latex-renderer/shared";
 import {
+  listValidatedSourceFiles,
   validateEntrypointPath,
   validateSourceFilePath,
 } from "@latex-renderer/zip-validation";
@@ -58,12 +59,14 @@ import {
 
 export { shouldExcludeProjectPath } from "./project-files.js";
 export { openLocalTarget } from "./open-local-target.js";
+export { withClientOperationDeadline } from "./operation-deadline.js";
 export {
   renderEngineSchema,
   type RenderEngine,
 } from "@latex-renderer/contracts";
 
 export interface ClientTransport {
+  sourceLimits?(options?: { signal?: AbortSignal | undefined }): Promise<ResourceLimits | undefined>;
   preparePreview?(
     jobId: string,
     page: number,
@@ -196,12 +199,14 @@ export async function renderProject(
   const temporary = await mkdtemp(join(tmpdir(), "latex-render-"));
   try {
     const zipPath = join(temporary, "source.zip");
+    const limits = await client.sourceLimits?.({ signal: options.signal });
     const prepared = await prepareInputArchive(
       input,
       zipPath,
       entrypoint,
       requestedOutput,
       options.signal,
+      limits,
     );
     options.onEvent?.({ type: "archive.created", ...prepared.source });
     const source = await reserveAndUploadSource(
@@ -267,12 +272,14 @@ export async function compileProjectPdf(
   let jobId: string | undefined;
   try {
     const zip = join(work, "source.zip");
+    const limits = await client.sourceLimits?.({ signal: options.signal });
     const archive = await createProjectArchive(
       root,
       zip,
       entrypoint,
       destination,
       options.signal,
+      limits,
     );
     options.onEvent?.({ type: "archive.created", ...archive });
     const engine =
@@ -375,10 +382,12 @@ export async function compileProjectPdf(
     }
   } catch (error) {
     if (jobId === undefined) throw error;
+    const reason: unknown = options.signal?.reason;
+    const cause = reason instanceof AppError ? reason : error;
     throw new AppError(
-      error instanceof AppError ? error.code : "PDF_PUBLICATION_FAILED",
-      `${error instanceof Error ? error.message : "PDF could not be saved"} (job ${jobId})`,
-      error instanceof AppError ? error.status : 500,
+      cause instanceof AppError ? cause.code : "PDF_PUBLICATION_FAILED",
+      `${cause instanceof Error ? cause.message : "PDF could not be saved"} (job ${jobId})`,
+      cause instanceof AppError ? cause.status : 500,
       { jobId },
     );
   } finally {
@@ -394,12 +403,14 @@ export async function uploadProjectSource(
   const temporary = await mkdtemp(join(tmpdir(), "latex-source-"));
   try {
     const zipPath = join(temporary, "source.zip"),
+      limits = await client.sourceLimits?.({ signal: options.signal }),
       prepared = await prepareInputArchive(
         resolve(projectPath),
         zipPath,
         undefined,
         undefined,
         options.signal,
+        limits,
       );
     options.onEvent?.({ type: "archive.created", ...prepared.source });
     return await reserveAndUploadSource(
@@ -516,12 +527,14 @@ async function completeAcceptedRender(
     );
     return { job, outputDirectory, artifacts };
   } catch (error) {
+    const reason: unknown = options.signal?.reason;
+    const cause = reason instanceof AppError ? reason : error;
     throw new AppError(
-      error instanceof AppError ? error.code : "RENDER_INTERRUPTED",
-      error instanceof AppError
-        ? error.message
+      cause instanceof AppError ? cause.code : "RENDER_INTERRUPTED",
+      cause instanceof AppError
+        ? cause.message
         : "Local rendering workflow was interrupted after the server accepted the Job",
-      error instanceof AppError ? error.status : 500,
+      cause instanceof AppError ? cause.status : 500,
       { jobId: ticket.jobId, lastStatus },
     );
   }
@@ -651,15 +664,7 @@ export async function retrySvgJob(
   const ticket = await client.retrySvgJob(jobId, randomUUID(), {
     signal: options.signal,
   });
-  const settled = await pollUntilTerminal(client, ticket, options),
-    { job } = settled,
-    access = artifactTicketAccess(client, settled, options),
-    output = resolve(outputDirectory);
-  return {
-    job,
-    outputDirectory: output,
-    artifacts: await downloadArtifacts(client, job, access, output, options),
-  };
+  return completeAcceptedRender(client, ticket, resolve(outputDirectory), options);
 }
 
 async function prepareInputArchive(
@@ -668,6 +673,7 @@ async function prepareInputArchive(
   entrypoint?: string,
   excludedOutputDirectory?: string,
   signal?: AbortSignal,
+  limits?: ResourceLimits,
 ): Promise<{
   source: { size: number; sha256: string; files: number };
   outputRoot: string;
@@ -682,11 +688,13 @@ async function prepareInputArchive(
         entrypoint,
         excludedOutputDirectory,
         signal,
+        limits,
       ),
       outputRoot: input,
     };
   if (info?.isFile() && extname(input).toLowerCase() === ".zip") {
     if (entrypoint !== undefined) validateEntrypointPath(entrypoint);
+    assertArchiveSize(info.size, limits);
     await pipeline(
       createReadStream(input),
       createWriteStream(destination, { flags: "wx", mode: 0o600 }),
@@ -695,6 +703,18 @@ async function prepareInputArchive(
     const archive = await stat(destination);
     if (archive.size <= 0)
       throw new AppError("EMPTY_ARCHIVE", "Source ZIP is empty", 400);
+    assertArchiveSize(archive.size, limits);
+    if (limits) {
+      const files = await listValidatedSourceFiles(destination, {
+        maxExtractedBytes: limits.maxExtractedBytes,
+        maxFileBytes: limits.maxUploadBytes,
+        maxEntries: limits.maxZipEntries,
+        maxFiles: limits.maxFileCount,
+        maxDepth: 10,
+        maxNameLength: 200,
+      });
+      assertExtractedSize(files.reduce((total, file) => total + file.size, 0), limits);
+    }
     return {
       source: {
         size: archive.size,
@@ -709,6 +729,16 @@ async function prepareInputArchive(
     "Source must be a project directory or .zip file",
     400,
   );
+}
+
+function assertArchiveSize(bytes: number, limits: Readonly<ResourceLimits> | undefined): void {
+  if (limits && bytes > limits.maxUploadBytes)
+    throw new AppError("ARCHIVE_TOO_LARGE", `Source ZIP exceeds ${limits.maxUploadBytes} bytes`, 400);
+}
+
+function assertExtractedSize(bytes: number, limits: Readonly<ResourceLimits>): void {
+  if (bytes > limits.maxExtractedBytes)
+    throw new AppError("PROJECT_TOO_LARGE", `Project files exceed ${limits.maxExtractedBytes} bytes`, 400);
 }
 
 async function reserveAndUploadSource(
@@ -765,6 +795,7 @@ export async function createProjectArchive(
   entrypoint?: string,
   excludedOutputPath?: string,
   signal?: AbortSignal,
+  limits?: ResourceLimits,
 ): Promise<{ size: number; sha256: string; files: number }> {
   signal?.throwIfAborted();
   const requiredEntrypoint =
@@ -800,6 +831,9 @@ export async function createProjectArchive(
   // Observe early stream failures while the project directory is being walked.
   void completion.catch(() => undefined);
   let files = 0;
+  const maxFiles = limits
+    ? Math.min(limits.maxFileCount, limits.maxZipEntries)
+    : DEFAULT_RESOURCE_LIMITS.maxFileCount;
   let entrypointFound = false,
     texFound = false;
   let sourceBytes = 0;
@@ -829,19 +863,16 @@ export async function createProjectArchive(
       if (name === requiredEntrypoint) entrypointFound = true;
       if (extname(name).toLowerCase() === ".tex") texFound = true;
       files += 1;
-      if (files > 500)
+      if (files > maxFiles)
         throw new AppError(
           "TOO_MANY_FILES",
-          "Project has more than 500 files",
+          `Project has more than ${maxFiles} files`,
           400,
         );
+      if (limits && size > limits.maxUploadBytes)
+        throw new AppError("PROJECT_FILE_TOO_LARGE", `Project file exceeds ${limits.maxUploadBytes} bytes: ${name}`, 400);
       sourceBytes += size;
-      if (sourceBytes > DEFAULT_RESOURCE_LIMITS.maxExtractedBytes)
-        throw new AppError(
-          "PROJECT_TOO_LARGE",
-          `Project files exceed ${DEFAULT_RESOURCE_LIMITS.maxExtractedBytes} bytes`,
-          400,
-        );
+      assertExtractedSize(sourceBytes, limits ?? DEFAULT_RESOURCE_LIMITS);
       zip.addFile(path, name, { mode: 0o600, mtime: new Date(0) });
     }
     if (!texFound)
@@ -860,6 +891,7 @@ export async function createProjectArchive(
     zip.end();
     await completion;
     const info = await stat(destination);
+    assertArchiveSize(info.size, limits);
     return {
       size: info.size,
       sha256: await hashFile(destination, signal),

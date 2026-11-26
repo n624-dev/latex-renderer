@@ -109,6 +109,25 @@ it("treats a stopping Worker as unavailable in the direct health reader", () => 
   }
 });
 
+it("reports a listening Worker as idle while cleanup is the only demand", () => {
+  const { root, path: databasePath, database } = fixture();
+  const path = join(root, "health.json");
+  const run = (...args: string[]) =>
+    args.at(-1)?.endsWith(".socket")
+      ? "LoadState=loaded\nActiveState=active\nSubState=listening\n"
+      : "LoadState=loaded\nActiveState=inactive\nResult=success\n";
+  database.exec(`INSERT INTO source_trees VALUES ('deleting');
+    INSERT INTO system_settings VALUES ('maintenance_mode','"reject-new-jobs"');`);
+  expect(demand.workerHasDemand(database)).toBe(true);
+  expect(readWorkerHealth({ path, databasePath, run })).toEqual({
+    operational: true, state: "idle",
+  });
+  database.exec("INSERT INTO jobs VALUES ('queued',NULL)");
+  expect(readWorkerHealth({ path, databasePath, run })).toEqual({
+    operational: false, state: "unavailable",
+  });
+});
+
 it("distinguishes pending PDF work from expired maintenance records", () => {
   const { database } = fixture();
   const now = "2026-11-27T00:00:00.000Z";

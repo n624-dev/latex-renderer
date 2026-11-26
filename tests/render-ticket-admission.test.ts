@@ -18,6 +18,22 @@ afterEach(async () => {
     await rm(root, { recursive: true, force: true });
 });
 
+it("requires an authorized rendering key to disclose the effective ZIP limits", async () => {
+  const f = fixture({ maxStorage: 100, maxQueue: 20 });
+  const key = insertKey(f, "service");
+  const anonymous = await f.app.request("/internal/v1/source-tickets");
+  expect(anonymous.status).toBe(401);
+  const response = await f.app.request("/internal/v1/source-tickets", {
+    headers: { Authorization: `Bearer ${key.token}` },
+  });
+  expect(response.status).toBe(200);
+  expect(response.headers.get("Cache-Control")).toContain("no-store");
+  await expect(response.json()).resolves.toEqual({
+    maxUploadBytes: 20 * 1024 ** 2, maxExtractedBytes: 100 * 1024 ** 2,
+    maxFileCount: 500, maxZipEntries: 1000,
+  });
+});
+
 describe("render ticket admission", () => {
   it.each(["legacy", "source"] as const)(
     "keeps %s Job renewal and replay bound to its original API key over HTTP",

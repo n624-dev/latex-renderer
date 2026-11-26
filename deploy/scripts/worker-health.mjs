@@ -178,7 +178,10 @@ export function readWorkerHealth({
       const mode = row ? JSON.parse(row.value_json) : "running";
       if (!workerModes.has(mode))
         return { operational: false, state: "unavailable" };
-      const demand = workerHasDemand(database);
+      const demand = workerHasDemand(database, {
+        includeMaintenance: false,
+        now: new Date(now).toISOString(),
+      });
       return {
         operational: mode === "running" && !demand,
         state: demand ? "unavailable" : mode === "running" ? "idle" : mode,

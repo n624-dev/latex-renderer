@@ -36,6 +36,7 @@ const signingKeys = loadSigningKeyRing(
   process.env.TICKET_SIGNING_KEY_DIR,
   process.env.TICKET_SIGNING_KEY_FILE,
 );
+const sourceLimits = loadResourceLimits(process.env);
 const app = createInternalApp({
   database,
   apiKeys: new ApiKeyService(database, new Map([[pepperId, pepper]]), pepperId),
@@ -48,7 +49,8 @@ const app = createInternalApp({
   ),
   rendererPublicUrl: required("RENDERER_PUBLIC_URL"),
   rendererVersion: process.env.RENDERER_IMAGE ?? "latex-renderer:development",
-  maxUploadBytes: loadResourceLimits(process.env).maxUploadBytes,
+  maxUploadBytes: sourceLimits.maxUploadBytes,
+  sourceLimits,
   maxOutputBytes: positiveBytesEnvironment(
     process.env,
     "MAX_OUTPUT_BYTES",

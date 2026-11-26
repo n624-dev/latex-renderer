@@ -28,6 +28,7 @@ import {
   requestJobAction,
   shouldExcludeProjectPath,
   uploadProjectSource,
+  withClientOperationDeadline,
   type ClientCoreEvent,
   type ClientTransport,
 } from "./index.js";
@@ -439,6 +440,37 @@ describe("client core", () => {
         sleep: () => Promise.resolve(),
       }),
     ).rejects.toMatchObject({ code: "RENDER_POLL_TIMEOUT", status: 504 });
+  });
+
+  it("applies one deadline after acceptance and keeps the original Job ID", async () => {
+    const client = new FakeClient([job("running")]);
+    const result = withClientOperationDeadline(
+      (signal) => renderSource(client, "source_test", {
+        signal, pollIntervalMs: 1000,
+      }),
+      { timeoutMs: 100 },
+    );
+    await expect(result).rejects.toMatchObject({
+      code: "CLIENT_OPERATION_TIMEOUT",
+      details: { jobId: "job_test", lastStatus: "running" },
+    });
+    expect(client.actions).toEqual([]);
+  });
+
+  it("preflights the server's current file count before reserving an upload", async () => {
+    const root = await temporaryRoot();
+    await writeFile(join(root, "main.tex"), "main");
+    await writeFile(join(root, "other.tex"), "other");
+    const client = new FakeClient([]);
+    const limited = Object.assign(client, {
+      sourceLimits: () => Promise.resolve({
+        maxUploadBytes: 2000, maxExtractedBytes: 1000,
+        maxFileCount: 2, maxZipEntries: 1,
+      }),
+    });
+    await expect(uploadProjectSource(limited, root)).rejects.toMatchObject({
+      code: "TOO_MANY_FILES",
+    });
   });
 
   it("shares ticket renewal across get, action, and artifact operations", async () => {

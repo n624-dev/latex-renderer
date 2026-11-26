@@ -41,6 +41,7 @@ API キーで作成した Job は、そのキーにひも付きます。管理�
 | メソッド | パス | 用途 |
 | --- | --- | --- |
 | `GET` / `HEAD` | `/api/v1/health` | Gateway の応答を確認（認証不要。HEAD は本文なし） |
+| `GET` | `/api/v1/source-tickets` | 描画用APIキーで現在のZIP上限を取得 |
 | `POST` | `/api/v1/source-tickets` | Source を予約、または同一ユーザー内で既存 ZIP を再利用 |
 | `PUT` | `/api/v1/sources/{sourceId}/content` | Source ZIP を検証してアップロード |
 | `POST` | `/api/v1/render-tickets` | 既存 Source から Job 作成、SVG 再試行、または 1 ジョブ従来フローの予約 |
