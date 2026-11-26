@@ -48,6 +48,18 @@ describe("complete wire tool catalog validation", () => {
       },
     },
     { inputSchema: { type: "object", properties: {}, required: ["missing"] } },
+    {
+      outputSchema: {
+        type: "object",
+        properties: {
+          resourceUri: {
+            type: "string",
+            format: "starts_with",
+            pattern: "^latex-renderer://jobs/",
+          },
+        },
+      },
+    },
     { annotations: { readOnlyHint: "true" } },
     { description: "" },
   ])("rejects invalid wire metadata or schemas", (change) => {

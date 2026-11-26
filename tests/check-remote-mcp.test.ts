@@ -15,7 +15,7 @@ function fixture() {
             code_challenge_methods_supported: ["S256"],
             token_endpoint_auth_methods_supported: ["none"],
           }
-        : { error: "invalid_token" };
+        : {};
     return Promise.resolve(
       new Response(JSON.stringify(body), {
         status: path === "/mcp" ? 401 : 200,

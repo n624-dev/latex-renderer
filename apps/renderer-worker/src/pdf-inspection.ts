@@ -20,8 +20,11 @@ import { dirname, join } from "node:path";
 import {
   ARTIFACT_DOWNLOAD_LEASE_MS,
   artifactStoragePath,
+  pdfInspectionUploadDirectory,
+  pdfInspectionUploadResult,
   protectArtifactDownloadLeases,
   type PdfInspectionRow,
+  type ArtifactRow,
   type DocumentProbeRow,
   type RendererDatabase,
 } from "@latex-renderer/database";
@@ -116,8 +119,7 @@ async function outputText(directory: string, name: ResultName) {
   }
 }
 
-async function cleanup(config: WorkerConfig, id: string) {
-  const { work } = paths(config, id);
+async function removeInspectionDirectory(work: string) {
   const info = await lstat(work).catch((error: unknown) => {
     if ((error as NodeJS.ErrnoException | null)?.code === "ENOENT")
       return undefined;
@@ -144,11 +146,27 @@ async function cleanup(config: WorkerConfig, id: string) {
   await rm(work, { recursive: true, force: true });
 }
 
+function cleanup(config: WorkerConfig, id: string) {
+  return removeInspectionDirectory(paths(config, id).work);
+}
+
 export async function recoverPdfInspections(
   db: RendererDatabase,
   config: WorkerConfig,
 ) {
   const timestamp = nowIso();
+  for (const upload of db.pdfInspections.expiredUploads(timestamp)) {
+    try {
+      await removeInspectionDirectory(
+        pdfInspectionUploadDirectory(config.storageRoot, upload.id),
+      );
+      db.pdfInspections.deleteExpiredUpload(upload.id, timestamp);
+    } catch {
+      config.diagnostic?.({
+        event: "renderer_worker.pdf_upload_cleanup_deferred",
+      });
+    }
+  }
   db.pdfInspections.prune(timestamp);
   db.documentProbes.prune(timestamp);
   const probe = db.documentProbes.running();
@@ -206,47 +224,85 @@ export async function processPdfInspection(
   const work = paths(config, request.id),
     maxOutputBytes = Math.min(config.maxOutputBytes, 4 * 1024 * 1024);
   const policy = { retentionHours: config.artifactRetentionHours ?? 24 };
-  const currentPdf = () =>
-    db.artifacts.getDownloadable(request.job_id, "result.pdf", policy);
+  const jobId = request.job_id;
   let lost = false,
     release: (() => void) | undefined;
   const owns = () =>
     !lost && db.pdfInspections.owns(request.id, config.workerId, nowIso());
-  let outcome: { json: string } | { error: string };
+  let outcome: { json: string } | { uploaded: true } | { error: string };
   try {
-    const { artifact, lease } = db.transaction(() => {
-      const artifact = currentPdf();
+    const upload = request.upload_id
+      ? db.pdfInspections.upload(request.upload_id)
+      : undefined;
+    let path: string;
+    let size: number;
+    let artifact: ArtifactRow | undefined;
+    if (jobId === null) {
       if (
-        !artifact ||
-        artifact.id !== request.artifact_id ||
-        artifact.sha256 !== request.pdf_sha256 ||
+        !upload ||
+        upload.pdf_sha256 !== request.pdf_sha256 ||
+        upload.size === null ||
+        upload.expires_at <= nowIso() ||
         !owns()
       )
         throw new AppError(
           "PDF_UNAVAILABLE",
-          "The canonical PDF has expired or changed",
+          "The attached PDF has expired or changed",
           410,
         );
-      const lease = newId("inspection_download");
-      db.artifacts.createLease({
-        id: lease,
-        jobId: request.job_id,
-        artifactId: artifact.id,
-        createdAt: nowIso(),
-        expiresAt: new Date(
-          Date.now() + ARTIFACT_DOWNLOAD_LEASE_MS,
-        ).toISOString(),
+      path = join(
+        pdfInspectionUploadDirectory(config.storageRoot, upload.id),
+        "original",
+        "result.pdf",
+      );
+      size = upload.size;
+    } else {
+      const result = db.transaction(() => {
+        const artifact = db.artifacts.getDownloadable(
+          jobId,
+          "result.pdf",
+          policy,
+        );
+        if (
+          !artifact ||
+          artifact.id !== request.artifact_id ||
+          artifact.sha256 !== request.pdf_sha256 ||
+          !owns()
+        )
+          throw new AppError(
+            "PDF_UNAVAILABLE",
+            "The canonical PDF has expired or changed",
+            410,
+          );
+        const lease = newId("inspection_download");
+        db.artifacts.createLease({
+          id: lease,
+          jobId,
+          artifactId: artifact.id,
+          createdAt: nowIso(),
+          expiresAt: new Date(
+            Date.now() + ARTIFACT_DOWNLOAD_LEASE_MS,
+          ).toISOString(),
+        });
+        return { artifact, lease };
       });
-      return { artifact, lease };
-    });
-    release = protectArtifactDownloadLeases(db.artifacts, [lease], () => {
-      lost = true;
-    });
-    const path = artifactStoragePath(config.storageRoot, artifact);
+      artifact = result.artifact;
+      release = protectArtifactDownloadLeases(
+        db.artifacts,
+        [result.lease],
+        () => {
+          lost = true;
+        },
+      );
+      path = artifactStoragePath(config.storageRoot, artifact);
+      size = artifact.size;
+    }
+    const info = await lstat(path);
     if (
+      info.size !== size ||
       (await realpath(path)) !== path ||
-      (await readArtifactSinglePass(path, "pdf", await lstat(path))).sha256 !==
-        artifact.sha256
+      (await readArtifactSinglePass(path, "pdf", info)).sha256 !==
+        request.pdf_sha256
     )
       throw new AppError("PDF_CHECKSUM_MISMATCH", "Stored PDF changed", 409);
     const space = await statfs(config.storageRoot);
@@ -271,13 +327,17 @@ export async function processPdfInspection(
     const sheet = params && "pages" in params ? params : null;
     const allowedPaths = new Set<string>();
     if (sync !== null) {
-      const job = db.jobs.get(request.job_id);
+      if (jobId === null || artifact === undefined)
+        throw new AppError(
+          "SYNCTEX_UNAVAILABLE",
+          "No source map for this PDF",
+          410,
+        );
+      const job = db.jobs.get(jobId);
       const source = job?.source_id ? db.sources.get(job.source_id) : undefined;
       for (const sourcePath of source
         ? db.sources.paths(source)
-        : (db.drafts.renderInput(request.job_id)?.files ?? []).map(
-            ({ path }) => path,
-          ))
+        : (db.drafts.renderInput(jobId)?.files ?? []).map(({ path }) => path))
         allowedPaths.add(sourcePath);
       if (sync.direction === "source_to_pdf" && !allowedPaths.has(sync.path))
         throw new AppError(
@@ -347,6 +407,9 @@ export async function processPdfInspection(
               ),
             ),
           );
+    const pageCount = checks?.["page-info"]?.text?.match(/^Pages:\s+([1-9]\d*)$/m)?.[1];
+    const sampledPages = checks?.["page-rasters"]?.text?.split("\n")
+      .filter((line) => /^[a-f0-9]{64}$/.test(line)).length ?? 0;
     const json = JSON.stringify(
       sync !== null
         ? await readSyncResult(work.output, sync, allowedPaths)
@@ -357,6 +420,12 @@ export async function processPdfInspection(
                 version: request.inspector_version,
                 runtimeImage: config.image,
                 checks,
+                coverage: {
+                  totalPages: pageCount === undefined ? null : Number(pageCount),
+                  pageDetailsThrough: pageCount === undefined ? null : Math.min(Number(pageCount), 100),
+                  sampledPages,
+                  maxSampleSidePixels: 512,
+                },
                 visual: "not_checked",
                 sourceComparison: "not_checked",
               }
@@ -368,7 +437,23 @@ export async function processPdfInspection(
         "PDF inspection output exceeded its limit",
         409,
       );
-    outcome = { json };
+    if (upload) {
+      if (!owns() || upload.expires_at <= nowIso())
+        throw new AppError(
+          "PDF_UNAVAILABLE",
+          "The attached PDF has expired",
+          410,
+        );
+      const directory = pdfInspectionUploadDirectory(
+        config.storageRoot,
+        upload.id,
+      );
+      await writeFile(pdfInspectionUploadResult(directory, request.id), json, {
+        flag: "wx",
+        mode: 0o660,
+      });
+      outcome = { uploaded: true };
+    } else outcome = { json };
   } catch (error) {
     if (error instanceof RendererCleanupDeferred) throw error;
     outcome = {

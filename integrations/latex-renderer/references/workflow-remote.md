@@ -13,3 +13,5 @@ Start with the tools published by the connected server. If present, call `get_au
 - Use protected MCP resources when the client supports them. Offer the authenticated Web result when the client cannot retrieve a large artifact. Report any files or pages you could not access.
 
 Use `get_project_revision_downloads` if available to get the matching saved ZIP and PDF. The Web download links require the owner to sign in. If recording a review, associate each observed check with the exact Job, PDF digest, and conditions version.
+
+To inspect a PDF attached in ChatGPT, use `request_attached_pdf_inspection` when the connected server lists it. Poll `get_attached_pdf_inspection` with the returned upload ID and SHA-256. Pass the physical page number and a rectangle from the displayed page’s top left for a close-up. The original and its inspection results expire one hour after acceptance. Report the pages and observations you actually checked.

@@ -31,6 +31,12 @@ ChatGPT や Claude（Web・デスクトップ等）からサーバーに接続�
 
 最終版を描画したら、成功時も診断を確認し、PDFの総ページ数をもとに全ページを確認します。保存したTeX ZIPと対応するPDFは `get_project_revision_downloads` で確認できます。PDFの取得期限も結果に表示されます。Webのリンクを開くには、保存したアカウントでログインしてください。
 
+### ChatGPTに添付したPDFを検査する
+
+接続先が添付取り込みに対応している場合は、ChatGPTにPDFを添付して「LaTeX RendererでこのPDFを検査して」と依頼できます。`request_attached_pdf_inspection` が添付PDFを受け付け、`get_attached_pdf_inspection` が用紙寸法、フォント、文字抽出、しおり、PDF構造の検査結果を返します。ページ番号と範囲を指定すると、数式や図を拡大できます。
+
+検査対象は受付時に記録されたSHA-256で確認できます。PDFと検査結果は初回受付から1時間で参照できなくなり、サーバーが自動で削除します。添付PDFから保存Projectが作成されることはありません。文字抽出・プレビューで確認できた範囲を結果と合わせて確認してください。
+
 ## ChatGPTなどの接続を確認する
 
 うまく接続できない場合は、次の点を確認してください。
@@ -59,6 +65,7 @@ AI に文書のテキストを送って PDF や SVG に変換し、エラー診�
 > | 文書条件と確認記録 | `get_project_document_state`、`update_project_document_conditions`、`adopt_project_revision`、`record_project_pdf_review`、`list_project_pdf_reviews` |
 > | 保存版の整理 | `get_project_storage_usage`、`protect_project_revision`、`plan_project_revision_cleanup`、`apply_project_revision_cleanup` |
 > | アップロード再開と添付 | `get_source_upload_status`、`import_source_attachment`（管理者が設定した場合） |
+> | 添付の接続確認 | `verify_attachment_delivery_origin`（管理者が指定した検証アカウントのみ） |
 > | 診断と結果 | `get_render_diagnostics`、`read_render_log`、`get_render_artifacts`、`get_render_manifest` |
 > | プレビュー | `get_render_preview`、`get_render_preview_pages`、`get_render_preview_crop`、`locate_render_source`、`get_render_preview_sheet` |
 > | PDF品質検査 | `request_render_quality_report`、`get_render_quality_report`、`compare_render_quality` |

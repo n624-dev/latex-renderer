@@ -10,10 +10,11 @@ See [Source reuse and recovery](docs/source-input-reuse.md) and the optional
 
 Migration 026 records the inputs used by pending draft previews. Migration 027
 records quota reservations for reusable compile state. Migration 028 adds
-project document conditions, PDF inspections and date profiles.
+project document conditions, PDF inspections and date profiles. Migration 029
+adds temporary, owner-scoped PDF attachment inspection.
 Run the backup, restore test and migration preflight before deploying all
-application services together. Verify schema 28 after startup. See
-[the migration notes](MIGRATIONS.md#migration-028-project-document-state-and-pdf-inspection).
+application services together. Verify schema 29 after startup. See
+[the migration notes](MIGRATIONS.md#migration-029-attached-pdf-inspection).
 
 Draft previews are subject to the regular artifact lifetime. The cleanup timer
 keeps up to three completed previews and targets 32 MiB of retained preview
@@ -118,10 +119,17 @@ times for two distinct epochs. Use it when validating the Runtime used by
 sh deploy/scripts/smoke-test-renderer-authoring.sh "$runtime_image_id" date-profile
 ```
 
-`REMOTE_MCP_FILE_ORIGINS` is empty by default. If the deployment has confirmed
-ChatGPT attachment delivery origins, list those exact HTTPS origins separated
-by commas in the Remote MCP service environment. Test an attachment through
-the connected client before offering automatic import to users.
+`REMOTE_MCP_FILE_ORIGINS` is empty by default. To verify delivery, set
+`REMOTE_MCP_ATTACHMENT_VERIFICATION_USER` to the test account ID returned by
+`get_profile`. Restart Remote MCP, refresh the tool list with that account, attach a sample file in
+ChatGPT, and call `verify_attachment_delivery_origin`. This returns the HTTPS
+origin only and leaves the file at its source.
+
+List the confirmed HTTPS origins, separated by commas, in
+`REMOTE_MCP_FILE_ORIGINS` and remove the verification account setting. Refresh
+the client tools again after restarting Remote MCP and test a ZIP import and a PDF inspection. The uploaded
+PDF and results expire one hour after acceptance. They are stored outside
+Project data and collected by Worker maintenance.
 
 ## Build and validation
 

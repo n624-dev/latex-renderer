@@ -1,4 +1,5 @@
-import { AjvJsonSchemaValidator } from "@modelcontextprotocol/server/validators/ajv";
+import { Ajv2020 } from "ajv/dist/2020.js";
+import addFormats from "ajv-formats";
 export { SUPPORTED_PROTOCOL_VERSIONS } from "@modelcontextprotocol/server";
 
 const object = (value: unknown): value is Record<string, unknown> =>
@@ -18,8 +19,9 @@ export function assertCompleteWireCatalog(result: unknown): {
     result.nextCursor !== undefined
   )
     throw new Error("Expected one complete nonempty tools/list page");
-  const validator = new AjvJsonSchemaValidator(),
+  const validator = new Ajv2020({ strictSchema: true, strictTypes: false }),
     names = new Set<string>();
+  addFormats.default(validator);
   let schemaCount = 0;
   for (const value of result.tools) {
     if (
@@ -67,7 +69,7 @@ export function assertCompleteWireCatalog(result: unknown): {
         throw new Error("Tool required properties are inconsistent");
       // Includes unresolved $ref and unsupported dialect failures. Validation
       // callbacks are compiled, but tool actions are never invoked.
-      validator.getValidator(schema);
+      validator.compile(schema);
       schemaCount++;
     }
   }

@@ -60,6 +60,17 @@ export function attachmentOrigins(
   );
 }
 
+export function attachmentOriginForVerification(value: string): string {
+  try {
+    const url = new URL(value);
+    if (url.username || url.password || url.hash) throw invalidOrigin();
+    if (!attachmentOrigins(url.origin).has(url.origin)) throw invalidOrigin();
+    return url.origin;
+  } catch {
+    throw invalidOrigin();
+  }
+}
+
 function invalidOrigin() {
   return new AppError(
     "ATTACHMENT_ORIGIN_INVALID",
@@ -73,6 +84,7 @@ export async function downloadAttachment(
   origins: ReadonlySet<string>,
   destination: string,
   maxBytes: number,
+  format: "ZIP" | "PDF" = "ZIP",
 ): Promise<void> {
   let url: URL;
   try {
@@ -158,8 +170,8 @@ export async function downloadAttachment(
           response.destroy();
           reject(
             new AppError(
-              "SOURCE_ARCHIVE_SIZE",
-              "Attachment exceeds the ZIP upload limit",
+              format === "ZIP" ? "SOURCE_ARCHIVE_SIZE" : "PDF_UPLOAD_SIZE",
+              `Attachment exceeds the ${format} upload limit`,
               413,
             ),
           );
@@ -172,8 +184,8 @@ export async function downloadAttachment(
             if (received > maxBytes)
               callback(
                 new AppError(
-                  "SOURCE_ARCHIVE_SIZE",
-                  "Attachment exceeds the ZIP upload limit",
+                  format === "ZIP" ? "SOURCE_ARCHIVE_SIZE" : "PDF_UPLOAD_SIZE",
+                  `Attachment exceeds the ${format} upload limit`,
                   413,
                 ),
               );

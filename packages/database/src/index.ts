@@ -1,6 +1,9 @@
 export {
   PDF_INSPECTOR_VERSION,
+  pdfInspectionUploadDirectory,
+  pdfInspectionUploadResult,
   type PdfInspectionRow,
+  type PdfInspectionUpload,
 } from "./repositories/pdf-inspections.js";
 export type { DocumentProbeRow } from "./repositories/document-probes.js";
 import { DocumentProbesRepository } from "./repositories/document-probes.js";
