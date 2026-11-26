@@ -1784,15 +1784,14 @@ describe("Remote MCP HTTP server", () => {
     const dependencies = {
       database: f.database, browserAuth: legacyTestBrowserAuth(f.database, {
         verify: () => Promise.reject(new Error("A browser session was not expected")),
-      } as unknown as AccessJwtVerifier, { enforceExactOrigin: true }),
+      }, { enforceExactOrigin: true }),
       oauth: f.oauth, mcp: createRemoteMcpHandler(f.renders, "test"), publicOrigin: ORIGIN, relayIdentity,
       relayDownload: f.renders.relayDownload.bind(f.renders),
     };
     const grants = new LocalRelayGrants(":memory:");
-    const cleanup = { [Symbol.dispose]: () => grants.close() };
-    using _grants = cleanup;
+    using relayGrants = { grants, [Symbol.dispose]: () => grants.close() };
     const secret = "test-shared-loopback-credential";
-    const localRelay = createLocalRelay(dependencies, { grants, secret, instanceId: keys.instanceId, agentOrigin: "http://127.0.0.1:3111" });
+    const localRelay = createLocalRelay(dependencies, { grants: relayGrants.grants, secret, instanceId: keys.instanceId, agentOrigin: "http://127.0.0.1:3111" });
     const app = createRemoteMcpApp({ ...dependencies, localRelay: localRelay.handle });
     const token = issueAccessToken(f.oauth, "user_test", "mcp:read mcp:render");
     const post = (path: string, input: unknown) => app.request(path, {

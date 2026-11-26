@@ -1,4 +1,8 @@
 {
+  "optionalChatGptConnection": "连接 ChatGPT（可选）",
+  "enableChatGptFromTerminal": "若要启用连接，请在服务器上运行以下命令：",
+  "skipChatGptConnection": "暂时跳过",
+  "skippedChatGptConnection": "设置已完成。您可以稍后启用 ChatGPT 连接。",
   "acceptTheSelectedCertificateAuthorityS": "同意所选证书颁发机构的条款",
   "additionalSwapLimit0DisablesIt": "额外交换空间上限（0 表示禁用）",
   "adminAudience": "管理认证受众",

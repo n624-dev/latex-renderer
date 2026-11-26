@@ -1,4 +1,8 @@
 {
+  "optionalChatGptConnection": "Yhdistä ChatGPT (valinnainen)",
+  "enableChatGptFromTerminal": "Ota yhteys käyttöön suorittamalla tämä komento palvelimella:",
+  "skipChatGptConnection": "Ohita toistaiseksi",
+  "skippedChatGptConnection": "Määritys on valmis. Voit yhdistää ChatGPT:n myöhemmin.",
   "acceptTheSelectedCertificateAuthorityS": "Hyväksy valitun varmentajan ehdot",
   "additionalSwapLimit0DisablesIt": "Lisäsivutustilan raja (0 poistaa käytöstä)",
   "adminAudience": "Hallinnan todennuksen kohdeyleisö",

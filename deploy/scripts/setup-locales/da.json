@@ -1,4 +1,8 @@
 {
+  "optionalChatGptConnection": "Forbind ChatGPT (valgfrit)",
+  "enableChatGptFromTerminal": "Kør denne kommando på serveren for at aktivere forbindelsen:",
+  "skipChatGptConnection": "Spring over indtil videre",
+  "skippedChatGptConnection": "Opsætningen er fuldført. Du kan forbinde ChatGPT senere.",
   "acceptTheSelectedCertificateAuthorityS": "Acceptér den valgte certifikatmyndigheds vilkår",
   "additionalSwapLimit0DisablesIt": "Grænse for ekstra swap (0 deaktiverer)",
   "adminAudience": "Målgruppe for administrationsgodkendelse",

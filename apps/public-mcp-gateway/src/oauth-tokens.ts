@@ -336,16 +336,19 @@ export function consentProof(
   return {
     id: session.id,
     browserHash: hash(session.browserSecret),
-    requestHash: hash(
-      JSON.stringify([
-        request.clientId,
-        request.redirectUri,
-        request.resource,
-        request.codeChallenge,
-        request.state,
-        request.scopes,
-      ]),
-    ),
+    requestHash: createHmac("sha256", session.browserSecret)
+      .update("latex-renderer-consent-v1\0")
+      .update(
+        JSON.stringify([
+          request.clientId,
+          request.redirectUri,
+          request.resource,
+          request.codeChallenge,
+          request.state,
+          request.scopes,
+        ]),
+      )
+      .digest("hex"),
   };
 }
 

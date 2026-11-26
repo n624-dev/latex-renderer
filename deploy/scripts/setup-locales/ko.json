@@ -1,4 +1,8 @@
 {
+  "optionalChatGptConnection": "ChatGPT 연결(선택 사항)",
+  "enableChatGptFromTerminal": "연결을 활성화하려면 서버에서 다음 명령을 실행하세요.",
+  "skipChatGptConnection": "지금은 건너뛰기",
+  "skippedChatGptConnection": "설정이 완료되었습니다. ChatGPT 연결은 나중에 활성화할 수 있습니다.",
   "acceptTheSelectedCertificateAuthorityS": "선택한 인증 기관의 약관에 동의",
   "additionalSwapLimit0DisablesIt": "추가 스왑 한도(0이면 비활성화)",
   "adminAudience": "관리 화면 인증 대상",

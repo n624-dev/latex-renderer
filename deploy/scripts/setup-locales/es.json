@@ -1,4 +1,8 @@
 {
+  "optionalChatGptConnection": "Conectar ChatGPT (opcional)",
+  "enableChatGptFromTerminal": "Para habilitar la conexión, ejecuta este comando en el servidor:",
+  "skipChatGptConnection": "Omitir por ahora",
+  "skippedChatGptConnection": "Configuración completada. Puedes conectar ChatGPT más adelante.",
   "acceptTheSelectedCertificateAuthorityS": "Aceptar las condiciones de la autoridad certificadora seleccionada",
   "additionalSwapLimit0DisablesIt": "Límite de swap adicional (0 lo desactiva)",
   "adminAudience": "Audiencia de autenticación de administración",

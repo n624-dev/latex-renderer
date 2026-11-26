@@ -292,7 +292,7 @@ describe("public gateway wire", () => {
       const ws = new WebSocket(
         `ws://${authority}${rendererRelayAgentPaths[channel]}`,
       );
-      const execute = vi.fn((method: string, _payload: unknown) =>
+      const execute = vi.fn((method: string) =>
         Promise.resolve(
           method === "renderer.revoke" ? { revoked: true } : { channel },
         ),

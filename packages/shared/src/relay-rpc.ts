@@ -6,7 +6,12 @@ type Failure =
   | "disconnected"
   | "send_failed"
   | "request_ended";
-type Reply = (result: unknown, error: Failure | null) => void;
+interface PendingReply {
+  resolve: (result: unknown) => void;
+  reject: (error: RelayRpcError) => void;
+  signal: AbortSignal;
+  onAbort: () => void;
+}
 
 export class RelayRpcError extends Error {
   constructor(readonly code: Failure) {
@@ -16,7 +21,7 @@ export class RelayRpcError extends Error {
 
 /** An authenticated socket carries only bounded, in-memory requests and replies. */
 export class RelayRpc {
-  #pending = new Map<string, Reply>();
+  #pending = new Map<string, PendingReply>();
   #incoming = new Set<string>();
   #closed = false;
 
@@ -44,19 +49,13 @@ export class RelayRpc {
     signal.throwIfAborted();
     const id = randomUUID();
     return new Promise((resolve, reject) => {
-      const fail = () => settle(undefined, "request_ended");
-      const settle: Reply = (value, error) => {
-        this.#pending.delete(id);
-        signal.removeEventListener("abort", fail);
-        if (error !== null) reject(new RelayRpcError(error));
-        else resolve(value);
-      };
-      this.#pending.set(id, settle);
-      signal.addEventListener("abort", fail, { once: true });
+      const onAbort = () => this.#settle(id, undefined, "request_ended");
+      this.#pending.set(id, { resolve, reject, signal, onAbort });
+      signal.addEventListener("abort", onAbort, { once: true });
       try {
         this.#write({ id, method, payload });
       } catch {
-        settle(undefined, "send_failed");
+        this.#settle(id, undefined, "send_failed");
       }
     });
   }
@@ -76,13 +75,13 @@ export class RelayRpc {
       throw new Error("Invalid relay message");
     const { id } = frame;
     if (!("method" in frame)) {
-      const settle = this.#pending.get(id);
       if ("error" in frame)
-        settle?.(
+        this.#settle(
+          id,
           undefined,
           frame.error === "busy" ? "busy" : "operation_failed",
         );
-      else if ("result" in frame) settle?.(frame.result, null);
+      else if ("result" in frame) this.#settle(id, frame.result, null);
       else throw new Error("Invalid relay reply");
       return;
     }
@@ -108,8 +107,17 @@ export class RelayRpc {
   close(): void {
     if (this.#closed) return;
     this.#closed = true;
-    for (const settle of this.#pending.values())
-      settle(undefined, "disconnected");
+    for (const id of this.#pending.keys())
+      this.#settle(id, undefined, "disconnected");
+  }
+
+  #settle(id: string, value: unknown, error: Failure | null): void {
+    const pending = this.#pending.get(id);
+    if (!pending) return;
+    this.#pending.delete(id);
+    pending.signal.removeEventListener("abort", pending.onAbort);
+    if (error !== null) pending.reject(new RelayRpcError(error));
+    else pending.resolve(value);
   }
 
   #write(message: Record<string, unknown>): void {
