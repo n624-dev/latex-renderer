@@ -21,7 +21,7 @@ export function assertCompleteWireCatalog(result: unknown): {
     throw new Error("Expected one complete nonempty tools/list page");
   const validator = new Ajv2020({ strictSchema: true, strictTypes: false }),
     names = new Set<string>();
-  addFormats(validator);
+  addFormats.default(validator);
   let schemaCount = 0;
   for (const value of result.tools) {
     if (
