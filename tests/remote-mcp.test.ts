@@ -1124,8 +1124,33 @@ describe("Remote MCP HTTP server", () => {
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" }),
     });
     expect(denied.status).toBe(401);
-    expect(denied.headers.get("WWW-Authenticate")).toContain(
-      `resource_metadata="${ORIGIN}/.well-known/oauth-protected-resource/mcp"`,
+    expect(denied.headers.get("WWW-Authenticate")).toBe(
+      `Bearer resource_metadata="${ORIGIN}/.well-known/oauth-protected-resource/mcp"`,
+    );
+    await expect(denied.json()).resolves.toEqual({});
+  });
+
+  it.each([
+    ["unsupported authentication", "Basic Zml4dHVyZQ==", false],
+    ["missing Bearer token", "Bearer", false],
+    ["invalid Bearer token", `Bearer mcp_at_${"x".repeat(43)}`, true],
+  ])("challenges MCP requests with %s", async (_label, authorization, invalid) => {
+    const fixture = await createFixture();
+    const response = await fixture.app.request("/mcp", {
+      headers: { Host: "latex.example.com", Authorization: authorization },
+    });
+    const challenge = `Bearer resource_metadata="${ORIGIN}/.well-known/oauth-protected-resource/mcp"`;
+    expect(response.status).toBe(401);
+    expect(response.headers.get("WWW-Authenticate")).toBe(
+      invalid ? `${challenge}, error="invalid_token"` : challenge,
+    );
+    await expect(response.json()).resolves.toEqual(
+      invalid
+        ? {
+            error: "invalid_token",
+            error_description: "A valid Remote MCP access token is required",
+          }
+        : {},
     );
   });
 

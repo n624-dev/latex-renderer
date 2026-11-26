@@ -177,12 +177,11 @@ export function createRemoteMcpApp(dependencies: RemoteMcpAppDependencies) {
     await next();
   });
   app.use("/mcp", async (c, next) => {
+    const authorization = c.req.header("Authorization");
     try {
       c.set(
         "mcpAccess",
-        deps.oauth.verifyAccessToken(
-          parseBearer(c.req.header("Authorization")),
-        ),
+        deps.oauth.verifyAccessToken(parseBearer(authorization)),
       );
     } catch (error) {
       if (!(error instanceof AppError) || error.status !== 401) throw error;
@@ -190,11 +189,24 @@ export function createRemoteMcpApp(dependencies: RemoteMcpAppDependencies) {
         JSON.stringify({
           event: "remote_mcp.authentication_rejected",
           code: error.code,
-          credentialPresent: c.req.header("Authorization") !== undefined,
+          credentialPresent: authorization !== undefined,
           requestId: diagnosticRequestId(c.get("requestId")),
         }),
       );
-      return mcpAuthenticationChallenge(deps.publicOrigin);
+      const metadata = `${deps.publicOrigin}/.well-known/oauth-protected-resource/mcp`;
+      const challenge = `Bearer resource_metadata="${metadata}"`;
+      if (error.code === "INVALID_TOKEN") {
+        c.header("WWW-Authenticate", `${challenge}, error="invalid_token"`);
+        return c.json(
+          {
+            error: "invalid_token",
+            error_description: "A valid Remote MCP access token is required",
+          },
+          401,
+        );
+      }
+      c.header("WWW-Authenticate", challenge);
+      return c.json({}, 401);
     }
     await next();
   });
@@ -608,23 +620,6 @@ function faultSubsystem(error: Error): string {
   )
     return "filesystem";
   return error instanceof AppError ? "oauth_request" : "unexpected";
-}
-
-function mcpAuthenticationChallenge(publicOrigin: string): Response {
-  const metadataUrl = `${publicOrigin}/.well-known/oauth-protected-resource/mcp`;
-  return new Response(
-    JSON.stringify({
-      error: "invalid_token",
-      error_description: "A valid Remote MCP access token is required",
-    }),
-    {
-      status: 401,
-      headers: {
-        "Content-Type": "application/json",
-        "WWW-Authenticate": `Bearer resource_metadata="${metadataUrl}", error="invalid_token"`,
-      },
-    },
-  );
 }
 
 async function establishOrRedirect(
