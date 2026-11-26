@@ -1,4 +1,8 @@
 {
+  "optionalChatGptConnection": "Anslut ChatGPT (valfritt)",
+  "enableChatGptFromTerminal": "Kör det här kommandot på servern för att aktivera anslutningen:",
+  "skipChatGptConnection": "Hoppa över tills vidare",
+  "skippedChatGptConnection": "Konfigurationen är klar. Du kan ansluta ChatGPT senare.",
   "acceptTheSelectedCertificateAuthorityS": "Godkänn den valda certifikatutfärdarens villkor",
   "additionalSwapLimit0DisablesIt": "Gräns för extra växlingsutrymme (0 inaktiverar)",
   "adminAudience": "Målgrupp för administratörsautentisering",

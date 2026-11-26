@@ -10,6 +10,10 @@ export const requiredProductionBuildOutputs = [
   "apps/admin-web/dist/server.js",
   "apps/internal-api/dist/server.js",
   "apps/remote-mcp/dist/server.js",
+  "apps/public-mcp-agent/dist/server.js",
+  "apps/public-mcp-agent/dist/setup.js",
+  "apps/public-mcp-gateway/dist/server.js",
+  "apps/public-mcp-gateway/dist/backup-cli.js",
   "apps/renderer-api/dist/server.js",
   "apps/renderer-worker/dist/index.js",
   "apps/standalone-gateway/dist/server.js",
@@ -58,6 +62,17 @@ export async function assembleBuildArtifacts({
 
 async function assertBuildOutputs(verifiedSource, root) {
   for (const requiredPath of requiredProductionBuildOutputs) {
+    if (/^apps\/public-mcp-(agent|gateway)\/dist\//.test(requiredPath)) {
+      const original = requiredPath
+        .replace("/dist/", "/src/")
+        .replace(/\.js$/, ".ts");
+      try {
+        await lstat(join(verifiedSource, original));
+      } catch (error) {
+        if (error.code === "ENOENT") continue;
+        throw error;
+      }
+    }
     if (requiredPath === "apps/public-web/dist/index.html") {
       try {
         await lstat(

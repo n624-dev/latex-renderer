@@ -5,10 +5,23 @@
     "paths": {
       "@latex-renderer/shared": ["./packages/shared/src/index.ts"],
       "@latex-renderer/shared/locale": ["./packages/shared/src/locale.ts"],
+      "@latex-renderer/shared/public-https": [
+        "./packages/shared/src/public-https.ts"
+      ],
+      "@latex-renderer/shared/bounded-body": [
+        "./packages/shared/src/bounded-body.ts"
+      ],
+      "@latex-renderer/shared/relay-rpc": ["./packages/shared/src/relay-rpc.ts"],
       "@latex-renderer/shared/diagnostic-locale": [
         "./packages/shared/src/diagnostic-locale.ts"
       ],
       "@latex-renderer/contracts": ["./packages/contracts/src/index.ts"],
+      "@latex-renderer/contracts/renderer-mcp-definitions": [
+        "./packages/contracts/src/renderer-mcp-definitions.ts"
+      ],
+      "@latex-renderer/contracts/renderer-mcp-messages": [
+        "./packages/contracts/src/renderer-mcp-messages.ts"
+      ],
       "@latex-renderer/database": ["./packages/database/src/index.ts"],
       "@latex-renderer/auth": ["./packages/auth/src/index.ts"],
       "@latex-renderer/ticket": ["./packages/ticket/src/index.ts"],

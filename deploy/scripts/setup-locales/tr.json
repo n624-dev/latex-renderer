@@ -1,4 +1,8 @@
 {
+  "optionalChatGptConnection": "ChatGPT’yi bağla (isteğe bağlı)",
+  "enableChatGptFromTerminal": "Bağlantıyı etkinleştirmek için sunucuda şu komutu çalıştırın:",
+  "skipChatGptConnection": "Şimdilik atla",
+  "skippedChatGptConnection": "Kurulum tamamlandı. ChatGPT’yi daha sonra bağlayabilirsiniz.",
   "acceptTheSelectedCertificateAuthorityS": "Seçilen sertifika yetkilisinin koşullarını kabul et",
   "additionalSwapLimit0DisablesIt": "Ek takas alanı sınırı (0 devre dışı bırakır)",
   "adminAudience": "Yönetim kimlik doğrulama hedef kitlesi",

@@ -1,0 +1,41 @@
+[Unit]
+Description=LaTeX Renderer outbound MCP agent
+Wants=network-online.target
+After=network-online.target latex-renderer-remote-mcp.socket
+Requisite=latex-renderer-remote-mcp.socket
+PartOf=latex-renderer-remote-mcp.socket
+ConditionPathExists=/opt/latex-renderer/current/apps/public-mcp-agent/dist/server.js
+
+[Service]
+User=latex-renderer-mcp-agent
+Group=latex-renderer-mcp-agent
+SupplementaryGroups=latex-renderer
+WorkingDirectory=/opt/latex-renderer/current
+EnvironmentFile=/etc/latex-renderer/chatgpt/agent.env
+EnvironmentFile=/etc/latex-renderer/chatgpt/agent-limits.env
+LoadCredential=agent.pem:/etc/latex-renderer/chatgpt/agent.pem
+LoadCredential=local-secret:/etc/latex-renderer/chatgpt/local-secret
+LoadCredential=admin-secret:/etc/latex-renderer/chatgpt/admin-secret
+Environment=RENDERER_RELAY_AGENT_KEY_FILE=%d/agent.pem
+Environment=RENDERER_RELAY_AGENT_SECRET_FILE=%d/local-secret
+Environment=RENDERER_RELAY_AGENT_ADMIN_SECRET_FILE=%d/admin-secret
+Environment=NODE_USE_SYSTEM_CA=1
+ExecStart=/usr/local/bin/node apps/public-mcp-agent/dist/server.js
+Restart=on-failure
+RestartPreventExitStatus=78
+RestartSec=5s
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+InaccessiblePaths=/etc/latex-renderer /var/lib/latex-renderer
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+LimitCORE=0
+
+[Install]
+WantedBy=latex-renderer-remote-mcp.socket

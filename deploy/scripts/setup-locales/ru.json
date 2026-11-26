@@ -1,4 +1,8 @@
 {
+  "optionalChatGptConnection": "Подключить ChatGPT (необязательно)",
+  "enableChatGptFromTerminal": "Чтобы включить подключение, выполните эту команду на сервере:",
+  "skipChatGptConnection": "Пропустить",
+  "skippedChatGptConnection": "Настройка завершена. Вы можете подключить ChatGPT позже.",
   "acceptTheSelectedCertificateAuthorityS": "Принять условия выбранного центра сертификации",
   "additionalSwapLimit0DisablesIt": "Лимит дополнительного swap (0 отключает)",
   "adminAudience": "Аудитория аутентификации администрирования",

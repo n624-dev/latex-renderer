@@ -1,6 +1,6 @@
 {
   "name": "@latex-renderer/contracts",
-  "version": "1.7.2-rc.4",
+  "version": "1.7.2-rc.5",
   "private": true,
   "license": "Apache-2.0",
   "type": "module",
@@ -10,6 +10,14 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./renderer-mcp-definitions": {
+      "types": "./dist/renderer-mcp-definitions.d.ts",
+      "import": "./dist/renderer-mcp-definitions.js"
+    },
+    "./renderer-mcp-messages": {
+      "types": "./dist/renderer-mcp-messages.d.ts",
+      "import": "./dist/renderer-mcp-messages.js"
     }
   },
   "scripts": {

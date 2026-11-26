@@ -105,6 +105,7 @@ ${tls}
   proxy_read_timeout 360s;
 ${GATEWAY_ROUTES.map((route) => `  location ${route} { limit_req zone=latex_renderer_api burst=20 nodelay; proxy_pass http://127.0.0.1:3105; }`).join("\n")}
   location ~ ^/\\.well-known/oauth-(authorization-server|protected-resource) { proxy_pass http://127.0.0.1:3104; }
+  location ~ ^/mcp/relay/local-(operation|revoke|download)$ { return 404; }
   location ~ ^/(oauth|mcp)(/|$) { proxy_pass http://127.0.0.1:3104; }
   location = /auth/password/login { limit_req zone=latex_renderer_login burst=5 nodelay; proxy_pass http://127.0.0.1:3102; }
   location ~ ^/(auth|admin/api|admin/v1|app/api)(/|$) { proxy_pass http://127.0.0.1:3102; }

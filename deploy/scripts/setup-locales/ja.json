@@ -1,4 +1,8 @@
 {
+  "optionalChatGptConnection": "ChatGPTと連携する（任意）",
+  "enableChatGptFromTerminal": "連携を有効にするには、サーバーで次のコマンドを実行します。",
+  "skipChatGptConnection": "今はスキップ",
+  "skippedChatGptConnection": "セットアップが完了しました。ChatGPT連携は後から有効にできます。",
   "acceptTheSelectedCertificateAuthorityS": "選択した認証局の利用規約に同意する",
   "additionalSwapLimit0DisablesIt": "追加swapの上限（0は無効）",
   "adminAudience": "管理画面の認証対象",

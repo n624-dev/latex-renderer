@@ -1,6 +1,6 @@
 {
   "name": "@latex-renderer/shared",
-  "version": "1.7.2-rc.4",
+  "version": "1.7.2-rc.5",
   "private": true,
   "license": "Apache-2.0",
   "type": "module",
@@ -18,6 +18,18 @@
     "./diagnostic-locale": {
       "types": "./dist/diagnostic-locale.d.ts",
       "import": "./dist/diagnostic-locale.js"
+    },
+    "./public-https": {
+      "types": "./dist/public-https.d.ts",
+      "import": "./dist/public-https.js"
+    },
+    "./bounded-body": {
+      "types": "./dist/bounded-body.d.ts",
+      "import": "./dist/bounded-body.js"
+    },
+    "./relay-rpc": {
+      "types": "./dist/relay-rpc.d.ts",
+      "import": "./dist/relay-rpc.js"
     }
   },
   "scripts": {

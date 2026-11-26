@@ -1,6 +1,7 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { isIP } from "node:net";
 import { Hono } from "hono";
+import { rendererRelayAgentDownloadPath, rendererRelayAgentOperationPath, rendererRelayAgentRevokePath, rendererRelayDownloadPath, rendererRelayDownloadRequestSchema, rendererRelayOperationPath, rendererRelayPublicIdentityPath, rendererRelayRequestSchema, rendererRelayRevokePath } from "@latex-renderer/contracts";
 import { requestId } from "hono/request-id";
 import { secureHeaders } from "hono/secure-headers";
 import {
@@ -10,6 +11,7 @@ import {
 import type { RendererDatabase } from "@latex-renderer/database";
 import {
   REMOTE_MCP_SCOPES,
+  type RemoteRenderService,
   RemoteOAuthService,
   RemoteMcpLoginContinuations,
   oauthLoginCookie,
@@ -39,6 +41,8 @@ import {
 } from "./diagnostics.js";
 import { observeMcpResponse } from "./response-diagnostics.js";
 import { consentCatalog } from "./consent-messages.js";
+import type { rendererIdentityFromEnvironment } from "./relay-identity.js";
+import { dispatchRelayOperation } from "./relay-operations.js";
 
 export interface RemoteMcpAppDependencies {
   registrationLimiter?: AnonymousRegistrationLimiter;
@@ -47,6 +51,9 @@ export interface RemoteMcpAppDependencies {
   oauth: RemoteOAuthService;
   mcp: McpHttpHandler;
   publicOrigin: string;
+  relayIdentity?: NonNullable<ReturnType<typeof rendererIdentityFromEnvironment>>;
+  localRelay?: (request: Request) => Promise<Response>;
+  relayDownload?: RemoteRenderService["relayDownload"];
 }
 
 const registerSchema = z
@@ -446,6 +453,56 @@ export function createRemoteMcpApp(dependencies: RemoteMcpAppDependencies) {
     );
     return c.json(tokens);
   });
+
+  if (deps.relayIdentity) {
+    const identity = deps.relayIdentity;
+    app.post(rendererRelayPublicIdentityPath, async (c) => {
+      const access = deps.oauth.verifyAccessToken(parseBearer(c.req.header("Authorization")));
+      const parsed = z.object({ nonce: z.string().regex(/^[A-Za-z0-9_-]{43}$/) }).strict()
+        .safeParse(await readJson(c.req.raw, 512));
+      if (!parsed.success) throw new AppError("INVALID_RELAY_REQUEST", "Invalid identity request", 400);
+      return c.json(identity.proof(access, parsed.data.nonce));
+    });
+    app.post(rendererRelayRevokePath, (c) => {
+      deps.oauth.revokeAccessGrant(parseBearer(c.req.header("Authorization")));
+      return c.json({ revoked: true });
+    });
+  }
+
+  if (deps.relayIdentity) {
+    const identity = deps.relayIdentity;
+    app.post(rendererRelayOperationPath, async (c) => {
+      const access = deps.oauth.verifyAccessToken(parseBearer(c.req.header("Authorization")));
+      const parsed = rendererRelayRequestSchema.safeParse(await readJson(c.req.raw, 8 * 1024 * 1024));
+      if (!parsed.success) throw new AppError("INVALID_RELAY_REQUEST", "Invalid Renderer relay request", 400);
+      const input = parsed.data;
+      if (input.instanceId !== identity.instance.id || input.grant !== access.grantId || access.scopes.includes("mcp"))
+        throw new AppError("INVALID_RELAY_GRANT", "Renderer relay grant is not authorized", 403);
+      return dispatchRelayOperation({ handler: deps.mcp, publicOrigin: deps.publicOrigin, operation: input.operation,
+        userId: access.userId, clientId: access.clientId, scopes: input.scopes.filter((scope) => access.scopes.includes(scope)),
+        signal: c.req.raw.signal });
+    });
+  }
+
+  if (deps.relayIdentity && deps.relayDownload) {
+    const { instance } = deps.relayIdentity;
+    const download = deps.relayDownload;
+    app.post(rendererRelayDownloadPath, async (c) => {
+      const access = deps.oauth.verifyAccessToken(parseBearer(c.req.header("Authorization")));
+      const parsed = rendererRelayDownloadRequestSchema.safeParse(await readJson(c.req.raw, 4096));
+      if (!parsed.success) throw new AppError("INVALID_RELAY_REQUEST", "Invalid download request", 400);
+      const { instanceId, grant, target, offset, limit } = parsed.data;
+      if (instanceId !== instance.id || grant !== access.grantId || access.scopes.includes("mcp"))
+        throw new AppError("INVALID_RELAY_GRANT", "Renderer relay grant is not authorized", 403);
+      return c.json(await download(access, target, offset, limit));
+    });
+  }
+
+  if (deps.localRelay) {
+    const handle = deps.localRelay;
+    for (const path of ["/oauth/relay", rendererRelayAgentOperationPath, rendererRelayAgentRevokePath, rendererRelayAgentDownloadPath])
+      app.all(path, (c) => handle(c.req.raw));
+  }
 
   app.all("/mcp", async (c) => {
     const access = c.get("mcpAccess");

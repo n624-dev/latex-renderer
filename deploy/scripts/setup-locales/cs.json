@@ -1,4 +1,8 @@
 {
+  "optionalChatGptConnection": "Připojit ChatGPT (volitelné)",
+  "enableChatGptFromTerminal": "Chcete-li připojení povolit, spusťte na serveru tento příkaz:",
+  "skipChatGptConnection": "Zatím přeskočit",
+  "skippedChatGptConnection": "Nastavení je dokončeno. ChatGPT můžete připojit později.",
   "acceptTheSelectedCertificateAuthorityS": "Přijmout podmínky vybrané certifikační autority",
   "additionalSwapLimit0DisablesIt": "Limit dodatečného swapu (0 jej vypne)",
   "adminAudience": "Publikum ověřování správy",

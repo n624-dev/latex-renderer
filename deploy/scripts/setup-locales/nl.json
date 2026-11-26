@@ -1,4 +1,8 @@
 {
+  "optionalChatGptConnection": "ChatGPT koppelen (optioneel)",
+  "enableChatGptFromTerminal": "Voer deze opdracht op de server uit om de verbinding in te schakelen:",
+  "skipChatGptConnection": "Voor nu overslaan",
+  "skippedChatGptConnection": "De installatie is voltooid. Je kunt ChatGPT later koppelen.",
   "acceptTheSelectedCertificateAuthorityS": "Voorwaarden van de geselecteerde certificaatautoriteit aanvaarden",
   "additionalSwapLimit0DisablesIt": "Limiet voor extra swap (0 schakelt uit)",
   "adminAudience": "Doelgroep van beheerauthenticatie",

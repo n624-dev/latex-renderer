@@ -1,0 +1,20 @@
+{
+  "name": "@latex-renderer/public-mcp-agent",
+  "version": "1.7.2-rc.5",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.9",
+    "@latex-renderer/contracts": "workspace:*",
+    "@latex-renderer/shared": "workspace:*",
+    "ws": "8.21.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.1"
+  }
+}

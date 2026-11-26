@@ -1,35 +1,10 @@
-import { lookup } from "node:dns/promises";
 import { createWriteStream } from "node:fs";
 import { get } from "node:https";
-import { BlockList, isIP } from "node:net";
+import { isIP } from "node:net";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import { checkServerIdentity } from "node:tls";
 import { AppError } from "@latex-renderer/shared";
-
-const nonPublic = new BlockList();
-for (const [network, prefix] of [
-  ["0.0.0.0", 8],
-  ["10.0.0.0", 8],
-  ["100.64.0.0", 10],
-  ["127.0.0.0", 8],
-  ["169.254.0.0", 16],
-  ["172.16.0.0", 12],
-  ["192.0.0.0", 24],
-  ["192.0.2.0", 24],
-  ["192.168.0.0", 16],
-  ["198.18.0.0", 15],
-  ["198.51.100.0", 24],
-  ["203.0.113.0", 24],
-  ["224.0.0.0", 4],
-  ["240.0.0.0", 4],
-] as const)
-  nonPublic.addSubnet(network, prefix);
-nonPublic.addSubnet("2001:db8::", 32, "ipv6");
-nonPublic.addSubnet("2002::", 16, "ipv6");
-
-const globallyRoutedV6 = new BlockList();
-globallyRoutedV6.addSubnet("2000::", 3, "ipv6");
+import { pinPublicHttps } from "@latex-renderer/shared/public-https";
 
 export function attachmentOrigins(
   value: string | undefined,
@@ -102,44 +77,23 @@ export async function downloadAttachment(
     throw invalidOrigin();
 
   const signal = AbortSignal.timeout(30_000);
-  // Resolve once, validate the selected destination, then connect to that
-  // exact address while verifying TLS against the original DNS name.
-  const records = await new Promise<{ address: string; family: number }[]>(
-    (resolve, reject) => {
-      const stop = () =>
-        reject(
-          new AppError(
-            "ATTACHMENT_UNAVAILABLE",
-            "Attachment retrieval timed out",
-            504,
-          ),
+  const connection = await pinPublicHttps(url, url.origin, signal).catch(
+    (error: unknown) => {
+      if (signal.aborted)
+        throw new AppError(
+          "ATTACHMENT_UNAVAILABLE",
+          "Attachment retrieval timed out",
+          504,
         );
-      signal.addEventListener("abort", stop, { once: true });
-      void lookup(url.hostname, { all: true })
-        .then(resolve, reject)
-        .finally(() => signal.removeEventListener("abort", stop));
+      throw error;
     },
   );
-  const record = records.find(({ address, family }) =>
-    family === 4
-      ? !nonPublic.check(address)
-      : family === 6 &&
-        globallyRoutedV6.check(address, "ipv6") &&
-        !nonPublic.check(address, "ipv6"),
-  );
-  if (!record) throw invalidOrigin();
-  signal.throwIfAborted();
+  if (!connection) throw invalidOrigin();
   await new Promise<void>((resolve, reject) => {
     const request = get(
       {
-        hostname: record.address,
-        family: record.family,
-        servername: url.hostname,
-        path: url.pathname + url.search,
+        ...connection,
         headers: { Host: url.host, "Accept-Encoding": "identity" },
-        checkServerIdentity: (_name, certificate) =>
-          checkServerIdentity(url.hostname, certificate),
-        agent: false,
         signal,
       },
       (response) => {

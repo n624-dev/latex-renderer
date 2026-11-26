@@ -382,6 +382,53 @@ async function main() {
     run(await controlled(localNode), [await controlled(recovery), "status"]);
     return;
   }
+  if (args[0] === "chatgpt") {
+    const unit = "latex-renderer-public-mcp-agent.service";
+    const action = args[1];
+    if (args.length === 2 && args[1] === "--skip") {
+      console.log("ChatGPT integration skipped. You can enable it later.");
+      return;
+    }
+    if (args.length === 2 && action === "--status") {
+      run("/usr/bin/systemctl", [
+        "show",
+        unit,
+        "--property=LoadState,ActiveState,UnitFileState",
+      ]);
+      return;
+    }
+    if (args.length === 2 && action === "--stop") {
+      run("/usr/bin/systemctl", ["disable", "--now", unit]);
+      return;
+    }
+    if (args.length === 2 && action === "--retire-key") {
+      const release = await installedRelease();
+      if (!release) throw new Error("Complete Renderer setup first.");
+      run(await controlled(localNode), [
+        await controlled(join(release, "apps/public-mcp-agent/dist/setup.js")),
+        action,
+        "/etc/latex-renderer/chatgpt",
+      ]);
+      run("/usr/bin/systemctl", ["disable", "--now", unit]);
+      return;
+    }
+    const origin = args[2];
+    const rotate = args.length === 4 && args[3] === "--rotate-agent-key";
+    if ((args.length !== 3 && !rotate) || args[1] !== "--connect" || !origin)
+      throw new Error(
+        "Usage: n624-latex server chatgpt --skip | --connect GATEWAY_HTTPS_ORIGIN [--rotate-agent-key]",
+      );
+    const release = await installedRelease();
+    if (!release) throw new Error("Complete Renderer setup first.");
+    run(await controlled(localNode), [
+      await controlled(join(release, "apps/public-mcp-agent/dist/setup.js")),
+      "--connect",
+      origin,
+      "/etc/latex-renderer/chatgpt",
+      ...(rotate ? ["--rotate-agent-key"] : []),
+    ]);
+    return;
+  }
   const usage =
     "Usage: n624-latex server setup [--web|--cui] [--ingress|--candidate vX.Y.Z-rc.N] [--plan] | server recovery status";
   if (args[0] !== "setup") throw new Error(usage);

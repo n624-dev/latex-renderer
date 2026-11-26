@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { AppError } from "@latex-renderer/shared";
+import { authoringTopics, type AuthoringTopic } from "@latex-renderer/contracts";
 
 const guideRoot = new URL(
   "../../../integrations/latex-renderer/",
@@ -20,10 +21,10 @@ const guideFiles = {
   "tikz-figure": "assets/tikz-figure.tex",
   accessibility: "references/accessibility.md",
   "japanese-tagged": "assets/japanese-tagged.tex",
-} as const;
+} satisfies Record<AuthoringTopic, string>;
 
-export type AuthoringTopic = keyof typeof guideFiles;
-export const authoringTopics = Object.keys(guideFiles) as AuthoringTopic[];
+export { authoringTopics };
+export type { AuthoringTopic };
 
 async function loadGuide() {
   const topics = await Promise.all(

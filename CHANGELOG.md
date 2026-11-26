@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 1.7.2-rc.5 - 2026-11-26
+
+- Add an optional MCP gateway for connecting ChatGPT to self-hosted LaTeX Renderer installations through HTTPS or an outbound agent.
+- Manage connection approvals, scope, key rotation, and encrypted gateway backups independently of the rendering server.
+- Deliver PDF, preview images, and revision ZIPs through short-lived links tied to a connection.
+
 ## 1.7.1 - 2026-11-23
 
 - Make installation, the first PDF, and server operation easier to follow in the public guides.
