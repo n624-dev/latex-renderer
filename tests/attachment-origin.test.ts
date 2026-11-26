@@ -50,10 +50,40 @@ describe("host-provided source attachments", () => {
       { address: "192.168.20.10", family: 4 },
       { address: "::ffff:169.254.10.12", family: 6 },
       { address: "fc01::1", family: 6 },
+      { address: "2001:0:1234::1", family: 6 },
+      { address: "3fff::1", family: 6 },
     ]);
     await expect(
       downloadAttachment(`${origin}/document.zip`, origins, destination, 128),
     ).rejects.toMatchObject({ code: "ATTACHMENT_ORIGIN_INVALID" });
     expect(get).not.toHaveBeenCalled();
+  });
+
+  it("connects to the checked address and retains the trusted hostname for TLS", async () => {
+    lookup.mockResolvedValue([
+      { address: "192.168.20.10", family: 4 },
+      { address: "93.184.216.34", family: 4 },
+    ]);
+    const stopped = new Error("fixture: no network request");
+    get.mockImplementation(() => {
+      throw stopped;
+    });
+
+    await expect(
+      downloadAttachment(`${origin}/document.zip`, origins, destination, 128),
+    ).rejects.toBe(stopped);
+    expect(lookup).toHaveBeenCalledExactlyOnceWith("attachments.example.test", {
+      all: true,
+    });
+    expect(get).toHaveBeenCalledWith(
+      expect.objectContaining({
+        hostname: "93.184.216.34",
+        servername: "attachments.example.test",
+        rejectUnauthorized: true,
+        agent: false,
+        path: "/document.zip",
+      }),
+      expect.any(Function),
+    );
   });
 });

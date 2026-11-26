@@ -1,0 +1,23 @@
+{
+  "name": "@latex-renderer/public-mcp-gateway",
+  "version": "1.7.2-rc.5",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.9",
+    "@latex-renderer/contracts": "workspace:*",
+    "@latex-renderer/shared": "workspace:*",
+    "@modelcontextprotocol/server": "^2.4.0",
+    "jose": "^6.2.18",
+    "ws": "8.21.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.2"
+  }
+}

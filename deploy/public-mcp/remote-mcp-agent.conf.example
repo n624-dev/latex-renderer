@@ -1,0 +1,8 @@
+[Service]
+EnvironmentFile=/etc/latex-renderer/chatgpt/agent.env
+EnvironmentFile=/etc/latex-renderer/chatgpt/agent-limits.env
+LoadCredential=instance.pem:/etc/latex-renderer/chatgpt/instance.pem
+LoadCredential=local-secret:/etc/latex-renderer/chatgpt/local-secret
+Environment=RENDERER_RELAY_INSTANCE_KEY_FILE=%d/instance.pem
+Environment=RENDERER_RELAY_AGENT_SECRET_FILE=%d/local-secret
+Environment=RENDERER_RELAY_AGENT_GRANTS_DB=/var/lib/latex-renderer/mcp-relay-grants.sqlite

@@ -16,6 +16,20 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import type { AccessJwtVerifier } from "@latex-renderer/auth";
 import {
+  rendererMcpResourceUris,
+  rendererMcpToolPolicies,
+} from "../packages/contracts/src/renderer-mcp.js";
+import {
+  rendererRelayAgentDownloadPath,
+  rendererRelayAgentOperationPath,
+  rendererRelayAgentRevokePath,
+  rendererRelayDownloadPath,
+  rendererRelayOperationPath,
+  rendererRelayPublicIdentityPath,
+  rendererRelayRevokePath,
+  rendererRelayVersion,
+} from "../packages/contracts/src/renderer-relay.js";
+import {
   ProjectDraftOperations,
   RendererDatabase,
   pdfInspectionUploadDirectory,
@@ -35,6 +49,10 @@ import {
   AnonymousRegistrationLimiter,
 } from "../apps/remote-mcp/src/app.js";
 import { createRemoteMcpHandler } from "../apps/remote-mcp/src/mcp.js";
+import { rendererIdentityFromEnvironment } from "../apps/remote-mcp/src/relay-identity.js";
+import { createLocalRelay } from "../apps/remote-mcp/src/relay-agent.js";
+import { LocalRelayGrants } from "../apps/remote-mcp/src/relay-grants.js";
+import { createAgentEnrollmentKeys } from "../apps/public-mcp-agent/src/enrollment.js";
 import yazl from "yazl";
 import { legacyTestBrowserAuth } from "./helpers/browser-auth.js";
 import {
@@ -67,6 +85,54 @@ afterEach(async () => {
 });
 
 describe("Remote MCP HTTP server", () => {
+  it("uses the shared operation scopes for the complete wire catalogue", async () => {
+    vi.stubEnv("REMOTE_MCP_FILE_ORIGINS", "https://files.example.test");
+    vi.stubEnv("REMOTE_MCP_ATTACHMENT_VERIFICATION_USER", "user_test");
+    const { app, oauth } = await createFixture();
+    const { result } = await mcpRequest(app, issueAccessToken(oauth), {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/list",
+    });
+    expect(assertCompleteWireCatalog(result).toolCount).toBe(
+      Object.keys(rendererMcpToolPolicies).length,
+    );
+    const scopesByTool = Object.fromEntries(
+      (result.tools ?? []).map(({ name, _meta }) => [name, _meta?.securitySchemes]),
+    );
+    expect(scopesByTool).toEqual(
+      Object.fromEntries(
+        Object.entries(rendererMcpToolPolicies).map(([name, { scope }]) => [
+          name,
+          [{ type: "oauth2", scopes: scope === null ? [] : [scope] }],
+        ]),
+      ),
+    );
+  });
+
+  it("publishes the shared resource URIs for direct connections", async () => {
+    const { app, oauth } = await createFixture();
+    const token = issueAccessToken(oauth);
+    const list = await mcpRequest(app, token, {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "resources/list",
+    });
+    const templates = await mcpRequest(app, token, {
+      jsonrpc: "2.0",
+      id: 2,
+      method: "resources/templates/list",
+    });
+    const { "remote-mcp-guide": guideUri, ...otherUris } =
+      rendererMcpResourceUris;
+    expect(list.result.resources?.map(({ uri }) => uri)).toEqual([guideUri]);
+    expect(
+      templates.result.resourceTemplates
+        ?.map(({ uriTemplate }) => uriTemplate)
+        .sort(),
+    ).toEqual(Object.values(otherUris).sort());
+  });
+
   it.each(["runtime", "numbered"])("keeps existing inspection records through the %s migration", async (migration) => {
     const f = await createFixture();
     const identity = { userId: "user_test", scopes: ["mcp:render"] as const };
@@ -1704,6 +1770,68 @@ describe("Remote MCP HTTP server", () => {
     expect(
       f.database.drafts.getOwned(project.id, identity.userId),
     ).toBeUndefined();
+  });
+
+  it("uses the same real Renderer procedures for HTTPS and agent relay tools and downloads", async () => {
+    const f = await createFixture();
+    const keys = createAgentEnrollmentKeys();
+    const instanceFile = join(f.storage, "relay-private.pem");
+    await writeFile(instanceFile, keys.instancePrivateKey.export({ format: "pem", type: "pkcs8" }), { mode: 0o600 });
+    const relayIdentity = rendererIdentityFromEnvironment(ORIGIN, {
+      RENDERER_RELAY_INSTANCE_ID: keys.instanceId, RENDERER_RELAY_INSTANCE_KEY_FILE: instanceFile,
+    });
+    if (!relayIdentity) throw new Error("No relay identity");
+    const dependencies = {
+      database: f.database, browserAuth: legacyTestBrowserAuth(f.database, {
+        verify: () => Promise.reject(new Error("A browser session was not expected")),
+      } as unknown as AccessJwtVerifier, { enforceExactOrigin: true }),
+      oauth: f.oauth, mcp: createRemoteMcpHandler(f.renders, "test"), publicOrigin: ORIGIN, relayIdentity,
+      relayDownload: f.renders.relayDownload.bind(f.renders),
+    };
+    const grants = new LocalRelayGrants(":memory:");
+    const cleanup = { [Symbol.dispose]: () => grants.close() };
+    using _grants = cleanup;
+    const secret = "test-shared-loopback-credential";
+    const localRelay = createLocalRelay(dependencies, { grants, secret, instanceId: keys.instanceId, agentOrigin: "http://127.0.0.1:3111" });
+    const app = createRemoteMcpApp({ ...dependencies, localRelay: localRelay.handle });
+    const token = issueAccessToken(f.oauth, "user_test", "mcp:read mcp:render");
+    const post = (path: string, input: unknown) => app.request(path, {
+      method: "POST", headers: { Host: new URL(ORIGIN).host, Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+    const proofResponse = await post(rendererRelayPublicIdentityPath, { nonce: "A".repeat(43) });
+    expect(proofResponse.status).toBe(200);
+    const proof = await proofResponse.json() as { grant: string };
+    const binding = { version: rendererRelayVersion, instanceId: keys.instanceId, grant: proof.grant };
+    const scopes = ["mcp:read", "mcp:render"];
+    const operation = { method: "tools/call", name: "get_authoring_guide", arguments: { topic: "remote" } };
+    const badBinding = await post(rendererRelayOperationPath, { ...binding, grant: "wrong", scopes, operation });
+    expect(badBinding.status).toBe(403);
+    const guide = await post(rendererRelayOperationPath, { ...binding, scopes, operation });
+    expect(guide.status).toBe(200);
+    expect(await guide.json()).toMatchObject({ result: { structuredContent: { success: true, result: { topic: "remote" } } } });
+    const jobId = await seedCompletedRemoteJob(f, "succeeded");
+    const target = { kind: "artifact", jobId, path: "result.pdf", sha256: createHash("sha256").update(TEST_PDF).digest("hex") };
+    const downloaded = await post(rendererRelayDownloadPath, { ...binding, target, offset: 0, limit: 4 });
+    expect(downloaded.status).toBe(200);
+    expect(await downloaded.json()).toMatchObject({ data: Buffer.from("%PDF").toString("base64"), size: TEST_PDF.length });
+    expect((await post(rendererRelayRevokePath, {})).status).toBe(200);
+    expect((await post(rendererRelayOperationPath, { ...binding, scopes, operation })).status).toBe(401);
+    const user = f.database.users.get("user_test");
+    if (!user) throw new Error("Missing fixture account");
+    const grant = grants.create(user.id, user.security_version, ["mcp:read", "mcp:render"], Date.now());
+    const postLocal = (path: string, input: unknown, host = "127.0.0.1:3104") => app.request(path, {
+      method: "POST", headers: { Host: host, Authorization: `Bearer ${secret}`, "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+    const agent = { ...binding, grant };
+    expect((await postLocal(rendererRelayAgentOperationPath, { ...agent, scopes, operation }, new URL(ORIGIN).host)).status).toBe(404);
+    const agentGuide = await postLocal(rendererRelayAgentOperationPath, { ...agent, scopes, operation });
+    expect(await agentGuide.json()).toMatchObject({ result: { structuredContent: { success: true, result: { topic: "remote" } } } });
+    const agentDownload = await postLocal(rendererRelayAgentDownloadPath, { ...agent, target, offset: 0, limit: 4 });
+    expect(await agentDownload.json()).toMatchObject({ data: Buffer.from("%PDF").toString("base64"), size: TEST_PDF.length });
+    expect((await postLocal(rendererRelayAgentRevokePath, { grant })).status).toBe(200);
+    expect((await postLocal(rendererRelayAgentDownloadPath, { ...agent, target, offset: 0, limit: 4 })).status).toBe(401);
   });
 
   it("reports literal declarations from an exact saved entrypoint separately from explicit requirements", async () => {
@@ -3927,8 +4055,13 @@ async function createFixture(
       );
       target.host = `127.0.0.1:${address.port}`;
       target.protocol = "http:";
+      // Use a fresh loopback socket for each fixture request. A busy test host
+      // can otherwise race the short HTTP keep-alive timer between assertions.
+      const headers = new Headers(init?.headers);
+      headers.set("Connection", "close");
       return fetch(target, {
         ...init,
+        headers,
         redirect: "manual",
       });
     };
@@ -4148,6 +4281,7 @@ async function testZip(
 function issueAccessToken(
   oauth: RemoteOAuthService,
   userId = "user_test",
+  scope = "mcp",
 ): string {
   const client = oauth.registerClient({
       clientName: "Compatibility test",
@@ -4160,7 +4294,7 @@ function issueAccessToken(
         response_type: "code",
         client_id: client.clientId,
         redirect_uri: "http://127.0.0.1:49152/callback",
-        scope: "mcp",
+        scope,
         resource: RESOURCE,
         code_challenge: challenge,
         code_challenge_method: "S256",
@@ -4219,6 +4353,8 @@ interface JsonRpcResponse {
   result: {
     protocolVersion?: unknown;
     tools?: Array<{ name: string; _meta?: Record<string, unknown> }>;
+    resources?: Array<{ uri: string }>;
+    resourceTemplates?: Array<{ uriTemplate: string }>;
     structuredContent?: unknown;
     content?: unknown[];
     contents?: Array<Record<string, unknown>>;

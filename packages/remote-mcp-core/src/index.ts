@@ -85,6 +85,8 @@ import {
   type PdfInspectionInput,
   pdfCropRequestSchema,
   type PdfCropRequest,
+  rendererMcpScopes,
+  type RendererRelayDownloadTarget,
   renderEngineSchema,
   renderOutputsSchema,
   type ProjectDocumentCondition,
@@ -101,13 +103,7 @@ export {
   oauthLoginCookieName,
 } from "./login-continuations.js";
 
-export const REMOTE_MCP_SCOPES = [
-  "mcp",
-  "mcp:render",
-  "mcp:read",
-  "mcp:cancel",
-  "mcp:delete",
-] as const;
+export const REMOTE_MCP_SCOPES = ["mcp", ...rendererMcpScopes] as const;
 export type RemoteMcpScope = (typeof REMOTE_MCP_SCOPES)[number];
 
 const ACCESS_TOKEN_MS = 10 * 60_000;
@@ -152,6 +148,7 @@ const ZIP_LIMITS = {
 export interface RemoteAccess {
   token: string;
   clientId: string;
+  grantId: string;
   userId: string;
   scopes: RemoteMcpScope[];
   resource: string;
@@ -629,11 +626,18 @@ export class RemoteOAuthService {
     return {
       token: value,
       clientId: row.client_id,
+      grantId: row.family_id,
       userId: row.user_id,
       scopes: normalizeStoredScopes(row.scopes_json),
       resource: row.resource,
       expiresAt: row.expires_at,
     };
+  }
+
+  revokeAccessGrant(value: string): void {
+    const access = this.verifyAccessToken(value);
+    this.database.remoteMcp.revokeFamily(access.grantId, this.now());
+    this.refreshReplies.delete(access.grantId);
   }
 
   private validateCode(
@@ -3719,6 +3723,40 @@ export class RemoteRenderService {
         pages,
       };
     });
+  }
+
+  async relayDownload(identity: RemoteMcpIdentity, target: RendererRelayDownloadTarget, offset: number, limit: number) {
+    requireScope(identity.scopes, "mcp:read");
+    this.enforceRateLimit(identity.userId, "relay_download", 500);
+    const mime = target.kind === "source" ? "application/zip" : target.path === "result.pdf" ? "application/pdf" : "image/png";
+    const readSegment = async (path: string, size: number) => {
+      if (!Number.isSafeInteger(size) || size < 0 || !Number.isSafeInteger(offset) ||
+          offset < 0 || offset > size || !Number.isSafeInteger(limit) || limit < 0 || limit > 512 * 1024)
+        throw new AppError("INVALID_ARTIFACT_RANGE", "Artifact range is invalid", 416);
+      const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+      try {
+        const metadata = await file.stat();
+        if (!metadata.isFile() || metadata.size !== size)
+          throw new AppError("ARTIFACT_UNAVAILABLE", "Artifact does not match its stored metadata", 409);
+        const length = Math.min(limit, size - offset), bytes = Buffer.alloc(length);
+        let received = 0;
+        while (received < length) {
+          const { bytesRead } = await file.read(bytes, received, length - received, offset + received);
+          if (bytesRead === 0) throw new AppError("ARTIFACT_UNAVAILABLE", "Artifact ended before the requested range", 409);
+          received += bytesRead;
+        }
+        return { sha256: target.sha256, size, offset, mimeType: mime, data: bytes.toString("base64") };
+      } finally { await file.close(); }
+    };
+    if (target.kind === "source") {
+      const { source, path } = this.savedRevisionSource(identity, target.projectId, target.revisionId);
+      if (source.sha256 !== target.sha256) throw new AppError("ARTIFACT_NOT_FOUND", "Artifact does not exist", 404);
+      return readSegment(path, source.size);
+    }
+    this.assertReadableJob(identity.userId, target.jobId);
+    const artifact = this.database.artifacts.getDownloadable(target.jobId, target.path, { retentionHours: this.artifactRetentionHours });
+    if (!artifact || artifact.sha256 !== target.sha256) throw new AppError("ARTIFACT_NOT_FOUND", "Artifact does not exist", 404);
+    return this.withArtifactLease(artifact, (path) => readSegment(path, artifact.size));
   }
 
   async artifact(

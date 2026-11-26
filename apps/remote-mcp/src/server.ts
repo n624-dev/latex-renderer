@@ -21,6 +21,8 @@ import {
 import { createRemoteMcpApp, AnonymousRegistrationLimiter } from "./app.js";
 import { createRemoteMcpHandler } from "./mcp.js";
 import { oauthDiagnostics } from "./diagnostics.js";
+import { rendererIdentityFromEnvironment } from "./relay-identity.js";
+import { loadLocalRelay } from "./relay-agent.js";
 
 function required(name: string): string {
   const value = process.env[name];
@@ -64,15 +66,18 @@ const oauth = new RemoteOAuthService(
     positiveIntegerEnvironment(process.env, "ARTIFACT_RETENTION_HOURS", 24),
   ),
   registrationLimiter = new AnonymousRegistrationLimiter(),
+  relayIdentity = rendererIdentityFromEnvironment(publicOrigin, process.env),
+  mcp = createRemoteMcpHandler(renders, PLATFORM_VERSION, (userId) =>
+    resolveDisplayLocale({ saved: database.users.displayLocale(userId) ?? undefined }),
+  ),
+  appDependencies = { database, browserAuth: authentication.browserAuth, mcp, publicOrigin, relayDownload: renders.relayDownload.bind(renders) },
+  relayAgent = loadLocalRelay(appDependencies, relayIdentity?.instance.id, process.env),
   app = createRemoteMcpApp({
+    ...appDependencies,
     registrationLimiter,
-    database,
-    browserAuth: authentication.browserAuth,
     oauth,
-    mcp: createRemoteMcpHandler(renders, PLATFORM_VERSION, (userId) =>
-      resolveDisplayLocale({ saved: database.users.displayLocale(userId) ?? undefined }),
-    ),
-    publicOrigin,
+    ...(relayIdentity === undefined ? {} : { relayIdentity }),
+    ...(relayAgent === undefined ? {} : { localRelay: relayAgent.handle }),
   }),
   port = validPortEnvironment(process.env, "PORT", 3104);
 
@@ -86,7 +91,7 @@ startHttpService(
     activity,
     port,
     name: "remote_mcp",
-    onIdle: () => database.close(),
+    onIdle: () => { relayAgent?.close(); database.close(); },
     busyUntil: () =>
       Math.max(
         oauth.idleBlockedUntil(),

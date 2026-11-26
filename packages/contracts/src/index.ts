@@ -1,5 +1,8 @@
 import { z } from "zod";
 
+export * from "./renderer-mcp.js";
+export * from "./renderer-relay.js";
+
 export const jobStatuses = [
   "reserved",
   "uploading",

@@ -1,0 +1,10 @@
+{
+  "dcr": ["https://client.example.com/oauth/callback"],
+  "cimd": [
+    {
+      "id": "https://client.example.com/oauth/client.json",
+      "jwksUri": "https://client.example.com/oauth/jwks.json",
+      "redirectUris": ["https://client.example.com/oauth/callback"]
+    }
+  ]
+}

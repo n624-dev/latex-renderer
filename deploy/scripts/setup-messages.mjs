@@ -7,6 +7,10 @@ import {
 } from "../../packages/shared/src/locale.ts";
 
 const english = {
+  optionalChatGptConnection: "Connect ChatGPT (optional)",
+  enableChatGptFromTerminal: "To enable the connection, run this command on the server:",
+  skipChatGptConnection: "Skip for now",
+  skippedChatGptConnection: "Setup complete. You can enable ChatGPT later.",
   acceptTheSelectedCertificateAuthorityS:
     "Accept the selected certificate authority’s terms",
   additionalSwapLimit0DisablesIt: "Additional swap limit (0 disables it)",

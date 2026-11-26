@@ -58,6 +58,11 @@ export function serverSetupHtml(locale) {
 <section id="confirmation" hidden><h2>${escapeSetupHtml(t("reviewBeforeApplying"))}</h2><p>${escapeSetupHtml(t("servicesStopBrieflyToApplyThe"))}</p>
 <div id="summary"></div><details><summary>${escapeSetupHtml(t("detailsOfReviewedSettings"))}</summary><pre id="summary-json"></pre></details><button id="apply" type="button">${escapeSetupHtml(t("applyTheseSettings"))}</button></section>
 <button id="close" type="button">${escapeSetupHtml(t("exitAndDiscardUnappliedChanges"))}</button>
+<section id="chatgpt-setup" hidden>
+  <h2>${escapeSetupHtml(t("optionalChatGptConnection"))}</h2>
+  <p>${escapeSetupHtml(t("enableChatGptFromTerminal"))} <code>sudo n624-latex server chatgpt --connect GATEWAY_HTTPS_ORIGIN</code></p>
+  <button id="skip-chatgpt" type="button">${escapeSetupHtml(t("skipChatGptConnection"))}</button>
+</section>
 <button id="recover" type="button" hidden>${escapeSetupHtml(t("recoverInterruptedSetup"))}</button>
 </main><script src="/script.js" defer></script></html>`;
 }
@@ -266,6 +271,7 @@ const setupController = `"use strict";
     el("fields").disabled = true; el("apply").disabled = true; el("close").disabled = true; status(setupMessage("applying"));
     try {
       await post("/api/apply", body); status(setupMessage("applied"));
+      if (initial) el("chatgpt-setup").hidden = false;
     }
     catch { status(setupMessage("applyUnconfirmed")); el("recover").hidden = false; }
     finally { for (const id of ["owner-password", "owner-confirm", "oidc-secret", "tls-key", "lan-invitation"]) el(id).value = ""; }
@@ -274,7 +280,7 @@ const setupController = `"use strict";
     el("recover").disabled = true; status(setupMessage("recovering"));
     try {
       const result = await post("/api/recover", { confirmation: "RECOVER" });
-      if (result.phase === "complete") { status(setupMessage("recovered")); return; }
+      if (result.phase === "complete") { status(setupMessage("recovered")); if (initial) el("chatgpt-setup").hidden = false; return; }
       const value = await post("/api/status", {}); model = value.review; el("review").value = JSON.stringify(model, null, 2); synchronize();
       el("fields").disabled = false; el("apply").disabled = false; el("close").disabled = false; confirmation = null; el("confirmation").hidden = true;
       status(setupMessage("reviewRecovery"));
@@ -282,6 +288,10 @@ const setupController = `"use strict";
     finally { el("recover").disabled = false; }
   });
   el("close").addEventListener("click", async () => { try { await post("/api/close", {}); status(setupMessage("closed")); el("fields").disabled = true; el("close").disabled = true; } catch (error) { status(error.message); } });
+  el("skip-chatgpt").addEventListener("click", () => {
+    el("chatgpt-setup").hidden = true;
+    status(setupMessage("skippedChatGptConnection"));
+  });
   (async () => {
     try {
       const session = await post("/api/session", { bootstrap }); token = session.token; csrf = session.csrf;
