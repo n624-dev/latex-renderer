@@ -8,7 +8,7 @@ import {
   adminDocsPage,
 } from "../../apps/admin-web/src/templates-admin.js";
 import { styles } from "../../apps/admin-web/src/assets/styles.js";
-import { siteScript } from "../../apps/admin-web/src/assets/site-script.js";
+import { readBrowserAsset } from "../../apps/admin-web/src/browser-assets.js";
 
 const script = execFileSync(
   process.execPath,
@@ -25,6 +25,7 @@ const origin = "https://renderer.invalid";
 const userId = `user_${"a".repeat(32)}`;
 const accountId = `sa_${"a".repeat(32)}`;
 const requestedId = `sa_${"b".repeat(32)}`;
+const fixtureCredential = "issued-credential-fixture-not-a-key";
 const jobId = `job_${"c".repeat(32)}`;
 const retryId = `job_${"f".repeat(32)}`;
 const sourceId = `source_${"d".repeat(32)}`;
@@ -69,7 +70,7 @@ afterAll(async () => {
   await browser?.close();
 });
 
-async function fixture(kind: string, query = "", pagedOwners = false) {
+async function fixture(kind: string, query = "", pagedOwners = false, pagedAccounts = false) {
   if (!browser) throw new Error("Browser not started");
   const page = await newTestPage(browser, {
     viewport: { width: 390, height: 844 },
@@ -101,7 +102,9 @@ async function fixture(kind: string, query = "", pagedOwners = false) {
         json:
           url.pathname === `/admin/api/v1/jobs/${jobId}/retry`
             ? { id: retryId, retryOfJobId: jobId }
-            : {},
+            : url.pathname.includes("/service-accounts/") && url.pathname.endsWith("/api-keys")
+              ? { apiKey: fixtureCredential }
+              : {},
       });
       return;
     }
@@ -110,7 +113,7 @@ async function fixture(kind: string, query = "", pagedOwners = false) {
       return;
     }
     if (url.pathname === "/admin/assets/site.js") {
-      await route.fulfill({ contentType: "text/javascript", body: siteScript });
+      await route.fulfill({ contentType: "text/javascript", body: readBrowserAsset("site") });
       return;
     }
     if (url.pathname === "/admin/assets/admin.js") {
@@ -140,6 +143,18 @@ async function fixture(kind: string, query = "", pagedOwners = false) {
       return;
     }
     const path = url.pathname.slice("/admin/api/v1".length);
+    if (pagedAccounts && path === "/service-accounts") {
+      const last = { ...account, id: requestedId, name: "別ページの連携" };
+      const items = url.searchParams.has("query")
+        ? url.searchParams.get("query") === last.name ? [last] : []
+        : url.searchParams.has("cursor")
+          ? [last]
+          : Array.from({ length: 50 }, (_, n) => ({
+              ...account, id: `sa_${String(n).padStart(32, "0")}`, name: `連携 ${n}`,
+            }));
+      await route.fulfill({ json: { items, nextCursor: items.length === 50 ? "next-account" : null } });
+      return;
+    }
     if (pagedOwners && path === "/users") {
       const items = url.searchParams.has("query")
         ? []
@@ -414,6 +429,27 @@ it("selects an explicit account outside the first page and keeps scope labels al
     `/admin/api/v1/service-accounts/${requestedId}/api-keys`,
   );
   expect(mutations[0]?.csrf).toBe("fixture-csrf");
+  const value = page.locator("[data-issued-credential]");
+  await expect.poll(() => value.textContent()).toBe(fixtureCredential);
+  expect(await page.evaluate(() => [...Object.values(sessionStorage), ...Object.values(localStorage)]
+    .some((entry) => entry.includes("issued-credential-fixture-not-a-key")))).toBe(false);
+  await page.keyboard.press("Escape");
+  await value.waitFor({ state: "detached" });
+  expect(errors).toEqual([]);
+});
+
+it("pages and searches API key accounts beyond the first 50 results", async () => {
+  const { page, errors } = await fixture("keys", "", false, true);
+  await page.locator("#key-create").click();
+  const select = page.locator('[name="account"]');
+  expect(await select.locator("option").count()).toBe(50);
+  await page.locator("[data-account-next]").click();
+  await select.locator(`option[value="${requestedId}"]`).waitFor({ state: "attached" });
+  await select.selectOption(requestedId);
+  await page.locator("[data-account-query]").fill("別ページの連携");
+  await page.locator("[data-account-search]").click();
+  await expect.poll(() => select.locator("option").count()).toBe(2);
+  expect(await select.inputValue()).toBe(requestedId);
   expect(errors).toEqual([]);
 });
 

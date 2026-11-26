@@ -66,8 +66,8 @@ export function createLatexRendererMcpServer(
         openWorldHint: false,
       },
     },
-    async ({ path }) =>
-      runTool("upload_source", () => operations.uploadSource(path)),
+    async ({ path }, { mcpReq: { signal } }) =>
+      runTool("upload_source", () => operations.uploadSource(path, signal)),
   );
   server.registerTool(
     "create_render_job",
@@ -84,9 +84,9 @@ export function createLatexRendererMcpServer(
         openWorldHint: false,
       },
     },
-    async ({ sourceId, entrypoint, outputs, engine }) =>
+    async ({ sourceId, entrypoint, outputs, engine }, { mcpReq: { signal } }) =>
       runTool("create_render_job", () =>
-        operations.createRenderJob(sourceId, entrypoint, outputs, ...(engine === undefined ? [] : [engine] as const)),
+        operations.createRenderJob(sourceId, entrypoint, outputs, engine, signal),
       ),
   );
 
@@ -105,9 +105,9 @@ export function createLatexRendererMcpServer(
         openWorldHint: false,
       },
     },
-    async ({ directory, entrypoint, outputs, engine }) =>
+    async ({ directory, entrypoint, outputs, engine }, { mcpReq: { signal } }) =>
       runTool("render_project", () =>
-        operations.renderProject(directory, entrypoint, outputs, ...(engine === undefined ? [] : [engine] as const)),
+        operations.renderProject(directory, entrypoint, outputs, engine, signal),
       ),
   );
   server.registerTool(
@@ -125,8 +125,8 @@ export function createLatexRendererMcpServer(
         openWorldHint: false,
       },
     },
-    async ({ jobId }) =>
-      runTool("get_render_status", () => operations.getRenderStatus(jobId)),
+    async ({ jobId }, { mcpReq: { signal } }) =>
+      runTool("get_render_status", () => operations.getRenderStatus(jobId, signal)),
   );
   server.registerTool(
     "download_render_artifacts",
@@ -143,12 +143,13 @@ export function createLatexRendererMcpServer(
         openWorldHint: false,
       },
     },
-    async ({ jobId, outputDirectory, previewPages }) =>
+    async ({ jobId, outputDirectory, previewPages }, { mcpReq: { signal } }) =>
       runTool("download_render_artifacts", () =>
         operations.downloadRenderArtifacts(
           jobId,
           outputDirectory,
           previewPages,
+          signal,
         ),
       ),
   );

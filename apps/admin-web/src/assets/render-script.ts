@@ -1,6 +1,25 @@
 import type { JobRetryResponse } from "@latex-renderer/contracts";
+import {
+  DEFAULT_RESOURCE_LIMITS,
+  type ResourceLimits,
+} from "@latex-renderer/shared/resource-limits";
 
-const MAX_ZIP_BYTES = 20 * 1024 * 1024;
+export function readSourceLimits(value: unknown): Readonly<ResourceLimits> {
+  if (typeof value !== "object" || value === null)
+    return DEFAULT_RESOURCE_LIMITS;
+  const limits = value as Partial<ResourceLimits>;
+  if (
+    Object.keys(DEFAULT_RESOURCE_LIMITS).every((key) => {
+      const limit = limits[key as keyof ResourceLimits];
+      return (
+        typeof limit === "number" && Number.isSafeInteger(limit) && limit > 0
+      );
+    })
+  )
+    return limits as ResourceLimits;
+  return DEFAULT_RESOURCE_LIMITS;
+}
+
 const JOB_ID_PATTERN = /^job_[a-f0-9]{32}$/;
 export const JOB_STATUSES = [
   "reserved",
@@ -143,7 +162,10 @@ export function inspectZip(bytes: Uint8Array): ZipInspection {
 
 export function inspectZipCandidates(
   bytes: Uint8Array,
+  limits: Readonly<ResourceLimits> = DEFAULT_RESOURCE_LIMITS,
 ): ZipCandidateInspection {
+  if (bytes.byteLength > limits.maxUploadBytes)
+    throw new Error(`ZIPは${limits.maxUploadBytes} B以下にしてください。`);
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const uint16 = (offset: number): number => {
     if (offset < 0 || offset + 2 > view.byteLength)
@@ -189,6 +211,8 @@ export function inspectZipCandidates(
   ) {
     throw new Error("ZIP64形式には対応していません。");
   }
+  if (entries > limits.maxZipEntries)
+    throw new Error(`ZIPエントリは${limits.maxZipEntries}件までです。`);
   const directoryEnd = directoryOffset + directorySize;
   if (directoryEnd > eocd || directoryEnd > bytes.byteLength) {
     throw new Error("ZIPの中央ディレクトリが不正です。");
@@ -196,7 +220,8 @@ export function inspectZipCandidates(
 
   const decoder = new TextDecoder("utf-8", { fatal: true });
   let cursor = directoryOffset;
-  let files = 0;
+  let files = 0,
+    extractedBytes = 0;
   let mainTex = false;
   const texFiles: string[] = [];
   for (let index = 0; index < entries; index += 1) {
@@ -223,8 +248,18 @@ export function inspectZipCandidates(
     }
     if (!name.endsWith("/")) {
       files += 1;
-      if (files > 500)
-        throw new Error("ZIP内のファイル数が500件を超えています。");
+      if (files > limits.maxFileCount)
+        throw new Error(`ZIP内のファイルは${limits.maxFileCount}件までです。`);
+      const fileBytes = uint32(cursor + 24);
+      if (fileBytes > limits.maxUploadBytes)
+        throw new Error(
+          `ZIP内の各ファイルは${limits.maxUploadBytes} B以下にしてください。`,
+        );
+      extractedBytes += fileBytes;
+      if (extractedBytes > limits.maxExtractedBytes)
+        throw new Error(
+          `ZIPの展開後サイズは${limits.maxExtractedBytes} B以下にしてください。`,
+        );
       if (name === "main.tex") mainTex = true;
       if (name.toLowerCase().endsWith(".tex"))
         // The extractor preserves ZIP spelling. Normalize only duplicate keys,
@@ -240,51 +275,27 @@ export function inspectZipCandidates(
 }
 
 export function zipSingleTex(bytes: Uint8Array): Uint8Array {
-  const name = new TextEncoder().encode("main.tex"),
-    crc = crc32(bytes),
-    local = new Uint8Array(30 + name.length + bytes.length),
-    lv = new DataView(local.buffer);
-  lv.setUint32(0, 0x04034b50, true);
-  lv.setUint16(4, 20, true);
-  lv.setUint16(6, 0x800, true);
-  lv.setUint16(8, 0, true);
-  lv.setUint32(14, crc, true);
-  lv.setUint32(18, bytes.length, true);
-  lv.setUint32(22, bytes.length, true);
-  lv.setUint16(26, name.length, true);
-  local.set(name, 30);
-  local.set(bytes, 30 + name.length);
-  const central = new Uint8Array(46 + name.length),
-    cv = new DataView(central.buffer);
-  cv.setUint32(0, 0x02014b50, true);
-  cv.setUint16(4, 20, true);
-  cv.setUint16(6, 20, true);
-  cv.setUint16(8, 0x800, true);
-  cv.setUint16(10, 0, true);
-  cv.setUint32(16, crc, true);
-  cv.setUint32(20, bytes.length, true);
-  cv.setUint32(24, bytes.length, true);
-  cv.setUint16(28, name.length, true);
-  central.set(name, 46);
-  const end = new Uint8Array(22),
-    ev = new DataView(end.buffer);
-  ev.setUint32(0, 0x06054b50, true);
-  ev.setUint16(8, 1, true);
-  ev.setUint16(10, 1, true);
-  ev.setUint32(12, central.length, true);
-  ev.setUint32(16, local.length, true);
-  const output = new Uint8Array(local.length + central.length + end.length);
-  output.set(local);
-  output.set(central, local.length);
-  output.set(end, local.length + central.length);
-  return output;
+  return zipStoredFiles([{ name: "main.tex", bytes }]);
+}
+
+export function storedZipSize(
+  files: Iterable<{ name: string; size: number }>,
+): number {
+  const encoder = new TextEncoder();
+  // End-of-directory record plus a local and central record for each member.
+  let bytes = 22;
+  for (const file of files)
+    bytes += 30 + 46 + 2 * encoder.encode(file.name).length + file.size;
+  return bytes;
 }
 
 export function zipStoredFiles(
   files: { name: string; bytes: Uint8Array }[],
+  maxFiles = 100,
 ): Uint8Array {
-  if (files.length === 0 || files.length > 100)
-    throw new Error("ZIPへ格納できるファイル数を超えています。");
+  const entryLimit = Math.min(maxFiles, 65_534);
+  if (files.length === 0 || files.length > entryLimit)
+    throw new Error(`ZIPへ格納できるファイルは1〜${entryLimit}件です。`);
   const encoder = new TextEncoder(),
     chunks: Uint8Array[] = [],
     central: Uint8Array[] = [];
@@ -510,8 +521,14 @@ export function parseJobStatus(
       : { previewPageCount: record.previewPageCount }),
     ...(stages === undefined ? {} : { stages }),
     ...(typeof record.engine === "string" ? { engine: record.engine } : {}),
-    ...(typeof record.runtimeDigest === "string" && /^sha256:[a-f0-9]{64}$/.test(record.runtimeDigest) ? { runtimeDigest: record.runtimeDigest } : {}),
-    ...(typeof record.previousRuntimeDigest === "string" && /^sha256:[a-f0-9]{64}$/.test(record.previousRuntimeDigest) ? { previousRuntimeDigest: record.previousRuntimeDigest } : {}),
+    ...(typeof record.runtimeDigest === "string" &&
+    /^sha256:[a-f0-9]{64}$/.test(record.runtimeDigest)
+      ? { runtimeDigest: record.runtimeDigest }
+      : {}),
+    ...(typeof record.previousRuntimeDigest === "string" &&
+    /^sha256:[a-f0-9]{64}$/.test(record.previousRuntimeDigest)
+      ? { previousRuntimeDigest: record.previousRuntimeDigest }
+      : {}),
   };
 }
 
@@ -644,7 +661,10 @@ function parseAdminRenderTargets(value: unknown): AdminRenderTarget[] {
 export async function fetchAdminRenderTargets(
   fetcher: RenderFetch,
   origin: string,
-): Promise<AdminRenderTarget[]> {
+): Promise<{
+  items: AdminRenderTarget[];
+  sourceLimits: Readonly<ResourceLimits>;
+}> {
   const response = await fetcher(
     new URL("/admin/api/v1/jobs/render-targets", origin),
     {
@@ -654,7 +674,13 @@ export async function fetchAdminRenderTargets(
       headers: { "Cache-Control": "no-store", Pragma: "no-cache" },
     },
   );
-  return parseAdminRenderTargets(await responseJson(response));
+  const value = await responseJson(response);
+  return {
+    items: parseAdminRenderTargets(value),
+    sourceLimits: readSourceLimits(
+      (value as { sourceLimits?: unknown }).sourceLimits,
+    ),
+  };
 }
 
 export async function createAdminRenderTicket(
@@ -968,7 +994,7 @@ export async function fetchRenderArtifact(
   return blob;
 }
 
-function formatBytes(bytes: number): string {
+export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
   return `${(bytes / (1024 * 1024)).toFixed(2)} MiB`;
@@ -1088,7 +1114,7 @@ function jobStatusLabel(status: string): string {
   );
 }
 
-function installRenderWorkflow(csrfToken: string): void {
+export function installRenderWorkflow(csrfToken: string): void {
   const form = document.querySelector<HTMLFormElement>("#render-preflight"),
     input = document.querySelector<HTMLInputElement>("#project-files"),
     directory = document.querySelector<HTMLInputElement>("#project-directory"),
@@ -1168,6 +1194,7 @@ function installRenderWorkflow(csrfToken: string): void {
     running = false;
   const fetcher = globalThis.fetch.bind(globalThis),
     origin = globalThis.location.origin,
+    renderTargets = fetchAdminRenderTargets(fetcher, origin),
     sleep = (ms: number) =>
       new Promise((resolve) => globalThis.setTimeout(resolve, ms));
   const updateStart = () => {
@@ -1266,13 +1293,12 @@ function installRenderWorkflow(csrfToken: string): void {
       sharedBlob = blob;
     };
     try {
+      const { sourceLimits } = await renderTargets;
       let prepared: Prepared[] = [],
         sharedBlob: Blob | undefined,
         sharedSize = 0;
       const details = document.createElement("div");
       if (files.length === 0) throw new Error("ファイルを選択してください。");
-      if (files.length > 200)
-        throw new Error("一度に選択できるファイルは200件までです。");
       const zips = files.filter((file) =>
           file.name.toLowerCase().endsWith(".zip"),
         ),
@@ -1282,10 +1308,12 @@ function installRenderWorkflow(csrfToken: string): void {
       if (zips.length > 1) throw new Error("ZIPは1件だけ選択してください。");
       if (zips.length === 1) {
         const file = zips[0] as File;
-        if (file.size <= 0 || file.size > MAX_ZIP_BYTES)
-          throw new Error("ZIPは20 MiB以下にしてください。");
+        if (file.size <= 0 || file.size > sourceLimits.maxUploadBytes)
+          throw new Error(
+            `ZIPは1 B以上${sourceLimits.maxUploadBytes} B以下にしてください。`,
+          );
         const bytes = new Uint8Array(await file.arrayBuffer()),
-          found = inspectZipCandidates(bytes),
+          found = inspectZipCandidates(bytes, sourceLimits),
           sha = await sha256Hex(bytes);
         sharedBlob = new Blob([bytes.slice().buffer], {
           type: "application/zip",
@@ -1319,13 +1347,20 @@ function installRenderWorkflow(csrfToken: string): void {
         tex.length === files.length &&
         files.every((file) => !file.webkitRelativePath)
       ) {
+        if (files.length > 200)
+          throw new Error("一度に変換できる文書は200件までです。");
         for (const file of tex) {
           if (file.size <= 0) throw new Error(`${file.name} は空です。`);
+          if (
+            storedZipSize([{ name: "main.tex", size: file.size }]) >
+            sourceLimits.maxUploadBytes
+          )
+            throw new Error(
+              `${file.name} のZIP化後の送信上限は${sourceLimits.maxUploadBytes} Bです。`,
+            );
           const archive = zipSingleTex(
             new Uint8Array(await file.arrayBuffer()),
           );
-          if (archive.length > MAX_ZIP_BYTES)
-            throw new Error(`${file.name} は送信上限を超えています。`);
           const blob = new Blob([archive.slice().buffer], {
             type: "application/zip",
           });
@@ -1340,14 +1375,20 @@ function installRenderWorkflow(csrfToken: string): void {
           });
         }
       } else {
+        const maxFiles = Math.min(
+          sourceLimits.maxFileCount,
+          sourceLimits.maxZipEntries,
+          65_534,
+        );
+        if (files.length > maxFiles)
+          throw new Error(`プロジェクトのファイルは${maxFiles}件までです。`);
         const firstSegments = files.map(
             (file) => file.webkitRelativePath.split("/")[0],
           ),
           stripRoot =
             firstSegments[0] !== "" &&
-            firstSegments.every((segment) => segment === firstSegments[0]),
-          archived: { name: string; bytes: Uint8Array }[] = [];
-        for (const file of files) {
+            firstSegments.every((segment) => segment === firstSegments[0]);
+        const entries = files.map((file) => {
           const original = file.webkitRelativePath || file.name,
             name = stripRoot
               ? original.split("/").slice(1).join("/")
@@ -1363,14 +1404,20 @@ function installRenderWorkflow(csrfToken: string): void {
               )
           )
             throw new Error(`${file.name} のパスは利用できません。`);
+          return { name, size: file.size, file };
+        });
+        if (storedZipSize(entries) > sourceLimits.maxUploadBytes)
+          throw new Error(
+            `プロジェクトのZIP化後の送信上限は${sourceLimits.maxUploadBytes} Bです。`,
+          );
+        const archived: { name: string; bytes: Uint8Array }[] = [];
+        for (const { name, file } of entries) {
           archived.push({
             name,
             bytes: new Uint8Array(await file.arrayBuffer()),
           });
         }
-        const archive = zipStoredFiles(archived);
-        if (archive.length > MAX_ZIP_BYTES)
-          throw new Error("プロジェクトはZIP化後20 MiB以下にしてください。");
+        const archive = zipStoredFiles(archived, maxFiles);
         const entrypoints = archived
           .map((file) => file.name)
           .filter((name) => name.toLowerCase().endsWith(".tex"));
@@ -2035,8 +2082,8 @@ function installRenderWorkflow(csrfToken: string): void {
     directory.value = "";
   });
   reset();
-  void fetchAdminRenderTargets(fetcher, origin)
-    .then((items) => {
+  void renderTargets
+    .then(({ items }) => {
       target.replaceChildren();
       if (items.length === 0) {
         target.append(new Option("利用できる実行先がありません", ""));
@@ -2061,46 +2108,3 @@ function installRenderWorkflow(csrfToken: string): void {
         caught instanceof Error ? caught.message : String(caught);
     });
 }
-
-export const renderScript = `
-(() => {
-  const MAX_ZIP_BYTES = ${MAX_ZIP_BYTES};
-  const JOB_ID_PATTERN = ${JOB_ID_PATTERN.toString()};
-  const JOB_STATUSES = ${JSON.stringify(JOB_STATUSES)};
-  const TERMINAL_JOB_STATUSES = new Set(${JSON.stringify([...TERMINAL_JOB_STATUSES])});
-  const runBoundedBatch = ${runBoundedBatch.toString()};
-  const crc32 = ${crc32.toString()};
-  const inspectZipCandidates = ${inspectZipCandidates.toString()};
-  const inspectZip = ${inspectZip.toString()};
-  const zipSingleTex = ${zipSingleTex.toString()};
-  const zipStoredFiles = ${zipStoredFiles.toString()};
-  const sha256Hex = ${sha256Hex.toString()};
-  const parseRenderTicket = ${parseRenderTicket.toString()};
-  const parseJobArtifact = ${parseJobArtifact.toString()};
-  const parseJobStatus = ${parseJobStatus.toString()};
-  const resourceWaitLabel = ${resourceWaitLabel.toString()};
-  const responseError = ${responseError.toString()};
-  const responseJson = ${responseJson.toString()};
-  const parseAdminRenderTargets = ${parseAdminRenderTargets.toString()};
-  const fetchAdminRenderTargets = ${fetchAdminRenderTargets.toString()};
-  const createAdminRenderTicket = ${createAdminRenderTicket.toString()};
-  const parseSourceTicket = ${parseSourceTicket.toString()};
-  const createAdminSourceTicket = ${createAdminSourceTicket.toString()};
-  const uploadSourceZip = ${uploadSourceZip.toString()};
-  const createAdminSourceRef = ${createAdminSourceRef.toString()};
-  const createAdminSourceRenderTicket = ${createAdminSourceRenderTicket.toString()};
-  const uploadRenderZip = ${uploadRenderZip.toString()};
-  const fetchRenderJob = ${fetchRenderJob.toString()};
-  const cancelRenderJob = ${cancelRenderJob.toString()};
-  const fetchRenderArtifact = ${fetchRenderArtifact.toString()};
-  const withAdminJobTicket = ${withAdminJobTicket.toString()};
-  const formatBytes = ${formatBytes.toString()};
-  const jobStatusLabel = ${jobStatusLabel.toString()};
-  fetch('/auth/session',{credentials:'same-origin',cache:'no-store'}).then(async response=>{
-    if(response.status===401){location.replace('/login/?return_to='+encodeURIComponent(location.pathname+location.search));return}
-    const session=await response.json();
-    if(!response.ok||typeof session.csrfToken!=='string')throw new Error(session?.error?.message||'ログインできませんでした。');
-    (${installRenderWorkflow.toString()})(session.csrfToken);
-  }).catch(error=>{const output=document.querySelector('#render-error');if(output)output.textContent=error instanceof Error?error.message:String(error)});
-})();
-`;

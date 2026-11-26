@@ -148,16 +148,19 @@ const jobSchema = z
     stages: jobStagesSchema.optional(),
   })
   .strict();
+export const rendererMcpRecoveryDetailsSchema = z.object({
+    retryAfterSeconds: z.number().int().positive().optional(),
+    expectedOffset: z.number().int().nonnegative().optional(),
+    previewErrorCode: z.string().regex(/^[A-Z0-9_]{1,64}$/).optional(),
+    retryable: z.boolean().optional(),
+    currentVersion: z.number().int().nonnegative().nullable().optional(),
+});
 const errorSchema = z
   .object({
     code: z.string(),
     message: z.string(),
     status: z.number().int(),
-    retryAfterSeconds: z.number().int().positive().optional(),
-    expectedOffset: z.number().int().nonnegative().optional(),
-    previewErrorCode: z.string().optional(),
-    retryable: z.boolean().optional(),
-    currentVersion: z.number().int().nonnegative().nullable().optional(),
+    ...rendererMcpRecoveryDetailsSchema.shape,
   })
   .strict();
 

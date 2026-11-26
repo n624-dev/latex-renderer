@@ -3,7 +3,7 @@ import { adminApiScopes, renderApiScopes } from "@latex-renderer/contracts";
 import type { AdminActor, AdminDependencies } from "../types.js";
 
 export class AdminApiKeysService {
-  constructor(private readonly deps: AdminDependencies) {}
+  constructor(private readonly deps: Pick<AdminDependencies, "database" | "apiKeys">) {}
 
   list(options: {
     cursor?: string | undefined;
@@ -28,13 +28,12 @@ export class AdminApiKeysService {
     if (kind === "admin" && actor.role !== "owner") {
       throw new AppError("OWNER_REQUIRED", "Only an owner can issue admin keys", 403);
     }
-    if (!this.deps.database.serviceAccounts.activeExists(serviceAccountId)) {
-      throw new AppError("SERVICE_ACCOUNT_NOT_FOUND", "Active service account does not exist", 404);
-    }
-
     const generated = this.deps.apiKeys.create(kind);
     const timestamp = nowIso();
     this.deps.database.transaction(() => {
+      if (!this.deps.database.serviceAccounts.activeExists(serviceAccountId)) {
+        throw new AppError("SERVICE_ACCOUNT_NOT_FOUND", "Active service account does not exist", 404);
+      }
       this.deps.database.apiKeys.insert({
         id: generated.id,
         serviceAccountId,
@@ -121,6 +120,8 @@ export class AdminApiKeysService {
           409,
         );
       }
+      if (!this.deps.database.serviceAccounts.activeExists(fresh.service_account_id))
+        throw new AppError("SERVICE_ACCOUNT_NOT_FOUND", "Active service account does not exist", 404);
       this.deps.database.apiKeys.revoke(id, timestamp);
       this.deps.database.apiKeys.insert({
         id: generated.id,
@@ -135,6 +136,8 @@ export class AdminApiKeysService {
         createdAt: timestamp,
         createdBy: actor.id,
       });
+      if (!this.deps.database.apiKeys.recordRotation(id, generated.id))
+        throw new AppError("API_KEY_STATE_CONFLICT", "API key could not be rotated", 409);
       this.deps.database.audit({
         actorType: actor.type,
         actorId: actor.id,

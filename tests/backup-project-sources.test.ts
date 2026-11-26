@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import {
   chmodSync,
   existsSync,
@@ -16,8 +17,12 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { RendererDatabase } from "@latex-renderer/database";
+import {
+  claimUnprotectedSources,
+  protectBackupSources,
+} from "../deploy/scripts/backup-source-protection.mjs";
 
 const roots: string[] = [];
 const ageAvailable = ["age", "age-keygen"].every(
@@ -35,6 +40,166 @@ afterEach(() => {
 describe.runIf(ageAvailable && linuxDescriptorAccess)(
   "Project Source backup boundary",
   () => {
+    it("collects a Source lease after its backup process is killed", async () => {
+      const root = mkdtempSync(join(tmpdir(), "backup-crash-lease-"));
+      roots.push(root);
+      const id = `source_${"2".repeat(32)}`;
+      const module = new URL(
+        "../deploy/scripts/backup-source-protection.mjs",
+        import.meta.url,
+      ).href;
+      const script = `
+        const { protectBackupSources } = await import(process.argv[1]);
+        await protectBackupSources(process.argv[2], () => [{id: process.argv[3]}]);
+        process.stdout.write("ready\\n");
+        setInterval(() => {}, 30000);
+      `;
+      const child = spawn(
+        process.execPath,
+        ["--input-type=module", "-e", script, module, root, id],
+        { stdio: ["ignore", "pipe", "pipe"] },
+      );
+      const stopped = once(child, "close");
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(
+            () => reject(new Error("Backup lease fixture did not start")),
+            5000,
+          );
+          child.stdout.once("data", (chunk: Buffer) => {
+            clearTimeout(timer);
+            if (chunk.toString().trim() === "ready") resolve();
+            else reject(new Error("Unexpected backup lease fixture output"));
+          });
+          void stopped.then(() => {
+            clearTimeout(timer);
+            reject(new Error("Backup lease fixture exited before startup"));
+          }, reject);
+        });
+        expect(
+          await claimUnprotectedSources(root, (protectedIds) => protectedIds),
+        ).toEqual([id]);
+        child.kill("SIGKILL");
+        await stopped;
+        await vi.waitFor(async () => {
+          expect(
+            await claimUnprotectedSources(root, (protectedIds) => protectedIds),
+          ).toEqual([]);
+          expect(readdirSync(root)).toEqual(["snapshot.lock"]);
+        });
+      } finally {
+        if (child.exitCode === null && child.signalCode === null)
+          child.kill("SIGKILL");
+        await stopped;
+      }
+    });
+
+    it("keeps only snapshot Sources through live Project deletion and cleanup", async () => {
+      const fixture = backupFixture();
+      const coordination = join(fixture.root, "coordination");
+      mkdirSync(coordination);
+      const other = `source_${"2".repeat(32)}`;
+      const otherPath = join(
+        fixture.storageRoot,
+        "sources",
+        other,
+        "source.zip",
+      );
+      mkdirSync(join(otherPath, ".."), { recursive: true });
+      writeFileSync(otherPath, "unreferenced input");
+      updateDatabase(
+        fixture,
+        `
+        INSERT INTO sources
+          (id,owner_user_id,size,sha256,storage_key,status,created_at,updated_at,expires_at)
+        SELECT '${other}',owner_user_id,18,sha256,'sources/${other}/source.zip',
+          'ready',created_at,updated_at,'2025-01-01' FROM sources WHERE id='${fixture.sourceId}'
+      `,
+      );
+      const snapshot = join(fixture.root, "point-in-time.sqlite3");
+      const lease = await protectBackupSources(coordination, () => {
+        const live = new DatabaseSync(fixture.databasePath, { readOnly: true });
+        try {
+          live.prepare("VACUUM INTO ?").run(snapshot);
+        } finally {
+          live.close();
+        }
+        const copy = new DatabaseSync(snapshot, { readOnly: true });
+        try {
+          const source = copy
+            .prepare("SELECT source_id AS id FROM project_revisions")
+            .get();
+          return [{ id: String(source?.id) }];
+        } finally {
+          copy.close();
+        }
+      });
+      const secondLease = await protectBackupSources(
+        coordination,
+        () => lease.sources,
+      );
+      const clean = () => {
+        const result = spawnSync(
+          process.execPath,
+          ["deploy/scripts/cleanup.mjs"],
+          {
+            env: {
+              ...process.env,
+              DATABASE_PATH: fixture.databasePath,
+              STORAGE_ROOT: fixture.storageRoot,
+              BACKUP_SOURCE_COORDINATION_DIR: coordination,
+            },
+            encoding: "utf8",
+            timeout: 10_000,
+          },
+        );
+        expect(result.status, result.stderr).toBe(0);
+      };
+      try {
+        updateDatabase(
+          fixture,
+          `
+          UPDATE projects SET deleted_at='2025-01-01';
+          UPDATE sources SET expires_at='2025-01-01';
+        `,
+        );
+        clean();
+        expect(existsSync(fixture.sourcePath)).toBe(true);
+        expect(existsSync(otherPath)).toBe(false);
+        await lease.release();
+        clean();
+        expect(existsSync(fixture.sourcePath)).toBe(true);
+      } finally {
+        await lease.release();
+        await secondLease.release();
+      }
+      // The next cleanup also collects a lease left behind by a killed process.
+      const stale = "lease-00000000-0000-0000-0000-000000000000";
+      writeFileSync(
+        join(coordination, stale),
+        JSON.stringify(lease.sources.map(({ id }) => id)),
+      );
+      clean();
+      expect(existsSync(fixture.sourcePath)).toBe(false);
+      expect(readdirSync(coordination)).toEqual(["snapshot.lock"]);
+    }, 30_000);
+
+    it("creates and verifies a backup with managed snapshot protection enabled", () => {
+      const fixture = backupFixture();
+      const coordination = join(fixture.root, "coordination");
+      mkdirSync(coordination);
+      const created = runBackup(fixture, {
+        BACKUP_SOURCE_COORDINATION_DIR: coordination,
+      });
+      expect(created.status, created.stderr).toBe(0);
+      expect(readdirSync(coordination)).toEqual(["snapshot.lock"]);
+      const restored = runRestore(fixture, backupArchive(fixture));
+      expect(restored.status, restored.stderr).toBe(0);
+      expect(JSON.parse(restored.stdout)).toMatchObject({
+        projectSourceCount: 1,
+      });
+    }, 20_000);
+
     it("does not publish or retain partially encrypted backups on encryption failure", () => {
       const fixture = backupFixture();
       const bin = join(fixture.root, "failure-bin");

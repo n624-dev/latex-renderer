@@ -6,6 +6,19 @@ info:
 servers:
   - url: /
 paths:
+  /api/v1/health:
+    get:
+      summary: Check Gateway availability
+      security: []
+      responses:
+        "200": { description: Gateway is available }
+        "503": { description: Service is temporarily unavailable }
+    head:
+      summary: Check Gateway availability without a response body
+      security: []
+      responses:
+        "200": { description: Gateway is available }
+        "503": { description: Service is temporarily unavailable }
   /api/v1/projects:
     get:
       summary: List saved Projects owned by the API key's user

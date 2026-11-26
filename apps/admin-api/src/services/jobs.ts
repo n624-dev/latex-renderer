@@ -6,7 +6,10 @@ import {
   ProjectDraftOperations,
   SvgRetryOperations,
   sourceRequestExpiresAt,
+  assertRenderAdmission,
   assertSourceWritable,
+  createSourceReference,
+  assertUserStorageQuota,
   type JobRow,
 } from "@latex-renderer/database";
 import {
@@ -14,7 +17,6 @@ import {
   type RenderEngine,
   type RenderOutput,
 } from "@latex-renderer/contracts";
-import { RemoteRenderService } from "@latex-renderer/remote-mcp-core";
 import { validateEntrypointPath } from "@latex-renderer/zip-validation";
 import type { AdminDependencies, AppActor } from "../types.js";
 import { artifactContentType, retentionExpiresAt } from "./artifacts.js";
@@ -31,11 +33,17 @@ const RETAINED = new Set([
 export class AdminJobsService {
   constructor(private readonly deps: AdminDependencies) {}
   async createDraftPreview(
-    actor: AppActor, projectId: string, version: number,
+    actor: AppActor,
+    projectId: string,
+    version: number,
     principal: { api_key_id: string; service_account_id: string },
   ) {
     const free = await statfs(this.deps.storageRoot);
-    const drafts = new ProjectDraftOperations(this.deps.database, this.deps.maxFileCount, this.deps.maxZipEntries);
+    const drafts = new ProjectDraftOperations(
+      this.deps.database,
+      this.deps.maxFileCount,
+      this.deps.maxZipEntries,
+    );
     const result = drafts.queuePreview(actor, projectId, version, {
       apiKeyId: principal.api_key_id,
       serviceAccountId: principal.service_account_id,
@@ -45,7 +53,11 @@ export class AdminJobsService {
       reservedOutputBytes: this.deps.maxOutputBytes,
       admit: () => {
         if (free.bavail * free.bsize < this.deps.minFreeStorageBytes)
-          throw new AppError("STORAGE_PRESSURE", "Insufficient free storage", 503);
+          throw new AppError(
+            "STORAGE_PRESSURE",
+            "Insufficient free storage",
+            503,
+          );
         this.assertAccepting(actor.userId, principal.service_account_id, 0);
       },
     });
@@ -193,14 +205,11 @@ export class AdminJobsService {
         "Selected render target is unavailable",
         409,
       );
-    const result = new RemoteRenderService(
+    const result = createSourceReference(
       this.deps.database,
-      this.deps.storageRoot,
-      this.deps.rendererVersion,
-      this.deps.renderTickets?.rendererPublicUrl ?? this.deps.publicOrigin,
-      this.deps.maxQueueLength,
-      this.deps.maxUserStorageBytes,
-    ).createSourceRef(identity.user_id, input.sourceId);
+      identity.user_id,
+      input.sourceId,
+    );
     this.deps.database.audit({
       actorType: actor.type,
       actorId: actor.id,
@@ -542,7 +551,12 @@ export class AdminJobsService {
     });
     try {
       this.deps.database.transaction(() => {
-        this.assertStorage(identity.user_id, input.size);
+        assertUserStorageQuota(
+          this.deps.database,
+          identity.user_id,
+          this.deps.maxUserStorageBytes,
+          input.size,
+        );
         assertSourceWritable(this.deps.database);
         this.deps.database.sources.insertReserved({
           id: sourceId,
@@ -977,11 +991,7 @@ export class AdminJobsService {
     return new SvgRetryOperations(this.deps.database, {
       ...this.deps,
       runtimeImage: process.env.RENDERER_IMAGE,
-    }).retry(
-      { userId: row.user_id, type: actor.type, id: actor.id },
-      id,
-      key,
-    );
+    }).retry({ userId: row.user_id, type: actor.type, id: actor.id }, id, key);
   }
 
   async retry(
@@ -1118,66 +1128,12 @@ export class AdminJobsService {
     serviceAccountId: string,
     requestedBytes: number,
   ): void {
-    if (
-      this.deps.database.settings.value<
-        "normal" | "reject-new-jobs" | "read-only" | "lockdown"
-      >("maintenance_mode", "normal") !== "normal"
-    )
-      throw new AppError(
-        "MAINTENANCE",
-        "New jobs are temporarily unavailable",
-        503,
-      );
-    const maxQueue = this.deps.database.settings.value(
-      "max_queue_length",
-      this.deps.maxQueueLength,
+    assertRenderAdmission(
+      this.deps.database,
+      { userId, serviceAccountId },
+      this.deps,
+      requestedBytes + this.deps.maxOutputBytes,
     );
-    if (this.deps.database.jobs.countActive() >= maxQueue)
-      throw new AppError("QUEUE_FULL", "Render queue is full", 503);
-    if (
-      this.deps.database.jobs.countActiveForServiceAccount(serviceAccountId) >=
-      5
-    )
-      throw new AppError(
-        "ACCOUNT_QUEUE_LIMIT",
-        "Service account pending job limit reached",
-        429,
-      );
-    const maxUserActiveJobs = this.deps.database.settings.value(
-      "max_user_active_jobs",
-      20,
-    );
-    if (this.deps.database.jobs.countActiveForUser(userId) >= maxUserActiveJobs)
-      throw new AppError(
-        "USER_QUEUE_LIMIT",
-        "User pending job limit reached",
-        429,
-      );
-    const maxStorage = this.deps.database.settings.value(
-        "max_user_storage_bytes",
-        this.deps.maxUserStorageBytes,
-      ),
-      usedStorage = this.deps.database.jobs.storageUsageForUser(userId);
-    if (requestedBytes + this.deps.maxOutputBytes > maxStorage - usedStorage)
-      throw new AppError(
-        "USER_STORAGE_QUOTA",
-        "User storage quota is exhausted",
-        429,
-      );
-  }
-
-  private assertStorage(userId: string, requestedBytes: number): void {
-    const maxStorage = this.deps.database.settings.value(
-        "max_user_storage_bytes",
-        this.deps.maxUserStorageBytes,
-      ),
-      usedStorage = this.deps.database.jobs.storageUsageForUser(userId);
-    if (requestedBytes > maxStorage - usedStorage)
-      throw new AppError(
-        "USER_STORAGE_QUOTA",
-        "User storage quota is exhausted",
-        429,
-      );
   }
 
   private renderTicketConfig() {
@@ -1285,7 +1241,7 @@ export class AdminJobsService {
         "Original Render upload is no longer pending",
         409,
       );
-    const identity = this.deps.database.apiKeys.renderIdentity(
+    const identity = this.deps.database.apiKeys.renderJobIdentity(
       row.api_key_id,
       nowIso(),
     );
@@ -1345,7 +1301,7 @@ export class AdminJobsService {
         "Idempotent job no longer exists",
         404,
       );
-    const identity = this.deps.database.apiKeys.renderIdentity(
+    const identity = this.deps.database.apiKeys.renderJobIdentity(
       row.api_key_id,
       nowIso(),
     );
@@ -1411,7 +1367,7 @@ export class AdminJobsService {
         "Job artifact retention has expired",
         410,
       );
-    const identity = this.deps.database.apiKeys.activeIdentity(
+    const identity = this.deps.database.apiKeys.activeJobIdentity(
       row.api_key_id,
       nowIso(),
     );

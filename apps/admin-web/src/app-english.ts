@@ -180,6 +180,6 @@ export const english = {
   whenSelectingMultipleFilesSelectOnly:
     "When selecting multiple files, select only TeX files.",
   whichDocumentDoYouWantTo: "Which document do you want to convert to PDF?",
-  zipArchiveMustBe20Mib: "ZIP archive must be 20 MiB or smaller.",
+  zipArchiveSizeLimit: "ZIP archive must be {limit} or smaller.",
   zoom: "Zoom",
 } as const;

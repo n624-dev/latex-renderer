@@ -27,6 +27,7 @@ import {
   type EditorChromeMessage,
 } from "./chrome-messages.js";
 import { EditorPreview } from "./preview.js";
+import { installDraftRecovery } from "./draft-recovery.js";
 import { editorTools } from "./tex-support.js";
 
 type Api = (url: string, init?: RequestInit) => Promise<unknown>;
@@ -49,6 +50,7 @@ type PreviewActivity = {
   successful: (Preview & { pageCount: number | null }) | null;
 };
 const settleMs = 1500;
+const maximumSaveRetries = 5;
 const previewFormatPreference = "latex-renderer-editor-preview-format";
 const editable = /\.(?:tex|sty|cls|bib|bst|csv|dat|txt)$/i;
 const jobLabels = new Set([
@@ -196,9 +198,12 @@ export async function installEditor(
   const settingsDialog = element("editor-settings-dialog", HTMLDialogElement);
   const revisionOutputs = element("editor-revision-outputs", HTMLSelectElement);
   const saveStatus = element("editor-save-status");
+  const reviewConflict = element("editor-review-conflict", HTMLButtonElement);
+  const saveCopy = element("editor-save-copy", HTMLButtonElement);
   const previewStatus = element("editor-preview-status");
   const previewVersion = element("editor-preview-version");
   const previewMode = element("editor-preview-mode", HTMLSelectElement);
+  const previewNotice = element("editor-preview-notice");
   try {
     if (localStorage.getItem(previewFormatPreference) === "png")
       previewMode.value = "png";
@@ -283,8 +288,10 @@ export async function installEditor(
   let selected = "",
     timer: number | undefined;
   let savedDocument: Text | undefined;
+  let saveRetries = 0;
+  let retryDelay: number | undefined;
   let editor: EditorView | undefined,
-    saving = false,
+    saving: Promise<boolean> | undefined,
     conflicted = false,
     composing = false;
   let refreshEditorPhrases = false;
@@ -299,6 +306,7 @@ export async function installEditor(
   let diagnosticsTicket: Preview | undefined;
   let shownVersion = 0;
   let shownJobId: string | undefined;
+  let displayRequest = 0;
   let lastSuccess: { ticket: Preview; pageCount: number } | undefined;
   let renderPending = false;
   let changing = false;
@@ -394,9 +402,10 @@ export async function installEditor(
   }
 
   function showError(error: unknown, target: HTMLElement) {
-    if ((error as { code?: string } | null)?.code === "DRAFT_VERSION_CONFLICT")
+    if ((error as { code?: string } | null)?.code === "DRAFT_VERSION_CONFLICT") {
       setText(target, "conflict");
-    else if (error instanceof Error) {
+      reviewConflict.hidden = false;
+    } else if (error instanceof Error) {
       translated.delete(target);
       delete target.dataset.state;
       target.textContent = error.message;
@@ -404,42 +413,69 @@ export async function installEditor(
   }
 
   async function save(): Promise<boolean> {
-    if (saving || composing || conflicted) return false;
+    if (composing || conflicted) return false;
+    if (saving) {
+      if (!(await saving)) return false;
+      return save();
+    }
     if (!editor || !changed()) return true;
+    const operation = saveCurrentFile(editor);
+    saving = operation;
+    try {
+      return (await operation) && !changed();
+    } finally {
+      saving = undefined;
+    }
+  }
+
+  async function saveCurrentFile(editor: EditorView): Promise<boolean> {
     const document = editor.state.doc;
     const text = editor.state.sliceDoc();
     const version = current().version;
-    saving = true;
     setText(saveStatus, "saving");
     try {
-      draft =
-        text.length <= 8192
-          ? await write<Draft>(`${base}/file`, "PUT", {
-              version,
-              path: selected,
-              text,
-            })
-          : await uploadContent(
-              selected,
-              version,
-              new Blob([text], { type: "text/plain; charset=utf-8" }),
-            );
+      draft = await writeTextFile(selected, version, text);
       savedDocument = document;
+      saveRetries = 0;
+      retryDelay = undefined;
       if (changed()) {
         schedule();
-        return false;
+        return true;
       }
       setText(saveStatus, "saved");
+      saveCopy.hidden = true;
       showVersion();
       return true;
     } catch (error) {
       conflicted =
-        (error as { code?: string }).code === "DRAFT_VERSION_CONFLICT";
+        (error as { code?: string } | null)?.code === "DRAFT_VERSION_CONFLICT";
+      const status = (error as { status?: number } | null)?.status;
+      if (
+        !conflicted && (status === undefined || status === 408 || status === 429 || status >= 500) &&
+        saveRetries < maximumSaveRetries
+      ) {
+        retryDelay = Math.min(1000 * 2 ** saveRetries++, 8000);
+        schedule();
+      }
+      saveCopy.hidden = !changed();
       showError(error, saveStatus);
       return false;
-    } finally {
-      saving = false;
     }
+  }
+
+  function writeTextFile(path: string, version: number, content: string) {
+    return content.length <= 8192
+      ? write<Draft>(`${base}/file`, "PUT", { version, path, text: content })
+      : uploadContent(
+          path,
+          version,
+          new Blob([content], { type: "text/plain; charset=utf-8" }),
+        );
+  }
+
+  async function readDraftFile(path: string, version: number, signal = pageController.signal) {
+    const query = new URLSearchParams({ path, version: String(version) });
+    return (await request<{ text: string }>(`${base}/file?${query}`, { signal })).text;
   }
 
   async function openFile(path: string) {
@@ -459,11 +495,7 @@ export async function installEditor(
         setText(source, "attachment");
         return true;
       }
-      const query = new URLSearchParams({
-        path,
-        version: String(current().version),
-      });
-      const value = await request<{ text: string }>(`${base}/file?${query}`);
+      const value = await readDraftFile(path, current().version);
       previousEditor?.destroy();
       selected = path;
       translated.delete(source);
@@ -471,13 +503,13 @@ export async function installEditor(
       editor = new EditorView({
         parent: source,
         state: EditorState.create({
-          doc: value.text,
+          doc: value,
           extensions: [
             EditorView.cspNonce.of(nonce),
             phrases.of(EditorState.phrases.of(catalog.phrases)),
             EditorView.contentAttributes.of({ "aria-label": path }),
             EditorState.lineSeparator.of(
-              value.text.includes("\r\n") ? "\r\n" : "\n",
+              value.includes("\r\n") ? "\r\n" : "\n",
             ),
             lineNumbers(),
             highlightActiveLine(),
@@ -498,6 +530,8 @@ export async function installEditor(
             }),
             EditorView.updateListener.of((update) => {
               if (!update.docChanged) return;
+              saveRetries = 0;
+              retryDelay = undefined;
               setText(saveStatus, "unsaved");
               updateTemplate();
               showVersion();
@@ -508,6 +542,7 @@ export async function installEditor(
       });
       savedDocument = editor.state.doc;
       setText(saveStatus, "saved");
+      saveCopy.hidden = true;
       return true;
     } catch (error) {
       showError(error, saveStatus);
@@ -530,11 +565,12 @@ export async function installEditor(
     if (!isAlive() || composing || conflicted || changing) return;
     const lastInput = performance.now();
     timer = window.setTimeout(() => {
-      if (auto.checked) {
+      retryDelay = undefined;
+      if (auto.checked && !renderPending) {
         measureEditor("input-idle", lastInput);
         void compile();
       } else void save();
-    }, settleMs);
+    }, retryDelay ?? settleMs);
   }
 
   function observe(ticket: Preview) {
@@ -712,22 +748,34 @@ export async function installEditor(
     signal: AbortSignal,
   ) {
     if (smallViewport.matches && layout.dataset.panel !== "preview") return;
+    const display = ++displayRequest;
+    const isCurrent = () => !signal.aborted && display === displayRequest;
     const job = `${scope}/${result.ticket.jobId}`;
     const pdf = job + "/artifacts/result.pdf";
-    const format = previewMode.value === "png" ? "png" : "pdf";
+    const png = {
+      pdf,
+      pageCount: result.pageCount,
+      path: (page: number) => `${job}/previews/page-${page}.png`,
+    };
+    let format = previewMode.value === "png" ? "png" : "pdf";
     const started = performance.now();
-    const rendered =
+    let rendered =
       format === "png"
-        ? await preview.showPng(
-            {
-              pdf,
-              pageCount: result.pageCount,
-              path: (page) => `${job}/previews/page-${page}.png`,
-            },
-            signal,
-          )
+        ? await preview.showPng(png, signal)
         : await preview.show(pdf, signal);
-    if (rendered && !signal.aborted) {
+    if (
+      !rendered && format === "pdf" && isCurrent() &&
+      (await preview.assetsMissing(AbortSignal.any([signal, AbortSignal.timeout(5000)]))) &&
+      isCurrent()
+    ) {
+      format = "png";
+      previewMode.value = "png";
+      setText(previewNotice, "previewReload");
+      previewNotice.hidden = false;
+      rendered = await preview.showPng(png, signal);
+    }
+    if (rendered && isCurrent()) {
+      if (format === "pdf") previewNotice.hidden = true;
       measureEditor(`${format}-load-and-paint`, started);
       shownVersion = result.ticket.version;
       shownJobId = result.ticket.jobId;
@@ -739,7 +787,7 @@ export async function installEditor(
     if (renderPending || composing || changing || !isAlive()) return;
     const started = performance.now();
     renderPending = true;
-    let queued = false;
+    let submittedVersion: number | undefined;
     try {
       if (!(await save())) return;
       if (
@@ -749,12 +797,12 @@ export async function installEditor(
       )
         return;
       if (!force && latest?.version === current().version) return;
+      submittedVersion = current().version;
       const ticket = await write<Preview>(`${base}/preview`, "POST", {
-        version: current().version,
+        version: submittedVersion,
       });
       measureEditor("save-and-queue", started);
       latest = ticket;
-      queued = true;
       if (!isAlive()) return;
       diagnosticsTicket = undefined;
       setText(diagnosticsStatus, "waitForResult");
@@ -766,7 +814,11 @@ export async function installEditor(
       showError(error, previewStatus);
     } finally {
       renderPending = false;
-      if (queued && changed()) schedule();
+      if (
+        submittedVersion !== undefined &&
+        (changed() || submittedVersion !== current().version)
+      )
+        schedule();
     }
   }
 
@@ -870,9 +922,44 @@ export async function installEditor(
       if (dom?.isConnected) dom.contentEditable = "true";
       changing = false;
       showVersion();
-      if (auto.checked) schedule();
+      if (auto.checked || (changed() && retryDelay !== undefined)) schedule();
     }
   };
+  const reloadChangedFile = async (path: string) => {
+    // The server has committed a new version. An old buffer cannot be edited
+    // against that version even when fetching its replacement fails.
+    editor?.destroy();
+    editor = undefined;
+    savedDocument = undefined;
+    selected = "";
+    source.replaceChildren();
+    refreshFileList(current());
+    await openFile(path);
+  };
+  installDraftRecovery({
+    review: reviewConflict,
+    saveCopy,
+    dialog: element("editor-conflict-dialog", HTMLDialogElement),
+    apply: element("editor-conflict-apply", HTMLButtonElement),
+    pathLabel: element("editor-conflict-path"),
+    status: element("editor-conflict-status"),
+    serverText: element("editor-conflict-server"),
+    localText: element("editor-conflict-local"),
+    buffer: () => ({ path: selected, unsaved: changed() ? editor?.state.sliceDoc() : undefined }),
+    readDraft: (signal) => request<Draft | null>(base, { signal }),
+    readText: readDraftFile,
+    writeText: writeTextFile,
+    resolve: async (latest, path) => {
+      draft = latest;
+      conflicted = false;
+      reviewConflict.hidden = false;
+      await reloadChangedFile(path);
+      reviewConflict.hidden = true;
+      schedule();
+    },
+    describe: setText,
+    showError,
+  });
   const patchFiles = async (
     data: { files: unknown[]; entrypoint?: string; engine?: string },
     path: string,
@@ -881,8 +968,7 @@ export async function installEditor(
       version: current().version,
       ...data,
     });
-    refreshFileList(current());
-    await openFile(path);
+    await reloadChangedFile(path);
   };
   newFile.addEventListener("click", () => {
     const path = window.prompt(text("fileName"));
@@ -898,8 +984,7 @@ export async function installEditor(
         path,
         text: "",
       });
-      refreshFileList(current());
-      await openFile(path);
+      await reloadChangedFile(path);
     });
   });
   upload.addEventListener("change", () => {
@@ -917,8 +1002,7 @@ export async function installEditor(
     void mutate(async () => {
       const content = file.slice(0, file.size, "application/octet-stream");
       draft = await uploadContent(path, current().version, content);
-      refreshFileList(current());
-      await openFile(path);
+      await reloadChangedFile(path);
     });
   });
   renameFile.addEventListener("click", () => {
@@ -1023,6 +1107,12 @@ export async function installEditor(
     }
   };
   cancel.addEventListener("click", () => void cancelPreview());
+  addEventListener("online", () => {
+    if (!changed()) return;
+    saveRetries = 0;
+    retryDelay = undefined;
+    schedule();
+  }, { signal: pageController.signal });
   addEventListener("beforeunload", (event) => {
     if (changed()) event.preventDefault();
   });

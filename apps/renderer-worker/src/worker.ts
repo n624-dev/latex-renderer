@@ -1,3 +1,4 @@
+import { claimAuxiliaryWork } from "./auxiliary-work.js";
 import type { RendererDatabase } from "@latex-renderer/database";
 import { AppError, nowIso } from "@latex-renderer/shared";
 import type { WorkerConfig } from "./config.js";
@@ -16,6 +17,7 @@ import { planRenderMemory, rememberRenderMemory } from "./memory-plan.js";
 import { diagnosticWriter } from "../../../deploy/scripts/service-diagnostics.mjs";
 import { workerHasDemand } from "../../../deploy/scripts/worker-demand.mjs";
 import { performance } from "node:perf_hooks";
+import { lstat } from "node:fs/promises";
 import { recoverStaleLeases } from "./recovery.js";
 import {
   processPdfInspection,
@@ -27,6 +29,17 @@ import {
   collectSourceTrees,
   recoverSourceTreeReaders,
 } from "./source-tree-cache.js";
+
+async function runtimeActivationPending(journal: string | undefined): Promise<boolean> {
+  if (journal === undefined) return false;
+  try {
+    await lstat(journal);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
 
 export async function runWorker(
   database: RendererDatabase,
@@ -90,7 +103,7 @@ export async function runWorker(
     previousAdmission = "";
   let resources = readHostResources();
   let admissionAfter: { queued_at: string; id: string } | undefined;
-  let preferPreview = false,
+  let preferAuxiliary = false,
     nextPreviewRecovery = 0;
   let nextSourceTreeCollection = 0;
   try {
@@ -159,7 +172,10 @@ export async function runWorker(
         continue;
       }
       const mode = database.settings.value<string>("worker_mode", "running");
-      if (mode === "draining" || mode === "paused") {
+      if (
+        mode === "draining" || mode === "paused" ||
+        await runtimeActivationPending(config.runtimeActivationJournal)
+      ) {
         await idleDelay();
         continue;
       }
@@ -239,80 +255,40 @@ export async function runWorker(
         );
         previousAdmission = admission;
       }
-      // Alternate waiting preview work and ordinary Jobs. A small conversion
-      // may proceed below the 1GiB renderer gate, never under memory/I/O pressure.
-      if (
-        (preferPreview ||
-          admission !== "ready" ||
-          !database.worker.nextQueued()) &&
-        (config.minimumAvailableMemoryBytes === undefined ||
-          assessHostResources(readHostResources(), 384 * 1024 * 1024) ===
-            "ready")
-      ) {
-        const inspection = database.transaction(() =>
-          database.previews.busy()
-            ? undefined
-            : database.pdfInspections.claim(config.workerId, nowIso()),
-        );
-        if (inspection) {
-          preferPreview = false;
-          try {
-            await processPdfInspection(database, config, inspection);
-          } catch (error) {
-            if (!(error instanceof RendererCleanupDeferred)) throw error;
-            diagnostic({
-              event: "renderer_worker.pdf_inspection_cleanup_deferred",
-              jobId: inspection.job_id,
-            });
+      const queuedRender = database.worker.nextQueued();
+      const renderReady = admission === "ready" && queuedRender !== undefined;
+      const auxiliary = !renderReady || preferAuxiliary
+        ? claimAuxiliaryWork(database, config, {
+            renderReady,
+            allowPreview: config.minimumAvailableMemoryBytes === undefined ||
+              assessHostResources(readHostResources(), 384 * 1024 * 1024) === "ready",
+            allowProbe: config.minimumAvailableMemoryBytes === undefined ||
+              assessHostResources(readHostResources(), config.minimumAvailableMemoryBytes) === "ready",
+          })
+        : undefined;
+      if (auxiliary) {
+        preferAuxiliary = false;
+        try {
+          switch (auxiliary.kind) {
+            case "inspection":
+              await processPdfInspection(database, config, auxiliary.request);
+              break;
+            case "preview":
+              await processPreview(database, config, auxiliary.request);
+              break;
+            case "probe":
+              await processDocumentProbe(database, config, auxiliary.request);
+              break;
           }
-          lastWork = clock();
-          continue;
+        } catch (error) {
+          if (!(error instanceof RendererCleanupDeferred)) throw error;
+          diagnostic({
+            event: "renderer_worker.auxiliary_cleanup_deferred",
+            kind: auxiliary.kind,
+          });
         }
-        const preview = database.transaction(() =>
-          database.previews.claim(config.workerId, nowIso()),
-        );
-        if (preview) {
-          preferPreview = false;
-          try {
-            await processPreview(database, config, preview);
-          } catch (error) {
-            if (!(error instanceof RendererCleanupDeferred)) throw error;
-            diagnostic({
-              event: "renderer_worker.preview_cleanup_deferred",
-              jobId: preview.job_id,
-              page: preview.page,
-            });
-          }
-          lastWork = clock();
-          continue;
-        }
-      }
-      if (
-        (preferPreview || !database.worker.nextQueued()) &&
-        (config.minimumAvailableMemoryBytes === undefined ||
-          assessHostResources(
-            readHostResources(),
-            config.minimumAvailableMemoryBytes,
-          ) === "ready")
-      ) {
-        const probe = database.transaction(() =>
-          database.previews.busy()
-            ? undefined
-            : database.documentProbes.claim(config.workerId, nowIso()),
-        );
-        if (probe) {
-          preferPreview = false;
-          try {
-            await processDocumentProbe(database, config, probe);
-          } catch (error) {
-            if (!(error instanceof RendererCleanupDeferred)) throw error;
-            diagnostic({
-              event: "renderer_worker.document_probe_cleanup_deferred",
-            });
-          }
-          lastWork = clock();
-          continue;
-        }
+        lastWork = clock();
+        continue;
       }
       if (admission !== "ready") {
         // Resource waiting is not a failed rendering. The old configured
@@ -383,7 +359,7 @@ export async function runWorker(
           additionalSwapLimitBytes: config.maximumSwapBytes ?? 0,
           result: terminal?.status ?? "unknown",
         });
-        preferPreview = true;
+        preferAuxiliary = true;
       } catch (error) {
         if (error instanceof RendererCleanupDeferred) {
           awaitingRecovery.add(job.id);

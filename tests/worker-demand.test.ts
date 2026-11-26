@@ -2,12 +2,13 @@ import { afterEach, expect, it, vi } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import { createServer } from "node:net";
 import { setTimeout } from "node:timers";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { RendererDatabase } from "../packages/database/src/index.js";
 import * as demand from "../deploy/scripts/worker-demand.mjs";
+import { readWorkerHealth } from "../deploy/scripts/worker-health.mjs";
 import {
   reconcileWorker,
   workerMaintenanceDue,
@@ -80,6 +81,60 @@ it("allows terminal Jobs and completed previews to sleep", () => {
     "INSERT INTO jobs VALUES ('succeeded',NULL),('failed',NULL),('canceled',NULL); INSERT INTO job_preview_requests VALUES ('succeeded',NULL),('failed',NULL); INSERT INTO source_trees VALUES ('ready'),('invalid')",
   );
   expect(demand.workerHasDemand(f.database)).toBe(false);
+});
+
+it("treats a stopping Worker as unavailable in the direct health reader", () => {
+  const { root, path: databasePath } = fixture();
+  const path = join(root, "health.json"),
+    now = Date.now();
+  const run = () => "ActiveState=active\nMainPID=1234\n";
+  for (const [stopping, state] of [
+    [false, "running"],
+    [true, "unavailable"],
+  ] as const) {
+    writeFileSync(
+      path,
+      JSON.stringify({
+        pid: 1234,
+        at: new Date(now).toISOString(),
+        mode: "running",
+        stopping,
+      }),
+      { mode: 0o600 },
+    );
+    expect(readWorkerHealth({ path, now, databasePath, run })).toEqual({
+      operational: !stopping,
+      state,
+    });
+  }
+});
+
+it("distinguishes pending PDF work from expired maintenance records", () => {
+  const { database } = fixture();
+  const now = "2026-11-27T00:00:00.000Z";
+  database.exec(`CREATE TABLE pdf_inspections(status TEXT,expires_at TEXT);
+    CREATE TABLE document_probes(status TEXT,expires_at TEXT);
+    CREATE TABLE pdf_inspection_uploads(expires_at TEXT);
+    INSERT INTO pdf_inspections VALUES('queued','2026-11-26T23:59:00.000Z');
+    INSERT INTO document_probes VALUES('queued','2026-11-26T23:59:00.000Z');
+    INSERT INTO pdf_inspection_uploads VALUES('2026-11-26T23:59:00.000Z');`);
+  expect(demand.workerHasDemand(database, { now })).toBe(true);
+  expect(
+    demand.workerHasDemand(database, { now, includeMaintenance: false }),
+  ).toBe(false);
+  for (const table of ["pdf_inspections", "document_probes"]) {
+    database.exec(`UPDATE ${table} SET status='running'`);
+    expect(
+      demand.workerHasDemand(database, { now, includeMaintenance: false }),
+    ).toBe(true);
+    database.exec(`UPDATE ${table} SET status='queued'`);
+  }
+  database.exec(
+    "UPDATE document_probes SET expires_at='2026-11-27T00:01:00.000Z'",
+  );
+  expect(
+    demand.workerHasDemand(database, { now, includeMaintenance: false }),
+  ).toBe(true);
 });
 
 it("notifies after commit, observes committed state, and never notifies on rollback", () => {

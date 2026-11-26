@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import { constants, createWriteStream } from "node:fs";
+import { createWriteStream } from "node:fs";
 import { isAbsolute, join } from "node:path";
-import { mkdir, open, rename, rm, statfs } from "node:fs/promises";
+import { mkdir, rename, rm, statfs } from "node:fs/promises";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import {
@@ -11,8 +11,15 @@ import {
   nowIso,
 } from "@latex-renderer/shared";
 import type { SourceTicketClaims, TicketClaims } from "@latex-renderer/ticket";
-import { assertSourceWritable } from "@latex-renderer/database";
+import {
+  assertSourceWritable,
+  defaultSourceOrphanRetentionMinutes,
+} from "@latex-renderer/database";
 import { validateAndExtract } from "@latex-renderer/zip-validation";
+import {
+  syncFile,
+  syncPublishedAncestors,
+} from "../../../../deploy/scripts/durable-storage.mjs";
 import type { RendererApiDependencies } from "../types.js";
 
 export async function uploadSource(
@@ -125,16 +132,15 @@ async function uploadSharedSource(
       },
       "",
     );
-    const handle = await open(temporaryPath, constants.O_RDONLY);
-    await handle.sync();
-    await handle.close();
+    await syncFile(temporaryPath);
     heartbeat.assertOwned();
     assertSourceWritable(deps.database);
     await rename(temporaryPath, finalPath);
+    await syncPublishedAncestors(finalPath, deps.storageRoot);
     const timestamp = nowIso(),
       orphanRetentionMinutes = deps.database.settings.value(
         "source_orphan_retention_minutes",
-        60,
+        defaultSourceOrphanRetentionMinutes,
       ),
       expiresAt = new Date(
         Date.now() + orphanRetentionMinutes * 60_000,
@@ -250,12 +256,11 @@ async function uploadLegacyJobSource(
       claims.size as number,
       claims.sha256 as string,
     );
-    const handle = await open(temporaryPath, constants.O_RDONLY);
-    await handle.sync();
-    await handle.close();
+    await syncFile(temporaryPath);
     heartbeat.assertOwned();
     assertSourceWritable(deps.database);
     await rename(temporaryPath, finalPath);
+    await syncPublishedAncestors(finalPath, deps.storageRoot);
     deps.database.transaction(() => {
       assertSourceWritable(deps.database);
       deps.database.consumeNonce(claims.nonce as string, claimOwner);

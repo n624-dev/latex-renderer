@@ -11,6 +11,7 @@ import {
   it,
   vi,
 } from "vitest";
+import { readBrowserAsset } from "../../apps/admin-web/src/browser-assets.js";
 import { loginPage } from "../../apps/admin-web/src/templates-pages.js";
 import { adminPage } from "../../apps/admin-web/src/templates-admin.js";
 
@@ -29,7 +30,7 @@ function shippedScript(file: string, name: string): string {
     { encoding: "utf8", timeout: 10_000, maxBuffer: 2 * 1024 * 1024 },
   );
 }
-const loginScript = shippedScript("login-script", "loginScript");
+const loginScript = readBrowserAsset("login");
 const adminScript = shippedScript("admin-script", "adminScript");
 const shippedStyles = shippedScript("styles", "styles");
 const origin = "http://127.0.0.1:43129";

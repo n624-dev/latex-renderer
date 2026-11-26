@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { join } from "node:path";
 import {
   boundedIntegerEnvironment,
   loadResourceLimits,
@@ -15,6 +16,7 @@ export interface WorkerConfig extends ResourceLimits {
   image: string;
   workerId: string;
   healthFile?: string;
+  runtimeActivationJournal?: string;
   seccompProfile: string;
   apparmorProfile: string | undefined;
   maxOutputBytes: number;
@@ -55,7 +57,14 @@ export function loadWorkerConfig(): WorkerConfig {
     storageRoot: required("STORAGE_ROOT"),
     image: required("RENDERER_IMAGE"),
     ...(process.env.WORKER_HEALTH_FILE
-      ? { healthFile: process.env.WORKER_HEALTH_FILE }
+      ? {
+          healthFile: process.env.WORKER_HEALTH_FILE,
+          runtimeActivationJournal: join(
+            process.env.IMAGE_MANAGER_STATE_ROOT ??
+              "/var/lib/latex-renderer/image-manager",
+            "activation-journal.json",
+          ),
+        }
       : {}),
     workerId: process.env.WORKER_ID ?? `worker_${randomUUID()}`,
     seccompProfile: required("RENDERER_SECCOMP_PROFILE"),

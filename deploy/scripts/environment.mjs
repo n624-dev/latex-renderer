@@ -54,3 +54,21 @@ export function positiveDurationEnvironment(
 export function validPortEnvironment(environment, name, fallback) {
   return boundedIntegerEnvironment(environment, name, fallback, 1, 65_535);
 }
+
+export function workerIdleConfiguration(environment = process.env) {
+  const enabled = environment.WORKER_IDLE_ENABLED ?? "false";
+  if (!["true", "false"].includes(enabled))
+    throw new Error("WORKER_IDLE_ENABLED must be true or false");
+  return {
+    enabled: enabled === "true",
+    timeoutMs:
+      1000 *
+      boundedIntegerEnvironment(
+        environment,
+        "WORKER_IDLE_TIMEOUT_SECONDS",
+        900,
+        30,
+        86400,
+      ),
+  };
+}

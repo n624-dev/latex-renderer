@@ -31,13 +31,15 @@ Send all credentials in the HTTP header `Authorization: Bearer <TOKEN>`.
 > [!WARNING]
 > Keep API keys, `uploadTicket`, and `jobTicket` out of logs, URL query strings, and source ZIPs.
 
-> [!NOTE]
-> **Job ownership is bound to the creating API key.** Another key belonging to the same user or service account receives `404` if it attempts to refresh `job-tickets`, replay the creation response with the same `Idempotency-Key`, or retry SVG extraction. Ownership cannot transfer even if the original key is revoked. Sources and saved projects are shared by the user, so another key can create a **new job** from a shared source with a new `Idempotency-Key`.
+In the admin interface, rotating an API key lets its replacement renew tickets, recover a creation response with the same `Idempotency-Key`, and retry SVG extraction for existing jobs. The old key and its tickets expire immediately. Queued jobs can continue if the replacement has rendering permission. This applies to rotations performed after upgrading.
+
+Independently issued keys receive `404` for these operations, even when they belong to the same service account. Revoke a key if it is compromised. Users share sources and saved projects across their keys and can create a new job from a shared source. If a history entry has `detailAccess: "different_connection"`, use the connection that owns the job to open its details.
 
 ## API endpoints {#apiエンドポイント}
 
 | Method | Path | Purpose |
 | --- | --- | --- |
+| `GET` / `HEAD` | `/api/v1/health` | Check whether the gateway responds. No authentication required. HEAD returns no body. |
 | `POST` | `/api/v1/source-tickets` | Reserve a source or reuse an existing ZIP owned by the same user |
 | `PUT` | `/api/v1/sources/{sourceId}/content` | Upload and validate a source ZIP |
 | `POST` | `/api/v1/render-tickets` | Create a job from a source, retry SVG extraction, or reserve a legacy single-job upload |

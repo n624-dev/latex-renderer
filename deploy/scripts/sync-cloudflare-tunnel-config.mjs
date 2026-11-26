@@ -2,6 +2,7 @@
 import { isMainModule } from "./is-main-module.mjs";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath, URL } from "node:url";
+import { mcpIngress } from "../../packages/server-setup-core/src/mcp-ingress.mjs";
 
 const repositoryRoot = fileURLToPath(new URL("../..", import.meta.url));
 
@@ -27,21 +28,20 @@ export function hostnameFromOrigin(origin) {
 
 export function desiredLatexRoutes(hostname, { passiveHealth = false } = {}) {
   return [
-    ...(passiveHealth ? [{
+    ...(passiveHealth
+      ? [
+          {
+            hostname,
+            path: "^/(health(/rendering|/status)?|api/v1/health)$",
+            service: "unix:/run/latex-renderer-status/status.sock",
+          },
+        ]
+      : []),
+    ...mcpIngress.map(({ pattern, route }) => ({
       hostname,
-      path: "^/(health(/rendering|/status)?|api/v1/health)$",
-      service: "unix:/run/latex-renderer-status/status.sock",
-    }] : []),
-    {
-      hostname,
-      path: "^/\\.well-known/oauth-(authorization-server|protected-resource)(/.*)?$",
-      service: "http://127.0.0.1:3104",
-    },
-    {
-      hostname,
-      path: "^/(oauth|mcp)(/.*)?$",
-      service: "http://127.0.0.1:3104",
-    },
+      path: pattern,
+      service: route === "deny" ? "http_status:404" : "http://127.0.0.1:3104",
+    })),
     {
       hostname,
       path: "^/auth(/.*)?$",
@@ -172,13 +172,29 @@ async function main() {
     .filter(Boolean);
   let passiveHealth = false;
   try {
-    const state = execFileSync("/usr/bin/systemctl", ["show", "latex-renderer-status.socket", "--property=ActiveState,SubState"], {
-      encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"],
-    });
-    passiveHealth = /^ActiveState=active$/m.test(state) && /^SubState=listening$/m.test(state);
-  } catch { /* Historical hosts retain their ordinary HTTP health route. */ }
+    const state = execFileSync(
+      "/usr/bin/systemctl",
+      [
+        "show",
+        "latex-renderer-status.socket",
+        "--property=ActiveState,SubState",
+      ],
+      {
+        encoding: "utf8",
+        timeout: 5000,
+        stdio: ["ignore", "pipe", "ignore"],
+      },
+    );
+    passiveHealth =
+      /^ActiveState=active$/m.test(state) &&
+      /^SubState=listening$/m.test(state);
+  } catch {
+    /* Historical hosts retain their ordinary HTTP health route. */
+  }
   if (process.env.RENDERER_RUNTIME_MODE === "compact" && !passiveHealth)
-    throw new Error("Compact Tunnel routing requires the passive health listener");
+    throw new Error(
+      "Compact Tunnel routing requires the passive health listener",
+    );
   const options = { hostname, legacyHostnames, passiveHealth };
   const configurationUrl =
     `https://api.cloudflare.com/client/v4/accounts/${accountId}` +

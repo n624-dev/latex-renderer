@@ -13,6 +13,33 @@ export function assertBackupDatabase(database) {
     throw new Error("SQLite foreign_key_check failed");
 }
 
+export function readBackupApplicationIdentity(manifest) {
+  if (manifest == null) return null;
+  const { version, commit, rendererRuntimeFingerprint, rendererRuntimeIdentity } = manifest;
+  if (
+    typeof version !== "string" ||
+    !/^\d+\.\d+\.\d+(?:-rc\.[1-9]\d*)?$/.test(version) ||
+    typeof commit !== "string" || !/^[a-f0-9]{40}$/.test(commit) ||
+    typeof rendererRuntimeFingerprint !== "string" || !/^[a-f0-9]{64}$/.test(rendererRuntimeFingerprint)
+  ) throw new Error("Invalid backup application release identity");
+  if (rendererRuntimeIdentity !== undefined &&
+      (rendererRuntimeIdentity?.schemaVersion !== 2 ||
+       typeof rendererRuntimeIdentity.fingerprint !== "string" ||
+       !/^[a-f0-9]{64}$/.test(rendererRuntimeIdentity.fingerprint)))
+    throw new Error("Invalid backup Runtime identity");
+  return {
+    version,
+    commit,
+    rendererRuntimeFingerprint,
+    ...(rendererRuntimeIdentity === undefined ? {} : {
+      rendererRuntimeIdentity: {
+        schemaVersion: rendererRuntimeIdentity.schemaVersion,
+        fingerprint: rendererRuntimeIdentity.fingerprint,
+      },
+    }),
+  };
+}
+
 export function projectSourceStorageKey(source) {
   if (
     typeof source.id !== "string" ||

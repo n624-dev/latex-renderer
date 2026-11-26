@@ -3,6 +3,10 @@ import { join } from "node:path";
 import type { RendererDatabase, WorkerJobRow } from "@latex-renderer/database";
 import { newId, nowIso } from "@latex-renderer/shared";
 import {
+  syncArtifactTree,
+  syncPublishedAncestors,
+} from "../../../deploy/scripts/durable-storage.mjs";
+import {
   publishArtifacts,
   validateArtifacts,
   type ValidatedArtifact,
@@ -114,12 +118,16 @@ export async function recordFailure(
       );
       artifacts = await validateArtifacts(config, staging, false);
       await publishArtifacts(staging, candidateOutput, artifacts);
+      await syncArtifactTree(candidateOutput, artifacts.map(({ path }) => path));
       if (!renewLease()) return;
       await mkdir(join(root, "outputs"), { recursive: true, mode: 0o770 });
       await rename(candidateOutput, output);
       published = true;
+      await syncPublishedAncestors(output, config.storageRoot);
     } catch (error) {
       if (!isArtifactStorageFull(error)) throw error;
+      if (published) await rm(output, { recursive: true, force: true });
+      published = false;
       // The database can stay writable when the artifact filesystem is full.
       // Record the fenced terminal state even when no diagnostics can be saved.
       artifacts = [];

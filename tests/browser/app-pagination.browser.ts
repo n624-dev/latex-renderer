@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { localizedAppScript } from "../../apps/admin-web/src/assets/localized-app-script.js";
 import type { Browser, Page } from "playwright";
 import { launchTestBrowser, newTestPage } from "../helpers/browser-engine.js";
 import { routeWebFonts } from "../helpers/browser-web-fonts.js";
@@ -18,18 +18,7 @@ import {
 } from "../../apps/admin-web/src/templates-app.js";
 import { styles } from "../../apps/admin-web/src/assets/styles.js";
 
-// Use the built browser script: Vitest's SSR transform changes function.toString().
-const appScript = execFileSync(
-  process.execPath,
-  [
-    "--input-type=module",
-    "--eval",
-    "const module = await import(process.argv[1]); process.stdout.write(module.appScript);",
-    new URL("../../apps/admin-web/dist/assets/app-script.js", import.meta.url)
-      .href,
-  ],
-  { encoding: "utf8", timeout: 10_000, maxBuffer: 2 * 1024 * 1024 },
-);
+const appScript = localizedAppScript("ja");
 const origin = "http://127.0.0.1:43128";
 const projectId = `project_${"a".repeat(32)}`;
 type Kind = "jobs" | "projects" | "revisions" | "revisionJobs";

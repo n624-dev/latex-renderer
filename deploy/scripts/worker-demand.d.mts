@@ -4,7 +4,10 @@ export function workerIdleConfiguration(environment?: NodeJS.ProcessEnv): {
   enabled: boolean;
   timeoutMs: number;
 };
-export function workerHasDemand(database: DatabaseSync): boolean;
+export function workerHasDemand(
+  database: DatabaseSync,
+  options?: { includeMaintenance?: boolean; now?: string },
+): boolean;
 export function notifyWorker(options?: {
   path?: string;
   timeoutMs?: number;

@@ -2,7 +2,7 @@ import type { Browser } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { launchTestBrowser, newTestPage } from "../helpers/browser-engine.js";
 import { styles } from "../../apps/admin-web/src/assets/styles.js";
-import { siteScript } from "../../apps/admin-web/src/assets/site-script.js";
+import { readBrowserAsset } from "../../apps/admin-web/src/browser-assets.js";
 
 let browser: Browser | undefined;
 beforeAll(async () => {
@@ -27,7 +27,7 @@ describe.each(["light", "dark"] as const)("control layout: %s", (theme) => {
         await page.route("https://renderer.invalid/", (route) =>
           route.fulfill({
             contentType: "text/html",
-            body: `<!doctype html><html lang="ja"><head><style>${styles}</style><script>${siteScript}</script></head><body>
+            body: `<!doctype html><html lang="ja"><head><style>${styles}</style><script>${readBrowserAsset("site")}</script></head><body>
         <header class="site-header"><strong>Renderer</strong><nav><a href="#main">変換</a><a href="#main">プロジェクト</a></nav></header>
         <main id="main"><div class="page-heading"><h1>文書の変換</h1><form class="inline-form"><input aria-label="文書名" value="日本語の文書"><button>作成</button></form></div>
         <form class="filter-bar"><input aria-label="検索"><button>検索</button><button type="button">クリア</button><button type="button">新規作成</button></form>

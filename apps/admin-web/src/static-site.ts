@@ -1,6 +1,5 @@
 import { readFileSync } from "node:fs";
-import { loginScript } from "./assets/login-script.js";
-import { siteScript } from "./assets/site-script.js";
+import { readBrowserAsset } from "./browser-assets.js";
 import { styles } from "./assets/styles.js";
 import { publicWebFontFiles } from "./assets/font-assets.js";
 import type { ClientDistribution } from "./client-distribution.js";
@@ -189,9 +188,9 @@ export function createPublicStaticAssets(
       content: distribution.rendererOpenApi,
     },
     { path: "404.html", content: publicPage404() },
-    { path: "assets/login.js", content: loginScript },
+    { path: "assets/login.js", content: readBrowserAsset("login") },
     { path: "assets/styles.css", content: styles },
-    { path: "assets/site.js", content: siteScript },
+    { path: "assets/site.js", content: readBrowserAsset("site") },
     ...publicWebFontFiles.map(({ path, source }) => ({
       path,
       get content() {

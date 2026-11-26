@@ -6,6 +6,7 @@ import {
   GatewayOAuthTokens,
 } from "../apps/public-mcp-gateway/src/oauth-tokens.js";
 import { SqliteConnectionStore } from "../apps/public-mcp-gateway/src/sqlite-connections.js";
+import { dcrClientRetentionMs } from "../apps/public-mcp-gateway/src/oauth-clients.js";
 
 const issuer = "https://gateway.example.com";
 const resource = `${issuer}/mcp`;
@@ -71,6 +72,8 @@ describe("central OAuth HTTP protocol", () => {
       expires_in: 600,
       scope: "mcp:read mcp:render",
     });
+    fixture.store.pruneExpiredCredentials(fixture.now + dcrClientRetentionMs);
+    expect(fixture.store.dcrClient(client_id)).toBeDefined();
     const reused = await fixture.handle(
       post(
         "/oauth/token",
@@ -79,6 +82,17 @@ describe("central OAuth HTTP protocol", () => {
       ),
     );
     expect(await reused?.json()).toEqual({ error: "invalid_grant" });
+  });
+
+  it("reclaims unused DCR registration capacity at the seven-day boundary", () => {
+    using fixture = createFixture();
+    const registration = { clientName: "Review Client", redirectUris: [redirect] };
+    const issued = fixture.store.registerDcrClient(registration, 1, fixture.now);
+    expect(issued).toBeDefined();
+    expect(fixture.store.registerDcrClient(registration, 1, fixture.now + dcrClientRetentionMs - 1)).toBeUndefined();
+    const replacement = fixture.store.registerDcrClient(registration, 1, fixture.now + dcrClientRetentionMs);
+    expect(replacement?.id).toBeDefined();
+    expect(replacement?.id).not.toBe(issued?.id);
   });
 
   it("rejects unauthorised callbacks, duplicate grants and cross-origin consent", async () => {
@@ -202,6 +216,7 @@ function createFixture() {
   });
   return {
     store,
+    now,
     handle,
     consentUrl: () => callback,
     [Symbol.dispose]: () => store.close(),

@@ -6,7 +6,7 @@ import {
   publicDocsSearchJson,
   renderPublicDoc,
 } from "../../apps/admin-web/src/markdown-docs.js";
-import { siteScript } from "../../apps/admin-web/src/assets/site-script.js";
+import { readBrowserAsset } from "../../apps/admin-web/src/browser-assets.js";
 import { styles } from "../../apps/admin-web/src/assets/styles.js";
 
 let browser: Browser | undefined;
@@ -29,7 +29,7 @@ it.each([320, 390, 768, 821, 960, 1100, 1200])(
         const path = new URL(route.request().url()).pathname;
         const resource =
           path === "/assets/site.js"
-            ? { contentType: "text/javascript", body: siteScript }
+            ? { contentType: "text/javascript", body: readBrowserAsset("site") }
             : path === "/assets/styles.css"
               ? { contentType: "text/css", body: styles }
               : { contentType: "text/html", body: renderPublicDoc("index") };
@@ -94,7 +94,7 @@ it("opens relocated technical details for an existing heading fragment", async (
       const path = new URL(route.request().url()).pathname;
       return route.fulfill(
         path === "/assets/site.js"
-          ? { contentType: "text/javascript", body: siteScript }
+          ? { contentType: "text/javascript", body: readBrowserAsset("site") }
           : path === "/assets/styles.css"
             ? { contentType: "text/css", body: styles }
             : { contentType: "text/html", body: renderPublicDoc("reference") },
@@ -142,7 +142,7 @@ it("keeps dense API examples usable and searchable on a small screen", async () 
       if (path === "/assets/site.js")
         return route.fulfill({
           contentType: "text/javascript",
-          body: siteScript,
+          body: readBrowserAsset("site"),
         });
       if (path === "/assets/styles.css")
         return route.fulfill({ contentType: "text/css", body: styles });

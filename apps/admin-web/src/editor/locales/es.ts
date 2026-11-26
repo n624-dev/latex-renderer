@@ -2,6 +2,13 @@ import type { EditorCatalog } from "../messages.js";
 
 export default {
   messages: {
+    reviewConflict: "Revisar el conflicto de edición",
+    saveUnsavedCopy: "Guardar una copia",
+    currentServerFile: "Versión del servidor",
+    applyMyEdits: "Aplicar mis cambios a este archivo",
+    conflictFileMissing: "Este archivo ya no está en el borrador actual. Guarda una copia para conservar los cambios.",
+    conflictReviewHint: "Revisa las líneas modificadas. Al aplicar los cambios, el archivo se sustituye por tu copia editada.",
+    previewReload: "Tras una actualización del servidor, se muestra la vista previa en PNG. Guarda los cambios antes de recargar para volver a la vista PDF.",
     skipContent: "Saltar al contenido",
     appNavigation: "Navegación de la aplicación",
     appRender: "Convertir a PDF",

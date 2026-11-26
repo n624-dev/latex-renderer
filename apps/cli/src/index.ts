@@ -7,6 +7,7 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { RendererClient } from "@latex-renderer/api-client";
 import {
+  acceptedJobRecovery,
   compileProjectPdf,
   downloadJobArtifacts,
   openLocalTarget,
@@ -780,12 +781,15 @@ function normalizeError(error: unknown): {
   code: string;
   message: string;
   status?: number;
+  jobId?: string;
+  lastStatus?: string | null;
 } {
   if (error instanceof AppError)
     return {
       code: error.code,
       message: error.message,
       status: error.status,
+      ...acceptedJobRecovery(error),
     };
   if (error instanceof CommanderError)
     return {

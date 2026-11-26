@@ -11,10 +11,13 @@ ingress:
   #   path: ^/(health(/rendering|/status)?|api/v1/health)$
   #   service: unix:/run/latex-renderer-status/status.sock
   - hostname: latex.example.com
+    path: ^/mcp/relay/local-(operation|revoke|download)(/|$)
+    service: http_status:404
+  - hostname: latex.example.com
     path: ^/\.well-known/oauth-(authorization-server|protected-resource)(/.*)?$
     service: http://127.0.0.1:3104
   - hostname: latex.example.com
-    path: ^/(oauth|mcp)(/.*)?$
+    path: ^/(oauth|mcp)(/|$)
     service: http://127.0.0.1:3104
   - hostname: latex.example.com
     path: ^/auth(/.*)?$

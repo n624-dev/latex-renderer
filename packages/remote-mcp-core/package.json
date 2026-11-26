@@ -19,11 +19,8 @@
   "dependencies": {
     "@latex-renderer/contracts": "workspace:*",
     "@latex-renderer/database": "workspace:*",
+    "@latex-renderer/renderer-core": "workspace:*",
     "@latex-renderer/shared": "workspace:*",
-    "@latex-renderer/zip-validation": "workspace:*",
-    "yazl": "^3.3.1"
-  },
-  "devDependencies": {
-    "@types/yazl": "^3.3.1"
+    "@latex-renderer/zip-validation": "workspace:*"
   }
 }

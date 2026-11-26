@@ -8,7 +8,7 @@ import { createAdminApp } from "../apps/admin-api/src/app.js";
 import { createWebApp } from "../apps/admin-web/src/app.js";
 import { adminScript } from "../apps/admin-web/src/assets/admin-script.js";
 import { styles } from "../apps/admin-web/src/assets/styles.js";
-import { siteScript } from "../apps/admin-web/src/assets/site-script.js";
+import { readBrowserAsset } from "../apps/admin-web/src/browser-assets.js";
 import { createStatusProbe } from "../apps/admin-web/src/status-probe.js";
 import { legacyTestBrowserAuth } from "./helpers/browser-auth.js";
 
@@ -350,7 +350,7 @@ describe("public and administrative Web", () => {
   it("provides light/dark themes using only neutral grayscale colors", async () => {
     expect(styles).toContain(':root[data-theme="dark"]');
     expect(styles).toContain("prefers-color-scheme: dark");
-    expect(siteScript).toContain("latex-renderer-theme");
+    expect(readBrowserAsset("site")).toContain("latex-renderer-theme");
     const colors = [...styles.matchAll(/#([\da-f]{6}|[\da-f]{3})\b/gi)];
     expect(colors.length).toBeGreaterThan(30);
     for (const match of colors) {

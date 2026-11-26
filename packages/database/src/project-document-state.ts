@@ -12,6 +12,28 @@ import { assertSourceWritable } from "./source-lifecycle.js";
 export class ProjectDocumentState {
   constructor(private readonly db: RendererDatabase) {}
 
+  clearDeletedProjectContent(projectId: string): void {
+    this.db.raw.prepare(
+      "UPDATE project_revision_changes SET description='' WHERE project_id=?",
+    ).run(projectId);
+    this.db.raw.prepare(
+      `UPDATE project_pdf_reviews
+         SET review_json=json_set(review_json, '$.checks', (
+           SELECT json_group_array(json_remove(value, '$.note'))
+           FROM json_each(project_pdf_reviews.review_json, '$.checks')
+         ))
+       WHERE project_id=?`,
+    ).run(projectId);
+    this.db.raw.prepare(
+      `DELETE FROM project_document_conditions AS conditions
+       WHERE conditions.project_id=?
+         AND NOT EXISTS (SELECT 1 FROM project_revision_changes AS changes
+           WHERE changes.project_id=conditions.project_id AND changes.conditions_version=conditions.version)
+         AND NOT EXISTS (SELECT 1 FROM project_pdf_reviews AS reviews
+           WHERE reviews.project_id=conditions.project_id AND reviews.conditions_version=conditions.version)`,
+    ).run(projectId);
+  }
+
   get(actor: ProjectActor, projectId: string, version?: number) {
     this.assertOwned(actor, projectId);
     const condition = this.conditions(projectId, version);

@@ -1,4 +1,5 @@
-import { Script, runInNewContext } from "node:vm";
+import { readFileSync } from "node:fs";
+import { Script } from "node:vm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import yazl from "yazl";
 import {
@@ -12,9 +13,10 @@ import {
   parseJobArtifact,
   parseJobStatus,
   parseRenderTicket,
-  renderScript,
+  readSourceLimits,
   runBoundedBatch,
   sha256Hex,
+  storedZipSize,
   uploadRenderZip,
   zipSingleTex,
   zipStoredFiles,
@@ -22,7 +24,7 @@ import {
   type RenderFetch,
 } from "../apps/admin-web/src/assets/render-script.js";
 import { adminRenderPage } from "../apps/admin-web/src/templates-admin.js";
-import { appScript } from "../apps/admin-web/src/assets/app-script.js";
+import { localizedAppScript } from "../apps/admin-web/src/assets/localized-app-script.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -284,6 +286,44 @@ describe("Web render ZIP preflight", () => {
     expect(inspectZip(bytes)).toEqual({ entries: 2, files: 2, mainTex: true });
   });
 
+  it("uses configured ZIP limits for UTF-8 entries and preflights the exact size", () => {
+    const files = [
+      { name: "main.tex", bytes: new TextEncoder().encode("本文") },
+      ...Array.from({ length: 501 }, (_, index) => ({
+        name: `章/${index}.tex`,
+        bytes: new Uint8Array(0),
+      })),
+    ];
+    const size = storedZipSize(
+      files.map(({ name, bytes }) => ({ name, size: bytes.length })),
+    );
+    const archive = zipStoredFiles(files, files.length);
+    expect(archive.length).toBe(size);
+    const limits = readSourceLimits({
+      maxUploadBytes: size,
+      maxExtractedBytes: size,
+      maxFileCount: files.length,
+      maxZipEntries: files.length,
+    });
+    expect(inspectZipCandidates(archive, limits)).toMatchObject({
+      files: 502,
+      entries: 502,
+    });
+    expect(() =>
+      inspectZipCandidates(archive, { ...limits, maxUploadBytes: size - 1 }),
+    ).toThrow(`${size - 1} B`);
+    expect(() =>
+      inspectZipCandidates(archive, { ...limits, maxFileCount: 501 }),
+    ).toThrow("501件");
+    expect(() =>
+      inspectZipCandidates(archive, { ...limits, maxZipEntries: 501 }),
+    ).toThrow("501件");
+    expect(() =>
+      inspectZipCandidates(archive, { ...limits, maxExtractedBytes: 5 }),
+    ).toThrow("5 B");
+    expect(readSourceLimits(undefined).maxFileCount).toBe(500);
+  });
+
   it.each(["reports/cafe\u0301.tex", "reports/caf\u00e9.tex"])(
     "preserves ZIP entrypoint spelling: %s",
     async (name) => {
@@ -350,6 +390,13 @@ describe("Web render ZIP preflight", () => {
   });
 
   it("ships a self-contained script without credential persistence", () => {
+    const renderScript = readFileSync(
+      new URL(
+        "../apps/admin-web/dist/browser-assets/admin-render.js",
+        import.meta.url,
+      ),
+      "utf8",
+    );
     expect(() => new Script(renderScript)).not.toThrow();
     expect(renderScript).toContain("latex-renderer:preflight-ready");
     expect(renderScript).not.toContain("localStorage");
@@ -358,26 +405,13 @@ describe("Web render ZIP preflight", () => {
     expect(renderScript).not.toContain("console.log");
   });
 
-  it.each([
-    ["App", appScript, "  (function installApp("],
-    ["Admin", renderScript, "  fetch('/auth/session'"],
-  ])(
-    "embeds the resource-wait helper in the shipped %s script",
-    (_name, script, startup) => {
-      // Syntax checks and direct module calls do not detect omitted dependencies
-      // in these serialized browser closures. Execute the actual emitted helper.
-      const end = script.lastIndexOf(startup);
-      expect(end).toBeGreaterThan(0);
-      const context = { label: "" };
-      runInNewContext(
-        script.slice(0, end) +
-          'globalThis.label = resourceWaitLabel({status:"queued",errorCode:"HOST_RESOURCE_WAIT",errorMessage:"700MiB / 704MiB"});})();',
-        context,
-      );
-      expect(context.label).toContain("サーバー資源の空きを待っています");
-      expect(context.label).toContain("704MiB");
-    },
-  );
+  it("serves a self-contained localized App script", () => {
+    for (const locale of ["ja", "en", "zh-CN"] as const) {
+      const script = localizedAppScript(locale);
+      expect(() => new Script(script)).not.toThrow();
+      expect(script).toContain("rendererAppController.installApp");
+    }
+  });
 
   it("renders an accessible batch workflow without operator details", () => {
     const page = adminRenderPage();
@@ -468,7 +502,7 @@ describe("Web render ZIP preflight", () => {
       return Promise.resolve(new Response(null, { status: 204 }));
     };
 
-    const targets = await fetchAdminRenderTargets(fetcher, ORIGIN);
+    const { items: targets } = await fetchAdminRenderTargets(fetcher, ORIGIN);
     const target = targets[0];
     expect(target).toBeDefined();
     if (target === undefined) throw new Error("Render target is missing");

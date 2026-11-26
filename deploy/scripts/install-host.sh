@@ -17,11 +17,7 @@ getent group latex-renderer >/dev/null || groupadd --system latex-renderer
 id latex-renderer >/dev/null 2>&1 || useradd --system --gid latex-renderer --home-dir /var/lib/latex-renderer --shell /usr/sbin/nologin latex-renderer
 id latex-renderer-web >/dev/null 2>&1 || useradd --system --gid latex-renderer --home-dir /nonexistent --shell /usr/sbin/nologin latex-renderer-web
 id latex-render-worker >/dev/null 2>&1 || useradd --system --gid latex-renderer --create-home --home-dir /var/lib/latex-render-worker --shell /bin/bash latex-render-worker
-# Debian does not allocate subordinate IDs for system users. Rootless Docker
-# requires a dedicated, non-overlapping range; the regular ubuntu user owns
-# 100000-165535 on this host, so reserve the next 65536 IDs for the worker.
-grep -q '^latex-render-worker:' /etc/subuid || usermod --add-subuids 165536-231071 latex-render-worker
-grep -q '^latex-render-worker:' /etc/subgid || usermod --add-subgids 165536-231071 latex-render-worker
+flock /run/lock/latex-renderer-worker-subid.lock /usr/local/bin/node "$source_root/deploy/scripts/worker-subordinate-ids.mjs"
 id latex-renderer-backup >/dev/null 2>&1 || useradd --system --gid latex-renderer --home-dir /var/backups/latex-renderer --shell /usr/sbin/nologin latex-renderer-backup
 id latex-renderer-update >/dev/null 2>&1 || useradd --system --gid latex-renderer --home-dir /var/lib/latex-renderer/update-manager --shell /usr/sbin/nologin latex-renderer-update
 id cloudflared >/dev/null 2>&1 || useradd --system --home-dir /var/lib/cloudflared --shell /usr/sbin/nologin cloudflared

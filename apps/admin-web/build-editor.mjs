@@ -27,6 +27,28 @@ for (const directory of ["cmaps", "standard_fonts", "iccs", "wasm"]) {
     recursive: true,
   });
 }
+const browserBuild = {
+  bundle: true,
+  minify: true,
+  platform: "browser",
+  format: "iife",
+  target: ["es2022"],
+  legalComments: "eof",
+};
+await build({
+  ...browserBuild,
+  entryPoints: ["admin-render", "login", "site"].map((name) => ({
+    in: join(root, "src/browser", name + ".ts"),
+    out: name,
+  })),
+  outdir: join(root, "dist/browser-assets"),
+});
+await build({
+  ...browserBuild,
+  entryPoints: [join(root, "src/assets/app-script.ts")],
+  outfile: join(root, "dist/browser-assets/app.js"),
+  globalName: "rendererAppController",
+});
 const editor = join(root, "src", "editor");
 const localeSources = join(editor, "locales");
 const locales = (await readdir(localeSources)).filter((name) =>

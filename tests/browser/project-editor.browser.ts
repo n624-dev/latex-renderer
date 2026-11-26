@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { localizedAppScript } from "../../apps/admin-web/src/assets/localized-app-script.js";
 import { once } from "node:events";
 import { createServer } from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -15,17 +15,7 @@ const projectId = `project_${"a".repeat(32)}`;
 const jobId = `job_${"1".repeat(32)}`;
 const editorPath = `/app/projects/${projectId}/edit/`;
 const draftPath = `/app/api/v1/projects/${projectId}/draft`;
-const appScript = execFileSync(
-  process.execPath,
-  [
-    "--input-type=module",
-    "--eval",
-    "const module = await import(process.argv[1]); process.stdout.write(module.appScript);",
-    new URL("../../apps/admin-web/dist/assets/app-script.js", import.meta.url)
-      .href,
-  ],
-  { encoding: "utf8", timeout: 10000 },
-);
+const appScript = localizedAppScript("ja");
 let browser: Browser | undefined;
 
 beforeAll(async () => {
@@ -190,7 +180,9 @@ describe("Project editor", () => {
         running = false,
         posts = 0,
         replacements = 0,
+        retiredPdfAssets = false,
         locale = "ja";
+      let previewGate: Promise<void> | undefined;
       const draft = () => ({
         version,
         entrypoint: "main.tex",
@@ -214,6 +206,8 @@ describe("Project editor", () => {
           path = url.pathname;
         observed.push(path);
         const json = (value: unknown) => route.fulfill({ json: value });
+        if (retiredPdfAssets && path.startsWith(assetRoot + "pdf/"))
+          return route.fulfill({ status: 404 });
         if (path === "/app/assets/app.js")
           return route.fulfill({
             body: appScript,
@@ -254,7 +248,11 @@ describe("Project editor", () => {
               version: number;
               text: string;
             };
-            expect(data.version).toBe(version);
+            if (data.version !== version)
+              return route.fulfill({
+                status: 409,
+                json: { error: { code: "DRAFT_VERSION_CONFLICT", message: "Draft changed" } },
+              });
             text = data.text;
             version++;
             return json(draft());
@@ -272,8 +270,16 @@ describe("Project editor", () => {
                 posts === 0 ? null : { jobId, version: 1, pageCount: 2 },
             });
           }
+          const requested = request.postDataJSON() as { version: number };
+          const held = previewGate;
           posts++;
-          return json({ jobId, version });
+          if (held) {
+            await held;
+            return route.fulfill({ status: 503, json: {
+              error: { code: "TEMPORARY_FAILURE", message: "Preview unavailable" },
+            } });
+          }
+          return json({ jobId, version: requested.version });
         }
         if (path === `/app/api/v1/jobs/${jobId}`)
           return json({
@@ -490,9 +496,8 @@ describe("Project editor", () => {
         origin + editorPath + "?revision=revision_" + "b".repeat(32);
       page.once("dialog", (dialog) => void dialog.dismiss());
       await page.goto(savedRevision);
-      await expect
-        .poll(() => page.locator(".cm-content").textContent())
-        .toContain("Edited");
+      await page.locator(".cm-content").filter({ hasText: "Edited" })
+        .waitFor({ timeout: 10_000 });
       expect(replacements).toBe(0);
 
       page.once("dialog", (dialog) => void dialog.accept());
@@ -551,6 +556,55 @@ describe("Project editor", () => {
         ),
       ).toBeLessThanOrEqual(0);
       expect(posts).toBe(2);
+
+      // A second editor saves the same file while this tab has a draft open.
+      version++;
+      text = "Server-side edit";
+      await source.focus();
+      await page.keyboard.insertText("Pending local edit");
+      const review = page.locator("#editor-review-conflict");
+      await review.waitFor({ state: "visible" });
+      await review.click();
+      await expect.poll(() => page.locator("#editor-conflict-server").textContent()).toContain("Server-side edit");
+      await expect.poll(() => page.locator("#editor-conflict-local").textContent()).toContain("Pending local edit");
+      await page.locator("#editor-conflict-apply").click();
+      await review.waitFor({ state: "hidden" });
+      expect(text).toContain("Pending local edit");
+
+      // Keep unsaved source open while an old PDF module stops being served.
+      retiredPdfAssets = true;
+      await source.focus();
+      await page.keyboard.insertText("Keep this tab");
+      await page.getByRole("button", { name: "PDF", exact: true }).click();
+      await openOptions("preview");
+      await page.locator("#editor-preview-mode").selectOption("pdf");
+      await page.keyboard.press("Escape");
+      await page.locator("#editor-preview-notice").waitFor({ state: "visible" });
+      await expect.poll(() => page.locator("#editor-canvas").getAttribute("aria-label")).toBe("PNG 1 / 2");
+      expect(await source.textContent()).toContain("Keep this tab");
+
+      // Autosave must keep working while the preview request is held open.
+      const initialPosts = posts;
+      let resumePreview: (() => void) | undefined;
+      previewGate = new Promise<void>((resolve) => { resumePreview = resolve; });
+      try {
+        await openOptions("settings");
+        await page.locator("#editor-auto").check();
+        await page.keyboard.press("Escape");
+        await expect.poll(() => posts, { timeout: 5_000 }).toBe(initialPosts + 1);
+        await page.locator('button[data-panel="source"]').click();
+        await source.focus();
+        await page.keyboard.insertText("Save before the preview reply");
+        await expect.poll(() => source.textContent())
+          .toContain("Save before the preview reply");
+        await expect.poll(() => text, { timeout: 5_000 })
+          .toContain("Save before the preview reply");
+        expect(posts).toBe(initialPosts + 1);
+      } finally {
+        previewGate = undefined;
+        resumePreview?.();
+      }
+      await expect.poll(() => posts, { timeout: 5_000 }).toBe(initialPosts + 2);
     } catch (error) {
       throw new Error(
         `${String(error)}\n${JSON.stringify({

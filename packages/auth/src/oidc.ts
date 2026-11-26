@@ -6,6 +6,7 @@ import {
   type JWTPayload,
 } from "jose";
 import { AppError } from "@latex-renderer/shared";
+import { safeLoginReturnTo as safeReturnTo } from "@latex-renderer/shared/login-redirect";
 import {
   discoverServerOidcProvider,
   serverOidcDiscoveryUrl,
@@ -342,19 +343,7 @@ export class OidcClient {
   }
 }
 
-export function safeReturnTo(value: string): string {
-  if (
-    value.length > 2048 ||
-    !value.startsWith("/") ||
-    value.startsWith("//") ||
-    value.includes("\\") ||
-    hasControlCharacters(value)
-  )
-    return "/app/";
-  const url = new URL(value, "https://return.invalid");
-  if (url.origin !== "https://return.invalid") return "/app/";
-  return `${url.pathname}${url.search}${url.hash}`;
-}
+export { safeReturnTo };
 
 function hasControlCharacters(value: string): boolean {
   for (const character of value) {

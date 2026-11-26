@@ -3,6 +3,7 @@ import type { AuthenticatedServiceAccount } from "@latex-renderer/auth";
 import {
   sourceRequestExpiresAt,
   assertSourceWritable,
+  assertUserStorageQuota,
 } from "@latex-renderer/database";
 import { AppError, nowIso } from "@latex-renderer/shared";
 import type { InternalApiDependencies } from "../types.js";
@@ -120,7 +121,12 @@ export class SourceTicketsService {
     try {
       this.deps.database.transaction(() => {
         assertSourceWritable(this.deps.database);
-        this.assertStorage(actor.userId, input.size);
+        assertUserStorageQuota(
+          this.deps.database,
+          actor.userId,
+          this.deps.maxUserStorageBytes,
+          input.size,
+        );
         this.deps.database.sources.insertReserved({
           id: sourceId,
           ownerUserId: actor.userId,
@@ -184,19 +190,6 @@ export class SourceTicketsService {
     };
   }
 
-  private assertStorage(userId: string, size: number): void {
-    const max = this.deps.database.settings.value(
-        "max_user_storage_bytes",
-        this.deps.maxUserStorageBytes,
-      ),
-      used = this.deps.database.jobs.storageUsageForUser(userId);
-    if (size > max - used)
-      throw new AppError(
-        "USER_STORAGE_QUOTA",
-        "User storage quota is exhausted",
-        429,
-      );
-  }
   private async issueExisting(
     actor: AuthenticatedServiceAccount,
     sourceId: string,

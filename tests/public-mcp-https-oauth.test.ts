@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
-import type { HttpsJsonClient } from "../apps/public-mcp-gateway/src/https-json.js";
+import { HttpsResponseError, type HttpsJsonClient } from "../apps/public-mcp-gateway/src/https-json.js";
+import { createHttpsDispatch } from "../apps/public-mcp-gateway/src/https-dispatch.js";
+import { HttpsCredentialKeys } from "../apps/public-mcp-gateway/src/https-credential-keys.js";
+import { SqliteConnectionStore } from "../apps/public-mcp-gateway/src/sqlite-connections.js";
 import type { RendererHttpsConnection } from "../apps/public-mcp-gateway/src/renderer-https-discovery.js";
 import { RendererHttpsOAuth } from "../apps/public-mcp-gateway/src/renderer-https-oauth.js";
 
@@ -25,7 +28,51 @@ const approved = {
 };
 
 describe("downstream HTTPS OAuth", () => {
+  it.each([true, false])("refreshes after a stale access token and only repeats reads (%s)", async (readOnly) => {
+    const store = new SqliteConnectionStore(":memory:");
+    try {
+      store.putVerifiedInstance({ id: "instance", publicKey: "fixture" });
+      const profile = store.profileFor("instance", "user");
+      const transport = store.addTransport("instance", { kind: "https", mcpUrl: connection.resource });
+      const key = Buffer.alloc(32, 4);
+      const keys = new HttpsCredentialKeys("test", new Map([["test", key]]));
+      const authorization = store.createAuthorization(
+        {
+          profileId: profile.id, transportId: transport.id, localGrantId: "fixture",
+          expiresAt: 120_000, scopes: ["mcp:read", "mcp:render"],
+        },
+        0,
+        (id) => keys.seal(id, {
+          clientId, accessToken: "stale-token", refreshToken: "test-refresh",
+          scopes: ["mcp:read", "mcp:render"], expiresAt: 50_000,
+        }),
+      );
+      const request = vi.fn<HttpsJsonClient>()
+        .mockRejectedValueOnce(new HttpsResponseError(401))
+        .mockResolvedValueOnce({ ...approved, scope: "mcp:read mcp:render" })
+        .mockResolvedValueOnce({ accepted: true });
+      const { dispatch } = createHttpsDispatch({
+        store, keys, request, maxResponseBytes: 8192, timeoutMs: 2000, clock: () => 1000,
+      });
+      const outcome = dispatch({
+        authorization, transport, signal,
+        operation: { method: "tools/call", name: readOnly ? "get_renderer_capabilities" : "create_project", arguments: {} },
+      });
+      if (readOnly) {
+        await expect(outcome).resolves.toEqual({ accepted: true });
+        expect(request.mock.calls[2]?.[0].bearer).toBe(approved.access_token);
+      } else {
+        await expect(outcome).rejects.toMatchObject({ code: "outcome_unknown" });
+        expect(request).toHaveBeenCalledTimes(2);
+      }
+      expect(request.mock.calls[1]?.[0].url.href).toBe(connection.tokenEndpoint);
+      expect(store.authorization(authorization.id)?.reauthRequired).toBe(false);
+    } finally {
+      store.close();
+    }
+  });
   it("registers the gateway callback and exchanges a bound code for scoped credentials", async () => {
+    let now = 0;
     const request = vi
       .fn<HttpsJsonClient>()
       .mockResolvedValueOnce({
@@ -33,8 +80,11 @@ describe("downstream HTTPS OAuth", () => {
         redirect_uris: [redirect],
         token_endpoint_auth_method: "none",
       })
-      .mockResolvedValueOnce(approved);
-    const oauth = new RendererHttpsOAuth(connection, 8192, request, () => 0);
+      .mockImplementationOnce(() => {
+        now = 30_000;
+        return Promise.resolve(approved);
+      });
+    const oauth = new RendererHttpsOAuth(connection, 8192, request, () => now);
     expect(await oauth.registerClient(redirect, signal)).toBe(clientId);
     const attempt = oauth.authorize(clientId, redirect, [
       "mcp:read",

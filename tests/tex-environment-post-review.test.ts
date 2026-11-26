@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { runInNewContext } from "node:vm";
+import { describe, expect, it, vi } from "vitest";
 import { adminScript } from "../apps/admin-web/src/assets/admin-script.js";
 
 const read = (path: string): string => readFileSync(path, "utf8");
@@ -67,9 +68,9 @@ describe("post-review TeX environment regressions", () => {
       'activationJournalPath = join(stateRoot, "activation-journal.json")',
     );
     expect(manager).toContain(
-      "const activationRecovery = await recoverPendingActivation()",
+      "const interruptedActivation = await readActivationJournal()",
     );
-    expect(manager).toContain("async function recoverPendingActivation()");
+    expect(manager).toContain("async function recoverPendingActivation(journal)");
     expect(manager).toContain("async function activateAndPersistState");
     const journalWrite = manager.search(
       /await writeAtomic\(\s*activationJournalPath/,
@@ -82,8 +83,65 @@ describe("post-review TeX environment regressions", () => {
     expect(journalWrite).toBeLessThan(rendererWrite);
     expect(manager).toContain("journal.nextState");
     expect(manager).toContain("journal.previousState");
-    expect(manager).toContain("Image activation was recovered and committed");
+    expect(manager).toContain("Image activation was interrupted; the previous Runtime was restored");
   });
+
+  it.each(["previous", "candidate"] as const)(
+    "verifies live consumers before closing a replayed rollback (%s env)",
+    async (configured) => {
+      const manager = read("deploy/scripts/image-manager.mjs");
+      const functionSource = /async function recoverPendingActivation\(journal\) \{[\s\S]*?\n\}/.exec(manager)?.[0];
+      if (!functionSource) throw new Error("Missing Runtime recovery function");
+      const previous = `sha256:${"1".repeat(64)}`;
+      const candidate = `sha256:${"2".repeat(64)}`;
+      const id = "imgop_recovery_test";
+      const previousState = { current: { runtimeImageId: previous } };
+      const journal = {
+        oldEnv: `RENDERER_IMAGE=${previous}\n`,
+        newImageId: candidate,
+        previousState,
+        operationId: id,
+      };
+      let env = `RENDERER_IMAGE=${configured === "previous" ? previous : candidate}\nKEEP_SETTING=updated\n`;
+      const actions: string[] = [];
+      const context = {
+        rendererEnv: "renderer.env",
+        state: { current: { runtimeImageId: candidate } },
+        readFile: () => env,
+        rendererImageFromEnv: (value: string) => value.split("\n")[0]?.slice("RENDERER_IMAGE=".length),
+        rendererEnvWithImage: (value: string, image: string) => value.replace(/^RENDERER_IMAGE=.*$/m, `RENDERER_IMAGE=${image}`),
+        dockerCapture: vi.fn(),
+        collectInventory: vi.fn(),
+        writeAtomic: (_path: string, value: string) => {
+          actions.push("restore configuration");
+          env = value;
+        },
+        writeInventory: () => actions.push("restore inventory"),
+        restartRendererConsumers: () => actions.push("restart consumers"),
+        verifyRendererConsumers: vi.fn().mockRejectedValueOnce(new Error("consumer still uses candidate")),
+        recoverInterruptedOperation: (operationId: string) => actions.push(`record failure ${operationId}`),
+        clearActivationJournal: () => actions.push("close journal"),
+      };
+      const recover = runInNewContext(`(${functionSource})`, context) as (value: typeof journal) => Promise<void>;
+      await expect(recover(journal)).rejects.toThrow("consumer still uses candidate");
+      expect(context.dockerCapture).toHaveBeenCalledWith(["image", "inspect", previous]);
+      expect(context.collectInventory).toHaveBeenCalledWith(previous, undefined);
+      expect(context.verifyRendererConsumers).toHaveBeenCalledWith(previous);
+      expect(env).toBe(`RENDERER_IMAGE=${previous}\nKEEP_SETTING=updated\n`);
+      expect(actions).toEqual([
+        ...(configured === "candidate" ? ["restore configuration"] : []),
+        "restore inventory", "restart consumers",
+      ]);
+      expect(context.state.current.runtimeImageId).toBe(candidate);
+
+      actions.length = 0;
+      await expect(recover(journal)).resolves.toBeUndefined();
+      expect(context.state).toEqual(previousState);
+      expect(actions).toEqual([
+        "restore inventory", "restart consumers", `record failure ${id}`, "close journal",
+      ]);
+    },
+  );
 
   it("preserves existing legacy language choices only during an upgrade migration", () => {
     const prepare = read("deploy/scripts/prepare-host.sh");

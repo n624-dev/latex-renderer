@@ -19,6 +19,7 @@ import {
   agentRevocationSchema,
   connectionApplicationId,
   connectionSchema,
+  connectionRetentionSchema,
   connectionSchemaVersion,
 } from "./sqlite-schema.js";
 import { SqliteOAuthTokens } from "./sqlite-oauth-tokens.js";
@@ -30,10 +31,12 @@ import {
   samePairingScopes,
   SqliteAgentPairing,
 } from "./sqlite-agent-pairing.js";
-import type {
-  DcrClient,
-  DcrClientRegistration,
-  DcrClientStore,
+import {
+  dcrClientRetentionMs,
+  expiredConnectionRetentionMs,
+  type DcrClient,
+  type DcrClientRegistration,
+  type DcrClientStore,
 } from "./oauth-clients.js";
 
 interface ProfileRow {
@@ -88,8 +91,9 @@ export class SqliteConnectionStore
           version === connectionSchemaVersion
         )
           return;
-        if (kind === connectionApplicationId && version === 1) {
-          this.#database.exec(agentRevocationSchema);
+        if (kind === connectionApplicationId && (version === 1 || version === 2)) {
+          if (version === 1) this.#database.exec(agentRevocationSchema);
+          this.#database.exec(connectionRetentionSchema);
           this.#database.exec(`PRAGMA user_version=${connectionSchemaVersion}`);
           return;
         }
@@ -101,6 +105,7 @@ export class SqliteConnectionStore
           throw new Error("Unsupported public MCP gateway database");
         this.#database.exec(connectionSchema);
         this.#database.exec(agentRevocationSchema);
+        this.#database.exec(connectionRetentionSchema);
         this.#database.exec(
           `PRAGMA application_id=${connectionApplicationId}; PRAGMA user_version=${connectionSchemaVersion}`,
         );
@@ -620,6 +625,12 @@ export class SqliteConnectionStore
     `,
         )
         .run(now, id).changes === 1;
+    this.#database.prepare(
+      `UPDATE oauth_dcr_clients SET last_authorization_end = MAX(last_authorization_end, (
+          SELECT MIN(expires_at, COALESCE(revoked_at, expires_at)) FROM authorizations WHERE id = ?
+        ))
+        WHERE id = (SELECT oauth_client_id FROM authorizations WHERE id = ?)`,
+    ).run(id, id);
     this.#database
       .prepare("DELETE FROM https_credentials WHERE authorization_id = ?")
       .run(id);
@@ -668,7 +679,41 @@ export class SqliteConnectionStore
       ]) {
         this.#database.prepare(statement).run(now);
       }
+      const removed = this.#database.prepare(
+        `DELETE FROM authorizations WHERE id IN (
+          SELECT id FROM authorizations WHERE expires_at <= ? ORDER BY expires_at, id LIMIT 200
+        ) RETURNING profile_id, transport_id`,
+      ).all(now - expiredConnectionRetentionMs) as { profile_id: string; transport_id: string }[];
+      const clearProfile = this.#database.prepare(
+        `UPDATE profiles SET display_name=NULL WHERE id=?
+          AND NOT EXISTS (SELECT 1 FROM authorizations WHERE profile_id=profiles.id)`,
+      );
+      const removeTransport = this.#database.prepare(
+        `DELETE FROM transports WHERE id=? AND kind='https'
+          AND NOT EXISTS (SELECT 1 FROM authorizations WHERE transport_id=transports.id)`,
+      );
+      for (const row of removed) {
+        clearProfile.run(row.profile_id);
+        removeTransport.run(row.transport_id);
+      }
+      this.#pruneDcrClients(now);
     });
+  }
+
+  #pruneDcrClients(now: number): void {
+    const cutoff = now - dcrClientRetentionMs;
+    this.#database.prepare(
+      `DELETE FROM oauth_dcr_clients AS client
+        WHERE client.created_at <= ? AND client.last_authorization_end <= ?
+          AND NOT EXISTS (
+            SELECT 1 FROM authorizations
+            WHERE oauth_client_id = client.id
+              AND MIN(expires_at, COALESCE(revoked_at, expires_at)) > ?
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM oauth_consents WHERE client_id = client.id AND expires_at > ?
+          )`,
+    ).run(cutoff, cutoff, cutoff, now);
   }
 
   claimClientAssertion(hash: string, expiresAt: number, now: number): boolean {
@@ -698,24 +743,28 @@ export class SqliteConnectionStore
   registerDcrClient(
     registration: DcrClientRegistration,
     capacity: number,
+    now: number,
   ): DcrClient | undefined {
-    if (!Number.isSafeInteger(capacity) || capacity < 1)
+    if (!Number.isSafeInteger(capacity) || capacity < 1 || !Number.isSafeInteger(now))
       throw new Error("A DCR client capacity is required");
     const id = newId("gateway_client");
-    const inserted =
-      this.#database
+    const inserted = this.#transaction(() => {
+      this.#pruneDcrClients(now);
+      return this.#database
         .prepare(
           `
-      INSERT INTO oauth_dcr_clients (id, display_name, redirect_uris)
-      SELECT ?, ?, ? WHERE (SELECT COUNT(*) FROM oauth_dcr_clients) < ?
+      INSERT INTO oauth_dcr_clients (id, display_name, redirect_uris, created_at)
+      SELECT ?, ?, ?, ? WHERE (SELECT COUNT(*) FROM oauth_dcr_clients) < ?
     `,
         )
         .run(
           id,
           registration.clientName,
           JSON.stringify(registration.redirectUris),
+          now,
           capacity,
         ).changes === 1;
+    });
     return inserted ? { id, ...registration } : undefined;
   }
 

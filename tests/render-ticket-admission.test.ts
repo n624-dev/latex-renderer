@@ -6,6 +6,7 @@ import type { AuthenticatedServiceAccount } from "@latex-renderer/auth";
 import { ApiKeyService } from "@latex-renderer/auth";
 import { RendererDatabase } from "@latex-renderer/database";
 import { TicketService } from "@latex-renderer/ticket";
+import { AdminApiKeysService } from "../apps/admin-api/src/services/api-keys.js";
 import { createInternalApp } from "../apps/internal-api/src/app.js";
 import { RenderTicketsService } from "../apps/internal-api/src/services/render-tickets.js";
 
@@ -130,6 +131,71 @@ describe("render ticket admission", () => {
       expect(database.jobs.countActive()).toBe(2);
     },
   );
+
+  it("keeps a queued Job and its replay accessible only to the active successor of its original key", async () => {
+    const f = fixture({ maxStorage: 100, maxQueue: 20 });
+    const { database, service, tickets, apiKeys } = f;
+    const original = insertKey(f, "service");
+    const independent = insertKey(f, "service");
+    const sourceId = readySource(database);
+    const projectId = `project_${"1".repeat(32)}`;
+    const revisionId = `revision_${"2".repeat(32)}`;
+    const timestamp = new Date().toISOString();
+    database.projects.insert({ id: projectId, ownerUserId: "user", displayName: "Shared", timestamp });
+    database.projects.insertRevision({
+      id: revisionId, projectId, sourceId, displayName: "Revision",
+      originalFilename: "main.tex", entrypoint: "main.tex", timestamp,
+    });
+    const input = { sourceId, project: { projectId, revisionId } };
+    const idempotencyKey = "rotation-in-progress-123456789";
+    const created = await service.create(apiKeys.authenticate(original.token), input, idempotencyKey);
+    const { jobId, jobTicket } = created.value;
+    expect(database.jobs.getVisible(jobId)?.status).toBe("queued");
+    const actions = new AdminApiKeysService({ database, apiKeys });
+    const owner = { type: "user", id: "user", userId: "user", role: "owner" } as const;
+    const rotated = actions.rotate(owner, original.id);
+    const history = async (token: string) => {
+      const response = await f.app.request(`/internal/v1/projects/${projectId}/revisions/${revisionId}/jobs`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      expect(response.status).toBe(200);
+      return response.json();
+    };
+
+    expect(database.jobs.getVisible(jobId)?.api_key_id).toBe(original.id);
+    await expect(history(independent.token)).resolves.toMatchObject({
+      items: [{ id: jobId, detailAccess: "different_connection" }],
+    });
+    await expect(history(rotated.apiKey)).resolves.toMatchObject({
+      items: [{ id: jobId, detailAccess: "available" }],
+    });
+    expect(database.worker.subjectState(jobId)).toMatchObject({
+      user_status: "active", sa_status: "active", revoked_at: null,
+    });
+    expect(() => actions.rotate(owner, original.id)).toThrow();
+    expect(() => apiKeys.authenticate(original.token)).toThrow(/revoked/);
+    await expect(tickets.verify(jobTicket, "status", jobId))
+      .rejects.toMatchObject({ code: "TICKET_SUBJECT_INACTIVE" });
+    await expect(service.renew(apiKeys.authenticate(independent.token), jobId))
+      .rejects.toMatchObject({ code: "JOB_NOT_FOUND" });
+    const successor = apiKeys.authenticate(rotated.apiKey);
+    const replayed = await service.create(successor, input, idempotencyKey);
+    expect(replayed).toMatchObject({ status: 200, value: { jobId } });
+    await expect(tickets.verify(replayed.value.jobTicket, "status", jobId))
+      .resolves.toMatchObject({ api_key_id: rotated.id });
+
+    const latest = actions.rotate(owner, rotated.id);
+    const access = await service.renew(apiKeys.authenticate(latest.apiKey), jobId);
+    await expect(tickets.verify(access.jobTicket, "download", jobId))
+      .resolves.toMatchObject({ api_key_id: latest.id });
+    await expect(tickets.verify(replayed.value.jobTicket, "status", jobId))
+      .rejects.toMatchObject({ code: "TICKET_SUBJECT_INACTIVE" });
+    actions.revoke(owner, latest.id);
+    await expect(tickets.verify(access.jobTicket, "status", jobId))
+      .rejects.toMatchObject({ code: "TICKET_SUBJECT_INACTIVE" });
+    expect(database.worker.subjectState(jobId)).toBeUndefined();
+    expect(database.apiKeys.activeJobIdentity(original.id, new Date().toISOString())).toBeUndefined();
+  });
 
   it("rejects another key's SVG retry before mutating stages, audit or idempotency", async () => {
     const f = fixture({ maxStorage: 100, maxQueue: 20 }),

@@ -269,6 +269,9 @@ export const projectJobSummarySchema = z
     errorCode: z.string().nullable(),
     outputs: z.array(renderOutputSchema),
     engine: renderEngineSchema.optional(),
+    detailAccess: z.enum(["available", "different_connection"])
+      .describe("Whether this connection can open the Job details. A shared history row may be visible even when the Job belongs to another connection.")
+      .optional(),
   })
   .loose();
 export const projectRevisionJobsPageSchema = z.object({

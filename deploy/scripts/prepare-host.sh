@@ -53,8 +53,7 @@ id latex-renderer-update >/dev/null 2>&1 || useradd --system --gid latex-rendere
   --home-dir /var/lib/latex-renderer/update-manager --shell /usr/sbin/nologin \
   latex-renderer-update
 
-grep -q "^$worker_user:" /etc/subuid || usermod --add-subuids 165536-231071 "$worker_user"
-grep -q "^$worker_user:" /etc/subgid || usermod --add-subgids 165536-231071 "$worker_user"
+flock /run/lock/latex-renderer-worker-subid.lock /usr/local/bin/node "$source_root/deploy/scripts/worker-subordinate-ids.mjs"
 
 install -d -o root -g root -m 0755 /opt/latex-renderer/releases
 install -d -o root -g root -m 0711 /opt/latex-renderer/update-staging

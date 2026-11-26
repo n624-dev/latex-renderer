@@ -182,6 +182,18 @@ Uploaded PDFs and their report files are temporary and kept outside saved
 Project data. Verify schema 29 after startup. To downgrade, restore the
 matching application, database, and storage from a verified recovery point.
 
+## Migration 030: Draft PDF positioning inputs
+
+Stores the paths and Sources used by a Draft PDF so its SyncTeX data can be resolved after the Draft changes. Existing PDF artifacts remain available. A PDF with no retained inputs cannot provide a verified source position from those inputs.
+
+## Migration 031: PDF inspection retry tracking
+
+Records the attempt count and schedule for temporary PDF inspection failures. Expired input cannot be retried. Existing inspection results remain tied to the PDF that was inspected.
+
+## Migration 032: API key rotation
+
+A routine rotation performed after this migration links the replacement key to the original application's Job history. A queued Job can continue if the active replacement is still authorized to render. Revocation invalidates the revoked key and its tickets. Keys issued independently or rotated before this migration retain their existing isolation.
+
 ## Migration 022: PDF-bound preview requests
 
 The same migration adds bounded `source_trees` and `source_tree_readers` for

@@ -1,71 +1,31 @@
 import { createConnection, createServer } from "node:net";
 import { fstatSync } from "node:fs";
 import { assertUnixListener } from "./activation-socket.mjs";
-import { boundedIntegerEnvironment } from "./environment.mjs";
+import { workerIdleConfiguration } from "./environment.mjs";
+export { workerIdleConfiguration } from "./environment.mjs";
 import { setImmediate as nextIoTurn } from "node:timers/promises";
 import { performance } from "node:perf_hooks";
 import { setTimeout, clearTimeout } from "node:timers";
+import demandQueries from "./worker-demand-queries.json" with { type: "json" };
 
 export const WORKER_WAKE_PATH = "/run/latex-renderer-worker/wake.sock";
 
-export function workerIdleConfiguration(environment = process.env) {
-  const enabled = environment.WORKER_IDLE_ENABLED ?? "false";
-  if (!["true", "false"].includes(enabled))
-    throw new Error("WORKER_IDLE_ENABLED must be true or false");
-  return {
-    enabled: enabled === "true",
-    timeoutMs:
-      1000 *
-      boundedIntegerEnvironment(
-        environment,
-        "WORKER_IDLE_TIMEOUT_SECONDS",
-        900,
-        30,
-        86400,
-      ),
-  };
-}
-
 // The database, including cleanup leases, is authoritative. Notifications only
 // reduce latency; neither a lost hint nor an old heartbeat can erase work.
-export function workerHasDemand(database) {
-  for (const table of ["pdf_inspections", "document_probes"])
-    if (
-      database
-        .prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?")
-        .get(table) &&
-      database
-        .prepare(
-          `SELECT 1 FROM ${table}
-        WHERE status='running' OR (status='queued' AND expires_at>?) LIMIT 1`,
-        )
-        .get(new Date().toISOString())
-    )
-      return true;
-  if (
-    database
-      .prepare(
-        "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='pdf_inspection_uploads'",
-      )
-      .get() &&
-    database
-      .prepare(
-        "SELECT 1 FROM pdf_inspection_uploads WHERE expires_at<=? LIMIT 1",
-      )
-      .get(new Date().toISOString())
-  )
-    return true;
-  return (
-    database
-      .prepare(
-        `SELECT
-    EXISTS(SELECT 1 FROM jobs WHERE status IN ('queued','validating','running') OR lease_owner IS NOT NULL)
-    OR EXISTS(SELECT 1 FROM job_preview_requests WHERE status IN ('queued','running') OR lease_owner IS NOT NULL)
-    OR EXISTS(SELECT 1 FROM source_tree_readers)
-    OR EXISTS(SELECT 1 FROM source_trees WHERE status IN ('building','deleting')) AS pending`,
-      )
-      .get().pending === 1
+export function workerHasDemand(
+  database,
+  { includeMaintenance = true, now = new Date().toISOString() } = {},
+) {
+  const table = database.prepare(
+    "SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?",
   );
+  for (const { kind, optionalTable, query } of demandQueries) {
+    if (kind === "maintenance" && !includeMaintenance) continue;
+    if (optionalTable && !table.get(optionalTable)) continue;
+    const parameters = query.includes("?") ? [now] : [];
+    if (database.prepare(query).get(...parameters) !== undefined) return true;
+  }
+  return false;
 }
 
 export function notifyWorker({

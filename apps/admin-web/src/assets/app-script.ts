@@ -1,21 +1,22 @@
 import type { DisplayLocale } from "@latex-renderer/shared/locale";
-import { appCatalog, type AppMessage } from "../app-messages.js";
 import {
-  browserLocaleScript,
-  synchronizeDisplayLocale,
-} from "../browser-locale.js";
+  DEFAULT_RESOURCE_LIMITS,
+  type ResourceLimits,
+} from "@latex-renderer/shared/resource-limits";
+import type { AppMessage } from "../app-messages.js";
+import { english } from "../app-english.js";
+import { synchronizeDisplayLocale } from "../browser-locale.js";
 import {
-  JOB_STATUSES,
-  crc32,
+  formatBytes,
   inspectZipCandidates,
-  parseJobArtifact,
   parseJobStatus,
   parseSourceTicket,
-  responseError,
+  readSourceLimits,
   resourceWaitLabel,
   runBoundedBatch,
   sha256Hex,
   uploadSourceZip,
+  storedZipSize,
   zipSingleTex,
 } from "./render-script.js";
 
@@ -25,19 +26,36 @@ type Fetcher = (
 ) => Promise<Response>;
 type Job = ReturnType<typeof parseJobStatus>;
 let csrfToken = "";
-const appMessages = appCatalog("ja");
+export interface AppBrowserConfig {
+  messages: Readonly<Record<AppMessage, string>>;
+  jobActions: Readonly<{
+    cancel: string;
+    cancelConfirmation: string;
+    canceled: string;
+    delete: string;
+    deleteConfirmation: string;
+    retry: string;
+  }>;
+}
+
+let appMessages: AppBrowserConfig["messages"] = english;
+let jobActionLabels: AppBrowserConfig["jobActions"];
 
 function appMessage(
   key: AppMessage,
   values: Readonly<Record<string, string | number>> = {},
 ): string {
-  return appMessages[key].replaceAll(/\{([a-zA-Z][a-zA-Z0-9]*)\}/g, (match, name: string) =>
-    Object.hasOwn(values, name) ? String(values[name]) : match,
+  return appMessages[key].replaceAll(
+    /\{([a-zA-Z][a-zA-Z0-9]*)\}/g,
+    (match, name: string) =>
+      Object.hasOwn(values, name) ? String(values[name]) : match,
   );
 }
 
 function appLanguage(): string {
-  return typeof document === "undefined" ? "ja" : document.documentElement.lang || "en";
+  return typeof document === "undefined"
+    ? "ja"
+    : document.documentElement.lang || "en";
 }
 
 async function json(
@@ -68,7 +86,9 @@ async function json(
   });
   if (!response.ok) {
     let code = "HTTP_ERROR",
-      message = appMessage("theServerReturnedHttpStatus", { status: response.status });
+      message = appMessage("theServerReturnedHttpStatus", {
+        status: response.status,
+      });
     try {
       const body = (await response.json()) as {
         error?: { code?: string; message?: string };
@@ -92,18 +112,14 @@ async function json(
 function friendly(error: unknown): { message: string; detail: string } {
   const value = error as { code?: string; message?: string },
     messages: Record<string, string> = {
-      ENTRYPOINT_MISSING:
-        appMessage("couldNotCreateThePdfSelect"),
-      SOURCE_NOT_READY:
-        appMessage("filesAreNotReadyYetWait"),
-      QUEUE_FULL:
-        appMessage("theConversionQueueIsCurrentlyBusy"),
-      ACCOUNT_QUEUE_LIMIT:
-        appMessage("concurrentConversionLimitReachedWaitFor"),
-      USER_STORAGE_QUOTA:
-        appMessage("storageQuotaReachedDeleteUnneededJobs"),
-      STORAGE_PRESSURE:
-        appMessage("theServerIsLowOnDisk"),
+      ENTRYPOINT_MISSING: appMessage("couldNotCreateThePdfSelect"),
+      SOURCE_NOT_READY: appMessage("filesAreNotReadyYetWait"),
+      QUEUE_FULL: appMessage("theConversionQueueIsCurrentlyBusy"),
+      ACCOUNT_QUEUE_LIMIT: appMessage(
+        "concurrentConversionLimitReachedWaitFor",
+      ),
+      USER_STORAGE_QUOTA: appMessage("storageQuotaReachedDeleteUnneededJobs"),
+      STORAGE_PRESSURE: appMessage("theServerIsLowOnDisk"),
       JOB_UNAVAILABLE: appMessage("thisConversionResultHasExpiredAnd"),
       JOB_IDENTITY_REVOKED: appMessage("accessToThisConversionResultHas"),
     };
@@ -159,7 +175,9 @@ function jobStatusLabel(status: string, stages: unknown): string {
       typeof s.svg?.status === "string" &&
       ["failed", "timeout", "canceled"].includes(s.svg.status)
     )
-      return appMessage("partialSuccessPdfSucceededSvgSvgstatus", { svgStatus: statusLabel(s.svg.status) });
+      return appMessage("partialSuccessPdfSucceededSvgSvgstatus", {
+        svgStatus: statusLabel(s.svg.status),
+      });
   }
   return statusLabel(status);
 }
@@ -208,6 +226,7 @@ async function establishSession(fetcher: Fetcher) {
     isAdmin: boolean;
     displayLocale?: DisplayLocale | null;
     resolvedDisplayLocale?: string;
+    sourceLimits?: unknown;
   };
   const admin = document.querySelector<HTMLElement>("#admin-link");
   if (admin) admin.hidden = !me.isAdmin;
@@ -381,7 +400,8 @@ function artifactButton(
           found = [...current.artifacts, ...current.previews].find(
             (item) => item.relativePath === path,
           );
-        if (!found && !lazyPage) throw new Error(appMessage("artifactNotFound"));
+        if (!found && !lazyPage)
+          throw new Error(appMessage("artifactNotFound"));
         const access = await issueAccess(fetcher, job.id),
           url =
             found?.downloadUrl ??
@@ -400,7 +420,9 @@ function artifactButton(
         }
         if (!response.ok)
           throw new Error(
-            appMessage("couldNotDownloadArtifactHttpStatus", { status: response.status }),
+            appMessage("couldNotDownloadArtifactHttpStatus", {
+              status: response.status,
+            }),
           );
         const blob = await response.blob();
         if (lazyPage) {
@@ -408,7 +430,9 @@ function artifactButton(
             (a) => a.relativePath === path,
           );
           if (!published || published.size !== blob.size)
-            throw new Error(appMessage("previewVerificationMetadataDoesNotMatch"));
+            throw new Error(
+              appMessage("previewVerificationMetadataDoesNotMatch"),
+            );
           const digest = [
             ...new Uint8Array(
               await crypto.subtle.digest("SHA-256", await blob.arrayBuffer()),
@@ -446,7 +470,7 @@ function artifactButton(
   return button;
 }
 
-function renderJobResult(
+export function renderJobResult(
   container: HTMLElement,
   fetcher: Fetcher,
   tracker: ReturnType<typeof jobTracker>,
@@ -581,7 +605,9 @@ function renderJobResult(
     const details = document.createElement("details"),
       summary = document.createElement("summary"),
       list = document.createElement("div");
-    summary.textContent = appMessage("svgArtifactsCount", { count: svgArtifacts.length });
+    summary.textContent = appMessage("svgArtifactsCount", {
+      count: svgArtifacts.length,
+    });
     details.className = "svg-artifacts";
     details.open = svgOpen;
     list.className = "actions";
@@ -611,7 +637,9 @@ function renderJobResult(
     job.engine ? appMessage("engineEngine", { engine: job.engine ?? "" }) : "",
     job.runtimeDigest ? `Runtime: ${job.runtimeDigest}` : "",
     job.previousRuntimeDigest
-      ? appMessage("previousRuntimeDigest", { digest: job.previousRuntimeDigest ?? "" })
+      ? appMessage("previousRuntimeDigest", {
+          digest: job.previousRuntimeDigest ?? "",
+        })
       : "",
     job.errorCode ? `${job.errorCode}: ${job.errorMessage ?? ""}` : "",
   ]
@@ -621,8 +649,7 @@ function renderJobResult(
   section.append(heading, state);
   if (job.previousRuntimeDigest) {
     const runtimeChange = document.createElement("p");
-    runtimeChange.textContent =
-      appMessage("thisRerunUsedADifferentTex");
+    runtimeChange.textContent = appMessage("thisRerunUsedADifferentTex");
     section.append(runtimeChange);
   }
   section.append(actions, detail);
@@ -635,6 +662,7 @@ async function followJob(
   container: HTMLElement,
   title: string,
   initial?: { jobTicket: string; expiresAt: string },
+  onStatus?: (status: string) => void,
 ) {
   const tracker = jobTracker(fetcher, id, initial);
   let failures = 0,
@@ -644,6 +672,7 @@ async function followJob(
       last = await tracker.get();
       failures = 0;
       renderJobResult(container, fetcher, tracker, last, title);
+      onStatus?.(last.status);
       if (
         [
           "succeeded",
@@ -669,8 +698,9 @@ async function followJob(
           "reconnecting",
         );
       else
-        container.textContent =
-          appMessage("lostConnectionToTheConversionService");
+        container.textContent = appMessage(
+          "lostConnectionToTheConversionService",
+        );
       if (failures >= 8) {
         showError(error);
         return false;
@@ -724,7 +754,10 @@ async function loadJobs(fetcher: Fetcher, container: HTMLElement, limit = 50) {
   await loadPage();
 }
 
-function installRender(fetcher: Fetcher) {
+function installRender(
+  fetcher: Fetcher,
+  limits: Readonly<ResourceLimits> = DEFAULT_RESOURCE_LIMITS,
+) {
   const form = document.querySelector<HTMLFormElement>("#app-render-form"),
     input = document.querySelector<HTMLInputElement>("#app-files"),
     svgOutput = document.querySelector<HTMLInputElement>("#app-render-svg"),
@@ -783,13 +816,20 @@ function installRender(fetcher: Fetcher) {
     try {
       const files = [...(input.files ?? [])];
       if (files.length === 0) return;
+      const assertUploadSize = (bytes: number) => {
+        if (bytes > limits.maxUploadBytes)
+          throw new Error(
+            appMessage("zipArchiveSizeLimit", {
+              limit: formatBytes(limits.maxUploadBytes),
+            }),
+          );
+      };
       let inspectedTasks: Task[];
       if (files.length === 1 && files[0]?.name.toLowerCase().endsWith(".zip")) {
-        const file = files[0],
-          bytes = new Uint8Array(await file.arrayBuffer());
-        if (bytes.length > 20 * 1024 * 1024)
-          throw new Error(appMessage("zipArchiveMustBe20Mib"));
-        const inspected = inspectZipCandidates(bytes),
+        const file = files[0];
+        assertUploadSize(file.size);
+        const bytes = new Uint8Array(await file.arrayBuffer()),
+          inspected = inspectZipCandidates(bytes, limits),
           entrypoints = inspected.hasMainTex
             ? ["main.tex"]
             : inspected.texFiles;
@@ -803,15 +843,21 @@ function installRender(fetcher: Fetcher) {
       } else {
         if (files.some((file) => !file.name.toLowerCase().endsWith(".tex")))
           throw new Error(appMessage("whenSelectingMultipleFilesSelectOnly"));
-        inspectedTasks = await Promise.all(
-          files.map(async (file) => ({
+        inspectedTasks = new Array<Task>(files.length);
+        await runBoundedBatch(files, 3, async (file, index) => {
+          if (current !== generation) return;
+          assertUploadSize(
+            storedZipSize([{ name: "main.tex", size: file.size }]),
+          );
+          const bytes = zipSingleTex(new Uint8Array(await file.arrayBuffer()));
+          inspectedTasks[index] = {
             label: file.name,
             original: file.name,
             entrypoint: "main.tex",
-            bytes: zipSingleTex(new Uint8Array(await file.arrayBuffer())),
+            bytes,
             selected: true,
-          })),
-        );
+          };
+        });
       }
       if (current !== generation) return;
       tasks = inspectedTasks;
@@ -824,7 +870,9 @@ function installRender(fetcher: Fetcher) {
         choices.hidden = false;
         const heading = document.createElement("strong");
         heading.textContent =
-          files.length === 1 ? appMessage("whichDocumentDoYouWantTo") : appMessage("documentToConvert");
+          files.length === 1
+            ? appMessage("whichDocumentDoYouWantTo")
+            : appMessage("documentToConvert");
         choices.append(heading);
         tasks.forEach((task) => {
           const label = document.createElement("label"),
@@ -934,7 +982,9 @@ function installRender(fetcher: Fetcher) {
     const cards = selected.map((task) => {
       const container = document.createElement("div");
       container.className = "render-result-card";
-      container.textContent = appMessage("taskWaitingToStart", { task: task.label });
+      container.textContent = appMessage("taskWaitingToStart", {
+        task: task.label,
+      });
       items.append(container);
       return { task, container };
     });
@@ -944,7 +994,9 @@ function installRender(fetcher: Fetcher) {
     let trackingLost = false;
     void runBoundedBatch(cards, 3, async ({ task, container }) => {
       if (trackingLost) {
-        container.textContent = appMessage("taskTheStatusCheckWasInterrupted", { task: task.label });
+        container.textContent = appMessage("taskTheStatusCheckWasInterrupted", {
+          task: task.label,
+        });
         return;
       }
       container.textContent = appMessage("preparingTask", { task: task.label });
@@ -989,7 +1041,10 @@ function installRender(fetcher: Fetcher) {
           await retryRenderCapacity(
             () => json(fetcher, "/app/api/v1/render-tickets", request),
             () => {
-              container.textContent = appMessage("taskServerBusyWaitingToRetry", { task: task.label });
+              container.textContent = appMessage(
+                "taskServerBusyWaitingToRetry",
+                { task: task.label },
+              );
             },
           ),
         );
@@ -1006,7 +1061,9 @@ function installRender(fetcher: Fetcher) {
           trackingLost = true;
         }
       } catch (error) {
-        container.textContent = appMessage("taskCouldNotStartConversion", { task: task.label });
+        container.textContent = appMessage("taskCouldNotStartConversion", {
+          task: task.label,
+        });
         showError(error);
       }
     })
@@ -1023,13 +1080,108 @@ function installRender(fetcher: Fetcher) {
 function installJob(fetcher: Fetcher) {
   const container = document.querySelector<HTMLElement>("#app-job-detail"),
     match = /^\/app\/jobs\/(job_[a-f0-9]{32})\/$/.exec(location.pathname);
-  if (!container || !match) return;
+  const id = match?.[1];
+  if (!container || !id) return;
+  const path = `/app/api/v1/jobs/${id}`;
+  const retryKey = crypto.randomUUID();
+  const panel = document.createElement("div");
+  const feedback = document.createElement("p");
+  const controls = document.createElement("div");
+  panel.className = "stack";
+  feedback.setAttribute("role", "status");
+  controls.className = "actions";
+  panel.append(controls, feedback);
+  container.after(panel);
+  let pending = false;
+  let lastStatus = "";
+  const updateActions = (status: string) => {
+    if (status === lastStatus) return;
+    lastStatus = status;
+    controls.replaceChildren();
+    const add = (
+      label: string,
+      action: () => Promise<void>,
+      prompt?: string,
+    ) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "secondary";
+      button.textContent = label;
+      button.disabled = pending;
+      button.onclick = () => {
+        if (pending || (prompt && !window.confirm(prompt))) return;
+        pending = true;
+        controls.querySelectorAll("button").forEach((item) => {
+          item.disabled = true;
+        });
+        void action()
+          .catch(showError)
+          .finally(() => {
+            pending = false;
+            controls.querySelectorAll("button").forEach((item) => {
+              item.disabled = false;
+            });
+          });
+      };
+      controls.append(button);
+    };
+    const terminal = ["succeeded", "failed", "timeout", "canceled", "rejected"];
+    if (
+      ["reserved", "uploading", "queued", "validating", "running"].includes(
+        status,
+      )
+    ) {
+      add(
+        jobActionLabels.cancel,
+        async () => {
+          await json(fetcher, `${path}/cancel`, { method: "POST", body: "{}" });
+          feedback.textContent = jobActionLabels.canceled;
+        },
+        jobActionLabels.cancelConfirmation,
+      );
+    }
+    if (terminal.includes(status)) {
+      add(jobActionLabels.retry, async () => {
+        const result = parseRender(
+          await json(fetcher, `${path}/retry`, {
+            method: "POST",
+            headers: { "Idempotency-Key": retryKey },
+            body: "{}",
+          }),
+        );
+        location.assign(`/app/jobs/${encodeURIComponent(result.jobId)}/`);
+      });
+    }
+    if (terminal.includes(status) || status === "expired") {
+      add(
+        jobActionLabels.delete,
+        async () => {
+          await json(fetcher, path, { method: "DELETE" });
+          location.assign("/app/jobs/");
+        },
+        jobActionLabels.deleteConfirmation,
+      );
+    }
+  };
   void (async () => {
     try {
-      const meta = (await json(fetcher, `/app/api/v1/jobs/${match[1]}`)) as {
+      const meta = (await json(fetcher, path)) as {
         entrypoint: string;
+        status: string;
       };
-      await followJob(fetcher, match[1] as string, container, meta.entrypoint);
+      updateActions(meta.status);
+      if (["expired", "deleting", "deleted"].includes(meta.status)) {
+        container.textContent = statusLabel(meta.status);
+        return;
+      }
+      await followJob(
+        fetcher,
+        id,
+        container,
+        meta.entrypoint,
+        undefined,
+        updateActions,
+      );
     } catch (error) {
       showError(error);
       container.textContent = appMessage("couldNotLoadConversionResult");
@@ -1167,7 +1319,8 @@ function installProjects(fetcher: Fetcher) {
             (revision) =>
               `<section><div class="page-heading"><div><h2>${escape(appMessage("revisionRevisionName", { revision: revision.revisionNumber, name: revision.displayName }))}</h2><p>${escape(revision.originalFilename)}・${escape(revision.engine ?? "lualatex")}・${escape(new Date(revision.createdAt).toLocaleString(appLanguage()))}</p></div><label>${escape(appMessage("outputFormat"))}<select id="outputs-${escape(revision.id)}"><option value="">${escape(appMessage("revisionDefault"))}</option><option value="pdf">PDF</option><option value="svg">PDF＋SVG</option></select></label><button type="button" class="secondary" data-rerender="${escape(revision.id)}">${escape(appMessage("convertAgain"))}</button><a class="button secondary" href="/app/projects/${encodeURIComponent(projectId)}/edit/?revision=${encodeURIComponent(revision.id)}">${escape(appMessage("editFromThisRevision"))}</a></div><ul>${revision.jobs.map((job) => `<li>${escape(jobStatusLabel(job.status, job.stages))}・${escape((job.outputs ?? []).join("＋").toUpperCase())} <a href="/app/jobs/${encodeURIComponent(job.id)}/">${escape(new Date(job.createdAt).toLocaleString(appLanguage()))}</a></li>`).join("") || `<li>${escape(appMessage("noConversionHistory"))}</li>`}</ul>${revision.jobsHasMore && revision.jobsNextCursor ? `<div class="actions"><button type="button" class="secondary" data-revision-jobs-next="${escape(revision.id)}">${escape(appMessage("showMoreHistoryForThisRevision"))}</button><span class="muted">${escape(appMessage("countTotal", { count: revision.jobs.length, total: revision.jobCount }))}</span></div>` : ""}</section>`,
           )
-          .join("") || `<section>${escape(appMessage("noRevisionsYet"))}</section>`
+          .join("") ||
+        `<section>${escape(appMessage("noRevisionsYet"))}</section>`
       }${project.revisionsHasMore ? `<div class="actions"><button type="button" class="secondary" id="app-revisions-next">${escape(appMessage("nextRevisionsPage"))}</button></div>` : ""}`;
       for (const button of detail.querySelectorAll<HTMLButtonElement>(
         "[data-revision-jobs-next]",
@@ -1295,12 +1448,7 @@ function installProjects(fetcher: Fetcher) {
             .catch(showError);
         };
         remove.onclick = () => {
-          if (
-            !confirm(
-              appMessage("removeThisProjectFromYourList"),
-            )
-          )
-            return;
+          if (!confirm(appMessage("removeThisProjectFromYourList"))) return;
           void json(fetcher, `/app/api/v1/projects/${projectId}`, {
             method: "DELETE",
             body: "{}",
@@ -1399,22 +1547,29 @@ function installEnvironment(fetcher: Fetcher) {
   }
 }
 
-function installApp() {
-  const fetcher = globalThis.fetch.bind(globalThis);
-  void establishSession(fetcher)
+export function installApp(
+  config: AppBrowserConfig,
+  fetcher: Fetcher = globalThis.fetch.bind(globalThis),
+): Promise<void> {
+  appMessages = config.messages;
+  jobActionLabels = config.jobActions;
+  csrfToken = "";
+  const startup = establishSession(fetcher)
     .then(async (authenticated) => {
       if (!authenticated) return;
       const selected = synchronizeDisplayLocale(
         authenticated.displayLocale,
-        (locale) => json(fetcher, "/app/api/v1/me/locale", {
-          method: "PATCH",
-          body: JSON.stringify({ locale }),
-        }),
+        (locale) =>
+          json(fetcher, "/app/api/v1/me/locale", {
+            method: "PATCH",
+            body: JSON.stringify({ locale }),
+          }),
         showError,
       );
       if (selected === false) return;
       const page = document.body.dataset.appPage;
-      if (page === "render") installRender(fetcher);
+      if (page === "render")
+        installRender(fetcher, readSourceLimits(authenticated.sourceLimits));
       if (page === "history") {
         const history = document.querySelector<HTMLElement>("#app-history");
         if (history) void loadJobs(fetcher, history).catch(showError);
@@ -1423,7 +1578,9 @@ function installApp() {
       if (page === "projects") installProjects(fetcher);
       if (page === "environment") installEnvironment(fetcher);
       if (page === "editor") {
-        const path = document.getElementById("app-editor-script")?.dataset.editorEntrypoint ?? "/app/assets/editor.js";
+        const path =
+          document.getElementById("app-editor-script")?.dataset
+            .editorEntrypoint ?? "/app/assets/editor.js";
         const editor = (await import(
           path
         )) as typeof import("../editor/index.js");
@@ -1441,55 +1598,5 @@ function installApp() {
       headers: { "X-CSRF-Token": csrfToken },
     }).finally(() => location.replace("/login/"));
   });
-  addEventListener("pagehide", () => {
-    // Credentials live only in closures and are discarded with the page.
-  });
+  return startup;
 }
-
-export function localizedAppScript(locale: DisplayLocale): string {
-  return `
-(() => {
-  let csrfToken = "";
-  ${browserLocaleScript}
-  const appMessages = ${JSON.stringify(appCatalog(locale))};
-  const appMessage = ${appMessage.toString()};
-  const appLanguage = ${appLanguage.toString()};
-  const JOB_STATUSES = ${JSON.stringify(JOB_STATUSES)};
-  const crc32 = ${crc32.toString()};
-  const inspectZipCandidates = ${inspectZipCandidates.toString()};
-  const zipSingleTex = ${zipSingleTex.toString()};
-  const sha256Hex = ${sha256Hex.toString()};
-  const parseSourceTicket = ${parseSourceTicket.toString()};
-  const responseError = ${responseError.toString()};
-  const uploadSourceZip = ${uploadSourceZip.toString()};
-  const parseJobArtifact = ${parseJobArtifact.toString()};
-  const parseJobStatus = ${parseJobStatus.toString()};
-  const resourceWaitLabel = ${resourceWaitLabel.toString()};
-  const json = ${json.toString()};
-  const friendly = ${friendly.toString()};
-  const showError = ${showError.toString()};
-  const escape = ${escape.toString()};
-  const statusLabel = ${statusLabel.toString()};
-  const jobStatusLabel = ${jobStatusLabel.toString()};
-  const establishSession = ${establishSession.toString()};
-  const createSource = ${createSource.toString()};
-  const parseRender = ${parseRender.toString()};
-  const retryRenderCapacity = ${retryRenderCapacity.toString()};
-  const runBoundedBatch = ${runBoundedBatch.toString()};
-  const issueAccess = ${issueAccess.toString()};
-  const rendererJob = ${rendererJob.toString()};
-  const jobTracker = ${jobTracker.toString()};
-  const artifactButton = ${artifactButton.toString()};
-  const renderJobResult = ${renderJobResult.toString()};
-  const followJob = ${followJob.toString()};
-  const loadJobs = ${loadJobs.toString()};
-  const installRender = ${installRender.toString()};
-  const installJob = ${installJob.toString()};
-  const installProjects = ${installProjects.toString()};
-  const installEnvironment = ${installEnvironment.toString()};
-  (${installApp.toString()})();
-})();
-`;
-}
-
-export const appScript = localizedAppScript("ja");

@@ -70,6 +70,7 @@ export class RendererClient {
   async retrySvgJob(
     jobId: string,
     idempotencyKey: string,
+    options?: RendererRequestOptions,
   ): Promise<SourceRenderResponse> {
     const response = await fetch(
       new URL(`${PUBLIC_API_PREFIX}/render-tickets`, this.#baseUrl),
@@ -81,6 +82,7 @@ export class RendererClient {
         }),
         body: JSON.stringify({ retrySvgJobId: jobId }),
         redirect: "error",
+        ...(options?.signal === undefined ? {} : { signal: options.signal }),
       },
     );
     return sourceRenderResponseSchema.parse(await responseJson(response));
@@ -107,6 +109,7 @@ export class RendererClient {
     size: number,
     sha256: string,
     idempotencyKey: string,
+    options?: RendererRequestOptions,
   ): Promise<SourceTicketResponse> {
     const response = await fetch(
       new URL(`${PUBLIC_API_PREFIX}/source-tickets`, this.#baseUrl),
@@ -118,6 +121,7 @@ export class RendererClient {
         }),
         body: JSON.stringify({ size, sha256 }),
         redirect: "error",
+        ...(options?.signal === undefined ? {} : { signal: options.signal }),
       },
     );
     return sourceTicketResponseSchema.parse(await responseJson(response));
@@ -126,6 +130,7 @@ export class RendererClient {
     ticket: SourceTicketResponse,
     zipPath: string,
     size: number,
+    options?: RendererRequestOptions,
   ): Promise<void> {
     if (!ticket.uploadRequired) return;
     if (ticket.uploadTicket === undefined || ticket.uploadUrl === undefined)
@@ -134,18 +139,32 @@ export class RendererClient {
         "Source upload response is incomplete",
         502,
       );
-    const response = await fetch(this.credentialTarget(ticket.uploadUrl), {
-      method: "PUT",
-      headers: {
-        Authorization: `Bearer ${ticket.uploadTicket}`,
-        "Content-Type": "application/zip",
-        "Content-Length": String(size),
-      },
-      body: Readable.toWeb(createReadStream(zipPath)) as ReadableStream,
-      duplex: "half",
-      redirect: "error",
-    } as RequestInit & { duplex: "half" });
-    if (!response.ok) await throwResponse(response);
+    const url = this.credentialTarget(ticket.uploadUrl);
+    const signal = options?.signal;
+    signal?.throwIfAborted();
+    const source = createReadStream(zipPath, signal ? { signal } : undefined);
+    try {
+      const response = await fetch(url, {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${ticket.uploadTicket}`,
+          "Content-Type": "application/zip",
+          "Content-Length": String(size),
+        },
+        body: Readable.toWeb(source) as ReadableStream,
+        duplex: "half",
+        redirect: "error",
+        ...(signal === undefined ? {} : { signal }),
+      } as RequestInit & { duplex: "half" });
+      if (!response.ok) await throwResponse(response);
+    } finally {
+      if (!source.closed) {
+        await new Promise<void>((resolve) => {
+          source.once("close", resolve);
+          source.destroy();
+        });
+      }
+    }
   }
   async createSourceJob(
     sourceId: string,
@@ -153,6 +172,7 @@ export class RendererClient {
     idempotencyKey: string,
     outputs: readonly RenderOutput[] = ["pdf"],
     engine?: RenderEngine,
+    options?: RendererRequestOptions,
   ): Promise<SourceRenderResponse> {
     const response = await fetch(
       new URL(`${PUBLIC_API_PREFIX}/render-tickets`, this.#baseUrl),
@@ -169,6 +189,7 @@ export class RendererClient {
           engine,
         }),
         redirect: "error",
+        ...(options?.signal === undefined ? {} : { signal: options.signal }),
       },
     );
     return sourceRenderResponseSchema.parse(await responseJson(response));
@@ -521,6 +542,7 @@ export class RendererClient {
     ticket: string,
     destination: string,
     expected: { size: number; sha256: string },
+    options?: RendererRequestOptions,
   ): Promise<void> {
     const target = this.credentialTarget(url);
     if (
@@ -537,6 +559,7 @@ export class RendererClient {
       headers: noStoreRequestHeaders({ Authorization: `Bearer ${ticket}` }),
       cache: "no-store",
       redirect: "error",
+      ...(options?.signal === undefined ? {} : { signal: options.signal }),
     });
     if (!response.ok) await throwResponse(response);
     if (response.body === null)
@@ -582,6 +605,7 @@ export class RendererClient {
         ),
         verifier,
         createWriteStream(temporary, { flags: "wx", mode: 0o600 }),
+        options?.signal === undefined ? {} : { signal: options.signal },
       );
       if (size !== expected.size || hash.digest("hex") !== expected.sha256)
         throw new AppError(
@@ -603,6 +627,7 @@ export class RendererClient {
           "Artifact destination changed while downloading",
           400,
         );
+      options?.signal?.throwIfAborted();
       await rename(temporary, destination);
     } catch (error) {
       await rm(temporary, { force: true }).catch(() => undefined);

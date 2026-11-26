@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { controlService } from "./http-services.mjs";
+import { controlService, httpServiceStatus } from "./http-services.mjs";
 import { withContainerEngine } from "./on-demand-engine.mjs";
 import { startHttpService, createHttpActivity } from "./http-idle-server.mjs";
 import { managerIdleConfiguration } from "./runtime-mode.mjs";
@@ -17,15 +17,16 @@ import {
   rename,
   rm,
   stat,
-  writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import {
   rendererRuntimeFingerprint,
   runtimeIdentity,
 } from "./runtime-image-identity.mjs";
 import { acquireMutationLock } from "./mutation-lock.mjs";
+import { readWorkerHealth } from "./worker-health.mjs";
 import {
   eligibleManagedImage,
   imageCleanupPolicy,
@@ -130,11 +131,13 @@ let state = await loadState();
 const operations = new Map();
 let activeOperationId = null;
 let languageCache = null;
-let quiescing = false;
+const interruptedActivation = await readActivationJournal();
+let quiescing = interruptedActivation !== null;
 let mutationGate = Promise.resolve();
-const activationRecovery = await recoverPendingActivation();
-await recoverInterruptedOperation(activationRecovery);
-await seedCurrentRuntimeIfNeeded();
+if (!interruptedActivation) {
+  await recoverInterruptedOperation();
+  await seedCurrentRuntimeIfNeeded();
+}
 
 async function loadState() {
   try {
@@ -169,13 +172,34 @@ async function persistState(value = state) {
 async function writeAtomic(path, content, mode = 0o640) {
   const tmp = `${path}.part-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
   try {
-    await writeFile(tmp, content, { mode });
-    await chmod(tmp, mode);
+    const handle = await open(tmp, "wx", mode);
+    try {
+      await handle.writeFile(content);
+      await handle.chmod(mode);
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
     await rename(tmp, path);
+    await syncParent(path);
   } catch (error) {
     await rm(tmp, { force: true }).catch(() => {});
     throw error;
   }
+}
+
+async function syncParent(path) {
+  const directory = await open(dirname(path), "r");
+  try {
+    await directory.sync();
+  } finally {
+    await directory.close();
+  }
+}
+
+async function clearActivationJournal() {
+  await rm(activationJournalPath, { force: true });
+  await syncParent(activationJournalPath);
 }
 
 async function serializeMutation(task) {
@@ -406,10 +430,13 @@ async function operationWithLog(op) {
 }
 
 function rendererImageFromEnv(contents) {
-  return /^RENDERER_IMAGE=(.+)$/m.exec(contents)?.[1]?.trim() ?? "";
+  const assignments = contents.match(/^RENDERER_IMAGE=.*$/gm);
+  if (assignments && assignments.length > 1)
+    throw new Error("Runtime configuration has duplicate image assignments");
+  return assignments?.[0].slice("RENDERER_IMAGE=".length).trim() ?? "";
 }
 
-async function recoverPendingActivation() {
+async function readActivationJournal() {
   let journal;
   try {
     journal = JSON.parse(await readFile(activationJournalPath, "utf8"));
@@ -419,58 +446,60 @@ async function recoverPendingActivation() {
   }
   if (
     journal?.version !== 1 ||
-    typeof journal?.newImageId !== "string" ||
+    !/^sha256:[a-f0-9]{64}$/.test(journal?.newImageId ?? "") ||
     !journal.previousState ||
     !journal.nextState ||
+    !/^imgop_[A-Za-z0-9_-]+$/.test(journal.operationId ?? "") ||
+    journal.previousState.lastOperationId !== journal.operationId ||
+    journal.nextState.current?.runtimeImageId !== journal.newImageId ||
     typeof journal.oldEnv !== "string"
   )
     throw new Error("Image activation journal is invalid");
-
-  const configured = rendererImageFromEnv(await readFile(rendererEnv, "utf8"));
-  const oldImage = rendererImageFromEnv(journal.oldEnv);
-  if (configured === journal.newImageId) {
-    await dockerCapture(["image", "inspect", journal.newImageId]);
-    await writeInventory(
-      await collectInventory(
-        journal.newImageId,
-        journal.nextState.current?.engineCapabilities,
-      ),
-    );
-    state = journal.nextState;
-    await persistState();
-    await rm(activationJournalPath, { force: true });
-    return { operationId: journal.operationId ?? null, committed: true };
-  }
-  if (configured === oldImage) {
-    state = journal.previousState;
-    await persistState();
-    if (oldImage) {
-      await dockerCapture(["image", "inspect", oldImage]);
-      await writeInventory(
-        await collectInventory(
-          oldImage,
-          journal.previousState.current?.engineCapabilities,
-        ),
-      );
-    }
-    await rm(activationJournalPath, { force: true });
-    return { operationId: journal.operationId ?? null, committed: false };
-  }
-  throw new Error(
-    `Image activation recovery refused an unexpected RENDERER_IMAGE: ${configured || "missing"}`,
-  );
+  return journal;
 }
 
-async function recoverInterruptedOperation(activationOutcome = null) {
+async function recoverPendingActivation(journal) {
+  const configured = rendererImageFromEnv(await readFile(rendererEnv, "utf8"));
+  const oldImage = rendererImageFromEnv(journal.oldEnv);
+  if (!oldImage || (configured !== oldImage && configured !== journal.newImageId))
+    throw new Error("Image activation recovery found unexpected Runtime configuration");
+  if (journal.previousState.current?.runtimeImageId &&
+      journal.previousState.current.runtimeImageId !== oldImage)
+    throw new Error("Image activation journal does not identify the previous Runtime");
+
+  await dockerCapture(["image", "inspect", oldImage]);
+  const inventory = await collectInventory(
+    oldImage, journal.previousState.current?.engineCapabilities,
+  );
+  const env = await readFile(rendererEnv, "utf8");
+  if (rendererImageFromEnv(env) !== configured)
+    throw new Error("Runtime configuration changed during activation recovery");
+  // Preserve unrelated settings configured since the original operation.
+  if (configured !== oldImage)
+    await writeAtomic(rendererEnv, rendererEnvWithImage(env, oldImage), 0o640);
+  await writeInventory(inventory);
+  // Even if renderer.env already contains the old image, a crash may have
+  // interrupted the previous restore before live consumers were restarted.
+  await restartRendererConsumers();
+  await verifyRendererConsumers(oldImage);
+  state = journal.previousState;
+  await recoverInterruptedOperation(journal.operationId);
+  await clearActivationJournal();
+}
+
+async function recoverInterruptedOperation(restoredOperationId = null) {
   if (!state.lastOperationId) return;
   const op = await loadOperation(state.lastOperationId);
-  if (!op || op.status !== "running") return;
-  const recoveredCommit =
-    activationOutcome?.operationId === op.id &&
-    activationOutcome.committed === true;
-  op.status = recoveredCommit ? "succeeded" : "failed";
-  op.error = recoveredCommit
-    ? null
+  if (restoredOperationId !== null && !op) {
+    state.lastApplyError =
+      "Image activation was interrupted; the previous Runtime was restored";
+    await persistState();
+    return;
+  }
+  if (!op || (op.status !== "running" && restoredOperationId !== op.id)) return;
+  op.status = "failed";
+  op.error = restoredOperationId === op.id
+    ? "Image activation was interrupted; the previous Runtime was restored"
     : "Image manager restarted while this operation was running";
   op.finishedAt = new Date().toISOString();
   await saveOperation(op);
@@ -478,9 +507,7 @@ async function recoverInterruptedOperation(activationOutcome = null) {
   await persistState();
   await appendLog(
     op,
-    recoveredCommit
-      ? "\nImage activation was recovered and committed after Image Manager restart.\n"
-      : "\nERROR: Image Manager restarted before this operation completed.\n",
+    `\nERROR: ${op.error}\n`,
   ).catch(() => {});
 }
 
@@ -1193,6 +1220,79 @@ async function restartRendererConsumers() {
   }
 }
 
+async function verifyRendererConsumers(expectedImage) {
+  const unitNames = ["worker", "internal-api", "admin-api", "remote-mcp"];
+  const units = unitNames.map((name) => `latex-renderer-${name}.service`);
+  const deadline = Date.now() + 60_000;
+  for (;;) {
+    let ready = true;
+    for (const unit of units) {
+      const status = httpServiceStatus(unit);
+      if (!status.managed || status.state === "idle") continue;
+      if (status.state !== "running") {
+        ready = false;
+        continue;
+      }
+      const pid = (await runCapture("systemctl", [
+        "show", "--property=MainPID", "--value", unit,
+      ])).trim();
+      if (!/^[1-9][0-9]*$/.test(pid)) {
+        ready = false;
+        continue;
+      }
+      // systemd has finished activation. Confirm the live process inherited
+      // the pinned image, rather than checking only the on-disk environment.
+      let env;
+      try {
+        env = await readFile(`/proc/${pid}/environ`, "utf8");
+      } catch (error) {
+        if (!["ENOENT", "ESRCH"].includes(error.code)) throw error;
+        ready = false;
+        continue;
+      }
+      if (!env.split("\0").includes(`RENDERER_IMAGE=${expectedImage}`))
+        throw new Error(`Runtime validation found different configuration in ${unit}`);
+      if (unit === "latex-renderer-worker.service" &&
+          readWorkerHealth().state === "unavailable")
+        ready = false;
+    }
+    if (ready) return;
+    if (Date.now() >= deadline)
+      throw new Error("Runtime consumers did not become ready after activation");
+    await delay(1_000);
+  }
+}
+
+async function restoreInterruptedActivation(journal) {
+  // Consumers are ordered after this unit in classic installations. The
+  // HTTP listener is available during ExecStartPost, so wait for systemd to
+  // finish that phase before requesting a blocking consumer restart.
+  if (process.env.NOTIFY_SOCKET !== undefined) {
+    const deadline = Date.now() + 60_000;
+    for (;;) {
+      const active = (await runCapture("systemctl", [
+        "show", "--property=ActiveState", "--value",
+        "latex-renderer-image-manager.service",
+      ])).trim();
+      if (active === "active") break;
+      if (Date.now() >= deadline)
+        throw new Error("Image Manager did not finish starting");
+      await delay(250);
+    }
+  }
+  const lock = await acquireMutationLock();
+  try {
+    await recoverPendingActivation(journal);
+  } finally {
+    await lock.release();
+  }
+  quiescing = false;
+  lastOperationCompleted = Date.now();
+  console.log(JSON.stringify({
+    event: "image_manager.activation_restored", operationId: journal.operationId,
+  }));
+}
+
 async function restoreActivation(snapshot) {
   const failures = [];
   let envRestored = true;
@@ -1207,6 +1307,7 @@ async function restoreActivation(snapshot) {
   if (snapshot.envChanged && envRestored) {
     try {
       await restartRendererConsumers();
+      await verifyRendererConsumers(rendererImageFromEnv(snapshot.oldEnv));
     } catch (error) {
       failures.push(
         `service restart: ${error instanceof Error ? error.message : String(error)}`,
@@ -1256,11 +1357,11 @@ async function activateAndPersistState(
     if (newEnv !== oldEnv) {
       await writeAtomic(rendererEnv, newEnv, 0o640);
       await restartRendererConsumers();
+      await verifyRendererConsumers(imageId);
     }
     await writeInventory(inventory);
     state = nextState;
     await persistState();
-    await rm(activationJournalPath, { force: true });
   } catch (error) {
     state = previousState;
     let restoreError;
@@ -1269,10 +1370,14 @@ async function activateAndPersistState(
     } catch (inner) {
       restoreError = inner;
     }
-    await persistState(previousState).catch(() => {});
-    if (restoreError === undefined)
-      await rm(activationJournalPath, { force: true }).catch(() => {});
+    try {
+      await persistState(previousState);
+      if (restoreError === undefined) await clearActivationJournal();
+    } catch (inner) {
+      restoreError ??= inner;
+    }
     if (restoreError !== undefined) {
+      quiescing = true;
       const restoreMessage =
         restoreError instanceof Error
           ? restoreError.message
@@ -1296,6 +1401,15 @@ async function activateAndPersistState(
       `${context} failed and the previous Runtime was restored: ${error instanceof Error ? error.message : String(error)}`,
       { cause: error },
     );
+  }
+  try {
+    await clearActivationJournal();
+  } catch (error) {
+    // The selected image and consumers are already verified and persisted.
+    // A failed directory sync may have unlinked the journal in this boot.
+    // Do not begin a second mutation without its recovery record.
+    quiescing = true;
+    throw new Error("Runtime activation was persisted but journal cleanup could not be confirmed", { cause: error });
   }
 }
 
@@ -2019,6 +2133,16 @@ startHttpService(server, {
         dockerHost,
       }),
     );
+    if (interruptedActivation) {
+      void restoreInterruptedActivation(interruptedActivation).catch((error) => {
+        state.lastApplyError = "Interrupted Runtime activation requires recovery";
+        console.error(JSON.stringify({
+          event: "image_manager.activation_recovery_required",
+          operationId: interruptedActivation.operationId,
+          message: error instanceof Error ? error.message : String(error),
+        }));
+      });
+    }
   },
 });
 

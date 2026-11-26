@@ -160,6 +160,6 @@
   "waitingForPreviewGeneration": "Väntar på att förhandsvisning genereras…",
   "whenSelectingMultipleFilesSelectOnly": "Välj endast TeX-filer när du markerar flera filer.",
   "whichDocumentDoYouWantTo": "Vilket dokument vill du konvertera till PDF?",
-  "zipArchiveMustBe20Mib": "ZIP-filen får vara högst 20 MiB.",
+  "zipArchiveSizeLimit": "ZIP-filen får vara högst {limit}.",
   "zoom": "Zoom"
 }

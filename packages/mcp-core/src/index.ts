@@ -3,9 +3,11 @@ import { delimiter, dirname, isAbsolute, relative, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { RendererClient } from "@latex-renderer/api-client";
 import {
+  acceptedJobRecovery,
   createSourceRenderJob,
   downloadJobArtifacts,
   getJob,
+  readAcceptedJob,
   renderProject,
   requestJobAction,
   uploadProjectSource,
@@ -350,24 +352,27 @@ export type McpToolOutput =
   | RenderProjectRevisionOutput;
 
 export interface McpOperations {
-  uploadSource(path: string): Promise<UploadSourceOutput>;
+  uploadSource(path: string, signal?: AbortSignal): Promise<UploadSourceOutput>;
   createRenderJob(
     sourceId: string,
     entrypoint: string,
     outputs?: RenderOutput[],
     engine?: RenderEngine,
+    signal?: AbortSignal,
   ): Promise<CreateRenderJobOutput>;
   renderProject(
     directory: string,
     entrypoint: string,
     outputs?: RenderOutput[],
     engine?: RenderEngine,
+    signal?: AbortSignal,
   ): Promise<RenderProjectOutput>;
-  getRenderStatus(jobId: string): Promise<GetRenderStatusOutput>;
+  getRenderStatus(jobId: string, signal?: AbortSignal): Promise<GetRenderStatusOutput>;
   downloadRenderArtifacts(
     jobId: string,
     outputDirectory: string,
     previewPages?: number[],
+    signal?: AbortSignal,
   ): Promise<DownloadArtifactsOutput>;
   cancelRender(jobId: string): Promise<CancelRenderOutput>;
   deleteRender(jobId: string): Promise<DeleteRenderOutput>;
@@ -418,17 +423,17 @@ export function createMcpOperations(
         await loadCredential(),
       ));
   return {
-    uploadSource: async (path) => {
+    uploadSource: async (path, signal) => {
       const localPath = await resolveAllowedMcpPath(path, allowedRoots(), true);
       return {
         success: true,
         operation: "upload_source",
         result: {
-          source: await uploadProjectSource(await client(), localPath),
+          source: await uploadProjectSource(await client(), localPath, { signal }),
         },
       };
     },
-    createRenderJob: async (sourceId, entrypoint, outputs, engine) => ({
+    createRenderJob: async (sourceId, entrypoint, outputs, engine, signal) => ({
       success: true,
       operation: "create_render_job",
       result: {
@@ -437,12 +442,12 @@ export function createMcpOperations(
             await client(),
             sourceId,
             entrypoint,
-            { ...(outputs === undefined ? {} : { outputs }), engine },
+            { ...(outputs === undefined ? {} : { outputs }), engine, signal },
           ),
         ),
       },
     }),
-    renderProject: async (directory, entrypoint, outputs, engine) => {
+    renderProject: async (directory, entrypoint, outputs, engine, signal) => {
       const localDirectory = await resolveAllowedMcpPath(
         directory,
         allowedRoots(),
@@ -451,6 +456,7 @@ export function createMcpOperations(
       let recovery: { jobId: string; lastStatus: string | null } | undefined;
       const rendered = await renderProject(await client(), localDirectory, {
         entrypoint,
+        signal,
         ...(outputs === undefined ? {} : { outputs }),
         engine,
         onEvent: (event) => {
@@ -491,12 +497,12 @@ export function createMcpOperations(
         },
       };
     },
-    getRenderStatus: async (jobId) => ({
+    getRenderStatus: async (jobId, signal) => ({
       success: true,
       operation: "get_render_status",
-      result: { job: summarizeJob(await getJob(await client(), jobId)) },
+      result: { job: summarizeJob(await getJob(await client(), jobId, signal)) },
     }),
-    downloadRenderArtifacts: async (jobId, outputDirectory, previewPages) => {
+    downloadRenderArtifacts: async (jobId, outputDirectory, previewPages, signal) => {
       const localOutput = await resolveAllowedMcpPath(
         outputDirectory,
         allowedRoots(),
@@ -508,6 +514,7 @@ export function createMcpOperations(
         localOutput,
         {
           ...(previewPages === undefined ? {} : { previewPages }),
+          signal,
           ...(options.renderTimeoutMs === undefined
             ? {}
             : { pollTimeoutMs: options.renderTimeoutMs }),
@@ -584,7 +591,7 @@ export function createMcpOperations(
           revisionId,
           randomUUID(),
         ),
-        job = await api.job(ticket.jobId, ticket.jobTicket);
+        job = await readAcceptedJob(api, ticket);
       return {
         success: true,
         operation: "render_project_revision",
@@ -607,21 +614,13 @@ export function mcpFailure<T extends McpToolName>(
   error: z.infer<typeof errorSchema>;
 } {
   const normalized = safeError(error);
-  const details = error instanceof AppError ? error.details : undefined;
-  const jobId = details?.jobId;
-  const lastStatus = details?.lastStatus;
   return {
     success: false,
     operation,
     error: {
       ...normalized,
       message: redactSecrets(normalized.message),
-      ...(typeof jobId === "string" && /^job_[a-f0-9]{32}$/.test(jobId)
-        ? {
-            jobId,
-            lastStatus: typeof lastStatus === "string" ? lastStatus : null,
-          }
-        : {}),
+      ...acceptedJobRecovery(error),
     },
   };
 }

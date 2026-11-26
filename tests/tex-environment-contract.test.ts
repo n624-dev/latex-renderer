@@ -555,7 +555,7 @@ describe("Web and CLI TeX environment parity", () => {
     expect(cli).toMatch(/tex\s*\.command\("operation"\)/);
     expect(adminScript).toContain("effectiveLanguageCollections");
     expect(adminScript).toContain("依存言語collection");
-    expect(adminScript).toContain("watchTexOperation");
+    expect(adminScript).toContain("watchManagerOperation");
     expect(adminScript).toContain("Admin APIへ再接続中");
     expect(adminScript).toContain("詳細ログを表示");
     expect(adminScript).toContain(

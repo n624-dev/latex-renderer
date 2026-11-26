@@ -50,6 +50,11 @@ export function createInternalV1Router(deps: InternalApiDependencies): Hono {
       userId: identity.userId,
       type: "service_account",
       id: identity.serviceAccountId,
+      jobReader: {
+        kind: "api-key" as const,
+        serviceAccountId: identity.serviceAccountId,
+        credentialOwnerId: deps.database.apiKeys.jobOwnerId(identity.apiKeyId) ?? identity.apiKeyId,
+      },
     };
   }
   function parse<T>(schema: z.ZodType<T>, value: unknown): T {

@@ -25,6 +25,9 @@ assert_rule "$origin/admin/api/v1/me" 127.0.0.1:3102
 assert_rule "$origin/.well-known/oauth-protected-resource/mcp" 127.0.0.1:3104
 assert_rule "$origin/oauth/authorize" 127.0.0.1:3104
 assert_rule "$origin/mcp" 127.0.0.1:3104
+assert_rule "$origin/mcp/relay/local-operation" http_status:404
+assert_rule "$origin/mcp/relay/local-revoke" http_status:404
+assert_rule "$origin/mcp/relay/local-download" http_status:404
 assert_rule "$origin/admin/" 127.0.0.1:3101
 assert_rule "$origin/app/api/v1/me" 127.0.0.1:3102
 assert_rule "$origin/app/" 127.0.0.1:3101

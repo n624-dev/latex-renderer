@@ -2,6 +2,13 @@ import type { EditorCatalog } from "../messages.js";
 
 export default {
   messages: {
+    reviewConflict: "Düzenleme çakışmasını incele",
+    saveUnsavedCopy: "Bir kopyasını kaydet",
+    currentServerFile: "Sunucudaki sürüm",
+    applyMyEdits: "Düzenlemelerimi bu dosyaya uygula",
+    conflictFileMissing: "Bu dosya mevcut taslakta yok. Düzenlemeleri saklamak için bir kopya kaydedin.",
+    conflictReviewHint: "Değişen satırları inceleyin. Uyguladığınızda dosya, düzenlediğiniz kopyayla değiştirilir.",
+    previewReload: "Sunucu güncellemesinden sonra PNG önizlemesi gösteriliyor. PDF önizlemesine dönmek için değişikliklerinizi kaydedip sayfayı yenileyin.",
     skipContent: "İçeriğe geç",
     appNavigation: "Uygulama gezinmesi",
     appRender: "PDF’ye dönüştür",

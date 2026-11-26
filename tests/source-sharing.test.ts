@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { createWriteStream } from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pipeline } from "node:stream/promises";
@@ -12,6 +12,12 @@ import { TicketService } from "@latex-renderer/ticket";
 import { createRendererApp } from "../apps/renderer-api/src/app.js";
 import { RenderTicketsService } from "../apps/internal-api/src/services/render-tickets.js";
 import { SourceTicketsService } from "../apps/internal-api/src/services/source-tickets.js";
+import { syncPublishedAncestors } from "../deploy/scripts/durable-storage.mjs";
+
+vi.mock("../deploy/scripts/durable-storage.mjs", async (original) => {
+  const module = await original<typeof import("../deploy/scripts/durable-storage.mjs")>();
+  return { ...module, syncPublishedAncestors: vi.fn(module.syncPublishedAncestors) };
+});
 
 const databases: RendererDatabase[] = [],
   roots: string[] = [];
@@ -23,6 +29,41 @@ afterEach(async () => {
 });
 
 describe("immutable shared Sources", () => {
+  it("does not mark a Source ready when the published directory fails to sync", async () => {
+    const { database, actor, tickets, sourceService, storageRoot } = await fixture();
+    const bytes = await zip([["main.tex", "Fixture"]]);
+    const reserved = await sourceService.create(actor, {
+      size: bytes.length,
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+    }, "publish-dir-sync-failure");
+    const sourceId = reserved.value.sourceId;
+    const path = join(storageRoot, "sources", sourceId, "source.zip");
+    const app = createRendererApp({
+      database, tickets, storageRoot, maxUploadBytes: 20 * 1024 * 1024,
+      minFreeStorageBytes: 1, artifactRetentionHours: 24,
+    });
+    const upload = () => app.request(`/api/v1/sources/${sourceId}/content`, {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${reserved.value.uploadTicket}`,
+        "Content-Type": "application/zip",
+        "Content-Length": String(bytes.length),
+      },
+      body: new Uint8Array(bytes).slice().buffer,
+    });
+    vi.mocked(syncPublishedAncestors).mockImplementationOnce(async (published) => {
+      expect(published).toBe(path);
+      expect((await lstat(path)).isFile()).toBe(true);
+      expect(database.sources.get(sourceId)?.status).toBe("uploading");
+      throw Object.assign(new Error("Simulated directory sync I/O failure"), { code: "EIO" });
+    });
+    expect((await upload()).status).toBe(500);
+    expect(database.sources.get(sourceId)?.status).toBe("reserved");
+    await expect(lstat(path)).rejects.toMatchObject({ code: "ENOENT" });
+    expect((await upload()).status).toBe(204);
+    expect(database.sources.get(sourceId)?.status).toBe("ready");
+  });
+
   it.each(["read-only", "lockdown", "reject-new-jobs"])(
     "rechecks maintenance for a previously reserved Source upload (%s)",
     async (mode) => {

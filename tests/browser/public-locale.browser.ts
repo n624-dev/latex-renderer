@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Browser } from "playwright";
 import type { ClientDistribution } from "../../apps/admin-web/src/client-distribution.js";
@@ -11,7 +10,6 @@ let app: ReturnType<
 
 let browser: Browser | undefined;
 let savedLanguage: string | null;
-const scripts = new Map<string, string>();
 
 beforeAll(async () => {
   const appPath = new URL("../../apps/admin-web/dist/app.js", import.meta.url)
@@ -42,26 +40,12 @@ async function openPage(locale: string) {
     const url = new URL(request.url());
     switch (url.pathname) {
       case "/app/assets/app.js": {
-        const locale = url.searchParams.get("locale") ?? "en";
-        let script = scripts.get(locale);
-        if (script === undefined) {
-          script = execFileSync(
-            process.execPath,
-            [
-              "--input-type=module",
-              "--eval",
-              "const module = await import(process.argv[1]); process.stdout.write(module.localizedAppScript(process.argv[2]));",
-              new URL(
-                "../../apps/admin-web/dist/assets/app-script.js",
-                import.meta.url,
-              ).href,
-              locale,
-            ],
-            { encoding: "utf8", timeout: 10_000 },
-          );
-          scripts.set(locale, script);
-        }
-        return route.fulfill({ contentType: "text/javascript", body: script });
+        const asset = await app.request(url.pathname + url.search);
+        return route.fulfill({
+          status: asset.status,
+          headers: Object.fromEntries(asset.headers),
+          body: await asset.text(),
+        });
       }
       case "/auth/config":
         return route.fulfill({

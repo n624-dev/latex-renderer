@@ -2,6 +2,13 @@ import type { EditorCatalog } from "../messages.js";
 
 export default {
   messages: {
+    reviewConflict: "편집 충돌 확인",
+    saveUnsavedCopy: "사본 저장",
+    currentServerFile: "서버 버전",
+    applyMyEdits: "이 파일에 내 변경 사항 적용",
+    conflictFileMissing: "현재 초안에 이 파일이 없습니다. 편집 내용을 보관하려면 사본을 저장하세요.",
+    conflictReviewHint: "바뀐 줄을 확인하세요. 적용하면 이 파일이 편집한 사본으로 바뀝니다.",
+    previewReload: "서버가 업데이트되어 PNG로 표시합니다. PDF 미리 보기로 돌아가려면 변경 사항을 저장한 뒤 페이지를 새로고침하세요.",
     skipContent: "본문으로 건너뛰기",
     appNavigation: "앱 탐색",
     appRender: "PDF로 변환",

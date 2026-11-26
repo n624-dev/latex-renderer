@@ -236,11 +236,12 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [items]
+                required: [items, sourceLimits]
                 properties:
                   items:
                     type: array
                     items: { $ref: "#/components/schemas/RenderTarget" }
+                  sourceLimits: { $ref: "#/components/schemas/SourceLimits" }
   /jobs/render-tickets:
     post:
       summary: Create a render job from the authenticated administrator Web UI
@@ -293,6 +294,39 @@ paths:
       responses:
         "200": { description: Existing ready or idempotent Source }
         "201": { description: Source reserved }
+  /jobs/source-refs:
+    post:
+      summary: Issue a Remote MCP reference for a completed Source using the selected render identity
+      description: Requires an administrator session with CSRF protection or an admin API key with `admin:jobs:write`. The selected render identity must own the Source.
+      parameters:
+        - $ref: "#/components/parameters/BrowserCsrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [apiKeyId, sourceId]
+              properties:
+                apiKeyId: { type: string, minLength: 1, maxLength: 128 }
+                sourceId: { type: string, pattern: "^source_[a-f0-9]{32}$" }
+      responses:
+        "201":
+          description: Short-lived Source reference
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [sourceRef, expiresAt]
+                properties:
+                  sourceRef: { type: string }
+                  expiresAt: { type: string, format: date-time }
+        "403": { description: Insufficient privileges }
+        "409":
+          {
+            description: The selected identity is unavailable or has no matching ready Source,
+          }
   /jobs/bulk-delete:
     post:
       summary: Mark up to 100 terminal jobs for deletion
@@ -331,6 +365,64 @@ paths:
           schema: { type: string, minLength: 16, maxLength: 200 }
       responses:
         "202": { description: Retry created }
+  /jobs/{id}/access-ticket:
+    post:
+      summary: Issue a fresh short-lived ticket for an existing render job
+      description: Requires an administrator session with CSRF protection or an admin API key with both `admin:jobs:read` and `admin:jobs:write`. Protect the returned bearer ticket as a credential.
+      parameters:
+        - $ref: "#/components/parameters/Id"
+        - $ref: "#/components/parameters/BrowserCsrf"
+      responses:
+        "200":
+          description: Existing Job and its renewed ticket
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [jobId, jobTicket, expiresAt]
+                properties:
+                  jobId: { type: string }
+                  jobTicket: { type: string }
+                  expiresAt: { type: string, format: date-time }
+        "403":
+          {
+            description: Insufficient privileges or the Job identity was revoked,
+          }
+        "404": { description: Job not found }
+        "410":
+          {
+            description: Job is unavailable or its artifact retention has expired,
+          }
+  /jobs/{id}/retry-svg:
+    post:
+      summary: Retry SVG generation using the PDF from an existing job
+      description: Requires an administrator session with CSRF protection or an admin API key with `admin:jobs:write`.
+      parameters:
+        - $ref: "#/components/parameters/Id"
+        - $ref: "#/components/parameters/BrowserCsrf"
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema: { type: string, minLength: 16, maxLength: 200 }
+      responses:
+        "200":
+          description: Existing SVG retry returned for the same idempotency key
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SvgRetry" }
+        "202":
+          description: SVG retry accepted
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SvgRetry" }
+        "400": { description: Missing or invalid idempotency key }
+        "403": { description: Insufficient privileges }
+        "404": { description: Job not found }
+        "409":
+          {
+            description: Job cannot be retried or the idempotency key conflicts,
+          }
+        "503": { description: Rendering temporarily unavailable }
   /jobs/{id}/artifacts/{path}:
     get:
       summary: Download a retained Job artifact through the administrator session
@@ -564,6 +656,7 @@ paths:
         The additive updater field reports status (ready, activating, unavailable),
         verified running identity (version, commit, slotId), selectedSlotId,
         candidateSlotId and pending. Application and Updater versions are independent.
+        The optional toolchain field reports the Updater's Node.js version and the installed Corepack version when the package metadata is available.
       responses:
         "200": { description: Application update state }
         "503": { description: Update Manager is not configured or unavailable }
@@ -654,9 +747,11 @@ paths:
         "200": { description: Status }
   /system/config:
     get:
-      summary: Read mutable limits
+      summary: Read effective limits and their configuration sources
+      description: SQLite overrides take precedence over host values. The response includes stored overrides in items and resolved limits in effective.
       responses:
         "200": { description: Configuration }
+        "409": { description: A stored limit is invalid }
     patch:
       summary: Update a mutable limit
       requestBody:
@@ -724,6 +819,46 @@ paths:
           schema: { type: string, enum: [pause, resume, drain] }
       responses:
         "200": { description: Worker mode updated }
+  /backups/status:
+    get:
+      summary: Get the encrypted backup and verification status
+      description: Requires an owner session or an owner's admin API key with `admin:system:read`.
+      responses:
+        "200":
+          description: Current backup status
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BackupStatus" }
+        "403": { description: Owner permission required }
+        "503": { description: Backup control is unavailable }
+  /backups/create:
+    post:
+      summary: Request an encrypted backup
+      description: Requires an owner session with CSRF protection or an owner's admin API key with `admin:system:write`. Poll backup status to confirm completion.
+      parameters:
+        - $ref: "#/components/parameters/BrowserCsrf"
+      responses:
+        "202":
+          description: Backup requested
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BackupStatus" }
+        "403": { description: Owner permission required }
+        "503": { description: Backup control is unavailable }
+  /backups/verify:
+    post:
+      summary: Request verification of the latest completed backup
+      description: Requires an owner session with CSRF protection or an owner's admin API key with `admin:system:write`. Poll backup status for the verification result.
+      parameters:
+        - $ref: "#/components/parameters/BrowserCsrf"
+      responses:
+        "202":
+          description: Verification requested
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BackupStatus" }
+        "403": { description: Owner permission required }
+        "503": { description: Backup control is unavailable }
   /audit-logs:
     get:
       summary: Search and page audit log entries
@@ -755,6 +890,11 @@ paths:
           }
 components:
   parameters:
+    BrowserCsrf:
+      in: header
+      name: X-CSRF-Token
+      description: Required when authenticating a mutation with a browser session.
+      schema: { type: string, pattern: "^[A-Za-z0-9_-]{43}$" }
     Id:
       in: path
       name: id
@@ -774,6 +914,57 @@ components:
       name: query
       schema: { type: string, maxLength: 500 }
   schemas:
+    SourceLimits:
+      type: object
+      required: [maxUploadBytes, maxExtractedBytes, maxFileCount, maxZipEntries]
+      properties:
+        maxUploadBytes:
+          {
+            type: integer,
+            minimum: 1,
+            description: Maximum archive and individual file size in bytes.,
+          }
+        maxExtractedBytes:
+          {
+            type: integer,
+            minimum: 1,
+            description: Maximum total extracted size in bytes.,
+          }
+        maxFileCount: { type: integer, minimum: 1 }
+        maxZipEntries:
+          {
+            type: integer,
+            minimum: 1,
+            description: Includes directory entries.,
+          }
+    SvgRetry:
+      type: object
+      required: [id, reused]
+      properties:
+        id: { type: string }
+        reused: { type: boolean }
+    BackupUnitStatus:
+      type: object
+      required: [active, result]
+      properties:
+        active:
+          {
+            type: string,
+            enum: [active, activating, deactivating, failed, inactive, unknown],
+          }
+        result: { type: string }
+    BackupStatus:
+      type: object
+      required: [backup, verification, latestVerification]
+      properties:
+        backup: { $ref: "#/components/schemas/BackupUnitStatus" }
+        verification: { $ref: "#/components/schemas/BackupUnitStatus" }
+        latestVerification:
+          type: [object, "null"]
+          required: [archive, verifiedAt]
+          properties:
+            archive: { type: string }
+            verifiedAt: { type: string, format: date-time }
     Session:
       type: object
       required: [authenticated, authMode, csrfToken, user]

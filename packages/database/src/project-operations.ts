@@ -16,11 +16,15 @@ import type {
   ProjectSummaryRow,
 } from "./repositories/projects.js";
 import type { RevisionJobSummary } from "./repositories/jobs.js";
+import { ProjectDocumentState } from "./project-document-state.js";
 
 export interface ProjectActor {
   userId: string;
   type: string;
   id: string;
+  jobReader?:
+    | { kind: "mcp"; serviceAccountId: string | null }
+    | { kind: "api-key"; serviceAccountId: string; credentialOwnerId: string };
 }
 
 /** The saved-document policy shared by browser, API-key and OAuth callers. */
@@ -70,6 +74,7 @@ export class ProjectOperations {
       revisionCount: this.database.projects.revisionCount(id),
       latestRevision: latestRevision
         ? this.revisionSummary(
+            actor,
             latestRevision,
             jobsByRevision.get(latestRevision.id) ?? [],
             jobCounts.get(latestRevision.id) ?? 0,
@@ -80,6 +85,7 @@ export class ProjectOperations {
       revisionsHasMore: revisions.hasMore,
       revisions: revisions.items.map((revision) =>
         this.revisionSummary(
+          actor,
           revision,
           jobsByRevision.get(revision.id) ?? [],
           jobCounts.get(revision.id) ?? 0,
@@ -109,18 +115,7 @@ export class ProjectOperations {
     );
     return {
       ...page,
-      items: page.items.map((job) => ({
-        id: job.id,
-        status: job.status,
-        createdAt: job.created_at,
-        updatedAt: job.updated_at,
-        retryOfJobId: job.retry_of_job_id,
-        errorCode: job.error_code,
-        outputs: this.database.jobs.outputs(job),
-        engine: job.engine,
-        runtimeDigest: job.runtime_digest,
-        ...(stages.has(job.id) ? { stages: stages.get(job.id) } : {}),
-      })),
+      items: page.items.map((job) => this.jobSummary(actor, job, stages)),
     };
   }
 
@@ -176,6 +171,7 @@ export class ProjectOperations {
       if (this.database.projects.softDelete(id, actor.userId, nowIso()) !== 1)
         throw new AppError("PROJECT_NOT_FOUND", "Project does not exist", 404);
       this.database.drafts.delete(id);
+      new ProjectDocumentState(this.database).clearDeletedProjectContent(id);
       this.database.audit({
         actorType: actor.type,
         actorId: actor.id,
@@ -348,6 +344,7 @@ export class ProjectOperations {
   }
 
   private revisionSummary(
+    actor: ProjectActor,
     revision: ProjectRevisionRow,
     jobs: RevisionJobSummary[],
     jobCount: number,
@@ -364,24 +361,39 @@ export class ProjectOperations {
       engine: revision.engine,
       outputs: this.database.projects.renderOutputs(revision),
       createdAt: revision.created_at,
-      jobs: jobs.map((job) => ({
-        id: job.id,
-        status: job.status,
-        createdAt: job.created_at,
-        updatedAt: job.updated_at,
-        retryOfJobId: job.retry_of_job_id,
-        errorCode: job.error_code,
-        outputs: this.database.jobs.outputs(job),
-        engine: job.engine,
-        runtimeDigest: job.runtime_digest,
-        ...(stages.has(job.id) ? { stages: stages.get(job.id) } : {}),
-      })),
+      jobs: jobs.map((job) => this.jobSummary(actor, job, stages)),
       jobCount,
       jobsHasMore: jobCount > jobs.length,
       jobsNextCursor:
         jobCount > jobs.length && lastJob !== undefined
           ? encodePageCursor({ createdAt: lastJob.created_at, id: lastJob.id })
           : null,
+    };
+  }
+
+  private jobSummary(
+    actor: ProjectActor,
+    job: RevisionJobSummary,
+    stages: ReadonlyMap<string, JobStages>,
+  ) {
+    const reader = actor.jobReader;
+    const canReadDetails = actor.userId === job.user_id && (
+      reader === undefined ||
+      (reader.serviceAccountId === job.service_account_id &&
+        (reader.kind === "mcp" || reader.credentialOwnerId === job.credential_owner_id))
+    );
+    return {
+      id: job.id,
+      status: job.status,
+      createdAt: job.created_at,
+      updatedAt: job.updated_at,
+      retryOfJobId: job.retry_of_job_id,
+      errorCode: job.error_code,
+      outputs: this.database.jobs.outputs(job),
+      engine: job.engine,
+      runtimeDigest: job.runtime_digest,
+      detailAccess: canReadDetails ? "available" as const : "different_connection" as const,
+      ...(stages.has(job.id) ? { stages: stages.get(job.id) } : {}),
     };
   }
 }

@@ -11,7 +11,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { httpIdleConfiguration } from "./http-idle-server.mjs";
 import { isMainModule } from "./is-main-module.mjs";
 import { acquireMutationLock } from "./mutation-lock.mjs";
-import { workerIdleConfiguration } from "./worker-demand.mjs";
+import { workerIdleConfiguration } from "./environment.mjs";
 import { runtimeMode } from "./runtime-mode.mjs";
 import { workerEngineCommand } from "./on-demand-engine.mjs";
 

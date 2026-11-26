@@ -2,6 +2,13 @@ import type { EditorCatalog } from "../messages.js";
 
 export default {
   messages: {
+    reviewConflict: "Granska redigeringskonflikten",
+    saveUnsavedCopy: "Spara en kopia",
+    currentServerFile: "Version på servern",
+    applyMyEdits: "Tillämpa mina ändringar på filen",
+    conflictFileMissing: "Filen saknas i det aktuella utkastet. Spara en kopia för att behålla dina ändringar.",
+    conflictReviewHint: "Granska de ändrade raderna. När du tillämpar ändringarna ersätts filen med din redigerade kopia.",
+    previewReload: "Efter en serveruppdatering visas förhandsvisningen som PNG. Spara ändringarna innan du laddar om sidan för att återställa PDF-förhandsvisningen.",
     skipContent: "Hoppa till innehållet",
     appNavigation: "Appnavigering",
     appRender: "Konvertera till PDF",

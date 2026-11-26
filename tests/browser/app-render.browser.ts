@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { execFileSync } from "node:child_process";
+import { localizedAppScript } from "../../apps/admin-web/src/assets/localized-app-script.js";
 import { createServer, type Server } from "node:http";
 import type { Browser, Page } from "playwright";
 import { launchTestBrowser, newTestPage } from "../helpers/browser-engine.js";
@@ -19,19 +19,7 @@ const previewPng = Buffer.from(
   "base64",
 );
 const previewSha = createHash("sha256").update(previewPng).digest("hex");
-// Serialize the actual tsc-built module in native Node. Vitest's SSR import
-// rewriting changes function.toString(), which is how App emits its script.
-const appScript = execFileSync(
-  process.execPath,
-  [
-    "--input-type=module",
-    "--eval",
-    "const module = await import(process.argv[1]); process.stdout.write(module.appScript);",
-    new URL("../../apps/admin-web/dist/assets/app-script.js", import.meta.url)
-      .href,
-  ],
-  { encoding: "utf8", timeout: 10_000, maxBuffer: 2 * 1024 * 1024 },
-);
+const appScript = localizedAppScript("ja");
 let browser: Browser | undefined;
 const pages: Page[] = [];
 const uploadServers: Server[] = [];

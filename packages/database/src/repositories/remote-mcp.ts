@@ -47,15 +47,6 @@ export interface RemoteMcpPrincipalRow {
   created_at: string;
 }
 
-export interface SourceRefRow {
-  id: string;
-  source_id: string;
-  owner_user_id: string;
-  created_at: string;
-  expires_at: string;
-  revoked_at: string | null;
-}
-
 export class RemoteMcpRepository {
   constructor(private readonly db: DatabaseSync) {}
 
@@ -305,35 +296,6 @@ export class RemoteMcpRepository {
         input.service_account_id,
         input.api_key_id,
         input.created_at,
-      );
-  }
-
-  sourceRef(
-    id: string,
-    ownerUserId: string,
-    now: string,
-  ): SourceRefRow | undefined {
-    return this.db
-      .prepare(
-        `SELECT * FROM source_refs WHERE id=? AND owner_user_id=?
-         AND revoked_at IS NULL AND expires_at>?`,
-      )
-      .get(id, ownerUserId, now) as unknown as SourceRefRow | undefined;
-  }
-
-  insertSourceRef(input: SourceRefRow): void {
-    this.db
-      .prepare(
-        `INSERT INTO source_refs(id,source_id,owner_user_id,created_at,expires_at,revoked_at)
-         VALUES (?,?,?,?,?,?)`,
-      )
-      .run(
-        input.id,
-        input.source_id,
-        input.owner_user_id,
-        input.created_at,
-        input.expires_at,
-        input.revoked_at,
       );
   }
 

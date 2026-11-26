@@ -32,6 +32,8 @@ Check these three things before starting.
    - Closing the browser does not stop the update. If a service restart briefly returns `502`, wait for the interface to reconnect automatically.
 5. Sign in from another browser or a private window. Compile a representative document, download the PDF, and check both the application and updater versions.
 
+Run `n624-latex admin update status --json` to inspect `toolchain.node`, which reports the Node.js version used by the running updater and the supported major versions. `toolchain.corepack` reports the installed Corepack version when available.
+
 ## Notifications and automatic updates {#通知と自動更新}
 
 Under **Update policy**, choose between checking and notifying only (the default) and automatically applying verified updates.

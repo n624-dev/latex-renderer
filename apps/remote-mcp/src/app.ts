@@ -43,6 +43,7 @@ import { observeMcpResponse } from "./response-diagnostics.js";
 import { consentCatalog } from "./consent-messages.js";
 import type { rendererIdentityFromEnvironment } from "./relay-identity.js";
 import { dispatchRelayOperation } from "./relay-operations.js";
+import { localApprovalPath } from "./relay-agent.js";
 
 export interface RemoteMcpAppDependencies {
   registrationLimiter?: AnonymousRegistrationLimiter;
@@ -157,13 +158,17 @@ export function createRemoteMcpApp(dependencies: RemoteMcpAppDependencies) {
       );
   });
   // Run after secureHeaders on the response: no-referrer makes native form
-  // POSTs send Origin: null. Only the consent document needs same-origin;
+  // POSTs send Origin: null. Only approval documents need same-origin;
   // external callbacks still receive no Referer, and Origin/CSRF stay strict.
-  app.use("/oauth/authorize", async (c, next) => {
-    await next();
-    if (c.req.method === "GET" && c.res.status === 200)
-      c.header("Referrer-Policy", "same-origin");
-  });
+  for (const path of ["/oauth/authorize", localApprovalPath])
+    app.use(path, async (c, next) => {
+      await next();
+      if (
+        c.res.status === 200 &&
+        c.res.headers.get("Content-Type")?.startsWith("text/html")
+      )
+        c.header("Referrer-Policy", "same-origin");
+    });
   app.use("*", secureHeaders());
   app.use("*", async (c, next) => {
     c.header("Cache-Control", "private, no-store, no-cache, max-age=0");
@@ -500,7 +505,7 @@ export function createRemoteMcpApp(dependencies: RemoteMcpAppDependencies) {
 
   if (deps.localRelay) {
     const handle = deps.localRelay;
-    for (const path of ["/oauth/relay", rendererRelayAgentOperationPath, rendererRelayAgentRevokePath, rendererRelayAgentDownloadPath])
+    for (const path of [localApprovalPath, rendererRelayAgentOperationPath, rendererRelayAgentRevokePath, rendererRelayAgentDownloadPath])
       app.all(path, (c) => handle(c.req.raw));
   }
 

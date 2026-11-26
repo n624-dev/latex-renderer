@@ -646,7 +646,7 @@ describe("release-based application updates", () => {
       expect(routes).toContain(route);
     }
     expect(web).toContain('"/admin/updates/": "updates"');
-    expect(adminScript).toContain("watchUpdateOperation");
+    expect(adminScript).toContain("watchManagerOperation");
     expect(adminScript).not.toContain("[0-9A-Za-z.-]+)?");
     expect(openapi).toContain("/updates/state:");
     expect(openapi).toContain("/updates/policy:");

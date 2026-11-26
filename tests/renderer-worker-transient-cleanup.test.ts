@@ -13,6 +13,8 @@ import {
   RendererDatabase,
   artifactStoragePath,
 } from "@latex-renderer/database";
+import { ApiKeyService } from "@latex-renderer/auth";
+import { AdminApiKeysService } from "../apps/admin-api/src/services/api-keys.js";
 import { recordFailure } from "../apps/renderer-worker/src/failure.js";
 import { processJob } from "../apps/renderer-worker/src/job-processor.js";
 import type { WorkerConfig } from "../apps/renderer-worker/src/config.js";
@@ -55,6 +57,57 @@ afterEach(async () => {
 });
 
 describe("renderer transient workspace cleanup", () => {
+  it.each(["rotate", "revoke"] as const)(
+    "checks queued Job ownership at the Worker after %s",
+    async (action) => {
+      const { database, config, root, jobId } = await fixture("queued");
+      const apiKeys = new ApiKeyService(
+        database,
+        new Map([["v1", Buffer.alloc(32, 7)]]),
+        "v1",
+      );
+      const keys = new AdminApiKeysService({ database, apiKeys });
+      const actor = { type: "user", id: "user", userId: "user", role: "owner" } as const;
+      const input = join(root, "jobs", jobId, "input");
+      await mkdir(input, { recursive: true });
+      const archive = new yazl.ZipFile();
+      const writing = pipeline(
+        archive.outputStream,
+        createWriteStream(join(input, "source.zip")),
+      );
+      archive.addBuffer(Buffer.from("rotation fixture"), "main.tex");
+      archive.end();
+      await writing;
+      await verifiedWorkerJob(database, root, jobId);
+
+      if (action === "rotate") keys.rotate(actor, "key");
+      else keys.revoke(actor, "key");
+      const claimed = database.worker.claimNext(
+        config.workerId,
+        new Date().toISOString(),
+        new Date(Date.now() + 30_000).toISOString(),
+      );
+      if (!claimed) throw new Error("Queued fixture could not be claimed");
+      const compileBoundary = new Error("Reached renderer launch");
+      const launch = vi.spyOn(docker, "spawnRenderer").mockImplementation(() => {
+        throw compileBoundary;
+      });
+
+      if (action === "rotate") {
+        await expect(processJob(database, config, claimed)).rejects.toBe(compileBoundary);
+        expect(launch).toHaveBeenCalledOnce();
+        expect(database.jobs.get(jobId)?.status).toBe("running");
+      } else {
+        await processJob(database, config, claimed);
+        expect(launch).not.toHaveBeenCalled();
+        expect(database.jobs.get(jobId)).toMatchObject({
+          status: "rejected",
+          error_code: "ACCOUNT_INACTIVE",
+        });
+      }
+    },
+  );
+
   it.each(['["pdf"]', '["pdf","svg"]'])(
     "keeps outer Job timeout without container-published diagnostics (%s)",
     async (outputs) => {
@@ -436,7 +489,7 @@ describe("renderer transient workspace cleanup", () => {
   );
 });
 
-async function fixture(status: "validating" | "canceled"): Promise<{
+async function fixture(status: "validating" | "canceled" | "queued"): Promise<{
   database: RendererDatabase;
   config: WorkerConfig;
   root: string;

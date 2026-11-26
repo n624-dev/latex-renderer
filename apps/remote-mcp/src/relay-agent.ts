@@ -15,7 +15,7 @@ import type { RemoteMcpAppDependencies } from "./app.js";
 import { LocalRelayGrants } from "./relay-grants.js";
 import { dispatchRelayOperation } from "./relay-operations.js";
 
-const localApprovalPath = "/oauth/relay";
+export const localApprovalPath = "/oauth/relay";
 const claimShape = z
   .object({
     id: z.string().max(128),

@@ -13,6 +13,10 @@ import {
 import { join } from "node:path";
 import type { RendererDatabase, WorkerJobRow } from "@latex-renderer/database";
 import { AppError, newId, nowIso } from "@latex-renderer/shared";
+import {
+  syncArtifactTree,
+  syncPublishedAncestors,
+} from "../../../deploy/scripts/durable-storage.mjs";
 import { prepareSourceInput } from "./source-tree-cache.js";
 import { rendererRuntimeDigest, type WorkerConfig } from "./config.js";
 import {
@@ -189,11 +193,13 @@ export async function processStagedJob(
         for (const name of ["compile.log", "errors.json", "dependencies.json"])
           await copyFile(join(staging, name), join(diagnostics, name));
         const artifacts = await validateArtifacts(config, diagnostics, false);
+        await syncArtifactTree(diagnostics, artifacts.map(({ path }) => path));
         const generation = storageGeneration(job.lease_generation, false),
           output = join(root, "outputs", String(generation));
         await mkdir(join(root, "outputs"), { recursive: true, mode: 0o770 });
         await rename(diagnostics, output);
         published.add(output);
+        await syncPublishedAncestors(output, config.storageRoot);
         const timestamp = nowIso(),
           committed = db.transaction(() => {
             if (!owns() || canceled()) return false;
@@ -242,11 +248,11 @@ export async function processStagedJob(
       const artifacts = (
         await validateArtifacts(config, staging, true, false)
       ).filter((a) => !a.path.startsWith("svg/"));
-      if (!artifacts.some((a) => a.path === "previews/page-1.png"))
-        throw new AppError("PREVIEW_MISSING", "PDF preview is missing");
       const pdf = artifacts.find((a) => a.path === "result.pdf");
       if (!pdf) throw new Error("Validated PDF is missing");
-      const pageCount = await previewPageCount(staging, artifacts);
+      const pageCount = await previewPageCount(staging, artifacts, true);
+      if (pageCount === undefined && !artifacts.some((a) => a.path === "previews/page-1.png"))
+        throw new AppError("PREVIEW_MISSING", "PDF preview metadata is missing");
       const sync = await digestRegularFile(
         join(staging, "result.synctex.gz"),
         config.maxOutputBytes,
@@ -272,10 +278,14 @@ export async function processStagedJob(
       );
       if (copiedSync.sha256 !== sync.sha256 || copiedSync.bytes !== sync.bytes)
         throw new Error("SyncTeX checkpoint changed");
+      await syncArtifactTree(candidate, [
+        ...artifacts.map(({ path }) => path), "result.synctex.gz",
+      ]);
       if (!renew() || !owns()) return;
       await mkdir(join(root, "outputs"), { recursive: true, mode: 0o770 });
       await rename(candidate, output);
       published.add(output);
+      await syncPublishedAncestors(output, config.storageRoot);
       const timestamp = nowIso();
       const committed = db.transaction(() => {
         if (
@@ -555,9 +565,11 @@ export async function processStagedJob(
       candidate,
       artifacts,
     );
+    await syncArtifactTree(candidate, artifacts.map(({ path }) => path));
     if (!renew() || !owns()) return;
     await rename(candidate, output);
     published.add(output);
+    await syncPublishedAncestors(output, config.storageRoot);
     const timestamp = nowIso();
     const committed = db.transaction(() => {
       if (

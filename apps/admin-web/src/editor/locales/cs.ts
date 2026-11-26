@@ -2,6 +2,13 @@ import type { EditorCatalog } from "../messages.js";
 
 export default {
   messages: {
+    reviewConflict: "Zkontrolovat konflikt úprav",
+    saveUnsavedCopy: "Uložit kopii",
+    currentServerFile: "Verze na serveru",
+    applyMyEdits: "Použít mé úpravy v tomto souboru",
+    conflictFileMissing: "Soubor v aktuálním konceptu chybí. Uložte kopii, chcete-li zachovat úpravy.",
+    conflictReviewHint: "Zkontrolujte změněné řádky. Po potvrzení nahradí soubor vaše upravená kopie.",
+    previewReload: "Po aktualizaci serveru se zobrazuje náhled PNG. Uložte změny a obnovte stránku, chcete-li zobrazit náhled PDF.",
     skipContent: "Přejít na obsah",
     appNavigation: "Navigace aplikace",
     appRender: "Převést do PDF",

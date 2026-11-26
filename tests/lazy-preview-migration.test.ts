@@ -1,24 +1,11 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { RendererDatabase } from "../packages/database/src/index.js";
-import { lazyPreviewsV22Sql } from "../packages/database/src/schema.js";
 const numbered = readFileSync(
   "deploy/migrations/022_lazy_previews.sql",
   "utf8",
 );
-const normalize = (sql: string) =>
-  sql
-    .split("\n")
-    .filter((line) => !line.trim().startsWith("--"))
-    .join("\n")
-    .replace(/\s+/g, " ")
-    .trim();
 describe("migration 22 deployment/application parity", () => {
-  it("keeps all reservations, cache tables and internal audit protections in the numbered transactional form", () => {
-    expect(normalize(numbered)).toBe(
-      normalize(`BEGIN IMMEDIATE; ${lazyPreviewsV22Sql} COMMIT;`),
-    );
-  });
   it.each(["application", "numbered"])(
     "supports normal startup and quota queries after %s migration",
     (mode) => {

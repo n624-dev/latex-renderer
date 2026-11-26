@@ -32,12 +32,15 @@ OpenAPI 定義：[予約とジョブ作成（gateway.openapi.yaml）](/openapi/g
 > API キー、`uploadTicket`、`jobTicket` をログ、URL クエリ、送信するソース ZIP 内に含めないでください。
 
 > [!NOTE]
-> **キー単位のジョブ所有固定**：API キーで作成した Job は、**作成したその API キー自身**に固定されます。同じユーザーや同じ Service Account の別キーであっても、既存 Job の `job-tickets` 更新・同一 `Idempotency-Key` での作成応答再取得・SVG 再試行を行うと `404` で拒否されます（元のキーが失効しても別キーへ引き継がれません）。一方、Source と保存 Project は同一ユーザー内で共有されるため、共有 Source から別キー＋新しい `Idempotency-Key` で**新規 Job** を作ることは可能です。
+API キーで作成した Job は、そのキーにひも付きます。管理画面でキーをローテーションすると、交換先のキーで既存 Job のチケット更新、同じ `Idempotency-Key` での応答再取得、SVG 再試行ができます。交換元のキーと発行済みチケットは失効します。新しいキーに描画権限があれば、受付済みの待機 Job はそのまま進みます。この引き継ぎは対応版を導入した後のローテーションから適用されます。
+
+独立して発行したキーから既存 Job を操作すると、同じ Service Account 内でも `404` が返ります。漏えい時はキーを失効させてください。Source と保存 Project は同じユーザー内で共有されるため、別キーでも共有 Source から新しい Job を作れます。保存版の履歴に `detailAccess: "different_connection"` がある Job は、その接続からは詳細を開けません。
 
 ## APIエンドポイント
 
 | メソッド | パス | 用途 |
 | --- | --- | --- |
+| `GET` / `HEAD` | `/api/v1/health` | Gateway の応答を確認（認証不要。HEAD は本文なし） |
 | `POST` | `/api/v1/source-tickets` | Source を予約、または同一ユーザー内で既存 ZIP を再利用 |
 | `PUT` | `/api/v1/sources/{sourceId}/content` | Source ZIP を検証してアップロード |
 | `POST` | `/api/v1/render-tickets` | 既存 Source から Job 作成、SVG 再試行、または 1 ジョブ従来フローの予約 |

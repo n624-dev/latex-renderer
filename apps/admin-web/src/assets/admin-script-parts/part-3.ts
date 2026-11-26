@@ -1,4 +1,8 @@
 export const part3 = String.raw`
+function showIssuedCredential(result) {
+  credentialDialog(result.apiKey);
+  keys().catch(()=>{err.textContent=adminMessage("apiKeyIssued")});
+}
 async function keys(){
   const params=new URLSearchParams(location.search),keyApi=new URLSearchParams();if(params.get('cursor'))keyApi.set('cursor',params.get('cursor'));const[k,a]=await Promise.all([request('/api-keys'+(keyApi.size?'?'+keyApi:'')),request('/service-accounts')]);
   const renderScopes=[['render:create',adminMessage("createJob")],['render:read:own',adminMessage("renewAShortLivedTokenFor")]];
@@ -9,11 +13,53 @@ async function keys(){
   if(requestedAccount&&!a.items.some(x=>x.id===requestedAccount&&x.status==='active'))throw new Error(adminMessage("theSpecifiedServiceAccountIsDisabled"));
   const accountOptions=a.items.filter(x=>x.status==='active').map(x=>'<option value="'+esc(x.id)+'"'+(x.id===requestedAccount?' selected':'')+'>'+esc(x.name)+'</option>').join('');
   out.innerHTML=section(adminMessage("apiKeys"),("<div class=\"actions\"><button id=\"key-create\">"+esc(adminMessage("issueApiKey"))+"</button></div>")+table(k.items,[[adminMessage("keyPrefix"),'prefix'],[adminMessage("name"),'name'],[adminMessage("serviceAccount"),x=>a.items.find(account=>account.id===x.service_account_id)?.name||adminMessage("seeDetails")],[adminMessage("lastUsed"),x=>fmt(x.last_used_at)],[adminMessage("revoke"),x=>fmt(x.revoked_at)]],x=>'<button class="secondary" data-k-detail="'+esc(x.id)+("\">"+esc(adminMessage("details"))+"</button>")+(x.revoked_at?'':'<button class="secondary" data-k-rotate="'+esc(x.id)+("\">"+esc(adminMessage("rotate"))+"</button><button class=\"danger\" data-k-revoke=\"")+esc(x.id)+("\">"+esc(adminMessage("revoke"))+"</button>")))+nextPage(k.nextCursor));
-  document.querySelector('#key-create').onclick=()=>{const kindField=("<label>"+esc(adminMessage("keyType"))+"<select name=\"kind\" id=\"dialog-key-kind\"><option value=\"render\">"+esc(adminMessage("renderingKey"))+"</option>")+(me.role==='owner'?("<option value=\"admin\">"+esc(adminMessage("adminKeyOwnersOnly"))+"</option>"):'')+'</select></label>',dialog=formDialog({title:adminMessage("issueApiKey"),description:adminMessage("theNewKeyAppearsOnlyOnce"),fields:("<label>"+esc(adminMessage("serviceAccount"))+"<select name=\"account\" required autofocus>")+accountOptions+("</select></label><label>"+esc(adminMessage("name"))+"<input name=\"name\" required maxlength=\"100\"></label>")+kindField+scopeFields(renderScopes,'render')+(me.role==='owner'?scopeFields(adminScopes,'admin'):'')+("<label>"+esc(adminMessage("expires"))+"<input name=\"expiresAt\" type=\"datetime-local\"></label>"),submitLabel:adminMessage("issue"),successMessage:adminMessage("apiKeyIssued"),wide:true,onSubmit:async f=>{const scopes=f.getAll('scope').map(String),expires=f.get('expiresAt');if(!scopes.length)throw new Error(adminMessage("selectAtLeastOneScope"));const v=await request('/service-accounts/'+f.get('account')+'/api-keys',{method:'POST',...jsonBody({name:f.get('name'),scopes,expiresAt:expires?new Date(String(expires)).toISOString():null})});sessionStorage.setItem('issued-key',v.apiKey);return v}}),kind=dialog.querySelector('#dialog-key-kind'),syncKind=()=>{for(const field of dialog.querySelectorAll('[data-key-kind]')){const active=field.dataset.keyKind===kind.value;field.hidden=!active;for(const input of field.querySelectorAll('input'))input.disabled=!active}};kind.onchange=syncKind;syncKind()};
-  bindAction('[data-k-rotate]',b=>confirmDialog({title:adminMessage("rotateApiKey"),description:b.dataset.kRotate,summary:("<div class=\"notice warning\">"+esc(adminMessage("theOldKeyWillBeRevoked"))+"</div>"),submitLabel:adminMessage("rotate"),danger:true,successMessage:adminMessage("apiKeyRotated"),onSubmit:async()=>{const v=await request('/api-keys/'+b.dataset.kRotate+'/rotate',{method:'POST',...jsonBody({})});sessionStorage.setItem('issued-key',v.apiKey);return v}}));
+  document.querySelector('#key-create').onclick=()=>{
+    const kindField='<label>'+esc(adminMessage("keyType"))+'<select name="kind" id="dialog-key-kind"><option value="render">'+esc(adminMessage("renderingKey"))+'</option>'+
+      (me.role==='owner'?'<option value="admin">'+esc(adminMessage("adminKeyOwnersOnly"))+'</option>':'')+'</select></label>';
+    const accountPicker='<div class="wide"><label>'+esc(adminMessage("search"))+'<input data-account-query maxlength="200" autocomplete="off"></label><div class="actions">'+
+      '<button type="button" class="secondary" data-account-search>'+esc(adminMessage("search"))+'</button>'+
+      '<button type="button" class="secondary" data-account-next>'+esc(adminMessage("nextPage"))+'</button></div>'+
+      '<p data-account-error role="status"></p></div>'+
+      '<label>'+esc(adminMessage("serviceAccount"))+'<select name="account" required autofocus>'+accountOptions+'</select></label>';
+    const dialog=formDialog({
+      title:adminMessage("issueApiKey"),
+      description:adminMessage("theNewKeyAppearsOnlyOnce"),
+      fields:accountPicker+'<label>'+esc(adminMessage("name"))+'<input name="name" required maxlength="100"></label>'+
+        kindField+scopeFields(renderScopes,'render')+(me.role==='owner'?scopeFields(adminScopes,'admin'):'')+
+        '<label>'+esc(adminMessage("expires"))+'<input name="expiresAt" type="datetime-local"></label>',
+      submitLabel:adminMessage("issue"),
+      successMessage:adminMessage("apiKeyIssued"),
+      wide:true,
+      reload:false,
+      afterSuccess:showIssuedCredential,
+      onSubmit:async f=>{
+        if(isLoading())throw new Error(adminMessage("processing"));
+        const scopes=f.getAll('scope').map(String),expires=f.get('expiresAt');
+        if(!scopes.length)throw new Error(adminMessage("selectAtLeastOneScope"));
+        return request('/service-accounts/'+encodeURIComponent(String(f.get('account')))+ '/api-keys',{
+          method:'POST',...jsonBody({name:f.get('name'),scopes,expiresAt:expires?new Date(String(expires)).toISOString():null})
+        });
+      }
+    });
+    const isLoading=bindPagedChoices(dialog,{
+      endpoint:'/service-accounts',initialCursor:a.nextCursor,prefix:'account',
+      select:dialog.querySelector('[name="account"]'),
+      label:account=>account.name,emptyLabel:adminMessage("noData")
+    });
+    const kind=dialog.querySelector('#dialog-key-kind');
+    const syncKind=()=>{
+      for(const field of dialog.querySelectorAll('[data-key-kind]')){
+        const active=field.dataset.keyKind===kind.value;
+        field.hidden=!active;
+        for(const input of field.querySelectorAll('input'))input.disabled=!active;
+      }
+    };
+    kind.onchange=syncKind;
+    syncKind();
+  };
+  bindAction('[data-k-rotate]',b=>confirmDialog({title:adminMessage("rotateApiKey"),description:b.dataset.kRotate,summary:("<div class=\"notice warning\">"+esc(adminMessage("theOldKeyWillBeRevoked"))+"</div>"),submitLabel:adminMessage("rotate"),danger:true,successMessage:adminMessage("apiKeyRotated"),reload:false,afterSuccess:showIssuedCredential,onSubmit:async()=>{const v=await request('/api-keys/'+b.dataset.kRotate+'/rotate',{method:'POST',...jsonBody({})});return v}}));
   bindAction('[data-k-revoke]',b=>confirmDialog({title:adminMessage("revokeApiKey"),description:b.dataset.kRevoke,summary:("<div class=\"notice warning\">"+esc(adminMessage("thisApiKeyWillBeRevoked"))+"</div>"),submitLabel:adminMessage("revoke"),danger:true,successMessage:adminMessage("apiKeyRevoked"),onSubmit:()=>request('/api-keys/'+b.dataset.kRevoke+'/revoke',{method:'POST',...jsonBody({})})}));
   bindAction('[data-k-detail]',b=>details(k.items.find(item=>item.id===b.dataset.kDetail),adminMessage("apiKeyDetails")));
-  const issued=sessionStorage.getItem('issued-key');if(issued)credentialDialog(issued)
 }
 
 async function jobsLegacy(){

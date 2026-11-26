@@ -160,6 +160,6 @@
   "waitingForPreviewGeneration": "Warte auf Vorschauerstellung…",
   "whenSelectingMultipleFilesSelectOnly": "Wählen Sie bei Mehrfachauswahl nur TeX-Dateien aus.",
   "whichDocumentDoYouWantTo": "Welches Dokument möchten Sie in ein PDF umwandeln?",
-  "zipArchiveMustBe20Mib": "Das ZIP-Archiv darf maximal 20 MiB groß sein.",
+  "zipArchiveSizeLimit": "Das ZIP-Archiv darf maximal {limit} groß sein.",
   "zoom": "Zoom"
 }

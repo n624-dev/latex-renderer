@@ -120,9 +120,9 @@ importers:
       '@latex-renderer/database':
         specifier: workspace:*
         version: link:../../packages/database
-      '@latex-renderer/remote-mcp-core':
+      '@latex-renderer/renderer-core':
         specifier: workspace:*
-        version: link:../../packages/remote-mcp-core
+        version: link:../../packages/renderer-core
       '@latex-renderer/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -540,6 +540,24 @@ importers:
         version: 4.6.7
 
   packages/remote-mcp-core:
+    dependencies:
+      '@latex-renderer/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      '@latex-renderer/database':
+        specifier: workspace:*
+        version: link:../database
+      '@latex-renderer/renderer-core':
+        specifier: workspace:*
+        version: link:../renderer-core
+      '@latex-renderer/shared':
+        specifier: workspace:*
+        version: link:../shared
+      '@latex-renderer/zip-validation':
+        specifier: workspace:*
+        version: link:../zip-validation
+
+  packages/renderer-core:
     dependencies:
       '@latex-renderer/contracts':
         specifier: workspace:*

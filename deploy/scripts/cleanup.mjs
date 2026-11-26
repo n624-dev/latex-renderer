@@ -5,6 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { pruneServiceDiagnostics } from "./service-diagnostics.mjs";
 import { sourceReferenceCountSql } from "../../packages/database/dist/source-lifecycle.js";
 import { collectSourceTrees } from "./source-tree-gc.mjs";
+import { claimUnprotectedSources } from "./backup-source-protection.mjs";
 import {
   readAuditCheckpoint,
   validateAuditCheckpoint,
@@ -43,6 +44,7 @@ const draftProjectBytes = boundedIntegerEnvironment(
   Number.MAX_SAFE_INTEGER,
 );
 const historyDays = positive("JOB_HISTORY_RETENTION_DAYS", 30);
+const sourceHistoryDays = positive("SOURCE_HISTORY_RETENTION_DAYS", 30);
 const auditRetentionDays = positive("AUDIT_LOG_RETENTION_DAYS", 365);
 const auditPruneBatchSize = boundedIntegerEnvironment(
   process.env,
@@ -323,43 +325,33 @@ for (const record of jobs) {
   }
 }
 
-const sources = db
-  .prepare(
-    `SELECT id,storage_key FROM sources s WHERE (
-      (deletion_status='retained' AND status IN ('ready','expired') AND expires_at<=?)
-      OR (status='deleting' AND deletion_status IN ('retained','pending','deleting'))
-      OR (deletion_status IN ('pending','deleting','retry')
-          AND (deletion_next_attempt_at IS NULL OR deletion_next_attempt_at<=?))
-    ) AND ${sourceReferenceCountSql("s")}=0
-    ORDER BY COALESCE(deletion_next_attempt_at,expires_at,updated_at),id LIMIT 100`,
-  )
-  .all(now, now);
+let sources = [];
+try {
+  sources = await claimUnprotectedSources(
+    process.env.BACKUP_SOURCE_COORDINATION_DIR,
+    (protectedIds) => db.prepare(
+      `UPDATE sources SET status='deleting',deletion_status='deleting',
+         deletion_attempts=deletion_attempts+1,deletion_error=NULL,
+         deletion_next_attempt_at=NULL,updated_at=?
+       WHERE id IN (
+         SELECT s.id FROM sources s WHERE (
+           (deletion_status='retained' AND status IN ('ready','expired') AND expires_at<=?)
+           OR (status='deleting' AND deletion_status IN ('retained','pending','deleting'))
+           OR (deletion_status IN ('pending','deleting','retry')
+               AND (deletion_next_attempt_at IS NULL OR deletion_next_attempt_at<=?))
+         ) AND ${sourceReferenceCountSql("s")}=0
+           AND s.id NOT IN (SELECT value FROM json_each(?))
+         ORDER BY COALESCE(deletion_next_attempt_at,expires_at,updated_at),id LIMIT 100
+       ) RETURNING id,storage_key`,
+    ).all(now, now, now, JSON.stringify(protectedIds)),
+  );
+} catch (error) {
+  recordFailure("source-claim", "bounded-batch", error);
+}
 let sourcesDeleted = 0;
 for (const record of sources) {
   const id = String(record.id),
     storageKey = String(record.storage_key);
-  try {
-    db.exec("BEGIN IMMEDIATE");
-    const changed = db
-      .prepare(
-        `UPDATE sources SET status='deleting',deletion_status='deleting',
-         deletion_attempts=deletion_attempts+1,deletion_error=NULL,
-         deletion_next_attempt_at=NULL,updated_at=? WHERE id=? AND (
-          (deletion_status='retained' AND status IN ('ready','expired') AND expires_at<=?)
-          OR (status='deleting' AND deletion_status IN ('retained','pending','deleting'))
-          OR (deletion_status IN ('pending','deleting','retry')
-              AND (deletion_next_attempt_at IS NULL OR deletion_next_attempt_at<=?))
-        )
-    AND ${sourceReferenceCountSql("sources")}=0`,
-      )
-      .run(now, id, now, now);
-    db.exec("COMMIT");
-    if (changed.changes !== 1) continue;
-  } catch (error) {
-    if (db.isTransaction) db.exec("ROLLBACK");
-    recordFailure("source-claim", id, error);
-    continue;
-  }
   try {
     if (isAbsolute(storageKey) || storageKey.split("/").includes(".."))
       throw new Error("Unsafe source storage key");
@@ -433,6 +425,28 @@ for (const id of old) {
     recordFailure("job-history-delete", id, error);
   }
 }
+const sourceHistoryCutoff = new Date(Date.now() - sourceHistoryDays * 86_400_000).toISOString();
+let sourceHistoryDeleted = 0;
+try {
+  // Physical Source deletion can precede Job history expiry. Unlike file
+  // collection, row collection checks even expired Job and deleted Project references.
+  sourceHistoryDeleted = Number(db.prepare(
+    `DELETE FROM sources WHERE id IN (
+      SELECT s.id FROM sources s
+      WHERE s.status='deleted' AND s.deletion_status='deleted' AND s.deleted_at<=?
+        AND NOT EXISTS (SELECT 1 FROM jobs WHERE source_id=s.id)
+        AND NOT EXISTS (SELECT 1 FROM project_revisions WHERE source_id=s.id)
+        AND NOT EXISTS (SELECT 1 FROM project_draft_files WHERE source_id=s.id)
+        AND NOT EXISTS (SELECT 1 FROM job_draft_input_files WHERE source_id=s.id)
+        AND NOT EXISTS (SELECT 1 FROM source_upload_nonces WHERE source_id=s.id)
+        AND NOT EXISTS (SELECT 1 FROM source_refs WHERE source_id=s.id)
+        AND NOT EXISTS (SELECT 1 FROM idempotency_records WHERE resource_id=s.id)
+      ORDER BY s.deleted_at,s.id LIMIT 1000
+    )`,
+  ).run(sourceHistoryCutoff).changes);
+} catch (error) {
+  recordFailure("source-history-delete", "bounded-batch", error);
+}
 let auditLogsDeleted = 0;
 let auditSequenceEntriesDeleted = 0;
 try {
@@ -492,6 +506,7 @@ console.log(
     draftPreviewsScheduled,
     sourcesDeleted,
     historyDeleted,
+    sourceHistoryDeleted,
     auditLogsDeleted,
     auditSequenceEntriesDeleted,
     staleJobUploadsRecovered,

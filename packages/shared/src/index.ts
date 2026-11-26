@@ -3,13 +3,11 @@ import { PUBLIC_ORIGIN } from "./version.js";
 
 export * from "./version.js";
 export * from "./pagination.js";
-
-export interface ResourceLimits {
-  maxUploadBytes: number;
-  maxExtractedBytes: number;
-  maxFileCount: number;
-  maxZipEntries: number;
-}
+export * from "./resource-limits.js";
+import {
+  DEFAULT_RESOURCE_LIMITS,
+  type ResourceLimits,
+} from "./resource-limits.js";
 
 /** Keep the direct client, MCP server, and managed launcher fallback order aligned. */
 export function clientRendererBaseUrl(
@@ -22,13 +20,6 @@ export function clientRendererBaseUrl(
     PUBLIC_ORIGIN
   );
 }
-
-export const DEFAULT_RESOURCE_LIMITS: Readonly<ResourceLimits> = Object.freeze({
-  maxUploadBytes: 20 * 1024 * 1024,
-  maxExtractedBytes: 100 * 1024 * 1024,
-  maxFileCount: 500,
-  maxZipEntries: 1_000,
-});
 
 export function boundedIntegerEnvironment(
   environment: Readonly<Record<string, string | undefined>>,

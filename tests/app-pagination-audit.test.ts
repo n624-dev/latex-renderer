@@ -1,24 +1,13 @@
-import { execFileSync } from "node:child_process";
-import { runInNewContext } from "node:vm";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  installApp,
+  jobTracker,
+  renderJobResult,
+} from "../apps/admin-web/src/assets/app-script.js";
+import { appBrowserConfig } from "../apps/admin-web/src/assets/localized-app-script.js";
 
-// Use the emitted controller to exercise the same function serialization and
-// catalog data as the browser.
-const appScript = execFileSync(
-  process.execPath,
-  [
-    "--input-type=module",
-    "--eval",
-    "const module = await import(process.argv[1]); process.stdout.write(module.appScript);",
-    new URL("../apps/admin-web/dist/assets/app-script.js", import.meta.url).href,
-  ],
-  {
-    encoding: "utf8",
-    timeout: 10_000,
-    maxBuffer: 2 * 1024 * 1024,
-    env: { ...process.env, NODE_OPTIONS: "--max-old-space-size=96" },
-  },
-);
+const config = appBrowserConfig("ja");
+afterEach(() => vi.unstubAllGlobals());
 
 class Element {
   innerHTML = "";
@@ -46,35 +35,33 @@ type Fetcher = (
   input: RequestInfo | URL,
   init?: RequestInit,
 ) => Promise<Response>;
-function harness(elements: Map<string, Element>, pathname = "/app/render/") {
-  const context = {
-    Headers,
-    URLSearchParams,
-    URL,
-    setTimeout,
-    crypto,
-    CSS: { escape: (value: string) => value },
-    document: {
-      documentElement: { lang: "ja" },
-      querySelector: (selector: string) => elements.get(selector) ?? null,
-      createElement: () => new Element(),
-    },
-    location: { pathname, assign: vi.fn() },
-    hooks: undefined as unknown as {
-      installRender(fetcher: Fetcher): void;
-      installProjects(fetcher: Fetcher): void;
-      renderJobResult(...args: unknown[]): void;
-    },
+function fixture(elements: Map<string, Element>, pathname = "/app/render/") {
+  vi.stubGlobal("CSS", { escape: (value: string) => value });
+  vi.stubGlobal("document", {
+    documentElement: { lang: "ja" },
+    body: { dataset: {} },
+    querySelector: (selector: string) => elements.get(selector) ?? null,
+    querySelectorAll: () => [],
+    createElement: () => new Element(),
+  });
+  vi.stubGlobal("location", {
+    pathname,
+    href: `http://localhost${pathname}`,
+    assign: vi.fn(),
+  });
+  return (page: string, fetcher: Fetcher) => {
+    document.body.dataset.appPage = page;
+    return installApp(config, (input, init) => {
+      if (input === "/auth/session")
+        return Promise.resolve(Response.json({ csrfToken: "test-csrf" }));
+      if (input === "/app/api/v1/me")
+        return Promise.resolve(Response.json({ isAdmin: false }));
+      return fetcher(input, init);
+    });
   };
-  const end = appScript.lastIndexOf("  (function installApp(");
-  expect(end).toBeGreaterThan(0);
-  runInNewContext(
-    appScript.slice(0, end) +
-      'csrfToken = "test-csrf"; globalThis.hooks = {installRender, installProjects, renderJobResult};})();',
-    context,
-  );
-  return context.hooks;
 }
+
+const resultOnly: Fetcher = () => Promise.resolve(Response.json({}));
 
 describe("audit Web pagination and retained previews", () => {
   it("sends the selected rerender outputs and displays per-Job formats", async () => {
@@ -86,10 +73,10 @@ describe("audit Web pagination and retained previews", () => {
     detail.children.push(button);
     detail.selectors.set("#outputs-revision_test", select);
     let submitted: unknown;
-    harness(
+    await fixture(
       new Map([["#app-project-detail", detail]]),
       `/app/projects/project_${"a".repeat(32)}/`,
-    ).installProjects((_input, init) => {
+    )("projects", (_input, init) => {
       if (init?.method === "POST") {
         if (typeof init.body !== "string")
           throw new Error("Expected JSON body");
@@ -165,7 +152,7 @@ describe("audit Web pagination and retained previews", () => {
       selectors.set(`#${name}`, element);
     }
     let requests = 0;
-    harness(selectors).installRender((input) => {
+    await fixture(selectors)("render", (input) => {
       const path = input instanceof Request ? input.url : input.toString();
       if (!path.includes("/projects?"))
         return Promise.resolve(Response.json({ items: [], hasMore: false }));
@@ -202,32 +189,32 @@ describe("audit Web pagination and retained previews", () => {
       ["#app-revisions-next", next],
     ]);
     let requests = 0;
-    harness(
-      elements,
-      `/app/projects/project_${"a".repeat(32)}/`,
-    ).installProjects(() => {
-      requests++;
-      return Promise.resolve(
-        Response.json({
-          displayName: "Project",
-          revisions: [
-            {
-              id: String(requests),
-              revisionNumber: requests,
-              displayName: "Revision",
-              originalFilename: "main.tex",
-              entrypoint: "main.tex",
-              createdAt: "2026-01-01",
-              jobs: [],
-              jobCount: 0,
-              jobsHasMore: false,
-            },
-          ],
-          revisionsHasMore: requests === 1,
-          revisionsNextCursor: requests === 1 ? "next" : null,
-        }),
-      );
-    });
+    await fixture(elements, `/app/projects/project_${"a".repeat(32)}/`)(
+      "projects",
+      () => {
+        requests++;
+        return Promise.resolve(
+          Response.json({
+            displayName: "Project",
+            revisions: [
+              {
+                id: String(requests),
+                revisionNumber: requests,
+                displayName: "Revision",
+                originalFilename: "main.tex",
+                entrypoint: "main.tex",
+                createdAt: "2026-01-01",
+                jobs: [],
+                jobCount: 0,
+                jobsHasMore: false,
+              },
+            ],
+            revisionsHasMore: requests === 1,
+            revisionsNextCursor: requests === 1 ? "next" : null,
+          }),
+        );
+      },
+    );
     await vi.waitFor(() => expect(next.onclick).toBeTypeOf("function"));
     const click = next.onclick;
     if (!click) throw new Error("Missing pagination handler");
@@ -239,17 +226,30 @@ describe("audit Web pagination and retained previews", () => {
     expect(requests).toBe(2);
   });
 
-  it("uses the actual padded preview path in the result button", () => {
+  it("uses the actual padded preview path in the result button", async () => {
     const container = new Element();
-    harness(new Map()).renderJobResult(
-      container,
-      () => {},
-      {},
+    await fixture(new Map())("", resultOnly);
+    renderJobResult(
+      container as unknown as HTMLElement,
+      resultOnly,
+      jobTracker(resultOnly, "job_test"),
       {
         id: "job_test",
         status: "succeeded",
+        retentionExpiresAt: null,
+        errorCode: null,
+        errorMessage: null,
         artifacts: [],
-        previews: [{ relativePath: "previews/page-01.png", type: "preview" }],
+        previews: [
+          {
+            relativePath: "previews/page-01.png",
+            type: "preview",
+            size: 0,
+            sha256: "0".repeat(64),
+            createdAt: "2026-01-01",
+            downloadUrl: "/api/v1/jobs/job_test/artifacts/previews/page-01.png",
+          },
+        ],
       },
       "Result",
     );
@@ -260,15 +260,17 @@ describe("audit Web pagination and retained previews", () => {
     ).toContain("プレビュー");
   });
 
-  it("shows detailed queued resource waiting through the shipped result renderer", () => {
+  it("shows detailed queued resource waiting in the result", async () => {
     const container = new Element();
-    harness(new Map()).renderJobResult(
-      container,
-      () => {},
-      {},
+    await fixture(new Map())("", resultOnly);
+    renderJobResult(
+      container as unknown as HTMLElement,
+      resultOnly,
+      jobTracker(resultOnly, "job_test"),
       {
         id: "job_test",
         status: "queued",
+        retentionExpiresAt: null,
         errorCode: "HOST_RESOURCE_WAIT",
         errorMessage: "利用可能: 700MiB、開始条件: 704MiB",
         artifacts: [],

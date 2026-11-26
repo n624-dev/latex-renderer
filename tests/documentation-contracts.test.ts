@@ -44,10 +44,14 @@ describe("documentation implementation contracts", () => {
       tunnelDocs = accessDocs.slice(accessDocs.indexOf("## Tunnel order")),
       expected = [
         [
+          "path: ^/mcp/relay/local-(operation|revoke|download)(/|$)",
+          "Loopback-only MCP relay paths",
+        ],
+        [
           "path: ^/\\.well-known/oauth-(authorization-server|protected-resource)(/.*)?$",
           "OAuth discovery metadata",
         ],
-        ["path: ^/(oauth|mcp)(/.*)?$", "`/oauth/*` and `/mcp`"],
+        ["path: ^/(oauth|mcp)(/|$)", "`/oauth/*` and `/mcp`"],
         ["path: ^/auth(/.*)?$", "`/auth/*`"],
         ["path: ^/admin/api(/.*)?$", "`/admin/api/*`"],
         ["path: ^/admin(/.*)?$", "`/admin/*`"],

@@ -1,8 +1,17 @@
 # Database migrations
 
 Application startup applies pending migrations through `RendererDatabase.migrate()`.
-The numbered SQL files remain the auditable deployment form and are also used
-by migration compatibility tests.
+The server reads the numbered SQL files for migrations 8–14 and 17 onward.
+The signed server bundle includes these files. The server owns the transaction
+and checks `schema_migrations` while holding the write lock. Migrations 12 and
+14 check for columns already present in the bootstrap schema. Migration 23
+checks foreign-key references before committing the table change.
+
+Migrations 1–7 and 15–16 use the historical bootstrap and compatibility checks
+in the database package. Use the application preflight for partially initialized
+databases or databases that were restored with older schema markers. The
+numbered SQL and recovery notes for those versions document their standalone
+operations and remain available for manual inspection and compatibility tests.
 
 Before migrations on production:
 
@@ -15,7 +24,8 @@ Before migrations on production:
    node deploy/scripts/preflight-users-migration.mjs /var/lib/latex-renderer/renderer.sqlite3
    ```
 
-4. Confirm the preflight reports target version 27. Deploy the application; the
+4. Confirm the preflight reports the latest numbered migration in the release.
+   Deploy the application. The
    first process holding `BEGIN IMMEDIATE` performs the migration and later
    processes observe it as already applied.
 5. Verify `PRAGMA integrity_check`, `PRAGMA foreign_key_check`, migration version,
@@ -101,3 +111,7 @@ Accounts without a preference continue to use device language negotiation.
 Migration 28 stores versioned document conditions, the selected Project revision,
 and review records bound to a Job and PDF digest. Back up the database and its
 matching storage as one recovery point.
+
+Migration 32 records logical ownership for API keys rotated after the migration.
+It does not infer relationships from old audit logs or change a Job's original
+credential ID.

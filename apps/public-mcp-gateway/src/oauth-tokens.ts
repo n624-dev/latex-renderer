@@ -76,6 +76,7 @@ export interface ConsentProof {
   id: string;
   browserHash: string;
   requestHash: string;
+  clientId: string;
 }
 
 export function validateOAuthAuthorizationRequest(
@@ -335,6 +336,7 @@ export function consentProof(
 ): ConsentProof {
   return {
     id: session.id,
+    clientId: request.clientId,
     browserHash: hash(session.browserSecret),
     requestHash: createHmac("sha256", session.browserSecret)
       .update("latex-renderer-consent-v1\0")

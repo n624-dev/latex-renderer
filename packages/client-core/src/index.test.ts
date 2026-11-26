@@ -16,12 +16,15 @@ import type {
   SourceRenderResponse,
   SourceTicketResponse,
 } from "@latex-renderer/contracts";
+import { AppError } from "@latex-renderer/shared";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   compileProjectPdf,
+  acceptedJobRecovery,
   downloadJobArtifacts,
   getJob,
   renderProject,
+  renderSource,
   requestJobAction,
   shouldExcludeProjectPath,
   uploadProjectSource,
@@ -40,13 +43,42 @@ afterEach(async () => {
 });
 
 describe("client core", () => {
+  it("returns the accepted ID and terminal status after an artifact transfer fails", async () => {
+    const root = await temporaryRoot();
+    const jobId = `job_${"4".repeat(32)}`;
+    const complete = { ...job("succeeded"), id: jobId };
+    const client = new FakeClient([complete]);
+    client.createSourceJob = () =>
+      Promise.resolve({
+        jobId,
+        jobTicket: "job-ticket-fixture",
+        expiresAt: new Date(Date.now() + 3600000).toISOString(),
+      });
+    client.download = () =>
+      Promise.reject(new Error("credential in upstream URL"));
+    const target = join(root, "out");
+    await expect(
+      renderSource(client, "source_fixture", { outputDirectory: target }).catch(
+        (error: unknown) => {
+          expect(error instanceof Error && error.message).not.toContain(
+            "credential in upstream URL",
+          );
+          return acceptedJobRecovery(error);
+        },
+      ),
+    ).resolves.toEqual({ jobId, lastStatus: "succeeded" });
+  });
+
   it.each(["lualatex", "pdflatex", "xelatex", "platex", "uplatex"] as const)(
     "sends the explicitly selected %s engine with the compile request",
     async (engine) => {
       const root = await temporaryRoot();
       await writeFile(join(root, "main.tex"), "document");
       const client = new FakeClient([job("succeeded")]);
-      await compileProjectPdf(client, "main.tex", { projectRoot: root, engine });
+      await compileProjectPdf(client, "main.tex", {
+        projectRoot: root,
+        engine,
+      });
       expect(client.engines).toEqual([engine]);
     },
   );
@@ -95,6 +127,39 @@ describe("client core", () => {
     ).rejects.toThrow("advertised size and SHA256");
     expect(await readFile(destination, "utf8")).toBe("prior PDF");
   });
+  it("renews an expired ticket between artifacts without restarting the publication", async () => {
+    const root = await temporaryRoot();
+    const complete = job("succeeded");
+    const client = new FakeClient([complete]);
+    let sequence = 0;
+    const original = client.download.bind(client);
+    const tokens: string[] = [];
+    client.renewJobTicket = () =>
+      Promise.resolve({
+        jobTicket: `ticket-${++sequence}`,
+        expiresAt: new Date(Date.now() + 1_800_000).toISOString(),
+      });
+    client.download = async (url, ticket, destination) => {
+      tokens.push(ticket);
+      if (url.endsWith("errors.json") && ticket === "ticket-1")
+        throw new AppError("INVALID_TICKET", "Ticket expired", 401);
+      await original(url, ticket, destination);
+    };
+    const output = join(root, "out");
+    const result = await downloadJobArtifacts(client, complete.id, output);
+    expect(tokens.slice(0, 4)).toEqual([
+      "ticket-1",
+      "ticket-1",
+      "ticket-2",
+      "ticket-2",
+    ]);
+    expect(sequence).toBe(2);
+    expect(result.artifacts.pdf).toBe(join(output, "result.pdf"));
+    expect(await readFile(result.artifacts.log ?? "", "utf8")).toBe(
+      "compile.log",
+    );
+  });
+
   it("generates only explicitly requested pages and downloads against fresh real metadata", async () => {
     const root = await temporaryRoot(),
       initial = { ...job("succeeded"), previewPageCount: 3 },

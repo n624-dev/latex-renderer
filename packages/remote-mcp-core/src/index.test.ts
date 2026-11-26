@@ -350,8 +350,10 @@ describe("Remote MCP core", () => {
       if (!principal) throw new Error("Missing MCP principal");
       expect(first.status).toBe("queued");
       expect(principal.service_account_id).not.toBe("sa_user_named_remote");
+      expect(database.serviceAccounts.get(principal.service_account_id)).toBeUndefined();
       expect(
-        database.serviceAccounts.get(principal.service_account_id)?.name,
+        database.raw.prepare("SELECT name FROM service_accounts WHERE id=?")
+          .get(principal.service_account_id)?.name,
       ).toBe(`Remote MCP (${principal.service_account_id})`);
       expect(database.serviceAccounts.get("sa_user_named_remote")).toEqual(
         before,
@@ -386,10 +388,18 @@ describe("Remote MCP core", () => {
     expect(job).toMatchObject({ status: "queued", entrypoint: "report.tex" });
     const principal = database.remoteMcp.principal("user_test");
     expect(principal).toBeDefined();
-    const accounting = database.apiKeys.get(principal?.api_key_id ?? "");
+    expect(database.apiKeys.get(principal?.api_key_id ?? "")).toBeUndefined();
+    expect(database.serviceAccounts.activeExists(principal?.service_account_id ?? "")).toBe(false);
+    const timestamp = new Date().toISOString();
+    expect(database.serviceAccounts.setStatus(principal?.service_account_id ?? "", "disabled", timestamp)).toBe(0);
+    expect(database.apiKeys.revoke(principal?.api_key_id ?? "", timestamp)).toBe(0);
+    database.apiKeys.revokeAll(timestamp);
+    const accounting = database.raw.prepare("SELECT prefix,scopes_json,revoked_at FROM api_keys WHERE id=?")
+      .get(principal?.api_key_id ?? "");
     expect(accounting?.prefix).toMatch(/^oauth_/);
     expect(accounting?.scopes_json).toBe('["oauth:mcp"]');
     expect(accounting?.prefix).not.toMatch(/^lr[ak]_/);
+    expect(accounting?.revoked_at).toBeNull();
   });
 
   it("keeps hosted Source references owner-scoped and short-lived", () => {
@@ -424,7 +434,7 @@ describe("Remote MCP core", () => {
 
     expect(reference.sourceRef).toMatch(/^source_ref_[a-f0-9]{32}$/);
     expect(
-      database.remoteMcp.sourceRef(
+      database.sources.sourceRef(
         reference.sourceRef,
         "different-user",
         timestamp,

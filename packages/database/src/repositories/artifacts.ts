@@ -70,21 +70,30 @@ export class ArtifactsRepository {
     );
   }
 
-  recordSourceMap(artifactId: string, sha256: string, size: number): void {
+  recordSourceMap(artifactId: string, sha256: string, size: number, paths?: readonly string[]): void {
     this.db
       .prepare(
-        "INSERT INTO pdf_source_maps(artifact_id,sha256,size) VALUES (?,?,?)",
+        "INSERT INTO pdf_source_maps(artifact_id,sha256,size,paths_json) VALUES (?,?,?,?)",
       )
-      .run(artifactId, sha256, size);
+      .run(artifactId, sha256, size, paths === undefined ? null : JSON.stringify(paths));
   }
 
   sourceMap(
     artifact: ArtifactRow,
-  ): { sha256: string; size: number } | undefined {
+  ): { sha256: string; size: number; paths?: readonly string[] } | undefined {
     const row = this.db
-      .prepare("SELECT sha256,size FROM pdf_source_maps WHERE artifact_id=?")
-      .get(artifact.id) as { sha256: string; size: number } | undefined;
-    if (row !== undefined) return row;
+      .prepare("SELECT sha256,size,paths_json FROM pdf_source_maps WHERE artifact_id=?")
+      .get(artifact.id) as { sha256: string; size: number; paths_json: string | null } | undefined;
+    if (row !== undefined) {
+      const paths: unknown = JSON.parse(row.paths_json ?? "null");
+      return {
+        sha256: row.sha256,
+        size: row.size,
+        ...(Array.isArray(paths) && paths.every((path): path is string => typeof path === "string")
+          ? { paths }
+          : {}),
+      };
+    }
     return this.db
       .prepare(
         `SELECT synctex_sha256 AS sha256,synctex_bytes AS size FROM job_output_stages

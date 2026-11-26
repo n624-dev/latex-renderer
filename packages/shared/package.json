@@ -11,9 +11,17 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
+    "./resource-limits": {
+      "types": "./dist/resource-limits.d.ts",
+      "import": "./dist/resource-limits.js"
+    },
     "./locale": {
       "types": "./dist/locale.d.ts",
       "import": "./dist/locale.js"
+    },
+    "./login-redirect": {
+      "types": "./dist/login-redirect.d.ts",
+      "import": "./dist/login-redirect.js"
     },
     "./diagnostic-locale": {
       "types": "./dist/diagnostic-locale.d.ts",

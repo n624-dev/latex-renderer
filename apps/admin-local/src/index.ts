@@ -15,6 +15,11 @@ import {
   newId,
   nowIso,
 } from "@latex-renderer/shared";
+import {
+  diagnoseInternalPrincipals,
+  repairInternalPrincipal,
+  retireLegacyInternalAccountKey,
+} from "./internal-principals.js";
 
 const allowedGid =
   process.env.LATEX_RENDERER_ADMIN_GID === undefined
@@ -248,9 +253,7 @@ program
   .action(() => {
     const changes = database.transaction(() => {
       const now = nowIso();
-      const result = database.raw
-        .prepare("UPDATE api_keys SET revoked_at=? WHERE revoked_at IS NULL")
-        .run(now);
+      const result = database.apiKeys.revokeAll(now);
       database.audit({
         actorType: "local",
         actorId: String(process.geteuid?.() ?? -1),
@@ -258,9 +261,9 @@ program
         targetType: "system",
         targetId: "all",
         result: "success",
-        metadata: { count: Number(result.changes) },
+        metadata: { count: result },
       });
-      return result.changes;
+      return result;
     });
     process.stdout.write(`${String(changes)} keys revoked\n`);
   });
@@ -300,6 +303,9 @@ program
   .action((o: { serviceAccount: string }) => {
     const generated = keys.create("admin");
     database.transaction(() => {
+      if (!database.serviceAccounts.activeExists(o.serviceAccount))
+        throw new AppError("SERVICE_ACCOUNT_NOT_FOUND", "Active service account does not exist", 404);
+
       database.raw
         .prepare(
           `INSERT INTO api_keys(id,service_account_id,name,prefix,kind,secret_hash,pepper_id,scopes_json,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,'local-recovery')`,
@@ -375,9 +381,7 @@ localKeys
   .action(() => {
     const changes = database.transaction(() => {
       const timestamp = nowIso();
-      const result = database.raw
-        .prepare("UPDATE api_keys SET revoked_at=? WHERE revoked_at IS NULL")
-        .run(timestamp);
+      const result = database.apiKeys.revokeAll(timestamp);
       database.audit({
         actorType: "local",
         actorId: String(process.geteuid?.() ?? -1),
@@ -385,9 +389,9 @@ localKeys
         targetType: "system",
         targetId: "all",
         result: "success",
-        metadata: { count: Number(result.changes) },
+        metadata: { count: result },
       });
-      return result.changes;
+      return result;
     });
     process.stdout.write(`${String(changes)} keys revoked\n`);
   });
@@ -398,6 +402,9 @@ localKeys
   .action((o: { serviceAccount: string }) => {
     const generated = keys.create("admin");
     database.transaction(() => {
+      if (!database.serviceAccounts.activeExists(o.serviceAccount))
+        throw new AppError("SERVICE_ACCOUNT_NOT_FOUND", "Active service account does not exist", 404);
+
       database.raw
         .prepare(
           `INSERT INTO api_keys(id,service_account_id,name,prefix,kind,secret_hash,pepper_id,scopes_json,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,'local-recovery')`,
@@ -424,6 +431,34 @@ localKeys
       });
     });
     process.stdout.write(`${generated.token}\n`);
+  });
+const internalPrincipals = program.command("internal-principals");
+internalPrincipals
+  .command("diagnose")
+  .description("Check internal Web and Remote MCP rendering identities and list legacy external keys")
+  .action(() => {
+    process.stdout.write(`${JSON.stringify(diagnoseInternalPrincipals(database), null, 2)}\n`);
+  });
+internalPrincipals
+  .command("repair")
+  .argument("<key-id>")
+  .description("Restore the existing internal rendering identity reported by diagnose")
+  .requiredOption("--yes")
+  .action((keyId: string) => {
+    const repaired = repairInternalPrincipal(database, keyId, String(process.geteuid?.() ?? -1));
+    process.stdout.write(`${JSON.stringify({ keyId, repaired })}\n`);
+  });
+internalPrincipals
+  .command("retire-legacy-key")
+  .argument("<key-id>")
+  .description("Revoke a legacy external key after verifying that its replacement works")
+  .requiredOption("--replacement-key <id>")
+  .requiredOption("--yes")
+  .action((keyId: string, {replacementKey}: { replacementKey: string }) => {
+    const revoked = retireLegacyInternalAccountKey(
+      database, keyId, replacementKey, String(process.geteuid?.() ?? -1),
+    );
+    process.stdout.write(`${JSON.stringify({ keyId, revoked })}\n`);
   });
 const localTickets = program.command("tickets");
 localTickets
@@ -603,9 +638,9 @@ smokeKey
         targetType: "system",
         targetId: "production-smoke",
         result: "requested",
-        metadata: { count: Number(result.changes) },
+        metadata: { count: result },
       });
-      return result.changes;
+      return result;
     });
     process.stdout.write(
       `${String(count)} smoke-test jobs queued for deletion.\n`,

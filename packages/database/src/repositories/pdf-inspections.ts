@@ -5,6 +5,11 @@ import { join } from "node:path";
 import type { ArtifactRow } from "./artifacts.js";
 
 export const PDF_INSPECTOR_VERSION = 2;
+const maximumInspectionRetries = 3;
+const retryableInspectionFailures = new Set([
+  "INSUFFICIENT_STORAGE",
+  "PDF_INSPECTION_INTERRUPTED",
+]);
 export const PDF_INSPECTION_UPLOAD_TTL_MS = 60 * 60 * 1000;
 export function pdfInspectionUploadDirectory(
   storageRoot: string,
@@ -47,6 +52,8 @@ export type PdfInspectionRow = {
   lease_until: string | null;
   result_json: string | null;
   error_code: string | null;
+  retry_count: number;
+  retry_at: string | null;
 };
 
 export class PdfInspectionsRepository {
@@ -324,9 +331,10 @@ export class PdfInspectionsRepository {
     const next = this.db
       .prepare(
         `SELECT id FROM pdf_inspections WHERE status='queued'
-      AND expires_at>? ORDER BY requested_at,id LIMIT 1`,
+      AND expires_at>? AND (retry_at IS NULL OR retry_at<=?)
+      ORDER BY COALESCE(retry_at, requested_at),id LIMIT 1`,
       )
-      .get(timestamp) as { id: string } | undefined;
+      .get(timestamp, timestamp) as { id: string } | undefined;
     if (!next) return undefined;
     this.db
       .prepare(
@@ -392,12 +400,26 @@ export class PdfInspectionsRepository {
     id: string,
     owner: string,
     outcome: { json: string } | { uploaded: true } | { error: string },
+    timestamp = new Date().toISOString(),
   ): boolean {
+    if ("error" in outcome && retryableInspectionFailures.has(outcome.error)) {
+      const row = this.get(id);
+      if (row && row.retry_count < maximumInspectionRetries) {
+        const retryAt = new Date(Date.parse(timestamp) + 30_000 * 2 ** row.retry_count).toISOString();
+        if (retryAt < row.expires_at) {
+          return this.db.prepare(
+            `UPDATE pdf_inspections SET status='queued', result_json=NULL, error_code=NULL,
+             retry_count=retry_count+1, retry_at=?, lease_until=NULL, lease_owner=NULL
+             WHERE id=? AND status='running' AND lease_owner=? AND retry_count=?`,
+          ).run(retryAt, id, owner, row.retry_count).changes === 1;
+        }
+      }
+    }
     return (
       this.db
         .prepare(
           `UPDATE pdf_inspections SET status=?,result_json=?,error_code=?,
-      lease_until=NULL,lease_owner=NULL WHERE id=? AND status='running' AND lease_owner=?`,
+      retry_at=NULL,lease_until=NULL,lease_owner=NULL WHERE id=? AND status='running' AND lease_owner=?`,
         )
         .run(
           "error" in outcome ? "failed" : "ready",

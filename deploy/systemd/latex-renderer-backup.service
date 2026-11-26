@@ -8,6 +8,7 @@ Group=latex-renderer
 WorkingDirectory=/opt/latex-renderer/current
 EnvironmentFile=/etc/latex-renderer/backup.env
 Environment=BACKUP_AGE_RECIPIENT_FILE=%d/age-recipient
+Environment=BACKUP_SOURCE_COORDINATION_DIR=/run/latex-renderer-backup-coordination
 LoadCredential=age-recipient:/etc/latex-renderer/secrets/backup-age-recipient
 ExecStart=/usr/local/bin/node deploy/scripts/backup.mjs
 NoNewPrivileges=true
@@ -17,5 +18,5 @@ PrivateTmp=true
 PrivateDevices=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 ReadOnlyPaths=/var/lib/latex-renderer/renderer.sqlite3 /var/lib/latex-renderer/storage
-ReadWritePaths=/var/lib/latex-renderer/backups
+ReadWritePaths=/var/lib/latex-renderer/backups /run/latex-renderer-backup-coordination
 UMask=0077
