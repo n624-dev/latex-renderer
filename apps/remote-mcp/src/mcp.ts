@@ -85,7 +85,7 @@ const artifactSchema = z
     size: z.number().int().nonnegative(),
     sha256: z.string().regex(/^[a-f0-9]{64}$/),
     pageCount: z.number().int().positive().nullable(),
-    resourceUri: z.string().startsWith("latex-renderer://jobs/"),
+    resourceUri: z.string().regex(/^latex-renderer:\/\/jobs\//),
   })
   .strict();
 const sourceSchema = z
