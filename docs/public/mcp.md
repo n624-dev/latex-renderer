@@ -65,6 +65,7 @@ AI に文書のテキストを送って PDF や SVG に変換し、エラー診�
 > | 文書条件と確認記録 | `get_project_document_state`、`update_project_document_conditions`、`adopt_project_revision`、`record_project_pdf_review`、`list_project_pdf_reviews` |
 > | 保存版の整理 | `get_project_storage_usage`、`protect_project_revision`、`plan_project_revision_cleanup`、`apply_project_revision_cleanup` |
 > | アップロード再開と添付 | `get_source_upload_status`、`import_source_attachment`（管理者が設定した場合） |
+> | 添付の接続確認 | `verify_attachment_delivery_origin`（管理者が指定した検証アカウントのみ） |
 > | 診断と結果 | `get_render_diagnostics`、`read_render_log`、`get_render_artifacts`、`get_render_manifest` |
 > | プレビュー | `get_render_preview`、`get_render_preview_pages`、`get_render_preview_crop`、`locate_render_source`、`get_render_preview_sheet` |
 > | PDF品質検査 | `request_render_quality_report`、`get_render_quality_report`、`compare_render_quality` |

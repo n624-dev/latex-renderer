@@ -174,6 +174,14 @@ on-demand PDF inspection and crop requests bound to a specific PDF, and records
 the selected date profile for reproducible renders. Existing jobs and projects
 keep their default behavior. Verify schema 28 after startup.
 
+## Migration 029: Attached PDF inspection
+
+Migration 029 preserves existing inspection records and adds requests for
+uploaded PDFs. Deploy Remote MCP, the Worker, and its reconciler together.
+Uploaded PDFs and their report files are temporary and kept outside saved
+Project data. Verify schema 29 after startup. To downgrade, restore the
+matching application, database, and storage from a verified recovery point.
+
 ## Migration 022: PDF-bound preview requests
 
 The same migration adds bounded `source_trees` and `source_tree_readers` for
