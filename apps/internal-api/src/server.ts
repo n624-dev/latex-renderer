@@ -67,6 +67,11 @@ const app = createInternalApp({
     "MAX_USER_STORAGE_BYTES",
     1024 * 1024 * 1024,
   ),
+  minFreeStorageBytes: positiveBytesEnvironment(
+    process.env,
+    "MIN_FREE_STORAGE_BYTES",
+    5 * 1024 * 1024 * 1024,
+  ),
   artifactRetentionHours: positiveIntegerEnvironment(
     process.env,
     "ARTIFACT_RETENTION_HOURS",

@@ -202,7 +202,7 @@ export function gatewayRoute(
       bodyRequired: method === "POST",
     };
   }
-  const draftPath = /^\/api\/v1\/projects\/project_[a-f0-9]{32}\/draft(?:\/(file|open|changes|save))?$/.exec(pathname);
+  const draftPath = /^\/api\/v1\/projects\/project_[a-f0-9]{32}\/draft(?:\/(file|open|changes|preview|save))?$/.exec(pathname);
   if (draftPath !== null) {
     const hasBody = draftPath[1] !== undefined && draftPath[1] !== "file";
     if (method !== (hasBody ? "POST" : "GET")) return "method-not-allowed";

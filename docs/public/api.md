@@ -62,6 +62,7 @@ API キーで作成した Job は、そのキーにひも付きます。管理�
 | `GET` | `/api/v1/projects/{projectId}/draft/file` | 指定版の本文を分割取得 |
 | `POST` | `/api/v1/projects/{projectId}/draft/open` | 共有下書きを開く |
 | `POST` | `/api/v1/projects/{projectId}/draft/changes` | 指定版に変更をまとめて適用 |
+| `POST` | `/api/v1/projects/{projectId}/draft/preview` | 指定版のPDFプレビューを試し描画または再利用 |
 | `POST` | `/api/v1/projects/{projectId}/draft/save` | 共有下書きを保存版に保存 |
 | `GET` / `POST` | `/api/v1/job-tickets/{jobId}/pdf-inspection` | 指定したPDFの品質検査を取得、または要求 |
 | `POST` | `/api/v1/projects/{projectId}/revisions` | ready Source を不変の改訂として保存 |
@@ -71,6 +72,7 @@ API キーで作成した Job は、そのキーにひも付きます。管理�
 
 > [!DETAILS] 保存 Project API と保守モード時の挙動を表示
 >
+> - **共有下書きの試し描画**：`render:create` と `render:draft:write` を付けたAPIキーで `version` を送ります。返された `jobId` のチケットを取得すると、同じ利用者のプレビューの状態と成果物を読めます。共有プレビュー用のチケットに取消・削除権限はありません。
 > - **保存 Project のパラメータ**：一覧・詳細・Job 履歴は `cursor` と `pageSize` でページングします。改訂保存（`POST .../revisions`）には `sourceId`、`entrypoint`（相対 `.tex` パス）、`displayName`、`originalFilename`、`outputs` を送り、同一 Project・Source・entrypoint なら既存改訂を再利用します。改訂のレンダリング（`POST .../render`）には `Idempotency-Key`（16〜200 文字）が必須で、`outputs` 省略時はその改訂の初回設定を使います。
 > - **保守モード時の制限**：
 >   - `reject-new-jobs`：Project の閲覧・改名・削除・改訂保存と Source 準備は可能ですが、新規 Job 作成は拒否されます。

@@ -241,7 +241,7 @@ export class DraftsRepository {
       this.db
         .prepare(
           `SELECT 1 FROM job_draft_inputs d JOIN projects p ON p.id=d.project_id
-       WHERE d.job_id=? AND p.owner_user_id=?`,
+       WHERE d.job_id=? AND p.owner_user_id=? AND p.deleted_at IS NULL`,
         )
         .get(jobId, userId) !== undefined
     );

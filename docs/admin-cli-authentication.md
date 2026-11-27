@@ -1,5 +1,10 @@
 # Admin CLIの認証とユーザー作成
 
+端末で `n624-latex admin` を実行すると、管理操作のメニューが開きます。
+認証情報の登録は `auth` から `login` を選びます。入力したキーは画面に表示されません。
+自動化では既存のサブコマンドを利用できます。
+[管理操作の対応表](admin-operation-compatibility.md)
+
 `latex-render-admin` は管理用APIキーを使用します。Cloudflare Accessを使わない
 Standalone環境ではAccess用の環境変数は不要です。Accessで保護する場合のみ
 `CF_ACCESS_CLIENT_ID` と `CF_ACCESS_CLIENT_SECRET` を両方設定してください。

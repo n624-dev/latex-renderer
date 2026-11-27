@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import { statfs } from "node:fs/promises";
 import type { AuthenticatedServiceAccount } from "@latex-renderer/auth";
 import {
   defaultRenderEngine,
@@ -8,6 +9,8 @@ import {
 import { AppError, nowIso } from "@latex-renderer/shared";
 import {
   assertRenderAdmission,
+  canRenderDraftPreview,
+  ProjectDraftOperations,
   SvgRetryOperations,
 } from "@latex-renderer/database";
 import { validateEntrypointPath } from "@latex-renderer/zip-validation";
@@ -15,6 +18,52 @@ import type { InternalApiDependencies } from "../types.js";
 
 export class RenderTicketsService {
   constructor(private readonly deps: InternalApiDependencies) {}
+  async createDraftPreview(
+    actor: AuthenticatedServiceAccount,
+    projectId: string,
+    version: number,
+  ) {
+    const { database, sourceLimits, storageRoot, minFreeStorageBytes } =
+      this.deps;
+    if (storageRoot === undefined)
+      throw new AppError(
+        "AUTHORING_UNAVAILABLE",
+        "Authoring operations are unavailable",
+        503,
+      );
+    const free = await statfs(storageRoot);
+    const drafts = new ProjectDraftOperations(
+      database,
+      sourceLimits?.maxFileCount,
+      sourceLimits?.maxZipEntries,
+    );
+    return drafts.queuePreview(
+      {
+        userId: actor.userId,
+        type: "service_account",
+        id: actor.serviceAccountId,
+      },
+      projectId,
+      version,
+      {
+        apiKeyId: actor.apiKeyId,
+        serviceAccountId: actor.serviceAccountId,
+        rendererVersion: this.deps.rendererVersion,
+        runtime: process.env.RENDERER_IMAGE ?? null,
+        retentionHours: this.deps.artifactRetentionHours,
+        reservedOutputBytes: this.deps.maxOutputBytes,
+        admit: () => {
+          if (free.bavail * free.bsize < (minFreeStorageBytes ?? 0))
+            throw new AppError(
+              "STORAGE_PRESSURE",
+              "Insufficient free storage",
+              503,
+            );
+          this.assertAccepting(actor, 0);
+        },
+      },
+    );
+  }
   async create(
     actor: AuthenticatedServiceAccount,
     input:
@@ -405,6 +454,30 @@ export class RenderTicketsService {
       jobTicket: await this.deps.tickets.issueJob(toSubject(actor, jobId)),
       expiresAt: new Date(Date.now() + 1_800_000).toISOString(),
     };
+  }
+  async renewForApiKey(actor: AuthenticatedServiceAccount, jobId: string) {
+    if (
+      canRenderDraftPreview(actor) &&
+      this.deps.database.drafts.isOwnedProjectPreview(jobId, actor.userId)
+    ) {
+      return {
+        jobId,
+        jobTicket: await this.deps.tickets.issueDraftPreview(
+          toSubject(actor, jobId),
+        ),
+        expiresAt: new Date(Date.now() + 1_800_000).toISOString(),
+      };
+    }
+    if (
+      !actor.scopes.includes("render:read:own") &&
+      !actor.scopes.includes("admin:*")
+    )
+      throw new AppError(
+        "INSUFFICIENT_SCOPE",
+        "API key lacks the required scope",
+        403,
+      );
+    return this.renew(actor, jobId);
   }
   requireOwnedJob(actor: AuthenticatedServiceAccount, jobId: string) {
     const row = this.deps.database.jobs.getOwned(

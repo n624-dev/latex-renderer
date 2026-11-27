@@ -134,6 +134,7 @@ claude mcp add --scope user latex-renderer -- latex-renderer-mcp
 | `list_project_revision_files` / `get_project_revision_file` | 自分の保存版のファイルを一覧・閲覧。対応サーバーと `render:project:read` 権限付きAPIキーが必要 |
 | `get_project_draft` / `get_project_draft_file` | 共有下書きの版と本文を読む。`render:draft:read` が必要 |
 | `open_project_draft` / `apply_project_changes` / `save_project_draft` | 共有下書きを開く・編集する・保存する。`render:draft:write` が必要 |
+| `render_project_draft` | 共有下書きを試し描画する。`render:create` と `render:draft:write` が必要。同じ利用者のプレビューを再利用し、状態と成果物を取得できる |
 | `request_render_quality_report` / `get_render_quality_report` | そのキーが所有するJobのPDFを検査する。`render:pdf:inspect` が必要 |
 | `create_project` / `rename_project` / `delete_project` | 保存 Project を管理 |
 | `attach_project_revision` / `render_project_revision` | アップロード済み Source を保存し、固定改訂から Job を作成 |

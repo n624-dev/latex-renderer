@@ -2,10 +2,13 @@
 import { humanText, humanDiagnostic } from "./messages.js";
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { createWriteStream } from "node:fs";
 import {
   chmod,
+  link,
   lstat,
   mkdir,
+  mkdtemp,
   readFile,
   rename,
   rm,
@@ -13,6 +16,8 @@ import {
 } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { Command } from "commander";
 import {
   ADMIN_API_PREFIX,
@@ -21,6 +26,7 @@ import {
   PUBLIC_ORIGIN,
 } from "@latex-renderer/shared";
 import { adminApiBaseUrl } from "./base-url.js";
+import { openAdminMenu } from "./menu.js";
 import {
   pollUpdateOperation,
   UpdateOperationUnconfirmedError,
@@ -136,6 +142,86 @@ users
   .action(async (id: string) =>
     print(await request("POST", `/users/${id}/enable`, {})),
   );
+users
+  .command("update")
+  .description("Update a user's display name, email, or role")
+  .argument("<id>")
+  .option("--display-name <name>")
+  .option("--email <email>")
+  .option("--clear-email")
+  .option("--role <role>")
+  .requiredOption("--yes")
+  .action(
+    async (
+      id: string,
+      options: {
+        displayName?: string;
+        email?: string;
+        clearEmail?: boolean;
+        role?: string;
+      },
+    ) => {
+      const { displayName, email, clearEmail, role } = options;
+      if (
+        (clearEmail && email !== undefined) ||
+        (!clearEmail &&
+          [displayName, email, role].every((value) => value === undefined))
+      )
+        throw new AppError(
+          "INVALID_OPTION",
+          "Choose fields to update; use either --email or --clear-email",
+          400,
+        );
+      print(
+        await request("PATCH", `/users/${encodeURIComponent(id)}`, {
+          displayName,
+          email: clearEmail ? null : email,
+          role,
+        }),
+      );
+    },
+  );
+users
+  .command("set-password")
+  .description("Update a user's password and revoke their active sessions")
+  .argument("<id>")
+  .requiredOption("--login-name <name>")
+  .requiredOption(
+    "--password-stdin",
+    humanText("readTheInitialPasswordFromStandard"),
+  )
+  .requiredOption("--reason <reason>")
+  .requiredOption("--yes")
+  .action(
+    async (id: string, options: { loginName: string; reason: string }) => {
+      const password = (await readStdin()).replace(/\r?\n$/, "");
+      print(
+        await request("POST", `/users/${encodeURIComponent(id)}/password`, {
+          loginName: options.loginName,
+          password,
+          reason: options.reason,
+        }),
+      );
+    },
+  );
+users
+  .command("unlink-identity")
+  .description("Unlink an external login identity from a user")
+  .argument("<id>")
+  .argument("<identity-id>")
+  .requiredOption("--reason <reason>")
+  .requiredOption("--yes")
+  .action(async (id: string, identity: string, options: { reason: string }) =>
+    print(
+      await request(
+        "POST",
+        `/users/${encodeURIComponent(id)}/identities/${encodeURIComponent(identity)}/unlink`,
+        {
+          reason: options.reason,
+        },
+      ),
+    ),
+  );
 
 const accounts = program.command("service-accounts");
 addReadCommands(accounts, "/service-accounts");
@@ -167,9 +253,87 @@ accounts
   .action(async (id: string) =>
     print(await request("POST", `/service-accounts/${id}/enable`, {})),
   );
+accounts
+  .command("update")
+  .description("Update a service account's name or client type")
+  .argument("<id>")
+  .option("--name <name>")
+  .option("--client-type <type>")
+  .requiredOption("--yes")
+  .action(
+    async (
+      id: string,
+      { name, clientType }: { name?: string; clientType?: string },
+    ) => {
+      if (name === undefined && clientType === undefined)
+        throw new AppError(
+          "INVALID_OPTION",
+          "Supply --name or --client-type",
+          400,
+        );
+      print(
+        await request("PATCH", `/service-accounts/${encodeURIComponent(id)}`, {
+          name,
+          clientType,
+        }),
+      );
+    },
+  );
+accounts
+  .command("delete")
+  .description("Disable a service account and revoke all of its API keys")
+  .argument("<id>")
+  .requiredOption("--yes")
+  .action(async (id: string) => {
+    await request("DELETE", `/service-accounts/${encodeURIComponent(id)}`);
+    print({ id, disabled: true });
+  });
 
 const jobs = program.command("jobs");
 addReadCommands(jobs, "/jobs", ["--status <status>", "--source-id <id>"]);
+jobs
+  .command("download")
+  .description(
+    "Download an individual artifact or a ZIP of the available artifacts",
+  )
+  .argument("<id>")
+  .requiredOption("--output <path>")
+  .option("--artifact <name>", "relative artifact path, for example result.pdf")
+  .action(
+    async (id: string, options: { output: string; artifact?: string }) => {
+      if (!/^job_[a-f0-9]{32}$/.test(id))
+        throw new AppError("INVALID_JOB_ID", "A valid Job ID is required", 400);
+      const name = options.artifact;
+      const base = `/jobs/${encodeURIComponent(id)}`;
+      let path = `${base}/archive`;
+      if (name !== undefined) {
+        const parts = name.split("/");
+        if (parts.some((part) => !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(part)))
+          throw new AppError(
+            "INVALID_ARTIFACT",
+            "Use the relative artifact path listed by jobs get",
+            400,
+          );
+        const collection =
+          parts.length === 2 && parts[0] === "previews" ? "" : "artifacts/";
+        path = `${base}/${collection}${parts.map(encodeURIComponent).join("/")}`;
+      }
+      await download(path, options.output);
+      print({ id, output: options.output, artifact: name ?? null });
+    },
+  );
+jobs
+  .command("render-targets")
+  .description("List available render credentials and input limits")
+  .action(async () => print(await request("GET", "/jobs/render-targets")));
+jobs
+  .command("bulk-delete")
+  .description("Delete a list of completed jobs")
+  .argument("<ids...>")
+  .requiredOption("--yes")
+  .action(async (ids: string[]) =>
+    print(await request("POST", "/jobs/bulk-delete", { ids })),
+  );
 jobs
   .command("cancel")
   .argument("<id>")
@@ -300,7 +464,64 @@ for (const action of ["pause", "resume", "drain"] as const)
     .requiredOption("--yes")
     .action(async () => print(await request("POST", `/worker/${action}`, {})));
 
-addReadCommands(program.command("sources"), "/sources", ["--status <status>"]);
+const sources = program.command("sources");
+addReadCommands(sources, "/sources", ["--status <status>"]);
+sources
+  .command("render")
+  .description("Render an existing source with the specified render API key ID")
+  .argument("<id>")
+  .requiredOption("--api-key-id <id>")
+  .option("--entrypoint <path>")
+  .option("--svg")
+  .option("--idempotency-key <key>")
+  .requiredOption("--yes")
+  .action(
+    async (
+      id: string,
+      options: {
+        apiKeyId: string;
+        entrypoint?: string;
+        svg?: boolean;
+        idempotencyKey?: string;
+      },
+    ) =>
+      print(
+        await request(
+          "POST",
+          `/sources/${encodeURIComponent(id)}/render`,
+          {
+            apiKeyId: options.apiKeyId,
+            entrypoint: options.entrypoint,
+            outputs: options.svg ? ["pdf", "svg"] : ["pdf"],
+          },
+          { "Idempotency-Key": options.idempotencyKey ?? randomUUID() },
+        ),
+      ),
+  );
+sources
+  .command("reference")
+  .description(
+    "Issue a short-lived source reference for the specified render API key ID",
+  )
+  .argument("<id>")
+  .requiredOption("--api-key-id <id>")
+  .requiredOption("--yes")
+  .action(async (id: string, { apiKeyId }: { apiKeyId: string }) =>
+    print(
+      await request("POST", `/sources/${encodeURIComponent(id)}/source-ref`, {
+        apiKeyId,
+      }),
+    ),
+  );
+sources
+  .command("delete")
+  .description("Delete an unreferenced source")
+  .argument("<id>")
+  .requiredOption("--yes")
+  .action(async (id: string) => {
+    await request("DELETE", `/sources/${encodeURIComponent(id)}`);
+    print({ id, accepted: true });
+  });
 const system = program.command("system");
 system
   .command("status")
@@ -317,12 +538,18 @@ systemConfig
   .action(async (key: string, raw: string, options: { reason: string }) => {
     const value = Number(raw);
     if (!/^[0-9]+$/.test(raw) || !Number.isSafeInteger(value) || value < 1)
-      throw new AppError("INVALID_OPTION", "The value must be a positive integer", 400);
-    print(await request("PATCH", "/system/config", {
-      key,
-      value,
-      reason: options.reason,
-    }));
+      throw new AppError(
+        "INVALID_OPTION",
+        "The value must be a positive integer",
+        400,
+      );
+    print(
+      await request("PATCH", "/system/config", {
+        key,
+        value,
+        reason: options.reason,
+      }),
+    );
   });
 
 const backup = program.command("backup");
@@ -584,12 +811,33 @@ update
     ),
   );
 
-await program.parseAsync().catch((error: unknown) => {
+let terminalSecret: string | undefined;
+await run().catch((error: unknown) => {
   process.stderr.write(
     `latex-render-admin: ${error instanceof Error ? humanDiagnostic(error.message) : humanDiagnostic("Unknown error")}\n`,
   );
   process.exitCode = 1;
 });
+
+async function run(): Promise<void> {
+  if (
+    process.argv.length !== 2 ||
+    !process.stdin.isTTY ||
+    !process.stdout.isTTY
+  ) {
+    await program.parseAsync();
+    return;
+  }
+  const invocation = await openAdminMenu(program);
+  if (invocation === undefined) return;
+  terminalSecret = invocation.secret;
+  delete invocation.secret;
+  try {
+    await program.parseAsync(invocation.args, { from: "user" });
+  } finally {
+    terminalSecret = undefined;
+  }
+}
 
 function addReadCommands(
   group: Command,
@@ -628,6 +876,24 @@ async function request(
   extraHeaders: Readonly<Record<string, string>> = {},
   signal?: AbortSignal,
 ): Promise<unknown> {
+  const response = await adminFetch(method, path, body, extraHeaders, signal);
+  const value: unknown = await response.json().catch(() => null);
+  if (!response.ok)
+    throw new AppError(
+      "ADMIN_HTTP_ERROR",
+      JSON.stringify(value),
+      response.status,
+    );
+  return value;
+}
+
+async function adminFetch(
+  method: string,
+  path: string,
+  body?: unknown,
+  extraHeaders: Readonly<Record<string, string>> = {},
+  signal?: AbortSignal,
+): Promise<Response> {
   const base = adminApiBaseUrl(
     process.env.LATEX_RENDER_BASE_URL ?? process.env.LATEX_RENDER_ADMIN_API_URL,
     PUBLIC_ORIGIN,
@@ -641,7 +907,7 @@ async function request(
       "Configure both Cloudflare Access service-token fields, or neither for Standalone",
       400,
     );
-  const response = await fetch(new URL(`${ADMIN_API_PREFIX}${path}`, base), {
+  return fetch(new URL(`${ADMIN_API_PREFIX}${path}`, base), {
     method,
     headers: {
       Authorization: `Bearer ${await loadKey()}`,
@@ -658,16 +924,45 @@ async function request(
     redirect: "error",
     ...(signal === undefined ? {} : { signal }),
   });
-  const value: unknown = await (response.json() as Promise<unknown>).catch(
-    () => null,
+}
+
+async function download(path: string, destination: string): Promise<void> {
+  const temporary = await mkdtemp(
+    join(dirname(destination), ".latex-renderer-download-"),
   );
-  if (!response.ok)
-    throw new AppError(
-      "ADMIN_HTTP_ERROR",
-      JSON.stringify(value),
-      response.status,
+  try {
+    const response = await adminFetch(
+      "GET",
+      path,
+      undefined,
+      {},
+      AbortSignal.timeout(30 * 60_000),
     );
-  return value;
+    if (!response.ok) {
+      const value: unknown = await response.json().catch(() => null);
+      throw new AppError(
+        "ADMIN_HTTP_ERROR",
+        JSON.stringify(value),
+        response.status,
+      );
+    }
+    if (response.body === null)
+      throw new AppError(
+        "DOWNLOAD_EMPTY",
+        "The download returned no content",
+        502,
+      );
+    const staged = join(temporary, "download");
+    await pipeline(
+      Readable.fromWeb(
+        response.body as import("node:stream/web").ReadableStream<Uint8Array>,
+      ),
+      createWriteStream(staged, { flags: "wx", mode: 0o600 }),
+    );
+    await link(staged, destination);
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
 }
 
 async function runTexMutation(path: string, body: unknown): Promise<void> {
@@ -822,17 +1117,25 @@ async function loadKey(): Promise<string> {
   return result.stdout;
 }
 async function readStdin(): Promise<string> {
+  if (terminalSecret !== undefined) {
+    const value = terminalSecret;
+    terminalSecret = undefined;
+    return boundedCredential(value);
+  }
   let value = "";
   process.stdin.setEncoding("utf8");
-  for await (const chunk of process.stdin) {
-    value += String(chunk);
-    if (Buffer.byteLength(value, "utf8") > 8192)
-      throw new AppError(
-        "INPUT_TOO_LARGE",
-        "Credential input exceeds the size limit",
-        400,
-      );
-  }
+  for await (const chunk of process.stdin)
+    value = boundedCredential(value + String(chunk));
+  return value;
+}
+
+function boundedCredential(value: string): string {
+  if (Buffer.byteLength(value, "utf8") > 8192)
+    throw new AppError(
+      "INPUT_TOO_LARGE",
+      "Credential input exceeds the size limit",
+      400,
+    );
   return value;
 }
 function print(value: unknown): void {

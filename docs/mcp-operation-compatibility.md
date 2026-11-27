@@ -1,6 +1,6 @@
 # MCP操作対応表
 
-関連Issueは [#387](https://github.com/n624-dev/latex-renderer/issues/387) です。確認基準はコミット `17b0de83`。表はコードの対応状況です。各接続先で実際に使えるツールは、サーバーの版・設定、認可、クライアントが取得したツール一覧で確認します。
+関連Issueは [#387](https://github.com/n624-dev/latex-renderer/issues/387) です。表はコードの対応状況です。各接続先で実際に使えるツールは、サーバーの版・設定、認可、クライアントが取得したツール一覧で確認します。
 
 - **○** は対応、**×** はその名前のツールなし。別の操作で代替できる場合は補足に記載します。
 - **Local MCP** はstdioとAPIキーを使います。追加操作は対応サーバーと下表の明示権限が必要です。Project履歴の表示と、独立した別キーで受理したJobへの操作権限は別です。
@@ -57,7 +57,7 @@
 | `get_project_draft` | 共有下書きの状態 | ○ | ○ | ○ | Remote系 `mcp:read`。Local `render:draft:read` |
 | `get_project_draft_file` | 共有下書きのファイル本文 | ○ | ○ | ○ | Remote系 `mcp:read`。Local `render:draft:read` |
 | `apply_project_changes` | 共有下書きを版確認付きで一括変更 | ○ | ○ | ○ | Remote系 `mcp:render`。Local `render:draft:write` |
-| `render_project_draft` | 共有下書きを試し描画 | × | ○ | ○ | Remote系 `mcp:render`。Localの `render_project` の入力は手元の文書 |
+| `render_project_draft` | 共有下書きを試し描画 | ○ | ○ | ○ | Remote系 `mcp:render`。Localは `render:create` と `render:draft:write`。共有プレビューの取得は読み取り専用 |
 | `save_project_draft` | 共有下書きを履歴へ保存 | ○ | ○ | ○ | Remote系 `mcp:render`。Local `render:draft:write` |
 | `get_project_document_state` | 文書条件と採用版 | × | ○ | ○ | Remote系 `mcp:read` |
 | `update_project_document_conditions` | 文書条件を編集 | × | ○ | ○ | Remote系 `mcp:render` |
