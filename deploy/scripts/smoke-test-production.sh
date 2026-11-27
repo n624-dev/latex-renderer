@@ -59,6 +59,14 @@ if [ -z "$public_origin" ]; then
   exit 65
 fi
 
+run_smoke_render() {
+  runuser -u "$smoke_user" -- env \
+    -u LATEX_RENDER_API_KEY -u LATEX_RENDER_PROFILE \
+    XDG_CONFIG_HOME="$temporary_root/config" \
+    LATEX_RENDER_BASE_URL="$public_origin" \
+    /usr/local/bin/node "$render_cli" "$@"
+}
+
 printf 'Production smoke check: local-credentials-cleanup\n' >&2
 run_smoke_admin cleanup-jobs --yes >/dev/null
 
@@ -87,15 +95,12 @@ install -o "$smoke_user" -g "$smoke_group" -m 0400 \
   "$temporary_root/main.tex" "$temporary_root/project/main.tex"
 
 printf 'Production smoke check: client-login\n' >&2
-printf '%s' "$token" | runuser -u "$smoke_user" -- env \
-  XDG_CONFIG_HOME="$temporary_root/config" \
-  /usr/local/bin/node "$render_cli" auth login --api-key-stdin >/dev/null
+printf '%s' "$token" | run_smoke_render auth login --api-key-stdin >/dev/null
 token=
 
 printf 'Production smoke check: render-and-preview\n' >&2
-runuser -u "$smoke_user" -- env XDG_CONFIG_HOME="$temporary_root/config" \
-  LATEX_RENDER_BASE_URL="$public_origin" \
-  /usr/local/bin/node "$render_cli" render "$temporary_root/project" --json | tee "$temporary_root/render.json"
+run_smoke_render render "$temporary_root/project" --json > "$temporary_root/render.json"
+cat "$temporary_root/render.json"
 
 printf 'Production smoke check: artifact-verification\n' >&2
 job_id=$(/usr/local/bin/node -e '
@@ -113,9 +118,7 @@ test -s "$temporary_root/project/.render/previews/page-1.png"
 /usr/local/bin/node -e 'const x=require(process.argv[1]);if(x.success!==true)process.exit(1)' "$temporary_root/project/.render/errors.json"
 
 printf 'Production smoke check: job-cleanup\n' >&2
-runuser -u "$smoke_user" -- env XDG_CONFIG_HOME="$temporary_root/config" \
-  LATEX_RENDER_BASE_URL="$public_origin" \
-  /usr/local/bin/node "$render_cli" jobs delete "$job_id" --yes --json > "$temporary_root/delete.json" || {
+run_smoke_render jobs delete "$job_id" --yes --json > "$temporary_root/delete.json" || {
     echo "Production smoke job deletion failed" >&2
     exit 1
   }

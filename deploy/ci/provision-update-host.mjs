@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { configureDockerRepository } from "./docker-repository.mjs";
 import { nativeBaseDigest } from "../scripts/ghcr-base-publication.mjs";
@@ -72,6 +72,16 @@ await writeFile(
   withoutUserEnvironmentDefaults(machineEnvironment),
 );
 for (const key of userEnvironmentKeys) delete process.env[key];
+// The runner's Microsoft feed supplies none of the host-test dependencies.
+// Keep its availability out of the test while keeping APT signature checks.
+for (const format of ["list", "sources"]) {
+  const path = `/etc/apt/sources.list.d/microsoft-prod.${format}`;
+  try {
+    await rename(path, `${path}.disabled`);
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+}
 run("/bin/sh", [resolve(source, "deploy/scripts/install-host.sh")]);
 run("/usr/local/bin/node", [
   resolve(source, "deploy/ci/check-database-access.mjs"),
