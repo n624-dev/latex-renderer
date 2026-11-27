@@ -67,7 +67,7 @@ it("preserves the same document files through Web, CLI and MCP ZIP producers", a
         limits,
         "report/main.tex",
       );
-      expect(result.paths.sort()).toEqual(files.map(({ path }) => path).sort());
+      expect(result.paths.toSorted()).toEqual(files.map(({ path }) => path).sort());
       for (const { path, bytes } of files)
         expect(await readFile(join(extracted, path))).toEqual(bytes);
     }

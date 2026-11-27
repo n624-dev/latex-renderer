@@ -48,6 +48,17 @@ const job = {
   created_at: "2026-10-19T00:00:00Z",
   retention_expires_at: "2026-10-20T00:00:00Z",
 };
+type JobFixture = Omit<typeof job, "previews"> & {
+  error_message?: string;
+  preview_page_count?: number;
+  previews: Array<{
+    open_url: string;
+    relative_path: string;
+    type: string;
+    size: number;
+    sha256: string;
+  }>;
+};
 let browser: Browser | undefined;
 const pages: Page[] = [];
 beforeAll(async () => {
@@ -73,7 +84,7 @@ async function fixture(kind: string, query = "", pagedOwners = false, pagedAccou
       body: string | null;
     }> = [];
   const ownerState = { disabled: false };
-  const jobState: { current: typeof job } = { current: job };
+  const jobState: { current: JobFixture } = { current: job };
   page.on("pageerror", (error) => errors.push(error.message));
   await page.route("**/*", async (route) => {
     const request = route.request(),
