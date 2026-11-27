@@ -1,35 +1,123 @@
-# LaTeX Renderer MCP operations
+# MCP操作対応表
 
-LaTeX Renderer has a local stdio server, a direct HTTPS server, and a public HTTPS gateway. The local server also works with files on the client. The two HTTPS entry points share a tool contract, then use the selected Renderer for processing and storage.
+関連Issueは [#387](https://github.com/n624-dev/latex-renderer/issues/387) です。確認基準はコミット `17b0de83`。表はコードの対応状況です。各接続先で実際に使えるツールは、サーバーの版・設定、認可、クライアントが取得したツール一覧で確認します。
 
-| Connection | Authorization | Where artifacts are accessed |
-| --- | --- | --- |
-| Local stdio | A renderer API key and short-lived Job tickets. Additional document tools need the specific privilege shown below. | Local MCP saves Job artifacts to the explicitly chosen folder. |
-| Direct HTTPS | OAuth authorization from the connected Renderer. Tools declare their OAuth scopes. | MCP resources, returned images, and the Renderer’s authenticated download routes. |
-| Public HTTPS gateway | OAuth authorization for the gateway and the selected Renderer. The gateway checks both authorization layers and keeps their identifiers separate. | The gateway relays authorized downloads and can issue its own short-lived links. Processing and durable document storage stay with the selected Renderer. |
+- **○** は対応、**×** はその名前のツールなし。別の操作で代替できる場合は補足に記載します。
+- **Local MCP** はstdioとAPIキーを使います。追加操作は対応サーバーと下表の明示権限が必要です。Project履歴の表示と、独立した別キーで受理したJobへの操作権限は別です。
+- **直接Remote MCP** はRendererのOAuthを使います。**公開MCP** はゲートウェイと選択したRendererの両方の認可に従います。公開MCPからRendererに接続するHTTPS方式と外向きエージェント方式は同じカタログを使います。
 
-## Tool coverage
+## 接続・ガイド・環境
 
-The **Direct/public** column uses the names in the common HTTPS catalog. The public gateway excludes the diagnostic tool for verifying an attachment origin. The **Local** column lists the equivalent operations and any extra scopes. Deployment configuration, authorization, and server version may further limit access.
+| ツール | 操作 | Local MCP | 直接Remote MCP | 公開MCP | 権限・補足 |
+| --- | --- | :---: | :---: | :---: | --- |
+| `get_profile` | 接続中の利用者ID | × | ○ | ○ | 直接Remoteは利用者ID、公開MCPは接続プロファイルID |
+| `get_authoring_guide` | 制作ガイド | ○ | ○ | ○ | Remote系 `mcp:read`。Localは同梱版を読む |
+| `get_renderer_capabilities` | エンジン・出力・制限・添付対応 | × | ○ | ○ | Remote系 `mcp:read` |
+| `list_authoring_profiles` | 制作プロファイル一覧 | × | ○ | ○ | Remote系 `mcp:read` |
+| `check_packages` | 指定パッケージの有無 | × | ○ | ○ | Remote系 `mcp:read` |
+| `search_packages` | パッケージ検索 | × | ○ | ○ | Remote系 `mcp:read` |
+| `check_fonts` | 指定フォントの有無 | × | ○ | ○ | Remote系 `mcp:read` |
+| `search_fonts` | フォント検索 | × | ○ | ○ | Remote系 `mcp:read` |
+| `check_document_requirements` | クラス・パッケージ・フォントの要件確認 | × | ○ | ○ | Remote系 `mcp:read` |
+| `probe_document_requirements` | 検証用文書を描画して要件確認 | × | ○ | ○ | Remote系 `mcp:render` |
 
-| Operation | Direct/public | Local |
-| --- | --- | --- |
-| Guide and engine environment | `get_authoring_guide`, `get_renderer_capabilities`, `list_authoring_profiles`, `check_packages`, `search_packages`, `check_fonts`, `search_fonts`, `check_document_requirements`, `probe_document_requirements` | `get_authoring_guide` reads the bundled guide. Check the connected environment in the Renderer Web UI. |
-| Connection identity | `get_profile` | Use the CLI’s saved Renderer connection and API key. |
-| Source upload | `create_source`, `begin_source_upload`, `upload_source_chunk`, `get_source_upload_status`, `finalize_source_upload`, `create_source_ref` | `upload_source` packages and uploads a local directory or ZIP. |
-| Source editing | `update_source_file`, `delete_source_file` | Edit the chosen local files, then upload them again to create a Source. |
-| Attached files | `import_source_attachment`, `request_attached_pdf_inspection`, `get_attached_pdf_inspection`; direct HTTPS can also expose `verify_attachment_delivery_origin` to a dedicated verification account. | Upload a permitted local source directory or ZIP. Client-issued ChatGPT file references are specific to the HTTPS connection. |
-| Project metadata and job history | `list_projects`, `get_project`, `create_project`, `rename_project`, `delete_project`, `attach_project_revision`, `get_project_revision_jobs` | Same tools. A Job history row does not grant permission to read that Job when it belongs to another independently issued key. |
-| Saved revision files | `list_project_revision_files`, `get_project_revision_file` | Same tools with `render:project:read`. |
-| Editing a saved revision directly | `update_project_file`, `delete_project_file` | Open the shared draft, apply the changes, and save the draft to create a new revision. |
-| Shared draft reads | `get_project_draft`, `get_project_draft_file` | Same tools with `render:draft:read`. |
-| Shared draft writes | `open_project_draft`, `apply_project_changes`, `save_project_draft` | Same tools with `render:draft:write`. A write based on an older draft version returns the current version when available. |
-| Trial render of a draft | `render_project_draft` | Compile a local copy with `render_project` or use the shared draft preview in the Renderer Web editor. |
-| Job creation and changes | `create_render`, `render_project_revision`, `retry_render`, `retry_svg_render`, `cancel_render`, `delete_render`, `get_render_status` | `create_render_job` and `render_project` create a Job from a named entrypoint. `render_project_revision`, `get_render_status`, `cancel_render`, and `delete_render` use the same tool names. The CLI can retry Jobs. |
-| Rendering diagnostics and history | `get_render_diagnostics`, `read_render_log`, `get_render_manifest` | `download_render_artifacts` downloads the error data and log; use the Web UI for details not available in a local download. |
-| Artifacts and previews | `get_render_artifacts`, `get_render_preview`, `get_render_preview_pages`, `get_render_preview_crop`, `get_render_preview_sheet`, `locate_render_source`, `get_project_revision_downloads` | `download_render_artifacts` saves outputs and requested full-page PNG previews locally. Use a direct HTTPS connection or the Web UI for specialized preview and revision operations. |
-| PDF quality reports | `request_render_quality_report`, `get_render_quality_report`, `compare_render_quality` | Request or read a report with `render:pdf:inspect`. Compare results by checking both reports or using the HTTPS comparison tool. |
-| Document conditions and acceptance | `get_project_document_state`, `update_project_document_conditions`, `adopt_project_revision`, `list_project_pdf_reviews`, `record_project_pdf_review` | Use the project’s Web view or the HTTPS tools. |
-| Retention and storage | `get_project_storage_usage`, `protect_project_revision`, `plan_project_revision_cleanup`, `apply_project_revision_cleanup` | Use the project’s Web view or the HTTPS tools. |
+## 入力ファイル
 
-The Local MCP extensions require a Renderer and Gateway that implement the authoring routes. Older servers continue to accept their existing rendering and download operations. A Project is shared across authorized clients of the same user. An API key’s Job inspection remains bound to that key’s ownership lineage.
+| ツール | 操作 | Local MCP | 直接Remote MCP | 公開MCP | 権限・補足 |
+| --- | --- | :---: | :---: | :---: | --- |
+| `upload_source` | ローカルのフォルダーまたはZIPをアップロード | ○ | × | × | — |
+| `create_source` | テキスト・小さなファイルからSourceを作成 | × | ○ | ○ | Remote系 `mcp:render` |
+| `begin_source_upload` | ZIPの分割アップロード開始 | × | ○ | ○ | Remote系 `mcp:render` |
+| `upload_source_chunk` | ZIPのチャンクを送信 | × | ○ | ○ | Remote系 `mcp:render` |
+| `get_source_upload_status` | アップロード進捗と再開位置 | × | ○ | ○ | Remote系 `mcp:render` |
+| `finalize_source_upload` | ZIPを検証・確定 | × | ○ | ○ | Remote系 `mcp:render` |
+| `create_source_ref` | 別の接続へ渡すSource参照を発行 | × | ○ | ○ | Remote系 `mcp:render` |
+| `update_source_file` | ファイルの追加・更新から新しいSourceを作成 | × | ○ | ○ | Remote系 `mcp:render` |
+| `delete_source_file` | ファイルを除いた新しいSourceを作成 | × | ○ | ○ | Remote系 `mcp:render` |
+| `import_source_attachment` | チャット添付をSourceに取り込み | × | ○ | ○ | Remote系 `mcp:render`。接続先の添付設定が必要。公開MCPのカタログには設定にかかわらず掲載 |
+| `verify_attachment_delivery_origin` | 添付の配布元を確認 | × | ○ | × | 直接Remote `mcp:read`。直接Remoteの指定済み検証アカウントのみ |
+
+## Project・保存版・共有下書き
+
+| ツール | 操作 | Local MCP | 直接Remote MCP | 公開MCP | 権限・補足 |
+| --- | --- | :---: | :---: | :---: | --- |
+| `list_projects` | 保存Project一覧 | ○ | ○ | ○ | Remote系 `mcp:read` |
+| `get_project` | Project詳細と保存版一覧 | ○ | ○ | ○ | Remote系 `mcp:read` |
+| `create_project` | Projectを作成 | ○ | ○ | ○ | Remote系 `mcp:render` |
+| `rename_project` | Projectを改名 | ○ | ○ | ○ | Remote系 `mcp:render` |
+| `delete_project` | Projectを削除 | ○ | ○ | ○ | Remote系 `mcp:delete` |
+| `attach_project_revision` | 既存Sourceを保存版にする | ○ | ○ | ○ | Remote系 `mcp:render` |
+| `get_project_revision_jobs` | 保存版のJob履歴 | ○ | ○ | ○ | Remote系 `mcp:read` |
+| `list_project_revision_files` | 保存版のファイル一覧 | ○ | ○ | ○ | Remote系 `mcp:read`。Local `render:project:read` |
+| `get_project_revision_file` | 保存版のテキスト本文 | ○ | ○ | ○ | Remote系 `mcp:read`。Local `render:project:read` |
+| `get_project_revision_downloads` | 保存版Source ZIPと成果物リンク | × | ○ | ○ | Remote系 `mcp:read` |
+| `update_project_file` | ファイルを更新して次の版を作成 | × | ○ | ○ | Remote系 `mcp:render`。Localは共有下書きを編集してから保存可 |
+| `delete_project_file` | ファイルを除いて次の版を作成 | × | ○ | ○ | Remote系 `mcp:render`。Localは共有下書きから削除してから保存可 |
+| `open_project_draft` | 共有下書きを開く・起点を選ぶ | ○ | ○ | ○ | Remote系 `mcp:render`。Local `render:draft:write` |
+| `get_project_draft` | 共有下書きの状態 | ○ | ○ | ○ | Remote系 `mcp:read`。Local `render:draft:read` |
+| `get_project_draft_file` | 共有下書きのファイル本文 | ○ | ○ | ○ | Remote系 `mcp:read`。Local `render:draft:read` |
+| `apply_project_changes` | 共有下書きを版確認付きで一括変更 | ○ | ○ | ○ | Remote系 `mcp:render`。Local `render:draft:write` |
+| `render_project_draft` | 共有下書きを試し描画 | × | ○ | ○ | Remote系 `mcp:render`。Localの `render_project` の入力は手元の文書 |
+| `save_project_draft` | 共有下書きを履歴へ保存 | ○ | ○ | ○ | Remote系 `mcp:render`。Local `render:draft:write` |
+| `get_project_document_state` | 文書条件と採用版 | × | ○ | ○ | Remote系 `mcp:read` |
+| `update_project_document_conditions` | 文書条件を編集 | × | ○ | ○ | Remote系 `mcp:render` |
+| `adopt_project_revision` | 採用する保存版を指定 | × | ○ | ○ | Remote系 `mcp:render` |
+| `record_project_pdf_review` | PDFの確認記録を保存 | × | ○ | ○ | Remote系 `mcp:render` |
+| `list_project_pdf_reviews` | PDFの確認記録一覧 | × | ○ | ○ | Remote系 `mcp:read` |
+| `get_project_storage_usage` | Projectの保存量 | × | ○ | ○ | Remote系 `mcp:read` |
+| `protect_project_revision` | 保存版の保護を設定 | × | ○ | ○ | Remote系 `mcp:render` |
+| `plan_project_revision_cleanup` | 保存版整理の候補を確認 | × | ○ | ○ | Remote系 `mcp:read` |
+| `apply_project_revision_cleanup` | 確認済みの保存版整理を実行 | × | ○ | ○ | Remote系 `mcp:delete` |
+
+## 描画・成果物・プレビュー
+
+| ツール | 操作 | Local MCP | 直接Remote MCP | 公開MCP | 権限・補足 |
+| --- | --- | :---: | :---: | :---: | --- |
+| `render_project` | 手元の入力から描画して成果物を直接保存 | ○ | × | × | — |
+| `create_render_job` | アップロード済みSourceから描画Jobを作るLocalの操作 | ○ | × | × | Remoteの対応操作は `create_render` |
+| `create_render` | テキスト・Source等から描画Jobを作るRemoteの操作 | × | ○ | ○ | Remote系 `mcp:render`。Localの対応操作は `create_render_job`。再送キーなど引数に差がある |
+| `render_project_revision` | 保存版を指定して描画 | ○ | ○ | ○ | Remote系 `mcp:render` |
+| `get_render_status` | Jobの状態 | ○ | ○ | ○ | Remote系 `mcp:read` |
+| `retry_render` | 描画を再試行 | × | ○ | ○ | Remote系 `mcp:render` |
+| `retry_svg_render` | 確定済みPDFを保持してSVGだけ再試行 | × | ○ | ○ | Remote系 `mcp:render` |
+| `cancel_render` | 描画を取り消す | ○ | ○ | ○ | Remote系 `mcp:cancel` |
+| `delete_render` | 終了済みJobを削除 | ○ | ○ | ○ | Remote系 `mcp:delete` |
+| `get_render_diagnostics` | 診断一覧とページング | × | ○ | ○ | Remote系 `mcp:read`。Localは成果物ダウンロードで構造化エラーを取得可 |
+| `read_render_log` | ログの範囲読み取り | × | ○ | ○ | Remote系 `mcp:read`。Localはログファイルを成果物として取得可 |
+| `get_render_manifest` | 描画のマニフェスト | × | ○ | ○ | Remote系 `mcp:read` |
+| `get_render_artifacts` | 成果物情報と取得用参照 | × | ○ | ○ | Remote系 `mcp:read`。Localは `download_render_artifacts` で直接保存 |
+| `download_render_artifacts` | ローカルにPDF・SVG・ログ・指定PNGを保存 | ○ | × | × | — |
+| `get_render_preview` | 個別のページプレビュー | × | ○ | ○ | Remote系 `mcp:read`。Localは成果物ダウンロードで指定ページのPNGを保存可 |
+| `get_render_preview_pages` | 指定ページ群のプレビュー | × | ○ | ○ | Remote系 `mcp:read` |
+| `get_render_preview_crop` | ページの指定領域を拡大 | × | ○ | ○ | Remote系 `mcp:read` |
+| `get_render_preview_sheet` | 複数ページを並べたプレビュー | × | ○ | ○ | Remote系 `mcp:read` |
+| `locate_render_source` | プレビュー位置に対応するTeXソース候補 | × | ○ | ○ | Remote系 `mcp:read` |
+
+## PDF品質検査
+
+| ツール | 操作 | Local MCP | 直接Remote MCP | 公開MCP | 権限・補足 |
+| --- | --- | :---: | :---: | :---: | --- |
+| `request_render_quality_report` | 描画済みPDFの検査を要求 | ○ | ○ | ○ | Remote系 `mcp:read`。Local `render:pdf:inspect` |
+| `get_render_quality_report` | 描画済みPDFの検査結果 | ○ | ○ | ○ | Remote系 `mcp:read`。Local `render:pdf:inspect` |
+| `compare_render_quality` | PDF同士の見た目を比較 | × | ○ | ○ | Remote系 `mcp:read` |
+| `request_attached_pdf_inspection` | チャット添付PDFの検査を要求 | × | ○ | ○ | Remote系 `mcp:render`。接続先の添付設定が必要。公開MCPのカタログには設定にかかわらず掲載 |
+| `get_attached_pdf_inspection` | 添付PDFの検査結果・領域拡大 | × | ○ | ○ | Remote系 `mcp:read`。接続先の添付設定が必要。公開MCPのカタログには設定にかかわらず掲載 |
+
+## リソースと成果物の受け取り
+
+| 操作 | Local MCP | 直接Remote MCP | 公開MCP | 補足 |
+| --- | :---: | :---: | :---: | --- |
+| `resources/list` で制作ガイドを列挙 | × | ○ | ○ | Localはガイドツールで取得。 |
+| `resources/templates/list` で成果物テンプレートを取得 | × | ○ | × | 公開MCPのメソッドは空一覧を返す。 |
+| `resources/read` でガイド・認可済み参照を読み取る | × | ○ | ○ | 公開MCPは返却された保護済み参照を使う。 |
+| 指定先へ成果物を直接保存 | ○ | × | × | Remote系はリソースやダウンロードリンクから取得。 |
+| 公開ゲートウェイの短期ダウンロードURL | × | × | ○ | 接続先で許可された成果物が対象。 |
+
+## 更新手順
+
+ツールの追加・削除、引数・権限、戻り値、リソース、接続方式ごとの制約が変わる変更では、同じPRで該当行と確認基準を更新します。共通機能を **×** から **○** にする場合は、正規の接続経路で登録と実行を確認します。固有機能や代替手順は該当行に残します。
+
+- [Local MCPの登録](../apps/mcp-server/src/server.ts)
+- [直接Remote MCPの登録](../apps/remote-mcp/src/mcp.ts)
+- [公開MCPの登録](../apps/public-mcp-gateway/src/public-mcp.ts) · [公開ツールの選定](../apps/public-mcp-gateway/src/renderer-dispatch.ts)
+- [共通ツール定義](../packages/contracts/src/renderer-mcp-definitions.ts) · [OAuthスコープ](../packages/contracts/src/renderer-mcp.ts)
