@@ -37,7 +37,11 @@ function toolchainDetails(toolchain) {
   const incompatible = apt?.status === "incompatible"
     ? `<p class="error-summary">${esc(adminMessage("thisVersionCannotBeApplied"))}</p>`
     : "";
-  return `<details><summary>Node.js / Corepack</summary><p>${esc(adminMessage("currentVersion"))} <strong>${running}</strong></p>${candidate}${incompatible}</details>`;
+  const update = toolchain.update;
+  const result = update
+    ? `<p>${esc(adminMessage(update.status === "applied" ? "completedSuccessfully" : "failed"))} · <time datetime="${esc(update.checkedAt)}">${esc(new Date(update.checkedAt).toLocaleString(document.documentElement.lang))}</time></p>`
+    : "";
+  return `<details><summary>Node.js / Corepack</summary><p>${esc(adminMessage("currentVersion"))} <strong>${running}</strong></p>${candidate}${incompatible}${result}</details>`;
 }
 async function updates(){
   const signal=beginManagerWatch();

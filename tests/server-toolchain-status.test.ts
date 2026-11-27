@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { serverToolchainStatus } from "../deploy/scripts/server-toolchain-status.mjs";
+import { recordHostRuntimeResult } from "../deploy/scripts/host-runtime-generation.mjs";
 
 it.skipIf(process.getuid === undefined)(
   "reports running Node and trusted Corepack metadata without executing it",
@@ -24,7 +25,7 @@ it.skipIf(process.getuid === undefined)(
         nodePath,
         corepackPath,
         nodeVersion: "26.13.0",
-        owner: process.getuid!(),
+        owner: process.getuid?.() ?? -1,
       };
       await expect(serverToolchainStatus(options)).resolves.toEqual({
         node: {
@@ -72,7 +73,7 @@ it.skipIf(process.getuid === undefined)(
         corepackPath,
         aptManifestPath,
         nodeVersion: "26.13.0",
-        owner: process.getuid!(),
+        owner: process.getuid?.() ?? -1,
       };
       expect((await serverToolchainStatus(options)).apt).toBeUndefined();
       for (const [version, corepack, status] of [
@@ -99,6 +100,9 @@ it.skipIf(process.getuid === undefined)(
       await writeFile(aptManifestPath, '{"version":"26.14.0","corepack":{"version":"0.36.0"}}');
       await chmod(aptManifestPath, 0o666);
       expect((await serverToolchainStatus(options)).apt).toBeUndefined();
+      const update = { status: "applied", checkedAt: "2026-11-27T08:00:00.000Z" } as const;
+      await recordHostRuntimeResult(managedRoot, update);
+      expect((await serverToolchainStatus(options)).update).toEqual(update);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

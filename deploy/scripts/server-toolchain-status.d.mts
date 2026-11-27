@@ -21,4 +21,5 @@ export function serverToolchainStatus(options?: {
     corepackVersion: string;
     status: "available" | "current" | "incompatible";
   };
+  update?: { status: "applied" | "rolled-back"; checkedAt: string };
 }>;

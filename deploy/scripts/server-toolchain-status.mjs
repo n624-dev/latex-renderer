@@ -25,6 +25,9 @@ export async function serverToolchainStatus({
     nodeSource === "managed-copy" && corepackSource === "managed-copy"
       ? await aptCandidate(aptManifestPath, owner, nodeVersion, corepackRelease)
       : undefined;
+  const result = nodeSource === "managed-copy" && corepackSource === "managed-copy"
+    ? await readTrustedJson(join(managedRoot, "last-result.json"), owner)
+    : undefined;
   return {
     node: {
       version: nodeVersion,
@@ -39,6 +42,13 @@ export async function serverToolchainStatus({
       source: corepackSource,
     },
     ...(candidate && { apt: candidate }),
+    ...(
+      (result?.status === "applied" || result?.status === "rolled-back") &&
+      typeof result.checkedAt === "string" &&
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(result.checkedAt)
+        ? { update: { status: result.status, checkedAt: result.checkedAt } }
+        : {}
+    ),
   };
 }
 

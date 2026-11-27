@@ -1,0 +1,15 @@
+[Unit]
+Description=Recover an interrupted LaTeX Renderer Node.js and Corepack update
+After=local-fs.target systemd-tmpfiles-setup.service
+Before=latex-renderer-authentication-recovery.service latex-renderer-updater-recovery.service
+RequiresMountsFor=/opt/latex-renderer
+ConditionPathExists=/opt/latex-renderer/current/deploy/scripts/refresh-host-runtime.sh
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh /opt/latex-renderer/current/deploy/scripts/refresh-host-runtime.sh --recover
+TimeoutStartSec=60
+
+[Install]
+WantedBy=multi-user.target

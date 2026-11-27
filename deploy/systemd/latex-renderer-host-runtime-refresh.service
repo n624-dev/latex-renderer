@@ -1,0 +1,16 @@
+[Unit]
+Description=Apply the installed APT Node.js and Corepack update to LaTeX Renderer
+Requires=latex-renderer-host-runtime-recovery.service
+After=latex-renderer-host-runtime-recovery.service
+ConditionPathExists=/opt/latex-renderer/current/deploy/scripts/refresh-host-runtime.sh
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh /opt/latex-renderer/current/deploy/scripts/refresh-host-runtime.sh
+TimeoutStartSec=5min
+UMask=0022
+NoNewPrivileges=true
+ProtectHome=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=-/opt/latex-renderer/host-runtime /usr/local/bin /run/latex-renderer
