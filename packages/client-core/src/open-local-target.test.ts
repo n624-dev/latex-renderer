@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { openLocalTarget } from "./open-local-target.js";
 
@@ -16,36 +16,47 @@ describe("native PDF and browser opener", () => {
   it.runIf(process.platform === "win32")(
     "checks the Windows PowerShell cmdlet signature and real process exit without opening a UI",
     async () => {
-      const signature = spawnSync(
-        "powershell.exe",
-        [
-          "-NoProfile",
-          "-NonInteractive",
-          "-Command",
-          "if(!(Get-Command Microsoft.PowerShell.Management\\Start-Process).Parameters.ContainsKey('FilePath')){exit 1}",
-        ],
-        { encoding: "utf8", timeout: 15_000 },
-      );
-      expect(signature.status, signature.stderr).toBe(0);
+      let diagnostics = "";
       const run = ((
         command: string,
         args: string[],
         options: import("node:child_process").SpawnOptions,
-      ) =>
-        spawn(
+      ) => {
+        const child = spawn(
           command,
           [
             ...args.slice(0, -1),
-            `function Start-Process { [CmdletBinding()]param([Parameter(Mandatory)][string]$FilePath) if($FilePath -ne $env:LATEX_RENDER_OPEN_TARGET){throw 'target mismatch'} }; ${args.at(-1) ?? ""}`,
+            [
+              "$ErrorActionPreference='Stop'",
+              "$native = Get-Command Microsoft.PowerShell.Management\\Start-Process",
+              "if(!$native.Parameters.ContainsKey('FilePath')){throw 'Missing native FilePath parameter'}",
+              "function Start-Process { [CmdletBinding()]param([Parameter(Mandatory)][string]$FilePath) if($FilePath -ne $env:LATEX_RENDER_OPEN_TARGET){throw 'target mismatch'} }",
+              args.at(-1) ?? "",
+            ].join("; "),
           ],
-          options,
-        )) as typeof spawn;
+          { ...options, stdio: ["ignore", "ignore", "pipe"] },
+        );
+        child.stderr?.setEncoding("utf8").on("data", (text: string) => {
+          diagnostics = (diagnostics + text).slice(-4000);
+        });
+        child.once("error", (error) => {
+          diagnostics += error.message;
+        });
+        child.once("exit", (code, signal) => {
+          if (code !== 0) diagnostics += `PowerShell exit: ${code ?? signal}\n`;
+        });
+        return child;
+      }) as typeof spawn;
+      const opened = await openLocalTarget("C:\\日本語 & [a] 'quote'.pdf", {
+        spawnProcess: run,
+        timeoutMs: 45_000,
+      });
       expect(
-        await openLocalTarget("C:\\日本語 & [a] 'quote'.pdf", {
-          spawnProcess: run,
-        }),
+        opened,
+        diagnostics || "The Windows PowerShell launcher did not complete",
       ).toBe(true);
     },
+    60_000,
   );
   it.each([
     "C:\\files\\a '& test.pdf",
