@@ -189,6 +189,8 @@ describe("local MCP v2", () => {
       expect(new Headers(options?.headers).get("Authorization")).toBe(`Bearer ${secret}`);
       calls.push({ path: url.pathname + url.search, method: options?.method ?? "GET", body: options?.body });
       if (url.pathname.endsWith("/draft")) return Promise.resolve(Response.json({ draft: null }));
+      if (url.pathname.endsWith("/draft/preview"))
+        return Promise.resolve(Response.json({ jobId, version: 5, reused: true }));
       if (url.pathname.endsWith("/changes")) return Promise.resolve(Response.json({
         error: { code: "DRAFT_VERSION_CONFLICT", message: "The draft changed", currentVersion: 6 },
       }, { status: 409 }));
@@ -212,12 +214,16 @@ describe("local MCP v2", () => {
         isError: true,
         structuredContent: { error: { code: "DRAFT_VERSION_CONFLICT", status: 409, currentVersion: 6 } },
       });
+      await expect(call("render_project_draft", { projectId, version: 5 })).resolves.toMatchObject({
+        structuredContent: { success: true, result: { jobId, version: 5, reused: true } },
+      });
       await expect(call("get_render_quality_report", { jobId, pdfSha256 })).resolves.toMatchObject({
         structuredContent: { success: true, result: { pdfSha256, state: "not_requested" } },
       });
       expect(calls).toEqual([
         { path: `/api/v1/projects/${projectId}/draft`, method: "GET", body: undefined },
         { path: `/api/v1/projects/${projectId}/draft/changes`, method: "POST", body: JSON.stringify(changes) },
+        { path: `/api/v1/projects/${projectId}/draft/preview`, method: "POST", body: JSON.stringify({ version: 5 }) },
         { path: `/api/v1/job-tickets/${jobId}/pdf-inspection?pdfSha256=${pdfSha256}`, method: "GET", body: undefined },
       ]);
     } finally {
