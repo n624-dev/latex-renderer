@@ -199,7 +199,7 @@ describe("production hardening", () => {
     expect(smoke).toContain('value.command!=="render"');
     expect(smoke).toContain("/apiKey|uploadTicket|jobTicket/i");
     expect(smoke).toContain("smoke_user=latex-renderer");
-    expect(smoke.match(/runuser -u "\$smoke_user"/g)).toHaveLength(4);
+    expect(smoke.match(/runuser -u "\$smoke_user"/g)).toHaveLength(2);
     expect(smoke).toContain('LATEX_RENDERER_ADMIN_GID="$smoke_gid"');
     for (const command of ["create", "revoke", "cleanup-jobs"])
       expect(smoke).toContain(`run_smoke_admin ${command}`);
@@ -213,6 +213,16 @@ describe("production hardening", () => {
     );
     expect(smoke).not.toContain('> "$temporary_root/project/main.tex"');
     expect(smoke).toContain("Production smoke credential revocation failed");
+  });
+  it("binds the smoke credential to the same origin used for render and cleanup", () => {
+    const smoke = read("deploy/scripts/smoke-test-production.sh");
+    const render = smoke.split("run_smoke_render() {")[1]?.split("\n}")[0];
+    expect(render).toContain('LATEX_RENDER_BASE_URL="$public_origin"');
+    expect(render).toContain('XDG_CONFIG_HOME="$temporary_root/config"');
+    expect(render).toContain("-u LATEX_RENDER_API_KEY -u LATEX_RENDER_PROFILE");
+    expect(smoke).toContain("run_smoke_render auth login --api-key-stdin");
+    expect(smoke).toContain('run_smoke_render render "$temporary_root/project"');
+    expect(smoke).toContain('run_smoke_render jobs delete "$job_id"');
   });
   it("exercises the published cross-platform setup lifecycle in an isolated temporary root", () => {
     const deploy = read("deploy/scripts/deploy-production-release.sh");

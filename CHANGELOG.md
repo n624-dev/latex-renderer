@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.7.2-rc.7 - 2026-11-27
+
+- Use the configured server URL throughout the post-update render check, including API key registration.
+
 ## 1.7.2-rc.6 - 2026-11-27
 
 - Recover unsaved edits after a connection loss or a draft conflict. Fall back to PNG previews when an already-open editor can no longer load its PDF viewer.
