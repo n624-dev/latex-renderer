@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 1.7.2 - 2026-11-27
+
+- Edit LaTeX projects in the browser with automatic compilation, shared drafts, revision history, and an editor available in 18 languages.
+- Choose LuaLaTeX, pdfLaTeX, XeLaTeX, pLaTeX, or upLaTeX where supported by the server. Use the Web editor or `n624-latex` to select the engine for each document.
+- Review PDF quality, inspect a region of a preview, and retry SVG generation while retaining the PDF already produced.
+- Manage several Renderer connections with `n624-latex connection`. Save each server URL with its API key, choose a default, and confirm the server when importing a key from an older client.
+- Use the authoring guide, saved revision files, shared drafts, and PDF inspection through MCP. New Local MCP operations require the corresponding API key permissions.
+- Connect a self-hosted installation through the optional public MCP gateway over HTTPS or an outbound agent.
+- Improve server update verification and recovery. Apply compatible Node.js and Corepack updates from APT to the managed server runtime, with automatic rollback if its health check fails.
+
 ## 1.7.2-rc.7 - 2026-11-27
 
 - Use the configured server URL throughout the post-update render check, including API key registration.

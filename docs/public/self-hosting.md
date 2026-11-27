@@ -176,20 +176,20 @@ APT で新規構築できるのは、`systemd` が動作する単一の Debian 1
 
 ## 手動配置・旧版向けの構築手順（tarball 導入）
 
-APT パッケージと `sudo n624-latex server setup` を使う標準手順では、以下の手動展開・ホスト準備・所有者スクリプト実行はウィザードが案内・処理します。手動で `v1.7.1` 配布物から構築する場合や、内部の公開境界・認証変更手順を確認したい場合は以下を開いてください。
+APT パッケージと `sudo n624-latex server setup` を使う標準手順では、以下の手動展開・ホスト準備・所有者スクリプト実行はウィザードが案内・処理します。手動で `v1.7.2` 配布物から構築する場合や、内部の公開境界・認証変更手順を確認したい場合は以下を開いてください。
 
-> [!DETAILS] v1.7.1 の手動ダウンロード・検証・配置・Owner 登録の詳細手順を表示
+> [!DETAILS] v1.7.2 の手動ダウンロード・検証・配置・Owner 登録の詳細手順を表示
 >
-> 新規の手動導入には、正式版リリース [v1.7.1](https://github.com/n624-dev/latex-renderer/releases/tag/v1.7.1)（`latex-renderer-server-1.7.1.tar.gz`）を使用します。このリリースは公開後にタグや配布ファイルを差し替えできない設定です。開発中の `main` ブランチからの直接配置やローカルでの TeX 用 `docker build` は一般運用ではサポート対象外です。
+> 新規の手動導入には、正式版リリース [v1.7.2](https://github.com/n624-dev/latex-renderer/releases/tag/v1.7.2)（`latex-renderer-server-1.7.2.tar.gz`）を使用します。このリリースは公開後にタグや配布ファイルを差し替えできない設定です。開発中の `main` ブランチからの直接配置やローカルでの TeX 用 `docker build` は一般運用ではサポート対象外です。
 >
-> ### v1.7.1をダウンロードして検証 {#v1-6-9をダウンロードして検証}
+> ### v1.7.2をダウンロードして検証 {#v1-6-9をダウンロードして検証}
 >
 > ダウンロード用に `curl`、`jq`、`tar`、`sha256sum`、`gh attestation verify` が使える GitHub CLI を準備します。サーバー用の Node.js と Corepack は、後述のホスト準備で導入します。
 >
 > 通常のユーザーで、同じ Bash セッション内で次を実行します。GitHub Releases の SHA-256 と GitHub Actions のビルド来歴署名（Attestation）の両方を検証します（公開 API の来歴データを `gh` に渡すため、GitHub ログインやトークンは不要です）。途中で失敗した場合は `bundle_root` が設定されないため、原因を解決してからやり直してください。
 >
 > ```bash
-> version=1.7.1
+> version=1.7.2
 > repository=n624-dev/latex-renderer
 > asset="latex-renderer-server-$version.tar.gz"
 > unset bundle_root
