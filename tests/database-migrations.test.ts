@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
 import { RendererDatabase } from "../packages/database/src/index.js";
+import { latestDatabaseMigration } from "../packages/database/src/migrations.js";
 
 const roots: string[] = [];
 const initialSql = readFileSync(
@@ -114,7 +115,7 @@ describe("database migration 002", () => {
         .prepare("SELECT version FROM schema_migrations ORDER BY version")
         .all(),
     ).toEqual(
-      Array.from({ length: 29 }, (_, index) => ({ version: index + 1 })),
+      Array.from({ length: latestDatabaseMigration }, (_, index) => ({ version: index + 1 })),
     );
 
     expect(() => migrated.migrate()).not.toThrow();
@@ -633,6 +634,45 @@ describe("database migration 002", () => {
     ).toBe(true);
     expect(() => db.migrate()).not.toThrow();
     db.close();
+  });
+});
+
+describe("numbered SQL application lifecycle", () => {
+  it("leaves both the migration marker and schema unchanged if a numbered migration fails", () => {
+    const database = new RendererDatabase(":memory:");
+    try {
+      database.migrate();
+      database.raw.exec(`
+        DROP INDEX idx_api_keys_active_rotation;
+        ALTER TABLE api_keys DROP COLUMN rotation_root_id;
+        DELETE FROM schema_migrations WHERE version=32;
+        CREATE INDEX idx_api_keys_active_rotation ON api_keys(id);
+      `);
+      expect(() => database.migrate()).toThrow("already exists");
+      expect(database.raw.isTransaction).toBe(false);
+      expect(database.raw.prepare("SELECT 1 FROM schema_migrations WHERE version=32").get()).toBeUndefined();
+      expect(database.raw.prepare("PRAGMA table_info(api_keys)").all().map(({ name }) => name))
+        .not.toContain("rotation_root_id");
+      database.raw.exec("DROP INDEX idx_api_keys_active_rotation");
+      database.migrate();
+      expect(database.raw.prepare("SELECT 1 FROM schema_migrations WHERE version=32").get()).toBeDefined();
+      expect(database.raw.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("rejects a database from a newer application before running migrations", () => {
+    const database = new RendererDatabase(":memory:");
+    try {
+      database.migrate();
+      const next = latestDatabaseMigration + 1;
+      database.raw.prepare("INSERT INTO schema_migrations VALUES (?,?)")
+        .run(next, new Date().toISOString());
+      expect(() => database.migrate()).toThrow(`Database schema ${next} requires a newer application`);
+    } finally {
+      database.close();
+    }
   });
 });
 

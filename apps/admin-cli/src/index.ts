@@ -41,7 +41,8 @@ const credentialPath =
 
 const program = new Command()
   .name("latex-render-admin")
-  .version(CLIENT_VERSION);
+  .version(CLIENT_VERSION)
+  .option("--json", "write the result as JSON");
 program
   .command("auth")
   .command("login")
@@ -55,7 +56,7 @@ program
   });
 
 const users = program.command("users");
-users.command("list").action(async () => print(await request("GET", "/users")));
+addReadCommands(users, "/users");
 users
   .command("create")
   .option("--email <email>")
@@ -63,10 +64,7 @@ users
   .requiredOption("--role <role>")
   .requiredOption("--authentication <type>", "password or external")
   .option("--login-name <name>", humanText("passwordLoginName"))
-  .option(
-    "--password-stdin",
-    humanText("readTheInitialPasswordFromStandard"),
-  )
+  .option("--password-stdin", humanText("readTheInitialPasswordFromStandard"))
   .option("--subject <subject>", humanText("externalProviderSubject"))
   .option("--preferred-username <name>")
   .option("--email-at-provider <email>")
@@ -140,9 +138,7 @@ users
   );
 
 const accounts = program.command("service-accounts");
-accounts
-  .command("list")
-  .action(async () => print(await request("GET", "/service-accounts")));
+addReadCommands(accounts, "/service-accounts");
 accounts
   .command("create")
   .requiredOption("--user <id>")
@@ -173,6 +169,38 @@ accounts
   );
 
 const jobs = program.command("jobs");
+addReadCommands(jobs, "/jobs", ["--status <status>", "--source-id <id>"]);
+jobs
+  .command("cancel")
+  .argument("<id>")
+  .requiredOption("--yes")
+  .action(async (id: string) =>
+    print(await request("POST", `/jobs/${encodeURIComponent(id)}/cancel`)),
+  );
+jobs
+  .command("delete")
+  .argument("<id>")
+  .requiredOption("--yes")
+  .action(async (id: string) => {
+    await request("DELETE", `/jobs/${encodeURIComponent(id)}`);
+    print({ id, accepted: true });
+  });
+jobs
+  .command("retry-svg")
+  .argument("<id>")
+  .requiredOption("--yes")
+  .action(async (id: string) =>
+    print(
+      await request(
+        "POST",
+        `/jobs/${encodeURIComponent(id)}/retry-svg`,
+        undefined,
+        {
+          "Idempotency-Key": randomUUID(),
+        },
+      ),
+    ),
+  );
 jobs
   .command("retry")
   .argument("<id>")
@@ -188,6 +216,7 @@ jobs
     ),
   );
 const keys = program.command("api-keys");
+addReadCommands(keys, "/api-keys");
 keys
   .command("create")
   .requiredOption("--service-account <id>")
@@ -219,6 +248,10 @@ keys
   );
 
 const maintenance = program.command("maintenance");
+maintenance.command("status").action(async () => {
+  const status = asRecord(await request("GET", "/system/status"));
+  print({ maintenance: status.maintenance });
+});
 maintenance
   .command("enable")
   .requiredOption("--mode <mode>")
@@ -240,6 +273,9 @@ maintenance
   );
 const ticketKeys = program.command("ticket-keys");
 ticketKeys
+  .command("list")
+  .action(async () => print(await request("GET", "/system/ticket-keys")));
+ticketKeys
   .command("revoke")
   .argument("<kid>")
   .requiredOption("--reason <reason>")
@@ -254,11 +290,64 @@ ticketKeys
     ),
   );
 const worker = program.command("worker");
+worker.command("status").action(async () => {
+  const status = asRecord(await request("GET", "/system/status"));
+  print({ worker: status.worker, rendering: status.rendering });
+});
 for (const action of ["pause", "resume", "drain"] as const)
   worker
     .command(action)
     .requiredOption("--yes")
     .action(async () => print(await request("POST", `/worker/${action}`, {})));
+
+addReadCommands(program.command("sources"), "/sources", ["--status <status>"]);
+const system = program.command("system");
+system
+  .command("status")
+  .action(async () => print(await request("GET", "/system/status")));
+const systemConfig = system
+  .command("config")
+  .action(async () => print(await request("GET", "/system/config")));
+systemConfig
+  .command("set")
+  .argument("<key>")
+  .argument("<value>")
+  .requiredOption("--reason <reason>")
+  .requiredOption("--yes")
+  .action(async (key: string, raw: string, options: { reason: string }) => {
+    const value = Number(raw);
+    if (!/^[0-9]+$/.test(raw) || !Number.isSafeInteger(value) || value < 1)
+      throw new AppError("INVALID_OPTION", "The value must be a positive integer", 400);
+    print(await request("PATCH", "/system/config", {
+      key,
+      value,
+      reason: options.reason,
+    }));
+  });
+
+const backup = program.command("backup");
+backup
+  .command("status")
+  .action(async () => print(await request("GET", "/backups/status")));
+for (const action of ["create", "verify"] as const)
+  backup
+    .command(action)
+    .action(async () => print(await request("POST", `/backups/${action}`)));
+
+program
+  .command("audit")
+  .command("list")
+  .option("--page <page>")
+  .option("--page-size <size>")
+  .option("--action <action>")
+  .option("--actor <actor>")
+  .option("--target <target>")
+  .option("--result <result>")
+  .option("--from <timestamp>")
+  .option("--to <timestamp>")
+  .action(async (filters: Record<string, string>) =>
+    print(await request("GET", withQuery("/audit-logs", filters))),
+  );
 
 const tex = program
   .command("tex")
@@ -316,7 +405,10 @@ tex
     "--all-languages",
     humanText("selectEveryLanguageCollectionReturnedBy"),
   )
-  .option("--clear-languages", humanText("selectZeroOptionalLanguageCollections"))
+  .option(
+    "--clear-languages",
+    humanText("selectZeroOptionalLanguageCollections"),
+  )
   .requiredOption("--auto-update <on|off>")
   .option(
     "--rebuild-if-missing <on|off>",
@@ -421,9 +513,7 @@ tex
 
 const update = program
   .command("update")
-  .description(
-    humanText("updateTheSelfHostedLatexRenderer"),
-  );
+  .description(humanText("updateTheSelfHostedLatexRenderer"));
 update
   .command("status")
   .action(async () => print(await request("GET", "/updates/state")));
@@ -500,6 +590,36 @@ await program.parseAsync().catch((error: unknown) => {
   );
   process.exitCode = 1;
 });
+
+function addReadCommands(
+  group: Command,
+  path: string,
+  extraFlags: readonly string[] = [],
+): void {
+  const list = group
+    .command("list")
+    .option("--page-size <size>")
+    .option("--cursor <cursor>")
+    .option("--query <query>");
+  for (const flag of extraFlags) list.option(flag);
+  list.action(async (filters: Record<string, string>) =>
+    print(await request("GET", withQuery(path, filters))),
+  );
+  group
+    .command("get")
+    .argument("<id>")
+    .action(async (id: string) =>
+      print(await request("GET", `${path}/${encodeURIComponent(id)}`)),
+    );
+}
+
+function withQuery(
+  path: string,
+  filters: Readonly<Record<string, string>>,
+): string {
+  const query = new URLSearchParams(filters).toString();
+  return query ? `${path}?${query}` : path;
+}
 
 async function request(
   method: string,
@@ -582,7 +702,9 @@ async function waitTexOperation(initial: unknown): Promise<unknown> {
       failures += 1;
       if (failures >= 60) throw error;
       if (lastStatus !== "reconnecting") {
-        process.stderr.write(humanText("texEnvironmentReconnectingToAdminApi") + "\n");
+        process.stderr.write(
+          humanText("texEnvironmentReconnectingToAdminApi") + "\n",
+        );
         lastStatus = "reconnecting";
       }
       await sleep(1_000);

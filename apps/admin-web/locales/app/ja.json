@@ -160,6 +160,6 @@
   "waitingForPreviewGeneration": "プレビュー生成を待っています…",
   "whenSelectingMultipleFilesSelectOnly": "複数選択ではTeXファイルだけを選択してください。",
   "whichDocumentDoYouWantTo": "どの文書をPDFにしますか？",
-  "zipArchiveMustBe20Mib": "ZIPは20 MiB以下にしてください。",
+  "zipArchiveSizeLimit": "ZIPは{limit}以下にしてください。",
   "zoom": "拡大率"
 }

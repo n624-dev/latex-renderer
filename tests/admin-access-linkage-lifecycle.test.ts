@@ -6,7 +6,7 @@ import {
 } from "@latex-renderer/auth";
 import { RendererDatabase } from "@latex-renderer/database";
 import { createAdminApp } from "../apps/admin-api/src/app.js";
-import { adminScript } from "../apps/admin-web/src/assets/admin-script.js";
+import { adminSource as adminScript } from "./helpers/admin-ui-source.js";
 import { legacyTestBrowserAuth } from "./helpers/browser-auth.js";
 
 const databases: RendererDatabase[] = [];
@@ -118,7 +118,7 @@ describe("administrator external identity lifecycle", () => {
     expect(adminScript).toContain("秘密値は入力しないでください");
     expect(adminScript).toContain("/identities/");
     expect(adminScript).toContain("/unlink");
-    expect(adminScript).toContain("fetch('/auth/logout'");
+    expect(adminScript).toContain('fetch("/auth/logout"');
     expect(adminScript).not.toContain("/session/claim-subject");
   });
 });

@@ -1,11 +1,11 @@
-import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import type { Browser, Route } from "playwright";
 import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
 import { launchTestBrowser, newTestPage } from "../helpers/browser-engine.js";
 import { routeWebFonts } from "../helpers/browser-web-fonts.js";
 import { adminRenderPage } from "../../apps/admin-web/src/templates-admin.js";
-import { siteScript } from "../../apps/admin-web/src/assets/site-script.js";
+import { readBrowserAsset } from "../../apps/admin-web/src/browser-assets.js";
 import { styles } from "../../apps/admin-web/src/assets/styles.js";
 import {
   zipSingleTex,
@@ -13,18 +13,12 @@ import {
   parseRenderTicket,
 } from "../../apps/admin-web/src/assets/render-script.js";
 
-const script = execFileSync(
-  process.execPath,
-  [
-    "--input-type=module",
-    "--eval",
-    "const m=await import(process.argv[1]);process.stdout.write(m.renderScript)",
-    new URL(
-      "../../apps/admin-web/dist/assets/render-script.js",
-      import.meta.url,
-    ).href,
-  ],
-  { encoding: "utf8", timeout: 10_000, maxBuffer: 2 * 1024 * 1024 },
+const script = readFileSync(
+  new URL(
+    "../../apps/admin-web/dist/browser-assets/admin-render.js",
+    import.meta.url,
+  ),
+  "utf8",
 );
 const origin = "https://renderer.invalid",
   sourceId = `source_${"a".repeat(32)}`;
@@ -95,7 +89,7 @@ async function fixture(
     if (url.pathname === "/admin/assets/site.js")
       return route.fulfill({
         contentType: "application/javascript",
-        body: siteScript,
+        body: readBrowserAsset("site"),
       });
     if (url.pathname === "/admin/assets/styles.css")
       return route.fulfill({ contentType: "text/css", body: styles });

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { ApiKeyService, type AccessJwtVerifier } from "@latex-renderer/auth";
 import { RendererDatabase } from "@latex-renderer/database";
+import { DEFAULT_RESOURCE_LIMITS } from "@latex-renderer/shared";
 import { TicketService } from "@latex-renderer/ticket";
 import { createAdminApp } from "../apps/admin-api/src/app.js";
 import { legacyTestBrowserAuth } from "./helpers/browser-auth.js";
@@ -168,6 +169,7 @@ describe("administrator Web render jobs", () => {
     expect(targets.status).toBe(200);
     const targetsBody = await targets.text();
     expect(JSON.parse(targetsBody)).toEqual({
+      sourceLimits: DEFAULT_RESOURCE_LIMITS,
       items: [
         {
           apiKeyId: "key_web",
@@ -298,10 +300,10 @@ describe("administrator Web render jobs", () => {
     };
     expect(sourceRef.sourceRef).toMatch(/^source_ref_[a-f0-9]{32}$/);
     expect(
-      database.remoteMcp.sourceRef(sourceRef.sourceRef, "user_owner", now),
+      database.sources.sourceRef(sourceRef.sourceRef, "user_owner", now),
     ).toMatchObject({ source_id: sourceTicket.sourceId });
     expect(
-      database.remoteMcp.sourceRef(sourceRef.sourceRef, "another_user", now),
+      database.sources.sourceRef(sourceRef.sourceRef, "another_user", now),
     ).toBeUndefined();
     const sourceJob = await app.request("/admin/api/v1/jobs/render-tickets", {
       method: "POST",

@@ -148,16 +148,19 @@ const jobSchema = z
     stages: jobStagesSchema.optional(),
   })
   .strict();
+export const rendererMcpRecoveryDetailsSchema = z.object({
+    retryAfterSeconds: z.number().int().positive().optional(),
+    expectedOffset: z.number().int().nonnegative().optional(),
+    previewErrorCode: z.string().regex(/^[A-Z0-9_]{1,64}$/).optional(),
+    retryable: z.boolean().optional(),
+    currentVersion: z.number().int().nonnegative().nullable().optional(),
+});
 const errorSchema = z
   .object({
     code: z.string(),
     message: z.string(),
     status: z.number().int(),
-    retryAfterSeconds: z.number().int().positive().optional(),
-    expectedOffset: z.number().int().nonnegative().optional(),
-    previewErrorCode: z.string().optional(),
-    retryable: z.boolean().optional(),
-    currentVersion: z.number().int().nonnegative().nullable().optional(),
+    ...rendererMcpRecoveryDetailsSchema.shape,
   })
   .strict();
 
@@ -170,7 +173,7 @@ function oauthToolMeta(tool: RendererMcpTool) {
   };
 }
 
-function operationOutput<T extends z.ZodType>(operation: string, result: T) {
+function operationOutput<T extends z.ZodType, const Name extends string>(operation: Name, result: T) {
   return z
     .object({
       success: z.boolean(),
@@ -180,6 +183,33 @@ function operationOutput<T extends z.ZodType>(operation: string, result: T) {
     })
     .strict();
 }
+
+export const authoringGuideToolDefinition = {
+      _meta: oauthToolMeta("get_authoring_guide"),
+      title: "Get the LaTeX authoring guide",
+      description:
+        "Read the published LaTeX Renderer authoring guide by topic. Start with overview; choose remote or local for tool-specific steps, then use layout and quality for the final PDF.",
+      inputSchema: z
+        .object({ topic: z.enum(authoringTopics).default("overview") })
+        .strict(),
+      outputSchema: operationOutput(
+        "get_authoring_guide",
+        z
+          .object({
+            version: z.string(),
+            topic: z.enum(authoringTopics),
+            body: z.string(),
+            topics: z.array(z.enum(authoringTopics)),
+          })
+          .strict(),
+      ),
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    };
 
 function rendererMcpRenderToolDefinitions(
   translate: RendererMcpTranslate,
@@ -302,32 +332,7 @@ function rendererMcpRenderToolDefinitions(
       .strict(),
   ]);
   return {
-    get_authoring_guide: {
-      _meta: oauthToolMeta("get_authoring_guide"),
-      title: "Get the LaTeX authoring guide",
-      description:
-        "Read the published LaTeX Renderer authoring guide by topic. Start with overview; choose remote or local for tool-specific steps, then use layout and quality for the final PDF.",
-      inputSchema: z
-        .object({ topic: z.enum(authoringTopics).default("overview") })
-        .strict(),
-      outputSchema: operationOutput(
-        "get_authoring_guide",
-        z
-          .object({
-            version: z.string(),
-            topic: z.enum(authoringTopics),
-            body: z.string(),
-            topics: z.array(z.enum(authoringTopics)),
-          })
-          .strict(),
-      ),
-      annotations: {
-        readOnlyHint: true,
-        destructiveHint: false,
-        idempotentHint: true,
-        openWorldHint: false,
-      },
-    },
+    get_authoring_guide: authoringGuideToolDefinition,
     list_authoring_profiles: {
       _meta: oauthToolMeta("list_authoring_profiles"),
       title: "Read verified authoring profile availability",
@@ -1463,6 +1468,77 @@ function rendererMcpEnvironmentToolDefinitions(
   };
 }
 
+const savedRevisionFileIdentity = {
+  projectId: projectIdSchema,
+  revisionId: projectRevisionIdSchema,
+  sourceId,
+  sourceSha256: z.string().regex(/^[a-f0-9]{64}$/),
+};
+
+export const savedRevisionFilesPageSchema = z.object({
+  ...savedRevisionFileIdentity,
+  items: z.array(z.object({
+    path: z.string(),
+    size: z.number().int().nonnegative(),
+    kind: z.enum(["text", "binary"]),
+  }).strict()),
+  totalFiles: z.number().int().nonnegative(),
+  nextOffset: z.number().int().nonnegative().nullable(),
+}).strict();
+
+export const savedRevisionFileTextSchema = z.object({
+  ...savedRevisionFileIdentity,
+  path: z.string(),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/),
+  size: z.number().int().nonnegative(),
+  text: z.string(),
+  unit: z.literal("utf16"),
+  offset: z.number().int().nonnegative(),
+  nextOffset: z.number().int().nonnegative().nullable(),
+  totalUnits: z.number().int().nonnegative(),
+}).strict();
+
+export const savedRevisionFileTools = {
+    list_project_revision_files: {
+      _meta: oauthToolMeta("list_project_revision_files"),
+      title: "List files in a saved Project revision",
+      description:
+        "List the exact saved revision's files, sizes in bytes, and kinds. Supply projectId and revisionId from get_project. Continue with nextOffset; use get_project_revision_file to read text.",
+      inputSchema: z
+        .object({
+          projectId: projectIdSchema,
+          revisionId: projectRevisionIdSchema,
+          offset: z.number().int().nonnegative().optional(),
+          limit: z.number().int().min(1).max(25).optional(),
+        })
+        .strict(),
+      outputSchema: operationOutput(
+        "list_project_revision_files",
+        savedRevisionFilesPageSchema,
+      ),
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    get_project_revision_file: {
+      _meta: oauthToolMeta("get_project_revision_file"),
+      title: "Read text from a saved Project revision",
+      description:
+        "Read UTF-8 text from the exact saved revision without opening a draft. Use the path returned by list_project_revision_files. Offset is in UTF-16 code units; follow nextOffset until null before replacing a file.",
+      inputSchema: z
+        .object({
+          projectId: projectIdSchema,
+          revisionId: projectRevisionIdSchema,
+          offset: z.number().int().nonnegative().optional(),
+          path: z.string().min(1).max(2048),
+        })
+        .strict(),
+      outputSchema: operationOutput(
+        "get_project_revision_file",
+        savedRevisionFileTextSchema,
+      ),
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+};
+
 function rendererMcpProjectToolDefinitions(translate: RendererMcpTranslate) {
   const projectId = projectIdSchema,
     revisionId = projectRevisionIdSchema,
@@ -1561,7 +1637,6 @@ function rendererMcpProjectToolDefinitions(translate: RendererMcpTranslate) {
     sourceId,
     sourceSha256: z.string().regex(/^[a-f0-9]{64}$/),
   };
-  const offset = z.number().int().nonnegative().optional();
   return {
     list_projects: {
       _meta: oauthToolMeta("list_projects"),
@@ -2015,71 +2090,7 @@ function rendererMcpProjectToolDefinitions(translate: RendererMcpTranslate) {
       ),
       annotations: readOnly,
     },
-    list_project_revision_files: {
-      _meta: oauthToolMeta("list_project_revision_files"),
-      title: "List files in a saved Project revision",
-      description:
-        "List the exact saved revision's files, sizes in bytes, and kinds. Supply projectId and revisionId from get_project. Continue with nextOffset; use get_project_revision_file to read text.",
-      inputSchema: z
-        .object({
-          projectId,
-          revisionId,
-          offset,
-          limit: z.number().int().min(1).max(25).optional(),
-        })
-        .strict(),
-      outputSchema: operationOutput(
-        "list_project_revision_files",
-        z
-          .object({
-            ...revisionFileIdentity,
-            items: z.array(
-              z
-                .object({
-                  path: z.string(),
-                  size: z.number().int().nonnegative(),
-                  kind: z.enum(["text", "binary"]),
-                })
-                .strict(),
-            ),
-            totalFiles: z.number().int().nonnegative(),
-            nextOffset: z.number().int().nonnegative().nullable(),
-          })
-          .strict(),
-      ),
-      annotations: readOnly,
-    },
-    get_project_revision_file: {
-      _meta: oauthToolMeta("get_project_revision_file"),
-      title: "Read text from a saved Project revision",
-      description:
-        "Read UTF-8 text from the exact saved revision without opening a draft. Use the path returned by list_project_revision_files. Offset is in UTF-16 code units; follow nextOffset until null before replacing a file.",
-      inputSchema: z
-        .object({
-          projectId,
-          revisionId,
-          offset,
-          path: z.string().min(1).max(2048),
-        })
-        .strict(),
-      outputSchema: operationOutput(
-        "get_project_revision_file",
-        z
-          .object({
-            ...revisionFileIdentity,
-            path: z.string(),
-            sha256: z.string().regex(/^[a-f0-9]{64}$/),
-            size: z.number().int().nonnegative(),
-            text: z.string(),
-            unit: z.literal("utf16"),
-            offset: z.number().int().nonnegative(),
-            nextOffset: z.number().int().nonnegative().nullable(),
-            totalUnits: z.number().int().nonnegative(),
-          })
-          .strict(),
-      ),
-      annotations: readOnly,
-    },
+    ...savedRevisionFileTools,
     get_project_revision_jobs: {
       _meta: oauthToolMeta("get_project_revision_jobs"),
       title: translate("listProjectRevisionJobs"),
@@ -2253,6 +2264,38 @@ export function rendererMcpResourceDefinitions(
       description: translate("ownedJsonMetadataOrValidatedSvg"),
     },
   };
+}
+
+export const rendererAuthoringRequestBytes = 8 * 1024 * 1024;
+
+export const rendererApiAuthoringRoutes = {
+  get_project_draft: { method: "GET", resource: "project", suffix: "/draft" },
+  get_project_draft_file: { method: "GET", resource: "project", suffix: "/draft/file" },
+  open_project_draft: { method: "POST", resource: "project", suffix: "/draft/open" },
+  apply_project_changes: { method: "POST", resource: "project", suffix: "/draft/changes" },
+  save_project_draft: { method: "POST", resource: "project", suffix: "/draft/save" },
+  get_render_quality_report: { method: "GET", resource: "job", suffix: "/pdf-inspection" },
+  request_render_quality_report: { method: "POST", resource: "job", suffix: "/pdf-inspection" },
+} as const;
+
+export type RendererApiAuthoringTool = keyof typeof rendererApiAuthoringRoutes;
+
+export function rendererApiAuthoringTools() {
+  const {
+    get_project_draft, get_project_draft_file, open_project_draft,
+    apply_project_changes, save_project_draft,
+  } = rendererMcpProjectToolDefinitions(rendererMcpEnglishText);
+  const { get_render_quality_report, request_render_quality_report } =
+    rendererMcpRenderToolDefinitions(rendererMcpEnglishText, 1);
+  return {
+    get_project_draft,
+    get_project_draft_file,
+    open_project_draft,
+    apply_project_changes,
+    save_project_draft,
+    get_render_quality_report,
+    request_render_quality_report,
+  } satisfies Record<RendererApiAuthoringTool, unknown>;
 }
 
 export function rendererMcpToolDefinitions(

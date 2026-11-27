@@ -1,7 +1,7 @@
 import type { Browser } from "playwright";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { launchTestBrowser, newTestPage } from "../helpers/browser-engine.js";
-import { part7 } from "../../apps/admin-web/src/assets/admin-script-parts/part-7.js";
+import { updateViewSource } from "../helpers/admin-ui-source.js";
 import { styles } from "../../apps/admin-web/src/assets/styles.js";
 import { adminCatalog, createAdminMessage } from "../../apps/admin-web/src/admin-messages.js";
 
@@ -21,7 +21,7 @@ it("preserves update log disclosure, focus, and scroll across polling and page r
       `<!doctype html><html lang="ja"><style>${styles}</style><main><div id="update-operation"></div></main></html>`,
     );
     await page.addScriptTag({
-      content: `const adminMessage=(${createAdminMessage.toString()})(${JSON.stringify(adminCatalog("ja"))});\n${part7}\nwindow.updateLogTest={render:renderUpdateOperation,remember:rememberUpdateLogView};`,
+      content: `const adminMessage=(${createAdminMessage.toString()})(${JSON.stringify(adminCatalog("ja"))});\n${updateViewSource}\nwindow.updateLogTest={render:renderUpdateOperation,remember:rememberUpdateLogView};`,
     });
     const result = await page.evaluate(() => {
       const controls = (

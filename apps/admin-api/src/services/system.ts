@@ -1,7 +1,12 @@
 import { AppError, nowIso } from "@latex-renderer/shared";
 import type { MaintenanceMode } from "@latex-renderer/contracts";
 import type { AdminActor, AdminDependencies } from "../types.js";
-import type { AuditLogQuery } from "@latex-renderer/database";
+import {
+  runtimeSettingDefinitions,
+  runtimeSettingKeys,
+  type AuditLogQuery,
+  type RuntimeSettingKey,
+} from "@latex-renderer/database";
 
 export const ticketRevocationMinimumSeconds = 35 * 60;
 
@@ -26,7 +31,39 @@ export class AdminSystemService {
     };
   }
   config() {
-    return this.deps.database.settings.listMutable();
+    const items = this.deps.database.settings.listMutable();
+    const definitions = runtimeSettingDefinitions(this.deps);
+    return {
+      items,
+      effective: runtimeSettingKeys.map((key) => {
+        const row = items.find((item) => item.key === key),
+          definition = definitions[key],
+          value: unknown =
+            row === undefined
+              ? definition.fallback
+              : JSON.parse(row.value_json);
+        if (
+          typeof value !== "number" ||
+          !Number.isSafeInteger(value) ||
+          value <= 0
+        )
+          throw new AppError(
+            "CONFIG_STATE_INVALID",
+            "Current resource limit is invalid",
+            409,
+          );
+        return {
+          key,
+          value,
+          source: row
+            ? "database"
+            : definition.environment
+              ? "host"
+              : "default",
+          ...definition,
+        };
+      }),
+    };
   }
   audit(query: AuditLogQuery) {
     return this.deps.database.auditLogs.search(query);
@@ -65,38 +102,21 @@ export class AdminSystemService {
   updateConfig(
     actor: AdminActor,
     input: {
-      key:
-        | "max_queue_length"
-        | "max_user_storage_bytes"
-        | "max_user_active_jobs"
-        | "source_orphan_retention_minutes";
+      key: RuntimeSettingKey;
       value: number;
       reason: string;
     },
   ): void {
-    const bounds =
-      input.key === "max_queue_length"
-        ? { min: 1, max: 10000 }
-        : input.key === "max_user_storage_bytes"
-          ? { min: 100 * 1024 * 1024, max: 100 * 1024 * 1024 * 1024 }
-          : input.key === "max_user_active_jobs"
-            ? { min: 1, max: 1000 }
-            : { min: 5, max: 1440 };
-    if (input.value < bounds.min || input.value > bounds.max)
+    const { minimum, maximum, fallback } = runtimeSettingDefinitions(this.deps)[
+      input.key
+    ];
+    if (input.value < minimum || input.value > maximum)
       throw new AppError(
         "CONFIG_OUT_OF_RANGE",
         "Configuration value is outside its safe range",
         400,
       );
     this.deps.database.transaction(() => {
-      const fallback =
-        input.key === "max_queue_length"
-          ? this.deps.maxQueueLength
-          : input.key === "max_user_storage_bytes"
-            ? this.deps.maxUserStorageBytes
-            : input.key === "max_user_active_jobs"
-              ? 20
-              : 60;
       const previous = this.deps.database.settings.value<number>(
         input.key,
         fallback,

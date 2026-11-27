@@ -2,20 +2,32 @@
   "extends": "./tsconfig.base.json",
   "compilerOptions": {
     "noEmit": true,
+    "allowJs": true,
     "paths": {
       "@latex-renderer/shared": ["./packages/shared/src/index.ts"],
+      "@latex-renderer/shared/resource-limits": [
+        "./packages/shared/src/resource-limits.ts"
+      ],
       "@latex-renderer/shared/locale": ["./packages/shared/src/locale.ts"],
+      "@latex-renderer/shared/login-redirect": [
+        "./packages/shared/src/login-redirect.ts"
+      ],
       "@latex-renderer/shared/public-https": [
         "./packages/shared/src/public-https.ts"
       ],
       "@latex-renderer/shared/bounded-body": [
         "./packages/shared/src/bounded-body.ts"
       ],
-      "@latex-renderer/shared/relay-rpc": ["./packages/shared/src/relay-rpc.ts"],
+      "@latex-renderer/shared/relay-rpc": [
+        "./packages/shared/src/relay-rpc.ts"
+      ],
       "@latex-renderer/shared/diagnostic-locale": [
         "./packages/shared/src/diagnostic-locale.ts"
       ],
       "@latex-renderer/contracts": ["./packages/contracts/src/index.ts"],
+      "@latex-renderer/contracts/authoring-guide": [
+        "./packages/contracts/src/authoring-guide.ts"
+      ],
       "@latex-renderer/contracts/renderer-mcp-definitions": [
         "./packages/contracts/src/renderer-mcp-definitions.ts"
       ],
@@ -32,6 +44,9 @@
       "@latex-renderer/api-client": ["./packages/api-client/src/index.ts"],
       "@latex-renderer/client-core": ["./packages/client-core/src/index.ts"],
       "@latex-renderer/mcp-core": ["./packages/mcp-core/src/index.ts"],
+      "@latex-renderer/renderer-core": [
+        "./packages/renderer-core/src/index.ts"
+      ],
       "@latex-renderer/remote-mcp-core": [
         "./packages/remote-mcp-core/src/index.ts"
       ],

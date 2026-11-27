@@ -85,6 +85,18 @@ AI に文書のテキストを送って PDF や SVG に変換し、エラー診�
 > - **組版で使う日時**。LuaLaTeX では `reproducibility` に `latest` または UTC日時を指定した `fixed` を選べます。`latest` は新規ジョブを受理した時点の日時を使います。`retry_render` で作る再実行ジョブにも、その再実行を受理した時点の日時を使います。同じ再送キー（`idempotencyKey`）で再送したときは、受理済みのジョブと日時を返します。同じジョブの中で SVG だけを再試行するときは、確定済みのPDFと日時をそろえます。ジョブに記録された日時は `get_render_manifest` で確認できます。
 > - **レート制限とエラー**：ツールごとの 1 分間上限を超えると `REMOTE_MCP_RATE_LIMIT`（status `429`）と再試行秒数が `structuredContent` と標準 `content` の両方に返ります。他人の Source や Job は存在しないものとして扱われます。
 
+### 接続方式ごとの操作と権限
+
+| 接続 | 認証 | 向いている操作 |
+| --- | --- | --- |
+| Local MCP（stdio） | レンダリングAPIキーと短時間のJobチケット | 手元のフォルダーやZIPから描画して、PDF・SVG・ログを手元に保存する |
+| 直接Remote MCP（HTTPS） | 接続先の利用者アカウントとOAuthスコープ | 接続先の保存版を読む、共有下書きを編集する、PDFを検査する |
+| 公開MCPゲートウェイ | ゲートウェイで承認した接続先と操作の範囲 | 承認したRendererで制作・描画し、MCPリソースやダウンロードリンクから成果物を取得する |
+
+接続先やバージョンによって利用できる操作は変わります。実際のMCPツール一覧を確認し、`get_renderer_capabilities` があればレンダリング構成や添付ファイルの対応を確認できます。Local MCPでは、対応するサーバーと明示的なAPIキー権限があれば、共有下書きの閲覧・編集やPDF品質検査を使えます。ローカルの成果物はLocal MCPやCLIから取得できます。
+
+公開ゲートウェイ経由でも文書・ジョブ・成果物の保存先は選んだRendererです。接続先ごとに利用者の承認が必要です。添付ファイルの取り込みには接続先の対応と管理者の設定が必要です。
+
 ## ローカルファイルを直接扱う
 
 手元のフォルダ内のファイルを直接指定し、完成した PDF をローカルに保存したい場合は **Local MCP** を使います（変換用の文書データはレンダリングサーバーへ送信されます）。
@@ -117,7 +129,12 @@ claude mcp add --scope user latex-renderer -- latex-renderer-mcp
 | `upload_source` | ディレクトリまたは ZIP を 1 つの Source として準備 |
 | `create_render_job` | `sourceId + entrypoint` から 1 つの Job を作成（`outputs` で SVG も選択可） |
 | `render_project` | Source 準備から成果物取得までを一括実行（`outputs` で SVG も選択可） |
+| `get_authoring_guide` | 同梱されたLaTeX制作ガイドを読む |
 | `list_projects` / `get_project` / `get_project_revision_jobs` | 保存 Project・改訂・Job 履歴を閲覧 |
+| `list_project_revision_files` / `get_project_revision_file` | 自分の保存版のファイルを一覧・閲覧。対応サーバーと `render:project:read` 権限付きAPIキーが必要 |
+| `get_project_draft` / `get_project_draft_file` | 共有下書きの版と本文を読む。`render:draft:read` が必要 |
+| `open_project_draft` / `apply_project_changes` / `save_project_draft` | 共有下書きを開く・編集する・保存する。`render:draft:write` が必要 |
+| `request_render_quality_report` / `get_render_quality_report` | そのキーが所有するJobのPDFを検査する。`render:pdf:inspect` が必要 |
 | `create_project` / `rename_project` / `delete_project` | 保存 Project を管理 |
 | `attach_project_revision` / `render_project_revision` | アップロード済み Source を保存し、固定改訂から Job を作成 |
 | `get_render_status` | ジョブ状態を確認 |

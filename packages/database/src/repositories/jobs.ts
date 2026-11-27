@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { userJobSql } from "../user-visible.js";
 import { readySourceSql } from "../source-lifecycle.js";
+import { jobCredentialId } from "../job-credentials.js";
 import {
   defaultRenderEngine,
   type JobStatus,
@@ -84,7 +85,9 @@ export type RevisionJobSummary = Pick<
   | "outputs_json"
   | "engine"
   | "runtime_digest"
->;
+  | "service_account_id"
+  | "user_id"
+> & { credential_owner_id: string };
 
 export type SourceJobSummary = Pick<
   JobRow,
@@ -767,6 +770,8 @@ export class JobsRepository {
       .prepare(
         `WITH ranked AS (
            SELECT j.id,j.project_revision_id,j.status,j.created_at,j.updated_at,j.retry_of_job_id,j.error_code,j.outputs_json,j.engine,j.runtime_digest,
+             j.service_account_id,j.user_id,
+             (SELECT ${jobCredentialId("k")} FROM api_keys k WHERE k.id=j.api_key_id) AS credential_owner_id,
              ROW_NUMBER() OVER (
                PARTITION BY j.project_revision_id
                ORDER BY j.created_at DESC,j.id DESC
@@ -774,7 +779,8 @@ export class JobsRepository {
            FROM jobs j
            WHERE j.project_revision_id IN (${placeholders}) AND ${userJobSql("j")} AND j.deleted_at IS NULL
          )
-         SELECT id,project_revision_id,status,created_at,updated_at,retry_of_job_id,error_code,outputs_json,engine,runtime_digest
+         SELECT id,project_revision_id,status,created_at,updated_at,retry_of_job_id,error_code,outputs_json,engine,runtime_digest,
+           service_account_id,user_id,credential_owner_id
          FROM ranked WHERE row_number<=?
          ORDER BY project_revision_id,created_at DESC,id DESC`,
       )
@@ -793,6 +799,9 @@ export class JobsRepository {
         outputs_json: row.outputs_json,
         engine: row.engine,
         runtime_digest: row.runtime_digest,
+        service_account_id: row.service_account_id,
+        user_id: row.user_id,
+        credential_owner_id: row.credential_owner_id,
       });
       result.set(row.project_revision_id, list);
     }
@@ -831,7 +840,8 @@ export class JobsRepository {
         : [revisionId, limit + 1],
       rows = this.db
         .prepare(
-          `SELECT id,status,created_at,updated_at,retry_of_job_id,error_code,outputs_json,engine,runtime_digest
+          `SELECT id,status,created_at,updated_at,retry_of_job_id,error_code,outputs_json,engine,runtime_digest,service_account_id,user_id,
+             (SELECT ${jobCredentialId("k")} FROM api_keys k WHERE k.id=jobs.api_key_id) AS credential_owner_id
            FROM jobs WHERE project_revision_id=? AND ${userJobSql()} AND deleted_at IS NULL${condition}
            ORDER BY created_at DESC,id DESC LIMIT ?`,
         )

@@ -1,4 +1,11 @@
 export const english = {
+  reviewConflict: "Review conflicting edits",
+  saveUnsavedCopy: "Save a copy",
+  currentServerFile: "Server version",
+  applyMyEdits: "Apply my edits to this file",
+  conflictFileMissing: "This file is missing from the current draft. Save a copy to keep your edits.",
+  conflictReviewHint: "Review the changed lines. Applying replaces this file with your edited copy.",
+  previewReload: "Showing PNG after a server update. Save your changes before reloading to restore PDF preview.",
   skipContent: "Skip to content",
   appNavigation: "Application navigation",
   appRender: "Convert to PDF",

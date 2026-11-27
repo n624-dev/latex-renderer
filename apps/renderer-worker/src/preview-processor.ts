@@ -17,6 +17,10 @@ import {
   type PreviewRequest,
 } from "@latex-renderer/database";
 import { AppError, newId, nowIso } from "@latex-renderer/shared";
+import {
+  syncArtifactTree,
+  syncPublishedAncestors,
+} from "../../../deploy/scripts/durable-storage.mjs";
 import type { WorkerConfig } from "./config.js";
 import {
   inspectOutputTree,
@@ -288,9 +292,11 @@ export async function processPreview(
       sha256: validated.sha256,
     };
     await publishArtifacts(staging, candidate, [artifact]);
+    await syncArtifactTree(candidate, [artifact.path]);
     await mkdir(dirname(p.output), { recursive: true, mode: 0o770 });
     if (!lifecycle.owns()) throw new Error("Preview ownership lost");
     await rename(candidate, p.output);
+    await syncPublishedAncestors(p.output, config.storageRoot);
     // Leave no unaccounted duplicate after the final transaction, even if the
     // process is killed immediately after committing its published pointer.
     await cleanup(db, config, request, lifecycle.owns, true);

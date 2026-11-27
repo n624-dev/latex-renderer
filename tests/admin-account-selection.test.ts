@@ -1,7 +1,7 @@
 import { japaneseAdminMessage } from "./helpers/admin-message.js";
 import { runInNewContext } from "node:vm";
 import { expect, it } from "vitest";
-import { part3 } from "../apps/admin-web/src/assets/admin-script-parts/part-3.js";
+import { keyViewSource as part3 } from "./helpers/admin-ui-source.js";
 import { escapeHtml } from "../apps/admin-web/src/templates-shared.js";
 
 it.each(["active", "disabled"])(

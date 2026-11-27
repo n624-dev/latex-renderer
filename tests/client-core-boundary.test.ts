@@ -19,7 +19,8 @@ describe("client core boundary", () => {
 
   it("owns ZIP, hash, Source, polling, and artifact operations", () => {
     const core = read("packages/client-core/src/index.ts"),
-      polling = read("packages/client-core/src/polling.ts");
+      polling = read("packages/client-core/src/polling.ts"),
+      access = read("packages/client-core/src/job-ticket-access.ts");
 
     for (const operation of [
       "createProjectArchive",
@@ -34,6 +35,7 @@ describe("client core boundary", () => {
     expect(core).toContain('from "./polling.js"');
     expect(polling).toContain("export async function pollUntilTerminal");
     expect(polling).toContain("client.job(");
-    expect(polling).toContain("client.renewJobTicket(");
+    expect(polling).toContain("createJobTicketAccess(");
+    expect(access).toContain("client.renewJobTicket(");
   });
 });

@@ -17,6 +17,7 @@ describe("renderer stage timeout exit codes", () => {
     ["compile", "pdf", 81, "LaTeX compile timed out"],
     ["pdfinfo", "pdf", 82, "PDF preview inspection timed out"],
     ["preview", "pdf", 82, "PDF preview timed out"],
+    ["preview", "pdf,svg", 0, "initial PNG preview unavailable"],
     ["svg", "pdf,svg", 83, "SVG capture timed out"],
     ["svg-export", "pdf,svg", 83, "SVG conversion timed out"],
     ["memory", "pdf", 84, "memory limit exceeded"],
@@ -102,19 +103,23 @@ if(name==='objects') fs.writeFileSync(path.join(out,'objects.meta'),'capture met
         );
         const scriptPath = join(root, "compile.sh");
         await writeFile(scriptPath, script);
-        await expect(
-          execute("sh", [scriptPath], {
+        const render = execute("sh", [scriptPath], {
             timeout: 10_000,
             env: {
               ...process.env,
               PATH: `${bin}:${process.env.PATH ?? "/usr/bin:/bin"}`,
               LATEX_ENTRYPOINT: "main.tex",
               LATEX_OUTPUTS: outputs,
+              ...(code === 0 ? { LATEX_RENDER_STAGE: "pdf" } : {}),
               TEST_TIMEOUT_STAGE: stage,
               TEST_CGROUP_ROOT: cgroup,
             },
-          }),
-        ).rejects.toMatchObject({ code });
+          });
+        if (code === 0) {
+          await render;
+          expect(await readFile(join(work, "output/result.pdf"), "utf8")).toMatch(/^%PDF-/);
+          expect(await readFile(join(work, "output/.preview-info.json"), "utf8")).toContain('"firstPage":"on-demand"');
+        } else await expect(render).rejects.toMatchObject({ code });
         expect(
           await readFile(join(work, "output/compile.log"), "utf8"),
         ).toContain(message);

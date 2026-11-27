@@ -87,14 +87,17 @@ Do not route `/api/v1/sources/*` or `/api/v1/jobs/*` through the Worker. Those p
 
 The remotely managed Tunnel is the production source of truth. Start from `deploy/cloudflared/config.example.yml`, then keep the configured copy outside Git with this order:
 
-1. OAuth discovery metadata → Remote MCP, port 3104
-2. `/oauth/*` and `/mcp` → Remote MCP, port 3104
-3. `/auth/*` → Admin API, port 3102
-4. `/admin/api/*` → Admin API, port 3102
-5. `/admin/*` → Web, port 3101
-6. `/app/api/*` → App API, port 3102
-7. `/app/*` → Web, port 3101
-8. `/api/*` → Renderer API, port 3100
-9. hostname catch-all → Web, port 3101
+1. Loopback-only MCP relay paths → HTTP 404
+2. OAuth discovery metadata → Remote MCP, port 3104
+3. `/oauth/*` and `/mcp` → Remote MCP, port 3104
+4. `/auth/*` → Admin API, port 3102
+5. `/admin/api/*` → Admin API, port 3102
+6. `/admin/*` → Web, port 3101
+7. `/app/api/*` → App API, port 3102
+8. `/app/*` → Web, port 3101
+9. `/api/*` → Renderer API, port 3100
+10. hostname catch-all → Web, port 3101
+
+Tunnel and Standalone Nginx share the rules for OAuth discovery, MCP, and loopback relay paths. Public Cloudflare Gateway Worker routes intercept the documented reservation routes before the Tunnel. Standalone handles those routes in Nginx and forwards them to its local Gateway. Use `/admin/api/v1/` for requests through either ingress.
 
 Run `deploy/scripts/validate-unified-routing.sh` against a local copy before applying equivalent remote rules. Actual dashboard/API configuration is a deployment operation and is not changed merely by merging this repository.

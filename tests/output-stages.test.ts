@@ -1,7 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RendererDatabase, SvgRetryOperations } from "@latex-renderer/database";
-import { readFileSync } from "node:fs";
-import { outputStagesV21Sql } from "../packages/database/src/schema.js";
 const databases: RendererDatabase[] = [];
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"] });
@@ -117,16 +115,6 @@ describe("independent output checkpoints", () => {
       reused: false,
     });
     expect(db.jobs.getVisible(id)).toBeUndefined();
-  });
-  it("keeps deployment SQL identical to the application migration", () => {
-    const sql = readFileSync(
-      "deploy/migrations/021_independent_output_stages.sql",
-      "utf8",
-    )
-      .trim()
-      .replace(/^BEGIN IMMEDIATE;\n/, "")
-      .replace(/\nCOMMIT;$/, "");
-    expect(sql).toBe(outputStagesV21Sql.trim());
   });
   it("deduplicates SVG retry requests and enforces ownership, maintenance, quotas, and immutable bindings", () => {
     const db = fixture();

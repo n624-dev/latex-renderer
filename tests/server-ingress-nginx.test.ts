@@ -199,6 +199,12 @@ describe("standalone Nginx configuration and actual HTTPS proxy", () => {
         const health = await get({}, "/api/v1/health");
         expect(health.status).toBe(200);
         expect(JSON.parse(health.body)).toEqual({ status: "ok" });
+        for (const localRoute of [
+          "local-operation",
+          "local-revoke",
+          "local-download/",
+        ])
+          expect((await get({}, `/mcp/relay/${localRoute}`)).status).toBe(404);
         expect((await get({ Host: "wrong.test" })).status).toBe(421);
         // The host health adapter uses normal CA trust, not rejectUnauthorized=false.
         const code = `import {checkIngressHttpsHealth} from ${JSON.stringify(new URL("../deploy/scripts/server-ingress.mjs", import.meta.url).href)};await checkIngressHttpsHealth(process.argv[1]);`;

@@ -160,6 +160,6 @@
   "waitingForPreviewGeneration": "正在等待生成预览…",
   "whenSelectingMultipleFilesSelectOnly": "多选时请仅选择 TeX 文件。",
   "whichDocumentDoYouWantTo": "要将哪个文档转换为 PDF？",
-  "zipArchiveMustBe20Mib": "ZIP 文件大小不得超过 20 MiB。",
+  "zipArchiveSizeLimit": "ZIP 文件大小不得超过 {limit}。",
   "zoom": "缩放"
 }

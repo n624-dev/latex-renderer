@@ -108,5 +108,3 @@ export function normalizeBrowserLoginConfiguration(
     methods: Object.freeze(methods),
   });
 }
-
-export const browserLoginConfigurationScript = `const normalizeBrowserLoginConfiguration=${normalizeBrowserLoginConfiguration.toString()};\n`;

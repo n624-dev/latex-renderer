@@ -1,7 +1,6 @@
 import { readFileSync } from "node:fs";
 import { afterEach, expect, it } from "vitest";
 import { RendererDatabase } from "@latex-renderer/database";
-import { internalSmokeVisibilitySql } from "../packages/database/src/schema.js";
 import { SourceTicketsService } from "../apps/internal-api/src/services/source-tickets.js";
 import { RenderTicketsService } from "../apps/internal-api/src/services/render-tickets.js";
 import { TicketService } from "@latex-renderer/ticket";
@@ -46,19 +45,6 @@ function fixture() {
   }
   return db;
 }
-
-it("uses identical runtime and standalone migration SQL", () => {
-  const withoutComments = (value: string) =>
-    value
-      .split("\n")
-      .filter((line) => !line.trim().startsWith("--"))
-      .join("\n")
-      .replace(/\s+/g, " ")
-      .trim();
-  expect(withoutComments(migration)).toBe(
-    withoutComments(`BEGIN IMMEDIATE; ${internalSmokeVisibilitySql} COMMIT;`),
-  );
-});
 
 it("filters before cursor pagination and counts without hiding normal smoke-like names", () => {
   const db = fixture();

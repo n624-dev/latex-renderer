@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import {
+  rendererMcpToolPolicies,
   rendererRelayIdentityMessage,
   rendererRelayIdentityProofSchema,
   rendererRelayOperationPath,
@@ -21,6 +22,7 @@ import {
   type HttpsJsonClient,
 } from "./https-json.js";
 import {
+  asRendererTool,
   DispatchFailure,
   type DispatchTransport,
 } from "./renderer-dispatch.js";
@@ -72,11 +74,16 @@ export function createHttpsDispatch(options: {
   async function credentialsFor(
     id: string,
     connection: RendererHttpsConnection,
+    rejectedAccessToken?: string,
   ): Promise<HttpsCredentials> {
     const stored = options.store.httpsCredentials(id, clock());
     if (!stored) throw new DispatchFailure("reauthentication_required");
     const credentials = options.keys.open(id, stored.envelope);
-    if (credentials.expiresAt > clock()) return credentials;
+    if (
+      credentials.expiresAt > clock() &&
+      credentials.accessToken !== rejectedAccessToken
+    )
+      return credentials;
     const previous = refreshes.get(id);
     if (previous) return previous;
     const refreshed = (async () => {
@@ -120,6 +127,28 @@ export function createHttpsDispatch(options: {
     return refreshed;
   }
 
+  async function retryReadAfterUnauthorized(
+    id: string,
+    connection: RendererHttpsConnection,
+    credentials: HttpsCredentials,
+    call: (accessToken: string) => Promise<unknown>,
+    readOnly: boolean,
+    signal: AbortSignal,
+  ) {
+    signal.throwIfAborted();
+    const renewed = await credentialsFor(id, connection, credentials.accessToken);
+    if (!readOnly) throw new DispatchFailure("outcome_unknown");
+    signal.throwIfAborted();
+    try {
+      return await call(renewed.accessToken);
+    } catch (error) {
+      if (!(error instanceof HttpsResponseError) || error.status !== 401)
+        throw error;
+      options.store.requireReauthentication(id);
+      throw new DispatchFailure("reauthentication_required");
+    }
+  }
+
   return {
     async dispatch({
       authorization,
@@ -137,16 +166,14 @@ export function createHttpsDispatch(options: {
         if (error instanceof DispatchFailure) throw error;
         throw new DispatchFailure("connection_offline");
       }
-      try {
-        return await request({
+      const requestSignal = AbortSignal.any([signal, AbortSignal.timeout(options.timeoutMs)]);
+      const call = (bearer: string) =>
+        request({
           url: new URL(rendererRelayOperationPath, connection.issuer),
           trustedOrigin: connection.issuer,
-          bearer: credentials.accessToken,
+          bearer,
           maxResponseBytes: options.maxResponseBytes,
-          signal: AbortSignal.any([
-            signal,
-            AbortSignal.timeout(options.timeoutMs),
-          ]),
+          signal: requestSignal,
           body: {
             contentType: "application/json",
             text: JSON.stringify({
@@ -158,14 +185,23 @@ export function createHttpsDispatch(options: {
             }),
           },
         });
+      try {
+        return await call(credentials.accessToken);
       } catch (error) {
         if (error instanceof HttpsResponseError && error.status === 404)
           throw new DispatchFailure("renderer_upgrade_required");
         if (error instanceof HttpsResponseError && error.status === 403)
           throw new DispatchFailure("insufficient_scope");
         if (error instanceof HttpsResponseError && error.status === 401) {
-          options.store.requireReauthentication(authorization.id);
-          throw new DispatchFailure("reauthentication_required");
+          const tool = operation.method === "tools/call" && asRendererTool(operation.name);
+          return retryReadAfterUnauthorized(
+            authorization.id,
+            connection,
+            credentials,
+            call,
+            operation.method === "resources/read" || (tool ? rendererMcpToolPolicies[tool].replay === "read" : false),
+            requestSignal,
+          );
         }
         throw error;
       }
@@ -178,17 +214,22 @@ export function createHttpsDispatch(options: {
     ) {
       const connection = connectionFor(mcpUrl);
       const credentials = await credentialsFor(authorizationId, connection);
-      return request({
+      const requestSignal = AbortSignal.any([signal, AbortSignal.timeout(options.timeoutMs)]);
+      const call = (bearer: string) => request({
         url: new URL(rendererRelayDownloadPath, connection.issuer),
         trustedOrigin: connection.issuer,
-        bearer: credentials.accessToken,
+        bearer,
         maxResponseBytes: options.maxResponseBytes,
-        signal: AbortSignal.any([
-          signal,
-          AbortSignal.timeout(options.timeoutMs),
-        ]),
+        signal: requestSignal,
         body: { contentType: "application/json", text: JSON.stringify(input) },
       });
+      try {
+        return await call(credentials.accessToken);
+      } catch (error) {
+        if (!(error instanceof HttpsResponseError) || error.status !== 401)
+          throw error;
+        return retryReadAfterUnauthorized(authorizationId, connection, credentials, call, true, requestSignal);
+      }
     },
     async revoke(authorizationId: string, mcpUrl: string) {
       const connection = connectionFor(mcpUrl);

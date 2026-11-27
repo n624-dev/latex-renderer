@@ -26,18 +26,25 @@ Send all credentials in the HTTP header `Authorization: Bearer <TOKEN>`.
 - **API key (`lrk_...`).** Use it for source reservation, job creation, saved projects, reissuing job tokens (`job-tickets`), and retrying SVG extraction.
   - `render:create` permits job creation and creating, renaming, or deleting projects and saving revisions.
   - `render:read:own` permits refreshing short-lived tokens for your jobs and viewing projects and history.
+  - `render:project:read` permits listing files and reading UTF-8 text from your saved project revisions. Select it explicitly when issuing a key.
+  - `render:draft:read` — Read the shared draft metadata and files.
+  - `render:draft:write` — Open, edit, and save shared drafts.
+  - `render:pdf:inspect` — Request and read PDF inspections for jobs owned by that key.
 - **Short-lived tokens (`uploadTicket` and `jobTicket`).** Use these to upload a ZIP, read job status, cancel a job, retrieve artifacts, or delete a job.
 
 > [!WARNING]
 > Keep API keys, `uploadTicket`, and `jobTicket` out of logs, URL query strings, and source ZIPs.
 
-> [!NOTE]
-> **Job ownership is bound to the creating API key.** Another key belonging to the same user or service account receives `404` if it attempts to refresh `job-tickets`, replay the creation response with the same `Idempotency-Key`, or retry SVG extraction. Ownership cannot transfer even if the original key is revoked. Sources and saved projects are shared by the user, so another key can create a **new job** from a shared source with a new `Idempotency-Key`.
+In the admin interface, rotating an API key lets its replacement renew tickets, recover a creation response with the same `Idempotency-Key`, and retry SVG extraction for existing jobs. The old key and its tickets expire immediately. Queued jobs can continue if the replacement has rendering permission. This applies to rotations performed after upgrading.
+
+Independently issued keys receive `404` for these operations, even when they belong to the same service account. Revoke a key if it is compromised. Users share sources and saved projects across their keys and can create a new job from a shared source. If a history entry has `detailAccess: "different_connection"`, use the connection that owns the job to open its details.
 
 ## API endpoints {#apiエンドポイント}
 
 | Method | Path | Purpose |
 | --- | --- | --- |
+| `GET` / `HEAD` | `/api/v1/health` | Check whether the gateway responds. No authentication required. HEAD returns no body. |
+| `GET` | `/api/v1/source-tickets` | Read current ZIP limits with a rendering API key |
 | `POST` | `/api/v1/source-tickets` | Reserve a source or reuse an existing ZIP owned by the same user |
 | `PUT` | `/api/v1/sources/{sourceId}/content` | Upload and validate a source ZIP |
 | `POST` | `/api/v1/render-tickets` | Create a job from a source, retry SVG extraction, or reserve a legacy single-job upload |
@@ -50,8 +57,15 @@ Send all credentials in the HTTP header `Authorization: Bearer <TOKEN>`.
 | `DELETE` | `/api/v1/jobs/{jobId}` | Mark a finished job for deletion |
 | `GET` / `POST` | `/api/v1/projects` | List or create saved projects |
 | `GET` / `PATCH` / `DELETE` | `/api/v1/projects/{projectId}` | View details and revisions, rename a project, or delete it (hide its record) |
+| `GET` | `/api/v1/projects/{projectId}/draft` | Get shared draft metadata and the file list |
+| `GET` | `/api/v1/projects/{projectId}/draft/file` | Read text from the specified draft version |
+| `POST` | `/api/v1/projects/{projectId}/draft/open` | Open a shared draft |
+| `POST` | `/api/v1/projects/{projectId}/draft/changes` | Apply a batch of changes to the exact draft version |
+| `POST` | `/api/v1/projects/{projectId}/draft/save` | Save a draft as an immutable revision |
+| `GET` / `POST` | `/api/v1/job-tickets/{jobId}/pdf-inspection` | Read or request an inspection for the specified PDF |
 | `POST` | `/api/v1/projects/{projectId}/revisions` | Save a ready source as an immutable revision |
 | `GET` | `/api/v1/projects/{projectId}/revisions/{revisionId}/jobs` | Get the job history for a revision |
+| `GET` | `/api/v1/projects/{projectId}/revisions/{revisionId}/files` | List saved revision files or read text by supplying `path` |
 | `POST` | `/api/v1/projects/{projectId}/revisions/{revisionId}/render` | Render a revision again |
 
 > [!DETAILS] Saved project API and maintenance modes

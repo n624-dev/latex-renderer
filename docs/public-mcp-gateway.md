@@ -9,6 +9,7 @@ The gateway connects ChatGPT to a LaTeX Renderer installation over public HTTPS 
 - An administrator can skip ChatGPT integration during setup and enable it later. Skipping requires neither gateway reachability nor local enrollment keys. The agent uses independent control and file connections, and its registration grants no access to a user's documents. For private installations, the user pairs the connection with an eight-digit code that expires after five minutes.
 - Initial authorization requests default to `mcp:read` and `mcp:render`. Cancellation can be selected during consent. Deletion requires separate approval. Direct connections retain their existing `mcp` scope. Gateway access tokens last up to ten minutes, with a fixed thirty-day maximum for the authorization.
 - DCR clients use approved callback URLs and PKCE. CIMD additionally verifies a signed client assertion against the approved key URL. Keep the DCR client registration valid while the connection is in use.
+- Unused DCR registrations expire after seven days. Used registrations remain available while an authorization is active and for seven days after the last authorization ends. A browser can review or remove an expired connection for seven days. Automatic cleanup keeps only the profile identifier needed to recognize the same Renderer user upon reconnection.
 - On a new installation or a deliberate clone, generate a new installation identity. The installation key and agent key serve different purposes. Loss of both keys requires new enrollment.
 
 ## Backups and deployment

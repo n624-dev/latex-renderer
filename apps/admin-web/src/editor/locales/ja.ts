@@ -2,6 +2,13 @@ import type { EditorCatalog } from "../messages.js";
 
 export default {
   messages: {
+    reviewConflict: "編集の競合を確認",
+    saveUnsavedCopy: "原稿のコピーを保存",
+    currentServerFile: "サーバー上の版",
+    applyMyEdits: "このファイルに自分の編集を反映",
+    conflictFileMissing: "最新版にこのファイルがありません。編集内容はコピーとして保存できます。",
+    conflictReviewHint: "変わった行を確認してください。反映すると、このファイルが手元の編集内容に置き換わります。",
+    previewReload: "サーバー更新のためPNGで表示しています。PDF表示に戻すには、変更を保存してからページを再読み込みしてください。",
     skipContent: "本文へ移動",
     appNavigation: "アプリナビゲーション",
     appRender: "PDFに変換",

@@ -6,9 +6,10 @@ import { createApiKeySchema } from "../packages/contracts/src/index.js";
 import { AppProjectsService } from "../apps/admin-api/src/services/app-projects.js";
 import { createAdminApp } from "../apps/admin-api/src/app.js";
 import { createWebApp } from "../apps/admin-web/src/app.js";
-import { adminScript } from "../apps/admin-web/src/assets/admin-script.js";
+import { localizedAdminScript } from "../apps/admin-web/src/assets/admin-script.js";
+import { adminSource as adminScript } from "./helpers/admin-ui-source.js";
 import { styles } from "../apps/admin-web/src/assets/styles.js";
-import { siteScript } from "../apps/admin-web/src/assets/site-script.js";
+import { readBrowserAsset } from "../apps/admin-web/src/browser-assets.js";
 import { createStatusProbe } from "../apps/admin-web/src/status-probe.js";
 import { legacyTestBrowserAuth } from "./helpers/browser-auth.js";
 
@@ -350,7 +351,7 @@ describe("public and administrative Web", () => {
   it("provides light/dark themes using only neutral grayscale colors", async () => {
     expect(styles).toContain(':root[data-theme="dark"]');
     expect(styles).toContain("prefers-color-scheme: dark");
-    expect(siteScript).toContain("latex-renderer-theme");
+    expect(readBrowserAsset("site")).toContain("latex-renderer-theme");
     const colors = [...styles.matchAll(/#([\da-f]{6}|[\da-f]{3})\b/gi)];
     expect(colors.length).toBeGreaterThan(30);
     for (const match of colors) {
@@ -380,7 +381,7 @@ describe("public and administrative Web", () => {
   it("keeps the administrative module valid and exposes guarded operations", () => {
     expect(() =>
       execFileSync(process.execPath, ["--input-type=module", "--check"], {
-        input: adminScript,
+        input: localizedAdminScript("ja"),
         timeout: 5000,
       }),
     ).not.toThrow();
@@ -393,13 +394,9 @@ describe("public and administrative Web", () => {
     expect(adminScript).toContain("renderScopes");
     expect(adminScript).toContain("adminScopes");
     expect(adminScript).toContain("pageSize:'50'");
-    expect(adminScript).toContain("deletable.has(job.status)");
-    expect(adminScript).toContain(
-      "new URLSearchParams(location.search).get('job')",
-    );
-    expect(adminScript).toContain(
-      'details(await request(\'/jobs/\'+requestedJob),adminMessage("jobDetails"))',
-    );
+    expect(adminScript).toContain("jobDeletable.has(job.status)");
+    expect(adminScript).toContain("params.get('job')");
+    expect(adminScript).toContain("await jobDetail(requested)");
     const markup = adminScript.replaceAll(String.raw`\"`, '"');
     expect(markup).toContain('name="actor"');
     expect(markup).toContain('name="target"');

@@ -6,7 +6,10 @@ import {
   type RenderOutput,
 } from "@latex-renderer/contracts";
 import { AppError, nowIso } from "@latex-renderer/shared";
-import { SvgRetryOperations } from "@latex-renderer/database";
+import {
+  assertRenderAdmission,
+  SvgRetryOperations,
+} from "@latex-renderer/database";
 import { validateEntrypointPath } from "@latex-renderer/zip-validation";
 import type { InternalApiDependencies } from "../types.js";
 
@@ -34,10 +37,10 @@ export class RenderTicketsService {
     if ("retrySvgJobId" in input) {
       // Reject before retry() can requeue stages or record idempotency.
       this.requireOwnedJob(actor, input.retrySvgJobId);
-      const result = new SvgRetryOperations(
-        this.deps.database,
-        { ...this.deps, runtimeImage: process.env.RENDERER_IMAGE },
-      ).retry(
+      const result = new SvgRetryOperations(this.deps.database, {
+        ...this.deps,
+        runtimeImage: process.env.RENDERER_IMAGE,
+      }).retry(
         {
           userId: actor.userId,
           type: "service_account",
@@ -403,13 +406,19 @@ export class RenderTicketsService {
       expiresAt: new Date(Date.now() + 1_800_000).toISOString(),
     };
   }
-  private requireOwnedJob(actor: AuthenticatedServiceAccount, jobId: string) {
+  requireOwnedJob(actor: AuthenticatedServiceAccount, jobId: string) {
     const row = this.deps.database.jobs.getOwned(
       jobId,
       actor.userId,
       actor.serviceAccountId,
     );
-    if (row === undefined || row.api_key_id !== actor.apiKeyId)
+    if (
+      row === undefined ||
+      !this.deps.database.apiKeys.matchesJobOwner(
+        row.api_key_id,
+        actor.apiKeyId,
+      )
+    )
       throw new AppError("JOB_NOT_FOUND", "Job does not exist", 404);
     return row;
   }
@@ -417,56 +426,12 @@ export class RenderTicketsService {
     actor: AuthenticatedServiceAccount,
     requestedBytes: number,
   ): void {
-    if (
-      this.deps.database.settings.value<
-        "normal" | "reject-new-jobs" | "read-only" | "lockdown"
-      >("maintenance_mode", "normal") !== "normal"
-    )
-      throw new AppError(
-        "MAINTENANCE",
-        "New jobs are temporarily unavailable",
-        503,
-      );
-    const maxQueue = this.deps.database.settings.value(
-      "max_queue_length",
-      this.deps.maxQueueLength,
+    assertRenderAdmission(
+      this.deps.database,
+      actor,
+      this.deps,
+      requestedBytes + this.deps.maxOutputBytes,
     );
-    if (this.deps.database.jobs.countActive() >= maxQueue)
-      throw new AppError("QUEUE_FULL", "Render queue is full", 503);
-    if (
-      this.deps.database.jobs.countActiveForServiceAccount(
-        actor.serviceAccountId,
-      ) >= 5
-    )
-      throw new AppError(
-        "ACCOUNT_QUEUE_LIMIT",
-        "Service account pending job limit reached",
-        429,
-      );
-    const maxUserActiveJobs = this.deps.database.settings.value(
-      "max_user_active_jobs",
-      20,
-    );
-    if (
-      this.deps.database.jobs.countActiveForUser(actor.userId) >=
-      maxUserActiveJobs
-    )
-      throw new AppError(
-        "USER_QUEUE_LIMIT",
-        "User pending job limit reached",
-        429,
-      );
-    const maxStorage = this.deps.database.settings.value(
-        "max_user_storage_bytes",
-        this.deps.maxUserStorageBytes,
-      ),
-      usedStorage = this.deps.database.jobs.storageUsageForUser(actor.userId);
-    if (requestedBytes + this.deps.maxOutputBytes > maxStorage - usedStorage)
-      throw new AppError(
-        "USER_STORAGE_QUOTA",
-        "User storage quota is exhausted",
-        429,
-      );
   }
   private async issueExisting(
     actor: AuthenticatedServiceAccount,

@@ -5,7 +5,12 @@ import {
   preferredDisplayLanguages,
   resolveDisplayLocale,
 } from "@latex-renderer/shared/locale";
-import { RemoteRenderService } from "@latex-renderer/remote-mcp-core";
+import {
+  RendererDrafts,
+  RendererEnvironment,
+  RendererSourceStore,
+  inlineArtifactLimit,
+} from "@latex-renderer/renderer-core";
 import {
   ProjectDraftOperations,
   ProjectDocumentState,
@@ -23,6 +28,7 @@ import {
 import {
   AppError,
   DEFAULT_RESOURCE_LIMITS,
+  effectiveResourceLimits,
   pageSize,
 } from "@latex-renderer/shared";
 import { validateEntrypointPath } from "@latex-renderer/zip-validation";
@@ -60,6 +66,22 @@ export function createAppV1Router(deps: AdminDependencies): Hono {
   const router = new Hono(),
     jobs = new AdminJobsService(deps),
     projects = new AppProjectsService(deps),
+    sourceLimits = effectiveResourceLimits(deps),
+    draftFiles = new RendererDrafts(
+      deps.database,
+      new RendererSourceStore(
+        deps.database,
+        deps.storageRoot,
+        sourceLimits,
+        deps.maxUserStorageBytes,
+      ),
+    ),
+    environment = new RendererEnvironment(
+      deps.environmentRoot ?? "/var/lib/latex-renderer/environment",
+      deps.rendererVersion,
+      sourceLimits,
+      inlineArtifactLimit(deps.maxOutputBytes),
+    ),
     drafts = new ProjectDraftOperations(
       deps.database,
       deps.maxFileCount,
@@ -84,6 +106,7 @@ export function createAppV1Router(deps: AdminDependencies): Hono {
       }),
       role: actor.role,
       isAdmin: actor.role === "owner" || actor.role === "admin",
+      sourceLimits,
     });
   });
 
@@ -198,6 +221,13 @@ export function createAppV1Router(deps: AdminDependencies): Hono {
     const retried = await jobs.retry(actor, id, key),
       access = await jobs.issueAccessTicket(actor, retried.id);
     return c.json({ ...access, retryOfJobId: id }, retried.reused ? 200 : 202);
+  });
+  router.delete("/jobs/:id", async (c) => {
+    const actor = await requireAppActor(deps, c),
+      id = parse(jobId, c.req.param("id"));
+    assertOwnedJob(deps, actor, id);
+    jobs.delete(actor, id);
+    return c.body(null, 204);
   });
 
   router.post("/source-tickets", async (c) => {
@@ -351,7 +381,7 @@ export function createAppV1Router(deps: AdminDependencies): Hono {
     const actor = await requireAppActor(deps, c),
       input = parse(projectDraftOpenRequestSchema, await readJson(c, true));
     return c.json(
-      await environmentService(deps).openProjectDraft(
+      await draftFiles.openProjectDraft(
         actor,
         parse(projectId, c.req.param("id")),
         input.revisionId,
@@ -393,9 +423,7 @@ export function createAppV1Router(deps: AdminDependencies): Hono {
         z.coerce.number().int().positive(),
         c.req.query("version"),
       );
-    return c.json(
-      await environmentService(deps).readDraftText(actor, id, version, path),
-    );
+    return c.json(await draftFiles.readDraftText(actor, id, version, path));
   });
   router.put("/projects/:id/draft/file", async (c) => {
     const actor = await requireAppActor(deps, c),
@@ -411,7 +439,7 @@ export function createAppV1Router(deps: AdminDependencies): Hono {
         await readJson(c),
       );
     return c.json(
-      await environmentService(deps).saveDraftText(
+      await draftFiles.saveDraftText(
         actor,
         id,
         input.version,
@@ -449,7 +477,7 @@ export function createAppV1Router(deps: AdminDependencies): Hono {
         "Content-Length does not match the declared file size",
         400,
       );
-    const result = await environmentService(deps).saveDraftFileContent(
+    const result = await draftFiles.saveDraftFileContent(
       actor,
       id,
       { version, path, size, utf8: type.startsWith("text/") },
@@ -498,7 +526,7 @@ export function createAppV1Router(deps: AdminDependencies): Hono {
           .strict(),
         await readJson(c),
       );
-    const revision = await environmentService(deps).saveDraftRevision(
+    const revision = await draftFiles.saveDraftRevision(
       actor,
       id,
       input.version,
@@ -576,58 +604,44 @@ export function createAppV1Router(deps: AdminDependencies): Hono {
   });
 
   router.get("/environment", async (c) => {
-    const actor = await requireAppActor(deps, c),
-      service = environmentService(deps);
-    return c.json(
-      await service.verifiedCapabilities(environmentIdentity(actor)),
-    );
+    await requireAppActor(deps, c);
+    return c.json(await environment.verifiedCapabilities());
   });
   router.post("/environment/packages/check", async (c) => {
-    const actor = await requireAppActor(deps, c),
-      input = parse(namesSchema, await readJson(c));
+    await requireAppActor(deps, c);
+    const input = parse(namesSchema, await readJson(c));
     return c.json({
-      items: await environmentService(deps).checkPackages(
-        environmentIdentity(actor),
-        input.names,
-      ),
+      items: await environment.checkPackages(input.names),
     });
   });
   router.get("/environment/packages/search", async (c) => {
-    const actor = await requireAppActor(deps, c),
-      input = parse(searchSchema, {
-        query: c.req.query("query"),
-        cursor: c.req.query("cursor"),
-      });
+    await requireAppActor(deps, c);
+    const input = parse(searchSchema, {
+      query: c.req.query("query"),
+      cursor: c.req.query("cursor"),
+    });
     return c.json(
-      await environmentService(deps).searchPackages(
-        environmentIdentity(actor),
+      await environment.searchPackages(
         input.query,
         Number(input.cursor ?? "0"),
       ),
     );
   });
   router.post("/environment/fonts/check", async (c) => {
-    const actor = await requireAppActor(deps, c),
-      input = parse(namesSchema, await readJson(c));
+    await requireAppActor(deps, c);
+    const input = parse(namesSchema, await readJson(c));
     return c.json({
-      items: await environmentService(deps).checkFonts(
-        environmentIdentity(actor),
-        input.names,
-      ),
+      items: await environment.checkFonts(input.names),
     });
   });
   router.get("/environment/fonts/search", async (c) => {
-    const actor = await requireAppActor(deps, c),
-      input = parse(searchSchema, {
-        query: c.req.query("query"),
-        cursor: c.req.query("cursor"),
-      });
+    await requireAppActor(deps, c);
+    const input = parse(searchSchema, {
+      query: c.req.query("query"),
+      cursor: c.req.query("cursor"),
+    });
     return c.json(
-      await environmentService(deps).searchFonts(
-        environmentIdentity(actor),
-        input.query,
-        Number(input.cursor ?? "0"),
-      ),
+      await environment.searchFonts(input.query, Number(input.cursor ?? "0")),
     );
   });
   return router;
@@ -709,31 +723,4 @@ function idempotencyKey(value: string | undefined): string {
       400,
     );
   return value;
-}
-
-function environmentService(deps: AdminDependencies) {
-  return new RemoteRenderService(
-    deps.database,
-    deps.storageRoot,
-    deps.rendererVersion,
-    deps.renderTickets?.rendererPublicUrl ?? deps.publicOrigin,
-    deps.maxQueueLength,
-    deps.maxUserStorageBytes,
-    deps.environmentRoot ?? "/var/lib/latex-renderer/environment",
-    {
-      maxUploadBytes:
-        deps.maxUploadBytes ?? DEFAULT_RESOURCE_LIMITS.maxUploadBytes,
-      maxExtractedBytes:
-        deps.maxExtractedBytes ?? DEFAULT_RESOURCE_LIMITS.maxExtractedBytes,
-      maxFileCount: deps.maxFileCount ?? DEFAULT_RESOURCE_LIMITS.maxFileCount,
-      maxZipEntries:
-        deps.maxZipEntries ?? DEFAULT_RESOURCE_LIMITS.maxZipEntries,
-    },
-    deps.maxOutputBytes,
-    deps.artifactRetentionHours,
-  );
-}
-
-function environmentIdentity(actor: AppActor) {
-  return { userId: actor.userId, scopes: ["mcp:read"] as const };
 }

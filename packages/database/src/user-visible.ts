@@ -7,6 +7,14 @@ export function userJobSql(alias = "jobs"): string {
   return userServiceAccountSql(`${alias}.service_account_id`);
 }
 
+// Web and MCP accounting rows can own visible Jobs, while credential
+// management is restricted to independently issued keys and accounts.
+export function separateFromInternalPrincipals(column: "id", field: "service_account_id" | "api_key_id"): string {
+  return `${column} NOT IN (
+    SELECT ${field} FROM web_principals
+    UNION ALL SELECT ${field} FROM remote_mcp_principals
+  )`;
+}
 /** The diagnostic log export is deliberately unfiltered; only its Web/API view is filtered. */
 export const userAuditSql = `
   NOT EXISTS (SELECT 1 FROM internal_resource_tombstones t

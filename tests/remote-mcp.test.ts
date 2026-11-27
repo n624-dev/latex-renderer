@@ -42,7 +42,6 @@ import {
   RemoteRenderService,
 } from "../packages/remote-mcp-core/src/index.js";
 import * as attachmentDownload from "../packages/remote-mcp-core/src/attachment-download.js";
-import { projectDocumentStateV28Sql } from "../packages/database/src/schema.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createRemoteMcpApp,
@@ -137,13 +136,16 @@ describe("Remote MCP HTTP server", () => {
     const f = await createFixture();
     const identity = { userId: "user_test", scopes: ["mcp:render"] as const };
     const job = await f.renders.createRender(identity, { inlineSource: "\\documentclass{article}\n\\begin{document}Test\\end{document}" });
-    const v28 = projectDocumentStateV28Sql.match(
+    const migration28 = await readFile(
+      new URL("../deploy/migrations/028_project_document_state.sql", import.meta.url), "utf8",
+    );
+    const v28 = migration28.match(
       /CREATE TABLE pdf_inspections \([\s\S]+?CREATE INDEX idx_pdf_inspections_queue[^;]+;/,
     )?.[0];
     if (!v28) throw new Error("Missing original inspection schema");
     f.database.raw.exec(`
       DROP TABLE pdf_inspections; DROP TABLE pdf_inspection_uploads;
-      DELETE FROM schema_migrations WHERE version=29;
+      DELETE FROM schema_migrations WHERE version IN (29,31);
       ${v28}
     `);
     const time = new Date().toISOString();
@@ -283,6 +285,15 @@ describe("Remote MCP HTTP server", () => {
     );
     if (!claimed) throw new Error("Expected an attachment inspection");
     expect(claimed).toMatchObject({ job_id: null, upload_id: uploadId });
+    const initialAttempt = Date.now();
+    expect(f.database.pdfInspections.finish(claimed.id, "inspection-worker", {
+      error: "INSUFFICIENT_STORAGE",
+    }, new Date(initialAttempt).toISOString())).toBe(true);
+    expect(f.database.pdfInspections.get(claimed.id)).toMatchObject({
+      status: "queued", retry_count: 1, result_json: null,
+    });
+    expect(f.database.pdfInspections.claim("inspection-worker", new Date(initialAttempt + 29_999).toISOString())).toBeUndefined();
+    expect(f.database.pdfInspections.claim("inspection-worker", new Date(initialAttempt + 30_000).toISOString())?.id).toBe(claimed.id);
     await writeFile(
       pdfInspectionUploadResult(directory, claimed.id),
       JSON.stringify({
@@ -1574,10 +1585,28 @@ describe("Remote MCP HTTP server", () => {
       revisionId: null,
       expectedRevisionId: first.id,
     });
-    const plan = structuredResult(
-      await call(9, "plan_project_revision_cleanup", selection),
+    const retained = await f.renders.renderProjectRevision(
+      identity,
+      projectId,
+      first.id,
     );
-    const removed = await call(10, "apply_project_revision_cleanup", {
+    f.database.raw.prepare("UPDATE jobs SET status='expired' WHERE id=?").run(retained.id);
+    const retainedPlan = await call(9, "plan_project_revision_cleanup", selection);
+    expect(retainedPlan.result.structuredContent).toMatchObject({
+      result: { entries: [{ revisionId: first.id, reasons: ["linked_job"] }] },
+    });
+    const retainedResult = await call(10, "apply_project_revision_cleanup", {
+      ...selection,
+      planHash: structuredResult(retainedPlan).planHash,
+    });
+    expect(retainedResult.result.structuredContent).toMatchObject({
+      error: { code: "REVISION_CLEANUP_PROTECTED" },
+    });
+    f.database.raw.prepare("DELETE FROM jobs WHERE id=?").run(retained.id);
+    const plan = structuredResult(
+      await call(11, "plan_project_revision_cleanup", selection),
+    );
+    const removed = await call(12, "apply_project_revision_cleanup", {
       ...selection,
       planHash: plan.planHash,
     });
@@ -1783,7 +1812,12 @@ describe("Remote MCP HTTP server", () => {
     if (!relayIdentity) throw new Error("No relay identity");
     const dependencies = {
       database: f.database, browserAuth: legacyTestBrowserAuth(f.database, {
-        verify: () => Promise.reject(new Error("A browser session was not expected")),
+        verify: () => Promise.resolve({
+          provider: "cloudflare-access",
+          issuer: "https://team.cloudflareaccess.com",
+          subject: "access-subject",
+          payload: { sub: "access-subject" },
+        }),
       }, { enforceExactOrigin: true }),
       oauth: f.oauth, mcp: createRemoteMcpHandler(f.renders, "test"), publicOrigin: ORIGIN, relayIdentity,
       relayDownload: f.renders.relayDownload.bind(f.renders),
@@ -1818,6 +1852,33 @@ describe("Remote MCP HTTP server", () => {
     expect((await post(rendererRelayOperationPath, { ...binding, scopes, operation })).status).toBe(401);
     const user = f.database.users.get("user_test");
     if (!user) throw new Error("Missing fixture account");
+    await dependencies.browserAuth.establishSession(new Request(ORIGIN, {
+      headers: { "Cf-Access-Jwt-Assertion": "fixture" },
+    }));
+    const browserGrant = grants.create(user.id, user.security_version, ["mcp:read"], Date.now());
+    const form = await app.request("/oauth/relay", {
+      headers: { Host: new URL(ORIGIN).host, Cookie: "test_browser_session=1" },
+    });
+    expect(form.status).toBe(200);
+    expect(form.headers.get("Referrer-Policy")).toBe("same-origin");
+    const csrf = /relay_csrf=([A-Za-z0-9_-]{43})/.exec(form.headers.get("Set-Cookie") ?? "")?.[1];
+    if (!csrf) throw new Error("Missing fixture CSRF token");
+    const disconnect = (origin: string) => app.request("/oauth/relay", {
+      method: "POST",
+      headers: {
+        Host: new URL(ORIGIN).host,
+        Origin: origin,
+        Cookie: `test_browser_session=1; relay_csrf=${csrf}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({ action: "revoke", grant: browserGrant, csrf }),
+    });
+    expect((await disconnect("null")).status).toBe(403);
+    expect(grants.lookup(browserGrant, Date.now())).toBeDefined();
+    const disconnected = await disconnect(ORIGIN);
+    expect(disconnected.status).toBe(303);
+    expect(disconnected.headers.get("Referrer-Policy")).toBe("no-referrer");
+    expect(grants.lookup(browserGrant, Date.now())).toBeUndefined();
     const grant = grants.create(user.id, user.security_version, ["mcp:read", "mcp:render"], Date.now());
     const postLocal = (path: string, input: unknown, host = "127.0.0.1:3104") => app.request(path, {
       method: "POST", headers: { Host: host, Authorization: `Bearer ${secret}`, "Content-Type": "application/json" },
@@ -2286,9 +2347,9 @@ describe("Remote MCP HTTP server", () => {
     });
     const draft = new ProjectDraftOperations(database).open(actor, project.id);
     await expect(
-      renders.readDraftText(actor, project.id, draft.version, "ref.bib"),
+      renders.draftFiles.readDraftText(actor, project.id, draft.version, "ref.bib"),
     ).resolves.toMatchObject({ text: "Original references" });
-    const changed = await renders.saveDraftText(
+    const changed = await renders.draftFiles.saveDraftText(
       actor,
       project.id,
       draft.version,
@@ -2296,13 +2357,13 @@ describe("Remote MCP HTTP server", () => {
       "New references",
     );
     await expect(
-      renders.readDraftText(actor, project.id, changed.version, "ref.bib"),
+      renders.draftFiles.readDraftText(actor, project.id, changed.version, "ref.bib"),
     ).resolves.toMatchObject({ text: "New references" });
     await expect(
-      renders.readDraftText(actor, project.id, changed.version, "main.tex"),
+      renders.draftFiles.readDraftText(actor, project.id, changed.version, "main.tex"),
     ).resolves.toMatchObject({ text: "Original TeX" });
     await expect(
-      renders.saveDraftText(
+      renders.draftFiles.saveDraftText(
         actor,
         project.id,
         draft.version,
@@ -2316,7 +2377,7 @@ describe("Remote MCP HTTP server", () => {
     expect(database.projects.latestRevision(project.id)?.source_id).toBe(
       source.id,
     );
-    const saved = await renders.saveDraftRevision(
+    const saved = await renders.draftFiles.saveDraftRevision(
       actor,
       project.id,
       changed.version,
@@ -2324,14 +2385,14 @@ describe("Remote MCP HTTP server", () => {
     );
     expect(saved).toMatchObject({ revision_number: 2, entrypoint: "main.tex" });
     expect(saved.source_id).not.toBe(source.id);
-    const repeated = await renders.saveDraftRevision(
+    const repeated = await renders.draftFiles.saveDraftRevision(
       actor,
       project.id,
       changed.version,
       "Edited input repeated",
     );
     expect(repeated.id).toBe(saved.id);
-    const withSvg = await renders.saveDraftRevision(
+    const withSvg = await renders.draftFiles.saveDraftRevision(
       actor,
       project.id,
       changed.version,
@@ -2384,7 +2445,7 @@ describe("Remote MCP HTTP server", () => {
           controller.close();
         },
       });
-      return renders.saveDraftFileContent(
+      return renders.draftFiles.saveDraftFileContent(
         actor,
         project.id,
         {
@@ -2413,7 +2474,7 @@ describe("Remote MCP HTTP server", () => {
     const changed = await send(bytes, bytes.length);
     expect(changed.version).toBe(2);
     expect(
-      await renders.readDraftText(actor, project.id, 2, "chapter.tex"),
+      await renders.draftFiles.readDraftText(actor, project.id, 2, "chapter.tex"),
     ).toMatchObject({ text: longText });
     expect(
       database.raw

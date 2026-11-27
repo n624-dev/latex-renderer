@@ -1,3 +1,4 @@
+import { latestDatabaseMigration } from "../packages/database/src/migrations.js";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
@@ -56,7 +57,7 @@ function run(path: string, temporaryRoot: string) {
 }
 
 describe("real migration preflight", () => {
-  it("validates a private copy through migration 29 without modifying the version 17 database", () => {
+  it("validates a private copy through the current migration without modifying the version 17 database", () => {
     const f = fixture();
     const before = createHash("sha256")
       .update(readFileSync(f.path))
@@ -67,7 +68,7 @@ describe("real migration preflight", () => {
     expect(JSON.parse(result.stdout)).toMatchObject({
       event: "migration.preflight_completed",
       users: 1,
-      targetVersion: 29,
+      targetVersion: latestDatabaseMigration,
     });
     expect(
       createHash("sha256").update(readFileSync(f.path)).digest("hex"),

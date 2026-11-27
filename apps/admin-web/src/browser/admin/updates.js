@@ -1,6 +1,7 @@
-export const part7 = String.raw`
+export function createUpdates({
+  adminMessage, adminAction, beginManagerWatch, confirmDialog, err, esc, jsonBody, ok, out, request, section, watchManagerOperation
+}) {
 function updateVersion(value){return value?'v'+value:'—'}
-let updateWatchGeneration=0;
 // One bounded view state; no log text or credentials are retained here.
 let updateLogView={id:null,open:false,scrollTop:0};
 function rememberUpdateLogView(){
@@ -26,9 +27,27 @@ function renderUpdateOperation(operation,reconnecting=false){
   const pre=card.querySelector('pre'),text=operation.log||adminMessage("noLogEntriesYet");
   if(pre.textContent!==text){const scrollTop=updateLogView.scrollTop;pre.textContent=text;pre.scrollTop=scrollTop}
 }
+function toolchainDetails(toolchain) {
+  if (!toolchain?.node) return "";
+  const running = `Node.js ${esc(toolchain.node.version || "—")} · Corepack ${esc(toolchain.corepack?.version || "—")}`;
+  const apt = toolchain.apt;
+  const candidate = apt && apt.status !== "current"
+    ? `<p>${esc(adminMessage("updateCandidate"))} (APT) <strong>Node.js ${esc(apt.nodeVersion)} · Corepack ${esc(apt.corepackVersion)}</strong></p>`
+    : "";
+  const incompatible = apt?.status === "incompatible"
+    ? `<p class="error-summary">${esc(adminMessage("thisVersionCannotBeApplied"))}</p>`
+    : "";
+  const update = toolchain.update;
+  const result = update
+    ? `<p>${esc(adminMessage(update.status === "applied" ? "completedSuccessfully" : "failed"))} · <time datetime="${esc(update.checkedAt)}">${esc(new Date(update.checkedAt).toLocaleString(document.documentElement.lang))}</time></p>`
+    : "";
+  return `<details><summary>Node.js / Corepack</summary><p>${esc(adminMessage("currentVersion"))} <strong>${running}</strong></p>${candidate}${incompatible}${result}</details>`;
+}
 async function updates(){
-  ++updateWatchGeneration;
-  const state=await request('/updates/state'),installed=state.installed||{},available=state.available||null,policy=state.policy||{channel:'stable',mode:'notify'};
+  const signal=beginManagerWatch();
+  const state=await request('/updates/state',{signal}).catch(error=>{if(!signal.aborted)throw error;return null});
+  if(signal.aborted)return;
+  const installed=state.installed||{},available=state.available||null,policy=state.policy||{channel:'stable',mode:'notify'};
   const updater=state.updater||{},running=updater.running||{};
   const updaterCard=("<details><summary>"+esc(adminMessage("updaterDetails"))+"</summary><p>Updater: <strong>")+esc(updateVersion(running.version))+'</strong></p><p>'+esc(updater.status==='ready'?adminMessage("switchAndRunningStateVerified"):updater.status==='activating'?adminMessage("switchInProgressNotComplete"):adminMessage("couldNotVerifyStatus"))+'</p></details>';
   const unavailable=available&&available.unavailableReason?("<div class=\"notice warning\"><strong>"+esc(adminMessage("thisVersionCannotBeApplied"))+"</strong><p>")+esc(available.unavailableReason)+'</p></div>':'';
@@ -36,14 +55,39 @@ async function updates(){
   const policyForm=("<form id=\"update-policy-form\" class=\"form-grid\"><label>"+esc(adminMessage("stableUpdates"))+"<select name=\"mode\"><option value=\"notify\"")+(policy.mode==='notify'?' selected':'')+(">"+esc(adminMessage("checkAndNotifyOnlyDefault"))+"</option><option value=\"automatic\"")+(policy.mode==='automatic'?' selected':'')+((">"+esc(adminMessage("applyAutomaticallyAfterVerification"))+"</option></select></label><label class=\"wide\">")+esc(adminMessage("reasonForTheChangeSavedIn"))+"<textarea name=\"reason\" required minlength=\"1\" maxlength=\"500\"></textarea><small>"+esc(adminMessage("doNotEnterSecretsOrApi"))+"</small></label><p class=\"wide\">"+esc(adminMessage("withAutomaticUpdatesServicesRestartAfter"))+"</p><button>"+esc(adminMessage("savePolicy"))+"</button></form>");
   const operationForm=("<form id=\"update-version-form\" class=\"form-grid\"><label>"+esc(adminMessage("versionLeaveBlankForTheLatest"))+"<input name=\"version\" pattern=\"v?(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)(?:-rc\\.[1-9]\\d*)?\" placeholder=\"vX.Y.Z\"></label><small class=\"wide\">"+esc(adminMessage("releaseCandidateVersionHint"))+"</small><div class=\"actions wide\"><button type=\"button\" id=\"update-check\" class=\"secondary\">"+esc(adminMessage("checkForUpdates"))+"</button><button type=\"button\" id=\"update-apply\">"+esc(adminMessage("downloadVerifyAndUpdate"))+"</button><button type=\"button\" id=\"update-rollback\" class=\"danger\"")+(state.previousReleaseId&&state.previousRollbackCompatible?'':' disabled')+(">"+esc(adminMessage("rollBackToPrevious"))+"</button></div></form><div id=\"update-operation\" class=\"stack\" aria-live=\"polite\"></div>");
   rememberUpdateLogView();
-  out.innerHTML=("<div class=\"page-heading\"><h1>"+esc(adminMessage("applicationUpdate"))+"</h1></div>")+section(adminMessage("status"),stateCards+updaterCard+unavailable+(state.lastError?("<div class=\"notice warning\"><strong>"+esc(adminMessage("applicationUpdatePreviousOperationFailed"))+"</strong><p>")+esc(state.lastError)+'</p></div>':''))+section(adminMessage("updatePolicy"),policyForm)+section(adminMessage("actions"),operationForm);
+  out.innerHTML=("<div class=\"page-heading\"><h1>"+esc(adminMessage("applicationUpdate"))+"</h1></div>")+section(adminMessage("status"),stateCards+updaterCard+toolchainDetails(state.toolchain)+unavailable+(state.lastError?("<div class=\"notice warning\"><strong>"+esc(adminMessage("applicationUpdatePreviousOperationFailed"))+"</strong><p>")+esc(state.lastError)+'</p></div>':''))+section(adminMessage("updatePolicy"),policyForm)+section(adminMessage("actions"),operationForm);
   const version=()=>String(new FormData(document.querySelector('#update-version-form')).get('version')||'').trim();
-  document.querySelector('#update-policy-form').onsubmit=async event=>{event.preventDefault();const data=new FormData(event.target),mode=String(data.get('mode')),reason=String(data.get('reason')||'').trim();await request('/updates/policy',{method:'POST',...jsonBody({channel:'stable',mode,reason})});ok.textContent=adminMessage("applicationUpdatePolicySaved");await updates()};
-  document.querySelector('#update-check').onclick=async()=>{const selected=version(),result=await request('/updates/check',{method:'POST',...jsonBody(selected?{version:selected}:{})});ok.textContent=adminMessage("versionChecked",{version:updateVersion(result.version)});await updates()};
+  document.querySelector('#update-policy-form').onsubmit=adminAction(async event=>{event.preventDefault();const data=new FormData(event.target),mode=String(data.get('mode')),reason=String(data.get('reason')||'').trim();await request('/updates/policy',{method:'POST',...jsonBody({channel:'stable',mode,reason})});ok.textContent=adminMessage("applicationUpdatePolicySaved");await updates()});
+  document.querySelector('#update-check').onclick=adminAction(async()=>{const selected=version(),result=await request('/updates/check',{method:'POST',...jsonBody(selected?{version:selected}:{})});ok.textContent=adminMessage("versionChecked",{version:updateVersion(result.version)});await updates()});
   document.querySelector('#update-apply').onclick=()=>{const selected=version();confirmDialog({title:adminMessage("updateApplication"),description:adminMessage("servicesRestartAfterBackupAndVerification"),summary:("<p>"+esc(adminMessage("target2"))+" <strong>")+esc(selected||adminMessage("latestStableRelease"))+("</strong></p><p>"+esc(adminMessage("someFailedUpdatesCannotBeRolled"))+"</p>"),reason:true,submitLabel:adminMessage("startUpdate"),successMessage:adminMessage("applicationUpdateOperationStarted"),reload:false,onSubmit:f=>request('/updates/apply',{method:'POST',...jsonBody({...(selected?{version:selected}:{}),reason:String(f.get('reason')||'').trim()})}),afterSuccess:startUpdateOperation})};
   document.querySelector('#update-rollback').onclick=()=>confirmDialog({title:adminMessage("restoreThePreviousApplicationVersion"),summary:'<p>'+esc(adminMessage("backUpAndRedeploy",{releaseId:state.previousReleaseId||''}))+'</p>',reason:true,submitLabel:adminMessage("rollBack"),danger:true,successMessage:adminMessage("rollbackStarted"),reload:false,onSubmit:f=>request('/updates/rollback',{method:'POST',...jsonBody({reason:String(f.get('reason')||'').trim()})}),afterSuccess:startUpdateOperation});
-  const operationId=state.activeOperationId||state.lastOperationId;if(operationId){const operation=await request('/updates/operations/'+encodeURIComponent(operationId)).catch(()=>null);if(operation){renderUpdateOperation(operation);if(operation.status==='running'||operation.outcome&&operation.outcome.updater==='activating')watchUpdateOperation(operation)}}
+  const operationId=state.activeOperationId||state.lastOperationId;
+  if(operationId){
+    const operation=await request('/updates/operations/'+encodeURIComponent(operationId),{signal})
+      .catch(error=>{if(!signal.aborted)throw error;return null});
+    if(signal.aborted)return;
+    if(updateOperationPending(operation))startUpdateOperation(operation,signal);
+    else renderUpdateOperation(operation);
+  }
 }
-function startUpdateOperation(value){if(value&&value.id)watchUpdateOperation(value)}
-async function watchUpdateOperation(initial){const generation=++updateWatchGeneration;let operation=initial,failures=0;for(;;){if(generation!==updateWatchGeneration||!document.querySelector('#update-operation'))return;renderUpdateOperation(operation);if(operation.status==='succeeded'&&!(operation.outcome&&operation.outcome.updater==='activating')){if(operation.outcome&&operation.outcome.complete)ok.textContent=adminMessage("confirmedThatTheApplicationAndUpdater");else err.textContent=adminMessage("theApplicationHasBeenUpdatedUpdater");await updates();return}if(operation.status==='failed'){err.textContent=operation.error||adminMessage("applicationUpdateOperationFailed");await updates();return}await new Promise(resolve=>setTimeout(resolve,1500));try{operation=await request('/updates/operations/'+encodeURIComponent(operation.id));failures=0}catch(e){failures++;renderUpdateOperation(operation,true);if(failures>=120){err.textContent=adminMessage("couldNotReconnectToTheAdmin2");return}await new Promise(resolve=>setTimeout(resolve,1000))}}}
-`;
+function updateOperationPending(operation){return operation.status==='running'||operation.outcome?.updater==='activating'}
+function startUpdateOperation(operation,signal) {
+  const target=document.querySelector('#update-operation');
+  if(!operation?.id||!target)return;
+  void adminAction(()=>watchManagerOperation(operation,{
+    signal:signal||beginManagerWatch(),endpoint:'/updates/operations/',target,
+    pending:updateOperationPending,render:renderUpdateOperation,
+    reconnectMessage:adminMessage("couldNotReconnectToTheAdmin2"),
+    maxFailures:120,
+    finish:async operation=>{
+      if(operation.status==='succeeded'){
+        if(operation.outcome?.complete)ok.textContent=adminMessage("confirmedThatTheApplicationAndUpdater");
+        else err.textContent=adminMessage("theApplicationHasBeenUpdatedUpdater");
+      }else err.textContent=operation.error||adminMessage("applicationUpdateOperationFailed");
+      await updates();
+    }
+  }))();
+}
+
+  return { updates };
+}

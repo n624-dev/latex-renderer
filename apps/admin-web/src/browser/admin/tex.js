@@ -1,11 +1,17 @@
-export const part6 = String.raw`
-let texPageData=null;
+export function createTex({
+  adminMessage, adminAction, beginManagerWatch, confirmDialog, err, esc, fmt, jsonBody, ok, out, request, section, watchManagerOperation
+}) {
 function texLanguageLabel(item){return item.description||item.name||item.id}
 function texSelectorDisplay(selector){if(!selector)return adminMessage("notSet");if(selector.mode==='latest')return adminMessage("latestVersion");if(selector.mode==='weekly')return (adminMessage("weeklyBuild")+" ")+selector.value;return selector.value||selector.mode}
 function texRuntimeCard(value,title){if(!value)return '<article class="card"><h3>'+esc(title)+("</h3><p class=\"muted\">"+esc(adminMessage("none"))+"</p></article>");const selected=value.languages||[],effective=value.effectiveLanguageCollections||selected,dependencies=effective.filter(x=>!selected.includes(x));return '<article class="card"><h3>'+esc(title)+("</h3><dl class=\"details\"><dt>"+esc(adminMessage("version"))+"</dt><dd>")+esc(value.snapshotDate||texSelectorDisplay(value.selector))+("</dd><dt>"+esc(adminMessage("language"))+"</dt><dd>")+esc(selected.join(', ')||adminMessage("none"))+("</dd><dt>"+esc(adminMessage("appliedAt"))+"</dt><dd>")+esc(value.appliedAt?fmt(value.appliedAt):'—')+("</dd></dl><details><summary>"+esc(adminMessage("environmentDetails"))+"</summary><dl class=\"details\"><dt>Base digest</dt><dd><code>")+esc(value.baseDigest||'—')+("</code></dd><dt>Runtime</dt><dd>"+esc(adminMessage("builtAndVerifiedOnThisServer"))+"</dd><dt>"+esc(adminMessage("requiredLanguageCollections"))+"</dt><dd>")+esc(dependencies.join(', ')||adminMessage("none"))+'</dd></dl></details></article>'}
 function renderTexOperation(operation,reconnecting=false){const target=document.querySelector('#tex-operation');if(!target||!operation)return;const status=reconnecting?adminMessage("reconnectingToAdminApi"):operation.status==='running'?adminMessage("processing"):operation.status==='succeeded'?adminMessage("completedSuccessfully"):adminMessage("failed");let card=target.querySelector('[data-tex-operation]');if(!card||card.dataset.operationId!==operation.id){target.replaceChildren();card=document.createElement('article');card.className='card';card.dataset.texOperation='';card.dataset.operationId=operation.id||'';const strong=document.createElement('strong');strong.dataset.operationStatus='';const label=document.createElement('p');label.className='muted';label.dataset.operationLabel='';const details=document.createElement('details'),summary=document.createElement('summary'),pre=document.createElement('pre');summary.textContent=adminMessage("showDetailedLog");details.append(summary,pre);card.append(strong,label,details);target.append(card)}card.querySelector('[data-operation-status]').textContent=status;card.querySelector('[data-operation-label]').textContent=(operation.type||'Image operation')+' / '+(operation.id||'');const pre=card.querySelector('pre'),nextLog=operation.log||adminMessage("noLogEntriesYet"),previousScrollTop=pre.scrollTop,followTail=pre.scrollHeight-pre.scrollTop-pre.clientHeight<8;if(pre.textContent!==nextLog){pre.textContent=nextLog;pre.scrollTop=followTail?pre.scrollHeight:previousScrollTop}}
 async function texEnvironment(){
-  const[state,images,languages]=await Promise.all([request('/tex-environment/state'),request('/tex-environment/images'),request('/tex-environment/languages')]),desired=state.desired||{};texPageData={state,images,languages};
+  const signal=beginManagerWatch();
+  const [state,images,languages]=await Promise.all(
+    ['/tex-environment/state','/tex-environment/images','/tex-environment/languages'].map(path=>request(path,{signal}))
+  ).catch(error=>{if(!signal.aborted)throw error;return []});
+  if(signal.aborted)return;
+  const desired=state.desired||{};
   const selector=desired.selector||{mode:'latest',value:null},selected=new Set(desired.languages||[]),recommended=languages.items.filter(x=>x.recommended),others=languages.items.filter(x=>!x.recommended),languageRows=items=>items.map(item=>'<label class="check" data-language-row data-label="'+esc((texLanguageLabel(item)+' '+item.id).toLowerCase())+'"><input type="checkbox" name="tex-language" value="'+esc(item.id)+'"'+(selected.has(item.id)?' checked':'')+'><span>'+esc(texLanguageLabel(item))+'</span></label>').join('');
   const savedCountry=languages.countryOverride||'';
   out.innerHTML=("<div class=\"page-heading\"><h1>"+esc(adminMessage("texEnvironment"))+"</h1></div>")+
@@ -21,8 +27,8 @@ async function texEnvironment(){
   document.querySelector('#tex-language-search').oninput=e=>{const q=e.target.value.trim().toLowerCase();document.querySelectorAll('[data-language-row]').forEach(row=>{row.hidden=q&&!row.dataset.label.includes(q)})};
   document.querySelector('#tex-select-all').onclick=()=>{if(languages.catalogUnavailable)return;document.querySelectorAll('input[name="tex-language"]').forEach(x=>{x.checked=true})};
   document.querySelector('#tex-clear-all').onclick=()=>document.querySelectorAll('input[name="tex-language"]').forEach(x=>{x.checked=false});
-  document.querySelector('#tex-country-form').onsubmit=async e=>{e.preventDefault();const raw=String(new FormData(e.target).get('country')||'').trim().toUpperCase();if(!/^[A-Z]{2}$/.test(raw)){err.textContent=adminMessage("enterATwoLetterIsoCountry");return}await request('/tex-environment/country',{method:'POST',...jsonBody({country:raw})});ok.textContent=adminMessage("countryPreferenceSaved");await texEnvironment()};
-  document.querySelector('#tex-country-clear').onclick=async()=>{await request('/tex-environment/country',{method:'POST',...jsonBody({country:null})});ok.textContent=adminMessage("countryOverrideRemoved");await texEnvironment()};
+  document.querySelector('#tex-country-form').onsubmit=adminAction(async e=>{e.preventDefault();const raw=String(new FormData(e.target).get('country')||'').trim().toUpperCase();if(!/^[A-Z]{2}$/.test(raw)){err.textContent=adminMessage("enterATwoLetterIsoCountry");return}await request('/tex-environment/country',{method:'POST',...jsonBody({country:raw})});ok.textContent=adminMessage("countryPreferenceSaved");await texEnvironment()});
+  document.querySelector('#tex-country-clear').onclick=adminAction(async()=>{await request('/tex-environment/country',{method:'POST',...jsonBody({country:null})});ok.textContent=adminMessage("countryOverrideRemoved");await texEnvironment()});
   document.querySelector('#tex-apply').onclick=()=>{try{const input=collectTexApply();const languageText=input.languages.length?input.languages.join(', '):adminMessage("none");confirmDialog({title:adminMessage("changeTexEnvironment"),description:adminMessage("buildAndVerifyTheEnvironmentUsing"),summary:("<dl class=\"details\"><dt>"+esc(adminMessage("version"))+"</dt><dd>")+esc(texSelectorDisplay(input.selector))+("</dd><dt>"+esc(adminMessage("language"))+"</dt><dd>")+esc(languageText)+("</dd><dt>"+esc(adminMessage("automaticUpdatesToTheLatestVersion"))+"</dt><dd>")+(input.autoUpdate?adminMessage("enabled"):adminMessage("disabled"))+("</dd><dt>"+esc(adminMessage("buildImagesForUnpublishedDates"))+"</dt><dd>")+(input.rebuildIfMissing?adminMessage("allow"):adminMessage("doNotAllow"))+'</dd></dl>',reason:true,submitLabel:adminMessage("fetchVerifyAndApply"),successMessage:adminMessage("texEnvironmentOperationStarted"),reload:false,onSubmit:f=>request('/tex-environment/apply',{method:'POST',...jsonBody({...input,reason:String(f.get('reason')).trim()})}),afterSuccess:startTexOperation})}catch(e){err.textContent=e instanceof Error?e.message:String(e)}};
   for(const [id,path,title,danger,description] of [
     ['tex-refresh-latest','refresh',adminMessage("checkForTheLatestVersion"),false,adminMessage("fetchAndVerifyTheLatestVersion")],
@@ -30,10 +36,33 @@ async function texEnvironment(){
     ['tex-revalidate','revalidate',adminMessage("verifyTheCurrentEnvironmentAgain"),false,adminMessage("runVerificationInTheCurrentEnvironment")],
     ['tex-cleanup','cleanup',adminMessage("cleanUpUnusedImages"),false,adminMessage("removeUnusedLocalImagesWhileProtecting")]
   ]){const button=document.querySelector('#'+id);if(!button)continue;button.onclick=()=>confirmDialog({title,reason:true,summary:'<p>'+esc(description)+'</p>',submitLabel:title,danger,successMessage:adminMessage("operationStarted"),reload:false,onSubmit:f=>request('/tex-environment/'+path,{method:'POST',...jsonBody({reason:String(f.get('reason')).trim()})}),afterSuccess:startTexOperation})}
-  document.querySelector('#tex-inventory-form').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target),kind=String(f.get('kind')),query=String(f.get('query')||'').trim(),data=await request('/tex-environment/inventory/'+kind+(query?'?q='+encodeURIComponent(query):'')),target=document.querySelector('#tex-inventory-result'),summary=document.createElement('p'),pre=document.createElement('pre');summary.className='muted';summary.textContent=adminMessage("itemCount",{count:new Intl.NumberFormat(document.documentElement.lang).format(data.total)})+(data.truncated?adminMessage("showingTheFirst500Entries"):'');pre.textContent=data.items.join('\n');target.replaceChildren(summary,pre)};
-  const operationId=state.activeOperationId||state.lastOperationId;if(operationId){const existing=await request('/tex-environment/operations/'+encodeURIComponent(operationId)).catch(()=>null);if(existing){renderTexOperation(existing);if(existing.status==='running')watchTexOperation(existing)}}
+  document.querySelector('#tex-inventory-form').onsubmit=adminAction(async e=>{e.preventDefault();const f=new FormData(e.target),kind=String(f.get('kind')),query=String(f.get('query')||'').trim(),data=await request('/tex-environment/inventory/'+kind+(query?'?q='+encodeURIComponent(query):'')),target=document.querySelector('#tex-inventory-result'),summary=document.createElement('p'),pre=document.createElement('pre');summary.className='muted';summary.textContent=adminMessage("itemCount",{count:new Intl.NumberFormat(document.documentElement.lang).format(data.total)})+(data.truncated?adminMessage("showingTheFirst500Entries"):'');pre.textContent=data.items.join('\n');target.replaceChildren(summary,pre)});
+  const operationId=state.activeOperationId||state.lastOperationId;
+  if(operationId){
+    const operation=await request('/tex-environment/operations/'+encodeURIComponent(operationId),{signal})
+      .catch(error=>{if(!signal.aborted)throw error;return null});
+    if(signal.aborted)return;
+    if(texOperationPending(operation))startTexOperation(operation,signal);
+    else renderTexOperation(operation);
+  }
 }
 function collectTexApply(){const mode=document.querySelector('#tex-image-mode').value,raw=document.querySelector('#tex-image-value').value.trim();let selector;if(mode==='latest')selector={mode:'latest',value:null};else if(mode==='date'&&/^\d{4}-\d{2}-\d{2}$/.test(raw))selector={mode,value:raw};else if(mode==='weekly'&&/^\d{4}-W\d{2}$/.test(raw))selector={mode,value:raw};else if(mode==='digest'&&/^sha256:[a-f0-9]{64}$/.test(raw))selector={mode,value:raw};else throw new Error(adminMessage("invalidImageSelector"));return{selector,languages:[...document.querySelectorAll('input[name="tex-language"]:checked')].map(x=>x.value),autoUpdate:selector.mode==='latest'&&document.querySelector('#tex-auto-update').checked,rebuildIfMissing:document.querySelector('#tex-rebuild-missing').checked}}
-function startTexOperation(value){if(!value?.id)return;watchTexOperation(value)}
-async function watchTexOperation(initial){let operation=initial,failures=0;for(;;){renderTexOperation(operation);if(operation.status==='succeeded'){ok.textContent=adminMessage("texEnvironmentOperationSucceeded");await texEnvironment();return}if(operation.status==='failed'){err.textContent=operation.error||adminMessage("texEnvironmentOperationFailed");await texEnvironment();return}await new Promise(resolve=>setTimeout(resolve,1500));try{operation=await request('/tex-environment/operations/'+encodeURIComponent(operation.id));failures=0}catch(e){failures++;renderTexOperation(operation,true);if(failures>=40){err.textContent=adminMessage("couldNotReconnectToTheAdmin");return}await new Promise(resolve=>setTimeout(resolve,1000))}}}
-`;
+function texOperationPending(operation){return operation.status==='running'}
+function startTexOperation(operation,signal) {
+  const target=document.querySelector('#tex-operation');
+  if(!operation?.id||!target)return;
+  void adminAction(()=>watchManagerOperation(operation,{
+    signal:signal||beginManagerWatch(),endpoint:'/tex-environment/operations/',target,
+    pending:texOperationPending,render:renderTexOperation,
+    reconnectMessage:adminMessage("couldNotReconnectToTheAdmin"),
+    maxFailures:40,
+    finish:async operation=>{
+      if(operation.status==='succeeded')ok.textContent=adminMessage("texEnvironmentOperationSucceeded");
+      else err.textContent=operation.error||adminMessage("texEnvironmentOperationFailed");
+      await texEnvironment();
+    }
+  }))();
+}
+
+  return { texEnvironment };
+}

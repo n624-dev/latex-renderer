@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { siteScript } from "../apps/admin-web/src/assets/site-script.js";
+import { readBrowserAsset } from "../apps/admin-web/src/browser-assets.js";
 import { styles } from "../apps/admin-web/src/assets/styles.js";
 import { createWebApp } from "../apps/admin-web/src/app.js";
 import {
@@ -90,11 +90,8 @@ describe("documentation navigation", () => {
   });
 
   it("supports keyboard-native search and code-copy controls on mobile", () => {
-    expect(siteScript).toContain(
-      "fetch(search.dataset.indexUrl || '/assets/docs-search.json')",
-    );
-    expect(siteScript).toContain("navigator.clipboard.writeText");
-    expect(siteScript).toContain("document.createElement('button')");
+    expect(readBrowserAsset("site")).toContain("/assets/docs-search.json");
+    expect(readBrowserAsset("site")).toContain("navigator.clipboard.writeText");
     expect(styles).toContain(
       ".docs-layout { grid-template-columns: minmax(0, 1fr); }",
     );

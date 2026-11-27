@@ -1,6 +1,6 @@
 {
   "name": "@latex-renderer/contracts",
-  "version": "1.7.2-rc.5",
+  "version": "1.7.2-rc.6",
   "private": true,
   "license": "Apache-2.0",
   "type": "module",
@@ -10,6 +10,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./authoring-guide": {
+      "types": "./dist/authoring-guide.d.ts",
+      "import": "./dist/authoring-guide.js"
     },
     "./renderer-mcp-definitions": {
       "types": "./dist/renderer-mcp-definitions.d.ts",

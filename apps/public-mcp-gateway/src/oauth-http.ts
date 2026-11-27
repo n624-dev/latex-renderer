@@ -124,6 +124,7 @@ export function createGatewayOAuthHandler(options: OAuthHttpOptions) {
         const client = options.clients.registerDcrClient(
           registration,
           options.dcrCapacity,
+          tokens.clock(),
         );
         if (!client) return oauthError("temporarily_unavailable", 503);
         return json(

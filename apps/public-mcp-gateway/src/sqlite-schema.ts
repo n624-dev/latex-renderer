@@ -1,4 +1,4 @@
-export const connectionSchemaVersion = 2;
+export const connectionSchemaVersion = 3;
 // SQLite application_id identifies the file independently of schema version.
 export const connectionApplicationId = 0x4c524d43;
 
@@ -9,6 +9,21 @@ export const agentRevocationSchema = `
     expires_at INTEGER NOT NULL,
     PRIMARY KEY (transport_id, local_grant_id)
   ) STRICT;
+`;
+
+export const connectionRetentionSchema = `
+  ALTER TABLE oauth_dcr_clients ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE oauth_dcr_clients ADD COLUMN last_authorization_end INTEGER NOT NULL DEFAULT 0;
+  UPDATE oauth_dcr_clients SET created_at = CAST(strftime('%s', 'now') AS INTEGER) * 1000;
+  ALTER TABLE oauth_consents ADD COLUMN client_id TEXT;
+  ALTER TABLE authorizations ADD COLUMN oauth_client_id TEXT;
+  UPDATE authorizations SET oauth_client_id = COALESCE(
+    (SELECT client_id FROM oauth_families WHERE authorization_id = authorizations.id),
+    (SELECT client_id FROM oauth_codes WHERE authorization_id = authorizations.id)
+  );
+  CREATE INDEX authorizations_oauth_client_idx ON authorizations (oauth_client_id);
+  CREATE INDEX authorizations_expiry_idx ON authorizations (expires_at);
+  CREATE INDEX oauth_consents_client_idx ON oauth_consents (client_id);
 `;
 
 export const connectionSchema = `

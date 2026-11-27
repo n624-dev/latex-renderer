@@ -10,13 +10,12 @@ import { Hono, type Context } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
 import { secureHeaders } from "hono/secure-headers";
 import { localizedAdminScript } from "./assets/admin-script.js";
-import { localizedAppScript } from "./assets/app-script.js";
-import { siteScript } from "./assets/site-script.js";
-import { renderScript } from "./assets/render-script.js";
-import { loginScript } from "./assets/login-script.js";
+import { localizedAppScript } from "./assets/localized-app-script.js";
+import { readBrowserAsset } from "./browser-assets.js";
 import { styles } from "./assets/styles.js";
 import { isVersionedWebFont, webFontAsset } from "./assets/font-assets.js";
 import { editorAsset, readEditorAssetVersion } from "./editor-assets.js";
+import { favicon } from "./favicon.js";
 import type { StatusProbe } from "./status-probe.js";
 import {
   binaryResponse,
@@ -48,7 +47,9 @@ const displayLocaleCookie = "latex_renderer_locale";
 
 function pageLocale(c: Context, routeLocale?: DisplayLocale): DisplayLocale {
   const choice = c.req.query("locale");
-  const selected = routeLocale ?? (choice === undefined ? undefined : matchDisplayLocale(choice));
+  const selected =
+    routeLocale ??
+    (choice === undefined ? undefined : matchDisplayLocale(choice));
   if (selected !== undefined)
     setCookie(c, displayLocaleCookie, selected, {
       path: "/",
@@ -124,20 +125,25 @@ export function createWebApp(
     }),
   );
 
+  app.get("/favicon.svg", (c) => {
+    c.header("Content-Type", "image/svg+xml");
+    return c.body(favicon);
+  });
   app.get("/assets/styles.css", (c) => {
     c.header("Content-Type", "text/css; charset=utf-8");
     return c.body(styles);
   });
-  app.get("/assets/fonts/:name", async (c) =>
-    (await webFontAsset(c.req.param("name"))) ?? c.notFound(),
+  app.get(
+    "/assets/fonts/:name",
+    async (c) => (await webFontAsset(c.req.param("name"))) ?? c.notFound(),
   );
   app.get("/assets/site.js", (c) => {
     c.header("Content-Type", "text/javascript; charset=utf-8");
-    return c.body(siteScript);
+    return c.body(readBrowserAsset("site"));
   });
   app.get("/assets/login.js", (c) => {
     c.header("Content-Type", "text/javascript; charset=utf-8");
-    return c.body(loginScript);
+    return c.body(readBrowserAsset("login"));
   });
   app.get("/assets/docs-search.json", (c) => {
     c.header("Content-Type", "application/json; charset=utf-8");
@@ -145,7 +151,9 @@ export function createWebApp(
   });
   for (const locale of displayLocales) {
     app.get(`/${locale}`, (c) => c.redirect(`/${locale}/`, 308));
-    app.get(`/${locale}/downloads`, (c) => c.redirect(`/${locale}/downloads/`, 308));
+    app.get(`/${locale}/downloads`, (c) =>
+      c.redirect(`/${locale}/downloads/`, 308),
+    );
     app.get(`/${locale}/assets/docs-search.json`, (c) => {
       c.header("Content-Type", "application/json; charset=utf-8");
       return c.body(publicDocsSearchJson(locale));
@@ -153,13 +161,17 @@ export function createWebApp(
   }
   app.get("/admin/assets/admin.js", (c) => {
     c.header("Content-Type", "text/javascript; charset=utf-8");
-    return c.body(localizedAdminScript(resolveDisplayLocale({
-      selected: c.req.query("locale") ?? "ja",
-    })));
+    return c.body(
+      localizedAdminScript(
+        resolveDisplayLocale({
+          selected: c.req.query("locale") ?? "ja",
+        }),
+      ),
+    );
   });
   app.get("/admin/assets/site.js", (c) => {
     c.header("Content-Type", "text/javascript; charset=utf-8");
-    return c.body(siteScript);
+    return c.body(readBrowserAsset("site"));
   });
   app.get("/admin/assets/styles.css", (c) => {
     c.header("Content-Type", "text/css; charset=utf-8");
@@ -167,7 +179,7 @@ export function createWebApp(
   });
   app.get("/admin/assets/render.js", (c) => {
     c.header("Content-Type", "text/javascript; charset=utf-8");
-    return c.body(renderScript);
+    return c.body(readBrowserAsset("admin-render"));
   });
   app.get("/app/assets/app.js", (c) => {
     const locale = resolveDisplayLocale({ selected: c.req.query("locale") });
@@ -176,7 +188,7 @@ export function createWebApp(
   });
   app.get("/app/assets/site.js", (c) => {
     c.header("Content-Type", "text/javascript; charset=utf-8");
-    return c.body(siteScript);
+    return c.body(readBrowserAsset("site"));
   });
   app.get("/app/assets/styles.css", (c) => {
     c.header("Content-Type", "text/css; charset=utf-8");
@@ -210,11 +222,13 @@ export function createWebApp(
   app.get("/login", (c) => c.redirect("/login/", 308));
   app.get("/login/", (c) => {
     const locale = pageLocale(c);
-    return c.html(loginPage(locale, (choice) => {
-      const query = new URL(c.req.url).searchParams;
-      query.set("locale", choice);
-      return `?${query}`;
-    }));
+    return c.html(
+      loginPage(locale, (choice) => {
+        const query = new URL(c.req.url).searchParams;
+        query.set("locale", choice);
+        return `?${query}`;
+      }),
+    );
   });
   app.get("/render", (c) => c.redirect("/app/", 308));
   app.get("/render/", (c) => c.redirect("/app/", 308));
@@ -227,12 +241,16 @@ export function createWebApp(
   }
   for (const locale of displayLocales) {
     app.get(`/${locale}/`, (c) => c.html(homePage(pageLocale(c, locale))));
-    app.get(`/${locale}/downloads/`, (c) => c.html(downloadsPage(
-      distribution.version,
-      distribution.archiveName,
-      distribution.mcpbName,
-      pageLocale(c, locale),
-    )));
+    app.get(`/${locale}/downloads/`, (c) =>
+      c.html(
+        downloadsPage(
+          distribution.version,
+          distribution.archiveName,
+          distribution.mcpbName,
+          pageLocale(c, locale),
+        ),
+      ),
+    );
   }
   app.get("/status", (c) => c.redirect("/status/", 308));
   app.get("/status/", async (c) =>
@@ -444,7 +462,9 @@ export function createWebApp(
   );
   app.get("/app/jobs/:id/", (c) => c.html(appJobPage(pageLocale(c))));
   app.get("/app/environment", (c) => c.redirect("/app/environment/", 308));
-  app.get("/app/environment/", (c) => c.html(appEnvironmentPage(pageLocale(c))));
+  app.get("/app/environment/", (c) =>
+    c.html(appEnvironmentPage(pageLocale(c))),
+  );
 
   app.get("/health", (c) => c.json({ status: "ok" }));
   app.notFound((c) => c.html(publicPage404(pageLocale(c)), 404));

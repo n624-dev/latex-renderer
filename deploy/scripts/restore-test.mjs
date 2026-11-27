@@ -12,6 +12,7 @@ import {
   projectSourceRows,
   projectSourceStorageKey,
   validateBackupArchive,
+  readBackupApplicationIdentity,
 } from "./backup-boundary.mjs";
 
 const archive = process.argv[2];
@@ -36,6 +37,7 @@ try {
   );
   if (manifest.format !== 1 && manifest.format !== 2)
     throw new Error("Backup manifest format is unsupported");
+  const application = readBackupApplicationIdentity(manifest.application);
   const databasePath = join(work, "renderer.sqlite3");
   const info = await stat(databasePath);
   if (
@@ -56,6 +58,10 @@ try {
         "SELECT version,applied_at FROM schema_migrations ORDER BY version",
       )
       .all();
+    if (
+      manifest.databaseSchemaVersion !== undefined &&
+      manifest.databaseSchemaVersion !== migrations.at(-1)?.version
+    ) throw new Error("Backup schema version does not match the database");
     if (manifest.format === 2)
       await verifyProjectSources(database, manifest.projectSources);
   } finally {
@@ -64,6 +70,7 @@ try {
   console.log(
     JSON.stringify({
       event: "restore_test.completed",
+      application,
       migrations,
       projectSourceCount:
         manifest.format === 2 ? manifest.projectSources.sources.length : 0,

@@ -17,7 +17,8 @@ export interface DocsValidationInput {
 
 type CliBinary = "latex-render" | "n624-latex";
 const methods = "get|post|put|patch|delete|head|options";
-const globalCliOptions = new Set(["--json"]);
+const documentedMethods = new RegExp(`\\b(${methods.toUpperCase()})\\b`, "g");
+const globalCliOptions = new Set(["--json", "--profile"]);
 const setupCliOptions = new Set([
   "--base-uri",
   "--install-directory",
@@ -182,6 +183,8 @@ function cliInvocations(
 
 function documentedCommandPath(invocation: string): string {
   const tokens = invocation.split(/\s+/);
+  if (tokens[0] === "connection" && tokens[1] && !tokens[1].startsWith("-"))
+    return tokens.slice(0, 2).join(" ");
   const commands: string[] = [];
   for (const token of tokens) {
     if (
@@ -242,15 +245,15 @@ function validateOpenApiCoverage(
       ),
     ].flatMap((match) => {
       const methodCell = match[1] ?? "";
-      return [...methodCell.matchAll(/\b(GET|POST|PUT|PATCH|DELETE)\b/g)].map(
+      return [...methodCell.matchAll(documentedMethods)].map(
         ([method]) => `${method} ${match[2]}`,
       );
     }),
   );
   const specified = new Set<string>();
   for (const openApi of openApis) {
-    for (const operation of openApiOperations(openApi.source))
-      specified.add(operation);
+    for (const { method, path } of openApiOperations(openApi.source))
+      specified.add(`${method} ${path}`);
     if (!markdownLinks(markdown).includes(openApi.publicPath)) {
       errors.push(`missing link to ${openApi.name} at ${openApi.publicPath}`);
     }
@@ -267,8 +270,10 @@ function validateOpenApiCoverage(
   }
 }
 
-function openApiOperations(source: string): string[] {
-  const operations: string[] = [];
+export function openApiOperations(
+  source: string,
+): Array<{ method: string; path: string }> {
+  const operations: Array<{ method: string; path: string }> = [];
   let inPaths = false;
   let path: string | undefined;
   for (const line of source.split("\n")) {
@@ -285,7 +290,7 @@ function openApiOperations(source: string): string[] {
     }
     const methodMatch = line.match(new RegExp(`^ {4}(${methods}):\\s*$`, "i"));
     if (path !== undefined && methodMatch?.[1] !== undefined)
-      operations.push(`${methodMatch[1].toUpperCase()} ${path}`);
+      operations.push({ method: methodMatch[1].toUpperCase(), path });
   }
   return operations;
 }

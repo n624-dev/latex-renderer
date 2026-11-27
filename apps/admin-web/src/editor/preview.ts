@@ -21,11 +21,12 @@ type PngSource = {
 export class EditorPreview {
   private document?: PDFDocumentProxy;
   private displayed?: PDFDocumentLoadingTask;
-  private loading?: PDFDocumentLoadingTask;
+  private loading?: () => Promise<void>;
   private painting?: RenderTask;
   private png?: PngSource;
   private page = 1;
   private generation = 0;
+  private pendingDisplay?: number;
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -39,7 +40,7 @@ export class EditorPreview {
   }
 
   async show(url: string, signal: AbortSignal): Promise<boolean> {
-    const generation = ++this.generation;
+    const generation = this.startDisplay();
     const current = () => !signal.aborted && generation === this.generation;
     const resource = assets + "pdf.mjs";
     let pdf: typeof import("pdfjs-dist");
@@ -47,9 +48,13 @@ export class EditorPreview {
       pdf = (await import(resource)) as typeof import("pdfjs-dist");
     } catch (error) {
       if (current()) this.report(error);
+      this.finishDisplay(generation);
       return false;
     }
-    if (!current()) return false;
+    if (!current()) {
+      this.finishDisplay(generation);
+      return false;
+    }
     pdf.GlobalWorkerOptions.workerSrc = assets + "pdf.worker.mjs";
     const task = pdf.getDocument({
       url,
@@ -63,10 +68,11 @@ export class EditorPreview {
       disableStream: true,
       canvasMaxAreaInBytes: 16 * 1024 * 1024,
     });
-    const abort = () => {
-      void task.destroy().catch(() => {});
-    };
-    this.loading = task;
+    let disposal: Promise<void> | undefined;
+    const dispose = () => (disposal ??= task.destroy().catch(() => {}));
+    const abort = () => void dispose();
+    this.loading = dispose;
+    this.updateButtons();
     signal.addEventListener("abort", abort, { once: true });
     let accepted = false;
     try {
@@ -91,35 +97,55 @@ export class EditorPreview {
       return false;
     } finally {
       signal.removeEventListener("abort", abort);
-      if (this.loading === task) delete this.loading;
-      if (!accepted) await task.destroy().catch(() => {});
-      this.updateButtons();
+      if (this.loading === dispose) delete this.loading;
+      if (!accepted) await dispose();
+      this.finishDisplay(generation);
     }
   }
 
   async showPng(source: PngSource, signal: AbortSignal): Promise<boolean> {
+    const generation = this.startDisplay();
     const page = Math.min(this.page, source.pageCount);
-    if (!(await this.paintPng(source, page, signal))) return false;
-    const previous = this.displayed;
-    delete this.document;
-    delete this.displayed;
-    this.png = source;
-    this.controls.download.href = source.pdf;
-    this.controls.download.hidden = false;
-    this.updateButtons();
-    await previous?.destroy().catch(() => {});
-    return true;
+    try {
+      if (
+        !(await this.paintPng(source, page, signal, generation)) ||
+        generation !== this.generation
+      )
+        return false;
+      const previous = this.displayed;
+      delete this.document;
+      delete this.displayed;
+      this.png = source;
+      this.controls.download.href = source.pdf;
+      this.controls.download.hidden = false;
+      await previous?.destroy().catch(() => {});
+      return true;
+    } finally {
+      this.finishDisplay(generation);
+    }
+  }
+
+  async assetsMissing(signal: AbortSignal): Promise<boolean> {
+    const responses = await Promise.allSettled(
+      ["pdf.mjs", "pdf.worker.mjs"].map((file) =>
+        fetch(assets + file, { method: "HEAD", cache: "no-store", signal }),
+      ),
+    );
+    return responses.some(
+      (result) => result.status === "fulfilled" && result.value.status === 404,
+    );
   }
 
   private async navigate(step: number) {
+    if (this.pendingDisplay !== undefined) return;
     const doc = this.document;
     const page = this.page + step;
-    if (this.png && this.loading === undefined) {
+    if (this.png) {
       if (page > 0 && page <= this.png.pageCount)
         await this.paintPng(this.png, page, AbortSignal.timeout(12000));
       return;
     }
-    if (this.loading || !doc || page < 1 || page > doc.numPages) return;
+    if (!doc || page < 1 || page > doc.numPages) return;
     const generation = ++this.generation;
     try {
       if (await this.paint(doc, page, generation)) {
@@ -136,8 +162,8 @@ export class EditorPreview {
     source: PngSource,
     page: number,
     signal: AbortSignal,
+    generation = ++this.generation,
   ): Promise<boolean> {
-    const generation = ++this.generation;
     try {
       for (let attempt = 0; attempt < 3; attempt++) {
         const response = await fetch(source.path(page), {
@@ -222,9 +248,9 @@ export class EditorPreview {
   private updateButtons() {
     const count = this.document?.numPages ?? this.png?.pageCount ?? 0;
     this.controls.previous.disabled =
-      this.loading !== undefined || this.page < 2;
+      this.pendingDisplay !== undefined || this.page < 2;
     this.controls.next.disabled =
-      this.loading !== undefined || this.page >= count;
+      this.pendingDisplay !== undefined || this.page >= count;
   }
 
   private report(error: unknown) {
@@ -233,10 +259,25 @@ export class EditorPreview {
     this.controls.error.hidden = false;
   }
 
+  private startDisplay() {
+    const loading = this.loading;
+    delete this.loading;
+    void loading?.();
+    this.painting?.cancel();
+    this.pendingDisplay = ++this.generation;
+    this.updateButtons();
+    return this.generation;
+  }
+
+  private finishDisplay(generation: number) {
+    if (this.pendingDisplay === generation) delete this.pendingDisplay;
+    this.updateButtons();
+  }
+
   async destroy() {
     ++this.generation;
     this.painting?.cancel();
-    await this.loading?.destroy().catch(() => {});
+    await this.loading?.();
     await this.displayed?.destroy().catch(() => {});
   }
 }

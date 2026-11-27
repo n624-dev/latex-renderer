@@ -27,15 +27,19 @@ since: "v1.3.6"
 
 ### Create and verify a backup from the command line {#コマンドで作成-検証する}
 
-1. Create an encrypted backup immediately on the server. `BACKUP_DIRECTORY` in `/etc/latex-renderer/backup.env` sets the destination and defaults to `/var/lib/latex-renderer/backups`. The `latex-renderer-backup.timer` timer runs scheduled backups.
+Configure an owner's admin API key on your client, then request the backup.
 
-```bash
-sudo systemctl start latex-renderer-backup.service
-sudo journalctl -u latex-renderer-backup.service -n 20 --no-pager
+```sh
+n624-latex admin backup create
+n624-latex admin backup status
 ```
 
-2. Copy the resulting `.tar.age` archive to a Linux verification host. Prepare GNU `tar`, `age`, a supported Node.js version (24 or 26) with `node:sqlite`, and the decryption key. For long-term storage, keep the archive and key separately.
-3. [Download, verify, and extract the server distribution](/en/docs/self-hosting/#v1-6-9をダウンロードして検証) for the application version that created the backup. Set the initial `version=` to that version. Set `release_dir` to the extracted directory and run the script from the distribution.
+When creation finishes, run `n624-latex admin backup verify`. Use `n624-latex admin backup status` to check the file name and time in `latestVerification`. The server saves the backup in `BACKUP_DIRECTORY`, which defaults to `/var/lib/latex-renderer/backups`. On older clients that lack the `backup` command, use the administration page above.
+
+### Verify on a separate host
+
+1. Copy the resulting `.tar.age` archive to a Linux verification host. Prepare GNU `tar`, `age`, a supported Node.js version (24 or 26) with `node:sqlite`, and the decryption key. For long-term storage, keep the archive and key separately.
+2. [Download, verify, and extract the server distribution](/en/docs/self-hosting/#v1-6-9をダウンロードして検証) for the application version that created the backup. Set the initial `version=` to that version. Set `release_dir` to the extracted directory and run the script from the distribution.
 
 ```bash
 release_dir=/path/to/verified-release
@@ -43,7 +47,7 @@ BACKUP_AGE_IDENTITY_FILE=/path/to/age-identity \
   node "$release_dir/deploy/scripts/restore-test.mjs" /path/to/backup.tar.age
 ```
 
-Verification is complete when you see `restore_test.completed`. The test extracts the SQLite database and input ZIPs to temporary storage and checks their consistency. To verify an off-site backup, retrieve it from its storage location and run the same test.
+Verification is complete when you see `restore_test.completed`. The test extracts the SQLite database and input ZIPs to temporary storage and checks their consistency. For recent backups, `application.version` and `application.commit` identify the release that created the backup. For older backups with `application: null`, check your records for the release in use when the backup was made. To verify an off-site backup, retrieve it from storage and run the same test.
 
 ## Review a recovery point after an unsuccessful update {#更新失敗後の復旧点を確認する}
 

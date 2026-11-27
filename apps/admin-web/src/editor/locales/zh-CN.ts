@@ -2,6 +2,13 @@ import type { EditorCatalog } from "../messages.js";
 
 export default {
   messages: {
+    reviewConflict: "检查编辑冲突",
+    saveUnsavedCopy: "保存副本",
+    currentServerFile: "服务器版本",
+    applyMyEdits: "将我的修改应用到此文件",
+    conflictFileMissing: "当前草稿中没有此文件。请保存副本以保留修改。",
+    conflictReviewHint: "请检查更改的行。应用后，此文件将替换为你编辑的副本。",
+    previewReload: "服务器更新后已切换为 PNG 预览。请先保存更改，再重新加载页面以恢复 PDF 预览。",
     skipContent: "跳转到正文",
     appNavigation: "应用导航",
     appRender: "转换为 PDF",

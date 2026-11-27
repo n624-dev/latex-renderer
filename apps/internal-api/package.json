@@ -1,6 +1,6 @@
 {
   "name": "@latex-renderer/internal-api",
-  "version": "1.7.2-rc.5",
+  "version": "1.7.2-rc.6",
   "private": true,
   "license": "Apache-2.0",
   "type": "module",
@@ -16,6 +16,7 @@
     "@latex-renderer/auth": "workspace:*",
     "@latex-renderer/contracts": "workspace:*",
     "@latex-renderer/database": "workspace:*",
+    "@latex-renderer/renderer-core": "workspace:*",
     "@latex-renderer/shared": "workspace:*",
     "@latex-renderer/ticket": "workspace:*",
     "@latex-renderer/zip-validation": "workspace:*",

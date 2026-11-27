@@ -168,7 +168,7 @@ export function assertGatewayDatabase(db: DatabaseSync): void {
   if (
     db.prepare("PRAGMA application_id").get()?.application_id !==
       connectionApplicationId ||
-    (version !== 1 && version !== connectionSchemaVersion)
+    (version !== 1 && version !== 2 && version !== connectionSchemaVersion)
   )
     throw new Error("The database does not belong to the public MCP gateway");
 }

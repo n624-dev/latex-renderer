@@ -26,18 +26,26 @@ OpenAPI 定義：[予約とジョブ作成（gateway.openapi.yaml）](/openapi/g
 - **API キー（`lrk_...`）を使う操作**：Source 予約、ジョブ作成、保存 Project 操作、ジョブ用トークンの再発行（`job-tickets`）、SVG 再試行
   - `render:create`：ジョブ作成、Project の作成・改名・削除・改訂保存
   - `render:read:own`：自分のジョブ用短時間トークンの更新、Project と履歴の閲覧
+  - `render:project:read`：同じ利用者が所有するProjectの保存版で、ファイル一覧とUTF-8の本文を読む。キー発行時に明示的に選択する。
+  - `render:draft:read` — 共有下書きの一覧と本文を読む。
+  - `render:draft:write` — 共有下書きを開き、編集・保存する。
+  - `render:pdf:inspect` — そのキーが所有するJobのPDF品質検査を要求し、結果を読む。
 - **短時間トークン（`uploadTicket` / `jobTicket`）を使う操作**：ZIP アップロード、ジョブの状態取得・キャンセル・成果物取得・削除
 
 > [!WARNING]
 > API キー、`uploadTicket`、`jobTicket` をログ、URL クエリ、送信するソース ZIP 内に含めないでください。
 
 > [!NOTE]
-> **キー単位のジョブ所有固定**：API キーで作成した Job は、**作成したその API キー自身**に固定されます。同じユーザーや同じ Service Account の別キーであっても、既存 Job の `job-tickets` 更新・同一 `Idempotency-Key` での作成応答再取得・SVG 再試行を行うと `404` で拒否されます（元のキーが失効しても別キーへ引き継がれません）。一方、Source と保存 Project は同一ユーザー内で共有されるため、共有 Source から別キー＋新しい `Idempotency-Key` で**新規 Job** を作ることは可能です。
+API キーで作成した Job は、そのキーにひも付きます。管理画面でキーをローテーションすると、交換先のキーで既存 Job のチケット更新、同じ `Idempotency-Key` での応答再取得、SVG 再試行ができます。交換元のキーと発行済みチケットは失効します。新しいキーに描画権限があれば、受付済みの待機 Job はそのまま進みます。この引き継ぎは対応版を導入した後のローテーションから適用されます。
+
+独立して発行したキーから既存 Job を操作すると、同じ Service Account 内でも `404` が返ります。漏えい時はキーを失効させてください。Source と保存 Project は同じユーザー内で共有されるため、別キーでも共有 Source から新しい Job を作れます。保存版の履歴に `detailAccess: "different_connection"` がある Job は、その接続からは詳細を開けません。
 
 ## APIエンドポイント
 
 | メソッド | パス | 用途 |
 | --- | --- | --- |
+| `GET` / `HEAD` | `/api/v1/health` | Gateway の応答を確認（認証不要。HEAD は本文なし） |
+| `GET` | `/api/v1/source-tickets` | 描画用APIキーで現在のZIP上限を取得 |
 | `POST` | `/api/v1/source-tickets` | Source を予約、または同一ユーザー内で既存 ZIP を再利用 |
 | `PUT` | `/api/v1/sources/{sourceId}/content` | Source ZIP を検証してアップロード |
 | `POST` | `/api/v1/render-tickets` | 既存 Source から Job 作成、SVG 再試行、または 1 ジョブ従来フローの予約 |
@@ -50,8 +58,15 @@ OpenAPI 定義：[予約とジョブ作成（gateway.openapi.yaml）](/openapi/g
 | `DELETE` | `/api/v1/jobs/{jobId}` | 終了済みジョブを削除対象へ移行 |
 | `GET` / `POST` | `/api/v1/projects` | 保存 Project の一覧取得 / 新規作成 |
 | `GET` / `PATCH` / `DELETE` | `/api/v1/projects/{projectId}` | Project の詳細・改訂履歴 / 改名 / 削除（非表示化） |
+| `GET` | `/api/v1/projects/{projectId}/draft` | 共有下書きの版とファイル一覧を取得 |
+| `GET` | `/api/v1/projects/{projectId}/draft/file` | 指定版の本文を分割取得 |
+| `POST` | `/api/v1/projects/{projectId}/draft/open` | 共有下書きを開く |
+| `POST` | `/api/v1/projects/{projectId}/draft/changes` | 指定版に変更をまとめて適用 |
+| `POST` | `/api/v1/projects/{projectId}/draft/save` | 共有下書きを保存版に保存 |
+| `GET` / `POST` | `/api/v1/job-tickets/{jobId}/pdf-inspection` | 指定したPDFの品質検査を取得、または要求 |
 | `POST` | `/api/v1/projects/{projectId}/revisions` | ready Source を不変の改訂として保存 |
 | `GET` | `/api/v1/projects/{projectId}/revisions/{revisionId}/jobs` | 指定した改訂の Job 履歴を取得 |
+| `GET` | `/api/v1/projects/{projectId}/revisions/{revisionId}/files` | 保存版のファイル一覧を取得。 `path` を指定すると本文を取得 |
 | `POST` | `/api/v1/projects/{projectId}/revisions/{revisionId}/render` | 指定した改訂を再レンダリング |
 
 > [!DETAILS] 保存 Project API と保守モード時の挙動を表示

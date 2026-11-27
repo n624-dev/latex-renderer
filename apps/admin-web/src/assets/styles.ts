@@ -536,7 +536,10 @@ body[data-app-page="editor"] #main-content > :is(#app-error, #app-status):not(:e
 }
 .editor-preview-scroll { overflow: auto; max-width: 100%; padding: clamp(0.65rem, 2vw, 1.25rem); }
 #editor-preview canvas[data-zoomed="true"] { max-width: none; }
-#editor-preview-version, #editor-pdf-error, #editor-errors { margin: 0; padding: 0.65rem 0.75rem; }
+#editor-preview-version, #editor-preview-notice, #editor-pdf-error, #editor-errors { margin: 0; padding: 0.65rem 0.75rem; }
+#editor-conflict-dialog { width: min(46rem, calc(100% - 2rem)); }
+.editor-conflict-diff { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr)); gap: 1rem; }
+.editor-conflict-diff pre { max-height: 35vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 #editor-preview-version:empty { display: none; }
 #editor-layout:not([data-panel="errors"]) #editor-errors,
 #editor-layout[data-panel="errors"] #editor-preview-body { display: none; }

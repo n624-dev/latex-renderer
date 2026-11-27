@@ -59,8 +59,9 @@ export class SqliteOAuthTokens implements TokenExchangeStore {
         this.db
           .prepare(
             `
-        INSERT INTO oauth_consents (id, browser_hash, request_hash, expires_at)
-        SELECT ?, ?, ?, ? WHERE (SELECT COUNT(*) FROM oauth_consents) < ?
+        INSERT INTO oauth_consents (id, browser_hash, request_hash, expires_at, client_id)
+        SELECT ?, ?, ?, ?, ? WHERE (SELECT COUNT(*) FROM oauth_consents) < ?
+          AND (? NOT GLOB 'gateway_client_*' OR EXISTS (SELECT 1 FROM oauth_dcr_clients WHERE id = ?))
         ON CONFLICT DO NOTHING
       `,
           )
@@ -69,7 +70,10 @@ export class SqliteOAuthTokens implements TokenExchangeStore {
             proof.browserHash,
             proof.requestHash,
             expiresAt,
+            proof.clientId,
             capacity,
+            proof.clientId,
+            proof.clientId,
           ).changes === 1
       );
     });
@@ -138,7 +142,11 @@ export class SqliteOAuthTokens implements TokenExchangeStore {
             JSON.stringify([...new Set(input.approvedScopes)]),
             Math.min(input.expiresAt, grant.expiresAt),
           ).changes === 1;
-      if (stored) this.consumeConsent(input.consent, input.now);
+      if (stored) {
+        this.db.prepare("UPDATE authorizations SET oauth_client_id=? WHERE id=?")
+          .run(clientId, grant.id);
+        this.consumeConsent(input.consent, input.now);
+      }
       else if (paired)
         throw new Error("Paired authorization could not be issued");
       return stored ? grant : undefined;

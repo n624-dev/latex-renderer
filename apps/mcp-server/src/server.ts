@@ -1,7 +1,16 @@
 import { terminalDisplayLocale } from "@latex-renderer/shared/locale";
+import { AppError } from "@latex-renderer/shared";
 import { mcpText } from "./mcp-messages.js";
 import { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
+import {
+  authoringGuideToolDefinition,
+  rendererApiAuthoringRoutes,
+  rendererApiAuthoringTools,
+  savedRevisionFileTools,
+  type RendererApiAuthoringTool,
+} from "@latex-renderer/contracts/renderer-mcp-definitions";
+import { getAuthoringGuide } from "@latex-renderer/contracts/authoring-guide";
 import {
   assertValidMcpOutput,
   cancelRenderOutputSchema,
@@ -66,8 +75,8 @@ export function createLatexRendererMcpServer(
         openWorldHint: false,
       },
     },
-    async ({ path }) =>
-      runTool("upload_source", () => operations.uploadSource(path)),
+    async ({ path }, { mcpReq: { signal } }) =>
+      runTool("upload_source", () => operations.uploadSource(path, signal)),
   );
   server.registerTool(
     "create_render_job",
@@ -84,9 +93,9 @@ export function createLatexRendererMcpServer(
         openWorldHint: false,
       },
     },
-    async ({ sourceId, entrypoint, outputs, engine }) =>
+    async ({ sourceId, entrypoint, outputs, engine }, { mcpReq: { signal } }) =>
       runTool("create_render_job", () =>
-        operations.createRenderJob(sourceId, entrypoint, outputs, ...(engine === undefined ? [] : [engine] as const)),
+        operations.createRenderJob(sourceId, entrypoint, outputs, engine, signal),
       ),
   );
 
@@ -105,9 +114,9 @@ export function createLatexRendererMcpServer(
         openWorldHint: false,
       },
     },
-    async ({ directory, entrypoint, outputs, engine }) =>
+    async ({ directory, entrypoint, outputs, engine }, { mcpReq: { signal } }) =>
       runTool("render_project", () =>
-        operations.renderProject(directory, entrypoint, outputs, ...(engine === undefined ? [] : [engine] as const)),
+        operations.renderProject(directory, entrypoint, outputs, engine, signal),
       ),
   );
   server.registerTool(
@@ -125,8 +134,8 @@ export function createLatexRendererMcpServer(
         openWorldHint: false,
       },
     },
-    async ({ jobId }) =>
-      runTool("get_render_status", () => operations.getRenderStatus(jobId)),
+    async ({ jobId }, { mcpReq: { signal } }) =>
+      runTool("get_render_status", () => operations.getRenderStatus(jobId, signal)),
   );
   server.registerTool(
     "download_render_artifacts",
@@ -143,12 +152,13 @@ export function createLatexRendererMcpServer(
         openWorldHint: false,
       },
     },
-    async ({ jobId, outputDirectory, previewPages }) =>
+    async ({ jobId, outputDirectory, previewPages }, { mcpReq: { signal } }) =>
       runTool("download_render_artifacts", () =>
         operations.downloadRenderArtifacts(
           jobId,
           outputDirectory,
           previewPages,
+          signal,
         ),
       ),
   );
@@ -189,7 +199,121 @@ export function createLatexRendererMcpServer(
       runTool("delete_render", () => operations.deleteRender(jobId)),
   );
   registerProjectTools(server, operations);
+  registerSavedRevisionFileTools(server, operations);
+  registerAuthoringTools(server, operations);
+  const guide = localTool(authoringGuideToolDefinition);
+  server.registerTool("get_authoring_guide", guide, async ({ topic }) => {
+    try {
+      const result = await getAuthoringGuide(topic);
+      return {
+        content: [{ type: "text" as const, text: result.body }],
+        structuredContent: guide.outputSchema.parse({
+          success: true, operation: "get_authoring_guide", result,
+        }),
+      };
+    } catch {
+      return {
+        content: [{ type: "text" as const, text: "The bundled authoring guide could not be loaded." }],
+        isError: true as const,
+        structuredContent: guide.outputSchema.parse({
+          success: false, operation: "get_authoring_guide",
+          error: { code: "GUIDE_UNAVAILABLE", message: "The bundled authoring guide could not be loaded.", status: 503 },
+        }),
+      };
+    }
+  });
   return server;
+}
+
+function localTool<Definition extends {
+  title: string;
+  description: string;
+  annotations: object;
+  inputSchema: z.ZodType;
+  outputSchema: z.ZodType;
+}>(definition: Definition): Pick<Definition, "title" | "description" | "annotations" | "inputSchema" | "outputSchema"> {
+  return {
+    title: definition.title,
+    description: definition.description,
+    annotations: definition.annotations,
+    inputSchema: definition.inputSchema,
+    outputSchema: definition.outputSchema,
+  };
+}
+
+function registerAuthoringTools(server: McpServer, operations: McpOperations): void {
+  const run = operations.runAuthoringOperation;
+  if (run === undefined) return;
+  const definitions = rendererApiAuthoringTools();
+  for (const name of Object.keys(rendererApiAuthoringRoutes) as RendererApiAuthoringTool[]) {
+    const { inputSchema, outputSchema, ...definition } = localTool(definitions[name]);
+    server.registerTool(name, {
+      ...definition,
+      inputSchema: inputSchema as z.ZodType<Record<string, unknown>>,
+      outputSchema: outputSchema as z.ZodType<Record<string, unknown>>,
+    }, async (input, { mcpReq: { signal } }) => {
+      try {
+        const result = await run(name, input, { signal });
+        return {
+          content: [{ type: "text" as const, text: `${definition.title} completed.` }],
+          structuredContent: outputSchema.parse({ success: true, operation: name, result }),
+        };
+      } catch (error) {
+        const failure = mcpFailure(name, error);
+        const currentVersion = error instanceof AppError && error.code === "DRAFT_VERSION_CONFLICT"
+          ? error.details?.currentVersion : undefined;
+        const recovery = currentVersion === null || typeof currentVersion === "number" ? { currentVersion } : {};
+        return {
+          content: [{ type: "text" as const, text: `${definition.title} failed (${failure.error.code}).` }],
+          isError: true,
+          structuredContent: outputSchema.parse({ ...failure, error: { ...failure.error, ...recovery } }),
+        };
+      }
+    });
+  }
+}
+
+function registerSavedRevisionFileTools(server: McpServer, operations: McpOperations): void {
+  const list = operations.listProjectRevisionFiles;
+  if (list !== undefined) {
+    const name = "list_project_revision_files";
+    const definition = localTool(savedRevisionFileTools[name]);
+    server.registerTool(name, definition, async ({ projectId, revisionId, offset, limit }, { mcpReq: { signal } }) => {
+      try {
+        const result = await list(projectId, revisionId, { offset, limit, signal });
+        return {
+          content: [{ type: "text" as const, text: `Found ${result.totalFiles} saved revision files.` }],
+          structuredContent: definition.outputSchema.parse({ success: true, operation: name, result }),
+        };
+      } catch (error) {
+        return {
+          content: [{ type: "text" as const, text: "Could not list saved revision files." }],
+          isError: true,
+          structuredContent: definition.outputSchema.parse(mcpFailure(name, error)),
+        };
+      }
+    });
+  }
+  const read = operations.getProjectRevisionFile;
+  if (read !== undefined) {
+    const name = "get_project_revision_file";
+    const definition = localTool(savedRevisionFileTools[name]);
+    server.registerTool(name, definition, async ({ projectId, revisionId, path, offset }, { mcpReq: { signal } }) => {
+      try {
+        const result = await read(projectId, revisionId, path, { offset, signal });
+        return {
+          content: [{ type: "text" as const, text: "Read text from the saved revision." }],
+          structuredContent: definition.outputSchema.parse({ success: true, operation: name, result }),
+        };
+      } catch (error) {
+        return {
+          content: [{ type: "text" as const, text: "Could not read the saved revision file." }],
+          isError: true,
+          structuredContent: definition.outputSchema.parse(mcpFailure(name, error)),
+        };
+      }
+    });
+  }
 }
 
 function registerProjectTools(

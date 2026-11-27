@@ -50,4 +50,7 @@ since: "v1.0.0"
 ## Get help {#問い合わせ}
 
 - **Contact your server administrator.** Include the time, the operation that stopped, the error code, and the job ID (`job_...`) if available.
-- **Report a public bug on GitHub.** Provide minimal reproduction steps with secrets and personal documents removed. **Never publish API keys, cookies, original documents, PDFs, or full unedited logs.**
+- **Report a bug or suggest an improvement** in the [public issue tracker](https://github.com/n624-dev/latex-renderer/issues). Describe what you were doing, include the steps and conditions needed to reproduce the issue, and share the error code if one appeared. Remove any sensitive information.
+- **For private support with the official ChatGPT plugin**, email [contact@n624.jp](mailto:contact@n624.jp). Use the same address for privacy questions or requests to delete connection data. In your first message, describe the operation and include the error code if available.
+
+Keep API keys, cookies, original documents, PDFs, and full unedited logs out of public reports and initial emails.

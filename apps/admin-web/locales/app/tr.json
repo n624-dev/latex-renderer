@@ -160,6 +160,6 @@
   "waitingForPreviewGeneration": "Önizleme oluşturulması bekleniyor…",
   "whenSelectingMultipleFilesSelectOnly": "Çoklu seçimde yalnızca TeX dosyalarını seçin.",
   "whichDocumentDoYouWantTo": "Hangi belgeyi PDF'ye dönüştürmek istiyorsunuz?",
-  "zipArchiveMustBe20Mib": "ZIP dosyası en fazla 20 MiB olmalıdır.",
+  "zipArchiveSizeLimit": "ZIP dosyası en fazla {limit} olmalıdır.",
   "zoom": "Yakınlaştırma"
 }

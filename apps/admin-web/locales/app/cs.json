@@ -160,6 +160,6 @@
   "waitingForPreviewGeneration": "Čekání na vytvoření náhledu…",
   "whenSelectingMultipleFilesSelectOnly": "Při výběru více položek vyberte pouze soubory TeX.",
   "whichDocumentDoYouWantTo": "Který dokument chcete převést do PDF?",
-  "zipArchiveMustBe20Mib": "Archiv ZIP smí mít nejvýše 20 MiB.",
+  "zipArchiveSizeLimit": "Archiv ZIP smí mít nejvýše {limit}.",
   "zoom": "Přiblížení"
 }

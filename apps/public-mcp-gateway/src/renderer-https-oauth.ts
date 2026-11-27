@@ -207,6 +207,7 @@ export class RendererHttpsOAuth {
     form: Record<string, string>,
     signal: AbortSignal,
   ): Promise<HttpsCredentials> {
+    const requestedAt = this.clock();
     const response = await this.#call(
       this.connection.tokenEndpoint,
       "application/x-www-form-urlencoded",
@@ -233,7 +234,7 @@ export class RendererHttpsOAuth {
         "Renderer token response did not match the authorization",
       );
     const approved = response.scope.split(" ");
-    const expiresAt = this.clock() + response.expires_in * 1000;
+    const expiresAt = requestedAt + response.expires_in * 1000;
     if (
       !approved.every(
         (scope): scope is RendererMcpScope =>

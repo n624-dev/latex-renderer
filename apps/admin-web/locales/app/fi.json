@@ -160,6 +160,6 @@
   "waitingForPreviewGeneration": "Odotetaan esikatselun luontia…",
   "whenSelectingMultipleFilesSelectOnly": "Valitse useita tiedostoja valittaessa vain TeX-tiedostoja.",
   "whichDocumentDoYouWantTo": "Minkä asiakirjan haluat muuntaa PDF:ksi?",
-  "zipArchiveMustBe20Mib": "ZIP-tiedoston on oltava enintään 20 MiB.",
+  "zipArchiveSizeLimit": "ZIP-tiedoston on oltava enintään {limit}.",
   "zoom": "Zoomaus"
 }

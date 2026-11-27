@@ -335,9 +335,10 @@ export async function processPdfInspection(
         );
       const job = db.jobs.get(jobId);
       const source = job?.source_id ? db.sources.get(job.source_id) : undefined;
+      const map = db.artifacts.sourceMap(artifact);
       for (const sourcePath of source
         ? db.sources.paths(source)
-        : (db.drafts.renderInput(jobId)?.files ?? []).map(({ path }) => path))
+        : map?.paths ?? [])
         allowedPaths.add(sourcePath);
       if (sync.direction === "source_to_pdf" && !allowedPaths.has(sync.path))
         throw new AppError(
@@ -345,7 +346,6 @@ export async function processPdfInspection(
           "Source file does not match this PDF",
           404,
         );
-      const map = db.artifacts.sourceMap(artifact);
       const mapPath = join(dirname(path), "result.synctex.gz");
       if (map === undefined || map.size > 8 * 1024 ** 2 || map.size < 1)
         throw new AppError(

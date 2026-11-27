@@ -1,0 +1,15 @@
+{
+  "overview": "SKILL.md",
+  "remote": "references/workflow-remote.md",
+  "local": "references/workflow.md",
+  "layout": "references/latex-rules.md",
+  "quality": "references/quality-review.md",
+  "diagnostics": "references/error-handling.md",
+  "security": "references/security.md",
+  "templates": "references/templates.md",
+  "japanese-math": "assets/japanese-math.tex",
+  "japanese-report": "assets/japanese-report.tex",
+  "tikz-figure": "assets/tikz-figure.tex",
+  "accessibility": "references/accessibility.md",
+  "japanese-tagged": "assets/japanese-tagged.tex"
+}

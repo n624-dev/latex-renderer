@@ -83,11 +83,14 @@ describe("public web static build", () => {
       "downloads/windows/latex-renderer-client-0.2.0.zip",
       "downloads/windows/manifest.json",
       "downloads/windows/uninstall.ps1",
+      "favicon.svg",
       "index.html",
       "openapi/gateway.openapi.yaml",
       "openapi/renderer.openapi.yaml",
     ]);
     expect(assets.get("index.html")).toContain("Convert LaTeX to PDF");
+    expect(assets.get("index.html")).toContain('href="/favicon.svg"');
+    expect(assets.get("favicon.svg")).toContain("<svg");
     expect(assets.get("ja/index.html")).toContain("LaTeXをPDFに変換");
     expect(assets.get("assets/login.js")).toContain("/auth/config");
     expect(assets.get("assets/styles.css")).toContain(
@@ -123,6 +126,7 @@ describe("public web static build", () => {
     expect(headerFile).toContain("img-src 'self' data: blob:");
     expect(headerFile).toContain("X-LaTeX-Renderer-Serving: workers-static");
     expect(headerFile).toContain("X-Content-Type-Options: nosniff");
+    expect(headerFile).toContain("/favicon.svg\n  Content-Type: image/svg+xml");
     expect(headerFile).toContain("Content-Type: application/zip");
     expect(headerFile).toContain(
       'Content-Disposition: attachment; filename="latex-renderer-client-0.2.0.zip"',

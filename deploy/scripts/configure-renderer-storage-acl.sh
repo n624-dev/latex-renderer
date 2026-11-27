@@ -40,10 +40,11 @@ case "$container_uid:$container_gid" in
   *[!0-9:]*|0:*|*:0) echo "renderer container UID/GID must be positive decimal integers" >&2; exit 64 ;;
 esac
 
-subuid_base=$(awk -F: -v user="$worker_user" '$1==user {print $2; exit}' /etc/subuid)
-subuid_count=$(awk -F: -v user="$worker_user" '$1==user {print $3; exit}' /etc/subuid)
-subgid_base=$(awk -F: -v user="$worker_user" '$1==user {print $2; exit}' /etc/subgid)
-subgid_count=$(awk -F: -v user="$worker_user" '$1==user {print $3; exit}' /etc/subgid)
+worker_uid=$(id -u "$worker_user")
+subuid_base=$(awk -F: -v user="$worker_user" -v uid="$worker_uid" '$1==user || $1==uid {print $2; exit}' /etc/subuid)
+subuid_count=$(awk -F: -v user="$worker_user" -v uid="$worker_uid" '$1==user || $1==uid {print $3; exit}' /etc/subuid)
+subgid_base=$(awk -F: -v user="$worker_user" -v uid="$worker_uid" '$1==user || $1==uid {print $2; exit}' /etc/subgid)
+subgid_count=$(awk -F: -v user="$worker_user" -v uid="$worker_uid" '$1==user || $1==uid {print $3; exit}' /etc/subgid)
 case "$subuid_base:$subuid_count:$subgid_base:$subgid_count" in
   *[!0-9:]*|:*|*::*) echo "valid subordinate UID/GID ranges are required for rootless Docker" >&2; exit 69 ;;
 esac

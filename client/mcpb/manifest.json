@@ -3,7 +3,7 @@
   "manifest_version": "0.4",
   "name": "latex-renderer-local",
   "display_name": "LaTeX Renderer Local",
-  "version": "1.7.2-rc.5",
+  "version": "1.7.2-rc.6",
   "description": "Render local LaTeX projects through LaTeX Renderer from Claude Desktop.",
   "long_description": "A local stdio MCP server for explicitly selected LaTeX files, directories, and ZIP projects. The server uploads source through the existing sandboxed renderer and downloads artifacts to the local machine.",
   "author": {
@@ -41,6 +41,46 @@
     {
       "name": "render_project",
       "description": "Render one explicitly selected local project."
+    },
+    {
+      "name": "get_authoring_guide",
+      "description": "Read the bundled LaTeX authoring guide."
+    },
+    {
+      "name": "list_project_revision_files",
+      "description": "List files in a saved project revision with an explicitly authorized key."
+    },
+    {
+      "name": "get_project_revision_file",
+      "description": "Read UTF-8 text from a saved project revision with an explicitly authorized key."
+    },
+    {
+      "name": "get_project_draft",
+      "description": "Read the shared draft's version, settings, and files."
+    },
+    {
+      "name": "get_project_draft_file",
+      "description": "Read text from a specific shared draft version."
+    },
+    {
+      "name": "open_project_draft",
+      "description": "Open an existing draft or start from a saved revision."
+    },
+    {
+      "name": "apply_project_changes",
+      "description": "Apply an explicitly authorized batch of changes to a shared draft."
+    },
+    {
+      "name": "save_project_draft",
+      "description": "Save the exact shared draft version as a project revision."
+    },
+    {
+      "name": "request_render_quality_report",
+      "description": "Request inspection of the canonical PDF from a job owned by the key."
+    },
+    {
+      "name": "get_render_quality_report",
+      "description": "Read the inspection state and report for the canonical PDF."
     },
     {
       "name": "get_render_status",

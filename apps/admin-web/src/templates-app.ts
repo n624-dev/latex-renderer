@@ -158,6 +158,8 @@ export function appProjectEditorPage(
       <div class="editor-body">
         <div class="editor-feedback">
           <p id="editor-save-status" role="status" data-editor-message="loading">${label("loading")}</p>
+          <button id="editor-review-conflict" type="button" class="ghost" data-editor-message="reviewConflict" hidden></button>
+          <button id="editor-save-copy" type="button" class="ghost" data-editor-message="saveUnsavedCopy" hidden></button>
           <p id="editor-preview-status" role="status"></p>
         </div>
         <div id="editor-panels" role="group" aria-label="${label("editorView")}" data-editor-aria="editorView">
@@ -197,6 +199,7 @@ export function appProjectEditorPage(
               <p id="editor-preview-version"></p>
               <div class="editor-preview-scroll"><canvas id="editor-canvas" hidden></canvas></div>
               <p id="editor-pdf-error" role="alert" hidden></p>
+              <p id="editor-preview-notice" role="status" hidden></p>
             </div>
             <div id="editor-errors" aria-live="polite">
               <p id="editor-diagnostics-status" data-editor-message="noErrors">${label("noCompileErrors")}</p>
@@ -207,6 +210,17 @@ export function appProjectEditorPage(
         </div>
       </div>
       ${fileDialog}${settings}${previewSettings}
+      <dialog id="editor-conflict-dialog" aria-labelledby="editor-conflict-title">
+        <h2 id="editor-conflict-title" data-editor-message="reviewConflict"></h2>
+        <p id="editor-conflict-path"></p>
+        <p id="editor-conflict-status" role="status"></p>
+        <div class="editor-conflict-diff">
+          <div><h3 data-editor-message="currentServerFile"></h3><pre id="editor-conflict-server"></pre></div>
+          <div><h3 data-editor-message="unsaved"></h3><pre id="editor-conflict-local"></pre></div>
+        </div>
+        <button id="editor-conflict-apply" type="button" data-editor-message="applyMyEdits" disabled></button>
+        <form method="dialog"><button class="ghost" data-editor-message="close"></button></form>
+      </dialog>
     </section>`,
     locale,
     nonce,

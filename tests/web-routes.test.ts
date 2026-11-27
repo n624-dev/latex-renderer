@@ -15,6 +15,18 @@ const bytes = new TextEncoder().encode("test"),
     adminOpenApi: bytes,
   };
 describe("unified web", () => {
+  it("links to and serves the SVG favicon", async () => {
+    const app = createWebApp(dist);
+    for (const path of ["/", "/docs/", "/app/", "/admin/"]) {
+      const page = await app.request(path);
+      expect(await page.text()).toContain('href="/favicon.svg"');
+    }
+    const icon = await app.request("/favicon.svg");
+    expect(icon.status).toBe(200);
+    expect(icon.headers.get("content-type")).toBe("image/svg+xml");
+    expect(await icon.text()).toContain("<svg");
+  });
+
   it("serves public, documentation, and admin pages", async () => {
     const app = createWebApp(dist);
     for (const path of [

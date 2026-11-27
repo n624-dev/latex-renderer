@@ -52,8 +52,16 @@ Send document text to your AI client to generate PDFs and SVGs, diagnose errors,
 > | Source | `create_source`, `update_source_file`, `delete_source_file`, `begin_source_upload`, `upload_source_chunk`, `finalize_source_upload`, `create_source_ref` |
 > | Saved projects | `list_projects`, `get_project`, `get_project_revision_jobs`, `create_project`, `rename_project`, `delete_project`, `attach_project_revision`, `update_project_file`, `delete_project_file`, `render_project_revision` |
 > | Render | `create_render`, `retry_render`, `retry_svg_render`, `get_render_status`, `cancel_render`, `delete_render` |
-> | Inspection | `get_render_diagnostics`, `get_render_preview`, `get_render_artifacts` |
-> | Environment | `get_renderer_capabilities`, `check_packages`, `search_packages`, `check_fonts`, `search_fonts` |
+> | Saved revision contents | `list_project_revision_files`, `get_project_revision_file`, `get_project_revision_downloads` |
+> | Drafts | `get_project_draft`, `open_project_draft`, `get_project_draft_file`, `apply_project_changes`, `render_project_draft`, `save_project_draft` |
+> | Document requirements and review history | `get_project_document_state`, `update_project_document_conditions`, `adopt_project_revision`, `record_project_pdf_review`, `list_project_pdf_reviews` |
+> | Revision retention | `get_project_storage_usage`, `protect_project_revision`, `plan_project_revision_cleanup`, `apply_project_revision_cleanup` |
+> | Upload recovery and attachments | `get_source_upload_status`, `import_source_attachment` (requires administrator configuration) |
+> | Attachment connection check | `verify_attachment_delivery_origin` (designated test accounts only) |
+> | Diagnostics and results | `get_render_diagnostics`, `read_render_log`, `get_render_artifacts`, `get_render_manifest` |
+> | Previews | `get_render_preview`, `get_render_preview_pages`, `get_render_preview_crop`, `locate_render_source`, `get_render_preview_sheet` |
+> | PDF inspection | `request_render_quality_report`, `get_render_quality_report`, `compare_render_quality` |
+> | Environment and guide | `get_renderer_capabilities`, `get_authoring_guide`, `list_authoring_profiles`, `check_document_requirements`, `probe_document_requirements`, `check_packages`, `search_packages`, `check_fonts`, `search_fonts` |
 >
 > - **Identity and scopes.** `get_profile` returns only an opaque, stable ID for the authenticated user. It remains the same across token refreshes and reconnections. The response excludes email and display name. Each tool declares its OAuth scopes in the tool list and checks them at execution.
 > - **Source creation and limits.**
@@ -65,6 +73,18 @@ Send document text to your AI client to generate PDFs and SVGs, diagnose errors,
 > - **Previews and resources.** Only page 1 is generated initially. Request a specific additional page with `get_render_preview` or a preview resource. While it is being prepared, request the same job and page again. Older jobs with all previews already generated remain usable. `previewPages` and the PDF’s `pageCount` give the total number of pages. The artifact list reports actual sizes and SHA-256 hashes for generated files only. Supporting clients can retrieve full PDFs, logs, and SVGs via resources. See [MCP results and resources](/en/docs/reference/#mcpの結果とresource).
 > - **Workflow and environment search.** Complete the workflow without opening the web UI: `create_source` → `create_render` → `get_render_status` → `get_render_diagnostics` or `get_render_preview` → source revision → `retry_render` or a new render → read the resource. The web result link is for human readers. The engine documented for this workflow is `lualatex`, with shell escape and external network access disabled. Package and font searches return up to 50 results and a cursor only when more results exist.
 > - **Rate limits and errors.** Exceeding a tool’s per-minute limit returns `REMOTE_MCP_RATE_LIMIT` (status `429`) and a retry delay in seconds in both `structuredContent` and standard `content`. Another user’s sources and jobs are treated as nonexistent.
+
+### Operations and permissions by connection {#接続方式ごとの操作と権限}
+
+| Connection | Authentication | Common tasks |
+| --- | --- | --- |
+| Local MCP (stdio) | Rendering API key and short-lived job tickets | Render a local folder or ZIP and save PDFs, SVGs, and logs to your computer |
+| Direct Remote MCP (HTTPS) | An account on the connected Renderer and OAuth scopes | Read saved revisions, edit shared drafts, and inspect PDFs on the connected Renderer |
+| Public MCP gateway | An approved Renderer connection and permission for the requested operations | Create and render documents on the approved Renderer and retrieve artifacts using MCP resources or download links |
+
+Available operations depend on the connected Renderer and its version. Check the MCP tool list and use `get_renderer_capabilities`, when available, to check the rendering environment and attachment support. Local MCP can read or edit shared drafts and inspect PDFs when the server supports those operations and the API key explicitly grants the relevant scopes. Use Local MCP or the CLI to save artifacts to your computer.
+
+With the public gateway, the selected Renderer stores the documents, jobs, and artifacts. Each connection requires user approval. Attachment import also requires support from the connected Renderer and configuration by its administrator.
 
 ## Work directly with local files {#ローカルファイルを直接扱う}
 
@@ -98,7 +118,12 @@ To repair a registration created by the downloadable installer, run `n624-latex 
 | `upload_source` | Prepare a directory or ZIP as one source |
 | `create_render_job` | Create one job from `sourceId + entrypoint`, optionally requesting SVG in `outputs` |
 | `render_project` | Prepare a source, render, and retrieve artifacts in one call, optionally requesting SVG in `outputs` |
+| `get_authoring_guide` | Read the bundled LaTeX authoring guide |
 | `list_projects` / `get_project` / `get_project_revision_jobs` | View saved projects, revisions, and job history |
+| `list_project_revision_files` / `get_project_revision_file` | List files and read text in your saved revisions. Requires a compatible server and a key with the `render:project:read` scope |
+| `get_project_draft` / `get_project_draft_file` | Read shared draft metadata and text with `render:draft:read` |
+| `open_project_draft` / `apply_project_changes` / `save_project_draft` | Open, edit, and save shared drafts with `render:draft:write` |
+| `request_render_quality_report` / `get_render_quality_report` | Inspect PDFs from jobs that the key owns with `render:pdf:inspect` |
 | `create_project` / `rename_project` / `delete_project` | Manage saved projects |
 | `attach_project_revision` / `render_project_revision` | Save an uploaded source and create a job from a fixed revision |
 | `get_render_status` | Check job status |

@@ -6,7 +6,8 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 77
 fi
 
-state_file=${IMAGE_MANAGER_STATE_FILE:-/var/lib/latex-renderer/image-manager/state.json}
+state_root=${IMAGE_MANAGER_STATE_ROOT:-/var/lib/latex-renderer/image-manager}
+state_file=${IMAGE_MANAGER_STATE_FILE:-$state_root/state.json}
 renderer_env=${RENDERER_ENV_FILE:-/etc/latex-renderer/renderer.env}
 environment_root=${RENDERER_ENVIRONMENT_ROOT:-/var/lib/latex-renderer/environment}
 worker_user=${RENDERER_WORKER_USER:-latex-render-worker}
@@ -24,6 +25,13 @@ prepare_root_directory() {
   chown root:latex-renderer "$1"
 }
 prepare_root_directory "$tmp_root"
+
+# The manager owns recovery of an interrupted activation, including restarting
+# consumers. Do not rebuild or replace renderer.env from a partially written
+# state before it reads the journal.
+if [ -e "$state_root/activation-journal.json" ]; then
+  exit 0
+fi
 
 state_values=$(/usr/local/bin/node - "$state_file" <<'NODE'
 const fs = require('node:fs');

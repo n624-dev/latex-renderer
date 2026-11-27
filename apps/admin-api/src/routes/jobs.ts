@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import { AppError, pageSize } from "@latex-renderer/shared";
+import { AppError, effectiveResourceLimits, pageSize } from "@latex-renderer/shared";
 import {
   createLegacyRenderTicketRequestSchema,
   renderEngineSchema,
@@ -39,7 +39,10 @@ export function createJobsRouter(deps: AdminDependencies): Hono {
   });
   r.get("/render-targets", async (c) => {
     await requireActor(deps, c, "admin:jobs:write");
-    return c.json({ items: service.renderTargets() });
+    return c.json({
+      items: service.renderTargets(),
+      sourceLimits: effectiveResourceLimits(deps),
+    });
   });
   r.post("/render-tickets", async (c) => {
     const actor = await requireActor(deps, c, "admin:jobs:write"),

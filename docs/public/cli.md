@@ -35,27 +35,28 @@ n624-latex auth status
 n624-latex auth logout
 ```
 
-- 環境変数 `LATEX_RENDER_API_KEY` が設定されている場合は、ローカルに保存されたキーよりも優先されます。
+- 接続先を明示的に選ばない場合、環境変数 `LATEX_RENDER_API_KEY` が保存されたキーよりも優先されます。
 - `logout` はローカルの保存済みキーだけを削除します。環境変数の解除や、サーバー側での API キー失効はそれぞれ別の操作です。
 
 ### 接続先サーバー
 
-既定ではホスト済みサービス（`https://latex-render.n624.jp`）に接続します。セルフホスト環境を使う場合は、コマンドを実行するシェルでサーバーの HTTPS URL を指定してください。
+**`n624-latex connection`** を実行すると、端末内のメニューで接続先を管理できます。
 
-- URL の末尾に `/app/` や `/api/v1/` は付けません。
-- 必ずその接続先サーバーが発行した API キーを使用してください。
+1. 接続先を追加し、名前、サーバーの HTTPS URL、そのサーバーが発行した API キーを入力します。入力したキーは画面に表示されません。
+2. 複数の接続先がある場合は、普段使う接続先を既定に設定します。
 
-**Linux・macOS**：
+普段は `n624-latex main.tex` で既定の接続先を使います。別の接続先で一度だけ実行するときは `n624-latex --profile work main.tex` のように指定します。Local MCP で接続先を指定するときは、その起動環境に `LATEX_RENDER_PROFILE=work` を設定します。
+
+以前保存したキーは、メニューの「旧キーを引き継ぐ」で接続先を確認して登録できます。自動化では `n624-latex connection migrate work https://latex.example.com --confirm-origin` を使います。登録済みのキーは確認した接続先でのみ使われます。
+
+非対話で接続先を追加する場合は、キーを標準入力から渡します。
 
 ```sh
-export LATEX_RENDER_BASE_URL=https://latex.example.com
+n624-latex connection add work https://latex.example.com --api-key-stdin
+n624-latex connection use work
 ```
 
-**Windows PowerShell**：
-
-```powershell
-$env:LATEX_RENDER_BASE_URL = 'https://latex.example.com'
-```
+CIなどで環境変数を使う場合は、`LATEX_RENDER_BASE_URL` と `LATEX_RENDER_API_KEY` を一緒に設定します。接続先を明示的に選んだ場合は、その接続先の保存済みキーを使います。
 
 ## セットアップと診断
 
@@ -190,6 +191,7 @@ n624-latex jobs delete <jobId> --yes
 ```
 
 - **ダウンロードと待機**：ジョブ操作時は API キーで短時間トークンを更新します。`jobs download` は完了まで待ってから成果物を切り替えます（待機中に中断・失敗した場合、既存の保存済み一式は変更されません）。`delete` は終了済みジョブのみ対象です。
+- **操作期限**：変換はアップロードから成果物取得まで全体で30分です。時間を超えても受付済みジョブはサーバーに残ります。同じジョブIDを使って `jobs get` や `jobs download` で確認を続けてください。
 - **PNG プレビューの追加取得**：PNG は初期状態で 1 ページ目のみ生成されます。通常のダウンロードは生成済み PNG のみを取得し、`--preview-page 2 5` のように指定すると追加ページを生成・検証（サイズと SHA-256 を確認）して保存します。PDF の再コンパイルや保持期限の延長は行いません。
 - **PDF の先行取得と SVG 再試行**：PDF＋SVG ジョブでは PDF が先に公開されるため、`--pdf-only` で SVG 完了を待たずに PDF を取得できます。SVG のみ失敗した場合は PDF を保存した上で部分成功となり、`retry-svg` で確定済み PDF を保ったまま SVG だけを再試行できます（初回を含め最大 8 回、保持期限の延長なし。Runtime が更新された場合は新規ジョブを作成してください。詳細：[PDFの先行公開とSVGの再試行](/docs/api/#pdfの先行公開とsvgの再試行)）。
 - **通信エラー時の自動再試行**：状態確認中の一時的な通信障害は自動で再試行しますが、認証・権限エラーは再試行しません。CLI 側の待機が止まってもサーバー側で処理が続いている場合があるため、作り直さず同じ `<jobId>` を確認してください（詳細：[CLIの待機と再試行](/docs/reference/#cliの待機と再試行)）。

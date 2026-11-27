@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { adminScript } from "../apps/admin-web/src/assets/admin-script.js";
+import { adminSource as adminScript } from "./helpers/admin-ui-source.js";
 
 const read = (path: string): string => readFileSync(path, "utf8");
 
@@ -555,7 +555,7 @@ describe("Web and CLI TeX environment parity", () => {
     expect(cli).toMatch(/tex\s*\.command\("operation"\)/);
     expect(adminScript).toContain("effectiveLanguageCollections");
     expect(adminScript).toContain("依存言語collection");
-    expect(adminScript).toContain("watchTexOperation");
+    expect(adminScript).toContain("watchManagerOperation");
     expect(adminScript).toContain("Admin APIへ再接続中");
     expect(adminScript).toContain("詳細ログを表示");
     expect(adminScript).toContain(

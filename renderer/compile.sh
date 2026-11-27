@@ -289,6 +289,12 @@ renderer_stage=preview
 timeout -s TERM -k 2 60 pdftoppm -f 1 -l 1 -singlefile -png -r 150 /work/output/result.pdf /work/output/previews/page-1
 preview_status=$?
 set -e
+if [ "$preview_status" -ne 0 ] && [ "$render_stage" = pdf ] && [ "$svg_requested" = true ]; then
+  rm -f /work/output/previews/page-1.png
+  printf '%s\n' 'renderer: initial PNG preview unavailable; this page can be requested again' >> "$renderer_log"
+  printf '{"schemaVersion":2,"pages":%s,"dpi":150,"firstPage":"on-demand"}\n' "$pages" > /work/output/.preview-info.json
+  exit 0
+fi
 if [ "$preview_status" -eq 124 ] || [ "$preview_status" -eq 137 ]; then
   printf '%s\n' 'renderer: PDF preview timed out' >> "$renderer_log"
   exit 82

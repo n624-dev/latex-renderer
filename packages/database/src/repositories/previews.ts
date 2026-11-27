@@ -151,7 +151,7 @@ export class PreviewsRepository {
     if (this.busy()) return undefined;
     const next = this.db
       .prepare(
-        "SELECT * FROM job_preview_requests WHERE status='queued' ORDER BY created_at,sequence LIMIT 1",
+        "SELECT * FROM job_preview_requests WHERE status='queued' AND attempt<3 ORDER BY created_at,sequence LIMIT 1",
       )
       .get() as PreviewRequest | undefined;
     if (!next) return undefined;

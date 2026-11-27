@@ -2,6 +2,13 @@ import type { EditorCatalog } from "../messages.js";
 
 export default {
   messages: {
+    reviewConflict: "Tarkista muokkausristiriita",
+    saveUnsavedCopy: "Tallenna kopio",
+    currentServerFile: "Palvelimella oleva versio",
+    applyMyEdits: "Käytä muutoksiani tähän tiedostoon",
+    conflictFileMissing: "Tiedosto puuttuu nykyisestä luonnoksesta. Säilytä muutokset tallentamalla kopio.",
+    conflictReviewHint: "Tarkista muuttuneet rivit. Muutosten käyttäminen korvaa tiedoston muokkaamallasi kopiolla.",
+    previewReload: "Palvelinpäivityksen jälkeen esikatselu näytetään PNG-muodossa. Tallenna muutokset ennen sivun lataamista uudelleen, jotta PDF-esikatselu palautuu.",
     skipContent: "Siirry sisältöön",
     appNavigation: "Sovelluksen navigointi",
     appRender: "Muunna PDF-muotoon",

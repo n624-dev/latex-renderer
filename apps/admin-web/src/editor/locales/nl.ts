@@ -2,6 +2,13 @@ import type { EditorCatalog } from "../messages.js";
 
 export default {
   messages: {
+    reviewConflict: "Bewerkingsconflict bekijken",
+    saveUnsavedCopy: "Een kopie opslaan",
+    currentServerFile: "Versie op de server",
+    applyMyEdits: "Mijn wijzigingen toepassen op dit bestand",
+    conflictFileMissing: "Dit bestand ontbreekt in het huidige concept. Sla een kopie op om je wijzigingen te bewaren.",
+    conflictReviewHint: "Bekijk de gewijzigde regels. Als je de wijzigingen toepast, wordt het bestand vervangen door je bewerkte kopie.",
+    previewReload: "Na een serverupdate wordt de voorvertoning als PNG weergegeven. Sla je wijzigingen op voordat je de pagina herlaadt om de PDF-voorvertoning terug te krijgen.",
     skipContent: "Naar de inhoud",
     appNavigation: "Appnavigatie",
     appRender: "Omzetten naar PDF",

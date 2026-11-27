@@ -3,6 +3,10 @@ import { constants } from "node:fs";
 import { basename, join } from "node:path";
 import type { RendererDatabase, WorkerJobRow } from "@latex-renderer/database";
 import { newId, nowIso } from "@latex-renderer/shared";
+import {
+  syncArtifactTree,
+  syncPublishedAncestors,
+} from "../../../deploy/scripts/durable-storage.mjs";
 import { prepareSourceInput } from "./source-tree-cache.js";
 import {
   inspectOutputTree,
@@ -394,11 +398,16 @@ export async function processJob(
           staging,
           candidateOutput,
         );
+      await syncArtifactTree(candidateOutput, [
+        ...artifacts.map(({ path }) => path),
+        ...(sourceMap === undefined ? [] : ["result.synctex.gz"]),
+      ]);
       renewLease();
       if (leaseIsLost()) return;
       await mkdir(join(root, "outputs"), { recursive: true, mode: 0o770 });
       await rename(candidateOutput, output);
       published = true;
+      await syncPublishedAncestors(output, config.storageRoot);
       committed = database.transaction(() => {
         const finalRuntime = database.worker.runtimeState(job.id);
         if (finalRuntime === undefined)
@@ -441,6 +450,7 @@ export async function processJob(
               artifactId,
               sourceMap.sha256,
               sourceMap.size,
+              database.drafts.renderInput(job.id)?.files.map(({ path }) => path),
             );
           if (artifact.type === "pdf" && pageCount !== undefined)
             database.previews.register({

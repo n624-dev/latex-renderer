@@ -3,8 +3,84 @@ import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { AppError } from "@latex-renderer/shared";
 import { createAdminApp } from "../apps/admin-api/src/app.js";
+import { createAdminV1Router } from "../apps/admin-api/src/routes/index.js";
+import { AdminSystemService } from "../apps/admin-api/src/services/system.js";
+import { RendererDatabase } from "@latex-renderer/database";
+import {
+  normalizedRoute,
+  openApiOperations,
+} from "./helpers/http-route-contract.js";
 
 describe("admin route contract", () => {
+  it("reports the host queue limit and any SQLite override", () => {
+    const database = new RendererDatabase(":memory:");
+    try {
+      database.migrate();
+      const admin = new AdminSystemService({
+        database,
+        maxQueueLength: 77,
+        maxUserStorageBytes: 2 * 1024 ** 3,
+      } as never);
+      expect(admin.config().effective).toContainEqual(
+        expect.objectContaining({
+          key: "max_queue_length",
+          value: 77,
+          source: "host",
+          environment: "MAX_QUEUE_LENGTH",
+        }),
+      );
+      database.settings.upsert(
+        "max_queue_length",
+        31,
+        "fixture",
+        new Date().toISOString(),
+      );
+      expect(admin.config().effective).toContainEqual(
+        expect.objectContaining({
+          key: "max_queue_length",
+          value: 31,
+          source: "database",
+          fallback: 77,
+        }),
+      );
+    } finally {
+      database.close();
+    }
+  });
+
+  it("documents both directions of the canonical Admin HTTP route inventory", () => {
+    // Actions validated from an enum at runtime have individual OpenAPI paths
+    // because the accepted inputs differ (e.g. maintenance enable vs. disable).
+    const actionRoutes: Readonly<Record<string, readonly string[]>> = {
+      "/service-accounts/:id/:action": [
+        "/service-accounts/:id/enable",
+        "/service-accounts/:id/disable",
+      ],
+      "/system/maintenance/:action": [
+        "/system/maintenance/enable",
+        "/system/maintenance/disable",
+      ],
+    };
+    const actual = new Set(
+      createAdminV1Router({} as never).routes.flatMap(({ method, path }) =>
+        (actionRoutes[path] ?? [path]).map(
+          (route) => `${method} ${normalizedRoute(route)}`,
+        ),
+      ),
+    );
+    const expected = new Set(
+      openApiOperations("openapi/admin.openapi.yaml").map(
+        ({ method, path }) => `${method} ${normalizedRoute(path)}`,
+      ),
+    );
+    expect([...actual].filter((operation) => !expected.has(operation))).toEqual(
+      [],
+    );
+    expect([...expected].filter((operation) => !actual.has(operation))).toEqual(
+      [],
+    );
+  });
+
   it("serves canonical and compatibility prefixes", async () => {
     const app = createAdminApp({
       database: { users: {} } as never,

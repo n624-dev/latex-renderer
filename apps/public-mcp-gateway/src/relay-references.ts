@@ -204,20 +204,15 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export function publicInputSchema(schema: JsonSchema): JsonSchema {
-  const reference = (input: JsonSchema, field: string): JsonSchema => {
-    if (idProperty.test(field) && input.type === "string")
+  function visit(value: JsonSchema, field?: string): JsonSchema {
+    if (field !== undefined && idProperty.test(field) && value.type === "string")
       return {
         type: "string",
         pattern: encodedReference.source,
-        ...(input.description === undefined
+        ...(value.description === undefined
           ? {}
-          : { description: input.description }),
+          : { description: value.description }),
       };
-    if (input.type === "array" && isRecord(input.items))
-      return { ...input, items: reference(input.items, field) };
-    return visit(input);
-  };
-  function visit(value: JsonSchema): JsonSchema {
     return Object.fromEntries(
       Object.entries(value).map(([key, item]) => {
         if (key === "properties" && isRecord(item))
@@ -226,16 +221,19 @@ export function publicInputSchema(schema: JsonSchema): JsonSchema {
             Object.fromEntries(
               Object.entries(item).map(([field, property]) => [
                 field,
-                isRecord(property) ? reference(property, field) : property,
+                isRecord(property) ? visit(property, field) : property,
               ]),
             ),
           ];
-        if (isRecord(item)) return [key, visit(item)];
+        const childField = ["items", "anyOf", "oneOf", "allOf"].includes(key)
+          ? field
+          : undefined;
+        if (isRecord(item)) return [key, visit(item, childField)];
         return [
           key,
           Array.isArray(item)
             ? item.map((entry: unknown) =>
-                isRecord(entry) ? visit(entry) : entry,
+                isRecord(entry) ? visit(entry, childField) : entry,
               )
             : item,
         ];

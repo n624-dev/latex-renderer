@@ -5,6 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import type { NewAuthorization } from "../apps/public-mcp-gateway/src/connections.js";
 import { HttpsCredentialKeys } from "../apps/public-mcp-gateway/src/https-credential-keys.js";
+import { expiredConnectionRetentionMs } from "../apps/public-mcp-gateway/src/oauth-clients.js";
 import { SqliteConnectionStore } from "../apps/public-mcp-gateway/src/sqlite-connections.js";
 
 const stores = new Set<SqliteConnectionStore>();
@@ -47,6 +48,17 @@ function fixture(store = open()) {
 }
 
 describe("public MCP connection storage", () => {
+  it("removes an expired approval after seven days and keeps the profile ID", () => {
+    const { store, https, profile, input } = fixture();
+    store.profileFor("instance-a", "local-user", "Example device");
+    const approved = store.createAuthorization(input, 0, () => "fixture");
+    store.pruneExpiredCredentials(input.expiresAt + expiredConnectionRetentionMs - 1);
+    expect(store.authorization(approved.id)).toBeDefined();
+    store.pruneExpiredCredentials(input.expiresAt + expiredConnectionRetentionMs);
+    expect(store.authorization(approved.id)).toBeUndefined();
+    expect(store.transport(https.id)).toBeUndefined();
+    expect(store.profileFor("instance-a", "local-user")).toEqual(profile);
+  });
   it("forgets one approval and retains only its pending revocation while an agent is offline", () => {
     const { store, agent, profile, input } = fixture();
     const first = store.createAuthorization(

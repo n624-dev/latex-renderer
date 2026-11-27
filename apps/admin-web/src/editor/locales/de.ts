@@ -2,6 +2,13 @@ import type { EditorCatalog } from "../messages.js";
 
 export default {
   messages: {
+    reviewConflict: "Bearbeitungskonflikt prüfen",
+    saveUnsavedCopy: "Kopie speichern",
+    currentServerFile: "Serverversion",
+    applyMyEdits: "Meine Änderungen auf diese Datei anwenden",
+    conflictFileMissing: "Diese Datei fehlt im aktuellen Entwurf. Speichern Sie eine Kopie, um Ihre Änderungen zu behalten.",
+    conflictReviewHint: "Prüfen Sie die geänderten Zeilen. Beim Anwenden wird die Datei durch Ihre bearbeitete Kopie ersetzt.",
+    previewReload: "Nach einer Serveraktualisierung wird die Vorschau als PNG angezeigt. Speichern Sie Ihre Änderungen, bevor Sie die Seite für die PDF-Vorschau neu laden.",
     skipContent: "Zum Inhalt springen",
     appNavigation: "Anwendungsnavigation",
     appRender: "In PDF umwandeln",

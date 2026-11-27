@@ -302,21 +302,22 @@ export function createRemoteMcpHandler(
             Promise.resolve({ job: renders.job(identity, id) }),
           ),
       );
-      for (const [operation, request] of [
-        ["request_render_quality_report", true],
-        ["get_render_quality_report", false],
-      ] as const) {
-        server.registerTool(
-          operation,
-          definitions[operation],
-          ({ jobId: id, pdfSha256 }) =>
-            execute(operation, identity, renders, request ? 10 : 45, () =>
-              Promise.resolve(
-                renders.pdfInspection(identity, id, pdfSha256, request),
-              ),
-            ),
-        );
-      }
+      server.registerTool(
+        "request_render_quality_report",
+        definitions.request_render_quality_report,
+        ({ jobId: id, pdfSha256 }) =>
+          execute("request_render_quality_report", identity, renders, 10, () =>
+            Promise.resolve(renders.pdfInspection(identity, id, pdfSha256, true)),
+          ),
+      );
+      server.registerTool(
+        "get_render_quality_report",
+        definitions.get_render_quality_report,
+        ({ jobId: id, pdfSha256 }) =>
+          execute("get_render_quality_report", identity, renders, 45, () =>
+            Promise.resolve(renders.pdfInspection(identity, id, pdfSha256, false)),
+          ),
+      );
       server.registerTool(
         "get_render_preview_crop",
         definitions.get_render_preview_crop,

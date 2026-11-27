@@ -269,6 +269,9 @@ export const projectJobSummarySchema = z
     errorCode: z.string().nullable(),
     outputs: z.array(renderOutputSchema),
     engine: renderEngineSchema.optional(),
+    detailAccess: z.enum(["available", "different_connection"])
+      .describe("Whether this connection can open the Job details. A shared history row may be visible even when the Job belongs to another connection.")
+      .optional(),
   })
   .loose();
 export const projectRevisionJobsPageSchema = z.object({
@@ -455,7 +458,15 @@ export const createServiceAccountSchema = z
   })
   .strict();
 
-export const renderApiScopes = ["render:create", "render:read:own"] as const;
+export const renderApiScopes = [
+  "render:create",
+  "render:read:own",
+  "render:project:read",
+  "render:draft:read",
+  "render:draft:write",
+  "render:pdf:inspect",
+] as const;
+export type RenderApiScope = (typeof renderApiScopes)[number];
 export const adminApiScopes = [
   "admin:users:read",
   "admin:users:write",

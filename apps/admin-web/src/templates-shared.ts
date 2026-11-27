@@ -55,7 +55,7 @@ export function siteMessageMetadata(
   const switcher = liveLocale
     ? `<meta name="regional-web-fonts" content="${escapeHtml(JSON.stringify(regionalFontStylesheets))}">`
     : "";
-  return `<meta name="site-messages" content="${escapeHtml(JSON.stringify(messages))}"><link rel="stylesheet" href="${escapeHtml(fontStylesheet)}">${regional}${switcher}`;
+  return `<link rel="icon" type="image/svg+xml" sizes="any" href="/favicon.svg"><meta name="site-messages" content="${escapeHtml(JSON.stringify(messages))}"><link rel="stylesheet" href="${escapeHtml(fontStylesheet)}">${regional}${switcher}`;
 }
 
 export function endpoint(

@@ -11,7 +11,7 @@ import { RendererDatabase } from "@latex-renderer/database";
 import { createAdminApp } from "../apps/admin-api/src/app.js";
 import { AdminApiKeysService } from "../apps/admin-api/src/services/api-keys.js";
 import { UsersService } from "../apps/admin-api/src/services/users.js";
-import { loginScript } from "../apps/admin-web/src/assets/login-script.js";
+import { safeLoginReturnTo } from "@latex-renderer/shared/login-redirect";
 import type { AdminDependencies } from "../apps/admin-api/src/types.js";
 
 const databases: RendererDatabase[] = [];
@@ -118,9 +118,13 @@ describe("browser authentication audit remediations", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
-  it("mirrors server return_to control-character limits in the login script", () => {
-    expect(loginScript).toContain("candidate.length<=2048");
-    expect(loginScript).toContain("[\\u0000-\\u001f\\u007f]");
+  it("keeps only local return paths within the login redirect limits", () => {
+    expect(safeLoginReturnTo("/app/render/?tab=pdf#result")).toBe(
+      "/app/render/?tab=pdf#result",
+    );
+    expect(safeLoginReturnTo("/" + "a".repeat(2048))).toBe("/app/");
+    expect(safeLoginReturnTo("/app/\u007f")).toBe("/app/");
+    expect(safeLoginReturnTo("/folder/..//example.test")).toBe("/app/");
   });
 
   it("uses a distinct OIDC state cookie name for every flow", () => {
@@ -424,7 +428,7 @@ describe("browser authentication audit remediations", () => {
     const service = new AdminApiKeysService({
       database,
       apiKeys,
-    } as unknown as AdminDependencies);
+    });
     expect(() =>
       service.rotate(
         {

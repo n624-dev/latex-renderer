@@ -1,9 +1,8 @@
 import { japaneseAdminMessage } from "./helpers/admin-message.js";
-import { Script } from "node:vm";
 import { describe, expect, it } from "vitest";
 import { RendererDatabase } from "@latex-renderer/database";
 import { AdminSystemService } from "../apps/admin-api/src/services/system.js";
-import { adminScript } from "../apps/admin-web/src/assets/admin-script.js";
+import { createDashboard } from "../apps/admin-web/src/browser/admin/dashboard.js";
 
 describe("admin system status and dashboard contract", () => {
   it.each([
@@ -99,14 +98,10 @@ describe("admin system status and dashboard contract", () => {
         expect(status.worker).toBe(status.rendering.mode);
         expect(JSON.stringify(status)).not.toMatch(/value_json|updated_by/);
         // Exercise the actual shipped dashboard function with the serialized API payload.
-        const dashboard = adminScript
-          .split("\n")
-          .find((line) => line.startsWith("async function dashboard()"));
-        expect(dashboard).toBeDefined();
         const out = { innerHTML: "" };
-        await new Script(`${dashboard}\ndashboard()`).runInNewContext({
-        adminMessage: japaneseAdminMessage,
-          document: { documentElement: { lang: "ja" } },
+        await createDashboard({
+          adminMessage: japaneseAdminMessage,
+          locale: "ja",
           out,
           request: (path: string) =>
             Promise.resolve(
@@ -116,7 +111,10 @@ describe("admin system status and dashboard contract", () => {
           section: () => "",
           table: () => "",
           bindAction: () => {},
-        });
+          details: () => {},
+          fmt: (value) => value,
+          jobLabel: (value) => value,
+        }).dashboard();
         expect(out.innerHTML).toContain(`>${expected}</span>`);
         expect(out.innerHTML).toContain(`<dd>${maintenanceLabel}</dd>`);
         expect(out.innerHTML).toContain(`<dd>${workerLabel}</dd>`);

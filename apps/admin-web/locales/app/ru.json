@@ -160,6 +160,6 @@
   "waitingForPreviewGeneration": "Ожидание создания предпросмотра…",
   "whenSelectingMultipleFilesSelectOnly": "При выборе нескольких файлов выбирайте только файлы TeX.",
   "whichDocumentDoYouWantTo": "Какой документ конвертировать в PDF?",
-  "zipArchiveMustBe20Mib": "Размер ZIP-архива не должен превышать 20 MiB.",
+  "zipArchiveSizeLimit": "Размер ZIP-архива не должен превышать {limit}.",
   "zoom": "Масштаб"
 }

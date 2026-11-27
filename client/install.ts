@@ -4,10 +4,11 @@ import {
   clientSetupFailureDiagnostic,
   fetchDistribution,
   installDistribution,
-  saveCredential,
+  clientConnections,
   type McpTarget,
   type SkillTarget,
 } from "@latex-renderer/setup-core";
+import { clientRendererOverride } from "@latex-renderer/shared";
 import process from "node:process";
 import { Writable } from "node:stream";
 
@@ -42,7 +43,9 @@ async function main(): Promise<void> {
   let credentialStored = false;
   if (args.includes("--api-key-stdin")) {
     phase = "credential";
-    await saveCredential((await readStdin()).trim());
+    const connections = clientConnections();
+    const { name, origin } = await connections.target(undefined, clientRendererOverride(process.env));
+    await connections.save(name, origin, (await readStdin()).trim());
     credentialStored = true;
   }
   if (json)

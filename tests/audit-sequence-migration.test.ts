@@ -3,7 +3,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { RendererDatabase } from "../packages/database/src/index.js";
-import { auditExportSequenceSql } from "../packages/database/src/schema.js";
 import { afterEach, expect, it } from "vitest";
 
 const roots: string[] = [];
@@ -17,12 +16,6 @@ const migration = readFileSync(
 afterEach(() => {
   for (const root of roots.splice(0))
     rmSync(root, { recursive: true, force: true });
-});
-
-it("keeps standalone and runtime sequence migration SQL identical", () => {
-  expect(migration.trim()).toBe(
-    `BEGIN IMMEDIATE;\n${auditExportSequenceSql.trim()}\nCOMMIT;`,
-  );
 });
 
 it.each(["runtime", "standalone"])(

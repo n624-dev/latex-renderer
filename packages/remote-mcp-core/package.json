@@ -1,6 +1,6 @@
 {
   "name": "@latex-renderer/remote-mcp-core",
-  "version": "1.7.2-rc.5",
+  "version": "1.7.2-rc.6",
   "private": true,
   "license": "Apache-2.0",
   "type": "module",
@@ -19,11 +19,8 @@
   "dependencies": {
     "@latex-renderer/contracts": "workspace:*",
     "@latex-renderer/database": "workspace:*",
+    "@latex-renderer/renderer-core": "workspace:*",
     "@latex-renderer/shared": "workspace:*",
-    "@latex-renderer/zip-validation": "workspace:*",
-    "yazl": "^3.3.1"
-  },
-  "devDependencies": {
-    "@types/yazl": "^3.3.1"
+    "@latex-renderer/zip-validation": "workspace:*"
   }
 }

@@ -2,6 +2,13 @@ import type { EditorCatalog } from "../messages.js";
 
 export default {
   messages: {
+    reviewConflict: "Проверить конфликт правок",
+    saveUnsavedCopy: "Сохранить копию",
+    currentServerFile: "Версия на сервере",
+    applyMyEdits: "Применить мои правки к этому файлу",
+    conflictFileMissing: "В текущем черновике этого файла нет. Сохраните копию, чтобы не потерять правки.",
+    conflictReviewHint: "Проверьте изменённые строки. При применении файл будет заменён вашей отредактированной копией.",
+    previewReload: "После обновления сервера используется предпросмотр в PNG. Сохраните изменения и перезагрузите страницу, чтобы вернуть предпросмотр PDF.",
     skipContent: "Перейти к содержимому",
     appNavigation: "Навигация приложения",
     appRender: "Преобразовать в PDF",

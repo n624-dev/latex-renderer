@@ -117,7 +117,7 @@ describe("public gateway wire", () => {
       const tokens = new GatewayOAuthTokens(origin, store.oauth, key, 300_000);
       const token = bearer(tokens, auth),
         otherToken = bearer(tokens, other);
-      const https = vi.fn(async () =>
+      const https = vi.fn<() => Promise<unknown>>(async () =>
         Promise.resolve({
           result: {
             structuredContent: {
@@ -171,13 +171,21 @@ describe("public gateway wire", () => {
           ?.split(/\r?\n/)
           .find((line) => line.startsWith("data: "))
           ?.slice(6) ?? catalogText;
-      expect(JSON.parse(data ?? "null") as unknown).toMatchObject({
+      const catalog = JSON.parse(data ?? "null") as { result: { tools: { name: string; inputSchema: unknown }[] } };
+      expect(catalog).toMatchObject({
         result: {
           tools: expect.arrayContaining([
             expect.objectContaining({ name: "get_authoring_guide" }),
             expect.objectContaining({ name: "apply_project_changes" }),
             expect.objectContaining({ name: "get_render_quality_report" }),
           ]) as unknown,
+        },
+      });
+      const adoption = catalog.result.tools.find(({name}) => name === "adopt_project_revision");
+      expect(adoption?.inputSchema).toMatchObject({
+        properties: {
+          revisionId: { anyOf: [{ type: "string", pattern: "^lrref_[A-Za-z0-9_-]+$" }, { type: "null" }] },
+          expectedRevisionId: { anyOf: [{ type: "string", pattern: "^lrref_[A-Za-z0-9_-]+$" }, { type: "null" }] },
         },
       });
       const protectedId = references.seal(auth, "object", jobId);
@@ -198,6 +206,30 @@ describe("public gateway wire", () => {
       );
       expect(await denied?.text()).toContain("invalid_reference");
       expect(agent).not.toHaveBeenCalled();
+
+      https.mockResolvedValueOnce({
+        result: {
+          isError: true,
+          structuredContent: {
+            success: false,
+            error: {
+              code: "SOURCE_UPLOAD_OFFSET",
+              expectedOffset: 512,
+              retryAfterSeconds: 3,
+              message: "/private/renderer/source",
+            },
+          },
+        },
+      });
+      const failed = await request(
+        "tools/call",
+        { name: "get_render_artifacts", arguments: { jobId: protectedId } },
+        token,
+      );
+      const failure = await failed?.text();
+      expect(failure).toContain('"expectedOffset":512');
+      expect(failure).toContain('"retryAfterSeconds":3');
+      expect(failure).not.toContain("/private/renderer/source");
     } finally {
       store.close();
     }

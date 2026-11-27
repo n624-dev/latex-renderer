@@ -38,8 +38,8 @@ class PassiveHealthTests(unittest.TestCase):
         self.assertTrue(state["rendering"])
         self.assertEqual(state["worker"], "idle")
 
-    def test_pending_or_cleanup_is_not_healthy_idle(self):
-        for status, owner in (("queued", None), ("running", "owner"), ("failed", "cleanup")):
+    def test_pending_user_work_is_not_healthy_idle(self):
+        for status, owner in (("queued", None), ("running", "owner")):
             with self.subTest(status=status):
                 self.db.execute("INSERT INTO jobs VALUES (?,?)", (status, owner))
                 self.db.commit()
@@ -55,6 +55,32 @@ class PassiveHealthTests(unittest.TestCase):
             self.assertTrue(self.snapshot()["api"])
             self.states["latex-renderer-standalone-gateway.socket"]["ActiveState"] = "failed"
             self.assertFalse(self.snapshot()["api"])
+
+    def test_pdf_inspection_and_document_probe_use_the_same_demand_queries(self):
+        now = "2026-11-27T00:00:00.000Z"
+        self.db.executescript("""CREATE TABLE pdf_inspections(status TEXT,expires_at TEXT);
+          CREATE TABLE document_probes(status TEXT,expires_at TEXT);
+          CREATE TABLE pdf_inspection_uploads(expires_at TEXT);
+          INSERT INTO pdf_inspections VALUES('queued','2026-11-26T23:59:00.000Z');
+          INSERT INTO document_probes VALUES('queued','2026-11-26T23:59:00.000Z');
+          INSERT INTO pdf_inspection_uploads VALUES('2026-11-26T23:59:00.000Z');""")
+        self.assertTrue(health.worker_has_demand(self.db, now))
+        self.assertFalse(health.worker_has_demand(self.db, now, include_maintenance=False))
+        for table in ("pdf_inspections", "document_probes"):
+            self.db.execute(f"UPDATE {table} SET status='running'")
+            self.assertTrue(health.worker_has_demand(self.db, now, include_maintenance=False))
+            self.db.execute(f"UPDATE {table} SET status='queued'")
+        self.db.execute("UPDATE document_probes SET expires_at='2026-11-27T00:01:00.000Z'")
+        self.assertTrue(health.worker_has_demand(self.db, now, include_maintenance=False))
+    def test_cleanup_does_not_count_as_user_facing_downtime(self):
+        self.db.execute("INSERT INTO source_trees VALUES ('deleting')")
+        self.db.execute("INSERT INTO system_settings VALUES ('maintenance_mode','\"reject-new-jobs\"')")
+        self.db.commit()
+        self.assertTrue(self.snapshot()["rendering"])
+        self.assertEqual(self.snapshot()["worker"], "idle")
+        self.db.execute("INSERT INTO jobs VALUES ('queued',NULL)")
+        self.db.commit()
+        self.assertFalse(self.snapshot()["rendering"])
 
     def test_failed_missing_and_stopped_listener_are_unavailable(self):
         for state in ("failed", "inactive"):

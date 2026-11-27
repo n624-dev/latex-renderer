@@ -322,7 +322,7 @@ describe(`Source pipeline HTTP/DB/Worker E2E (${realPipelineImage === undefined 
           return artifactStoragePath(f.storage, pdf);
         };
         await preview(false, "First paragraph.");
-        draft = await f.renders.saveDraftText(
+        draft = await f.renders.draftFiles.saveDraftText(
           actor,
           project.id,
           draft.version,
@@ -330,7 +330,7 @@ describe(`Source pipeline HTTP/DB/Worker E2E (${realPipelineImage === undefined 
           document("Edited paragraph."),
         );
         await preview(true, "Edited paragraph.");
-        draft = await f.renders.saveDraftText(
+        draft = await f.renders.draftFiles.saveDraftText(
           actor,
           project.id,
           draft.version,
@@ -339,7 +339,7 @@ describe(`Source pipeline HTTP/DB/Worker E2E (${realPipelineImage === undefined 
         );
         const withBlack = await preview(false, "Updated Reference");
         const replacement = Buffer.from(white, "base64");
-        draft = await f.renders.saveDraftFileContent(
+        draft = await f.renders.draftFiles.saveDraftFileContent(
           actor,
           project.id,
           {
@@ -355,7 +355,7 @@ describe(`Source pipeline HTTP/DB/Worker E2E (${realPipelineImage === undefined 
         const raster = (path: string) =>
           readPdf(path, "pdftoppm", ["-r", "45", "-singlefile", "/input.pdf"]);
         expect(raster(withWhite).equals(raster(withBlack))).toBe(false);
-        draft = await f.renders.saveDraftText(
+        draft = await f.renders.draftFiles.saveDraftText(
           actor,
           project.id,
           draft.version,

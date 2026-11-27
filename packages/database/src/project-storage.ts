@@ -129,7 +129,7 @@ export class ProjectStorage {
         EXISTS(SELECT 1 FROM project_adopted_revisions WHERE project_id=? AND revision_id=?) AS adopted,
         EXISTS(SELECT 1 FROM project_protected_revisions WHERE project_id=? AND revision_id=?) AS protected,
         EXISTS(SELECT 1 FROM project_pdf_reviews WHERE project_id=? AND revision_id=?) AS reviewed,
-        EXISTS(SELECT 1 FROM jobs WHERE project_revision_id=? AND status NOT IN ('expired','deleted')) AS job
+        EXISTS(SELECT 1 FROM jobs WHERE project_revision_id=?) AS job
       `,
         )
         .get(

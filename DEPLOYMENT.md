@@ -11,10 +11,13 @@ See [Source reuse and recovery](docs/source-input-reuse.md) and the optional
 Migration 026 records the inputs used by pending draft previews. Migration 027
 records quota reservations for reusable compile state. Migration 028 adds
 project document conditions, PDF inspections and date profiles. Migration 029
-adds temporary, owner-scoped PDF attachment inspection.
+adds temporary, owner-scoped PDF attachment inspection. Migration 030 pins the
+inputs used for Draft PDF positioning. Migration 031 tracks pending PDF
+inspection retries. Migration 032 records the API key identity across routine
+rotations.
 Run the backup, restore test and migration preflight before deploying all
-application services together. Verify schema 29 after startup. See
-[the migration notes](MIGRATIONS.md#migration-029-attached-pdf-inspection).
+application services together. Verify schema 32 after startup. See
+[the migration notes](MIGRATIONS.md#migration-032-api-key-rotation).
 
 Draft previews are subject to the regular artifact lifetime. The cleanup timer
 keeps up to three completed previews and targets 32 MiB of retained preview

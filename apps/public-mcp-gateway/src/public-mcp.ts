@@ -5,7 +5,10 @@ import {
   type CallToolResult,
   type Tool,
 } from "@modelcontextprotocol/server";
-import { rendererMcpToolDefinitions } from "@latex-renderer/contracts/renderer-mcp-definitions";
+import {
+  rendererMcpRecoveryDetailsSchema,
+  rendererMcpToolDefinitions,
+} from "@latex-renderer/contracts/renderer-mcp-definitions";
 import {
   rendererMcpToolPolicies,
   type RendererMcpTool,
@@ -120,7 +123,8 @@ export function createPublicMcp(options: {
               /^[A-Z0-9_]{1,64}$/.test(body.error.code)
                 ? body.error.code
                 : "renderer_operation_failed";
-            return failure(code);
+            const recovery = rendererMcpRecoveryDetailsSchema.safeParse(body.error);
+            return failure(code, recovery.success ? recovery.data : undefined);
           }
           if (!isRecord(result.structuredContent))
             return failure("renderer_unavailable");
@@ -271,17 +275,23 @@ export function createPublicMcp(options: {
   };
 }
 
-function failure(code: string): CallToolResult {
+function failure(
+  code: string,
+  recovery?: z.infer<typeof rendererMcpRecoveryDetailsSchema>,
+): CallToolResult {
+  const error = { code, ...recovery };
   return {
     isError: true,
-    structuredContent: { success: false, error: { code } },
+    structuredContent: { success: false, error },
     content: [
       {
         type: "text",
         text:
           code === "outcome_unknown"
             ? "The connection ended after the request was sent. Check the original operation before repeating it. For an operation with a replay key, reuse the same key with identical input."
-            : `LaTeX Renderer: ${code}`,
+            : Object.keys(error).length > 1
+              ? JSON.stringify(error)
+              : `LaTeX Renderer: ${code}`,
       },
     ],
   };

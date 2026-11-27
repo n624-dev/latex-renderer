@@ -10,11 +10,21 @@ import { DocumentProbesRepository } from "./repositories/document-probes.js";
 import { PdfInspectionsRepository } from "./repositories/pdf-inspections.js";
 export { ProjectStorage } from "./project-storage.js";
 export { ProjectDocumentState } from "./project-document-state.js";
+export { jobTicketCredential } from "./job-credentials.js";
+export * from "./runtime-settings.js";
+export {
+  assertRenderAdmission,
+  assertRenderAvailable,
+  assertUserStorageQuota,
+} from "./render-admission.js";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import type { JobStatus } from "@latex-renderer/contracts";
 import { AppError, newId, nowIso } from "@latex-renderer/shared";
 import { schemaSql } from "./schema.js";
-import { applyDatabaseMigrations } from "./migrations.js";
+import {
+  applyDatabaseMigrations,
+  assertSupportedDatabaseVersion,
+} from "./migrations.js";
 import { notifyWorkerAfterCommit } from "../../../deploy/scripts/worker-demand.mjs";
 export { ProjectOperations, type ProjectActor } from "./project-operations.js";
 export { ProjectDraftOperations, type DraftUpdate } from "./project-drafts.js";
@@ -27,6 +37,7 @@ export {
 export {
   sourceRequestExpiresAt,
   assertSourceWritable,
+  createSourceReference,
 } from "./source-lifecycle.js";
 export { artifactRetentionExpiresAt } from "./artifact-availability.js";
 export { waitForPreview } from "./preview-wait.js";
@@ -91,6 +102,7 @@ export class RendererDatabase {
       enableForeignKeyConstraints: true,
     });
     this.raw.exec("PRAGMA busy_timeout=5000");
+    if (options.readonly !== true) this.raw.exec("PRAGMA synchronous=FULL");
     this.users = new UsersRepository(this.raw);
     this.serviceAccounts = new ServiceAccountsRepository(this.raw);
     this.apiKeys = new ApiKeysRepository(this.raw);
@@ -114,6 +126,7 @@ export class RendererDatabase {
   }
 
   migrate(): void {
+    assertSupportedDatabaseVersion(this.raw);
     this.raw.exec(schemaSql);
     applyDatabaseMigrations(this.raw);
   }

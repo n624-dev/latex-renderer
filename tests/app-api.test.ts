@@ -22,6 +22,39 @@ afterEach(() => {
 });
 
 describe("user Web application API", () => {
+  it("reports effective source limits to the signed-in user and enforces them when reserving storage", async () => {
+    const limits = {
+      maxUploadBytes: 1024,
+      maxExtractedBytes: 2048,
+      maxFileCount: 110,
+      maxZipEntries: 220,
+    };
+    const { app, database } = setup(limits);
+    const session = await app.request("/app/api/v1/me", {
+      headers: assertion("user"),
+    });
+    expect(session.status).toBe(200);
+    await expect(session.json()).resolves.toMatchObject({
+      sourceLimits: limits,
+    });
+    const rejected = await app.request("/app/api/v1/source-tickets", {
+      method: "POST",
+      headers: {
+        ...mutation("user"),
+        "Idempotency-Key": "oversize-source-limits-regression",
+      },
+      body: JSON.stringify({
+        size: limits.maxUploadBytes + 1,
+        sha256: "0".repeat(64),
+      }),
+    });
+    expect(rejected.status).toBe(400);
+    expect(
+      database.raw.prepare("SELECT COUNT(*) AS count FROM sources").get()
+        ?.count,
+    ).toBe(0);
+  });
+
   it("serves single PDF ranges only to the owning user", async () => {
     const { app, database, root } = setup();
     const post = (path: string, body: string) =>
@@ -660,18 +693,27 @@ describe("user Web application API", () => {
     expect(fixture.database.sources.referenceCount(source.sourceId)).toBe(2);
     expect(fixture.database.sources.markDeleting(source.sourceId, now)).toBe(0);
 
-    const savedZip = join(fixture.root, "sources", source.sourceId, "source.zip");
+    const savedZip = join(
+      fixture.root,
+      "sources",
+      source.sourceId,
+      "source.zip",
+    );
     mkdirSync(dirname(savedZip), { recursive: true });
     writeFileSync(savedZip, archive);
     const downloadPath = `/app/api/v1/projects/${project.id}/revisions/${rendered.revisionId}/source.zip`;
-    const download = await fixture.app.request(downloadPath, { headers: assertion("user") });
+    const download = await fixture.app.request(downloadPath, {
+      headers: assertion("user"),
+    });
     expect(download.status).toBe(200);
     expect(download.headers.get("etag")).toBe(`"${archiveSha}"`);
     expect(Buffer.from(await download.arrayBuffer())).toEqual(archive);
     const corrupted = Buffer.from(archive);
     corrupted[10] = 42;
     writeFileSync(savedZip, corrupted);
-    const mismatched = await fixture.app.request(downloadPath, { headers: assertion("user") });
+    const mismatched = await fixture.app.request(downloadPath, {
+      headers: assertion("user"),
+    });
     expect(mismatched.status).toBe(410);
 
     const renewed = await fixture.app.request(
@@ -720,7 +762,30 @@ describe("user Web application API", () => {
     );
     expect(hidden.status).toBe(404);
 
-    fixture.database.apiKeys.revoke(principal.api_key_id, now);
+    expect(fixture.database.apiKeys.revoke(principal.api_key_id, now)).toBe(0);
+    const otherUserDeletion = await fixture.app.request(
+      `/app/api/v1/jobs/${rendered.jobId}`,
+      { method: "DELETE", headers: mutation("other") },
+    );
+    expect(otherUserDeletion.status).toBe(404);
+    const activeDeletion = await fixture.app.request(
+      `/app/api/v1/jobs/${rendered.jobId}`,
+      { method: "DELETE", headers },
+    );
+    expect(activeDeletion.status).toBe(409);
+    const ownDeletion = await fixture.app.request(
+      `/app/api/v1/jobs/${rerendered.jobId}`,
+      { method: "DELETE", headers },
+    );
+    expect(ownDeletion.status).toBe(204);
+    expect(fixture.database.jobs.get(rerendered.jobId)?.status).toBe(
+      "deleting",
+    );
+
+    // Simulate a database affected by a legacy administrative operation.
+    fixture.database.raw
+      .prepare("UPDATE api_keys SET revoked_at=? WHERE id=?")
+      .run(now, principal.api_key_id);
     const revoked = await fixture.app.request(
       `/app/api/v1/jobs/${rendered.jobId}/access-ticket`,
       { method: "POST", headers, body: "{}" },
@@ -760,7 +825,9 @@ describe("user Web application API", () => {
   });
 });
 
-function setup() {
+function setup(
+  limits: Partial<import("@latex-renderer/shared").ResourceLimits> = {},
+) {
   const database = new RendererDatabase(":memory:");
   databases.push(database);
   database.migrate();
@@ -821,6 +888,7 @@ function setup() {
       storageRoot: root,
       environmentRoot,
       rendererVersion: "test",
+      ...limits,
       maxOutputBytes: 1,
       maxQueueLength: 20,
       maxUserStorageBytes: 1024 * 1024,

@@ -4,6 +4,7 @@ import type {
 } from "@latex-renderer/contracts";
 import { AppError } from "@latex-renderer/shared";
 import type { ClientTransport, RenderOptions } from "./index.js";
+import { abortable, createJobTicketAccess } from "./job-ticket-access.js";
 
 const terminalStatuses = new Set([
   "succeeded",
@@ -21,7 +22,7 @@ export async function pollUntilTerminal(
   ticket: SourceRenderResponse,
   options: RenderOptions,
   ready?: (job: JobResponse) => boolean,
-): Promise<{ job: JobResponse; jobTicket: string }> {
+): Promise<{ job: JobResponse; jobTicket: string; ticketExpiresAt: string }> {
   const interval = options.pollIntervalMs ?? 1000,
     timeout = options.pollTimeoutMs,
     now = options.now ?? Date.now,
@@ -44,6 +45,9 @@ export async function pollUntilTerminal(
     );
   const startedAt = now(),
     controller = new AbortController();
+  const signal = options.signal
+    ? AbortSignal.any([controller.signal, options.signal])
+    : controller.signal;
   let lastStatus: JobResponse["status"] | undefined;
   const timeoutError = () =>
     new AppError(
@@ -56,7 +60,7 @@ export async function pollUntilTerminal(
   const assertDeadline = () => {
     if (timeout !== undefined && now() - startedAt >= timeout)
       controller.abort(timeoutError());
-    controller.signal.throwIfAborted();
+    signal.throwIfAborted();
   };
   const scheduleDeadline = () => {
     if (timeout === undefined) return;
@@ -71,29 +75,21 @@ export async function pollUntilTerminal(
       Math.max(1, Math.min(timeout - (now() - startedAt), 2_147_483_647)),
     );
   };
-  let jobTicket = ticket.jobTicket,
-    expiresAt = Date.parse(ticket.expiresAt);
-  const renew = async () => {
-    const renewed = await abortable(controller.signal, () =>
-      client.renewJobTicket(ticket.jobId, { signal: controller.signal }),
-    );
-    jobTicket = renewed.jobTicket;
-    expiresAt = Date.parse(renewed.expiresAt);
-  };
+  const access = createJobTicketAccess(client, ticket, { now, signal });
   const wait = async (milliseconds: number) => {
     if (customSleep !== undefined)
-      await abortable(controller.signal, () => customSleep(milliseconds));
-    else await sleep(milliseconds, controller.signal);
+      await abortable(signal, () => customSleep(milliseconds));
+    else await sleep(milliseconds, signal);
   };
-  const readStatus = async (): Promise<JobResponse> => {
+  const readStatus = async (jobTicket: string): Promise<JobResponse> => {
     // Only repeat the read-only status request, never job creation, upload,
     // ticket renewal or artifact verification. Bound retries even when the
     // caller supplies no overall polling deadline.
     for (let retries = 0; ; retries++) {
       assertDeadline();
       try {
-        return await abortable(controller.signal, () =>
-          client.job(ticket.jobId, jobTicket, { signal: controller.signal }),
+        return await abortable(signal, () =>
+          client.job(ticket.jobId, jobTicket, { signal }),
         );
       } catch (error) {
         assertDeadline();
@@ -106,21 +102,7 @@ export async function pollUntilTerminal(
   try {
     for (;;) {
       assertDeadline();
-      if (Number.isFinite(expiresAt) && expiresAt <= now() + 60_000)
-        await renew();
-      assertDeadline();
-      let job: JobResponse;
-      try {
-        job = await readStatus();
-      } catch (error) {
-        // Do not turn revocation or a security-version change into a silent
-        // authorization retry. Only an invalid/expired ticket is refreshed.
-        if (!(error instanceof AppError) || error.code !== "INVALID_TICKET")
-          throw error;
-        assertDeadline();
-        await renew();
-        job = await readStatus();
-      }
+      const job = await access.read(readStatus);
       assertDeadline();
       lastStatus = job.status;
       options.onEvent?.({
@@ -134,7 +116,7 @@ export async function pollUntilTerminal(
           : {}),
       });
       if (terminalStatuses.has(job.status) || ready?.(job) === true)
-        return { job, jobTicket };
+        return { job, jobTicket: access.credential.jobTicket, ticketExpiresAt: access.credential.expiresAt };
       await wait(interval);
     }
   } finally {
@@ -153,23 +135,6 @@ function isTransientStatusError(error: unknown): boolean {
 function abortReason(signal: AbortSignal): Error {
   const reason: unknown = signal.reason;
   return reason instanceof Error ? reason : new Error("Polling aborted");
-}
-
-async function abortable<T>(
-  signal: AbortSignal,
-  operation: () => Promise<T>,
-): Promise<T> {
-  signal.throwIfAborted();
-  let onAbort: () => void = () => undefined;
-  const aborted = new Promise<never>((_resolve, reject) => {
-    onAbort = () => reject(abortReason(signal));
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
-  try {
-    return await Promise.race([operation(), aborted]);
-  } finally {
-    signal.removeEventListener("abort", onAbort);
-  }
 }
 
 function sleep(milliseconds: number, signal: AbortSignal): Promise<void> {

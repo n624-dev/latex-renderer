@@ -7,6 +7,7 @@ User=latex-renderer
 Group=latex-renderer
 WorkingDirectory=/opt/latex-renderer/current
 EnvironmentFile=/etc/latex-renderer/renderer.env
+Environment=BACKUP_SOURCE_COORDINATION_DIR=/run/latex-renderer-backup-coordination
 ExecStart=/usr/local/bin/node deploy/scripts/cleanup.mjs
 NoNewPrivileges=true
 ProtectSystem=strict
@@ -14,5 +15,5 @@ ProtectHome=true
 PrivateTmp=true
 PrivateDevices=true
 RestrictAddressFamilies=AF_UNIX
-ReadWritePaths=/var/lib/latex-renderer
+ReadWritePaths=/var/lib/latex-renderer /run/latex-renderer-backup-coordination
 UMask=0007

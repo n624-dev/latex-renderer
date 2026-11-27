@@ -10,6 +10,9 @@ import { requestHttpsJson, type HttpsJsonClient } from "./https-json.js";
 export const jwtClientAssertionType =
   "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
 
+export const dcrClientRetentionMs = 7 * 86_400_000;
+export const expiredConnectionRetentionMs = 7 * 86_400_000;
+
 export interface DcrClientRegistration {
   clientName: string;
   redirectUris: string[];
@@ -23,6 +26,7 @@ export interface DcrClientStore {
   registerDcrClient(
     registration: DcrClientRegistration,
     capacity: number,
+    now: number,
   ): DcrClient | undefined;
   dcrClient(id: string): DcrClient | undefined;
 }

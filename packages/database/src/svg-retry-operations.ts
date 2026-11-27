@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { AppError, nowIso } from "@latex-renderer/shared";
 import type { RendererDatabase } from "./index.js";
+import { assertRenderAdmission } from "./render-admission.js";
 
 export interface SvgRetryActor {
   userId: string;
@@ -93,53 +94,15 @@ export class SvgRetryOperations {
           "The Runtime changed after PDF publication. Start a new Job to generate PDF and SVG together.",
           409,
         );
-      if (
-        this.db.settings.value<string>("maintenance_mode", "normal") !==
-        "normal"
-      )
-        throw new AppError(
-          "MAINTENANCE",
-          "New rendering is temporarily unavailable",
-          503,
-        );
-      if (
-        this.db.jobs.countActive() >=
-        this.db.settings.value(
-          "max_queue_length",
-          this.limits.maxQueueLength ?? 100,
-        )
-      )
-        throw new AppError("QUEUE_FULL", "Render queue is full", 503);
-      if (
-        this.db.jobs.countActiveForServiceAccount(row.service_account_id) >= 5
-      )
-        throw new AppError(
-          "ACCOUNT_QUEUE_LIMIT",
-          "Service account pending Job limit reached",
-          429,
-        );
-      if (
-        this.db.jobs.countActiveForUser(actor.userId) >=
-        this.db.settings.value("max_user_active_jobs", 20)
-      )
-        throw new AppError(
-          "USER_QUEUE_LIMIT",
-          "User pending Job limit reached",
-          429,
-        );
-      const storageLimit = this.db.settings.value(
-        "max_user_storage_bytes",
-        this.limits.maxUserStorageBytes ?? 1024 ** 3,
+      assertRenderAdmission(
+        this.db,
+        { userId: actor.userId, serviceAccountId: row.service_account_id },
+        {
+          maxQueueLength: this.limits.maxQueueLength ?? 100,
+          maxUserStorageBytes: this.limits.maxUserStorageBytes ?? 1024 ** 3,
+        },
+        Math.max(0, maxOutput - (row.output_size ?? 0)),
       );
-      if (
-        Math.max(0, maxOutput - (row.output_size ?? 0)) >
-        storageLimit - this.db.jobs.storageUsageForUser(actor.userId)
-      )
-        throw new AppError(
-          "USER_STORAGE_QUOTA",
-          "User storage quota is exhausted",
-          429,
-        );
       const timestamp = nowIso(),
         cutoff = new Date(Date.now() - retention * 3600000).toISOString();
       if (

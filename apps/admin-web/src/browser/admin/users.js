@@ -1,4 +1,8 @@
-export const part2 = String.raw`
+import { normalizeBrowserLoginConfiguration } from "../../assets/auth-configuration.js";
+
+export function createUsers({
+  adminMessage, bindAction, bindPagedChoices, confirmDialog, details, displayLabel, esc, fmt, formDialog, jsonBody, linkageLabel, me, nextPage, out, request, section, table, userDetails
+}) {
 async function users(){
   out.replaceChildren();
   const response=await fetch('/auth/config',{credentials:'same-origin',cache:'no-store'});if(!response.ok)throw new Error(adminMessage("couldNotRetrieveSignInSettings"));const config=normalizeBrowserLoginConfiguration(await response.json()),passwordEnabled=config.methods.some(method=>method.id==='password'),oidc=config.methods.find(method=>method.id==='oidc'),authenticationOptions=[...(passwordEnabled?[{type:'password',label:adminMessage("password")}]:[]),...(config.backend==='cloudflare-access'||oidc?[{type:'external',label:oidc?.displayName||'Cloudflare Access'}]:[])];
@@ -27,35 +31,24 @@ async function accounts(){
   const ownerOptions=u.items.filter(x=>x.status==='active').map(x=>'<option value="'+esc(x.id)+'">'+esc(x.display_name+' ('+x.email+')')+'</option>').join(''),typeOptions=(selected='')=>[['codex','Codex'],['claude-code','Claude Code'],['mcp','MCP'],['ci','CI'],['generic',adminMessage("generalPurposeCli")]].map(([value,label])=>'<option value="'+value+'"'+(selected===value?' selected':'')+'>'+label+'</option>').join('');
   out.innerHTML=section(adminMessage("serviceAccounts"),("<div class=\"actions\"><button id=\"account-create\">"+esc(adminMessage("createServiceAccount"))+"</button></div>")+table(a.items,[[adminMessage("name"),'name'],[adminMessage("type"),x=>displayLabel(x.client_type)],[adminMessage("owner"),x=>u.items.find(user=>user.id===x.owner_user_id)?.display_name||adminMessage("seeDetails")],[adminMessage("status"),x=>displayLabel(x.status)]],x=>'<button class="secondary" data-a-detail="'+esc(x.id)+(("\">"+esc(adminMessage("details"))+"</button><details class=\"row-options\"><summary>")+esc(adminMessage("moreActions"))+"</summary><div class=\"actions\"><button class=\"secondary\" data-a-edit=\"")+esc(x.id)+("\">"+esc(adminMessage("edit"))+"</button><a class=\"button secondary\" href=\"/admin/api-keys/?account=")+encodeURIComponent(x.id)+("\">"+esc(adminMessage("addApiKey"))+"</a><button class=\"secondary\" data-a-status=\"")+esc(x.id)+'" data-active="'+(x.status==='active')+'">'+(x.status==='active'?adminMessage("disable"):adminMessage("enable"))+'</button>'+(x.status==='active'?'<button class="danger" data-a-delete="'+esc(x.id)+("\">"+esc(adminMessage("disableAccountAndRevokeAllKeys"))+"</button>"):'')+'</div></details>')+nextPage(a.nextCursor));
   document.querySelector('#account-create').onclick=()=>{
-    let loading=false;
     const dialog=formDialog({title:adminMessage("createServiceAccount"),fields:("<div class=\"wide\"><label>"+esc(adminMessage("searchOwners"))+"<input data-owner-query maxlength=\"200\" autocomplete=\"off\"></label><div class=\"actions\"><button type=\"button\" class=\"secondary\" data-owner-search>"+esc(adminMessage("search"))+"</button><button type=\"button\" class=\"secondary\" data-owner-next>"+esc(adminMessage("nextUsers"))+"</button></div><p data-owner-error role=\"status\"></p></div><label>"+esc(adminMessage("owner"))+"<select name=\"ownerUserId\" required autofocus><option value=\"\">"+esc(adminMessage("selectAnOption"))+"</option>")+ownerOptions+("</select></label><label>"+esc(adminMessage("name"))+"<input name=\"name\" required maxlength=\"100\"></label><label>"+esc(adminMessage("type"))+"<select name=\"clientType\">")+typeOptions()+'</select></label>',submitLabel:adminMessage("create"),successMessage:adminMessage("serviceAccountCreated"),onSubmit:async f=>{
-      if(loading)throw new Error(adminMessage("checkingTheListOfOwners"));
+      if(isLoading())throw new Error(adminMessage("checkingTheListOfOwners"));
       const owner=await request('/users/'+encodeURIComponent(String(f.get('ownerUserId'))));
       if(owner.status!=='active')throw new Error(adminMessage("selectAnActiveOwner"));
       return request('/service-accounts',{method:'POST',...jsonBody({ownerUserId:owner.id,name:String(f.get('name')),clientType:String(f.get('clientType'))})});
-    }}),select=dialog.querySelector('[name="ownerUserId"]'),search=dialog.querySelector('[data-owner-search]'),next=dialog.querySelector('[data-owner-next]'),query=dialog.querySelector('[data-owner-query]'),status=dialog.querySelector('[data-owner-error]');
-    let cursor=u.nextCursor||null,currentQuery='';next.disabled=!cursor;
-    const loadOwners=async(reset)=>{
-      if(loading||dialog.dataset.busy==='true')return;
-      loading=true;search.disabled=true;next.disabled=true;status.textContent='';
-      const selected=select.selectedOptions[0],value=select.value,params=new URLSearchParams({pageSize:'50'}),requestedQuery=reset?query.value.trim():currentQuery;
-      if(requestedQuery)params.set('query',requestedQuery);if(!reset&&cursor)params.set('cursor',cursor);
-      try{
-        const page=await request('/users?'+params);if(!dialog.isConnected)return;
-        const users=page.items.filter(x=>x.status==='active');
-        select.innerHTML=("<option value=\"\">"+esc(adminMessage("selectAnOption"))+"</option>")+users.map(x=>'<option value="'+esc(x.id)+'">'+esc(x.display_name+(x.email?' ('+x.email+')':''))+'</option>').join('');
-        if(value&&!users.some(x=>x.id===value)&&selected)select.append(selected.cloneNode(true));
-        select.value=value;cursor=page.nextCursor||null;currentQuery=requestedQuery;
-        if(!users.length)status.textContent=adminMessage("noActiveUsersOnThisPage");
-      }catch(error){if(dialog.isConnected)status.textContent=error instanceof Error?error.message:String(error);}
-      finally{loading=false;if(dialog.isConnected){search.disabled=false;next.disabled=!cursor;}}
-    };
-    search.onclick=()=>{void loadOwners(true)};next.onclick=()=>{void loadOwners(false)};
-    query.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();void loadOwners(true)}};
+    }});
+    const isLoading=bindPagedChoices(dialog,{
+      endpoint:'/users',initialCursor:u.nextCursor,prefix:'owner',
+      select:dialog.querySelector('[name="ownerUserId"]'),
+      label:owner=>owner.display_name+(owner.email?' ('+owner.email+')':''),
+      emptyLabel:adminMessage("noActiveUsersOnThisPage")
+    });
   };
   bindAction('[data-a-detail]',b=>{const x=a.items.find(v=>v.id===b.dataset.aDetail);details({...x,apiKeys:k.items.filter(v=>v.service_account_id===x.id)},adminMessage("serviceAccountDetails"))});
   bindAction('[data-a-edit]',b=>{const x=a.items.find(v=>v.id===b.dataset.aEdit);formDialog({title:adminMessage("editServiceAccount"),description:x.id,fields:("<label>"+esc(adminMessage("name"))+"<input name=\"name\" required maxlength=\"100\" value=\"")+esc(x.name)+("\" autofocus></label><label>"+esc(adminMessage("type"))+"<select name=\"clientType\">")+typeOptions(x.client_type)+'</select></label>',submitLabel:adminMessage("saveChanges"),successMessage:adminMessage("serviceAccountUpdated"),onSubmit:f=>request('/service-accounts/'+x.id,{method:'PATCH',...jsonBody({name:f.get('name'),clientType:f.get('clientType')})})})});
   bindAction('[data-a-status]',b=>{const x=a.items.find(v=>v.id===b.dataset.aStatus),action=b.dataset.active==='true'?'disable':'enable',verb=action==='disable'?adminMessage("disable"):adminMessage("enable");confirmDialog({title:adminMessage("serviceAccountAction",{action:verb}),description:x.name+' / '+x.id,summary:("<p>"+esc(adminMessage("associatedApiKeysWillNotBe"))+"</p>"),submitLabel:verb,danger:action==='disable',successMessage:adminMessage("serviceAccountStatusChanged"),onSubmit:()=>request('/service-accounts/'+x.id+'/'+action,{method:'POST',...jsonBody({})})})});
   bindAction('[data-a-delete]',b=>{const x=a.items.find(v=>v.id===b.dataset.aDelete),count=k.items.filter(v=>v.service_account_id===x.id&&v.revoked_at===null).length;confirmDialog({title:adminMessage("disableAccountAndRevokeAllKeys"),description:x.name+' / '+x.id,summary:'<div class="notice warning"><strong>'+esc(adminMessage("revokeAllServiceAccountKeys",{count}))+'</strong></div>',submitLabel:adminMessage("disableAccountAndRevokeAllKeys"),danger:true,successMessage:adminMessage("accountDisabledAndKeysRevoked"),onSubmit:()=>request('/service-accounts/'+x.id,{method:'DELETE'})})})
 }
-`;
+
+  return { users, accounts };
+}

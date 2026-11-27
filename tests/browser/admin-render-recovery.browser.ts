@@ -1,26 +1,20 @@
-import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import type { Browser, Page } from "playwright";
 import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
 import { launchTestBrowser, newTestPage } from "../helpers/browser-engine.js";
 import { routeWebFonts } from "../helpers/browser-web-fonts.js";
 import { adminRenderPage } from "../../apps/admin-web/src/templates-admin.js";
 import { styles } from "../../apps/admin-web/src/assets/styles.js";
-import { siteScript } from "../../apps/admin-web/src/assets/site-script.js";
+import { readBrowserAsset } from "../../apps/admin-web/src/browser-assets.js";
 import { zipStoredFiles } from "../../apps/admin-web/src/assets/render-script.js";
 
-// Exercise the shipped stringified script, not a separately reimplemented UI.
-const script = execFileSync(
-  process.execPath,
-  [
-    "--input-type=module",
-    "--eval",
-    "const m=await import(process.argv[1]);process.stdout.write(m.renderScript)",
-    new URL(
-      "../../apps/admin-web/dist/assets/render-script.js",
-      import.meta.url,
-    ).href,
-  ],
-  { encoding: "utf8", timeout: 10_000, maxBuffer: 2 * 1024 * 1024 },
+// Exercise the browser asset built for distribution.
+const script = readFileSync(
+  new URL(
+    "../../apps/admin-web/dist/browser-assets/admin-render.js",
+    import.meta.url,
+  ),
+  "utf8",
 );
 const origin = "https://renderer.invalid";
 const sourceId = `source_${"a".repeat(32)}`;
@@ -65,7 +59,7 @@ it.each([true, false])(
       if (url.pathname === "/admin/assets/site.js")
         return route.fulfill({
           contentType: "application/javascript",
-          body: siteScript,
+          body: readBrowserAsset("site"),
         });
       if (url.pathname === "/admin/assets/render.js")
         return route.fulfill({

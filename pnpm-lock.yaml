@@ -120,9 +120,9 @@ importers:
       '@latex-renderer/database':
         specifier: workspace:*
         version: link:../../packages/database
-      '@latex-renderer/remote-mcp-core':
+      '@latex-renderer/renderer-core':
         specifier: workspace:*
-        version: link:../../packages/remote-mcp-core
+        version: link:../../packages/renderer-core
       '@latex-renderer/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -266,6 +266,9 @@ importers:
       '@latex-renderer/database':
         specifier: workspace:*
         version: link:../../packages/database
+      '@latex-renderer/renderer-core':
+        specifier: workspace:*
+        version: link:../../packages/renderer-core
       '@latex-renderer/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -284,6 +287,9 @@ importers:
 
   apps/mcp-server:
     dependencies:
+      '@latex-renderer/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
       '@latex-renderer/mcp-core':
         specifier: workspace:*
         version: link:../../packages/mcp-core
@@ -296,6 +302,10 @@ importers:
       zod:
         specifier: ^4.6.7
         version: 4.6.7
+    devDependencies:
+      '@latex-renderer/api-client':
+        specifier: workspace:*
+        version: link:../../packages/api-client
 
   apps/public-mcp-agent:
     dependencies:
@@ -540,6 +550,24 @@ importers:
         version: 4.6.7
 
   packages/remote-mcp-core:
+    dependencies:
+      '@latex-renderer/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      '@latex-renderer/database':
+        specifier: workspace:*
+        version: link:../database
+      '@latex-renderer/renderer-core':
+        specifier: workspace:*
+        version: link:../renderer-core
+      '@latex-renderer/shared':
+        specifier: workspace:*
+        version: link:../shared
+      '@latex-renderer/zip-validation':
+        specifier: workspace:*
+        version: link:../zip-validation
+
+  packages/renderer-core:
     dependencies:
       '@latex-renderer/contracts':
         specifier: workspace:*

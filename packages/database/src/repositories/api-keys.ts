@@ -1,10 +1,13 @@
 import type { DatabaseSync } from "node:sqlite";
-import { userServiceAccountSql } from "../user-visible.js";
+import { separateFromInternalPrincipals, userServiceAccountSql } from "../user-visible.js";
+import { jobCredentialId, sameJobCredential } from "../job-credentials.js";
 import {
   decodePageCursor,
   encodePageCursor,
   type Page,
 } from "@latex-renderer/shared";
+
+const external = separateFromInternalPrincipals("id", "api_key_id");
 
 export interface ApiKeyRow {
   id: string;
@@ -39,7 +42,7 @@ export class ApiKeysRepository {
     return this.db
       .prepare(
         `SELECT id,service_account_id,name,prefix,kind,scopes_json,expires_at,last_used_at,revoked_at,created_at,created_by
-      FROM api_keys WHERE ${userServiceAccountSql("service_account_id")} ORDER BY created_at DESC LIMIT ?`,
+      FROM api_keys WHERE ${userServiceAccountSql("service_account_id")} AND ${external} ORDER BY created_at DESC LIMIT ?`,
       )
       .all(limit) as unknown as ApiKeyRow[];
   }
@@ -53,7 +56,7 @@ export class ApiKeysRepository {
   ): Page<ApiKeyRow> {
     const limit = options.limit ?? 50,
       cursor = decodePageCursor(options.cursor, ["createdAt", "id"]),
-      conditions: string[] = [userServiceAccountSql("service_account_id")],
+      conditions: string[] = [userServiceAccountSql("service_account_id"), external],
       params: Array<string | number> = [],
       query = options.query?.trim().toLowerCase();
     if (query !== undefined && query !== "") {
@@ -106,7 +109,7 @@ export class ApiKeysRepository {
     return this.db
       .prepare(
         `SELECT id,service_account_id,name,prefix,kind,scopes_json,expires_at,last_used_at,revoked_at,created_at,created_by
-      FROM api_keys WHERE id=? AND ${userServiceAccountSql("service_account_id")}`,
+      FROM api_keys WHERE id=? AND ${userServiceAccountSql("service_account_id")} AND ${external}`,
       )
       .get(id) as unknown as ApiKeyRow | undefined;
   }
@@ -184,6 +187,22 @@ export class ApiKeysRepository {
   }
 
   activeIdentity(id: string, now: string): RenderIdentityRow | undefined {
+    return this.findActiveIdentity(id, now, false);
+  }
+
+  activeJobIdentity(id: string, now: string): RenderIdentityRow | undefined {
+    return this.findActiveIdentity(id, now, true);
+  }
+
+  renderJobIdentity(id: string, now: string): RenderIdentityRow | undefined {
+    const active = this.activeJobIdentity(id, now);
+    return active && this.renderIdentity(active.api_key_id, now);
+  }
+
+  private findActiveIdentity(id: string, now: string, followRotation: boolean): RenderIdentityRow | undefined {
+    const credential = followRotation
+      ? `EXISTS (SELECT 1 FROM api_keys owner WHERE owner.id=? AND ${sameJobCredential("owner", "k")})`
+      : "k.id=?";
     return this.db
       .prepare(
         `SELECT k.id AS api_key_id,k.name AS api_key_name,
@@ -193,10 +212,35 @@ export class ApiKeysRepository {
         u.security_version AS user_security_version
         FROM api_keys k JOIN service_accounts s ON s.id=k.service_account_id
         JOIN users u ON u.id=s.owner_user_id
-        WHERE k.id=? AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at>?)
+        WHERE ${credential} AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at>?)
           AND s.status='active' AND s.purpose='user' AND u.status='active'`,
       )
       .get(id, now) as unknown as RenderIdentityRow | undefined;
+  }
+
+  jobOwnerId(id: string): string | undefined {
+    return this.db.prepare(`SELECT ${jobCredentialId("k")} AS owner FROM api_keys k WHERE k.id=?`)
+      .get(id)?.owner as string | undefined;
+  }
+
+  matchesJobOwner(originalId: string, currentId: string): boolean {
+    return this.db.prepare(`
+      SELECT 1 FROM api_keys owner JOIN api_keys k ON ${sameJobCredential("owner", "k")}
+      WHERE owner.id=? AND k.id=? AND k.revoked_at IS NULL
+    `).get(originalId, currentId) !== undefined;
+  }
+
+  recordRotation(previous: string, successor: string): boolean {
+    return this.db.prepare(`
+      UPDATE api_keys AS k SET rotation_root_id=(
+        SELECT ${jobCredentialId("owner")} FROM api_keys owner WHERE owner.id=?
+      )
+      WHERE k.id=? AND k.rotation_root_id IS NULL AND k.revoked_at IS NULL
+        AND EXISTS (
+          SELECT 1 FROM api_keys owner WHERE owner.id=? AND owner.revoked_at IS NOT NULL
+            AND owner.service_account_id=k.service_account_id AND owner.kind=k.kind
+        )
+    `).run(previous, successor, previous).changes === 1;
   }
 
   insert(input: {
@@ -236,7 +280,7 @@ export class ApiKeysRepository {
     return Number(
       this.db
         .prepare(
-          "UPDATE api_keys SET revoked_at=COALESCE(revoked_at,?) WHERE id=?",
+          `UPDATE api_keys SET revoked_at=COALESCE(revoked_at,?) WHERE id=? AND ${external}`,
         )
         .run(timestamp, id).changes,
     );
@@ -246,7 +290,7 @@ export class ApiKeysRepository {
     return Number(
       this.db
         .prepare(
-          "UPDATE api_keys SET revoked_at=COALESCE(revoked_at,?) WHERE service_account_id=?",
+          `UPDATE api_keys SET revoked_at=COALESCE(revoked_at,?) WHERE service_account_id=? AND ${external}`,
         )
         .run(timestamp, serviceAccountId).changes,
     );
@@ -255,7 +299,7 @@ export class ApiKeysRepository {
   revokeAll(timestamp: string): number {
     return Number(
       this.db
-        .prepare("UPDATE api_keys SET revoked_at=? WHERE revoked_at IS NULL")
+        .prepare(`UPDATE api_keys SET revoked_at=? WHERE revoked_at IS NULL AND ${external}`)
         .run(timestamp).changes,
     );
   }

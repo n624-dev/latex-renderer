@@ -27,6 +27,8 @@ import { acquireMutationLock } from "./mutation-lock.mjs";
 import { waitPrivilegedProcess } from "./privileged-process-output.mjs";
 import { githubJson as readGitHubJson } from "./github-json.mjs";
 import { collectUpdateLogs, updateLogPolicy } from "./update-log-retention.mjs";
+import { createUpdateManagerState } from "./update-manager-state.mjs";
+import { serverToolchainStatus } from "./server-toolchain-status.mjs";
 import {
   updaterStatus,
   updateOutcome,
@@ -168,7 +170,9 @@ const emptyState = () => ({
   lastError: null,
   updatedAt: new Date().toISOString(),
 });
-let state = await loadState();
+const managerState = createUpdateManagerState(await loadState(), (next) =>
+  writeAtomic(statePath, `${JSON.stringify(next, null, 2)}\n`),
+);
 let activeOperation = null;
 let recoveringOperationId = null;
 let logCollection = Promise.resolve();
@@ -258,11 +262,6 @@ async function writeAtomic(path, contents, mode = 0o640) {
     await rm(temporary, { force: true }).catch(() => {});
     throw error;
   }
-}
-
-async function persistState() {
-  state.updatedAt = new Date().toISOString();
-  await writeAtomic(statePath, `${JSON.stringify(state, null, 2)}\n`);
 }
 
 function safeToken(received) {
@@ -424,6 +423,7 @@ async function saveOperation(operation) {
 }
 
 async function recoverInterruptedOperation() {
+  const state = managerState.current;
   if (!state.lastOperationId) return;
   const path = join(operationsRoot, `${state.lastOperationId}.json`);
   try {
@@ -442,9 +442,8 @@ async function recoverInterruptedOperation() {
       operation.error =
         "Update Manager restarted while this operation was running; inspect the active release before retrying";
       operation.finishedAt = new Date().toISOString();
-      state.lastError = operation.error;
       await writeAtomic(path, `${JSON.stringify(operation, null, 2)}\n`);
-      await persistState();
+      await managerState.update({ lastError: operation.error });
       recoveringOperationId = null;
     } finally {
       await lock.release();
@@ -454,7 +453,7 @@ async function recoverInterruptedOperation() {
   }
 }
 
-async function operationWithLog(id) {
+async function operationWithLog(id, includeLog = true) {
   let operation = activeOperation?.id === id ? activeOperation : null;
   if (!operation) {
     try {
@@ -467,32 +466,31 @@ async function operationWithLog(id) {
     }
   }
   let log = "";
-  try {
-    const path = join(operationsRoot, `${id}.log`);
-    const info = await stat(path);
-    const handle = await open(path, "r");
+  if (includeLog) {
     try {
-      const length = Math.min(info.size, 100_000);
-      const buffer = Buffer.alloc(length);
-      const result = await handle.read(
-        buffer,
-        0,
-        length,
-        Math.max(0, info.size - length),
-      );
-      log = buffer.subarray(0, result.bytesRead).toString("utf8");
-    } finally {
-      await handle.close();
+      const path = join(operationsRoot, `${id}.log`);
+      const info = await stat(path);
+      const handle = await open(path, "r");
+      try {
+        const length = Math.min(info.size, 100_000);
+        const buffer = Buffer.alloc(length);
+        const result = await handle.read(
+          buffer, 0, length, Math.max(0, info.size - length),
+        );
+        log = buffer.subarray(0, result.bytesRead).toString("utf8");
+      } finally {
+        await handle.close();
+      }
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
     }
-  } catch (error) {
-    if (error?.code !== "ENOENT") throw error;
   }
   return {
     ...operationView(operation),
     log,
     outcome:
-      id === state.lastOperationId
-        ? updateOutcome(operation, await updaterStatus())
+      id === managerState.current.lastOperationId
+        ? updateOutcome(operation, operation.status === "succeeded" ? await updaterStatus() : null)
         : {
             application: operation.status,
             updater: "historical",
@@ -628,9 +626,7 @@ async function checkRelease(
   requireInstallable = false,
 ) {
   const release = await fetchRelease(requestedVersion, requireInstallable);
-  state.available = release;
-  state.lastError = null;
-  await persistState();
+  await managerState.update({ available: release, lastError: null });
   return release;
 }
 
@@ -966,11 +962,11 @@ async function deployPrepared(operation, release, prepared) {
       "Deployment completed without activating the requested release",
     );
   }
-  state.previousReleaseId = before?.releaseId ?? null;
-  state.previousRollbackCompatible =
-    prepared.manifest.rollbackCompatible === true;
-  state.available = release;
-  await persistState();
+  await managerState.update({
+    previousReleaseId: before?.releaseId ?? null,
+    previousRollbackCompatible: prepared.manifest.rollbackCompatible === true,
+    available: release,
+  });
   return after;
 }
 
@@ -1015,6 +1011,7 @@ async function applyRelease(operation, requestedVersion) {
 }
 
 async function rollbackRelease(operation) {
+  const state = managerState.current;
   const releaseId = state.previousReleaseId;
   if (!releaseId || !/^[A-Za-z0-9._-]+$/.test(releaseId))
     throw new Error("No previous known-good application release is available");
@@ -1036,9 +1033,10 @@ async function rollbackRelease(operation) {
   const after = await installedRelease();
   if (after?.releaseId !== releaseId)
     throw new Error("Rollback did not activate the requested release");
-  state.previousReleaseId = current?.releaseId ?? null;
-  state.previousRollbackCompatible = false;
-  await persistState();
+  await managerState.update({
+    previousReleaseId: current?.releaseId ?? null,
+    previousRollbackCompatible: false,
+  });
 }
 
 async function setPolicy(input) {
@@ -1056,15 +1054,16 @@ async function setPolicy(input) {
       "INVALID_UPDATE_MODE",
       "Update mode must be notify or automatic",
     );
-  if (activeOperation)
-    throw httpError(
-      409,
-      "UPDATE_OPERATION_ACTIVE",
-      "Update policy cannot change while an operation is running",
-    );
-  state.policy = { channel, mode };
-  await persistState();
-  return state.policy;
+  const applied = await managerState.update(() => {
+    if (activeOperation)
+      throw httpError(
+        409,
+        "UPDATE_OPERATION_ACTIVE",
+        "Update policy cannot change while an operation is running",
+      );
+    return { policy: { channel, mode } };
+  });
+  return applied.policy;
 }
 
 async function refreshPolicy() {
@@ -1078,13 +1077,17 @@ async function refreshPolicy() {
         reason: release.unavailableReason,
       };
     }
-    if (state.policy.mode === "automatic") {
-      const operation = await startOperation(
-        "automatic-apply",
-        release.version,
-        (value) => applyRelease(value, release.version),
-      );
-      return { status: "started", release, operation };
+    if (managerState.current.policy.mode === "automatic") {
+      try {
+        const operation = await startOperation(
+          "automatic-apply",
+          release.version,
+          (value) => applyRelease(value, release.version),
+        );
+        return { status: "started", release, operation };
+      } catch (error) {
+        if (error?.code !== "UPDATE_POLICY_CHANGED") throw error;
+      }
     }
     return { status: "available", release };
   }
@@ -1107,8 +1110,6 @@ async function startOperation(type, requestedVersion, task) {
     }
     throw error;
   }
-  const previousLastOperationId = state.lastOperationId;
-  const previousLastError = state.lastError;
   const operation = {
     id: `updop_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`,
     type,
@@ -1120,23 +1121,22 @@ async function startOperation(type, requestedVersion, task) {
   };
   operation.logPath = join(operationsRoot, `${operation.id}.log`);
   activeOperation = operation;
-  state.lastOperationId = operation.id;
-  state.lastError = null;
   try {
     await saveOperation(operation);
-    await persistState();
     // Do not begin downloading/building if bounded diagnostic storage cannot
     // be established. The new operation is already protected from collection.
     await cleanupOperationLogs();
+    await managerState.update(({ policy }) => {
+      if (type === "automatic-apply" && policy.mode !== "automatic")
+        throw httpError(409, "UPDATE_POLICY_CHANGED", "Automatic updates were disabled");
+      return { lastOperationId: operation.id, lastError: null };
+    });
   } catch (error) {
     activeOperation = null;
-    state.lastOperationId = previousLastOperationId;
-    state.lastError = previousLastError;
     await rm(join(operationsRoot, `${operation.id}.json`), {
       force: true,
     }).catch(() => {});
     await rm(operation.logPath, { force: true }).catch(() => {});
-    await persistState().catch(() => {});
     await mutationLock.release().catch(() => {});
     throw error;
   }
@@ -1145,21 +1145,19 @@ async function startOperation(type, requestedVersion, task) {
       .then(async () => {
         operation.status = "succeeded";
         operation.finishedAt = new Date().toISOString();
-        state.lastError = null;
         await saveOperation(operation);
-        await persistState();
+        await managerState.update({ lastError: null });
       })
       .catch(async (error) => {
         operation.status = "failed";
         operation.error =
           error instanceof Error ? error.message : String(error);
         operation.finishedAt = new Date().toISOString();
-        state.lastError = operation.error;
         await appendLog(operation, `\nERROR: ${operation.error}\n`).catch(
           () => {},
         );
         await saveOperation(operation).catch(() => {});
-        await persistState().catch(() => {});
+        await managerState.update({ lastError: operation.error }).catch(() => {});
       })
       .finally(async () => {
         const restartForNewCode =
@@ -1242,14 +1240,15 @@ const server = createServer(
       if (request.method === "GET" && url.pathname === "/v1/activation-state") {
         return send(response, 200, {
           activeOperationId: activeOperation?.id ?? recoveringOperationId,
-          lastError: state.lastError,
+          lastError: managerState.current.lastError,
         });
       }
       if (request.method === "GET" && url.pathname === "/v1/state") {
         return send(response, 200, {
-          ...state,
+          ...managerState.current,
           installed: await installedRelease(),
           updater: await updaterStatus(),
+          toolchain: await serverToolchainStatus(),
           activeOperationId: activeOperation?.id ?? recoveringOperationId,
         });
       }
@@ -1257,7 +1256,10 @@ const server = createServer(
         url.pathname,
       );
       if (request.method === "GET" && operationMatch) {
-        const operation = await operationWithLog(operationMatch[1]);
+        const operation = await operationWithLog(
+          operationMatch[1],
+          url.searchParams.get("includeLog") !== "0",
+        );
         if (!operation)
           throw httpError(
             404,

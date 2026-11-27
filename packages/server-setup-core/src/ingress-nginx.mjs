@@ -1,6 +1,7 @@
 import { validateServerIngressReview } from "./ingress-review.mjs";
 import { URL } from "node:url";
 import { validateLanHttpsProvider } from "./lan-https.mjs";
+import { mcpIngress } from "./mcp-ingress.mjs";
 
 export const LAN_HTTPS_BACKEND_PORT = 3180;
 
@@ -104,9 +105,7 @@ ${tls}
   proxy_send_timeout 120s;
   proxy_read_timeout 360s;
 ${GATEWAY_ROUTES.map((route) => `  location ${route} { limit_req zone=latex_renderer_api burst=20 nodelay; proxy_pass http://127.0.0.1:3105; }`).join("\n")}
-  location ~ ^/\\.well-known/oauth-(authorization-server|protected-resource) { proxy_pass http://127.0.0.1:3104; }
-  location ~ ^/mcp/relay/local-(operation|revoke|download)$ { return 404; }
-  location ~ ^/(oauth|mcp)(/|$) { proxy_pass http://127.0.0.1:3104; }
+${mcpIngress.map(({ pattern, route }) => `  location ~ ${pattern} { ${route === "deny" ? "return 404;" : "proxy_pass http://127.0.0.1:3104;"} }`).join("\n")}
   location = /auth/password/login { limit_req zone=latex_renderer_login burst=5 nodelay; proxy_pass http://127.0.0.1:3102; }
   location ~ ^/(auth|admin/api|admin/v1|app/api)(/|$) { proxy_pass http://127.0.0.1:3102; }
   location ^~ /api/ { proxy_pass http://127.0.0.1:3100; }

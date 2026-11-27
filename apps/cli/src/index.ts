@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { humanText, humanDiagnostic, humanJobStatus } from "./messages.js";
+import { connectionMenu } from "./connection-menu.js";
 import { Writable } from "node:stream";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -7,6 +8,7 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { RendererClient } from "@latex-renderer/api-client";
 import {
+  acceptedJobRecovery,
   compileProjectPdf,
   downloadJobArtifacts,
   openLocalTarget,
@@ -17,6 +19,7 @@ import {
   requestJobAction,
   retrySvgJob,
   uploadProjectSource,
+  withClientOperationDeadline,
   type ClientCoreEvent,
   type RenderProjectResult,
   type RenderEngine,
@@ -25,20 +28,19 @@ import { stripVTControlCharacters } from "node:util";
 import {
   AppError,
   CLIENT_VERSION,
-  clientRendererBaseUrl,
+  clientRendererOverride,
 } from "@latex-renderer/shared";
 import {
   DEFAULT_DISTRIBUTION_URI,
+  clientConnections,
   configurePackageIntegrations,
   deleteCredential,
   doctorSetup,
   fetchDistribution,
   inspectSetup,
   installDistribution,
-  loadCredential,
   removeSetup,
   repairSetup,
-  saveCredential,
   type McpTarget,
   type SetupStatus,
   type SkillTarget,
@@ -76,7 +78,8 @@ const program = new Command()
   })
   .name(commandName)
   .version(CLIENT_VERSION)
-  .option("--json", humanText("writeOneStructuredJsonResultTo"));
+  .option("--json", humanText("writeOneStructuredJsonResultTo"))
+  .option("--profile <name>", "use a saved Renderer connection for this command");
 
 if (publicCommand) {
   program.addHelpText("after", "\n" + humanText("compileADocumentN624LatexMain"));
@@ -101,7 +104,9 @@ if (publicCommand) {
           );
         throw error;
       }
-      const result = await compileProjectPdf(client, input, { ...options, engine });
+      const result = await runLocalRenderOperation((signal) =>
+        compileProjectPdf(client, input, { ...options, engine, signal }),
+      );
       if (result.pdf !== undefined) {
         emitSuccess("compile", { jobId: result.job.id, pdf: result.pdf }, () =>
           process.stdout.write(`${result.pdf}\n`),
@@ -136,19 +141,19 @@ if (publicCommand) {
 }
 
 const auth = program.command("auth");
-const authLogin = auth.command("login").requiredOption("--api-key-stdin");
-authLogin.action(async () => {
+const authLogin = auth.command("login").requiredOption("--api-key-stdin").option("--url <url>");
+authLogin.action(async (options: { url?: string }) => {
   const secret = (await readStdin()).trim();
   if (!/^lrk_[a-f0-9]{32}_[A-Za-z0-9_-]{43}$/.test(secret))
     throw new AppError("INVALID_API_KEY", "Input is not a render API key", 400);
-  await saveCredential(secret);
+  await saveConnectionCredential(secret, options.url ?? rendererOverride());
   emitSuccess("auth.login", { stored: true }, () => {
     process.stdout.write(humanText("credentialStored") + "\n");
   });
 });
 
 auth.command("status").action(async () => {
-  await loadCredential();
+  await clientConnections().resolve(activeProfile());
   emitSuccess("auth.status", { configured: true }, () => {
     process.stdout.write(humanText("credentialIsConfigured") + "\n");
   });
@@ -158,10 +163,44 @@ auth
   .command("logout")
   .description(humanText("removeTheStoredApiKey"))
   .action(async () => {
-    await deleteCredential();
+    const store = clientConnections();
+    const name = activeProfile() ?? process.env.LATEX_RENDER_PROFILE ?? await store.defaultName();
+    if (name) await store.remove(name);
+    else await deleteCredential();
     emitSuccess("auth.logout", { removed: true }, () => {
       process.stdout.write(humanText("credentialRemoved") + "\n");
     });
+  });
+
+const connection = program.command("connection").description("Manage Renderer connections");
+connection.action(async () => {
+  if (isJsonMode()) throw new AppError("CLI_USAGE_ERROR", "Choose a connection subcommand for JSON output", 400);
+  await connectionMenu();
+});
+connection.command("list").action(async () => {
+  const connections = await clientConnections().list();
+  emitSuccess("connection.list", { connections }, () => {
+    for (const item of connections)
+      process.stdout.write(`${item.default ? "*" : " "} ${item.name}  ${item.origin}\n`);
+  });
+});
+connection.command("add").argument("<name>").argument("<url>").requiredOption("--api-key-stdin")
+  .action(async (name: string, url: string) => {
+    await clientConnections().save(name, url, (await readStdin()).trim());
+    emitSuccess("connection.add", { name }, () => process.stdout.write(humanText("credentialStored") + "\n"));
+  });
+connection.command("use").argument("<name>").action(async (name: string) => {
+  await clientConnections().select(name);
+  emitSuccess("connection.use", { name }, () => process.stdout.write(name + "\n"));
+});
+connection.command("remove").argument("<name>").requiredOption("--yes").action(async (name: string) => {
+  await clientConnections().remove(name);
+  emitSuccess("connection.remove", { name }, () => process.stdout.write(humanText("credentialRemoved") + "\n"));
+});
+connection.command("migrate").argument("<name>").argument("<url>").requiredOption("--confirm-origin")
+  .action(async (name: string, url: string) => {
+    await clientConnections().migrate(name, url);
+    emitSuccess("connection.migrate", { name }, () => process.stdout.write(humanText("credentialStored") + "\n"));
   });
 
 interface SetupCommandOptions {
@@ -192,7 +231,7 @@ const setup = program
       options.apiKeyStdin === true &&
       options.gui !== true
     ) {
-      await saveCredential((await readStdin()).trim());
+      await saveConnectionCredential((await readStdin()).trim(), rendererOverride());
       emitSuccess("setup", { configured: true }, () =>
         process.stdout.write(humanText("credentialStored") + "\n"),
       );
@@ -223,7 +262,8 @@ const setup = program
       const webOptions = {
         ...setupCoreOptions(options),
         distributionBaseUri: options.baseUri ?? DEFAULT_DISTRIBUTION_URI,
-        rendererBaseUrl: clientRendererBaseUrl(process.env),
+        ...(activeProfile() ? { profile: activeProfile() } : {}),
+        ...(rendererOverride() ? { rendererBaseUrl: rendererOverride() } : {}),
       };
       if (packageManager) {
         const core = setupCoreOptions(options);
@@ -257,7 +297,7 @@ const setup = program
       ...(isJsonMode() ? { output: quietWriter, warning: quietWriter } : {}),
     });
     if (options.apiKeyStdin === true)
-      await saveCredential((await readStdin()).trim());
+      await saveConnectionCredential((await readStdin()).trim(), rendererOverride());
     emitSuccess("setup", result, () => {
       process.stdout.write(
         `Setup ${result.action}: ${result.installDirectory} (${result.version})\n`,
@@ -323,7 +363,7 @@ setup
       ...(isJsonMode() ? { output: quietWriter, warning: quietWriter } : {}),
     });
     if (merged.apiKeyStdin === true)
-      await saveCredential((await readStdin()).trim());
+      await saveConnectionCredential((await readStdin()).trim(), rendererOverride());
     emitSuccess("setup.repair", result, () => {
       process.stdout.write(
         humanText("repairedItems", { count: result.repaired.length }) + "\n",
@@ -411,10 +451,11 @@ program
             : { outputDirectory: options.output }),
           ...(isJsonMode() ? {} : { onEvent: humanRenderEvent }),
         },
-        result =
+        result = await runLocalRenderOperation((signal) =>
           options.source === undefined
-            ? await renderProject(client, path ?? ".", renderOptions)
-            : await renderSource(client, options.source, renderOptions);
+            ? renderProject(client, path ?? ".", { ...renderOptions, signal })
+            : renderSource(client, options.source, { ...renderOptions, signal }),
+        );
       const pdf = result.artifacts.pdf;
       if (
         options.open === true &&
@@ -438,10 +479,11 @@ sources
   .command("upload")
   .argument("<path>", humanText("projectDirectoryOrZip"))
   .action(async (path: string) => {
-    const result = await uploadProjectSource(
-      await configuredClient(),
-      path,
-      isJsonMode() ? {} : { onEvent: humanRenderEvent },
+    const result = await runLocalRenderOperation(async (signal) =>
+      uploadProjectSource(await configuredClient(), path, {
+        signal,
+        ...(isJsonMode() ? {} : { onEvent: humanRenderEvent }),
+      }),
     );
     emitSuccess("source.upload", result, () => {
       process.stdout.write(
@@ -536,16 +578,19 @@ projects
       path: string,
       options: { entrypoint: string; name?: string; svg?: boolean },
     ) => {
-      const client = await configuredClient(),
-        source = await uploadProjectSource(client, path),
-        filename = basename(resolve(path));
-      const revision = await client.attachProjectRevision({
-        projectId,
-        sourceId: source.sourceId,
-        entrypoint: options.entrypoint,
-        displayName: options.name ?? filename,
-        originalFilename: filename,
-        outputs: options.svg ? ["pdf", "svg"] : ["pdf"],
+      const { source, revision } = await runLocalRenderOperation(async (signal) => {
+        const client = await configuredClient();
+        const source = await uploadProjectSource(client, path, { signal });
+        const filename = basename(resolve(path));
+        const revision = await client.attachProjectRevision({
+          projectId,
+          sourceId: source.sourceId,
+          entrypoint: options.entrypoint,
+          displayName: options.name ?? filename,
+          originalFilename: filename,
+          outputs: options.svg ? ["pdf", "svg"] : ["pdf"],
+        }, { signal });
+        return { source, revision };
       });
       emitSuccess("projects.save", { source, revision }, () =>
         process.stdout.write(`${revision.id} (${source.sourceId})\n`),
@@ -634,17 +679,15 @@ jobs
       id: string,
       options: { output: string; pdfOnly?: boolean; previewPage?: string[] },
     ) => {
-      const result = await downloadJobArtifacts(
-        await configuredClient(),
-        id,
-        options.output,
-        {
+      const result = await runLocalRenderOperation(async (signal) =>
+        downloadJobArtifacts(await configuredClient(), id, options.output, {
+          signal,
           ...(isJsonMode() ? {} : { onEvent: humanRenderEvent }),
           ...(options.pdfOnly === true ? { pdfOnly: true } : {}),
           ...(options.previewPage === undefined
             ? {}
             : { previewPages: options.previewPage.map(Number) }),
-        },
+        }),
       );
       emitSuccess("jobs.download", result, () => {
         process.stdout.write(
@@ -659,11 +702,11 @@ jobs
   .argument("<id>")
   .option("--output <directory>", humanText("outputDirectory"), ".render")
   .action(async (id: string, options: { output: string }) => {
-    const result = await retrySvgJob(
-      await configuredClient(),
-      id,
-      options.output,
-      isJsonMode() ? {} : { onEvent: humanRenderEvent },
+    const result = await runLocalRenderOperation(async (signal) =>
+      retrySvgJob(await configuredClient(), id, options.output, {
+        signal,
+        ...(isJsonMode() ? {} : { onEvent: humanRenderEvent }),
+      }),
     );
     emitSuccess("jobs.retry-svg", result, () => {
       process.stdout.write(
@@ -690,7 +733,13 @@ if (publicCommand && userArgs[0] === "admin") {
     process.exitCode = child.status ?? 1;
   }
 } else {
-  const first = userArgs.findIndex((argument) => argument !== "--json");
+  let first = 0;
+  while (first < userArgs.length) {
+    const value = userArgs[first];
+    if (value === "--profile") first += 2;
+    else if (value === "--json" || value?.startsWith("--profile=")) first++;
+    else break;
+  }
   const input = userArgs[first];
   if (
     publicCommand &&
@@ -721,13 +770,49 @@ if (publicCommand && userArgs[0] === "admin") {
           `${commandName}: ${error instanceof Error ? humanDiagnostic(error.message) : humanDiagnostic("Unknown error")}\n`,
         );
       }
-      process.exitCode = error instanceof CommanderError ? error.exitCode : 1;
+      process.exitCode =
+        error instanceof CommanderError
+          ? error.exitCode
+          : error instanceof AppError && error.code === "CLIENT_OPERATION_INTERRUPTED"
+            ? 130
+            : 1;
     });
 }
 
+async function runLocalRenderOperation<T>(
+  operation: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const controller = new AbortController();
+  const interrupt = () => controller.abort(new AppError(
+    "CLIENT_OPERATION_INTERRUPTED",
+    "Local operation interrupted. Check the status of any accepted Job before submitting again.",
+    499,
+  ));
+  process.once("SIGINT", interrupt);
+  try {
+    return await withClientOperationDeadline(operation, { signal: controller.signal });
+  } finally {
+    process.off("SIGINT", interrupt);
+  }
+}
+
 async function configuredClient(): Promise<RendererClient> {
-  const base = clientRendererBaseUrl(process.env);
-  return new RendererClient(base, await loadCredential());
+  const { origin, apiKey } = await clientConnections().resolve(activeProfile());
+  return new RendererClient(origin, apiKey);
+}
+
+function activeProfile() {
+  return program.opts<{ profile?: string }>().profile;
+}
+
+function rendererOverride() {
+  return clientRendererOverride(process.env);
+}
+
+async function saveConnectionCredential(secret: string, url?: string): Promise<void> {
+  const store = clientConnections();
+  const { name, origin } = await store.target(activeProfile(), url);
+  await store.save(name, origin, secret);
 }
 
 function humanRenderEvent(event: ClientCoreEvent): void {
@@ -780,12 +865,15 @@ function normalizeError(error: unknown): {
   code: string;
   message: string;
   status?: number;
+  jobId?: string;
+  lastStatus?: string | null;
 } {
   if (error instanceof AppError)
     return {
       code: error.code,
       message: error.message,
       status: error.status,
+      ...acceptedJobRecovery(error),
     };
   if (error instanceof CommanderError)
     return {

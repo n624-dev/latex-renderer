@@ -58,6 +58,17 @@ sudo n624-latex server setup --cui
 
 To update an existing installation, enter each setting when prompted. Leave a field empty and press Enter to keep the current value. For automatic LAN HTTPS during initial setup, choose `LAN` and follow the prompts. To configure custom HTTPS on first installation or an existing Cloudflare route in the terminal, enter one line of JSON in the format shown. If this is your first time configuring that setup, [start in a browser](#ブラウザで開く).
 
+### Change the queue limit on a running server {#稼働中のキュー上限を変更する}
+
+Use the admin CLI to see the effective settings and their units. For example, to limit all unfinished jobs, including queued and running jobs, to 50, run these commands.
+
+```sh
+n624-latex admin system config
+n624-latex admin system config set max_queue_length 50 --reason "Queue capacity review" --yes
+```
+
+Changing a setting requires write access to the admin API. The `system config` output lists the keys, minimums, and maximums.
+
 ### Older releases and manual installations {#旧版-手動配置の場合}
 
 > [!DETAILS] Run server-setup.mjs directly

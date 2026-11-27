@@ -1,18 +1,46 @@
 import type { DatabaseSync } from "node:sqlite";
-import {
-  auditExportSequenceSql,
-  internalSmokeVisibilitySql,
-  remoteMcpLoginContinuationsSql,
-  outputStagesV21Sql,
-  lazyPreviewsV22Sql,
-  renderEngineSettingsV23Sql,
-  projectDraftsV24Sql,
-  accountLocaleV25Sql,
-  draftRenderInputsV26Sql,
-  draftWorkCacheV27Sql,
-  projectDocumentStateV28Sql,
-  attachedPdfInspectionsV29Sql,
-} from "./schema.js";
+import { readdirSync, readFileSync } from "node:fs";
+
+const canonicalDirectory = new URL(
+  "../../../deploy/migrations/",
+  import.meta.url,
+);
+export const latestDatabaseMigration = 32;
+const numberedSqlFiles = readdirSync(canonicalDirectory)
+  .filter((name) => name.endsWith(".sql"))
+  .sort();
+for (const [index, name] of numberedSqlFiles.entries()) {
+  const match = /^(\d{3})_[a-z0-9_]+\.sql$/.exec(name);
+  if (match === null || Number(match[1]) !== index + 1)
+    throw new Error(
+      `Database migration list has a gap, duplicate or invalid name: ${name}`,
+    );
+}
+if (numberedSqlFiles.length !== latestDatabaseMigration)
+  throw new Error(
+    `Database migration list must include versions 1 through ${latestDatabaseMigration}`,
+  );
+
+export function assertSupportedDatabaseVersion(db: DatabaseSync): void {
+  if (
+    !db
+      .prepare(
+        "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='schema_migrations'",
+      )
+      .get()
+  )
+    return;
+  const applied = db
+    .prepare("SELECT MAX(version) AS version FROM schema_migrations")
+    .get();
+  if (
+    typeof applied?.version === "number" &&
+    applied.version > latestDatabaseMigration
+  )
+    throw new Error(
+      `Database schema ${applied.version} requires a newer application`,
+    );
+}
 
 const usersAccessSubjectV2Sql = `
 DROP INDEX IF EXISTS idx_users_access_subject_unique;
@@ -58,129 +86,83 @@ export function applyDatabaseMigrations(db: DatabaseSync): void {
   applyWebAppProjectsV5(db);
   applySvgOutputsV6(db);
   applyBrowserAuthV7(db);
-  applyWorkerLeaseFencingV8(db);
-  applyCleanupStateV9(db);
-  applyAdmissionReservationsV10(db);
-  applyUploadClaimLeasesV11(db);
-  applyAuthorizationCodeSecurityVersionV12(db);
-  applyListPaginationIndexesV13(db);
-  applyProjectRevisionOutputsV14(db);
+  for (let version = 8; version <= 14; version += 1)
+    applyNumberedMigrations(db, version, version);
   applySourceUploadConcurrencyV15(db);
   applyApiKeyKindV16(db);
-  applyArtifactGenerationV17(db);
-  applyAuditExportSequenceV18(db);
-  applyInternalSmokeVisibilityV19(db);
-  applyRemoteMcpLoginContinuationsV20(db);
-  applyOutputStagesV21(db);
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    if (!db.prepare("SELECT 1 FROM schema_migrations WHERE version=22").get())
-      db.exec(lazyPreviewsV22Sql);
-    db.exec("COMMIT");
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
-  applyRenderEngineSettingsV23(db);
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    if (!db.prepare("SELECT 1 FROM schema_migrations WHERE version=24").get())
-      db.exec(projectDraftsV24Sql);
-    if (!db.prepare("SELECT 1 FROM schema_migrations WHERE version=25").get())
-      db.exec(accountLocaleV25Sql);
-    if (!db.prepare("SELECT 1 FROM schema_migrations WHERE version=26").get())
-      db.exec(draftRenderInputsV26Sql);
-    if (!db.prepare("SELECT 1 FROM schema_migrations WHERE version=27").get())
-      db.exec(draftWorkCacheV27Sql);
-    if (!db.prepare("SELECT 1 FROM schema_migrations WHERE version=28").get())
-      db.exec(projectDocumentStateV28Sql);
-    if (!db.prepare("SELECT 1 FROM schema_migrations WHERE version=29").get())
-      db.exec(attachedPdfInspectionsV29Sql);
-    db.exec("COMMIT");
-  } catch (error) {
-    if (db.isTransaction) db.exec("ROLLBACK");
-    throw error;
-  }
+  for (let version = 17; version <= 23; version += 1)
+    applyNumberedMigrations(db, version, version);
+  applyNumberedMigrations(db, 24, latestDatabaseMigration);
 }
 
-function applyRenderEngineSettingsV23(db: DatabaseSync): void {
-  db.exec("PRAGMA foreign_keys=OFF");
+// The initial schema already contains some columns when bringing up a fresh
+// database. Keep the preexisting-column checks from the historical migrations.
+const historicalMigrationColumn: Readonly<
+  Record<number, { table: string; column: string }>
+> = {
+  12: {
+    table: "remote_mcp_authorization_codes",
+    column: "user_security_version",
+  },
+  14: { table: "project_revisions", column: "outputs_json" },
+};
+
+function applyNumberedMigrations(
+  db: DatabaseSync,
+  start: number,
+  end: number,
+): void {
+  const requiresForeignKeysDisabled = start === 23;
+  if (requiresForeignKeysDisabled) db.exec("PRAGMA foreign_keys=OFF");
   try {
     db.exec("BEGIN IMMEDIATE");
-    if (!db.prepare("SELECT 1 FROM schema_migrations WHERE version=23").get())
-      db.exec(renderEngineSettingsV23Sql);
+    assertSupportedDatabaseVersion(db);
+    const applied = db.prepare(
+      "SELECT 1 FROM schema_migrations WHERE version=?",
+    );
+    for (let version = start; version <= end; version += 1) {
+      if (applied.get(version)) continue;
+      const name = numberedSqlFiles[version - 1];
+      if (name === undefined)
+        throw new Error(`Database migration ${version} is missing`);
+      const script = readFileSync(new URL(name, canonicalDirectory), "utf8");
+      // Numbered files can also be run by an operator. The runtime owns the
+      // transaction and constraint settings to check the version under lock.
+      // Match full lines so trigger bodies with BEGIN ... END are preserved.
+      const statements = script.replace(
+        /^[ \t]*(?:BEGIN(?: IMMEDIATE)?|COMMIT|PRAGMA (?:foreign_keys=(?:ON|OFF)|busy_timeout=\d+|foreign_key_check));[ \t]*\r?$/gm,
+        "",
+      );
+      const preexistingColumn = historicalMigrationColumn[version];
+      if (
+        preexistingColumn &&
+        db
+          .prepare(`PRAGMA table_info(${preexistingColumn.table})`)
+          .all()
+          .some((column) => column.name === preexistingColumn.column)
+      ) {
+        db.prepare(
+          "INSERT INTO schema_migrations(version,applied_at) VALUES (?,strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
+        ).run(version);
+      } else db.exec(statements);
+      if (!applied.get(version))
+        throw new Error(
+          `Database migration ${version} did not record its version`,
+        );
+      if (
+        requiresForeignKeysDisabled &&
+        db.prepare("PRAGMA foreign_key_check").get()
+      )
+        throw new Error(
+          `Database migration ${version} produced an invalid foreign key`,
+        );
+    }
     db.exec("COMMIT");
   } catch (error) {
     if (db.isTransaction) db.exec("ROLLBACK");
     throw error;
   } finally {
-    db.exec("PRAGMA foreign_keys=ON");
-  }
-}
-
-function applyOutputStagesV21(db: DatabaseSync): void {
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    if (!db.prepare("SELECT 1 FROM schema_migrations WHERE version=21").get())
-      db.exec(outputStagesV21Sql);
-    db.exec("COMMIT");
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
-}
-
-function applyRemoteMcpLoginContinuationsV20(db: DatabaseSync): void {
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    if (!db.prepare("SELECT 1 FROM schema_migrations WHERE version=20").get())
-      db.exec(remoteMcpLoginContinuationsSql);
-    db.exec("COMMIT");
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
-}
-
-function applyInternalSmokeVisibilityV19(db: DatabaseSync): void {
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    if (!db.prepare("SELECT 1 FROM schema_migrations WHERE version=19").get())
-      db.exec(internalSmokeVisibilitySql);
-    db.exec("COMMIT");
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
-}
-
-function applyAuditExportSequenceV18(db: DatabaseSync): void {
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    if (!db.prepare("SELECT 1 FROM schema_migrations WHERE version=18").get())
-      db.exec(auditExportSequenceSql);
-    db.exec("COMMIT");
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
-}
-
-function applyArtifactGenerationV17(db: DatabaseSync): void {
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    if (!db.prepare("SELECT 1 FROM schema_migrations WHERE version=17").get()) {
-      db.exec(
-        "ALTER TABLE artifacts ADD COLUMN storage_generation INTEGER CHECK(storage_generation IS NULL OR storage_generation > 0)",
-      );
-      db.exec(
-        "INSERT INTO schema_migrations(version,applied_at) VALUES (17,strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
-      );
-    }
-    db.exec("COMMIT");
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
+    if (requiresForeignKeysDisabled) db.exec("PRAGMA foreign_keys=ON");
   }
 }
 
@@ -577,226 +559,6 @@ function applyBrowserAuthV7(db: DatabaseSync): void {
   }
 }
 
-const workerLeaseFencingV8Sql = `
-ALTER TABLE jobs
-ADD COLUMN lease_generation INTEGER NOT NULL DEFAULT 0
-CHECK(lease_generation >= 0);
-INSERT INTO schema_migrations(version,applied_at)
-VALUES (8,strftime('%Y-%m-%dT%H:%M:%fZ','now'));
-`;
-
-function applyWorkerLeaseFencingV8(db: DatabaseSync): void {
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    const applied =
-      db.prepare("SELECT 1 FROM schema_migrations WHERE version=8").get() !==
-      undefined;
-    if (!applied) db.exec(workerLeaseFencingV8Sql);
-    db.exec("COMMIT");
-  } catch (error) {
-    try {
-      db.exec("ROLLBACK");
-    } catch {
-      /* Preserve the original migration error. */
-    }
-    throw error;
-  }
-}
-
-const cleanupStateV9Sql = `
-ALTER TABLE jobs ADD COLUMN render_status TEXT
-CHECK(render_status IS NULL OR render_status IN ('succeeded','failed','timeout','canceled','rejected','expired'));
-ALTER TABLE jobs ADD COLUMN deletion_status TEXT NOT NULL DEFAULT 'retained'
-CHECK(deletion_status IN ('retained','pending','deleting','retry','failed','deleted'));
-ALTER TABLE jobs ADD COLUMN deletion_attempts INTEGER NOT NULL DEFAULT 0
-CHECK(deletion_attempts >= 0);
-ALTER TABLE jobs ADD COLUMN deletion_error TEXT;
-ALTER TABLE jobs ADD COLUMN deletion_next_attempt_at TEXT;
-UPDATE jobs SET render_status=status
-WHERE status IN ('succeeded','failed','timeout','canceled','rejected','expired');
-UPDATE jobs SET deletion_status='deleting' WHERE status='deleting';
-UPDATE jobs SET deletion_status='deleted' WHERE status='deleted';
-CREATE INDEX idx_jobs_deletion_retry
-ON jobs(deletion_status,deletion_next_attempt_at,updated_at);
-
-ALTER TABLE sources ADD COLUMN deletion_status TEXT NOT NULL DEFAULT 'retained'
-CHECK(deletion_status IN ('retained','pending','deleting','retry','failed','deleted'));
-ALTER TABLE sources ADD COLUMN deletion_attempts INTEGER NOT NULL DEFAULT 0
-CHECK(deletion_attempts >= 0);
-ALTER TABLE sources ADD COLUMN deletion_error TEXT;
-ALTER TABLE sources ADD COLUMN deletion_next_attempt_at TEXT;
-UPDATE sources SET deletion_status='deleting' WHERE status='deleting';
-UPDATE sources SET deletion_status='deleted' WHERE status='deleted';
-CREATE INDEX idx_sources_deletion_retry
-ON sources(deletion_status,deletion_next_attempt_at,updated_at);
-
-INSERT INTO schema_migrations(version,applied_at)
-VALUES (9,strftime('%Y-%m-%dT%H:%M:%fZ','now'));
-`;
-
-function applyCleanupStateV9(db: DatabaseSync): void {
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    const applied =
-      db.prepare("SELECT 1 FROM schema_migrations WHERE version=9").get() !==
-      undefined;
-    if (!applied) db.exec(cleanupStateV9Sql);
-    db.exec("COMMIT");
-  } catch (error) {
-    try {
-      db.exec("ROLLBACK");
-    } catch {
-      /* Preserve the original migration error. */
-    }
-    throw error;
-  }
-}
-
-const admissionReservationsV10Sql = `
-ALTER TABLE jobs ADD COLUMN reserved_output_bytes INTEGER NOT NULL DEFAULT 209715200
-CHECK(reserved_output_bytes >= 0);
-UPDATE jobs SET reserved_output_bytes=0
-WHERE status IN ('succeeded','failed','timeout','canceled','rejected','deleting','deleted','expired');
-
-INSERT OR IGNORE INTO system_settings(key,value_json,updated_by,updated_at)
-VALUES ('max_user_active_jobs','20','migration',strftime('%Y-%m-%dT%H:%M:%fZ','now'));
-
-CREATE INDEX idx_jobs_user_active
-ON jobs(user_id,status);
-
-INSERT INTO schema_migrations(version,applied_at)
-VALUES (10,strftime('%Y-%m-%dT%H:%M:%fZ','now'));
-`;
-
-function applyAdmissionReservationsV10(db: DatabaseSync): void {
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    const applied =
-      db.prepare("SELECT 1 FROM schema_migrations WHERE version=10").get() !==
-      undefined;
-    if (!applied) db.exec(admissionReservationsV10Sql);
-    db.exec("COMMIT");
-  } catch (error) {
-    try {
-      db.exec("ROLLBACK");
-    } catch {
-      /* Preserve the original migration error. */
-    }
-    throw error;
-  }
-}
-
-const uploadClaimLeasesV11Sql = `
-ALTER TABLE used_nonces ADD COLUMN claim_expires_at TEXT;
-UPDATE used_nonces SET claim_expires_at=expires_at WHERE state='claimed';
-
-ALTER TABLE source_upload_nonces ADD COLUMN claim_expires_at TEXT;
-UPDATE source_upload_nonces SET claim_expires_at=expires_at WHERE state='claimed';
-
-CREATE INDEX idx_nonces_claim_expiry
-ON used_nonces(state,claim_expires_at);
-CREATE INDEX idx_source_nonces_claim_expiry
-ON source_upload_nonces(state,claim_expires_at);
-
-INSERT INTO schema_migrations(version,applied_at)
-VALUES (11,strftime('%Y-%m-%dT%H:%M:%fZ','now'));
-`;
-
-function applyUploadClaimLeasesV11(db: DatabaseSync): void {
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    const applied =
-      db.prepare("SELECT 1 FROM schema_migrations WHERE version=11").get() !==
-      undefined;
-    if (!applied) db.exec(uploadClaimLeasesV11Sql);
-    db.exec("COMMIT");
-  } catch (error) {
-    try {
-      db.exec("ROLLBACK");
-    } catch {
-      /* Preserve the original migration error. */
-    }
-    throw error;
-  }
-}
-
-const listPaginationIndexesV13Sql = `
-CREATE INDEX IF NOT EXISTS idx_users_created_id
-  ON users(created_at DESC,id DESC);
-CREATE INDEX IF NOT EXISTS idx_service_accounts_created_id
-  ON service_accounts(created_at DESC,id DESC);
-CREATE INDEX IF NOT EXISTS idx_api_keys_created_id
-  ON api_keys(created_at DESC,id DESC);
-CREATE INDEX IF NOT EXISTS idx_jobs_created_id
-  ON jobs(created_at DESC,id DESC);
-CREATE INDEX IF NOT EXISTS idx_jobs_user_created_id
-  ON jobs(user_id,created_at DESC,id DESC) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_jobs_source_created_id
-  ON jobs(source_id,created_at DESC,id DESC) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_jobs_revision_created_id
-  ON jobs(project_revision_id,created_at DESC,id DESC) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_sources_created_id
-  ON sources(created_at DESC,id DESC) WHERE status!='deleted';
-CREATE INDEX IF NOT EXISTS idx_projects_owner_updated_id
-  ON projects(owner_user_id,updated_at DESC,id DESC) WHERE deleted_at IS NULL;
-INSERT INTO schema_migrations(version,applied_at)
-VALUES (13,strftime('%Y-%m-%dT%H:%M:%fZ','now'));
-`;
-
-function applyListPaginationIndexesV13(db: DatabaseSync): void {
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    const applied =
-      db.prepare("SELECT 1 FROM schema_migrations WHERE version=13").get() !==
-      undefined;
-    if (!applied) db.exec(listPaginationIndexesV13Sql);
-    db.exec("COMMIT");
-  } catch (error) {
-    try {
-      db.exec("ROLLBACK");
-    } catch {
-      /* Preserve the original migration error. */
-    }
-    throw error;
-  }
-}
-
-const projectRevisionOutputsV14Sql = `
-ALTER TABLE project_revisions
-ADD COLUMN outputs_json TEXT NOT NULL DEFAULT '["pdf"]'
-CHECK(json_valid(outputs_json));
-INSERT INTO schema_migrations(version,applied_at)
-VALUES (14,strftime('%Y-%m-%dT%H:%M:%fZ','now'));
-`;
-
-function applyProjectRevisionOutputsV14(db: DatabaseSync): void {
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    const applied =
-      db.prepare("SELECT 1 FROM schema_migrations WHERE version=14").get() !==
-      undefined;
-    if (!applied) {
-      const columns = db
-        .prepare("PRAGMA table_info(project_revisions)")
-        .all() as Array<{ name?: unknown }>;
-      if (!columns.some((column) => column.name === "outputs_json"))
-        db.exec(projectRevisionOutputsV14Sql);
-      else
-        db.exec(
-          "INSERT INTO schema_migrations(version,applied_at) VALUES (14,strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
-        );
-    }
-    db.exec("COMMIT");
-  } catch (error) {
-    try {
-      db.exec("ROLLBACK");
-    } catch {
-      /* Preserve the migration error. */
-    }
-    throw error;
-  }
-}
-
 function applySourceUploadConcurrencyV15(db: DatabaseSync): void {
   db.exec("BEGIN IMMEDIATE");
   try {
@@ -860,35 +622,6 @@ function applyApiKeyKindV16(db: DatabaseSync): void {
     if (!applied) {
       db.exec(
         "INSERT INTO schema_migrations(version,applied_at) VALUES (16,strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
-      );
-    }
-    db.exec("COMMIT");
-  } catch (error) {
-    try {
-      db.exec("ROLLBACK");
-    } catch {
-      /* Preserve the original migration error. */
-    }
-    throw error;
-  }
-}
-
-function applyAuthorizationCodeSecurityVersionV12(db: DatabaseSync): void {
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    const applied =
-      db.prepare("SELECT 1 FROM schema_migrations WHERE version=12").get() !==
-      undefined;
-    if (!applied) {
-      const columns = db
-        .prepare("PRAGMA table_info(remote_mcp_authorization_codes)")
-        .all() as Array<{ name?: unknown }>;
-      if (!columns.some((column) => column.name === "user_security_version"))
-        db.exec(
-          "ALTER TABLE remote_mcp_authorization_codes ADD COLUMN user_security_version INTEGER NOT NULL DEFAULT 1 CHECK(user_security_version > 0)",
-        );
-      db.exec(
-        "INSERT INTO schema_migrations(version,applied_at) VALUES (12,strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
       );
     }
     db.exec("COMMIT");

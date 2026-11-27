@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { SQLInputValue } from "node:sqlite";
 import type { JobStatus, RenderEngine } from "@latex-renderer/contracts";
+import { sameJobCredential } from "../job-credentials.js";
 
 export interface WorkerJobRow {
   id: string;
@@ -173,7 +174,14 @@ export class WorkerRepository {
     return this.db
       .prepare(
         `SELECT u.status AS user_status,s.status AS sa_status,k.revoked_at,k.expires_at FROM jobs j
-      JOIN users u ON u.id=j.user_id JOIN service_accounts s ON s.id=j.service_account_id JOIN api_keys k ON k.id=j.api_key_id WHERE j.id=?`,
+        JOIN users u ON u.id=j.user_id
+        JOIN service_accounts s ON s.id=j.service_account_id AND s.owner_user_id=u.id
+        JOIN api_keys owner ON owner.id=j.api_key_id AND owner.service_account_id=s.id
+        JOIN api_keys k ON ${sameJobCredential("owner", "k")} AND k.revoked_at IS NULL
+        WHERE j.id=? AND (k.id=owner.id OR EXISTS (
+          SELECT 1 FROM json_each(CASE WHEN json_valid(k.scopes_json) THEN k.scopes_json ELSE '[]' END)
+          WHERE value IN ('render:create','admin:*')
+        ))`,
       )
       .get(jobId) as WorkerSubjectState | undefined;
   }

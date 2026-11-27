@@ -1,6 +1,5 @@
 import { readFileSync } from "node:fs";
-import { loginScript } from "./assets/login-script.js";
-import { siteScript } from "./assets/site-script.js";
+import { readBrowserAsset } from "./browser-assets.js";
 import { styles } from "./assets/styles.js";
 import { publicWebFontFiles } from "./assets/font-assets.js";
 import type { ClientDistribution } from "./client-distribution.js";
@@ -9,6 +8,7 @@ import {
   publicDocumentationPages,
 } from "./docs-pages.js";
 import { publicDocsSearchJson } from "./markdown-docs.js";
+import { favicon } from "./favicon.js";
 import { downloadsPage, homePage, publicPage404 } from "./templates.js";
 
 export interface StaticAsset {
@@ -25,6 +25,9 @@ function headers(archiveName: string, mcpbName?: string): string {
   X-LaTeX-Renderer-Serving: workers-static
   X-Content-Type-Options: nosniff
   X-Frame-Options: DENY
+
+/favicon.svg
+  Content-Type: image/svg+xml
 
 /downloads/windows/manifest.json
   Content-Type: application/json; charset=utf-8
@@ -189,9 +192,10 @@ export function createPublicStaticAssets(
       content: distribution.rendererOpenApi,
     },
     { path: "404.html", content: publicPage404() },
-    { path: "assets/login.js", content: loginScript },
+    { path: "favicon.svg", content: favicon },
+    { path: "assets/login.js", content: readBrowserAsset("login") },
     { path: "assets/styles.css", content: styles },
-    { path: "assets/site.js", content: siteScript },
+    { path: "assets/site.js", content: readBrowserAsset("site") },
     ...publicWebFontFiles.map(({ path, source }) => ({
       path,
       get content() {

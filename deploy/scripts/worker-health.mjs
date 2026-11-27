@@ -19,11 +19,12 @@ import { httpServiceStatus } from "./http-services.mjs";
 import { workerHasDemand } from "./worker-demand.mjs";
 import { request } from "node:http";
 
+const workerModes = new Set(["running", "paused", "draining"]);
+
 // Volatile, non-secret liveness only. The dedicated RuntimeDirectory is owned
 // by the worker and readable, never writable, by the Web service's group.
 export function writeWorkerHealth(path, { at, mode, stopping }) {
-  if (!["running", "paused", "draining"].includes(mode))
-    throw new Error("Invalid worker health mode");
+  if (!workerModes.has(mode)) throw new Error("Invalid worker health mode");
   const directory = dirname(path),
     info = lstatSync(directory);
   if (
@@ -117,7 +118,10 @@ export function readWorkerHealth({
       realpathSync(directory) !== directory
     )
       throw new Error("Unsafe health directory");
-    descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    descriptor = openSync(
+      path,
+      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+    );
     const info = fstatSync(descriptor);
     if (
       !info.isFile() ||
@@ -147,12 +151,13 @@ export function readWorkerHealth({
       Number.isSafeInteger(value.pid) &&
       value.pid > 1 &&
       String(value.pid) === values.MainPID &&
-      values.ActiveState === "active";
+      values.ActiveState === "active" &&
+      workerModes.has(value.mode) &&
+      value.stopping === false;
     if (!fresh) throw new Error("Worker heartbeat is not active");
     return {
-      operational:
-        fresh && value.mode === "running" && value.stopping === false,
-      state: fresh ? value.mode : "unavailable",
+      operational: value.mode === "running",
+      state: value.mode,
     };
   } catch {
     let database;
@@ -171,7 +176,12 @@ export function readWorkerHealth({
         )
         .get();
       const mode = row ? JSON.parse(row.value_json) : "running";
-      const demand = workerHasDemand(database);
+      if (!workerModes.has(mode))
+        return { operational: false, state: "unavailable" };
+      const demand = workerHasDemand(database, {
+        includeMaintenance: false,
+        now: new Date(now).toISOString(),
+      });
       return {
         operational: mode === "running" && !demand,
         state: demand ? "unavailable" : mode === "running" ? "idle" : mode,

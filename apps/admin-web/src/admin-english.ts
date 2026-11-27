@@ -403,6 +403,10 @@ export const english = {
   removedRoutes: "Removed routes",
   removedUnlockRoute: "Use {enable} or {disable} in place of {oldRoute}.",
   renderCreateScope: "{scope}: Create jobs.",
+  readSavedRevisionFiles: "Read files in saved project revisions",
+  readSharedDrafts: "Read shared project drafts",
+  editSharedDrafts: "Open, edit and save shared project drafts",
+  inspectOwnedPdfs: "Inspect PDFs from jobs owned by this key",
   renderReadScope:
     "{scope}: Renew a short-lived token for your own job. Use it to check status, retrieve results, cancel or delete the job.",
   renderTarget: "Render target",

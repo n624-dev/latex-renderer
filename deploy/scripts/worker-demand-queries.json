@@ -1,0 +1,32 @@
+[
+  {
+    "optionalTable": null,
+    "kind": "interactive",
+    "query": "SELECT 1 FROM jobs WHERE status IN ('queued','validating','running') LIMIT 1"
+  },
+  {
+    "optionalTable": null,
+    "kind": "interactive",
+    "query": "SELECT 1 FROM job_preview_requests WHERE status IN ('queued','running') LIMIT 1"
+  },
+  {
+    "optionalTable": "pdf_inspections",
+    "kind": "interactive",
+    "query": "SELECT 1 FROM pdf_inspections WHERE status='running' OR (status='queued' AND expires_at>?) LIMIT 1"
+  },
+  {
+    "optionalTable": "document_probes",
+    "kind": "interactive",
+    "query": "SELECT 1 FROM document_probes WHERE status='running' OR (status='queued' AND expires_at>?) LIMIT 1"
+  },
+  {
+    "optionalTable": null,
+    "kind": "maintenance",
+    "query": "SELECT 1 WHERE EXISTS(SELECT 1 FROM jobs WHERE lease_owner IS NOT NULL) OR EXISTS(SELECT 1 FROM job_preview_requests WHERE lease_owner IS NOT NULL) OR EXISTS(SELECT 1 FROM source_tree_readers) OR EXISTS(SELECT 1 FROM source_trees WHERE status IN ('building','deleting'))"
+  },
+  {
+    "optionalTable": "pdf_inspection_uploads",
+    "kind": "maintenance",
+    "query": "SELECT 1 FROM pdf_inspection_uploads WHERE expires_at<=? LIMIT 1"
+  }
+]

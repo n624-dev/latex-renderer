@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "vitest";
 import { AppError } from "@latex-renderer/shared";
 import type { JobResponse } from "@latex-renderer/contracts";
-import type { ClientTransport } from "../packages/client-core/src/index.js";
+import { acceptedJobRecovery, readAcceptedJob, type ClientTransport } from "../packages/client-core/src/index.js";
 import { pollUntilTerminal } from "../packages/client-core/src/polling.js";
 
 const ticket = () => ({ jobId: "job_test", jobTicket: "old", expiresAt: new Date(Date.now() + 1_800_000).toISOString() });
@@ -12,6 +12,19 @@ function transport(job: ClientTransport["job"], renewJobTicket: ClientTransport[
 }
 
 describe("polling deadlines and ticket renewal", () => {
+  it("retains the accepted Job ID after the initial status request fails", async () => {
+    const jobId = "job_" + "b".repeat(32);
+    const failure = new AppError("UPSTREAM_UNAVAILABLE", "/private/file?token=test-ticket", 503);
+    await assert.rejects(readAcceptedJob({
+      job: () => Promise.reject(failure),
+    }, { ...ticket(), jobId }), (error: unknown) => {
+      assert.ok(error instanceof AppError);
+      assert.equal(error.code, failure.code);
+      assert.deepEqual(acceptedJobRecovery(error), { jobId, lastStatus: null });
+      assert.ok(!error.message.includes("test-ticket"));
+      return true;
+    });
+  });
   it.each([502, 503, 504])("retries transient HTTP %s on status reads without renewing a ticket", async status => {
     let requests = 0, renewals = 0;
     const delays: number[] = [];

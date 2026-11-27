@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch for installed APT Node.js and Corepack updates for LaTeX Renderer
+
+[Path]
+PathChanged=/usr/lib/n624-latex/server/node-runtime.json
+PathChanged=/var/lib/dpkg/status
+
+[Install]
+WantedBy=multi-user.target

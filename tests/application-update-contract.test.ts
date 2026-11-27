@@ -16,7 +16,7 @@ import {
   normalizeRuntimeLanguages,
   runtimeIdentity,
 } from "../deploy/scripts/runtime-image-identity.mjs";
-import { adminScript } from "../apps/admin-web/src/assets/admin-script.js";
+import { adminSource as adminScript } from "./helpers/admin-ui-source.js";
 import {
   assembleBuildArtifacts,
   assertSealedControlTree,
@@ -646,7 +646,7 @@ describe("release-based application updates", () => {
       expect(routes).toContain(route);
     }
     expect(web).toContain('"/admin/updates/": "updates"');
-    expect(adminScript).toContain("watchUpdateOperation");
+    expect(adminScript).toContain("watchManagerOperation");
     expect(adminScript).not.toContain("[0-9A-Za-z.-]+)?");
     expect(openapi).toContain("/updates/state:");
     expect(openapi).toContain("/updates/policy:");

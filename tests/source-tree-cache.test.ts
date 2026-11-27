@@ -203,7 +203,7 @@ describe("bounded owner-bound Source input reuse (fixture renderer, no Docker)",
       expect(
         await load({ ...reader, projectId: "not-the-owner-project" }),
       ).toBe(false);
-      draft = await f.renders.saveDraftText(
+      draft = await f.renders.draftFiles.saveDraftText(
         actor,
         project.id,
         draft.version,
@@ -292,7 +292,7 @@ describe("bounded owner-bound Source input reuse (fixture renderer, no Docker)",
         outputs: ["pdf"],
       });
       let draft = drafts.open(actor, project.id);
-      draft = await f.renders.saveDraftText(
+      draft = await f.renders.draftFiles.saveDraftText(
         actor,
         project.id,
         draft.version,
@@ -315,7 +315,7 @@ describe("bounded owner-bound Source input reuse (fixture renderer, no Docker)",
         reservedOutputBytes: 1024,
         admit: () => {},
       });
-      await f.renders.saveDraftText(
+      await f.renders.draftFiles.saveDraftText(
         actor,
         project.id,
         draft.version,

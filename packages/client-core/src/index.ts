@@ -31,11 +31,13 @@ import type {
   RenderEngine,
 } from "@latex-renderer/contracts";
 import {
+  JobStatusSchema,
   structuredErrorsSchema,
   type StructuredErrors,
 } from "@latex-renderer/contracts";
-import { AppError, DEFAULT_RESOURCE_LIMITS } from "@latex-renderer/shared";
+import { AppError, DEFAULT_RESOURCE_LIMITS, type ResourceLimits } from "@latex-renderer/shared";
 import {
+  listValidatedSourceFiles,
   validateEntrypointPath,
   validateSourceFilePath,
 } from "@latex-renderer/zip-validation";
@@ -44,6 +46,10 @@ import yazl from "yazl";
 import { shouldExcludeProjectPath } from "./project-files.js";
 import { resolveLocalTexEngine } from "./tex-engine.js";
 import { pollUntilTerminal } from "./polling.js";
+import {
+  createJobTicketAccess,
+  type JobTicketAccess,
+} from "./job-ticket-access.js";
 import { pruneGeneratedArtifacts } from "./artifact-cleanup.js";
 import { publishArtifactSet } from "./artifact-transaction.js";
 import {
@@ -53,31 +59,36 @@ import {
 
 export { shouldExcludeProjectPath } from "./project-files.js";
 export { openLocalTarget } from "./open-local-target.js";
+export { withClientOperationDeadline } from "./operation-deadline.js";
 export {
   renderEngineSchema,
   type RenderEngine,
 } from "@latex-renderer/contracts";
 
 export interface ClientTransport {
+  sourceLimits?(options?: { signal?: AbortSignal | undefined }): Promise<ResourceLimits | undefined>;
   preparePreview?(
     jobId: string,
     page: number,
     ticket: string,
-    options?: { signal?: AbortSignal },
+    options?: { signal?: AbortSignal | undefined },
   ): Promise<void>;
   retrySvgJob?(
     jobId: string,
     idempotencyKey: string,
+    options?: { signal?: AbortSignal | undefined },
   ): Promise<SourceRenderResponse>;
   createSource(
     size: number,
     sha256: string,
     idempotencyKey: string,
+    options?: { signal?: AbortSignal | undefined },
   ): Promise<SourceTicketResponse>;
   uploadSource(
     ticket: SourceTicketResponse,
     zipPath: string,
     size: number,
+    options?: { signal?: AbortSignal | undefined },
   ): Promise<void>;
   createSourceJob(
     sourceId: string,
@@ -85,6 +96,7 @@ export interface ClientTransport {
     idempotencyKey: string,
     outputs?: readonly RenderOutput[],
     engine?: RenderEngine,
+    options?: { signal?: AbortSignal | undefined },
   ): Promise<SourceRenderResponse>;
   job(
     jobId: string,
@@ -107,6 +119,7 @@ export interface ClientTransport {
     ticket: string,
     destination: string,
     expected: { size: number; sha256: string },
+    options?: { signal?: AbortSignal | undefined },
   ): Promise<void>;
 }
 
@@ -146,6 +159,7 @@ export interface DownloadArtifactsResult {
 }
 
 export interface ClientCoreOptions {
+  signal?: AbortSignal | undefined;
   onEvent?: (event: ClientCoreEvent) => void;
   outputs?: readonly RenderOutput[];
   engine?: RenderEngine | undefined;
@@ -185,11 +199,14 @@ export async function renderProject(
   const temporary = await mkdtemp(join(tmpdir(), "latex-render-"));
   try {
     const zipPath = join(temporary, "source.zip");
+    const limits = await client.sourceLimits?.({ signal: options.signal });
     const prepared = await prepareInputArchive(
       input,
       zipPath,
       entrypoint,
       requestedOutput,
+      options.signal,
+      limits,
     );
     options.onEvent?.({ type: "archive.created", ...prepared.source });
     const source = await reserveAndUploadSource(
@@ -204,19 +221,17 @@ export async function renderProject(
       entrypoint,
       options.outputs,
       options.engine,
+      options.signal,
     );
-    options.onEvent?.({ type: "job.queued", jobId: ticket.jobId });
-    const { job, jobTicket } = await pollUntilTerminal(client, ticket, options);
     const outputDirectory =
       requestedOutput ?? resolve(join(prepared.outputRoot, ".render"));
-    const artifacts = await downloadArtifacts(
+    const completed = await completeAcceptedRender(
       client,
-      job,
-      jobTicket,
+      ticket,
       outputDirectory,
       options,
     );
-    return { job, outputDirectory, source, artifacts };
+    return { ...completed, source };
   } finally {
     await rm(temporary, { recursive: true, force: true });
   }
@@ -228,7 +243,7 @@ export async function compileProjectPdf(
   input: string,
   options: Pick<
     RenderOptions,
-    "pollIntervalMs" | "pollTimeoutMs" | "onEvent" | "engine"
+    "pollIntervalMs" | "pollTimeoutMs" | "onEvent" | "engine" | "signal"
   > & {
     projectRoot?: string;
     output?: string;
@@ -257,11 +272,14 @@ export async function compileProjectPdf(
   let jobId: string | undefined;
   try {
     const zip = join(work, "source.zip");
+    const limits = await client.sourceLimits?.({ signal: options.signal });
     const archive = await createProjectArchive(
       root,
       zip,
       entrypoint,
       destination,
+      options.signal,
+      limits,
     );
     options.onEvent?.({ type: "archive.created", ...archive });
     const engine =
@@ -273,10 +291,13 @@ export async function compileProjectPdf(
       entrypoint,
       undefined,
       engine,
+      options.signal,
     );
     jobId = ticket.jobId;
     options.onEvent?.({ type: "job.queued", jobId: ticket.jobId });
-    const { job, jobTicket } = await pollUntilTerminal(client, ticket, options);
+    const settled = await pollUntilTerminal(client, ticket, options);
+    const { job } = settled;
+    const access = artifactTicketAccess(client, settled, options);
     if (job.status !== "succeeded") {
       const artifact = job.artifacts.find(
         ({ relativePath }) => relativePath === "errors.json",
@@ -287,7 +308,7 @@ export async function compileProjectPdf(
           await downloadVerified(
             client,
             client.artifactUrl(job.id, "errors.json"),
-            jobTicket,
+            access,
             path,
             artifact,
           );
@@ -297,6 +318,7 @@ export async function compileProjectPdf(
           if (diagnostics.success)
             return { job, diagnostics: diagnostics.data };
         } catch {
+          options.signal?.throwIfAborted();
           // The Job failure remains authoritative if optional diagnostics are unavailable.
         }
       }
@@ -322,7 +344,7 @@ export async function compileProjectPdf(
       await downloadVerified(
         client,
         client.artifactUrl(job.id, "result.pdf"),
-        jobTicket,
+        access,
         staged,
         pdf,
       );
@@ -347,6 +369,7 @@ export async function compileProjectPdf(
           409,
         );
       await assertSafeOutputFile(destination);
+      options.signal?.throwIfAborted();
       await rename(staged, destination);
       options.onEvent?.({
         type: "artifact.downloaded",
@@ -359,10 +382,12 @@ export async function compileProjectPdf(
     }
   } catch (error) {
     if (jobId === undefined) throw error;
+    const reason: unknown = options.signal?.reason;
+    const cause = reason instanceof AppError ? reason : error;
     throw new AppError(
-      error instanceof AppError ? error.code : "PDF_PUBLICATION_FAILED",
-      `${error instanceof Error ? error.message : "PDF could not be saved"} (job ${jobId})`,
-      error instanceof AppError ? error.status : 500,
+      cause instanceof AppError ? cause.code : "PDF_PUBLICATION_FAILED",
+      `${cause instanceof Error ? cause.message : "PDF could not be saved"} (job ${jobId})`,
+      cause instanceof AppError ? cause.status : 500,
       { jobId },
     );
   } finally {
@@ -378,7 +403,15 @@ export async function uploadProjectSource(
   const temporary = await mkdtemp(join(tmpdir(), "latex-source-"));
   try {
     const zipPath = join(temporary, "source.zip"),
-      prepared = await prepareInputArchive(resolve(projectPath), zipPath);
+      limits = await client.sourceLimits?.({ signal: options.signal }),
+      prepared = await prepareInputArchive(
+        resolve(projectPath),
+        zipPath,
+        undefined,
+        undefined,
+        options.signal,
+        limits,
+      );
     options.onEvent?.({ type: "archive.created", ...prepared.source });
     return await reserveAndUploadSource(
       client,
@@ -403,9 +436,37 @@ export async function createSourceRenderJob(
     validateEntrypointPath(entrypoint),
     options.outputs,
     options.engine,
+    options.signal,
   );
   options.onEvent?.({ type: "job.queued", jobId: ticket.jobId });
-  return client.job(ticket.jobId, ticket.jobTicket);
+  return readAcceptedJob(client, ticket, options.signal);
+}
+
+export async function readAcceptedJob(
+  client: Pick<ClientTransport, "job">,
+  ticket: SourceRenderResponse,
+  signal?: AbortSignal,
+): Promise<JobResponse> {
+  try {
+    signal?.throwIfAborted();
+    return await client.job(ticket.jobId, ticket.jobTicket, { signal });
+  } catch (cause) {
+    throw new AppError(
+      cause instanceof AppError ? cause.code : "RENDER_STATUS_UNAVAILABLE",
+      `Job ${ticket.jobId} was accepted. Check its status before submitting again.`,
+      cause instanceof AppError ? cause.status : 503,
+      { jobId: ticket.jobId, lastStatus: null },
+    );
+  }
+}
+
+export function acceptedJobRecovery(error: unknown) {
+  const details = error instanceof AppError ? error.details : undefined;
+  const jobId = details?.jobId;
+  if (typeof jobId !== "string" || !/^job_[a-f0-9]{32}$/.test(jobId))
+    return undefined;
+  const status = JobStatusSchema.safeParse(details?.lastStatus);
+  return { jobId, lastStatus: status.success ? status.data : null };
 }
 
 export async function renderSource(
@@ -420,37 +481,73 @@ export async function renderSource(
       entrypoint,
       options.outputs,
       options.engine,
+      options.signal,
     );
-  options.onEvent?.({ type: "job.queued", jobId: ticket.jobId });
-  const { job, jobTicket } = await pollUntilTerminal(client, ticket, options),
-    outputDirectory = resolve(options.outputDirectory ?? ".render"),
-    artifacts = await downloadArtifacts(
-      client,
-      job,
-      jobTicket,
-      outputDirectory,
-      options,
-    );
+  const completed = await completeAcceptedRender(
+    client,
+    ticket,
+    resolve(options.outputDirectory ?? ".render"),
+    options,
+  );
   return {
-    job,
-    outputDirectory,
+    ...completed,
     source: {
       sourceId,
       uploadRequired: false,
-      size: job.sourceSize,
-      sha256: job.sourceSha256,
+      size: completed.job.sourceSize,
+      sha256: completed.job.sourceSha256,
       files: 0,
     },
-    artifacts,
   };
+}
+
+async function completeAcceptedRender(
+  client: ClientTransport,
+  ticket: SourceRenderResponse,
+  outputDirectory: string,
+  options: RenderOptions,
+): Promise<DownloadArtifactsResult> {
+  let lastStatus: JobResponse["status"] | null = null;
+  try {
+    options.onEvent?.({ type: "job.queued", jobId: ticket.jobId });
+    const settled = await pollUntilTerminal(client, ticket, {
+      ...options,
+      onEvent: (event) => {
+        if (event.type === "job.status") lastStatus = event.status;
+        options.onEvent?.(event);
+      },
+    });
+    const job = settled.job;
+    const artifacts = await downloadArtifacts(
+      client,
+      job,
+      artifactTicketAccess(client, settled, options),
+      outputDirectory,
+      options,
+    );
+    return { job, outputDirectory, artifacts };
+  } catch (error) {
+    const reason: unknown = options.signal?.reason;
+    const cause = reason instanceof AppError ? reason : error;
+    throw new AppError(
+      cause instanceof AppError ? cause.code : "RENDER_INTERRUPTED",
+      cause instanceof AppError
+        ? cause.message
+        : "Local rendering workflow was interrupted after the server accepted the Job",
+      cause instanceof AppError ? cause.status : 500,
+      { jobId: ticket.jobId, lastStatus },
+    );
+  }
 }
 
 export async function getJob(
   client: ClientTransport,
   jobId: string,
+  signal?: AbortSignal,
 ): Promise<JobResponse> {
-  const renewed = await client.renewJobTicket(jobId);
-  return client.job(jobId, renewed.jobTicket);
+  signal?.throwIfAborted();
+  const renewed = await client.renewJobTicket(jobId, { signal });
+  return client.job(jobId, renewed.jobTicket, { signal });
 }
 
 export async function requestJobAction(
@@ -469,7 +566,10 @@ export async function downloadJobArtifacts(
   outputDirectory: string,
   options: RenderOptions = {},
 ): Promise<DownloadArtifactsResult> {
-  const renewed = await client.renewJobTicket(jobId);
+  options.signal?.throwIfAborted();
+  const renewed = await client.renewJobTicket(jobId, {
+    signal: options.signal,
+  });
   const settled = await pollUntilTerminal(
     client,
     {
@@ -483,7 +583,7 @@ export async function downloadJobArtifacts(
       : undefined,
   );
   let job = settled.job;
-  const jobTicket = settled.jobTicket;
+  const access = artifactTicketAccess(client, settled, options);
   if (options.previewPages !== undefined) {
     if (
       options.previewPages.length > 100 ||
@@ -514,10 +614,15 @@ export async function downloadJobArtifacts(
           "This transport cannot request ungenerated pages",
           501,
         );
-      await client.preparePreview(jobId, page, jobTicket);
+      const preparePreview = client.preparePreview.bind(client);
+      await access.read((value) =>
+        preparePreview(jobId, page, value, { signal: options.signal }),
+      );
     }
     // Sizes/digests always come from the published artifact transaction.
-    job = await client.job(jobId, jobTicket);
+    job = await access.read((value) =>
+      client.job(jobId, value, { signal: options.signal }),
+    );
     for (const page of new Set(options.previewPages))
       if (
         !job.previews.some(
@@ -536,7 +641,7 @@ export async function downloadJobArtifacts(
   const artifacts = await downloadArtifacts(
     client,
     job,
-    jobTicket,
+    access,
     output,
     options,
   );
@@ -555,14 +660,11 @@ export async function retrySvgJob(
       "This transport does not support SVG-only retries",
       501,
     );
-  const ticket = await client.retrySvgJob(jobId, randomUUID());
-  const { job, jobTicket } = await pollUntilTerminal(client, ticket, options),
-    output = resolve(outputDirectory);
-  return {
-    job,
-    outputDirectory: output,
-    artifacts: await downloadArtifacts(client, job, jobTicket, output, options),
-  };
+  options.signal?.throwIfAborted();
+  const ticket = await client.retrySvgJob(jobId, randomUUID(), {
+    signal: options.signal,
+  });
+  return completeAcceptedRender(client, ticket, resolve(outputDirectory), options);
 }
 
 async function prepareInputArchive(
@@ -570,10 +672,13 @@ async function prepareInputArchive(
   destination: string,
   entrypoint?: string,
   excludedOutputDirectory?: string,
+  signal?: AbortSignal,
+  limits?: ResourceLimits,
 ): Promise<{
   source: { size: number; sha256: string; files: number };
   outputRoot: string;
 }> {
+  signal?.throwIfAborted();
   const info = await stat(input).catch(() => undefined);
   if (info?.isDirectory())
     return {
@@ -582,22 +687,38 @@ async function prepareInputArchive(
         destination,
         entrypoint,
         excludedOutputDirectory,
+        signal,
+        limits,
       ),
       outputRoot: input,
     };
   if (info?.isFile() && extname(input).toLowerCase() === ".zip") {
     if (entrypoint !== undefined) validateEntrypointPath(entrypoint);
+    assertArchiveSize(info.size, limits);
     await pipeline(
       createReadStream(input),
       createWriteStream(destination, { flags: "wx", mode: 0o600 }),
+      signal ? { signal } : {},
     );
     const archive = await stat(destination);
     if (archive.size <= 0)
       throw new AppError("EMPTY_ARCHIVE", "Source ZIP is empty", 400);
+    assertArchiveSize(archive.size, limits);
+    if (limits) {
+      const files = await listValidatedSourceFiles(destination, {
+        maxExtractedBytes: limits.maxExtractedBytes,
+        maxFileBytes: limits.maxUploadBytes,
+        maxEntries: limits.maxZipEntries,
+        maxFiles: limits.maxFileCount,
+        maxDepth: 10,
+        maxNameLength: 200,
+      });
+      assertExtractedSize(files.reduce((total, file) => total + file.size, 0), limits);
+    }
     return {
       source: {
         size: archive.size,
-        sha256: await hashFile(destination),
+        sha256: await hashFile(destination, signal),
         files: 0,
       },
       outputRoot: dirname(input),
@@ -610,19 +731,33 @@ async function prepareInputArchive(
   );
 }
 
+function assertArchiveSize(bytes: number, limits: Readonly<ResourceLimits> | undefined): void {
+  if (limits && bytes > limits.maxUploadBytes)
+    throw new AppError("ARCHIVE_TOO_LARGE", `Source ZIP exceeds ${limits.maxUploadBytes} bytes`, 400);
+}
+
+function assertExtractedSize(bytes: number, limits: Readonly<ResourceLimits>): void {
+  if (bytes > limits.maxExtractedBytes)
+    throw new AppError("PROJECT_TOO_LARGE", `Project files exceed ${limits.maxExtractedBytes} bytes`, 400);
+}
+
 async function reserveAndUploadSource(
   client: ClientTransport,
   zipPath: string,
   source: { size: number; sha256: string; files: number },
   options: ClientCoreOptions,
 ): Promise<UploadedSource> {
+  options.signal?.throwIfAborted();
   const ticket = await client.createSource(
     source.size,
     source.sha256,
     randomUUID(),
+    { signal: options.signal },
   );
   if (ticket.uploadRequired)
-    await client.uploadSource(ticket, zipPath, source.size);
+    await client.uploadSource(ticket, zipPath, source.size, {
+      signal: options.signal,
+    });
   options.onEvent?.({
     type: "source.ready",
     sourceId: ticket.sourceId,
@@ -641,13 +776,16 @@ function startSourceJob(
   entrypoint: string,
   outputs: readonly RenderOutput[] = ["pdf"],
   engine?: RenderEngine,
+  signal?: AbortSignal,
 ): Promise<SourceRenderResponse> {
+  signal?.throwIfAborted();
   return client.createSourceJob(
     sourceId,
     entrypoint,
     randomUUID(),
     outputs,
-    ...(engine === undefined ? [] : ([engine] as const)),
+    engine,
+    { signal },
   );
 }
 
@@ -656,7 +794,10 @@ export async function createProjectArchive(
   destination: string,
   entrypoint?: string,
   excludedOutputPath?: string,
+  signal?: AbortSignal,
+  limits?: ResourceLimits,
 ): Promise<{ size: number; sha256: string; files: number }> {
+  signal?.throwIfAborted();
   const requiredEntrypoint =
     entrypoint === undefined ? undefined : validateEntrypointPath(entrypoint);
   const excludedRelative =
@@ -682,10 +823,17 @@ export async function createProjectArchive(
   const handle = await open(destination, "wx", 0o600);
   const output = handle.createWriteStream();
   zip.on("error", (error: Error) => output.destroy(error));
-  const completion = pipeline(zip.outputStream, output);
+  const completion = pipeline(
+    zip.outputStream,
+    output,
+    signal ? { signal } : {},
+  );
   // Observe early stream failures while the project directory is being walked.
   void completion.catch(() => undefined);
   let files = 0;
+  const maxFiles = limits
+    ? Math.min(limits.maxFileCount, limits.maxZipEntries)
+    : DEFAULT_RESOURCE_LIMITS.maxFileCount;
   let entrypointFound = false,
     texFound = false;
   let sourceBytes = 0;
@@ -697,6 +845,7 @@ export async function createProjectArchive(
       exclusions,
       excludedName,
     )) {
+      signal?.throwIfAborted();
       try {
         validateSourceFilePath(name);
       } catch (error) {
@@ -714,19 +863,16 @@ export async function createProjectArchive(
       if (name === requiredEntrypoint) entrypointFound = true;
       if (extname(name).toLowerCase() === ".tex") texFound = true;
       files += 1;
-      if (files > 500)
+      if (files > maxFiles)
         throw new AppError(
           "TOO_MANY_FILES",
-          "Project has more than 500 files",
+          `Project has more than ${maxFiles} files`,
           400,
         );
+      if (limits && size > limits.maxUploadBytes)
+        throw new AppError("PROJECT_FILE_TOO_LARGE", `Project file exceeds ${limits.maxUploadBytes} bytes: ${name}`, 400);
       sourceBytes += size;
-      if (sourceBytes > DEFAULT_RESOURCE_LIMITS.maxExtractedBytes)
-        throw new AppError(
-          "PROJECT_TOO_LARGE",
-          `Project files exceed ${DEFAULT_RESOURCE_LIMITS.maxExtractedBytes} bytes`,
-          400,
-        );
+      assertExtractedSize(sourceBytes, limits ?? DEFAULT_RESOURCE_LIMITS);
       zip.addFile(path, name, { mode: 0o600, mtime: new Date(0) });
     }
     if (!texFound)
@@ -744,6 +890,13 @@ export async function createProjectArchive(
     ended = true;
     zip.end();
     await completion;
+    const info = await stat(destination);
+    assertArchiveSize(info.size, limits);
+    return {
+      size: info.size,
+      sha256: await hashFile(destination, signal),
+      files,
+    };
   } catch (error) {
     if (!ended) zip.end();
     output.destroy();
@@ -753,21 +906,42 @@ export async function createProjectArchive(
   } finally {
     await handle.close().catch(() => undefined);
   }
-  const info = await stat(destination);
-  return { size: info.size, sha256: await hashFile(destination), files };
 }
 
-export async function hashFile(path: string): Promise<string> {
+export async function hashFile(
+  path: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  signal?.throwIfAborted();
   const hash = createHash("sha256");
-  for await (const chunk of createReadStream(path))
+  for await (const chunk of createReadStream(
+    path,
+    signal ? { signal } : undefined,
+  ))
     hash.update(chunk as Buffer);
   return hash.digest("hex");
+}
+
+function artifactTicketAccess(
+  client: ClientTransport,
+  settled: { job: JobResponse; jobTicket: string; ticketExpiresAt: string },
+  options: RenderOptions,
+): JobTicketAccess {
+  return createJobTicketAccess(
+    client,
+    {
+      jobId: settled.job.id,
+      jobTicket: settled.jobTicket,
+      expiresAt: settled.ticketExpiresAt,
+    },
+    options,
+  );
 }
 
 async function downloadArtifacts(
   client: ClientTransport,
   job: JobResponse,
-  jobTicket: string,
+  access: JobTicketAccess,
   outputDirectory: string,
   options: ClientCoreOptions,
 ): Promise<ArtifactPaths> {
@@ -789,7 +963,7 @@ async function downloadArtifacts(
     );
   const events: ClientCoreEvent[] = [];
   const result = await publishArtifactSet(outputDirectory, async (stage) => {
-    const paths = await stageArtifacts(client, job, jobTicket, stage, {
+    const paths = await stageArtifacts(client, job, access, stage, {
       ...options,
       onEvent: (event) =>
         events.push(
@@ -801,6 +975,7 @@ async function downloadArtifacts(
             : event,
         ),
     });
+    options.signal?.throwIfAborted();
     const finalPath = (path: string) =>
       join(outputDirectory, relative(stage, path));
     return {
@@ -825,7 +1000,7 @@ async function downloadArtifacts(
 async function stageArtifacts(
   client: ClientTransport,
   job: JobResponse,
-  jobTicket: string,
+  access: JobTicketAccess,
   outputDirectory: string,
   options: ClientCoreOptions,
 ): Promise<ArtifactPaths> {
@@ -842,7 +1017,7 @@ async function stageArtifacts(
   const pdf = await downloadNamedArtifact(
     client,
     job.id,
-    jobTicket,
+    access,
     outputDirectory,
     paths.get("result.pdf"),
     options,
@@ -850,7 +1025,7 @@ async function stageArtifacts(
   const errors = await downloadNamedArtifact(
     client,
     job.id,
-    jobTicket,
+    access,
     outputDirectory,
     paths.get("errors.json"),
     options,
@@ -858,7 +1033,7 @@ async function stageArtifacts(
   const log = await downloadNamedArtifact(
     client,
     job.id,
-    jobTicket,
+    access,
     outputDirectory,
     paths.get("compile.log"),
     options,
@@ -866,7 +1041,7 @@ async function stageArtifacts(
   const previews = await downloadPreviews(
     client,
     job,
-    jobTicket,
+    access,
     outputDirectory,
     options,
   );
@@ -893,7 +1068,7 @@ async function stageArtifacts(
     await downloadVerified(
       client,
       client.artifactUrl(job.id, artifact.relativePath),
-      jobTicket,
+      access,
       destination,
       artifact,
     );
@@ -917,7 +1092,7 @@ async function stageArtifacts(
       const path = await downloadNamedArtifact(
         client,
         job.id,
-        jobTicket,
+        access,
         outputDirectory,
         artifact,
         options,
@@ -953,7 +1128,7 @@ async function stageArtifacts(
 async function downloadPreviews(
   client: ClientTransport,
   job: JobResponse,
-  ticket: string,
+  access: JobTicketAccess,
   output: string,
   options: ClientCoreOptions,
 ): Promise<string[]> {
@@ -994,7 +1169,7 @@ async function downloadPreviews(
     await downloadVerified(
       client,
       client.previewUrl(job.id, name),
-      ticket,
+      access,
       destination,
       artifact,
     );
@@ -1011,7 +1186,7 @@ async function downloadPreviews(
 async function downloadNamedArtifact(
   client: ClientTransport,
   jobId: string,
-  ticket: string,
+  access: JobTicketAccess,
   output: string,
   artifact: JobResponse["artifacts"][number] | undefined,
   options: ClientCoreOptions,
@@ -1023,7 +1198,7 @@ async function downloadNamedArtifact(
   await downloadVerified(
     client,
     client.artifactUrl(jobId, name),
-    ticket,
+    access,
     destination,
     artifact,
   );
@@ -1034,7 +1209,7 @@ async function downloadNamedArtifact(
 async function downloadVerified(
   client: ClientTransport,
   url: string,
-  ticket: string,
+  access: JobTicketAccess,
   destination: string,
   expected: { size: number; sha256: string },
 ): Promise<void> {
@@ -1048,13 +1223,17 @@ async function downloadVerified(
       "Artifact size or SHA256 is invalid",
       502,
     );
-  await client.download(url, ticket, destination, expected);
+  await access.read((ticket) =>
+    client.download(url, ticket, destination, expected, {
+      signal: access.signal,
+    }),
+  );
   // Also verify custom transports: the core's publication invariant does not
   // depend on a particular HTTP adapter behaving correctly.
   await assertSafeOutputFile(destination);
   if (
     (await lstat(destination)).size !== expected.size ||
-    (await hashFile(destination)) !== expected.sha256
+    (await hashFile(destination, access.signal)) !== expected.sha256
   )
     throw new AppError(
       "ARTIFACT_INTEGRITY_ERROR",

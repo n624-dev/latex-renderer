@@ -7,7 +7,7 @@ import {
   SignJWT,
   type JWTPayload,
 } from "jose";
-import type { RendererDatabase } from "@latex-renderer/database";
+import { jobTicketCredential, type RendererDatabase } from "@latex-renderer/database";
 import { AppError, nowIso } from "@latex-renderer/shared";
 
 export type TicketScope =
@@ -350,29 +350,7 @@ export class TicketService {
   }
 
   private revalidateSubject(claims: TicketClaims): void {
-    const row = this.database.raw
-      .prepare(
-        `SELECT j.status,u.status AS user_status,u.security_version AS user_sv,
-      s.status AS sa_status,s.security_version AS sa_sv,k.revoked_at,k.expires_at
-      FROM jobs j JOIN users u ON u.id=j.user_id JOIN service_accounts s ON s.id=j.service_account_id
-      JOIN api_keys k ON k.id=j.api_key_id WHERE j.id=? AND j.user_id=? AND j.service_account_id=? AND j.api_key_id=?`,
-      )
-      .get(
-        claims.job_id,
-        claims.user_id,
-        claims.service_account_id,
-        claims.api_key_id,
-      ) as
-      | {
-          status: string;
-          user_status: string;
-          user_sv: number;
-          sa_status: string;
-          sa_sv: number;
-          revoked_at: string | null;
-          expires_at: string | null;
-        }
-      | undefined;
+    const row = jobTicketCredential(this.database.raw, claims);
     if (row === undefined || row.status === "deleted")
       throw new AppError("JOB_NOT_FOUND", "Job does not exist", 404);
     if (

@@ -27,15 +27,19 @@ since: "v1.3.6"
 
 ### コマンドで作成・検証する
 
-1. サーバー上で暗号化バックアップを即時作成します（保存先は `/etc/latex-renderer/backup.env` の `BACKUP_DIRECTORY`、既定値は `/var/lib/latex-renderer/backups`。自動実行は `latex-renderer-backup.timer` が担います）。
+所有者の管理APIキーを設定した端末から、バックアップを作成できます。
 
-```bash
-sudo systemctl start latex-renderer-backup.service
-sudo journalctl -u latex-renderer-backup.service -n 20 --no-pager
+```sh
+n624-latex admin backup create
+n624-latex admin backup status
 ```
 
-2. 作成した `.tar.age` アーカイブを検証用の Linux ホストにコピーします。GNU `tar`、`age`、`node:sqlite` を使える対応 Node.js（24 または 26）、復号鍵を準備します。長期保管時はアーカイブと復号鍵を別々に保管します。
-3. バックアップを作成したアプリの版に対応するサーバー配布物を、[手動でダウンロードして検証する手順](/docs/self-hosting/#v1-6-9をダウンロードして検証)で取得・展開します。先頭の `version=` にその版を指定します。展開先を `release_dir` に設定し、配布物のスクリプトを実行します。
+作成が終わったら `n624-latex admin backup verify` を実行し、`n624-latex admin backup status` の `latestVerification` に対象のファイル名と検証時刻が載ることを確認します。バックアップはサーバーの `BACKUP_DIRECTORY` に保存します。既定値は `/var/lib/latex-renderer/backups` です。`backup` コマンドに未対応の版では上記の管理画面を使えます。
+
+### 別のホストで検証する
+
+1. 作成した `.tar.age` アーカイブを検証用の Linux ホストにコピーします。GNU `tar`、`age`、`node:sqlite` を使える対応 Node.js（24 または 26）、復号鍵を準備します。長期保管時はアーカイブと復号鍵を別々に保管します。
+2. バックアップを作成したアプリの版に対応するサーバー配布物を、[手動でダウンロードして検証する手順](/docs/self-hosting/#v1-6-9をダウンロードして検証)で取得・展開します。先頭の `version=` にその版を指定します。展開先を `release_dir` に設定し、配布物のスクリプトを実行します。
 
 ```bash
 release_dir=/path/to/verified-release
@@ -43,7 +47,7 @@ BACKUP_AGE_IDENTITY_FILE=/path/to/age-identity \
   node "$release_dir/deploy/scripts/restore-test.mjs" /path/to/backup.tar.age
 ```
 
-`restore_test.completed` が表示されれば検証は完了です。テストは一時領域に展開した SQLite と入力 ZIP の整合性を検証します。外部ストレージへ移したバックアップも、その保管先から取り出して検証できます。
+`restore_test.completed` が表示されれば検証は完了です。テストは一時領域に展開した SQLite と入力 ZIP の整合性を検証します。新しいバックアップでは、出力の `application.version` と `application.commit` で作成元を確認できます。古いバックアップの `application` が `null` の場合は、作成時の記録で対応する版を確認してください。外部ストレージへ移したバックアップも、その保管先から取り出して検証できます。
 
 ## 更新失敗後の復旧点を確認する
 

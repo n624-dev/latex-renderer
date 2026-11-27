@@ -6,6 +6,7 @@ import {
   mkdir,
   mkdtemp,
   open,
+  readFile,
   rm,
   stat,
   writeFile,
@@ -19,8 +20,10 @@ import {
   openBackupFile,
   projectSourceRows,
   projectSourceStorageKey,
+  readBackupApplicationIdentity,
   validateBackupArchive,
 } from "./backup-boundary.mjs";
+import { protectBackupSources } from "./backup-source-protection.mjs";
 
 const databasePath = absolutePath(required("DATABASE_PATH"), "DATABASE_PATH");
 const storageRoot = absolutePath(required("STORAGE_ROOT"), "STORAGE_ROOT");
@@ -39,24 +42,41 @@ const stamp = new Date().toISOString().replaceAll(":", "-");
 const snapshot = join(work, "renderer.sqlite3");
 
 try {
-  const sourceDatabase = new DatabaseSync(databasePath, { readOnly: true });
-  try {
-    sourceDatabase.exec("PRAGMA busy_timeout=30000");
-    sourceDatabase.prepare("VACUUM INTO ?").run(snapshot);
-  } finally {
-    sourceDatabase.close();
-  }
-
-  // Node 24.15.0 / SQLite 3.51.3 returned "ok" for a CHECK violation when
-  // opened read-only in our regression fixture. Inspect only this private
-  // copy read-write to avoid that observed runtime difference, never the live DB.
-  const snapshotDatabase = new DatabaseSync(snapshot);
+  const protection = await protectBackupSources(
+    process.env.BACKUP_SOURCE_COORDINATION_DIR,
+    () => {
+      const sourceDatabase = new DatabaseSync(databasePath, { readOnly: true });
+      try {
+        sourceDatabase.exec("PRAGMA busy_timeout=30000");
+        sourceDatabase.prepare("VACUUM INTO ?").run(snapshot);
+      } finally {
+        sourceDatabase.close();
+      }
+      const copy = new DatabaseSync(snapshot, { readOnly: true });
+      try {
+        return projectSourceRows(copy);
+      } finally {
+        copy.close();
+      }
+    },
+  );
   let projectBoundary;
+  let schemaVersion;
   try {
-    assertBackupDatabase(snapshotDatabase);
-    projectBoundary = await copyProjectSources(snapshotDatabase);
+    // Node 24.15.0 / SQLite 3.51.3 returned "ok" for a CHECK violation on a
+    // read-only database in our fixture. Only the private copy is writable.
+    const snapshotDatabase = new DatabaseSync(snapshot);
+    try {
+      assertBackupDatabase(snapshotDatabase);
+      schemaVersion = snapshotDatabase
+        .prepare("SELECT MAX(version) AS version FROM schema_migrations")
+        .get()?.version;
+      projectBoundary = await copyProjectSources(snapshotDatabase, protection.sources);
+    } finally {
+      snapshotDatabase.close();
+    }
   } finally {
-    snapshotDatabase.close();
+    await protection.release();
   }
 
   const snapshotStat = await stat(snapshot);
@@ -70,6 +90,13 @@ try {
       sha256: digest,
     },
     artifactsIncluded: false,
+    application: readBackupApplicationIdentity(
+      await readFile(".latex-renderer-release.json", "utf8").then(JSON.parse, (error) => {
+        if (error?.code !== "ENOENT") throw error;
+        return null;
+      }),
+    ),
+    databaseSchemaVersion: schemaVersion,
     projectSources: {
       included: true,
       directory: "project-sources",
@@ -127,7 +154,7 @@ try {
   await rm(work, { recursive: true, force: true });
 }
 
-async function copyProjectSources(database) {
+async function copyProjectSources(database, sources) {
   const revisions = database
     .prepare(
       `SELECT r.id AS revision_id,r.project_id,r.source_id
@@ -137,7 +164,6 @@ async function copyProjectSources(database) {
        ORDER BY r.project_id,r.revision_number,r.id`,
     )
     .all();
-  const sources = projectSourceRows(database);
   const copied = [];
   for (const source of sources) {
     const storageKey = projectSourceStorageKey(source);

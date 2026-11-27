@@ -199,6 +199,17 @@ try {
     await cli(join(prefixBin, "latex-render-admin"), ["--help"]),
     /Usage:/,
   );
+  const supportsProfiles = (await cli(publishedCli, ["--help"])).includes("--profile <name>");
+  if (supportsProfiles) {
+    await assert.rejects(
+      cli(publishedCli, ["auth", "status", "--json"]),
+      (error) => JSON.parse(error.stdout).error.code === "CONNECTION_CONFIRMATION_REQUIRED",
+    );
+    await cli(publishedCli, [
+      "connection", "migrate", "default", `http://127.0.0.1:${server.address().port}`,
+      "--confirm-origin", "--json",
+    ]);
+  }
   assert.equal(
     JSON.parse(await cli(publishedCli, ["auth", "status", "--json"])).result
       .configured,
@@ -244,7 +255,7 @@ try {
   await checkPackagedRender(join(stage, "render"), (cwd, endpoint) =>
     cli(publishedCli, ["main.tex"], {
       cwd,
-      env: { ...env, LATEX_RENDER_BASE_URL: endpoint },
+      env: { ...env, LATEX_RENDER_BASE_URL: endpoint, ...(supportsProfiles ? { LATEX_RENDER_API_KEY: fixtureCredential } : {}) },
     }),
   );
 
@@ -287,7 +298,7 @@ try {
     (cwd, endpoint) =>
       cli(publishedCli, ["main.tex"], {
         cwd,
-        env: { ...env, LATEX_RENDER_BASE_URL: endpoint },
+        env: { ...env, LATEX_RENDER_BASE_URL: endpoint, ...(supportsProfiles ? { LATEX_RENDER_API_KEY: fixtureCredential } : {}) },
       }),
   );
 

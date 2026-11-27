@@ -7,6 +7,7 @@ import {
   type OAuthAuthorizationRequest,
 } from "./oauth-tokens.js";
 import { GatewayAgentPairing, pairingLifetimeMs } from "./agent-pairing.js";
+import { expiredConnectionRetentionMs } from "./oauth-clients.js";
 import { discoverRendererHttps } from "./renderer-https-discovery.js";
 import {
   RendererHttpsOAuth,
@@ -298,7 +299,7 @@ export function createBrowserConsent(options: {
       cookie(
         `relay_manage_${authorization.id}`,
         proof,
-        Math.max(0, authorization.expiresAt - tokens.clock()),
+        Math.max(0, authorization.expiresAt + expiredConnectionRetentionMs - tokens.clock()),
       ),
     );
     return response;
@@ -355,7 +356,7 @@ export function createBrowserConsent(options: {
     const verified = (id: string) => {
       if (!/^authorization_[a-f0-9]{32}$/.test(id)) return undefined;
       const authorization = options.store.authorization(id);
-      if (!authorization || authorization.expiresAt <= tokens.clock())
+      if (!authorization || authorization.expiresAt + expiredConnectionRetentionMs <= tokens.clock())
         return undefined;
       try {
         return options.references.open(
@@ -386,8 +387,11 @@ export function createBrowserConsent(options: {
           (transport.endpoint.kind === "https"
             ? new URL(transport.endpoint.mcpUrl).hostname
             : "Private Renderer");
+        const expired = authorization.expiresAt <= tokens.clock();
         const status =
-          authorization.revokedAt !== null || transport.disabledAt !== null
+          expired
+            ? "Expired"
+            : authorization.revokedAt !== null || transport.disabledAt !== null
             ? "Disconnected"
             : authorization.reauthRequired
               ? "Sign in again"
@@ -397,7 +401,7 @@ export function createBrowserConsent(options: {
                   : "Offline"
                 : "Authorized";
         return [
-          `<form method="post"><p><strong>${escape(label)}</strong><br>${escape(status)} · ${transport.endpoint.kind === "https" ? "HTTPS" : "Agent"}<br>${escape(authorization.scopes.join(", "))}</p><input name="id" type="hidden" value="${authorization.id}">${authorization.revokedAt === null ? '<button name="action" value="disconnect">Disconnect</button>' : '<button name="action" value="forget">Forget connection</button>'}</form>`,
+          `<form method="post"><p><strong>${escape(label)}</strong><br>${escape(status)} · ${transport.endpoint.kind === "https" ? "HTTPS" : "Agent"}<br>${escape(authorization.scopes.join(", "))}</p><input name="id" type="hidden" value="${authorization.id}">${authorization.revokedAt === null && !expired ? '<button name="action" value="disconnect">Disconnect</button>' : '<button name="action" value="forget">Forget connection</button>'}</form>`,
         ];
       });
       return page(
@@ -418,11 +422,12 @@ export function createBrowserConsent(options: {
     const action = fields.get("action");
     if (action !== "disconnect" && action !== "forget")
       return page("Invalid connection request", "", 400);
-    if (action === "forget" && authorization.revokedAt === null)
+    const active = authorization.revokedAt === null && authorization.expiresAt > tokens.clock();
+    if (action === "forget" && active)
       return page("Disconnect the connection first.", "", 409);
     const transport = options.store.transport(authorization.transportId);
     const notify =
-      transport?.endpoint.kind === "https" && authorization.revokedAt === null
+      transport?.endpoint.kind === "https" && active
         ? options.revokeHttps(authorization.id, transport.endpoint.mcpUrl)
         : undefined;
     options.store.disconnect(

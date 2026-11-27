@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { localizedAdminScript } from "../../apps/admin-web/src/assets/admin-script.js";
 import type { Browser, Page } from "playwright";
 import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
 import { launchTestBrowser, newTestPage } from "../helpers/browser-engine.js";
@@ -8,23 +8,14 @@ import {
   adminDocsPage,
 } from "../../apps/admin-web/src/templates-admin.js";
 import { styles } from "../../apps/admin-web/src/assets/styles.js";
-import { siteScript } from "../../apps/admin-web/src/assets/site-script.js";
+import { readBrowserAsset } from "../../apps/admin-web/src/browser-assets.js";
 
-const script = execFileSync(
-  process.execPath,
-  [
-    "--input-type=module",
-    "--eval",
-    "const m=await import(process.argv[1]);process.stdout.write(m.adminScript)",
-    new URL("../../apps/admin-web/dist/assets/admin-script.js", import.meta.url)
-      .href,
-  ],
-  { encoding: "utf8", timeout: 10_000, maxBuffer: 2 * 1024 * 1024 },
-);
+const script = localizedAdminScript("ja");
 const origin = "https://renderer.invalid";
 const userId = `user_${"a".repeat(32)}`;
 const accountId = `sa_${"a".repeat(32)}`;
 const requestedId = `sa_${"b".repeat(32)}`;
+const fixtureCredential = "issued-credential-fixture-not-a-key";
 const jobId = `job_${"c".repeat(32)}`;
 const retryId = `job_${"f".repeat(32)}`;
 const sourceId = `source_${"d".repeat(32)}`;
@@ -57,6 +48,17 @@ const job = {
   created_at: "2026-10-19T00:00:00Z",
   retention_expires_at: "2026-10-20T00:00:00Z",
 };
+type JobFixture = Omit<typeof job, "previews"> & {
+  error_message?: string;
+  preview_page_count?: number;
+  previews: Array<{
+    open_url: string;
+    relative_path: string;
+    type: string;
+    size: number;
+    sha256: string;
+  }>;
+};
 let browser: Browser | undefined;
 const pages: Page[] = [];
 beforeAll(async () => {
@@ -69,7 +71,7 @@ afterAll(async () => {
   await browser?.close();
 });
 
-async function fixture(kind: string, query = "", pagedOwners = false) {
+async function fixture(kind: string, query = "", pagedOwners = false, pagedAccounts = false) {
   if (!browser) throw new Error("Browser not started");
   const page = await newTestPage(browser, {
     viewport: { width: 390, height: 844 },
@@ -82,6 +84,7 @@ async function fixture(kind: string, query = "", pagedOwners = false) {
       body: string | null;
     }> = [];
   const ownerState = { disabled: false };
+  const jobState: { current: JobFixture } = { current: job };
   page.on("pageerror", (error) => errors.push(error.message));
   await page.route("**/*", async (route) => {
     const request = route.request(),
@@ -101,7 +104,9 @@ async function fixture(kind: string, query = "", pagedOwners = false) {
         json:
           url.pathname === `/admin/api/v1/jobs/${jobId}/retry`
             ? { id: retryId, retryOfJobId: jobId }
-            : {},
+            : url.pathname.includes("/service-accounts/") && url.pathname.endsWith("/api-keys")
+              ? { apiKey: fixtureCredential }
+              : {},
       });
       return;
     }
@@ -110,13 +115,13 @@ async function fixture(kind: string, query = "", pagedOwners = false) {
       return;
     }
     if (url.pathname === "/admin/assets/site.js") {
-      await route.fulfill({ contentType: "text/javascript", body: siteScript });
+      await route.fulfill({ contentType: "text/javascript", body: readBrowserAsset("site") });
       return;
     }
     if (url.pathname === "/admin/assets/admin.js") {
       await route.fulfill({
         contentType: "text/javascript",
-        body: script + "\nwindow.renderJobFixture=jobDetail;",
+        body: script,
       });
       return;
     }
@@ -140,6 +145,18 @@ async function fixture(kind: string, query = "", pagedOwners = false) {
       return;
     }
     const path = url.pathname.slice("/admin/api/v1".length);
+    if (pagedAccounts && path === "/service-accounts") {
+      const last = { ...account, id: requestedId, name: "別ページの連携" };
+      const items = url.searchParams.has("query")
+        ? url.searchParams.get("query") === last.name ? [last] : []
+        : url.searchParams.has("cursor")
+          ? [last]
+          : Array.from({ length: 50 }, (_, n) => ({
+              ...account, id: `sa_${String(n).padStart(32, "0")}`, name: `連携 ${n}`,
+            }));
+      await route.fulfill({ json: { items, nextCursor: items.length === 50 ? "next-account" : null } });
+      return;
+    }
     if (pagedOwners && path === "/users") {
       const items = url.searchParams.has("query")
         ? []
@@ -192,7 +209,7 @@ async function fixture(kind: string, query = "", pagedOwners = false) {
         nextCursor: null,
       },
       "/jobs": { items: [job], nextCursor: null },
-      [`/jobs/${jobId}`]: job,
+      [`/jobs/${jobId}`]: jobState.current,
       [`/jobs/${retryId}`]: { ...job, id: retryId, retry_of_job_id: jobId },
       "/jobs/render-targets": { items: [] },
       "/sources": {
@@ -286,13 +303,15 @@ async function fixture(kind: string, query = "", pagedOwners = false) {
   await page.goto(`${origin}/admin/${path}/${query}`);
   if (kind !== "docs") {
     await page.waitForFunction(
-      () =>
-        typeof (window as typeof window & { renderJobFixture?: unknown })
-          .renderJobFixture === "function",
+      () => Boolean(document.querySelector("#updated")?.textContent ||
+        document.querySelector("#error")?.textContent),
+      undefined,
+      { timeout: 15_000 },
     );
-    await page.locator("#updated").waitFor({ state: "attached" });
+    expect(await page.locator("#error").textContent()).toBe("");
+    expect(errors).toEqual([]);
   }
-  return { page, errors, mutations, ownerState };
+  return { page, errors, mutations, ownerState, jobState };
 }
 
 it.each([false, true])(
@@ -326,6 +345,7 @@ it.each([false, true])(
       expect(mutations).toEqual([]);
     } else {
       await page.waitForFunction(() => !document.querySelector("dialog form"));
+      await page.waitForFunction(() => Boolean(document.querySelector("#success")?.textContent));
       expect(mutations[0]?.path).toBe("/admin/api/v1/service-accounts");
       expect(mutations[0]?.csrf).toBe("fixture-csrf");
       expect(JSON.parse(mutations[0]?.body ?? "{}")).toMatchObject({
@@ -337,6 +357,7 @@ it.each([false, true])(
 );
 
 it.each([
+  "dashboard",
   "users",
   "accounts",
   "keys",
@@ -395,6 +416,9 @@ it("selects an explicit account outside the first page and keeps scope labels al
   expect(await page.locator('[name="account"]').inputValue()).toBe(requestedId);
   expect(await page.locator('[name="scope"]:checked').count()).toBe(2);
   expect(await page.locator('[data-key-kind="admin"]').isVisible()).toBe(false);
+  const draftRead = page.locator('input[name="scope"][value="render:draft:read"]');
+  expect(await draftRead.isChecked()).toBe(false);
+  await draftRead.check();
   const aligned = await page
     .locator("label.check")
     .first()
@@ -414,20 +438,47 @@ it("selects an explicit account outside the first page and keeps scope labels al
     `/admin/api/v1/service-accounts/${requestedId}/api-keys`,
   );
   expect(mutations[0]?.csrf).toBe("fixture-csrf");
+  expect(JSON.parse(mutations[0]?.body ?? "{}")).toMatchObject({
+    scopes: ["render:create", "render:read:own", "render:draft:read"],
+  });
+  const value = page.locator("[data-issued-credential]");
+  await expect.poll(() => value.textContent()).toBe(fixtureCredential);
+  const stored = await page.evaluate((credential) => {
+    for (const storage of [sessionStorage, localStorage]) {
+      for (let index = 0; index < storage.length; index++) {
+        const key = storage.key(index);
+        if (key !== null && storage.getItem(key)?.includes(credential))
+          return true;
+      }
+    }
+    return false;
+  }, fixtureCredential);
+  expect(stored).toBe(false);
+  await page.keyboard.press("Escape");
+  await value.waitFor({ state: "detached" });
+  expect(errors).toEqual([]);
+});
+
+it("pages and searches API key accounts beyond the first 50 results", async () => {
+  const { page, errors } = await fixture("keys", "", false, true);
+  await page.locator("#key-create").click();
+  const select = page.locator('[name="account"]');
+  expect(await select.locator("option").count()).toBe(50);
+  await page.locator("[data-account-next]").click();
+  await select.locator(`option[value="${requestedId}"]`).waitFor({ state: "attached" });
+  await select.selectOption(requestedId);
+  await page.locator("[data-account-query]").fill("別ページの連携");
+  await page.locator("[data-account-search]").click();
+  await expect.poll(() => select.locator("option").count()).toBe(2);
+  expect(await select.inputValue()).toBe(requestedId);
   expect(errors).toEqual([]);
 });
 
 it("opens the newly created Job after an administrator retry", async () => {
-  const { page, errors, mutations } = await fixture("jobs", `?job=${jobId}`);
+  const { page, errors, mutations, jobState } = await fixture("jobs", `?job=${jobId}`);
   await page.locator("#job-technical").waitFor({ state: "attached" });
-  await page.evaluate(async (next) => {
-    const render = (
-      window as typeof window & {
-        renderJobFixture: (id: string, job: unknown) => Promise<unknown>;
-      }
-    ).renderJobFixture;
-    await render(next.id, { ...next, status: "failed" });
-  }, job);
+  jobState.current = { ...job, status: "failed" };
+  await page.locator("#refresh").click();
   await page.locator("[data-j-retry]").click();
   await page.locator('dialog button[type="submit"]').click();
   await page.waitForURL(`${origin}/admin/jobs/?job=${retryId}`);
@@ -442,22 +493,13 @@ it("opens the newly created Job after an administrator retry", async () => {
 });
 
 it("keeps a job's chosen disclosures across a status refresh", async () => {
-  const { page, errors } = await fixture("jobs", `?job=${jobId}`);
+  const { page, errors, jobState } = await fixture("jobs", `?job=${jobId}`);
   await page.locator("#job-technical").waitFor({ state: "attached" });
   await page.locator("#job-technical summary").click();
   await page.locator("#artifact-panel summary").click();
-  await page.evaluate(async (next) => {
-    const render = (
-      window as typeof window & {
-        renderJobFixture: (id: string, job: unknown) => Promise<unknown>;
-      }
-    ).renderJobFixture;
-    await render(next.id, {
-      ...next,
-      status: "failed",
-      error_message: "fixture error",
-    });
-  }, job);
+  jobState.current = { ...job, status: "failed", error_message: "fixture error" };
+  await page.locator("#refresh").click();
+  await expect.poll(() => page.locator(".error-summary").textContent()).toBe("fixture error");
   expect(
     await page.locator("#job-technical").getAttribute("open"),
   ).not.toBeNull();
@@ -482,7 +524,7 @@ it("logs out from the static API documentation with session-specific CSRF", asyn
 });
 
 it("navigates ungenerated pages, retries a pending PNG and does not fetch untouched pages", async () => {
-  const { page, errors } = await fixture("jobs");
+  const { page, errors, jobState } = await fixture("jobs", `?job=${jobId}`);
   const requested: number[] = [];
   const png = Buffer.from(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=",
@@ -499,16 +541,7 @@ it("navigates ungenerated pages, retries a pending PNG and does not fetch untouc
       });
     else await route.fulfill({ contentType: "image/png", body: png });
   });
-  await page.evaluate(
-    async (next) => {
-      const render = (
-        window as typeof window & {
-          renderJobFixture: (id: string, job: unknown) => Promise<unknown>;
-        }
-      ).renderJobFixture;
-      await render(next.id, next);
-    },
-    {
+  jobState.current = {
       ...job,
       status: "succeeded",
       preview_page_count: 3,
@@ -521,8 +554,8 @@ it("navigates ungenerated pages, retries a pending PNG and does not fetch untouc
           sha256: "a".repeat(64),
         },
       ],
-    },
-  );
+  };
+  await page.locator("#refresh").click();
   await page.locator("#job-preview").waitFor({ state: "visible" });
   expect(await page.locator("#preview-count").textContent()).toBe("1 / 3");
   await page.locator("#preview-next").click();

@@ -58,6 +58,17 @@ sudo n624-latex server setup --cui
 
 既存サーバーの設定を変更するときは、項目ごとに入力します。値を維持する項目は空欄のまま Enter を押します。初回セットアップで LAN の自動 HTTPS を使うときは、入力欄で `LAN` を選ぶと端末の案内に沿って設定できます。初回の独自 HTTPS や既存の Cloudflare 公開経路を端末で設定する場合は、表示された形式の JSON を 1 行で入力します。この構成を初めて設定する場合は [ブラウザで開く](#ブラウザで開く)から始めてください。
 
+### 稼働中のキュー上限を変更する
+
+管理CLIで現在の実効値と単位を確認できます。例えば、待機中や実行中など、未完了ジョブの全体上限を50件に変更するには次を実行します。
+
+```sh
+n624-latex admin system config
+n624-latex admin system config set max_queue_length 50 --reason "Queue capacity review" --yes
+```
+
+変更には管理APIの書き込み権限が必要です。設定キー、最小値と最大値は `system config` の結果に表示されます。
+
 ### 旧版・手動配置の場合
 
 > [!DETAILS] server-setup.mjs を直接実行する手順

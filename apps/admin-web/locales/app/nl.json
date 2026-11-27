@@ -160,6 +160,6 @@
   "waitingForPreviewGeneration": "Wachten op genereren van voorbeeld…",
   "whenSelectingMultipleFilesSelectOnly": "Selecteer bij meervoudige selectie alleen TeX-bestanden.",
   "whichDocumentDoYouWantTo": "Welk document wilt u naar PDF converteren?",
-  "zipArchiveMustBe20Mib": "Het ZIP-bestand mag maximaal 20 MiB zijn.",
+  "zipArchiveSizeLimit": "Het ZIP-bestand mag maximaal {limit} zijn.",
   "zoom": "Zoom"
 }

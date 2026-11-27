@@ -9,6 +9,23 @@ import stat
 from pathlib import Path
 
 DB = "/var/lib/latex-renderer/renderer.sqlite3"
+WORKER_DEMAND = Path(__file__).with_name("worker-demand-queries.json")
+
+
+def worker_has_demand(db, now, include_maintenance=True):
+    definitions = json.loads(WORKER_DEMAND.read_text(encoding="utf8"))
+    for item in definitions:
+        if item["kind"] == "maintenance" and not include_maintenance:
+            continue
+        table = item["optionalTable"]
+        if table is not None and db.execute(
+                "SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?", (table,)).fetchone() is None:
+            continue
+        query = item["query"]
+        params = (now,) if "?" in query else ()
+        if db.execute(query, params).fetchone() is not None:
+            return True
+    return False
 
 
 def service_states():
@@ -77,23 +94,23 @@ def snapshot(database=DB, states=service_states, health=read_worker_health):
         db = sqlite3.connect(Path(database).as_uri() + "?mode=ro", uri=True, timeout=.1)
         try:
             db.execute("PRAGMA cache_size=-256")
-            settings = dict(db.execute("SELECT key,value_json FROM system_settings WHERE key IN ('worker_mode','worker_heartbeat')"))
-            mode = json.loads(settings.get("worker_mode", '"running"'))
+            row = db.execute("SELECT value_json FROM system_settings WHERE key='worker_mode'").fetchone()
+            mode = json.loads(row[0]) if row else "running"
             if mode not in ("running", "paused", "draining"):
                 raise ValueError("Invalid Worker mode")
-            pending = db.execute("""SELECT
-              EXISTS(SELECT 1 FROM jobs WHERE status IN ('queued','validating','running') OR lease_owner IS NOT NULL)
-              OR EXISTS(SELECT 1 FROM job_preview_requests WHERE status IN ('queued','running') OR lease_owner IS NOT NULL)
-              OR EXISTS(SELECT 1 FROM source_tree_readers)
-              OR EXISTS(SELECT 1 FROM source_trees WHERE status IN ('building','deleting'))""").fetchone()[0]
+            pending = worker == "idle" and worker_has_demand(
+                db, now.isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+                include_maintenance=False)
             if worker == "idle" and not pending:
                 value["worker"] = "idle" if mode == "running" else mode
                 value["rendering"] = mode == "running"
             elif worker == "running":
                 heartbeat = health()
                 age = (now - datetime.datetime.fromisoformat(heartbeat["at"])).total_seconds()
+                pid = heartbeat.get("pid")
                 if (0 <= age <= 30 and heartbeat.get("stopping") is False and
-                        str(heartbeat.get("pid")) == records["latex-renderer-worker.service"].get("MainPID")):
+                        type(pid) is int and pid > 1 and
+                        str(pid) == records["latex-renderer-worker.service"].get("MainPID")):
                     value["worker"] = mode
                     value["rendering"] = mode == "running"
         finally:

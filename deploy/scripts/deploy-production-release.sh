@@ -329,6 +329,14 @@ if [ -f "$source_root/deploy/systemd/latex-renderer-backup-control.socket" ]; th
     "$source_root/deploy/systemd/latex-renderer-backup-verify.service" /etc/systemd/system/
   systemctl daemon-reload
 fi
+if [ -f "$source_root/deploy/systemd/latex-renderer-host-runtime-refresh.path" ]; then
+  install -o root -g root -m 0644 \
+    "$source_root/deploy/systemd/latex-renderer-host-runtime-recovery.service" \
+    "$source_root/deploy/systemd/latex-renderer-host-runtime-refresh.service" \
+    "$source_root/deploy/systemd/latex-renderer-host-runtime-refresh.path" \
+    "$source_root/deploy/systemd/latex-renderer-host-runtime-refresh.timer" /etc/systemd/system/
+  systemctl daemon-reload
+fi
 # The running Updater supplies the trusted publication tools, which can predate
 # socket activation. Install this verified release's listener definitions before
 # reconciling or starting its consumers, even when those older tools omit them.
@@ -431,6 +439,13 @@ systemctl enable --now \
   latex-renderer-image-refresh.timer \
   latex-renderer-image-operation-watchdog.timer \
   latex-renderer-image-log-cleanup.timer
+if [ -f "$source_root/deploy/systemd/latex-renderer-host-runtime-refresh.path" ] &&
+   [ -d /opt/latex-renderer/host-runtime ]; then
+  # The deployment owns the mutation lock. Run recovery and runtime refresh
+  # independently after the release operation exits.
+  systemctl enable latex-renderer-host-runtime-recovery.service
+  systemctl enable --now latex-renderer-host-runtime-refresh.path latex-renderer-host-runtime-refresh.timer
+fi
 if systemctl is-enabled --quiet latex-renderer-worker.socket; then
   systemctl enable --now latex-renderer-worker-reconcile.timer
 fi
