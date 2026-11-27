@@ -53,7 +53,8 @@ export async function connectionMenu(): Promise<void> {
   const ask = async (prompt: string) =>
     (await terminal.question(prompt, { signal: controller.signal })).trim();
   try {
-    while (!controller.signal.aborted) {
+    for (;;) {
+      controller.signal.throwIfAborted();
       const connections = await store.list();
       for (const { name, origin, default: selected } of connections)
         process.stdout.write(`${selected ? "*" : " "} ${name}  ${origin}\n`);
