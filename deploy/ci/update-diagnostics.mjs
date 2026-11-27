@@ -89,7 +89,15 @@ try {
 } catch {
   log += '\n{"event":"ci.manager_diagnostic_unavailable"}';
 }
-for (const name of readdirSync("/etc/latex-renderer/secrets")) {
+const secrets = "/etc/latex-renderer/secrets";
+let secretNames;
+try {
+  secretNames = readdirSync(secrets);
+} catch (error) {
+  if (error.code !== "ENOENT") throw error;
+  secretNames = [];
+}
+for (const name of secretNames) {
   const path = `/etc/latex-renderer/secrets/${name}`,
     info = lstatSync(path);
   if (info.isFile() && info.size < 4096) {

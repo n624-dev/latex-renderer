@@ -53,10 +53,16 @@ const server = createServer((request, response) => {
     response.end(distribution.bytes);
   else response.writeHead(404).end();
 });
-const credential = join(
+const legacyCredential = join(
   config,
   "latex-renderer",
   windows ? "credential.bin" : "credential",
+);
+const profileCredential = join(
+  config,
+  "latex-renderer",
+  "connections",
+  "profile-default.json",
 );
 const setupArguments = [
   "--install-directory",
@@ -76,6 +82,7 @@ try {
     server.listen(0, "127.0.0.1", resolve);
   });
   const baseUri = `http://127.0.0.1:${server.address().port}/`;
+  environment.LATEX_RENDER_BASE_URL = baseUri;
   const installer = join(temporary, "legacy-install.mjs");
   await writeFile(installer, previous.installer, { flag: "wx" });
   const fixtureCredential = `lrk_${"a".repeat(32)}_${"A".repeat(43)}`;
@@ -89,6 +96,14 @@ try {
     JSON.parse((await command).stdout).result.credentialStored,
     true,
   );
+  const needsConfirmation = await lstat(legacyCredential).then(
+    () => true,
+    (error) => {
+      if (error.code !== "ENOENT") throw error;
+      return false;
+    },
+  );
+  const credential = needsConfirmation ? legacyCredential : profileCredential;
   const before = await readFile(credential);
   if (windows) assert(!before.includes(fixtureCredential));
   assert.equal(
@@ -127,6 +142,28 @@ try {
   const updated = JSON.parse(updateOutput);
   assert.equal(updated.success, true);
   assert.equal(updated.result.action, "updated");
+  if (needsConfirmation) {
+    await assert.rejects(
+      run("n624-latex", ["auth", "status", "--json"]),
+      (error) =>
+        JSON.parse(error.stdout).error.code ===
+        "CONNECTION_CONFIRMATION_REQUIRED",
+    );
+    const migration = JSON.parse(
+      await run("n624-latex", [
+        "connection",
+        "migrate",
+        "default",
+        baseUri,
+        "--confirm-origin",
+        "--json",
+      ]),
+    );
+    assert.equal(migration.success, true);
+    const saved = await readFile(profileCredential, "utf8");
+    assert.equal(JSON.parse(saved).origin, new URL(baseUri).origin);
+    if (windows) assert(!saved.includes(fixtureCredential));
+  }
   for (const name of ["latex-render", "n624-latex"]) {
     assert.equal(await run(name, ["--version"]), next.manifest.version);
     assert.equal(
