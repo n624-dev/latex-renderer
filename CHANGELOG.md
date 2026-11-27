@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 1.7.2-rc.6 - 2026-11-27
+
+- Recover unsaved edits after a connection loss or a draft conflict. Fall back to PNG previews when an already-open editor can no longer load its PDF viewer.
+- Preserve accepted jobs during routine API key rotation. Keep permissions tied to the replacement key.
+- Read saved revisions, edit shared drafts, and inspect PDFs from Local MCP with explicitly granted permissions.
+- Check a server's ZIP limits before uploading and keep the Job ID available if a local wait is interrupted.
+- Apply Node.js and Corepack updates from the installed APT package to the managed server runtime, with a health check and rollback.
+- Add a site favicon and improve admin, backup, and update recovery.
+
 ## 1.7.2-rc.5 - 2026-11-26
 
 - Add an optional MCP gateway for connecting ChatGPT to self-hosted LaTeX Renderer installations through HTTPS or an outbound agent.
