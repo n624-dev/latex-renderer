@@ -443,8 +443,17 @@ it("selects an explicit account outside the first page and keeps scope labels al
   });
   const value = page.locator("[data-issued-credential]");
   await expect.poll(() => value.textContent()).toBe(fixtureCredential);
-  expect(await page.evaluate(() => [...Object.values(sessionStorage), ...Object.values(localStorage)]
-    .some((entry) => entry.includes("issued-credential-fixture-not-a-key")))).toBe(false);
+  const stored = await page.evaluate((credential) => {
+    for (const storage of [sessionStorage, localStorage]) {
+      for (let index = 0; index < storage.length; index++) {
+        const key = storage.key(index);
+        if (key !== null && storage.getItem(key)?.includes(credential))
+          return true;
+      }
+    }
+    return false;
+  }, fixtureCredential);
+  expect(stored).toBe(false);
   await page.keyboard.press("Escape");
   await value.waitFor({ state: "detached" });
   expect(errors).toEqual([]);

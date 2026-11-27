@@ -85,6 +85,17 @@ export async function checkPackagedRender(directory, run) {
         response.end(JSON.stringify(value));
       };
       switch (requestId) {
+        case "GET /api/v1/source-tickets":
+          assert(
+            request.headers.authorization === `Bearer ${fixtureCredential}`,
+          );
+          json({
+            maxUploadBytes: 20 * 1024 ** 2,
+            maxExtractedBytes: 100 * 1024 ** 2,
+            maxFileCount: 500,
+            maxZipEntries: 1_000,
+          });
+          break;
         case "POST /api/v1/source-tickets":
           assert(
             request.headers.authorization === `Bearer ${fixtureCredential}`,
@@ -166,7 +177,10 @@ export async function checkPackagedRender(directory, run) {
       throw requestError ?? error;
     }
     assert.deepEqual(await readFile(join(directory, "main.pdf")), pdf);
-    assert.deepEqual(requests, [
+    // Clients published before the limits endpoint skip the preflight.
+    const operations =
+      requests[0] === "GET /api/v1/source-tickets" ? requests.slice(1) : requests;
+    assert.deepEqual(operations, [
       "POST /api/v1/source-tickets",
       `PUT ${sourcePath}`,
       "POST /api/v1/render-tickets",

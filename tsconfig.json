@@ -9,6 +9,9 @@
         "./packages/shared/src/resource-limits.ts"
       ],
       "@latex-renderer/shared/locale": ["./packages/shared/src/locale.ts"],
+      "@latex-renderer/shared/login-redirect": [
+        "./packages/shared/src/login-redirect.ts"
+      ],
       "@latex-renderer/shared/public-https": [
         "./packages/shared/src/public-https.ts"
       ],
