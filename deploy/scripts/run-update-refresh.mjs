@@ -96,7 +96,7 @@ export async function runUpdateRefresh({
     token,
     "POST",
     "/v1/refresh",
-    AbortSignal.timeout(60_000),
+    globalThis.AbortSignal.timeout(60_000),
   );
   const status = result?.status;
   if (["available", "unavailable", "up-to-date"].includes(status)) {
@@ -111,7 +111,7 @@ export async function runUpdateRefresh({
     throw new Error("Update Manager did not return an operation ID");
   report("started", { operationId: id });
 
-  const signal = AbortSignal.timeout(maximumWaitMs);
+  const signal = globalThis.AbortSignal.timeout(maximumWaitMs);
   let reconnecting = false;
   for (;;) {
     let operation;

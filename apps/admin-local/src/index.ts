@@ -638,9 +638,9 @@ smokeKey
         targetType: "system",
         targetId: "production-smoke",
         result: "requested",
-        metadata: { count: result },
+        metadata: { count: Number(result.changes) },
       });
-      return result;
+      return result.changes;
     });
     process.stdout.write(
       `${String(count)} smoke-test jobs queued for deletion.\n`,

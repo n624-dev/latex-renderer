@@ -51,10 +51,10 @@ describe("downstream HTTPS OAuth", () => {
         .mockRejectedValueOnce(new HttpsResponseError(401))
         .mockResolvedValueOnce({ ...approved, scope: "mcp:read mcp:render" })
         .mockResolvedValueOnce({ accepted: true });
-      const { dispatch } = createHttpsDispatch({
+      const dispatcher = createHttpsDispatch({
         store, keys, request, maxResponseBytes: 8192, timeoutMs: 2000, clock: () => 1000,
       });
-      const outcome = dispatch({
+      const outcome = dispatcher.dispatch({
         authorization, transport, signal,
         operation: { method: "tools/call", name: readOnly ? "get_renderer_capabilities" : "create_project", arguments: {} },
       });

@@ -52,7 +52,7 @@ export function installDraftRecovery<Draft extends DraftSnapshot>(options: {
     dialog.showModal();
     void (async () => {
       const latest = await options.readDraft(signal);
-      if (signal.aborted) return;
+      signal.throwIfAborted();
       if (!latest?.files.some((file) => file.path === path)) {
         options.describe(status, "conflictFileMissing");
         return;
@@ -63,7 +63,7 @@ export function installDraftRecovery<Draft extends DraftSnapshot>(options: {
         return;
       }
       const server = await options.readText(path, latest.version, signal);
-      if (signal.aborted) return;
+      signal.throwIfAborted();
       const [before, after] = changedLines(server, unsaved);
       options.serverText.textContent = before;
       options.localText.textContent = after;

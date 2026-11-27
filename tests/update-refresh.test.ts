@@ -101,7 +101,7 @@ describe.skipIf(process.platform === "win32")(
             stdout
               .trim()
               .split("\n")
-              .map((line) => JSON.parse(line)),
+              .map((line): unknown => JSON.parse(line)),
           ).toEqual([
             { event: "application_update.started", operationId },
             { event: "application_update.reconnecting", operationId },
@@ -123,7 +123,7 @@ describe.skipIf(process.platform === "win32")(
             code: 1,
             stderr: expect.stringContaining(
               `Automatic application update ${operationId} failed`,
-            ),
+            ) as unknown,
           });
           expect(requests).toEqual(["POST /v1/refresh", check, check]);
         },

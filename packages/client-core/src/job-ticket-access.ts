@@ -55,7 +55,10 @@ export async function abortable<T>(
   signal.throwIfAborted();
   let onAbort = () => {};
   const aborted = new Promise<never>((_resolve, reject) => {
-    onAbort = () => reject(signal.reason);
+    onAbort = () => {
+      const reason: unknown = signal.reason;
+      reject(reason instanceof Error ? reason : new Error("Client operation aborted", { cause: reason }));
+    };
     signal.addEventListener("abort", onAbort, { once: true });
   });
   try {

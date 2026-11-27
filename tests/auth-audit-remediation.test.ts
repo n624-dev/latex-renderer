@@ -428,7 +428,7 @@ describe("browser authentication audit remediations", () => {
     const service = new AdminApiKeysService({
       database,
       apiKeys,
-    } as unknown as AdminDependencies);
+    });
     expect(() =>
       service.rotate(
         {
