@@ -27,6 +27,8 @@ import {
   windowsLauncherContents,
 } from "./windows-launchers.js";
 import { runWindowsCredential } from "./windows-credential.js";
+import { readCredentialFile, writeCredentialFile } from "./credential-storage.js";
+import { rendererConnectionProfiles } from "./connection-profiles.js";
 
 export { clientSetupFailureDiagnostic } from "./failure-diagnostic.js";
 
@@ -925,6 +927,9 @@ export async function removeSetup({
 
   await rm(paths.installDirectory, { recursive: true, force: true });
   if (!keepCredential) {
+    const connections = rendererConnectionProfiles({ platform: paths.platform, path: paths.credentialPath, env: options.env ?? process.env });
+    for (const { name } of await connections.list()) await connections.remove(name);
+    await removeIfEmpty(join(dirname(paths.credentialPath), "connections"));
     await rm(paths.credentialPath, { force: true });
     await removeIfEmpty(dirname(paths.credentialPath));
   }
@@ -937,27 +942,11 @@ export async function saveCredential(
   options: Pick<CoreOptions, "platform" | "home" | "env"> = {},
 ): Promise<void> {
   const paths = resolveSetupPaths(options);
-  if (!/^lrk_[a-f0-9]{32}_[A-Za-z0-9_-]{43}$/.test(secret))
-    throw new AppError("INVALID_API_KEY", "Input is not a render API key", 400);
-  await mkdir(dirname(paths.credentialPath), { recursive: true, mode: 0o700 });
-  if (paths.platform === "win32") {
-    runWindowsCredential(
-      "save",
-      paths.credentialPath,
-      options.env ?? process.env,
-      secret,
-    );
-    return;
-  }
-  const temporary = `${paths.credentialPath}.part-${randomUUID()}`;
-  try {
-    await writeFile(temporary, secret, { mode: 0o600, flag: "wx" });
-    await chmod(temporary, 0o600);
-    await rename(temporary, paths.credentialPath);
-  } catch (error) {
-    await rm(temporary, { force: true }).catch(() => undefined);
-    throw error;
-  }
+  await writeCredentialFile({
+    platform: paths.platform,
+    path: paths.credentialPath,
+    env: options.env ?? process.env,
+  }, secret);
 }
 
 export async function loadCredential(
@@ -967,27 +956,24 @@ export async function loadCredential(
   const fromEnvironment = env.LATEX_RENDER_API_KEY;
   if (fromEnvironment !== undefined) return fromEnvironment;
   const paths = resolveSetupPaths({ ...options, env });
-  if (paths.platform === "win32") {
-    return runWindowsCredential("load", paths.credentialPath, env);
-  }
-  const info = await lstat(paths.credentialPath);
-  if (
-    !info.isFile() ||
-    (info.mode & 0o077) !== 0 ||
-    info.uid !== (process.geteuid?.() ?? info.uid)
-  )
-    throw new AppError(
-      "CREDENTIAL_PERMISSIONS",
-      "Credential file must be a regular file owned by the current user with mode 0600",
-      401,
-    );
-  return (await readFile(paths.credentialPath, "utf8")).trim();
+  return readCredentialFile({ platform: paths.platform, path: paths.credentialPath, env });
 }
 
 export async function deleteCredential(
   options: Pick<CoreOptions, "platform" | "home" | "env"> = {},
 ): Promise<void> {
   await rm(resolveSetupPaths(options).credentialPath, { force: true });
+}
+
+export function clientConnections(
+  options: Pick<CoreOptions, "platform" | "home" | "env"> = {},
+) {
+  const paths = resolveSetupPaths(options);
+  return rendererConnectionProfiles({
+    platform: paths.platform,
+    path: paths.credentialPath,
+    env: options.env ?? process.env,
+  });
 }
 
 export async function extractClientArchive(
@@ -1347,6 +1333,16 @@ async function inspectCredential(
   paths: SetupPaths,
   env: NodeJS.ProcessEnv,
 ): Promise<DiagnosticCheck> {
+  const connections = rendererConnectionProfiles({ platform: paths.platform, path: paths.credentialPath, env });
+  if (env.LATEX_RENDER_PROFILE !== undefined || await connections.defaultName() !== undefined) {
+    try {
+      const selected = await connections.resolve();
+      return { id: "credential", status: "pass", message: `Renderer connection: ${selected.name ?? "environment"} · ${selected.origin}` };
+    } catch (error) {
+      if (!(error instanceof AppError)) throw error;
+      return { id: "credential", status: "fail", message: error.message };
+    }
+  }
   if (env.LATEX_RENDER_API_KEY !== undefined)
     return {
       id: "credential",

@@ -30,11 +30,10 @@ import {
   type RenderOutput,
   type RenderEngine,
 } from "@latex-renderer/contracts";
-import { loadCredential } from "@latex-renderer/setup-core";
+import { clientConnections } from "@latex-renderer/setup-core";
 import type { RendererApiAuthoringTool } from "@latex-renderer/contracts/renderer-mcp-definitions";
 import {
   AppError,
-  clientRendererBaseUrl,
   safeError,
 } from "@latex-renderer/shared";
 import { z } from "zod";
@@ -422,11 +421,10 @@ export function createMcpOperations(
   const allowedRoots = lazyAllowedRoots(options.allowedRoots);
   const client =
     options.clientFactory ??
-    (async () =>
-      new RendererClient(
-        options.baseUrl ?? rendererBaseUrl(),
-        await loadCredential(),
-      ));
+    (async () => {
+      const { origin, apiKey } = await clientConnections().resolve(undefined, options.baseUrl);
+      return new RendererClient(origin, apiKey);
+    });
   return {
     uploadSource: (path, requestSignal) => withClientOperationDeadline(async (signal) => {
       const localPath = await resolveAllowedMcpPath(path, allowedRoots(), true);
@@ -790,10 +788,6 @@ function containsPath(root: string, target: string): boolean {
 function notFoundOnly(error: unknown): undefined {
   if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
   throw error;
-}
-
-function rendererBaseUrl(): string {
-  return clientRendererBaseUrl(process.env);
 }
 
 export function assertValidMcpOutput(output: McpToolOutput): McpToolOutput {

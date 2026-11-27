@@ -436,6 +436,10 @@ server.listen(0, "127.0.0.1", () => writeFileSync(ready, String(server.address()
     $installedManifest = $newManifest
     Assert-Installed $version
     Assert-ClientPath
+    $supportsProfiles = ((Invoke-Checked $managedCli @('--help')) -join [Environment]::NewLine) -match '--profile <name>'
+    if ($supportsProfiles) {
+        Invoke-Checked $managedCli @('connection', 'migrate', 'default', $origin, '--confirm-origin', '--json') | Out-Null
+    }
     $setupArgs = @('setup', 'integrations', '--mcp-target', 'codex', '--skill-target', 'none', '--json')
     $preserved = Invoke-Checked $managedCli $setupArgs | ConvertFrom-Json
     if (!$preserved.success -or 'mcp:codex:conflict' -notin $preserved.result.preserved -or
@@ -464,6 +468,9 @@ server.listen(0, "127.0.0.1", () => writeFileSync(ready, String(server.address()
             throw 'A fresh Windows user profile could not reload the packaged client key.'
         }
         $freshCredential = Join-Path $env:APPDATA 'latex-renderer\credential.bin'
+        if ($supportsProfiles) {
+            $freshCredential = Join-Path $env:APPDATA 'latex-renderer\connections\profile-default.json'
+        }
         if ([Text.Encoding]::UTF8.GetString([IO.File]::ReadAllBytes($freshCredential)).Contains($fixtureKey)) {
             throw 'The packaged client wrote a plaintext API key.'
         }

@@ -13,11 +13,16 @@ import {
 export function clientRendererBaseUrl(
   environment: Readonly<Record<string, string | undefined>>,
 ): string {
+  return clientRendererOverride(environment) ?? PUBLIC_ORIGIN;
+}
+
+export function clientRendererOverride(
+  environment: Readonly<Record<string, string | undefined>>,
+): string | undefined {
   return (
     environment.LATEX_RENDER_BASE_URL ??
     environment.LATEX_RENDER_RENDERER_URL ??
-    environment.LATEX_RENDER_GATEWAY_URL ??
-    PUBLIC_ORIGIN
+    environment.LATEX_RENDER_GATEWAY_URL
   );
 }
 

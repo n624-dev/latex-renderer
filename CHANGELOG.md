@@ -8,6 +8,7 @@
 - Preserve accepted jobs during routine API key rotation. Keep permissions tied to the replacement key.
 - Read saved revisions, edit shared drafts, and inspect PDFs from Local MCP with explicitly granted permissions.
 - Check a server's ZIP limits before uploading and keep the Job ID available if a local wait is interrupted.
+- Manage multiple Renderer connections from a terminal menu or command line. Each saved API key is tied to its server.
 - Apply Node.js and Corepack updates from the installed APT package to the managed server runtime, with a health check and rollback.
 - Add a site favicon and improve admin, backup, and update recovery.
 

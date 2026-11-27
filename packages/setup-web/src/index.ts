@@ -14,19 +14,18 @@ import { RendererClient } from "@latex-renderer/api-client";
 import { openLocalTarget, renderProject } from "@latex-renderer/client-core";
 import {
   DEFAULT_DISTRIBUTION_URI,
+  clientConnections,
   deleteCredential,
   doctorSetup,
   fetchDistribution,
   inspectSetup,
   installDistribution,
-  loadCredential,
   repairSetup,
-  saveCredential,
   type ClientPackageManager,
   type McpTarget,
   type SkillTarget,
 } from "@latex-renderer/setup-core";
-import { AppError, PUBLIC_ORIGIN } from "@latex-renderer/shared";
+import { AppError } from "@latex-renderer/shared";
 import { clientSetupHtml, setupCss, setupJavaScript } from "./assets.js";
 
 const MAXIMUM_BODY_BYTES = 16 * 1024;
@@ -55,7 +54,8 @@ export interface SetupWebActionOptions {
   readonly installDirectory?: string;
   readonly binDirectory?: string;
   readonly distributionBaseUri?: string;
-  readonly rendererBaseUrl?: string;
+  readonly rendererBaseUrl?: string | undefined;
+  readonly profile?: string | undefined;
 }
 
 export interface SetupWebActions {
@@ -346,6 +346,7 @@ export async function createSetupWebServer(
 export function createSetupWebActions(
   options: SetupWebActionOptions = {},
 ): SetupWebActions {
+  const connections = clientConnections();
   const setupOptions = {
     ...(options.installDirectory
       ? { installDirectory: options.installDirectory }
@@ -356,11 +357,14 @@ export function createSetupWebActions(
     status: () => inspectSetup(setupOptions),
     doctor: () => doctorSetup(setupOptions),
     saveApiKey: async (apiKey) => {
-      await saveCredential(apiKey);
+      const target = await connections.target(options.profile, options.rendererBaseUrl);
+      await connections.save(target.name, target.origin, apiKey);
       return { configured: true };
     },
     removeApiKey: async () => {
-      await deleteCredential();
+      const name = options.profile ?? process.env.LATEX_RENDER_PROFILE ?? await connections.defaultName();
+      if (name) await connections.remove(name);
+      else await deleteCredential();
       return { removed: true };
     },
     update: async ({ skillTarget, mcpTarget }) => {
@@ -384,11 +388,14 @@ export function createSetupWebActions(
         output: quietWriter,
         warning: quietWriter,
       }),
-    sampleRender: () => sampleRender(options.rendererBaseUrl ?? PUBLIC_ORIGIN),
+    sampleRender: async () => {
+      const { origin, apiKey } = await connections.resolve(options.profile, options.rendererBaseUrl);
+      return sampleRender(new RendererClient(origin, apiKey));
+    },
   };
 }
 
-async function sampleRender(rendererBaseUrl: string): Promise<unknown> {
+async function sampleRender(client: RendererClient): Promise<unknown> {
   const root = await mkdtemp(join(tmpdir(), "latex-renderer-setup-sample-"));
   try {
     await writeFile(
@@ -404,7 +411,7 @@ LaTeX Renderer setup test.\\
       { mode: 0o600 },
     );
     const rendered = await renderProject(
-      new RendererClient(rendererBaseUrl, await loadCredential()),
+      client,
       root,
       { outputDirectory: join(root, ".render") },
     );

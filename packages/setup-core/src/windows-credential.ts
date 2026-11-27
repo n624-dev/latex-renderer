@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { AppError } from "@latex-renderer/shared";
 
-type Operation = "save" | "load" | "probe";
+type Operation = "save" | "load" | "probe" | "protect" | "unprotect";
 
 // Resolve only modules belonging to the Windows PowerShell process itself.
 // A PowerShell 7 -> Node -> powershell.exe chain otherwise inherits PS7 modules.
@@ -11,6 +11,13 @@ const bootstrap =
   "try{Import-Module ([IO.Path]::Combine($PSHOME,'Modules','Microsoft.PowerShell.Security','Microsoft.PowerShell.Security.psd1')) -ErrorAction Stop}catch{exit 21};";
 
 function script(operation: Operation): string {
+  if (operation === "protect")
+    return (
+      bootstrap +
+      "try{$s=[Console]::In.ReadToEnd().Trim();" +
+      "$v=Microsoft.PowerShell.Security\\ConvertTo-SecureString -String $s -AsPlainText -Force;" +
+      "[Console]::Out.Write((Microsoft.PowerShell.Security\\ConvertFrom-SecureString -SecureString $v));exit 0}catch{exit 24}"
+    );
   if (operation === "save")
     return (
       bootstrap +
@@ -20,15 +27,19 @@ function script(operation: Operation): string {
       "$e=Microsoft.PowerShell.Security\\ConvertFrom-SecureString -SecureString $v;" +
       "[IO.File]::WriteAllText($p,$e,[Text.Encoding]::ASCII);exit 0}catch{exit 24}"
     );
+  const input =
+    operation === "unprotect"
+      ? "try{$e=[Console]::In.ReadToEnd().Trim()}catch{exit 22};"
+      : "try{$e=[IO.File]::ReadAllText($env:LR_CREDENTIAL_PATH).Trim()}" +
+        "catch [IO.FileNotFoundException]{exit 20}catch [IO.DirectoryNotFoundException]{exit 20}catch{exit 22};";
   return (
     bootstrap +
-    "try{$e=[IO.File]::ReadAllText($env:LR_CREDENTIAL_PATH).Trim()}" +
-    "catch [IO.FileNotFoundException]{exit 20}catch [IO.DirectoryNotFoundException]{exit 20}catch{exit 22};" +
+    input +
     "try{$v=Microsoft.PowerShell.Security\\ConvertTo-SecureString -String $e;" +
     "$b=[Runtime.InteropServices.Marshal]::SecureStringToBSTR($v);" +
     "try{$s=[Runtime.InteropServices.Marshal]::PtrToStringBSTR($b);" +
     "if($s -notmatch '^lrk_[a-f0-9]{32}_[A-Za-z0-9_-]{43}$'){exit 23};" +
-    (operation === "load" ? "[Console]::Out.Write($s)" : "$null=$s") +
+    (operation === "probe" ? "$null=$s" : "[Console]::Out.Write($s)") +
     "}finally{if($b -ne [IntPtr]::Zero){[Runtime.InteropServices.Marshal]::ZeroFreeBSTR($b)}};exit 0}catch{exit 23}"
   );
 }
@@ -56,7 +67,9 @@ export function runWindowsCredential(
     },
   );
   if (result.status === 0 && !result.error)
-    return operation === "load" ? result.stdout : "";
+    return ["load", "protect", "unprotect"].includes(operation)
+      ? result.stdout
+      : "";
   // PowerShell errors can include command text, file contents, or decrypted
   // input. Return only fixed stage diagnostics, never stdout/stderr/error text.
   if (!result.error) {

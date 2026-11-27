@@ -35,27 +35,28 @@ n624-latex auth status
 n624-latex auth logout
 ```
 
-- If set, the `LATEX_RENDER_API_KEY` environment variable takes precedence over the locally stored key.
+- If you have not explicitly selected a connection, `LATEX_RENDER_API_KEY` takes precedence over the saved key.
 - `logout` removes only the locally stored key. Unset the environment variable or revoke the key on the server separately as needed.
 
 ### Choose a server {#接続先サーバー}
 
-By default, the CLI connects to the hosted service (`https://latex-render.n624.jp`). For a self-hosted installation, set your server’s HTTPS URL in the shell where you run the CLI.
+Run **`n624-latex connection`** to manage connections from a terminal menu.
 
-- Omit `/app/` and `/api/v1/` from the end of the URL.
-- Use an API key issued by that server.
+1. Add a connection by entering a name, your server’s HTTPS URL, and an API key issued by that server. The terminal hides the key as you enter it.
+2. If you have several connections, set the one you use most often as the default.
 
-**Linux and macOS**
+Run `n624-latex main.tex` for the default connection, or `n624-latex --profile work main.tex` to select another connection for one command. To select a connection in Local MCP, set `LATEX_RENDER_PROFILE=work` in its launch environment.
+
+To reuse a key saved by an older version, choose **Import saved key** and confirm the server it belongs to. For automation, run `n624-latex connection migrate work https://latex.example.com --confirm-origin`. A saved key is used only with its confirmed server.
+
+To register a server noninteractively, pass the key on standard input.
 
 ```sh
-export LATEX_RENDER_BASE_URL=https://latex.example.com
+n624-latex connection add work https://latex.example.com --api-key-stdin
+n624-latex connection use work
 ```
 
-**Windows PowerShell**
-
-```powershell
-$env:LATEX_RENDER_BASE_URL = 'https://latex.example.com'
-```
+In CI, you can set `LATEX_RENDER_BASE_URL` and `LATEX_RENDER_API_KEY` together. If you explicitly select a connection, the client uses that connection’s saved key.
 
 ## Setup and diagnostics {#セットアップと診断}
 

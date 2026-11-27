@@ -18,7 +18,7 @@ export interface DocsValidationInput {
 type CliBinary = "latex-render" | "n624-latex";
 const methods = "get|post|put|patch|delete|head|options";
 const documentedMethods = new RegExp(`\\b(${methods.toUpperCase()})\\b`, "g");
-const globalCliOptions = new Set(["--json"]);
+const globalCliOptions = new Set(["--json", "--profile"]);
 const setupCliOptions = new Set([
   "--base-uri",
   "--install-directory",
@@ -183,6 +183,8 @@ function cliInvocations(
 
 function documentedCommandPath(invocation: string): string {
   const tokens = invocation.split(/\s+/);
+  if (tokens[0] === "connection" && tokens[1] && !tokens[1].startsWith("-"))
+    return tokens.slice(0, 2).join(" ");
   const commands: string[] = [];
   for (const token of tokens) {
     if (

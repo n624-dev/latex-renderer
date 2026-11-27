@@ -35,27 +35,28 @@ n624-latex auth status
 n624-latex auth logout
 ```
 
-- 環境変数 `LATEX_RENDER_API_KEY` が設定されている場合は、ローカルに保存されたキーよりも優先されます。
+- 接続先を明示的に選ばない場合、環境変数 `LATEX_RENDER_API_KEY` が保存されたキーよりも優先されます。
 - `logout` はローカルの保存済みキーだけを削除します。環境変数の解除や、サーバー側での API キー失効はそれぞれ別の操作です。
 
 ### 接続先サーバー
 
-既定ではホスト済みサービス（`https://latex-render.n624.jp`）に接続します。セルフホスト環境を使う場合は、コマンドを実行するシェルでサーバーの HTTPS URL を指定してください。
+**`n624-latex connection`** を実行すると、端末内のメニューで接続先を管理できます。
 
-- URL の末尾に `/app/` や `/api/v1/` は付けません。
-- 必ずその接続先サーバーが発行した API キーを使用してください。
+1. 接続先を追加し、名前、サーバーの HTTPS URL、そのサーバーが発行した API キーを入力します。入力したキーは画面に表示されません。
+2. 複数の接続先がある場合は、普段使う接続先を既定に設定します。
 
-**Linux・macOS**：
+普段は `n624-latex main.tex` で既定の接続先を使います。別の接続先で一度だけ実行するときは `n624-latex --profile work main.tex` のように指定します。Local MCP で接続先を指定するときは、その起動環境に `LATEX_RENDER_PROFILE=work` を設定します。
+
+以前保存したキーは、メニューの「旧キーを引き継ぐ」で接続先を確認して登録できます。自動化では `n624-latex connection migrate work https://latex.example.com --confirm-origin` を使います。登録済みのキーは確認した接続先でのみ使われます。
+
+非対話で接続先を追加する場合は、キーを標準入力から渡します。
 
 ```sh
-export LATEX_RENDER_BASE_URL=https://latex.example.com
+n624-latex connection add work https://latex.example.com --api-key-stdin
+n624-latex connection use work
 ```
 
-**Windows PowerShell**：
-
-```powershell
-$env:LATEX_RENDER_BASE_URL = 'https://latex.example.com'
-```
+CIなどで環境変数を使う場合は、`LATEX_RENDER_BASE_URL` と `LATEX_RENDER_API_KEY` を一緒に設定します。接続先を明示的に選んだ場合は、その接続先の保存済みキーを使います。
 
 ## セットアップと診断
 
