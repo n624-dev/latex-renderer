@@ -14,6 +14,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { pipeline } from "node:stream/promises";
 import { build } from "esbuild";
+import { authoringGuideDefine } from "./authoring-guide-define.mjs";
 import yazl from "yazl";
 
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -27,6 +28,10 @@ const archiveName = `${payloadName}-${version}.zip`;
 const archivePath = join(outputRoot, archiveName);
 const bundleDefine = {
   "process.env.LATEX_RENDER_CLIENT_VERSION": JSON.stringify(version),
+  __latexRendererSetupBrowserScript: JSON.stringify(
+    await readFile(join(repository, "packages/setup-web/src/setup-browser.js"), "utf8"),
+  ),
+  ...(await authoringGuideDefine(repository)),
 };
 const workspaceAliases = {
   "@latex-renderer/api-client": join(
@@ -41,6 +46,8 @@ const workspaceAliases = {
     repository,
     "packages/contracts/src/index.ts",
   ),
+  "@latex-renderer/contracts/authoring-guide": join(repository, "packages/contracts/src/authoring-guide.ts"),
+  "@latex-renderer/contracts/renderer-mcp-definitions": join(repository, "packages/contracts/src/renderer-mcp-definitions.ts"),
   "@latex-renderer/mcp-core": join(
     repository,
     "packages/mcp-core/src/index.ts",

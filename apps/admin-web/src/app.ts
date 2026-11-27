@@ -15,6 +15,7 @@ import { readBrowserAsset } from "./browser-assets.js";
 import { styles } from "./assets/styles.js";
 import { isVersionedWebFont, webFontAsset } from "./assets/font-assets.js";
 import { editorAsset, readEditorAssetVersion } from "./editor-assets.js";
+import { favicon } from "./favicon.js";
 import type { StatusProbe } from "./status-probe.js";
 import {
   binaryResponse,
@@ -124,6 +125,10 @@ export function createWebApp(
     }),
   );
 
+  app.get("/favicon.svg", (c) => {
+    c.header("Content-Type", "image/svg+xml");
+    return c.body(favicon);
+  });
   app.get("/assets/styles.css", (c) => {
     c.header("Content-Type", "text/css; charset=utf-8");
     return c.body(styles);

@@ -406,7 +406,7 @@ export class RenderTicketsService {
       expiresAt: new Date(Date.now() + 1_800_000).toISOString(),
     };
   }
-  private requireOwnedJob(actor: AuthenticatedServiceAccount, jobId: string) {
+  requireOwnedJob(actor: AuthenticatedServiceAccount, jobId: string) {
     const row = this.deps.database.jobs.getOwned(
       jobId,
       actor.userId,

@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 
-type BrowserAsset = "admin-render" | "app" | "login" | "site";
+type BrowserAsset = "admin" | "admin-render" | "app" | "login" | "site";
 
 const scripts = new Map<BrowserAsset, string>();
 

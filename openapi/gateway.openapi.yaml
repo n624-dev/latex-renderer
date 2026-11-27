@@ -92,6 +92,119 @@ paths:
       responses:
         "200": { description: Project ID and deleted flag }
         "404": { $ref: "#/components/responses/Error" }
+  /api/v1/projects/{projectId}/draft:
+    parameters:
+      - { $ref: "#/components/parameters/ProjectId" }
+    get:
+      summary: Get the version and file list of a shared draft
+      description: Requires the render:draft:read scope.
+      security: [{ renderApiKey: [] }]
+      responses:
+        "200": { description: Shared draft metadata or a null draft when none exists }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/projects/{projectId}/draft/file:
+    parameters:
+      - { $ref: "#/components/parameters/ProjectId" }
+    get:
+      summary: Read a page of UTF-8 text from an exact draft version
+      description: Requires the render:draft:read scope. Follow nextOffset to continue reading in UTF-16 code units.
+      security: [{ renderApiKey: [] }]
+      parameters:
+        - { in: query, name: version, required: true, schema: { type: integer, minimum: 1 } }
+        - { in: query, name: path, required: true, schema: { type: string, maxLength: 2048 } }
+        - { in: query, name: offset, schema: { type: integer, minimum: 0 } }
+      responses:
+        "200": { description: Draft file text and continuation information }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/projects/{projectId}/draft/open:
+    parameters:
+      - { $ref: "#/components/parameters/ProjectId" }
+    post:
+      summary: Open a shared draft or explicitly replace it with a saved revision
+      description: Requires the render:draft:write scope. Set replaceVersion only after confirming replacement.
+      security: [{ renderApiKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                revisionId: { type: string, pattern: "^revision_[a-f0-9]{32}$" }
+                replaceVersion: { type: integer, minimum: 1 }
+      responses:
+        "200": { description: Open or replaced shared draft }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/projects/{projectId}/draft/changes:
+    parameters:
+      - { $ref: "#/components/parameters/ProjectId" }
+    post:
+      summary: Apply an idempotent batch to the exact draft version
+      description: Requires the render:draft:write scope. Use the same idempotencyKey and body after an interrupted response.
+      security: [{ renderApiKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [version, idempotencyKey, files]
+              properties:
+                version: { type: integer, minimum: 1 }
+                idempotencyKey: { type: string, minLength: 16, maxLength: 200 }
+                entrypoint: { type: string }
+                engine: { type: string }
+                outputs: { type: array, items: { type: string, enum: [pdf, svg] } }
+                files:
+                  type: array
+                  maxItems: 200
+                  items:
+                    type: object
+                    required: [path]
+                    properties:
+                      path: { type: string }
+                      remove: { type: boolean, enum: [true] }
+                      text: { type: string }
+                      base64: { type: string }
+                      patch:
+                        type: object
+                        required: [expectedSha256, original, replacement]
+                        properties:
+                          expectedSha256: { type: string, pattern: "^[a-f0-9]{64}$" }
+                          original: { type: string }
+                          replacement: { type: string }
+                          expectedMatches: { type: integer, minimum: 1, maximum: 100 }
+      responses:
+        "200": { description: Resulting draft version and changed paths }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
+  /api/v1/projects/{projectId}/draft/save:
+    parameters:
+      - { $ref: "#/components/parameters/ProjectId" }
+    post:
+      summary: Save the exact draft version as a Project revision
+      description: Requires the render:draft:write scope.
+      security: [{ renderApiKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [version, displayName]
+              properties:
+                version: { type: integer, minimum: 1 }
+                displayName: { type: string, minLength: 1, maxLength: 200 }
+                description: { type: string, maxLength: 1000 }
+      responses:
+        "200": { description: Saved revision identity and build settings }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /api/v1/projects/{projectId}/revisions:
     parameters:
       - { $ref: "#/components/parameters/ProjectId" }
@@ -131,6 +244,27 @@ paths:
       responses:
         "200": { description: Paginated Job summaries }
         "404": { $ref: "#/components/responses/Error" }
+  /api/v1/projects/{projectId}/revisions/{revisionId}/files:
+    parameters:
+      - { $ref: "#/components/parameters/ProjectId" }
+      - { $ref: "#/components/parameters/RevisionId" }
+    get:
+      summary: List files or read UTF-8 text from a saved Project revision
+      description: Requires an explicitly granted render:project:read scope. When path is present, offset counts UTF-16 code units. Otherwise offset counts files.
+      security: [{ renderApiKey: [] }]
+      parameters:
+        - { in: query, name: path, schema: { type: string, minLength: 1, maxLength: 2048 } }
+        - { in: query, name: offset, schema: { type: integer, minimum: 0 } }
+        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 25 } }
+      responses:
+        "200": { description: Saved revision identity and a page of files or text }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "416": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
   /api/v1/projects/{projectId}/revisions/{revisionId}/render:
     parameters:
       - { $ref: "#/components/parameters/ProjectId" }
@@ -249,6 +383,40 @@ paths:
         "409": { $ref: "#/components/responses/Error" }
         "429": { $ref: "#/components/responses/Error" }
         "503": { $ref: "#/components/responses/Error" }
+  /api/v1/job-tickets/{jobId}/pdf-inspection:
+    parameters:
+      - { in: path, name: jobId, required: true, schema: { type: string, pattern: "^job_[a-f0-9]{32}$" } }
+    get:
+      summary: Read the inspection report for an exact PDF
+      description: Requires the render:pdf:inspect scope and Job ownership.
+      security: [{ renderApiKey: [] }]
+      parameters:
+        - { in: query, name: pdfSha256, required: true, schema: { type: string, pattern: "^[a-f0-9]{64}$" } }
+      responses:
+        "200": { description: Inspection state and report when available }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "410": { $ref: "#/components/responses/Error" }
+    post:
+      summary: Request or reuse an inspection of an exact PDF
+      description: Requires the render:pdf:inspect scope and Job ownership. The request does not create a new render.
+      security: [{ renderApiKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [pdfSha256]
+              properties:
+                pdfSha256: { type: string, pattern: "^[a-f0-9]{64}$" }
+      responses:
+        "200": { description: Accepted or existing inspection state }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "410": { $ref: "#/components/responses/Error" }
   /api/v1/job-tickets/{jobId}:
     post:
       summary: Renew a job-operation ticket

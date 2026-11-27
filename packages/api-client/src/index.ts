@@ -25,6 +25,12 @@ import {
   type TicketResponse,
 } from "@latex-renderer/contracts";
 import {
+  rendererApiAuthoringRoutes,
+  savedRevisionFilesPageSchema,
+  savedRevisionFileTextSchema,
+  type RendererApiAuthoringTool,
+} from "@latex-renderer/contracts/renderer-mcp-definitions";
+import {
   AppError,
   PUBLIC_API_PREFIX,
   credentialUrl,
@@ -281,6 +287,80 @@ export class RendererClient {
       redirect: "error",
     });
     return projectRevisionJobsPageSchema.parse(await responseJson(response));
+  }
+  async listProjectRevisionFiles(
+    projectId: string,
+    revisionId: string,
+    options: RendererRequestOptions & { offset?: number | undefined; limit?: number | undefined } = {},
+  ) {
+    const query = new URLSearchParams();
+    if (options.offset !== undefined) query.set("offset", String(options.offset));
+    if (options.limit !== undefined) query.set("limit", String(options.limit));
+    return savedRevisionFilesPageSchema.parse(
+      await this.#readProjectRevisionFiles(projectId, revisionId, query, options.signal),
+    );
+  }
+  async runAuthoringOperation(
+    operation: RendererApiAuthoringTool,
+    { projectId, jobId, ...parameters }: Readonly<Record<string, unknown>>,
+    options: RendererRequestOptions = {},
+  ): Promise<unknown> {
+    const route = rendererApiAuthoringRoutes[operation];
+    const id = route.resource === "project" ? projectId : jobId;
+    const pattern = route.resource === "project" ? /^project_[a-f0-9]{32}$/ : /^job_[a-f0-9]{32}$/;
+    if (typeof id !== "string" || !pattern.test(id))
+      throw new AppError("INVALID_REQUEST", "A valid Project or Job ID is required", 400);
+    const collection = route.resource === "project" ? "projects" : "job-tickets";
+    const url = new URL(
+      `${PUBLIC_API_PREFIX}/${collection}/${encodeURIComponent(id)}${route.suffix}`,
+      this.#baseUrl,
+    );
+    if (route.method === "GET")
+      for (const [key, value] of Object.entries(parameters)) {
+        if (typeof value === "number" || typeof value === "string")
+          url.searchParams.set(key, String(value));
+      }
+    const response = await fetch(url, {
+      method: route.method,
+      headers: noStoreRequestHeaders(this.headers(route.method === "POST"
+        ? { "Content-Type": "application/json" } : undefined)),
+      cache: "no-store",
+      redirect: "error",
+      ...(route.method === "POST" ? { body: JSON.stringify(parameters) } : {}),
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+    });
+    return await authoringResponse(response, route.resource === "job");
+  }
+  async getProjectRevisionFile(
+    projectId: string,
+    revisionId: string,
+    path: string,
+    options: RendererRequestOptions & { offset?: number | undefined } = {},
+  ) {
+    const query = new URLSearchParams({ path });
+    if (options.offset !== undefined) query.set("offset", String(options.offset));
+    return savedRevisionFileTextSchema.parse(
+      await this.#readProjectRevisionFiles(projectId, revisionId, query, options.signal),
+    );
+  }
+  async #readProjectRevisionFiles(
+    projectId: string,
+    revisionId: string,
+    query: URLSearchParams,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    const url = new URL(
+      `${PUBLIC_API_PREFIX}/projects/${encodeURIComponent(projectId)}/revisions/${encodeURIComponent(revisionId)}/files`,
+      this.#baseUrl,
+    );
+    url.search = query.toString();
+    const response = await fetch(url, {
+      headers: noStoreRequestHeaders(this.headers()),
+      cache: "no-store",
+      redirect: "error",
+      ...(signal === undefined ? {} : { signal }),
+    });
+    return await authoringResponse(response);
   }
   async createProject(displayName: string): Promise<{ id: string }> {
     const response = await fetch(
@@ -701,6 +781,26 @@ async function responseJson(response: Response): Promise<unknown> {
   if (!response.ok) throwFromValue(response.status, value);
   return value;
 }
+async function authoringResponse(
+  response: Response,
+  legacyJobRoute = false,
+): Promise<unknown> {
+  try {
+    return await responseJson(response);
+  } catch (error) {
+    if (error instanceof AppError && (
+      error.status === 405 ||
+      (error.status === 404 && ["NOT_FOUND", "INVALID_RESPONSE", "HTTP_ERROR"].includes(error.code)) ||
+      (legacyJobRoute && error.status === 400 && error.code === "INVALID_JOB_ID")
+    ))
+      throw new AppError(
+        "AUTHORING_UNAVAILABLE",
+        "This server does not support the requested Local MCP authoring operation. Update the server or use its Web editor or Remote MCP.",
+        501,
+      );
+    throw error;
+  }
+}
 async function throwResponse(response: Response): Promise<never> {
   throwFromValue(
     response.status,
@@ -716,6 +816,7 @@ function throwFromValue(status: number, value: unknown): never {
           message?: unknown;
           previewErrorCode?: unknown;
           retryable?: unknown;
+          currentVersion?: unknown;
         };
       }
     ).error;
@@ -731,7 +832,11 @@ function throwFromValue(status: number, value: unknown): never {
               previewErrorCode: error.previewErrorCode,
               retryable: error.retryable,
             }
-          : undefined,
+          : error.code === "DRAFT_VERSION_CONFLICT" &&
+              (error.currentVersion === null || typeof error.currentVersion === "number" &&
+                Number.isSafeInteger(error.currentVersion) && error.currentVersion >= 0)
+            ? { currentVersion: error.currentVersion }
+            : undefined,
       );
   }
   throw new AppError(

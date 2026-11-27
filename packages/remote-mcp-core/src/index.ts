@@ -28,7 +28,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { constants, createReadStream } from "node:fs";
-import { dirname, extname, join } from "node:path";
+import { dirname, join } from "node:path";
 import type {
   ArtifactRow,
   JobRow,
@@ -46,7 +46,6 @@ import {
   protectArtifactDownloadLeases,
   ARTIFACT_DOWNLOAD_LEASE_MS,
   artifactRetentionExpiresAt,
-  PDF_INSPECTOR_VERSION,
   pdfInspectionUploadDirectory,
   pdfInspectionUploadResult,
   waitForPreview,
@@ -65,8 +64,6 @@ import {
 } from "@latex-renderer/shared";
 import {
   validateAndExtract,
-  readValidatedSourceFile,
-  listValidatedSourceFiles,
   validateEntrypointPath,
   validateSourceFilePath,
 } from "@latex-renderer/zip-validation";
@@ -74,7 +71,6 @@ import {
   defaultRenderEngine,
   documentProbeSchema,
   type DocumentProbe,
-  pdfInspectionInputSchema,
   type PdfInspectionInput,
   pdfCropRequestSchema,
   type PdfCropRequest,
@@ -83,7 +79,6 @@ import {
   type ProjectDocumentCondition,
   type ProjectReviewCheck,
   type RenderEngine,
-  type RenderOutput,
   type RenderReproducibility,
 } from "@latex-renderer/contracts";
 import {
@@ -102,6 +97,14 @@ export {
 } from "@latex-renderer/renderer-core";
 import {
   RendererDrafts,
+  RendererSavedSources,
+  inspectJobPdf,
+  decodeSourceBase64,
+  findOperationRequest,
+  operationRequest,
+  recordOperationRequest,
+  type DraftChangeBatch,
+  type OperationRequest,
   RendererSourceStore,
   SOURCE_UPLOAD_MS,
   readDirectoryFiles,
@@ -212,49 +215,6 @@ export interface RemoteSourceUpload {
   expiresAt: string;
   maxChunkBytes: number;
 }
-
-type OperationRequest = {
-  keyHash: string;
-  requestHash: string;
-  operation:
-    | "remote_mcp.create_render"
-    | "remote_mcp.retry_render"
-    | "remote_mcp.render_project_revision"
-    | "remote_mcp.apply_project_changes"
-    | "remote_mcp.import_source_attachment";
-};
-
-function operationRequest(
-  operation: OperationRequest["operation"],
-  key: string | undefined,
-  input: object,
-): OperationRequest | undefined {
-  if (key === undefined) return undefined;
-  if (key.length < 16 || key.length > 200)
-    throw new AppError(
-      "INVALID_IDEMPOTENCY_KEY",
-      "Idempotency key must contain 16 to 200 characters",
-      400,
-    );
-  return {
-    operation,
-    keyHash: sha256Hex(key),
-    requestHash: sha256Hex(JSON.stringify(input)),
-  };
-}
-
-type DraftFileChange =
-  | { path: string; remove: true }
-  | RemoteSourceFileInput
-  | {
-      path: string;
-      patch: {
-        expectedSha256: string;
-        original: string;
-        replacement: string;
-        expectedMatches: number;
-      };
-    };
 
 type RenderInput = {
   entrypoint?: string | undefined;
@@ -680,7 +640,7 @@ export class RemoteRenderService {
         );
       const bytes =
         file.text === undefined
-          ? decodeBase64(file.base64 as string)
+          ? decodeSourceBase64(file.base64 as string)
           : Buffer.from(file.text, "utf8");
       if (bytes.byteLength > limits.fileBytes)
         throw new AppError(
@@ -878,7 +838,7 @@ export class RemoteRenderService {
 
   getSharedDraft(identity: RemoteMcpIdentity, projectId: string) {
     requireScope(identity.scopes, "mcp:read");
-    return this.draftOperations().get(this.projectActor(identity), projectId);
+    return this.draftFiles.getDraft(this.projectActor(identity), projectId);
   }
 
   async startSharedDraft(
@@ -888,24 +848,9 @@ export class RemoteRenderService {
     replaceVersion?: number,
   ) {
     requireScope(identity.scopes, "mcp:render");
-    const actor = this.projectActor(identity);
-    if (replaceVersion !== undefined) {
-      if (revisionId === undefined)
-        throw new AppError(
-          "DRAFT_SOURCE_REQUIRED",
-          "Choose a saved revision to replace the draft",
-          400,
-        );
-      return this.draftOperations().replaceFromRevision(
-        actor,
-        projectId,
-        revisionId,
-        replaceVersion,
-      );
-    }
-    return revisionId === undefined
-      ? this.draftFiles.openProjectDraft(actor, projectId)
-      : this.draftOperations().open(actor, projectId, revisionId, true);
+    return this.draftFiles.openSharedDraft(
+      this.projectActor(identity), projectId, revisionId, replaceVersion,
+    );
   }
 
   async getSharedDraftText(
@@ -916,186 +861,18 @@ export class RemoteRenderService {
     offset = 0,
   ) {
     requireScope(identity.scopes, "mcp:read");
-    if (sourceFileKind(path) === "binary")
-      throw new AppError("SOURCE_FILE_BINARY", "Source file is binary", 422);
-    const file = await this.draftFiles.readDraftText(
+    return this.draftFiles.readDraftPage(
       this.projectActor(identity),
       projectId,
       version,
       path,
+      offset,
     );
-    return {
-      projectId,
-      path: file.path,
-      version,
-      sha256: sha256Hex(file.text),
-      ...sourceTextPage(file.text, offset),
-    };
   }
 
-  async applyProjectChanges(
-    identity: RemoteMcpIdentity,
-    input: {
-      projectId: string;
-      version: number;
-      idempotencyKey: string;
-      files: readonly DraftFileChange[];
-      entrypoint?: string | undefined;
-      outputs?: readonly RenderOutput[] | undefined;
-      engine?: RenderEngine | undefined;
-    },
-  ) {
+  async applyProjectChanges(identity: RemoteMcpIdentity, input: DraftChangeBatch) {
     requireScope(identity.scopes, "mcp:render");
-    const actor = this.projectActor(identity);
-    const drafts = this.draftOperations();
-    const draft = drafts.get(actor, input.projectId);
-    if (draft === null)
-      throw new AppError("DRAFT_NOT_FOUND", "Draft does not exist", 404);
-    const request = operationRequest(
-      "remote_mcp.apply_project_changes",
-      input.idempotencyKey,
-      {
-        projectId: input.projectId,
-        version: input.version,
-        entrypoint: input.entrypoint,
-        outputs: input.outputs,
-        engine: input.engine,
-        files: input.files.map((change) =>
-          "remove" in change
-            ? { path: change.path, remove: true }
-            : "patch" in change
-              ? { path: change.path, patch: change.patch }
-              : { path: change.path, text: change.text, base64: change.base64 },
-        ),
-      },
-    );
-    const result = (version: number) => ({
-      projectId: input.projectId,
-      baseVersion: input.version,
-      version,
-      changedPaths: input.files.map(({ path }) => path),
-    });
-    const replay = this.findOperationRequest(actor.userId, request, nowIso());
-    if (replay !== undefined) return result(Number(replay));
-    if (draft.version !== input.version)
-      throw draftVersionConflict(draft.version);
-    const limits = directSourceLimits(this.resourceLimits);
-    const names = new Set<string>(),
-      files: { path: string; bytes: Buffer }[] = [];
-    let totalBytes = 0;
-    for (const change of input.files) {
-      const path = validateSourceFilePath(
-        change.path,
-        this.sources.zipLimits(),
-      );
-      if (names.has(path))
-        throw new AppError(
-          "DRAFT_DUPLICATE_CHANGE",
-          "A path was changed more than once",
-          422,
-        );
-      names.add(path);
-      if ("remove" in change) continue;
-      let bytes: Buffer;
-      if ("patch" in change) {
-        if (sourceFileKind(path) === "binary")
-          throw new AppError(
-            "SOURCE_FILE_BINARY",
-            "Source file is binary",
-            422,
-          );
-        const original = await this.draftFiles.readDraftText(
-          actor,
-          input.projectId,
-          input.version,
-          path,
-        );
-        bytes = replaceExactDraftText(
-          original.text,
-          change.patch,
-          limits.fileBytes,
-        );
-      } else {
-        if ((change.text === undefined) === (change.base64 === undefined))
-          throw new AppError(
-            "SOURCE_FILE_CONTENT",
-            "Specify exactly one of text or base64",
-            400,
-          );
-        bytes =
-          change.text === undefined
-            ? decodeBase64(change.base64 as string)
-            : Buffer.from(change.text, "utf8");
-      }
-      if (bytes.length > limits.fileBytes)
-        throw new AppError(
-          "SOURCE_FILE_SIZE",
-          "Draft file exceeds the direct file limit",
-          422,
-        );
-      totalBytes += bytes.length;
-      if (totalBytes > limits.contentBytes || files.length >= limits.files)
-        throw new AppError(
-          "SOURCE_TOTAL_SIZE",
-          "Draft changes exceed the direct upload limits",
-          422,
-        );
-      files.push({ path, bytes });
-    }
-    const apply = (sourceId: string, rollbackIfReplayed = false) => {
-      const timestamp = nowIso();
-      const accepted = this.findOperationRequest(
-        actor.userId,
-        request,
-        timestamp,
-      );
-      if (accepted !== undefined) {
-        if (rollbackIfReplayed) throw new DraftEditReplayed(Number(accepted));
-        return result(Number(accepted));
-      }
-      const current = this.database.drafts.getOwned(
-        input.projectId,
-        actor.userId,
-      );
-      if (current?.version !== input.version)
-        throw draftVersionConflict(current?.version);
-      const updated = drafts.updateInTransaction(actor, input.projectId, {
-        version: input.version,
-        entrypoint: input.entrypoint,
-        engine: input.engine,
-        outputs: input.outputs,
-        files: input.files.map((change) =>
-          "remove" in change
-            ? { path: change.path, remove: true }
-            : { path: change.path, sourceId, sourcePath: change.path },
-        ),
-      });
-      this.recordOperationRequest(
-        actor.userId,
-        request,
-        String(updated.version),
-        timestamp,
-      );
-      return result(updated.version);
-    };
-    if (files.length === 0) return this.database.transaction(() => apply(""));
-    const archive = await zipFiles(files, this.sources.zipLimits());
-    let accepted: ReturnType<typeof apply> | undefined;
-    try {
-      await this.sources.storeReadySource(
-        actor.userId,
-        archive,
-        files.map(({ path }) => path),
-        (sourceId) => {
-          accepted = apply(sourceId, true);
-        },
-      );
-    } catch (error) {
-      if (error instanceof DraftEditReplayed) return result(error.version);
-      throw error;
-    }
-    if (accepted === undefined) throw new Error("Draft changes did not commit");
-    return accepted;
+    return this.draftFiles.applyProjectChanges(this.projectActor(identity), input);
   }
 
   queueSharedDraftPreview(
@@ -1309,7 +1086,7 @@ export class RemoteRenderService {
       );
     const bytes =
       file.text === undefined
-        ? decodeBase64(file.base64 as string)
+        ? decodeSourceBase64(file.base64 as string)
         : Buffer.from(file.text, "utf8");
     const maxRevisionFileBytes = Math.min(
       20 * 1024 * 1024,
@@ -1392,33 +1169,13 @@ export class RemoteRenderService {
     );
   }
 
-  private savedRevisionSource(
-    identity: RemoteMcpIdentity,
-    projectId: string,
-    revisionId: string,
-  ) {
+  private savedRevisionSource(identity: RemoteMcpIdentity, projectId: string, revisionId: string) {
     requireScope(identity.scopes, "mcp:read");
-    const { revision } = new ProjectOperations(this.database).revision(
-      this.projectActor(identity),
-      projectId,
-      revisionId,
-    );
-    const source = this.sources.resolveOwnedSource(
-      identity.userId,
-      revision.source_id,
-    );
-    return {
-      source,
-      path: this.sources.sourcePath(source),
-      entrypoint: revision.entrypoint,
-      engine: revision.engine,
-      revision: {
-        projectId,
-        revisionId,
-        sourceId: source.id,
-        sourceSha256: source.sha256,
-      },
-    };
+    return this.savedSources().revisionSource(this.projectActor(identity), projectId, revisionId);
+  }
+
+  private savedSources() {
+    return new RendererSavedSources(this.database, this.sources);
   }
 
   projectDelivery(
@@ -1501,93 +1258,14 @@ export class RemoteRenderService {
     };
   }
 
-  async listProjectRevisionFiles(
-    identity: RemoteMcpIdentity,
-    projectId: string,
-    revisionId: string,
-    offset = 0,
-    limit = 25,
-  ) {
-    const { path, revision } = this.savedRevisionSource(
-      identity,
-      projectId,
-      revisionId,
-    );
-    const files = await readSavedSource(() =>
-      listValidatedSourceFiles(path, this.sources.zipLimits()),
-    );
-    if (
-      !Number.isSafeInteger(offset) ||
-      offset < 0 ||
-      offset > files.length ||
-      !Number.isSafeInteger(limit) ||
-      limit < 1 ||
-      limit > 25
-    )
-      throw new AppError(
-        "SOURCE_FILE_RANGE",
-        "Invalid Source file list range",
-        416,
-      );
-    const items = files.slice(offset, offset + limit).map((file) => ({
-      ...file,
-      kind: sourceFileKind(file.path),
-    }));
-    return {
-      ...revision,
-      items,
-      totalFiles: files.length,
-      nextOffset:
-        offset + items.length < files.length ? offset + items.length : null,
-    };
+  listProjectRevisionFiles(identity: RemoteMcpIdentity, projectId: string, revisionId: string, offset = 0, limit = 25) {
+    requireScope(identity.scopes, "mcp:read");
+    return this.savedSources().listProjectRevisionFiles(this.projectActor(identity), projectId, revisionId, offset, limit);
   }
 
-  async getProjectRevisionFile(
-    identity: RemoteMcpIdentity,
-    projectId: string,
-    revisionId: string,
-    requestedPath: string,
-    offset = 0,
-  ) {
-    const { source, path, revision } = this.savedRevisionSource(
-      identity,
-      projectId,
-      revisionId,
-    );
-    const target = validateSourceFilePath(
-      requestedPath,
-      this.sources.zipLimits(),
-    );
-    if (!this.database.sources.paths(source).includes(target))
-      throw new AppError(
-        "SOURCE_FILE_NOT_FOUND",
-        "Source file does not exist",
-        404,
-      );
-    if (sourceFileKind(target) === "binary")
-      throw new AppError("SOURCE_FILE_BINARY", "Source file is binary", 422);
-    const bytes = await readSavedSource(() =>
-      readValidatedSourceFile(path, target, this.sources.zipLimits()),
-    );
-    let text: string;
-    try {
-      text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
-        bytes,
-      );
-    } catch {
-      throw new AppError(
-        "SOURCE_FILE_ENCODING",
-        "Source file is not UTF-8",
-        422,
-      );
-    }
-    return {
-      ...revision,
-      path: target,
-      sha256: sha256Hex(bytes),
-      size: bytes.byteLength,
-      ...sourceTextPage(text, offset),
-    };
+  getProjectRevisionFile(identity: RemoteMcpIdentity, projectId: string, revisionId: string, path: string, offset = 0) {
+    requireScope(identity.scopes, "mcp:read");
+    return this.savedSources().getProjectRevisionFile(this.projectActor(identity), projectId, revisionId, path, offset);
   }
 
   projectRevisionJobs(
@@ -1682,7 +1360,7 @@ export class RemoteRenderService {
       );
     const bytes =
       input.file.text === undefined
-        ? decodeBase64(input.file.base64 as string)
+        ? decodeSourceBase64(input.file.base64 as string)
         : Buffer.from(input.file.text, "utf8");
     if (
       bytes.byteLength >
@@ -2075,33 +1753,8 @@ export class RemoteRenderService {
     return this.summarize(retry);
   }
 
-  private findOperationRequest(
-    userId: string,
-    request: OperationRequest | undefined,
-    timestamp: string,
-  ): string | undefined {
-    if (!request) return undefined;
-    const record = this.database.security.idempotency(
-      "oauth",
-      userId,
-      request.operation,
-      request.keyHash,
-      timestamp,
-    );
-    if (!record) return undefined;
-    if (record.request_hash !== request.requestHash)
-      throw new AppError(
-        "IDEMPOTENCY_CONFLICT",
-        "Idempotency key was reused with different inputs",
-        409,
-      );
-    if (!record.resource_id)
-      throw new AppError(
-        "REQUEST_UNAVAILABLE",
-        "The accepted request is unavailable",
-        409,
-      );
-    return record.resource_id;
+  private findOperationRequest(userId: string, request: OperationRequest | undefined, timestamp: string) {
+    return findOperationRequest(this.database, { type: "oauth", id: userId }, request, timestamp);
   }
 
   private findRenderRequest(
@@ -2113,22 +1766,8 @@ export class RemoteRenderService {
     return jobId === undefined ? undefined : this.assertOwned(userId, jobId);
   }
 
-  private recordOperationRequest(
-    userId: string,
-    request: OperationRequest | undefined,
-    resourceId: string,
-    timestamp: string,
-  ): void {
-    if (!request) return;
-    this.database.security.insertIdempotency({
-      actorType: "oauth",
-      actorId: userId,
-      ...request,
-      resourceId,
-      responseCode: 202,
-      createdAt: timestamp,
-      expiresAt: new Date(Date.parse(timestamp) + 86_400_000).toISOString(),
-    });
+  private recordOperationRequest(userId: string, request: OperationRequest | undefined, resourceId: string, timestamp: string) {
+    recordOperationRequest(this.database, { type: "oauth", id: userId }, request, resourceId, timestamp);
   }
 
   retrySvgRender(
@@ -2172,85 +1811,13 @@ export class RemoteRenderService {
     params?: PdfInspectionInput,
   ) {
     requireScope(identity.scopes, "mcp:read");
-    const geometry =
-      params === undefined ? undefined : pdfInspectionInputSchema.parse(params);
-    const lookup = () => {
-      const job = this.assertReadableJob(identity.userId, jobId);
-      const pdf = this.database.artifacts.getDownloadable(jobId, "result.pdf", {
-        retentionHours: this.artifactRetentionHours,
-      });
-      if (!pdf)
-        throw new AppError(
-          "PDF_UNAVAILABLE",
-          "The canonical PDF is not available",
-          410,
-        );
-      if (pdf.sha256 !== sha256)
-        throw new AppError(
-          "PDF_CHECKSUM_MISMATCH",
-          "The canonical PDF does not match the requested digest",
-          409,
-        );
-      const expiresAt = this.artifactExpiry(job);
-      const document = this.database.previews.document(jobId);
-      if (geometry && "direction" in geometry) {
-        if (!this.database.artifacts.sourceMap(pdf))
-          throw new AppError(
-            "SYNCTEX_UNAVAILABLE",
-            "No source map for this PDF",
-            410,
-          );
-        if (geometry.direction === "source_to_pdf")
-          geometry.path = validateSourceFilePath(
-            geometry.path,
-            this.sources.zipLimits(),
-          );
-      }
-      if (
-        geometry &&
-        "page" in geometry &&
-        document?.pdf_sha256 === pdf.sha256 &&
-        geometry.page > document.page_count
-      )
-        throw new AppError(
-          "PREVIEW_PAGE_INVALID",
-          "Preview page is outside the PDF",
-          404,
-        );
-      if (
-        geometry &&
-        "pages" in geometry &&
-        document?.pdf_sha256 === pdf.sha256 &&
-        geometry.pages.some((page) => page > document.page_count)
-      )
-        throw new AppError(
-          "PREVIEW_PAGE_INVALID",
-          "A contact sheet page is outside the PDF",
-          404,
-        );
-      const row = request
-        ? this.database.pdfInspections.request(
-            pdf,
-            expiresAt,
-            nowIso(),
-            geometry,
-          )
-        : this.database.pdfInspections.forArtifact(pdf, geometry);
-      return {
-        jobId,
-        revisionId: job.project_revision_id,
-        pdfSha256: pdf.sha256,
-        generation: pdf.storage_generation ?? null,
-        inspectorVersion: PDF_INSPECTOR_VERSION,
-        expiresAt,
-        state: row?.status ?? ("not_requested" as const),
-        errorCode: row?.error_code ?? null,
-        report: row?.result_json
-          ? (JSON.parse(row.result_json) as unknown)
-          : null,
-      };
-    };
-    return request ? this.database.transaction(lookup) : lookup();
+    return inspectJobPdf(this.database, jobId, sha256, {
+      readJob: () => this.assertReadableJob(identity.userId, jobId),
+      sources: this.sources,
+      retentionHours: this.artifactRetentionHours,
+      request,
+      params,
+    });
   }
 
   comparePdfInspections(
@@ -3091,7 +2658,7 @@ export class RemoteRenderService {
         "Chunk offset is invalid",
         400,
       );
-    const bytes = decodeBase64(base64);
+    const bytes = decodeSourceBase64(base64);
     if (
       bytes.byteLength < 1 ||
       bytes.byteLength > SOURCE_UPLOAD_CHUNK_MAX_BYTES
@@ -3949,153 +3516,4 @@ function assertTexSource(paths: readonly string[]): void {
       "Source must contain at least one .tex file",
       422,
     );
-}
-
-function decodeBase64(value: string): Buffer {
-  if (
-    value.length % 4 !== 0 ||
-    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(
-      value,
-    )
-  )
-    throw new AppError(
-      "INVALID_BASE64",
-      "Binary Source content is invalid",
-      400,
-    );
-  return Buffer.from(value, "base64");
-}
-
-function sourceFileKind(path: string): "text" | "binary" {
-  return [".png", ".jpg", ".jpeg", ".pdf"].includes(extname(path).toLowerCase())
-    ? "binary"
-    : "text";
-}
-
-async function readSavedSource<T>(read: () => Promise<T>): Promise<T> {
-  try {
-    return await read();
-  } catch (error) {
-    if (
-      error instanceof Error &&
-      "code" in error &&
-      (error.code === "ENOENT" || error.code === "EACCES")
-    )
-      throw new AppError(
-        "SOURCE_ARCHIVE_UNAVAILABLE",
-        "Saved Source archive is unavailable",
-        409,
-      );
-    throw error;
-  }
-}
-
-function replaceExactDraftText(
-  text: string,
-  patch: Extract<DraftFileChange, { patch: unknown }>["patch"],
-  maxBytes: number,
-): Buffer {
-  if (sha256Hex(text) !== patch.expectedSha256)
-    throw new AppError(
-      "DRAFT_PATCH_MISMATCH",
-      "The draft file does not match the expected digest",
-      409,
-    );
-  if (
-    !Number.isSafeInteger(patch.expectedMatches) ||
-    patch.expectedMatches < 1 ||
-    patch.expectedMatches > 100 ||
-    patch.original.length === 0
-  )
-    throw new AppError(
-      "DRAFT_PATCH_INVALID",
-      "Invalid patch match requirement",
-      422,
-    );
-  let matches = 0;
-  for (
-    let offset = text.indexOf(patch.original);
-    offset !== -1;
-    offset = text.indexOf(patch.original, offset + patch.original.length)
-  ) {
-    if (++matches > patch.expectedMatches) break;
-  }
-  if (
-    matches !== patch.expectedMatches ||
-    countOverlappingMatches(text, patch.original, matches) !== matches
-  )
-    throw new AppError(
-      "DRAFT_PATCH_MISMATCH",
-      "The patch does not match the expected number of non-overlapping locations",
-      409,
-    );
-  const resultBytes =
-    Buffer.byteLength(text) +
-    matches *
-      (Buffer.byteLength(patch.replacement) -
-        Buffer.byteLength(patch.original));
-  if (resultBytes > maxBytes)
-    throw new AppError(
-      "SOURCE_FILE_SIZE",
-      "Patched file exceeds the direct file limit",
-      422,
-    );
-  return Buffer.from(
-    text.replaceAll(patch.original, () => patch.replacement),
-    "utf8",
-  );
-}
-
-function countOverlappingMatches(
-  text: string,
-  value: string,
-  limit: number,
-): number {
-  let matches = 0;
-  for (
-    let offset = text.indexOf(value);
-    offset !== -1;
-    offset = text.indexOf(value, offset + 1)
-  ) {
-    if (++matches > limit) break;
-  }
-  return matches;
-}
-
-class DraftEditReplayed extends Error {
-  constructor(readonly version: number) {
-    super("The edit was accepted by another request");
-  }
-}
-
-function draftVersionConflict(currentVersion: number | undefined) {
-  return new AppError(
-    "DRAFT_VERSION_CONFLICT",
-    "The draft has changed since it was loaded",
-    409,
-    {
-      currentVersion: currentVersion ?? null,
-    },
-  );
-}
-
-function sourceTextPage(text: string, offset: number) {
-  const isLowSurrogate = (at: number) =>
-    (text.charCodeAt(at) & 0xfc00) === 0xdc00;
-  if (
-    !Number.isSafeInteger(offset) ||
-    offset < 0 ||
-    offset > text.length ||
-    isLowSurrogate(offset)
-  )
-    throw new AppError("SOURCE_FILE_RANGE", "Invalid UTF-16 offset", 416);
-  let end = Math.min(offset + 4000, text.length);
-  if (isLowSurrogate(end)) end--;
-  return {
-    text: text.slice(offset, end),
-    unit: "utf16" as const,
-    offset,
-    nextOffset: end < text.length ? end : null,
-    totalUnits: text.length,
-  };
 }

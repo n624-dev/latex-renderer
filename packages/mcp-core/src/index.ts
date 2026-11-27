@@ -31,6 +31,7 @@ import {
   type RenderEngine,
 } from "@latex-renderer/contracts";
 import { loadCredential } from "@latex-renderer/setup-core";
+import type { RendererApiAuthoringTool } from "@latex-renderer/contracts/renderer-mcp-definitions";
 import {
   AppError,
   clientRendererBaseUrl,
@@ -390,6 +391,9 @@ export interface McpOperations {
     revisionId: string,
     options: { cursor?: string | undefined; pageSize?: number | undefined },
   ): Promise<GetProjectRevisionJobsOutput>;
+  listProjectRevisionFiles?: RendererClient["listProjectRevisionFiles"];
+  getProjectRevisionFile?: RendererClient["getProjectRevisionFile"];
+  runAuthoringOperation?: RendererClient["runAuthoringOperation"];
   createProject(displayName: string): Promise<CreateProjectOutput>;
   renameProject(
     projectId: string,
@@ -564,6 +568,18 @@ export function createMcpOperations(
         ).listProjectRevisionJobs(projectId, revisionId, query),
       },
     }),
+    listProjectRevisionFiles: (projectId, revisionId, options) =>
+      withClientOperationDeadline(async (signal) =>
+        (await client()).listProjectRevisionFiles(projectId, revisionId, { ...options, signal }),
+      { signal: options?.signal }),
+    getProjectRevisionFile: (projectId, revisionId, path, options) =>
+      withClientOperationDeadline(async (signal) =>
+        (await client()).getProjectRevisionFile(projectId, revisionId, path, { ...options, signal }),
+      { signal: options?.signal }),
+    runAuthoringOperation: (operation, input, options) =>
+      withClientOperationDeadline(async (signal) =>
+        (await client()).runAuthoringOperation(operation, input, { signal }),
+      { signal: options?.signal }),
     createProject: async (displayName) => ({
       success: true,
       operation: "create_project",
@@ -610,7 +626,7 @@ export function createMcpOperations(
   };
 }
 
-export function mcpFailure<T extends McpToolName>(
+export function mcpFailure<T extends McpToolName | RendererApiAuthoringTool | "list_project_revision_files" | "get_project_revision_file">(
   operation: T,
   error: unknown,
 ): {

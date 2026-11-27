@@ -1,12 +1,14 @@
 import { PassThrough } from "node:stream";
 import { createInterface } from "node:readline";
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
+import { AppError } from "@latex-renderer/shared";
 import {
   MCP_TOOL_NAMES,
   type McpOperations,
   type McpToolName,
 } from "@latex-renderer/mcp-core";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { RendererClient } from "@latex-renderer/api-client";
 import { createLatexRendererMcpServer } from "./server.js";
 
 const jobId = `job_${"a".repeat(32)}`;
@@ -175,14 +177,106 @@ afterEach(async () => {
 });
 
 describe("local MCP v2", () => {
+  it("uses the scoped Gateway routes for draft and PDF operations and returns recovery details", async () => {
+    const client = new RendererClient("https://renderer.example.test/", secret);
+    const pdfSha256 = "1".repeat(64);
+    const origin = "https://renderer.example.test";
+    const calls: Array<{ path: string; method: string; body: BodyInit | null | undefined }> = [];
+    const fetch = vi.spyOn(globalThis, "fetch").mockImplementation((url, options) => {
+      if (!(url instanceof URL)) throw new Error("Expected a URL");
+      expect(url.origin).toBe(origin);
+      expect(options?.redirect).toBe("error");
+      expect(new Headers(options?.headers).get("Authorization")).toBe(`Bearer ${secret}`);
+      calls.push({ path: url.pathname + url.search, method: options?.method ?? "GET", body: options?.body });
+      if (url.pathname.endsWith("/draft")) return Promise.resolve(Response.json({ draft: null }));
+      if (url.pathname.endsWith("/changes")) return Promise.resolve(Response.json({
+        error: { code: "DRAFT_VERSION_CONFLICT", message: "The draft changed", currentVersion: 6 },
+      }, { status: 409 }));
+      return Promise.resolve(Response.json({
+        jobId, revisionId: null, pdfSha256, generation: null,
+        inspectorVersion: 1, expiresAt: "2026-11-28T00:00:00.000Z",
+        state: "not_requested", errorCode: null, report: null,
+      }));
+    });
+    try {
+      const connection = await connect({
+        ...operations, runAuthoringOperation: client.runAuthoringOperation.bind(client),
+      });
+      const call = (name: string, args: Record<string, unknown>) =>
+        connection.request("tools/call", { name, arguments: args });
+      await expect(call("get_project_draft", { projectId })).resolves.toMatchObject({
+        structuredContent: { success: true, result: { draft: null } },
+      });
+      const changes = { version: 5, idempotencyKey: "test-draft-edit-key", files: [] };
+      await expect(call("apply_project_changes", { projectId, ...changes })).resolves.toMatchObject({
+        isError: true,
+        structuredContent: { error: { code: "DRAFT_VERSION_CONFLICT", status: 409, currentVersion: 6 } },
+      });
+      await expect(call("get_render_quality_report", { jobId, pdfSha256 })).resolves.toMatchObject({
+        structuredContent: { success: true, result: { pdfSha256, state: "not_requested" } },
+      });
+      expect(calls).toEqual([
+        { path: `/api/v1/projects/${projectId}/draft`, method: "GET", body: undefined },
+        { path: `/api/v1/projects/${projectId}/draft/changes`, method: "POST", body: JSON.stringify(changes) },
+        { path: `/api/v1/job-tickets/${jobId}/pdf-inspection?pdfSha256=${pdfSha256}`, method: "GET", body: undefined },
+      ]);
+    } finally {
+      fetch.mockRestore();
+    }
+  });
+
+  it("lists and reads saved revision files with the shared tool schema", async () => {
+    const identity = { projectId, revisionId, sourceId, sourceSha256: "a".repeat(64) };
+    const connection = await connect({
+      ...operations,
+      listProjectRevisionFiles: () => Promise.resolve({
+        ...identity, items: [{ path: "main.tex", size: 9, kind: "text" }],
+        totalFiles: 1, nextOffset: null,
+      }),
+      getProjectRevisionFile: (_projectId, _revisionId, path, options) => {
+        if (path !== "main.tex")
+          return Promise.reject(new AppError("SOURCE_FILE_NOT_FOUND", "File does not exist", 404));
+        return Promise.resolve({
+          ...identity, path, sha256: "b".repeat(64), size: 9, text: "日本語",
+          unit: "utf16", offset: options?.offset ?? 0, totalUnits: 3, nextOffset: null,
+        });
+      },
+    });
+    const tools = asRecordArray(asRecord(await connection.request("tools/list", {})).tools);
+    expect(tools.map((tool) => tool.name)).toContain("get_project_revision_file");
+    const invoke = (name: string, args: Record<string, unknown>) =>
+      connection.request("tools/call", { name, arguments: { projectId, revisionId, ...args } });
+    await expect(invoke("list_project_revision_files", { limit: 1 })).resolves.toMatchObject({
+      structuredContent: { success: true, result: { ...identity, totalFiles: 1 } },
+    });
+    await expect(invoke("get_project_revision_file", { path: "main.tex" })).resolves.toMatchObject({
+      structuredContent: { success: true, result: { ...identity, text: "日本語" } },
+    });
+    await expect(invoke("get_project_revision_file", { path: "missing.tex" })).resolves.toMatchObject({
+      isError: true,
+      structuredContent: { success: false, error: { code: "SOURCE_FILE_NOT_FOUND", status: 404 } },
+    });
+  });
+
   it("advertises object output schemas and returns structured results for all tools", async () => {
     const connection = await connect(operations);
     const listed = await connection.request("tools/list", {});
     const tools = asRecordArray(asRecord(listed).tools);
 
-    expect(tools.map((tool) => tool.name)).toEqual(MCP_TOOL_NAMES);
+    expect(tools.map((tool) => tool.name)).toEqual([...MCP_TOOL_NAMES, "get_authoring_guide"]);
     for (const tool of tools)
       expect(asRecord(tool.outputSchema).type).toBe("object");
+    const guide = asRecord(await connection.request("tools/call", {
+      name: "get_authoring_guide",
+      arguments: { topic: "local" },
+    }));
+    expect(guide.isError).not.toBe(true);
+    expect(asRecord(guide.structuredContent)).toMatchObject({
+      success: true,
+      operation: "get_authoring_guide",
+      result: { topic: "local" },
+    });
+    expect(asRecord(asRecord(guide.structuredContent).result).body).toContain("Local MCP");
 
     const argumentsByTool: Record<McpToolName, Record<string, string>> = {
       upload_source: { path: "/tmp/project" },

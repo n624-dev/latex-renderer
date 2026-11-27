@@ -21,6 +21,7 @@ import {
   verifyMcpbBundle,
 } from "./mcpb-format.mjs";
 import { build } from "esbuild";
+import { authoringGuideDefine } from "./authoring-guide-define.mjs";
 
 const repository = resolve(import.meta.dirname, ".."),
   outputRoot = join(repository, "client-dist"),
@@ -45,6 +46,8 @@ const repository = resolve(import.meta.dirname, ".."),
       repository,
       "packages/contracts/src/index.ts",
     ),
+    "@latex-renderer/contracts/authoring-guide": join(repository, "packages/contracts/src/authoring-guide.ts"),
+    "@latex-renderer/contracts/renderer-mcp-definitions": join(repository, "packages/contracts/src/renderer-mcp-definitions.ts"),
     "@latex-renderer/mcp-core": join(
       repository,
       "packages/mcp-core/src/index.ts",
@@ -78,6 +81,7 @@ try {
     legalComments: "none",
     define: {
       "process.env.LATEX_RENDER_CLIENT_VERSION": JSON.stringify(version),
+      ...(await authoringGuideDefine(repository)),
     },
     alias: aliases,
   });

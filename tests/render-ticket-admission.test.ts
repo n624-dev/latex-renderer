@@ -1,11 +1,15 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { createWriteStream } from "node:fs";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pipeline } from "node:stream/promises";
+import yazl from "yazl";
 import type { AuthenticatedServiceAccount } from "@latex-renderer/auth";
 import { ApiKeyService } from "@latex-renderer/auth";
 import { RendererDatabase } from "@latex-renderer/database";
 import { TicketService } from "@latex-renderer/ticket";
+import { gatewayRoute, proxyGatewayJson } from "../packages/gateway-core/src/index.js";
 import { AdminApiKeysService } from "../apps/admin-api/src/services/api-keys.js";
 import { createInternalApp } from "../apps/internal-api/src/app.js";
 import { RenderTicketsService } from "../apps/internal-api/src/services/render-tickets.js";
@@ -16,6 +20,61 @@ afterEach(async () => {
   for (const database of databases.splice(0)) database.close();
   for (const root of roots.splice(0))
     await rm(root, { recursive: true, force: true });
+});
+
+it("reads saved revision files only with the explicit scope and matching owner", async () => {
+  const storageRoot = await mkdtemp(join(tmpdir(), "saved-revision-files-"));
+  roots.push(storageRoot);
+  const f = fixture({ maxStorage: 10000, maxQueue: 20, storageRoot });
+  const sourceId = readySource(f.database);
+  const projectId = `project_${"1".repeat(32)}`;
+  const revisionId = `revision_${"2".repeat(32)}`;
+  const timestamp = new Date().toISOString();
+  f.database.projects.insert({ id: projectId, ownerUserId: "user", displayName: "Shared", timestamp });
+  f.database.projects.insertRevision({
+    id: revisionId, projectId, sourceId, displayName: "Revision",
+    originalFilename: "main.tex", entrypoint: "main.tex", timestamp,
+  });
+  const sourceDirectory = join(storageRoot, "sources", sourceId);
+  await mkdir(sourceDirectory, { recursive: true });
+  const zip = new yazl.ZipFile();
+  const contents = "日本語𝑥";
+  zip.addBuffer(Buffer.from(contents), "main.tex");
+  const write = pipeline(zip.outputStream, createWriteStream(join(sourceDirectory, "source.zip")));
+  zip.end();
+  await write;
+
+  f.database.raw.prepare(
+    `INSERT INTO users(id,access_subject,email,display_name,role,status,security_version,created_by,created_at,updated_at)
+     VALUES ('other','other-subject','other@example.test','Other','user','active',1,'test',?,?)`,
+  ).run(timestamp, timestamp);
+  f.database.serviceAccounts.insert({
+    id: "other-account", ownerUserId: "other", name: "Other",
+    clientType: "generic", timestamp,
+  });
+  const endpoint = `/internal/v1/projects/${projectId}/revisions/${revisionId}/files`;
+  const request = (token: string, query = "", method = "GET") =>
+    f.app.request(endpoint + query, { method, headers: { Authorization: `Bearer ${token}` } });
+  const base = insertKey(f, "service");
+  const own = insertKey(f, "service", ["render:project:read"]);
+  const other = insertKey(f, "other-account", ["render:project:read"]);
+  expect((await request(base.token)).status).toBe(403);
+  expect((await request(other.token)).status).toBe(404);
+  expect((await request(own.token, "", "POST")).status).toBe(404);
+  const listed = await request(own.token, "?limit=1");
+  expect(listed.status).toBe(200);
+  expect(listed.headers.get("Cache-Control")).toContain("no-store");
+  await expect(listed.json()).resolves.toMatchObject({
+    projectId, revisionId, sourceId,
+    items: [{ path: "main.tex", kind: "text", size: Buffer.byteLength(contents) }],
+    totalFiles: 1, nextOffset: null,
+  });
+  const read = await request(own.token, "?path=main.tex&offset=3");
+  expect(read.status).toBe(200);
+  await expect(read.json()).resolves.toMatchObject({
+    projectId, revisionId, sourceId, path: "main.tex",
+    text: "𝑥", offset: 3, unit: "utf16", totalUnits: 5, nextOffset: null,
+  });
 });
 
 it("requires an authorized rendering key to disclose the effective ZIP limits", async () => {
@@ -32,6 +91,97 @@ it("requires an authorized rendering key to disclose the effective ZIP limits", 
     maxUploadBytes: 20 * 1024 ** 2, maxExtractedBytes: 100 * 1024 ** 2,
     maxFileCount: 500, maxZipEntries: 1000,
   });
+});
+
+it("opens, edits and saves a draft across the Gateway with independent scopes", async () => {
+  const storageRoot = await mkdtemp(join(tmpdir(), "render-authoring-"));
+  roots.push(storageRoot);
+  const f = fixture({ maxStorage: 2 * 1024 * 1024, maxQueue: 20, storageRoot });
+  const projectId = `project_${"3".repeat(32)}`;
+  f.database.projects.insert({
+    id: projectId, ownerUserId: "user", displayName: "Draft", timestamp: new Date().toISOString(),
+  });
+  const base = insertKey(f, "service");
+  const reader = insertKey(f, "service", ["render:draft:read"]);
+  const writer = insertKey(f, "service", ["render:draft:write"]);
+  const text = "% " + "shared draft ".repeat(350);
+  async function call(token: string, suffix = "", data?: object) {
+    const url = new URL(`https://renderer.example.test/api/v1/projects/${projectId}/draft${suffix}`);
+    const body = data === undefined ? undefined : JSON.stringify(data);
+    const method = body === undefined ? "GET" : "POST";
+    const route = gatewayRoute(url.pathname, method);
+    if (typeof route !== "object") throw new Error("Missing Gateway route");
+    const response = await proxyGatewayJson({
+      ...route, requestId: "authoring-test",
+      request: new Request(url, {
+        method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(body === undefined ? {} : {
+            "Content-Type": "application/json", "Content-Length": String(Buffer.byteLength(body)),
+          }),
+        },
+        ...(body === undefined ? {} : { body }),
+      }),
+      fetchUpstream: async (target, init) => await f.app.request(target, init),
+    });
+    expect(response.headers.get("Cache-Control")).toContain("no-store");
+    return { status: response.status, value: await response.json() as unknown };
+  }
+  await expect(call(base.token)).resolves.toMatchObject({ status: 403 });
+  await expect(call(writer.token)).resolves.toMatchObject({ status: 403 });
+  await expect(call(reader.token)).resolves.toEqual({ status: 200, value: { draft: null } });
+  await expect(call(reader.token, "/open", {})).resolves.toMatchObject({ status: 403 });
+  const opened = await call(writer.token, "/open", {});
+  expect(opened).toMatchObject({ status: 200, value: { draft: { version: 1 } } });
+  const changes = {
+    version: 1, idempotencyKey: "draft-authoring-key-2026", files: [{ path: "main.tex", text }],
+  };
+  const applied = await call(writer.token, "/changes", changes);
+  expect(applied).toMatchObject({ status: 200, value: { version: 2, changedPaths: ["main.tex"] } });
+  await expect(call(writer.token, "/changes", changes)).resolves.toEqual(applied);
+  await expect(call(writer.token, "/changes", { ...changes, idempotencyKey: "another-authoring-key-2026" }))
+    .resolves.toMatchObject({ status: 409, value: { error: { code: "DRAFT_VERSION_CONFLICT", currentVersion: 2 } } });
+  await expect(call(reader.token, "/file?version=2&path=main.tex"))
+    .resolves.toMatchObject({ status: 200, value: { text: text.slice(0, 4000), nextOffset: 4000 } });
+  await expect(call(writer.token, "/save", { version: 2, displayName: "Reviewed" }))
+    .resolves.toMatchObject({ status: 200, value: { revision: { projectId, revisionNumber: 1 } } });
+});
+
+it("inspects only the exact PDF of a job owned by an explicitly authorized key", async () => {
+  const storageRoot = await mkdtemp(join(tmpdir(), "render-pdf-quality-"));
+  roots.push(storageRoot);
+  const f = fixture({ maxStorage: 100, maxQueue: 20, storageRoot });
+  const owner = insertKey(f, "service", ["render:create", "render:pdf:inspect"]);
+  const unrelated = insertKey(f, "service", ["render:pdf:inspect"]);
+  const old = insertKey(f, "service");
+  const { jobId } = (await f.service.create(
+    f.apiKeys.authenticate(owner.token), { sourceId: readySource(f.database) }, "inspect-job-key-2026",
+  )).value;
+  const timestamp = new Date().toISOString();
+  f.database.raw.prepare("UPDATE jobs SET status='succeeded',completed_at=? WHERE id=?")
+    .run(timestamp, jobId);
+  const sha256 = "a".repeat(64);
+  f.database.artifacts.insert({
+    id: "pdf-fixture", job_id: jobId, type: "pdf", relative_path: "result.pdf",
+    storage_generation: null, size: 1, sha256, created_at: timestamp,
+  });
+  const path = `/internal/v1/jobs/${jobId}/pdf-inspection`;
+  const request = (token: string, requestInspection = false, digest = sha256) =>
+    f.app.request(requestInspection ? path : `${path}?pdfSha256=${digest}`, {
+      method: requestInspection ? "POST" : "GET",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      ...(requestInspection ? { body: JSON.stringify({ pdfSha256: digest }) } : {}),
+    });
+  expect((await request(old.token, true)).status).toBe(403);
+  expect((await request(unrelated.token, true)).status).toBe(404);
+  expect((await request(owner.token, true, "b".repeat(64))).status).toBe(409);
+  const result = await request(owner.token, true);
+  expect(result.status).toBe(200);
+  await expect(result.json()).resolves.toMatchObject({ jobId, pdfSha256: sha256, state: "queued" });
+  await expect((await request(owner.token)).json()).resolves.toMatchObject({ state: "queued" });
+  expect(f.database.jobs.countActive()).toBe(0);
+  expect(f.database.raw.prepare("SELECT COUNT(*) count FROM pdf_inspections").get()).toEqual({ count: 1 });
 });
 
 describe("render ticket admission", () => {
@@ -175,7 +325,7 @@ describe("render ticket admission", () => {
         headers: { Authorization: `Bearer ${token}` },
       });
       expect(response.status).toBe(200);
-      return response.json();
+      return (await response.json()) as unknown;
     };
 
     expect(database.jobs.getVisible(jobId)?.api_key_id).toBe(original.id);
@@ -573,6 +723,7 @@ function fixture(options: {
   maxStorage: number;
   maxQueue: number;
   maxOutput?: number;
+  storageRoot?: string;
 }) {
   const database = new RendererDatabase(":memory:");
   databases.push(database);
@@ -620,6 +771,7 @@ function fixture(options: {
     tickets,
     rendererPublicUrl: "https://latex.example.com",
     rendererVersion: "test",
+    ...(options.storageRoot === undefined ? {} : { storageRoot: options.storageRoot }),
     maxUploadBytes: 20 * 1024 * 1024,
     maxOutputBytes: options.maxOutput ?? 1,
     maxQueueLength: options.maxQueue,
@@ -630,7 +782,11 @@ function fixture(options: {
   return { database, service, actor, tickets, apiKeys, app };
 }
 
-function insertKey(f: ReturnType<typeof fixture>, serviceAccountId: string) {
+function insertKey(
+  f: ReturnType<typeof fixture>,
+  serviceAccountId: string,
+  scopes = ["render:create", "render:read:own"],
+) {
   const key = f.apiKeys.create("render");
   f.database.apiKeys.insert({
     id: key.id,
@@ -640,7 +796,7 @@ function insertKey(f: ReturnType<typeof fixture>, serviceAccountId: string) {
     kind: key.kind,
     secretHash: key.secretHash,
     pepperId: key.pepperId,
-    scopes: ["render:create", "render:read:own"],
+    scopes,
     createdAt: new Date().toISOString(),
     createdBy: "fixture",
   });

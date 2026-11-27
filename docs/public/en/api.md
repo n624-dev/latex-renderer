@@ -26,6 +26,10 @@ Send all credentials in the HTTP header `Authorization: Bearer <TOKEN>`.
 - **API key (`lrk_...`).** Use it for source reservation, job creation, saved projects, reissuing job tokens (`job-tickets`), and retrying SVG extraction.
   - `render:create` permits job creation and creating, renaming, or deleting projects and saving revisions.
   - `render:read:own` permits refreshing short-lived tokens for your jobs and viewing projects and history.
+  - `render:project:read` permits listing files and reading UTF-8 text from your saved project revisions. Select it explicitly when issuing a key.
+  - `render:draft:read` — Read the shared draft metadata and files.
+  - `render:draft:write` — Open, edit, and save shared drafts.
+  - `render:pdf:inspect` — Request and read PDF inspections for jobs owned by that key.
 - **Short-lived tokens (`uploadTicket` and `jobTicket`).** Use these to upload a ZIP, read job status, cancel a job, retrieve artifacts, or delete a job.
 
 > [!WARNING]
@@ -53,8 +57,15 @@ Independently issued keys receive `404` for these operations, even when they bel
 | `DELETE` | `/api/v1/jobs/{jobId}` | Mark a finished job for deletion |
 | `GET` / `POST` | `/api/v1/projects` | List or create saved projects |
 | `GET` / `PATCH` / `DELETE` | `/api/v1/projects/{projectId}` | View details and revisions, rename a project, or delete it (hide its record) |
+| `GET` | `/api/v1/projects/{projectId}/draft` | Get shared draft metadata and the file list |
+| `GET` | `/api/v1/projects/{projectId}/draft/file` | Read text from the specified draft version |
+| `POST` | `/api/v1/projects/{projectId}/draft/open` | Open a shared draft |
+| `POST` | `/api/v1/projects/{projectId}/draft/changes` | Apply a batch of changes to the exact draft version |
+| `POST` | `/api/v1/projects/{projectId}/draft/save` | Save a draft as an immutable revision |
+| `GET` / `POST` | `/api/v1/job-tickets/{jobId}/pdf-inspection` | Read or request an inspection for the specified PDF |
 | `POST` | `/api/v1/projects/{projectId}/revisions` | Save a ready source as an immutable revision |
 | `GET` | `/api/v1/projects/{projectId}/revisions/{revisionId}/jobs` | Get the job history for a revision |
+| `GET` | `/api/v1/projects/{projectId}/revisions/{revisionId}/files` | List saved revision files or read text by supplying `path` |
 | `POST` | `/api/v1/projects/{projectId}/revisions/{revisionId}/render` | Render a revision again |
 
 > [!DETAILS] Saved project API and maintenance modes

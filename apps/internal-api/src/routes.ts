@@ -5,8 +5,10 @@ import {
   createSourceTicketRequestSchema,
   renderEngineSchema,
   renderOutputsSchema,
+  type RenderApiScope,
 } from "@latex-renderer/contracts";
 import { ProjectOperations } from "@latex-renderer/database";
+import { RendererSavedSources, RendererSourceStore } from "@latex-renderer/renderer-core";
 import {
   AppError,
   DEFAULT_RESOURCE_LIMITS,
@@ -17,6 +19,7 @@ import { validateEntrypointPath } from "@latex-renderer/zip-validation";
 import { RenderTicketsService } from "./services/render-tickets.js";
 import { SourceTicketsService } from "./services/source-tickets.js";
 import type { InternalApiDependencies } from "./types.js";
+import { mountAuthoringRoutes } from "./authoring.js";
 
 export function createInternalV1Router(deps: InternalApiDependencies): Hono {
   const r = new Hono(),
@@ -43,9 +46,11 @@ export function createInternalV1Router(deps: InternalApiDependencies): Hono {
       );
   function actor(
     c: string | undefined,
-    scope: "render:create" | "render:read:own",
+    scope: RenderApiScope,
   ) {
     const identity = deps.apiKeys.authenticate(parseBearer(c), scope);
+    if (scope !== "render:create" && scope !== "render:read:own" && identity.keyKind !== "render")
+      throw new AppError("INSUFFICIENT_SCOPE", "A rendering API key is required", 403);
     return {
       userId: identity.userId,
       type: "service_account",
@@ -63,6 +68,16 @@ export function createInternalV1Router(deps: InternalApiDependencies): Hono {
       throw new AppError("INVALID_REQUEST", "Project request is invalid", 400);
     return result.data;
   }
+  function sourceStore() {
+    if (deps.storageRoot === undefined)
+      throw new AppError("AUTHORING_UNAVAILABLE", "Authoring operations are unavailable", 503);
+    return new RendererSourceStore(deps.database, deps.storageRoot, {
+      ...DEFAULT_RESOURCE_LIMITS,
+      ...deps.sourceLimits,
+      maxUploadBytes,
+    }, deps.maxUserStorageBytes);
+  }
+  mountAuthoringRoutes(r, deps, service, sourceStore, actor);
   r.get("/projects", (c) =>
     c.json(
       projects.list(actor(c.req.header("Authorization"), "render:read:own"), {
@@ -120,6 +135,21 @@ export function createInternalV1Router(deps: InternalApiDependencies): Hono {
       ),
     ),
   );
+  r.get("/projects/:id/revisions/:revisionId/files", async (c) => {
+    const owner = actor(c.req.header("Authorization"), "render:project:read");
+    const project = parse(projectId, c.req.param("id"));
+    const revision = parse(revisionId, c.req.param("revisionId"));
+    const query = parse(z.object({
+      path: z.string().min(1).max(2048).optional(),
+      offset: z.string().regex(/^[0-9]+$/).transform(Number).pipe(z.int().nonnegative()).optional(),
+      limit: z.string().regex(/^[0-9]+$/).transform(Number).pipe(z.int().min(1).max(25)).optional(),
+    }).strict(), c.req.query());
+    const files = new RendererSavedSources(deps.database, sourceStore());
+    if (query.path === undefined) {
+      return c.json(await files.listProjectRevisionFiles(owner, project, revision, query.offset, query.limit));
+    }
+    return c.json(await files.getProjectRevisionFile(owner, project, revision, query.path, query.offset));
+  });
   r.post("/projects/:id/revisions", async (c) => {
     const owner = actor(c.req.header("Authorization"), "render:create"),
       id = parse(projectId, c.req.param("id")),

@@ -82,7 +82,7 @@ Send document text to your AI client to generate PDFs and SVGs, diagnose errors,
 | Direct Remote MCP (HTTPS) | An account on the connected Renderer and OAuth scopes | Read saved revisions, edit shared drafts, and inspect PDFs on the connected Renderer |
 | Public MCP gateway | An approved Renderer connection and permission for the requested operations | Create and render documents on the approved Renderer and retrieve artifacts using MCP resources or download links |
 
-Available operations depend on the connected Renderer and its version. Check the MCP tool list and use `get_renderer_capabilities`, when available, to check the rendering environment and attachment support. To work with shared drafts or request a PDF inspection while using Local MCP, open the same Renderer's web app or connect through Remote MCP. Use Local MCP or the CLI to save artifacts to your computer.
+Available operations depend on the connected Renderer and its version. Check the MCP tool list and use `get_renderer_capabilities`, when available, to check the rendering environment and attachment support. Local MCP can read or edit shared drafts and inspect PDFs when the server supports those operations and the API key explicitly grants the relevant scopes. Use Local MCP or the CLI to save artifacts to your computer.
 
 With the public gateway, the selected Renderer stores the documents, jobs, and artifacts. Each connection requires user approval. Attachment import also requires support from the connected Renderer and configuration by its administrator.
 
@@ -118,7 +118,12 @@ To repair a registration created by the downloadable installer, run `n624-latex 
 | `upload_source` | Prepare a directory or ZIP as one source |
 | `create_render_job` | Create one job from `sourceId + entrypoint`, optionally requesting SVG in `outputs` |
 | `render_project` | Prepare a source, render, and retrieve artifacts in one call, optionally requesting SVG in `outputs` |
+| `get_authoring_guide` | Read the bundled LaTeX authoring guide |
 | `list_projects` / `get_project` / `get_project_revision_jobs` | View saved projects, revisions, and job history |
+| `list_project_revision_files` / `get_project_revision_file` | List files and read text in your saved revisions. Requires a compatible server and a key with the `render:project:read` scope |
+| `get_project_draft` / `get_project_draft_file` | Read shared draft metadata and text with `render:draft:read` |
+| `open_project_draft` / `apply_project_changes` / `save_project_draft` | Open, edit, and save shared drafts with `render:draft:write` |
+| `request_render_quality_report` / `get_render_quality_report` | Inspect PDFs from jobs that the key owns with `render:pdf:inspect` |
 | `create_project` / `rename_project` / `delete_project` | Manage saved projects |
 | `attach_project_revision` / `render_project_revision` | Save an uploaded source and create a job from a fixed revision |
 | `get_render_status` | Check job status |

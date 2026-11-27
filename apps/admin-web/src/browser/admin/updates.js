@@ -1,4 +1,6 @@
-export const part7 = String.raw`
+export function createUpdates({
+  adminMessage, adminAction, beginManagerWatch, confirmDialog, err, esc, jsonBody, ok, out, request, section, watchManagerOperation
+}) {
 function updateVersion(value){return value?'v'+value:'—'}
 // One bounded view state; no log text or credentials are retained here.
 let updateLogView={id:null,open:false,scrollTop:0};
@@ -70,4 +72,6 @@ function startUpdateOperation(operation,signal) {
     }
   }))();
 }
-`;
+
+  return { updates };
+}

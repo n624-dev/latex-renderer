@@ -57,9 +57,4 @@ function synchronizeDisplayLocale(
   return undefined;
 }
 
-export const browserLocaleScript = `
-const displayLocales = ${JSON.stringify(displayLocales)};
-const synchronizeDisplayLocale = ${synchronizeDisplayLocale.toString()};
-`;
-
 export { synchronizeDisplayLocale };

@@ -27,7 +27,7 @@ import {
   type SkillTarget,
 } from "@latex-renderer/setup-core";
 import { AppError, PUBLIC_ORIGIN } from "@latex-renderer/shared";
-import { clientSetupHtml, clientSetupScript, setupCss } from "./assets.js";
+import { clientSetupHtml, setupCss, setupJavaScript } from "./assets.js";
 
 const MAXIMUM_BODY_BYTES = 16 * 1024;
 const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
@@ -208,9 +208,7 @@ export async function createSetupWebServer(
       return;
     }
     if (request.method === "GET" && url.pathname === "/assets/setup.js") {
-      const preferred = preferredDisplayLanguages(request.headers["accept-language"]);
-      const locale = resolveDisplayLocale({ preferred });
-      send(response, 200, "text/javascript; charset=utf-8", clientSetupScript(locale));
+      send(response, 200, "text/javascript; charset=utf-8", setupJavaScript);
       return;
     }
     if (request.method !== "POST")

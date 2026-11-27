@@ -1,4 +1,8 @@
-export const part2 = String.raw`
+import { normalizeBrowserLoginConfiguration } from "../../assets/auth-configuration.js";
+
+export function createUsers({
+  adminMessage, bindAction, bindPagedChoices, confirmDialog, details, displayLabel, esc, fmt, formDialog, jsonBody, linkageLabel, me, nextPage, out, request, section, table, userDetails
+}) {
 async function users(){
   out.replaceChildren();
   const response=await fetch('/auth/config',{credentials:'same-origin',cache:'no-store'});if(!response.ok)throw new Error(adminMessage("couldNotRetrieveSignInSettings"));const config=normalizeBrowserLoginConfiguration(await response.json()),passwordEnabled=config.methods.some(method=>method.id==='password'),oidc=config.methods.find(method=>method.id==='oidc'),authenticationOptions=[...(passwordEnabled?[{type:'password',label:adminMessage("password")}]:[]),...(config.backend==='cloudflare-access'||oidc?[{type:'external',label:oidc?.displayName||'Cloudflare Access'}]:[])];
@@ -45,4 +49,6 @@ async function accounts(){
   bindAction('[data-a-status]',b=>{const x=a.items.find(v=>v.id===b.dataset.aStatus),action=b.dataset.active==='true'?'disable':'enable',verb=action==='disable'?adminMessage("disable"):adminMessage("enable");confirmDialog({title:adminMessage("serviceAccountAction",{action:verb}),description:x.name+' / '+x.id,summary:("<p>"+esc(adminMessage("associatedApiKeysWillNotBe"))+"</p>"),submitLabel:verb,danger:action==='disable',successMessage:adminMessage("serviceAccountStatusChanged"),onSubmit:()=>request('/service-accounts/'+x.id+'/'+action,{method:'POST',...jsonBody({})})})});
   bindAction('[data-a-delete]',b=>{const x=a.items.find(v=>v.id===b.dataset.aDelete),count=k.items.filter(v=>v.service_account_id===x.id&&v.revoked_at===null).length;confirmDialog({title:adminMessage("disableAccountAndRevokeAllKeys"),description:x.name+' / '+x.id,summary:'<div class="notice warning"><strong>'+esc(adminMessage("revokeAllServiceAccountKeys",{count}))+'</strong></div>',submitLabel:adminMessage("disableAccountAndRevokeAllKeys"),danger:true,successMessage:adminMessage("accountDisabledAndKeysRevoked"),onSubmit:()=>request('/service-accounts/'+x.id,{method:'DELETE'})})})
 }
-`;
+
+  return { users, accounts };
+}

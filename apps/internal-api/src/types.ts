@@ -10,6 +10,7 @@ export interface InternalApiDependencies {
   rendererVersion: string;
   maxUploadBytes?: number;
   sourceLimits?: Readonly<ResourceLimits>;
+  storageRoot?: string;
   maxOutputBytes: number;
   maxQueueLength: number;
   maxUserStorageBytes: number;

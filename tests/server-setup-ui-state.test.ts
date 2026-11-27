@@ -6,6 +6,8 @@ import {
   setupScript,
 } from "../deploy/scripts/server-setup-assets.mjs";
 
+const setupMessages = /id="setup-messages">(.*?)<\/script>/.exec(setupHtml)?.[1] ?? "";
+
 // Small startup-state fixture, not a substitute for real browser CSS tests.
 function element() {
   const label = { hidden: false };
@@ -73,6 +75,7 @@ it.each(["mismatch", "connection-lost", "reply-lost", "success"])(
     };
     let submitted = 0,
       applied = 0;
+    get("setup-messages").textContent = setupMessages;
     runInNewContext(setupScript, {
       document: { getElementById: get, createElement: element },
       location: { hash: "#fixture" },
@@ -191,6 +194,7 @@ it.each([
       if (!value) throw new Error(`Missing setup element ${id}`);
       return value;
     };
+    get("setup-messages").textContent = setupMessages;
     runInNewContext(setupScript, {
       document: { getElementById: get, createElement: element },
       location: { hash: "#fixture-bootstrap" },

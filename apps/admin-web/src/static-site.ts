@@ -8,6 +8,7 @@ import {
   publicDocumentationPages,
 } from "./docs-pages.js";
 import { publicDocsSearchJson } from "./markdown-docs.js";
+import { favicon } from "./favicon.js";
 import { downloadsPage, homePage, publicPage404 } from "./templates.js";
 
 export interface StaticAsset {
@@ -24,6 +25,9 @@ function headers(archiveName: string, mcpbName?: string): string {
   X-LaTeX-Renderer-Serving: workers-static
   X-Content-Type-Options: nosniff
   X-Frame-Options: DENY
+
+/favicon.svg
+  Content-Type: image/svg+xml
 
 /downloads/windows/manifest.json
   Content-Type: application/json; charset=utf-8
@@ -188,6 +192,7 @@ export function createPublicStaticAssets(
       content: distribution.rendererOpenApi,
     },
     { path: "404.html", content: publicPage404() },
+    { path: "favicon.svg", content: favicon },
     { path: "assets/login.js", content: readBrowserAsset("login") },
     { path: "assets/styles.css", content: styles },
     { path: "assets/site.js", content: readBrowserAsset("site") },

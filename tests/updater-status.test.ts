@@ -14,7 +14,7 @@ import {
   updateOutcome,
 } from "../deploy/scripts/updater-status.mjs";
 import { runInNewContext } from "node:vm";
-import { part7 } from "../apps/admin-web/src/assets/admin-script-parts/part-7.js";
+import { updateViewSource as part7 } from "./helpers/admin-ui-source.js";
 
 const roots: string[] = [];
 afterEach(async () => {

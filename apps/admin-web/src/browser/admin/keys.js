@@ -1,13 +1,22 @@
-export const part3 = String.raw`
+export function createKeys({
+  adminMessage, bindAction, bindPagedChoices, confirmDialog, credentialDialog, details, err, esc, fmt, formDialog, jsonBody, me, nextPage, out, request, section, table
+}) {
 function showIssuedCredential(result) {
   credentialDialog(result.apiKey);
   keys().catch(()=>{err.textContent=adminMessage("apiKeyIssued")});
 }
 async function keys(){
   const params=new URLSearchParams(location.search),keyApi=new URLSearchParams();if(params.get('cursor'))keyApi.set('cursor',params.get('cursor'));const[k,a]=await Promise.all([request('/api-keys'+(keyApi.size?'?'+keyApi:'')),request('/service-accounts')]);
-  const renderScopes=[['render:create',adminMessage("createJob")],['render:read:own',adminMessage("renewAShortLivedTokenFor")]];
+  const renderScopes = [
+    ['render:create', adminMessage("createJob"), true],
+    ['render:read:own', adminMessage("renewAShortLivedTokenFor"), true],
+    ['render:project:read', adminMessage("readSavedRevisionFiles"), false],
+    ['render:draft:read', adminMessage("readSharedDrafts"), false],
+    ['render:draft:write', adminMessage("editSharedDrafts"), false],
+    ['render:pdf:inspect', adminMessage("inspectOwnedPdfs"), false],
+  ];
   const adminScopes=[['admin:users:read',adminMessage("viewUsers")],['admin:users:write',adminMessage("changeUsers")],['admin:service-accounts:read',adminMessage("viewServiceAccounts")],['admin:service-accounts:write',adminMessage("changeServiceAccounts")],['admin:api-keys:read',adminMessage("viewApiKeys")],['admin:api-keys:write',adminMessage("issueAndRevokeApiKeys")],['admin:jobs:read',adminMessage("viewJobs")],['admin:jobs:write',adminMessage("manageJobs")],['admin:system:read',adminMessage("viewSystemInformation")],['admin:system:write',adminMessage("changeSystemSettings")],['admin:update:read',adminMessage("viewApplicationUpdateStatus")],['admin:update:write',adminMessage("requestApplicationUpdatesOwnersOnly")],['admin:tex-environment:read',adminMessage("viewTexEnvironmentStatus")],['admin:tex-environment:write',adminMessage("requestTexEnvironmentOperationsRuntimeChanges")],['admin:audit:read',adminMessage("viewAuditLogs")],['admin:*',adminMessage("allAdministrativeOperationsEmergencyUse")]];
-  const scopeFields=(items,kind)=>'<fieldset class="wide" data-key-kind="'+kind+'"><legend>'+ (kind==='render'?adminMessage("rendering"):adminMessage("administration")) +(""+esc(adminMessage("scopes"))+"</legend>")+items.map(([value,label])=>'<label class="check"><input type="checkbox" name="scope" value="'+value+'"'+(kind==='render'?' checked':'')+'> <span>'+esc(label)+'</span></label>').join('')+("<details><summary>"+esc(adminMessage("permissionIdentifier"))+"</summary><dl class=\"details\">")+items.map(([value,label])=>'<dt>'+esc(label)+'</dt><dd><code>'+esc(value)+'</code></dd>').join('')+'</dl></details></fieldset>';
+  const scopeFields=(items,kind)=>'<fieldset class="wide" data-key-kind="'+kind+'"><legend>'+ (kind==='render'?adminMessage("rendering"):adminMessage("administration")) +(""+esc(adminMessage("scopes"))+"</legend>")+items.map(([value,label,selected])=>'<label class="check"><input type="checkbox" name="scope" value="'+value+'"'+(selected?' checked':'')+'> <span>'+esc(label)+'</span></label>').join('')+("<details><summary>"+esc(adminMessage("permissionIdentifier"))+"</summary><dl class=\"details\">")+items.map(([value,label])=>'<dt>'+esc(label)+'</dt><dd><code>'+esc(value)+'</code></dd>').join('')+'</dl></details></fieldset>';
   const requestedAccount=params.get('account');
   if(requestedAccount&&!a.items.some(x=>x.id===requestedAccount))a.items.push(await request('/service-accounts/'+encodeURIComponent(requestedAccount)));
   if(requestedAccount&&!a.items.some(x=>x.id===requestedAccount&&x.status==='active'))throw new Error(adminMessage("theSpecifiedServiceAccountIsDisabled"));
@@ -62,15 +71,5 @@ async function keys(){
   bindAction('[data-k-detail]',b=>details(k.items.find(item=>item.id===b.dataset.kDetail),adminMessage("apiKeyDetails")));
 }
 
-async function jobsLegacy(){
-  const d=await request('/jobs'),active=new Set(['reserved','uploading','queued','validating','running']),retryable=new Set(['succeeded','failed','timeout','canceled','rejected']),deletable=new Set(['succeeded','failed','timeout','canceled','rejected','expired']),requestedJob=new URLSearchParams(location.search).get('job');
-  out.innerHTML=section(adminMessage("jobs"),("<div class=\"actions\"><a class=\"button\" href=\"/admin/render/\">"+esc(adminMessage("createAJobInTheBrowser"))+"</a><button id=\"bulk-delete\" class=\"danger\">"+esc(adminMessage("deleteSelectedJobs"))+"</button><span id=\"selected-count\">"+esc(adminMessage("selected0"))+"</span></div>")+table(d.items,[['ID','id'],[adminMessage("user"),'user_id'],[adminMessage("status"),'status'],[adminMessage("input"),x=>bytes(x.source_size)],[adminMessage("created"),x=>fmt(x.created_at)]],x=>'<button class="secondary" data-j-detail="'+esc(x.id)+("\">"+esc(adminMessage("details"))+"</button>")+(active.has(x.status)?'<button class="secondary" data-j-cancel="'+esc(x.id)+("\">"+esc(adminMessage("canceled"))+"</button>"):'')+(retryable.has(x.status)?'<button class="secondary" data-j-retry="'+esc(x.id)+("\">"+esc(adminMessage("runAgain"))+"</button>"):'')+(deletable.has(x.status)?'<button class="danger" data-j-delete="'+esc(x.id)+("\">"+esc(adminMessage("delete"))+"</button>"):''),true));
-  for(const box of document.querySelectorAll('[data-select]')){const job=d.items.find(x=>x.id===box.dataset.select);box.disabled=!deletable.has(job.status);box.addEventListener('change',()=>{document.querySelector('#selected-count').textContent=adminMessage("selectedCount",{count:document.querySelectorAll('[data-select]:checked').length})})}
-  bindAction('[data-j-detail]',async b=>details(await request('/jobs/'+b.dataset.jDetail),adminMessage("jobDetails")));
-  bindAction('[data-j-cancel]',b=>confirmDialog({title:adminMessage("cancelJob"),description:b.dataset.jCancel,summary:("<p>"+esc(adminMessage("ifTheJobIsRunningA"))+"</p>"),submitLabel:adminMessage("requestCancellation"),danger:true,successMessage:adminMessage("cancellationRequested"),onSubmit:()=>request('/jobs/'+b.dataset.jCancel+'/cancel',{method:'POST',...jsonBody({})})}));
-  bindAction('[data-j-retry]',b=>confirmDialog({title:adminMessage("retryJob"),description:b.dataset.jRetry,summary:("<p>"+esc(adminMessage("aNewJobWillBeCreated"))+"</p>"),submitLabel:adminMessage("runAgain"),successMessage:adminMessage("newJobCreatedForTheRetry"),onSubmit:()=>request('/jobs/'+b.dataset.jRetry+'/retry',{method:'POST',headers:{'Content-Type':'application/json','Idempotency-Key':crypto.randomUUID()},body:'{}'})}));
-  bindAction('[data-j-delete]',b=>confirmDialog({title:adminMessage("deleteJob"),description:b.dataset.jDelete,summary:("<div class=\"notice warning\">"+esc(adminMessage("theInputPdfLogsAndPreviews"))+"</div>"),submitLabel:adminMessage("delete"),danger:true,successMessage:adminMessage("deletionRequested"),onSubmit:()=>request('/jobs/'+b.dataset.jDelete,{method:'DELETE'})}));
-  document.querySelector('#bulk-delete').onclick=()=>{const ids=[...document.querySelectorAll('[data-select]:checked')].map(x=>x.dataset.select).slice(0,100);if(!ids.length){err.textContent=adminMessage("selectJobs");return}confirmDialog({title:adminMessage("bulkDeleteSelectedJobs"),description:adminMessage("markJobsForDeletion",{count:ids.length}),summary:("<div class=\"notice warning\"><strong>"+esc(adminMessage("theInputAndOutputFilesWill"))+"</strong></div><details><summary>"+esc(adminMessage("showTargetIds"))+"</summary><ul>")+ids.map(id=>'<li><code>'+esc(id)+'</code></li>').join('')+'</ul></details>',submitLabel:adminMessage("deleteSelectedJobs",{count:ids.length}),danger:true,successMessage:adminMessage("bulkDeletionRequested"),onSubmit:()=>request('/jobs/bulk-delete',{method:'POST',...jsonBody({ids})})})}
-  if(requestedJob&&/^job_[a-f0-9]{32}$/.test(requestedJob))details(await request('/jobs/'+requestedJob),adminMessage("jobDetails"));
+  return { keys };
 }
-`;

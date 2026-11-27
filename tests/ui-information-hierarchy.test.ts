@@ -1,8 +1,8 @@
 import { japaneseAdminMessage } from "./helpers/admin-message.js";
 import { describe, expect, it } from "vitest";
 import { runInNewContext } from "node:vm";
-import { part6 } from "../apps/admin-web/src/assets/admin-script-parts/part-6.js";
-import { part5 } from "../apps/admin-web/src/assets/admin-script-parts/part-5.js";
+import { texViewSource as part6 } from "./helpers/admin-ui-source.js";
+import { jobViewSource as part5 } from "./helpers/admin-ui-source.js";
 import { escapeHtml } from "../apps/admin-web/src/templates-shared.js";
 import {
   homePage,
@@ -16,6 +16,8 @@ describe("concise public UI", () => {
     const out = { innerHTML: "" };
     await new Promise<void>((resolve, reject) => {
       runInNewContext(`${part6}\ntexEnvironment().then(done, fail)`, {
+        adminAction: (handler: unknown) => handler,
+        beginManagerWatch: () => new AbortController().signal,
         adminMessage: japaneseAdminMessage,
         request: (path: string) =>
           Promise.resolve(

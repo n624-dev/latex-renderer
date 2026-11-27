@@ -16,7 +16,7 @@ import {
   normalizeRuntimeLanguages,
   runtimeIdentity,
 } from "../deploy/scripts/runtime-image-identity.mjs";
-import { adminScript } from "../apps/admin-web/src/assets/admin-script.js";
+import { adminSource as adminScript } from "./helpers/admin-ui-source.js";
 import {
   assembleBuildArtifacts,
   assertSealedControlTree,

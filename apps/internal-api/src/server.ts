@@ -51,6 +51,7 @@ const app = createInternalApp({
   rendererVersion: process.env.RENDERER_IMAGE ?? "latex-renderer:development",
   maxUploadBytes: sourceLimits.maxUploadBytes,
   sourceLimits,
+  storageRoot: required("STORAGE_ROOT"),
   maxOutputBytes: positiveBytesEnvironment(
     process.env,
     "MAX_OUTPUT_BYTES",

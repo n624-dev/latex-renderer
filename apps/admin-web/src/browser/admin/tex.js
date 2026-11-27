@@ -1,5 +1,6 @@
-export const part6 = String.raw`
-let texPageData=null;
+export function createTex({
+  adminMessage, adminAction, beginManagerWatch, confirmDialog, err, esc, fmt, jsonBody, ok, out, request, section, watchManagerOperation
+}) {
 function texLanguageLabel(item){return item.description||item.name||item.id}
 function texSelectorDisplay(selector){if(!selector)return adminMessage("notSet");if(selector.mode==='latest')return adminMessage("latestVersion");if(selector.mode==='weekly')return (adminMessage("weeklyBuild")+" ")+selector.value;return selector.value||selector.mode}
 function texRuntimeCard(value,title){if(!value)return '<article class="card"><h3>'+esc(title)+("</h3><p class=\"muted\">"+esc(adminMessage("none"))+"</p></article>");const selected=value.languages||[],effective=value.effectiveLanguageCollections||selected,dependencies=effective.filter(x=>!selected.includes(x));return '<article class="card"><h3>'+esc(title)+("</h3><dl class=\"details\"><dt>"+esc(adminMessage("version"))+"</dt><dd>")+esc(value.snapshotDate||texSelectorDisplay(value.selector))+("</dd><dt>"+esc(adminMessage("language"))+"</dt><dd>")+esc(selected.join(', ')||adminMessage("none"))+("</dd><dt>"+esc(adminMessage("appliedAt"))+"</dt><dd>")+esc(value.appliedAt?fmt(value.appliedAt):'—')+("</dd></dl><details><summary>"+esc(adminMessage("environmentDetails"))+"</summary><dl class=\"details\"><dt>Base digest</dt><dd><code>")+esc(value.baseDigest||'—')+("</code></dd><dt>Runtime</dt><dd>"+esc(adminMessage("builtAndVerifiedOnThisServer"))+"</dd><dt>"+esc(adminMessage("requiredLanguageCollections"))+"</dt><dd>")+esc(dependencies.join(', ')||adminMessage("none"))+'</dd></dl></details></article>'}
@@ -11,7 +12,6 @@ async function texEnvironment(){
   ).catch(error=>{if(!signal.aborted)throw error;return []});
   if(signal.aborted)return;
   const desired=state.desired||{};
-  texPageData={state,images,languages};
   const selector=desired.selector||{mode:'latest',value:null},selected=new Set(desired.languages||[]),recommended=languages.items.filter(x=>x.recommended),others=languages.items.filter(x=>!x.recommended),languageRows=items=>items.map(item=>'<label class="check" data-language-row data-label="'+esc((texLanguageLabel(item)+' '+item.id).toLowerCase())+'"><input type="checkbox" name="tex-language" value="'+esc(item.id)+'"'+(selected.has(item.id)?' checked':'')+'><span>'+esc(texLanguageLabel(item))+'</span></label>').join('');
   const savedCountry=languages.countryOverride||'';
   out.innerHTML=("<div class=\"page-heading\"><h1>"+esc(adminMessage("texEnvironment"))+"</h1></div>")+
@@ -63,4 +63,6 @@ function startTexOperation(operation,signal) {
     }
   }))();
 }
-`;
+
+  return { texEnvironment };
+}

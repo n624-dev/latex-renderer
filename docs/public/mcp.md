@@ -93,7 +93,7 @@ AI に文書のテキストを送って PDF や SVG に変換し、エラー診�
 | 直接Remote MCP（HTTPS） | 接続先の利用者アカウントとOAuthスコープ | 接続先の保存版を読む、共有下書きを編集する、PDFを検査する |
 | 公開MCPゲートウェイ | ゲートウェイで承認した接続先と操作の範囲 | 承認したRendererで制作・描画し、MCPリソースやダウンロードリンクから成果物を取得する |
 
-接続先やバージョンによって利用できる操作は変わります。実際のMCPツール一覧を確認し、`get_renderer_capabilities` があればレンダリング構成や添付ファイルの対応を確認できます。Local MCPで共有下書きやPDF品質検査を使う場合は、同じRendererのWeb画面またはRemote MCPを開きます。ローカルの成果物はLocal MCPやCLIから取得できます。
+接続先やバージョンによって利用できる操作は変わります。実際のMCPツール一覧を確認し、`get_renderer_capabilities` があればレンダリング構成や添付ファイルの対応を確認できます。Local MCPでは、対応するサーバーと明示的なAPIキー権限があれば、共有下書きの閲覧・編集やPDF品質検査を使えます。ローカルの成果物はLocal MCPやCLIから取得できます。
 
 公開ゲートウェイ経由でも文書・ジョブ・成果物の保存先は選んだRendererです。接続先ごとに利用者の承認が必要です。添付ファイルの取り込みには接続先の対応と管理者の設定が必要です。
 
@@ -129,7 +129,12 @@ claude mcp add --scope user latex-renderer -- latex-renderer-mcp
 | `upload_source` | ディレクトリまたは ZIP を 1 つの Source として準備 |
 | `create_render_job` | `sourceId + entrypoint` から 1 つの Job を作成（`outputs` で SVG も選択可） |
 | `render_project` | Source 準備から成果物取得までを一括実行（`outputs` で SVG も選択可） |
+| `get_authoring_guide` | 同梱されたLaTeX制作ガイドを読む |
 | `list_projects` / `get_project` / `get_project_revision_jobs` | 保存 Project・改訂・Job 履歴を閲覧 |
+| `list_project_revision_files` / `get_project_revision_file` | 自分の保存版のファイルを一覧・閲覧。対応サーバーと `render:project:read` 権限付きAPIキーが必要 |
+| `get_project_draft` / `get_project_draft_file` | 共有下書きの版と本文を読む。`render:draft:read` が必要 |
+| `open_project_draft` / `apply_project_changes` / `save_project_draft` | 共有下書きを開く・編集する・保存する。`render:draft:write` が必要 |
+| `request_render_quality_report` / `get_render_quality_report` | そのキーが所有するJobのPDFを検査する。`render:pdf:inspect` が必要 |
 | `create_project` / `rename_project` / `delete_project` | 保存 Project を管理 |
 | `attach_project_revision` / `render_project_revision` | アップロード済み Source を保存し、固定改訂から Job を作成 |
 | `get_render_status` | ジョブ状態を確認 |

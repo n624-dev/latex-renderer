@@ -50,6 +50,12 @@ await build({
   globalName: "rendererAppController",
 });
 const editor = join(root, "src", "editor");
+await build({
+  ...browserBuild,
+  entryPoints: [join(root, "src/browser/admin/controller.ts")],
+  outfile: join(root, "dist/browser-assets/admin.js"),
+  globalName: "rendererAdminController",
+});
 const localeSources = join(editor, "locales");
 const locales = (await readdir(localeSources)).filter((name) =>
   name.endsWith(".ts"),

@@ -11,8 +11,8 @@ import {
   type ProjectActor,
   type RendererDatabase,
 } from "@latex-renderer/database";
-import { AppError, newId, nowIso } from "@latex-renderer/shared";
-import type { RenderOutput } from "@latex-renderer/contracts";
+import { AppError, newId, nowIso, sha256Hex } from "@latex-renderer/shared";
+import type { RenderEngine, RenderOutput } from "@latex-renderer/contracts";
 import {
   extractValidatedSourceFiles,
   readValidatedSourceFile,
@@ -32,6 +32,31 @@ import {
 } from "./source-archive.js";
 import { RendererSourceStore, SOURCE_UPLOAD_MS } from "./source-store.js";
 import { directSourceLimits } from "./environment.js";
+import { sourceFileKind, sourceTextPage } from "./saved-sources.js";
+import { decodeSourceBase64 } from "./source-content.js";
+import { findOperationRequest, operationRequest, recordOperationRequest } from "./operation-requests.js";
+
+type DraftFileChange =
+  | { path: string; remove: true }
+  | { path: string; text?: string | undefined; base64?: string | undefined }
+  | {
+      path: string;
+      patch: {
+        expectedSha256: string;
+        original: string;
+        replacement: string;
+        expectedMatches: number;
+      };
+    };
+export type DraftChangeBatch = {
+  projectId: string;
+  version: number;
+  idempotencyKey: string;
+  files: readonly DraftFileChange[];
+  entrypoint?: string | undefined;
+  outputs?: readonly RenderOutput[] | undefined;
+  engine?: RenderEngine | undefined;
+};
 
 export class RendererDrafts {
   constructor(
@@ -39,16 +64,225 @@ export class RendererDrafts {
     private readonly sources: RendererSourceStore,
   ) {}
 
+  getDraft(actor: ProjectActor, projectId: string) {
+    return this.operations().get(actor, projectId);
+  }
+
+  async openSharedDraft(
+    actor: ProjectActor,
+    projectId: string,
+    revisionId?: string,
+    replaceVersion?: number,
+  ) {
+    if (replaceVersion !== undefined) {
+      if (revisionId === undefined)
+        throw new AppError(
+          "DRAFT_SOURCE_REQUIRED",
+          "Choose a saved revision to replace the draft",
+          400,
+        );
+      return this.operations().replaceFromRevision(
+        actor, projectId, revisionId, replaceVersion,
+      );
+    }
+    return revisionId === undefined
+      ? this.openProjectDraft(actor, projectId)
+      : this.operations().open(actor, projectId, revisionId, true);
+  }
+
+  async readDraftPage(
+    actor: ProjectActor,
+    projectId: string,
+    version: number,
+    path: string,
+    offset = 0,
+  ) {
+    if (sourceFileKind(path) === "binary")
+      throw new AppError("SOURCE_FILE_BINARY", "Source file is binary", 422);
+    const file = await this.readDraftText(actor, projectId, version, path);
+    return {
+      projectId,
+      path: file.path,
+      version,
+      sha256: sha256Hex(file.text),
+      ...sourceTextPage(file.text, offset),
+    };
+  }
+
+  async applyProjectChanges(
+    actor: ProjectActor,
+    input: DraftChangeBatch,
+  ) {
+    const drafts = this.operations();
+    const draft = drafts.get(actor, input.projectId);
+    if (draft === null)
+      throw new AppError("DRAFT_NOT_FOUND", "Draft does not exist", 404);
+    const request = operationRequest(
+      "remote_mcp.apply_project_changes",
+      input.idempotencyKey,
+      {
+        projectId: input.projectId,
+        version: input.version,
+        entrypoint: input.entrypoint,
+        outputs: input.outputs,
+        engine: input.engine,
+        files: input.files.map((change) =>
+          "remove" in change
+            ? { path: change.path, remove: true }
+            : "patch" in change
+              ? { path: change.path, patch: change.patch }
+              : { path: change.path, text: change.text, base64: change.base64 },
+        ),
+      },
+    );
+    const requestActor = actor.jobReader?.kind === "api-key"
+      ? { type: "api_key", id: actor.jobReader.credentialOwnerId }
+      : actor;
+    const result = (version: number) => ({
+      projectId: input.projectId,
+      baseVersion: input.version,
+      version,
+      changedPaths: input.files.map(({ path }) => path),
+    });
+    const replay = findOperationRequest(this.database, requestActor, request, nowIso());
+    if (replay !== undefined) return result(Number(replay));
+    if (draft.version !== input.version)
+      throw draftVersionConflict(draft.version);
+    const limits = directSourceLimits(this.sources.resourceLimits);
+    const names = new Set<string>(),
+      files: { path: string; bytes: Buffer }[] = [];
+    let totalBytes = 0;
+    for (const change of input.files) {
+      const path = validateSourceFilePath(
+        change.path,
+        this.sources.zipLimits(),
+      );
+      if (names.has(path))
+        throw new AppError(
+          "DRAFT_DUPLICATE_CHANGE",
+          "A path was changed more than once",
+          422,
+        );
+      names.add(path);
+      if ("remove" in change) continue;
+      let bytes: Buffer;
+      if ("patch" in change) {
+        if (sourceFileKind(path) === "binary")
+          throw new AppError(
+            "SOURCE_FILE_BINARY",
+            "Source file is binary",
+            422,
+          );
+        const original = await this.readDraftText(
+          actor,
+          input.projectId,
+          input.version,
+          path,
+        );
+        bytes = replaceExactDraftText(
+          original.text,
+          change.patch,
+          limits.fileBytes,
+        );
+      } else {
+        if ((change.text === undefined) === (change.base64 === undefined))
+          throw new AppError(
+            "SOURCE_FILE_CONTENT",
+            "Specify exactly one of text or base64",
+            400,
+          );
+        bytes =
+          change.text === undefined
+            ? decodeSourceBase64(change.base64 as string)
+            : Buffer.from(change.text, "utf8");
+      }
+      if (bytes.length > limits.fileBytes)
+        throw new AppError(
+          "SOURCE_FILE_SIZE",
+          "Draft file exceeds the direct file limit",
+          422,
+        );
+      totalBytes += bytes.length;
+      if (totalBytes > limits.contentBytes || files.length >= limits.files)
+        throw new AppError(
+          "SOURCE_TOTAL_SIZE",
+          "Draft changes exceed the direct upload limits",
+          422,
+        );
+      files.push({ path, bytes });
+    }
+    const apply = (sourceId: string, rollbackIfReplayed = false) => {
+      const timestamp = nowIso();
+      const accepted = findOperationRequest(
+        this.database,
+        requestActor,
+        request,
+        timestamp,
+      );
+      if (accepted !== undefined) {
+        if (rollbackIfReplayed) throw new DraftEditReplayed(Number(accepted));
+        return result(Number(accepted));
+      }
+      const current = this.database.drafts.getOwned(
+        input.projectId,
+        actor.userId,
+      );
+      if (current?.version !== input.version)
+        throw draftVersionConflict(current?.version);
+      const updated = drafts.updateInTransaction(actor, input.projectId, {
+        version: input.version,
+        entrypoint: input.entrypoint,
+        engine: input.engine,
+        outputs: input.outputs,
+        files: input.files.map((change) =>
+          "remove" in change
+            ? { path: change.path, remove: true }
+            : { path: change.path, sourceId, sourcePath: change.path },
+        ),
+      });
+      recordOperationRequest(
+        this.database,
+        requestActor,
+        request,
+        String(updated.version),
+        timestamp,
+      );
+      return result(updated.version);
+    };
+    if (files.length === 0) return this.database.transaction(() => apply(""));
+    const archive = await zipFiles(files, this.sources.zipLimits());
+    let accepted: ReturnType<typeof apply> | undefined;
+    try {
+      await this.sources.storeReadySource(
+        actor.userId,
+        archive,
+        files.map(({ path }) => path),
+        (sourceId) => {
+          accepted = apply(sourceId, true);
+        },
+      );
+    } catch (error) {
+      if (error instanceof DraftEditReplayed) return result(error.version);
+      throw error;
+    }
+    if (accepted === undefined) throw new Error("Draft changes did not commit");
+    return accepted;
+  }
+
+  private operations() {
+    return new ProjectDraftOperations(
+      this.database,
+      this.sources.resourceLimits.maxFileCount,
+      this.sources.resourceLimits.maxZipEntries,
+    );
+  }
+
   async openProjectDraft(
     actor: ProjectActor,
     projectId: string,
     revisionId?: string,
   ) {
-    const drafts = new ProjectDraftOperations(
-      this.database,
-      this.sources.resourceLimits.maxFileCount,
-      this.sources.resourceLimits.maxZipEntries,
-    );
+    const drafts = this.operations();
     try {
       return drafts.open(actor, projectId, revisionId);
     } catch (error) {
@@ -497,4 +731,93 @@ export class RendererDrafts {
       );
     return { drafts, draft, path: validateSourceFilePath(candidate) };
   }
+}
+
+function replaceExactDraftText(
+  text: string,
+  patch: Extract<DraftFileChange, { patch: unknown }>["patch"],
+  maxBytes: number,
+): Buffer {
+  if (sha256Hex(text) !== patch.expectedSha256)
+    throw new AppError(
+      "DRAFT_PATCH_MISMATCH",
+      "The draft file does not match the expected digest",
+      409,
+    );
+  if (
+    !Number.isSafeInteger(patch.expectedMatches) ||
+    patch.expectedMatches < 1 ||
+    patch.expectedMatches > 100 ||
+    patch.original.length === 0
+  )
+    throw new AppError(
+      "DRAFT_PATCH_INVALID",
+      "Invalid patch match requirement",
+      422,
+    );
+  let matches = 0;
+  for (
+    let offset = text.indexOf(patch.original);
+    offset !== -1;
+    offset = text.indexOf(patch.original, offset + patch.original.length)
+  ) {
+    if (++matches > patch.expectedMatches) break;
+  }
+  if (
+    matches !== patch.expectedMatches ||
+    countOverlappingMatches(text, patch.original, matches) !== matches
+  )
+    throw new AppError(
+      "DRAFT_PATCH_MISMATCH",
+      "The patch does not match the expected number of non-overlapping locations",
+      409,
+    );
+  const resultBytes =
+    Buffer.byteLength(text) +
+    matches *
+      (Buffer.byteLength(patch.replacement) -
+        Buffer.byteLength(patch.original));
+  if (resultBytes > maxBytes)
+    throw new AppError(
+      "SOURCE_FILE_SIZE",
+      "Patched file exceeds the direct file limit",
+      422,
+    );
+  return Buffer.from(
+    text.replaceAll(patch.original, () => patch.replacement),
+    "utf8",
+  );
+}
+
+function countOverlappingMatches(
+  text: string,
+  value: string,
+  limit: number,
+): number {
+  let matches = 0;
+  for (
+    let offset = text.indexOf(value);
+    offset !== -1;
+    offset = text.indexOf(value, offset + 1)
+  ) {
+    if (++matches > limit) break;
+  }
+  return matches;
+}
+
+class DraftEditReplayed extends Error {
+  constructor(readonly version: number) {
+    super("The edit was accepted by another request");
+  }
+}
+
+function draftVersionConflict(currentVersion: number | undefined) {
+  return new AppError(
+    "DRAFT_VERSION_CONFLICT",
+    "The draft has changed since it was loaded",
+    409,
+    {
+      currentVersion: currentVersion ?? null,
+    },
+  );
 }

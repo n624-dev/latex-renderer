@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { localizedAdminScript } from "../../apps/admin-web/src/assets/admin-script.js";
 import type { Browser, Page } from "playwright";
 import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
 import { launchTestBrowser, newTestPage } from "../helpers/browser-engine.js";
@@ -10,17 +10,7 @@ import {
 import { styles } from "../../apps/admin-web/src/assets/styles.js";
 import { readBrowserAsset } from "../../apps/admin-web/src/browser-assets.js";
 
-const script = execFileSync(
-  process.execPath,
-  [
-    "--input-type=module",
-    "--eval",
-    "const m=await import(process.argv[1]);process.stdout.write(m.adminScript)",
-    new URL("../../apps/admin-web/dist/assets/admin-script.js", import.meta.url)
-      .href,
-  ],
-  { encoding: "utf8", timeout: 10_000, maxBuffer: 2 * 1024 * 1024 },
-);
+const script = localizedAdminScript("ja");
 const origin = "https://renderer.invalid";
 const userId = `user_${"a".repeat(32)}`;
 const accountId = `sa_${"a".repeat(32)}`;
@@ -83,6 +73,7 @@ async function fixture(kind: string, query = "", pagedOwners = false, pagedAccou
       body: string | null;
     }> = [];
   const ownerState = { disabled: false };
+  const jobState: { current: typeof job } = { current: job };
   page.on("pageerror", (error) => errors.push(error.message));
   await page.route("**/*", async (route) => {
     const request = route.request(),
@@ -119,7 +110,7 @@ async function fixture(kind: string, query = "", pagedOwners = false, pagedAccou
     if (url.pathname === "/admin/assets/admin.js") {
       await route.fulfill({
         contentType: "text/javascript",
-        body: script + "\nwindow.renderJobFixture=jobDetail;",
+        body: script,
       });
       return;
     }
@@ -207,7 +198,7 @@ async function fixture(kind: string, query = "", pagedOwners = false, pagedAccou
         nextCursor: null,
       },
       "/jobs": { items: [job], nextCursor: null },
-      [`/jobs/${jobId}`]: job,
+      [`/jobs/${jobId}`]: jobState.current,
       [`/jobs/${retryId}`]: { ...job, id: retryId, retry_of_job_id: jobId },
       "/jobs/render-targets": { items: [] },
       "/sources": {
@@ -301,13 +292,15 @@ async function fixture(kind: string, query = "", pagedOwners = false, pagedAccou
   await page.goto(`${origin}/admin/${path}/${query}`);
   if (kind !== "docs") {
     await page.waitForFunction(
-      () =>
-        typeof (window as typeof window & { renderJobFixture?: unknown })
-          .renderJobFixture === "function",
+      () => Boolean(document.querySelector("#updated")?.textContent ||
+        document.querySelector("#error")?.textContent),
+      undefined,
+      { timeout: 15_000 },
     );
-    await page.locator("#updated").waitFor({ state: "attached" });
+    expect(await page.locator("#error").textContent()).toBe("");
+    expect(errors).toEqual([]);
   }
-  return { page, errors, mutations, ownerState };
+  return { page, errors, mutations, ownerState, jobState };
 }
 
 it.each([false, true])(
@@ -341,6 +334,7 @@ it.each([false, true])(
       expect(mutations).toEqual([]);
     } else {
       await page.waitForFunction(() => !document.querySelector("dialog form"));
+      await page.waitForFunction(() => Boolean(document.querySelector("#success")?.textContent));
       expect(mutations[0]?.path).toBe("/admin/api/v1/service-accounts");
       expect(mutations[0]?.csrf).toBe("fixture-csrf");
       expect(JSON.parse(mutations[0]?.body ?? "{}")).toMatchObject({
@@ -352,6 +346,7 @@ it.each([false, true])(
 );
 
 it.each([
+  "dashboard",
   "users",
   "accounts",
   "keys",
@@ -410,6 +405,9 @@ it("selects an explicit account outside the first page and keeps scope labels al
   expect(await page.locator('[name="account"]').inputValue()).toBe(requestedId);
   expect(await page.locator('[name="scope"]:checked').count()).toBe(2);
   expect(await page.locator('[data-key-kind="admin"]').isVisible()).toBe(false);
+  const draftRead = page.locator('input[name="scope"][value="render:draft:read"]');
+  expect(await draftRead.isChecked()).toBe(false);
+  await draftRead.check();
   const aligned = await page
     .locator("label.check")
     .first()
@@ -429,6 +427,9 @@ it("selects an explicit account outside the first page and keeps scope labels al
     `/admin/api/v1/service-accounts/${requestedId}/api-keys`,
   );
   expect(mutations[0]?.csrf).toBe("fixture-csrf");
+  expect(JSON.parse(mutations[0]?.body ?? "{}")).toMatchObject({
+    scopes: ["render:create", "render:read:own", "render:draft:read"],
+  });
   const value = page.locator("[data-issued-credential]");
   await expect.poll(() => value.textContent()).toBe(fixtureCredential);
   expect(await page.evaluate(() => [...Object.values(sessionStorage), ...Object.values(localStorage)]
@@ -454,16 +455,10 @@ it("pages and searches API key accounts beyond the first 50 results", async () =
 });
 
 it("opens the newly created Job after an administrator retry", async () => {
-  const { page, errors, mutations } = await fixture("jobs", `?job=${jobId}`);
+  const { page, errors, mutations, jobState } = await fixture("jobs", `?job=${jobId}`);
   await page.locator("#job-technical").waitFor({ state: "attached" });
-  await page.evaluate(async (next) => {
-    const render = (
-      window as typeof window & {
-        renderJobFixture: (id: string, job: unknown) => Promise<unknown>;
-      }
-    ).renderJobFixture;
-    await render(next.id, { ...next, status: "failed" });
-  }, job);
+  jobState.current = { ...job, status: "failed" };
+  await page.locator("#refresh").click();
   await page.locator("[data-j-retry]").click();
   await page.locator('dialog button[type="submit"]').click();
   await page.waitForURL(`${origin}/admin/jobs/?job=${retryId}`);
@@ -478,22 +473,13 @@ it("opens the newly created Job after an administrator retry", async () => {
 });
 
 it("keeps a job's chosen disclosures across a status refresh", async () => {
-  const { page, errors } = await fixture("jobs", `?job=${jobId}`);
+  const { page, errors, jobState } = await fixture("jobs", `?job=${jobId}`);
   await page.locator("#job-technical").waitFor({ state: "attached" });
   await page.locator("#job-technical summary").click();
   await page.locator("#artifact-panel summary").click();
-  await page.evaluate(async (next) => {
-    const render = (
-      window as typeof window & {
-        renderJobFixture: (id: string, job: unknown) => Promise<unknown>;
-      }
-    ).renderJobFixture;
-    await render(next.id, {
-      ...next,
-      status: "failed",
-      error_message: "fixture error",
-    });
-  }, job);
+  jobState.current = { ...job, status: "failed", error_message: "fixture error" };
+  await page.locator("#refresh").click();
+  await expect.poll(() => page.locator(".error-summary").textContent()).toBe("fixture error");
   expect(
     await page.locator("#job-technical").getAttribute("open"),
   ).not.toBeNull();
@@ -518,7 +504,7 @@ it("logs out from the static API documentation with session-specific CSRF", asyn
 });
 
 it("navigates ungenerated pages, retries a pending PNG and does not fetch untouched pages", async () => {
-  const { page, errors } = await fixture("jobs");
+  const { page, errors, jobState } = await fixture("jobs", `?job=${jobId}`);
   const requested: number[] = [];
   const png = Buffer.from(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=",
@@ -535,16 +521,7 @@ it("navigates ungenerated pages, retries a pending PNG and does not fetch untouc
       });
     else await route.fulfill({ contentType: "image/png", body: png });
   });
-  await page.evaluate(
-    async (next) => {
-      const render = (
-        window as typeof window & {
-          renderJobFixture: (id: string, job: unknown) => Promise<unknown>;
-        }
-      ).renderJobFixture;
-      await render(next.id, next);
-    },
-    {
+  jobState.current = {
       ...job,
       status: "succeeded",
       preview_page_count: 3,
@@ -557,8 +534,8 @@ it("navigates ungenerated pages, retries a pending PNG and does not fetch untouc
           sha256: "a".repeat(64),
         },
       ],
-    },
-  );
+  };
+  await page.locator("#refresh").click();
   await page.locator("#job-preview").waitFor({ state: "visible" });
   expect(await page.locator("#preview-count").textContent()).toBe("1 / 3");
   await page.locator("#preview-next").click();

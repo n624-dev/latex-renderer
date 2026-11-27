@@ -26,6 +26,10 @@ OpenAPI 定義：[予約とジョブ作成（gateway.openapi.yaml）](/openapi/g
 - **API キー（`lrk_...`）を使う操作**：Source 予約、ジョブ作成、保存 Project 操作、ジョブ用トークンの再発行（`job-tickets`）、SVG 再試行
   - `render:create`：ジョブ作成、Project の作成・改名・削除・改訂保存
   - `render:read:own`：自分のジョブ用短時間トークンの更新、Project と履歴の閲覧
+  - `render:project:read`：同じ利用者が所有するProjectの保存版で、ファイル一覧とUTF-8の本文を読む。キー発行時に明示的に選択する。
+  - `render:draft:read` — 共有下書きの一覧と本文を読む。
+  - `render:draft:write` — 共有下書きを開き、編集・保存する。
+  - `render:pdf:inspect` — そのキーが所有するJobのPDF品質検査を要求し、結果を読む。
 - **短時間トークン（`uploadTicket` / `jobTicket`）を使う操作**：ZIP アップロード、ジョブの状態取得・キャンセル・成果物取得・削除
 
 > [!WARNING]
@@ -54,8 +58,15 @@ API キーで作成した Job は、そのキーにひも付きます。管理�
 | `DELETE` | `/api/v1/jobs/{jobId}` | 終了済みジョブを削除対象へ移行 |
 | `GET` / `POST` | `/api/v1/projects` | 保存 Project の一覧取得 / 新規作成 |
 | `GET` / `PATCH` / `DELETE` | `/api/v1/projects/{projectId}` | Project の詳細・改訂履歴 / 改名 / 削除（非表示化） |
+| `GET` | `/api/v1/projects/{projectId}/draft` | 共有下書きの版とファイル一覧を取得 |
+| `GET` | `/api/v1/projects/{projectId}/draft/file` | 指定版の本文を分割取得 |
+| `POST` | `/api/v1/projects/{projectId}/draft/open` | 共有下書きを開く |
+| `POST` | `/api/v1/projects/{projectId}/draft/changes` | 指定版に変更をまとめて適用 |
+| `POST` | `/api/v1/projects/{projectId}/draft/save` | 共有下書きを保存版に保存 |
+| `GET` / `POST` | `/api/v1/job-tickets/{jobId}/pdf-inspection` | 指定したPDFの品質検査を取得、または要求 |
 | `POST` | `/api/v1/projects/{projectId}/revisions` | ready Source を不変の改訂として保存 |
 | `GET` | `/api/v1/projects/{projectId}/revisions/{revisionId}/jobs` | 指定した改訂の Job 履歴を取得 |
+| `GET` | `/api/v1/projects/{projectId}/revisions/{revisionId}/files` | 保存版のファイル一覧を取得。 `path` を指定すると本文を取得 |
 | `POST` | `/api/v1/projects/{projectId}/revisions/{revisionId}/render` | 指定した改訂を再レンダリング |
 
 > [!DETAILS] 保存 Project API と保守モード時の挙動を表示

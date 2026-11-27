@@ -1,4 +1,5 @@
-import { execFileSync } from "node:child_process";
+import { localizedAdminScript } from "../../apps/admin-web/src/assets/admin-script.js";
+import { styles as shippedStyles } from "../../apps/admin-web/src/assets/styles.js";
 import type { Browser, Page } from "playwright";
 import { launchTestBrowser, newTestPage } from "../helpers/browser-engine.js";
 import { routeWebFonts } from "../helpers/browser-web-fonts.js";
@@ -15,24 +16,8 @@ import { readBrowserAsset } from "../../apps/admin-web/src/browser-assets.js";
 import { loginPage } from "../../apps/admin-web/src/templates-pages.js";
 import { adminPage } from "../../apps/admin-web/src/templates-admin.js";
 
-// Execute the production build, not Vitest's function.toString() SSR transform.
-function shippedScript(file: string, name: string): string {
-  return execFileSync(
-    process.execPath,
-    [
-      "--input-type=module",
-      "--eval",
-      "const m=await import(process.argv[1]);process.stdout.write(m[process.argv[2]]);",
-      new URL(`../../apps/admin-web/dist/assets/${file}.js`, import.meta.url)
-        .href,
-      name,
-    ],
-    { encoding: "utf8", timeout: 10_000, maxBuffer: 2 * 1024 * 1024 },
-  );
-}
 const loginScript = readBrowserAsset("login");
-const adminScript = shippedScript("admin-script", "adminScript");
-const shippedStyles = shippedScript("styles", "styles");
+const adminScript = localizedAdminScript("ja");
 const origin = "http://127.0.0.1:43129";
 const password = { id: "password" };
 const oidc = { id: "oidc", displayName: "School Account" };

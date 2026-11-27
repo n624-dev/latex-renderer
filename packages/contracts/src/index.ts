@@ -458,7 +458,15 @@ export const createServiceAccountSchema = z
   })
   .strict();
 
-export const renderApiScopes = ["render:create", "render:read:own"] as const;
+export const renderApiScopes = [
+  "render:create",
+  "render:read:own",
+  "render:project:read",
+  "render:draft:read",
+  "render:draft:write",
+  "render:pdf:inspect",
+] as const;
+export type RenderApiScope = (typeof renderApiScopes)[number];
 export const adminApiScopes = [
   "admin:users:read",
   "admin:users:write",

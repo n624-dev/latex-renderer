@@ -1,4 +1,6 @@
-export const part4 = String.raw`
+export function createSystem({
+  adminMessage, bindAction, confirmDialog, details, displayLabel, err, esc, fmt, formDialog, jsonBody, me, ok, out, request, section, table
+}) {
 async function system(){
   const[s,c,keys]=await Promise.all([request('/system/status'),request('/system/config'),request('/system/ticket-keys')]),values=Object.fromEntries(Array.isArray(c.effective)?c.effective.map(x=>[x.key,x.value]):c.items.map(x=>[x.key,JSON.parse(x.value_json)])),configs=[{key:'max_queue_length',label:adminMessage("maximumQueueLength"),display:String(values.max_queue_length||100),value:values.max_queue_length||100,min:1,max:10000,mul:1,unit:''},{key:'max_user_active_jobs',label:adminMessage("concurrentConversionLimitPerUser"),display:String(values.max_user_active_jobs||20),value:values.max_user_active_jobs||20,min:1,max:1000,mul:1,unit:''},{key:'max_user_storage_bytes',label:adminMessage("storageQuotaPerUser"),display:Math.round((values.max_user_storage_bytes||1073741824)/1048576)+' MiB',value:Math.round((values.max_user_storage_bytes||1073741824)/1048576),min:100,max:102400,mul:1048576,unit:'MiB'},{key:'source_orphan_retention_minutes',label:adminMessage("retentionForUnusedInputFiles"),display:String(values.source_orphan_retention_minutes||60)+(" "+adminMessage("min")),value:values.source_orphan_retention_minutes||60,min:5,max:1440,mul:1,unit:adminMessage("min")}];
   const keySummary=keys.verificationKids.length?("<button id=\"ticket-revoke\" class=\"danger\">"+esc(adminMessage("revokeOldSigningKey"))+"</button>"):("<p class=\"muted\">"+esc(adminMessage("noVerificationKeysAreAvailableTo"))+"</p>");
@@ -26,10 +28,6 @@ async function audit(){
   form.onsubmit=e=>{e.preventDefault();page=1;render().catch(e=>{err.textContent=e instanceof Error?e.message:String(e)})};form.onreset=()=>setTimeout(()=>{page=1;render().catch(e=>{err.textContent=e instanceof Error?e.message:String(e)})});await render()
 }
 
-async function establishSession(){const r=await fetch('/auth/session',{credentials:'same-origin',cache:'no-store'});if(r.status===401){location.replace('/login/?return_to='+encodeURIComponent(location.pathname+location.search));return false}const session=await r.json();if(!r.ok)throw new Error((session?.error?.code?'['+session.error.code+'] ':'')+(session?.error?.message||adminMessage("couldNotSignIn")));csrfToken=session.csrfToken;return true}
-async function load(){err.textContent='';try{if(!await establishSession())return;me=await request('/me');const locale=synchronizeDisplayLocale(me.displayLocale,async language=>{const response=await fetch('/app/api/v1/me/locale',{method:'PATCH',credentials:'same-origin',headers:{'X-CSRF-Token':csrfToken,'Content-Type':'application/json'},body:JSON.stringify({locale:language})});if(!response.ok)throw new Error(adminMessage("reloadThePageToRefreshYour"))},error=>{err.textContent=error instanceof Error?error.message:String(error)});if(locale===false)return;identity.textContent=(me.displayName?me.displayName+' / ':'')+displayLabel(me.role);if(page==='users')await users();else if(page==='accounts')await accounts();else if(page==='keys')await keys();else if(page==='jobs')await jobs();else if(page==='sources')await sources();else if(page==='tex')await texEnvironment();else if(page==='updates')await updates();else if(page==='system')await system();else if(page==='audit')await audit();else await dashboard();document.querySelector('#updated').textContent=(adminMessage("refresh")+" ")+new Date().toLocaleTimeString(document.documentElement.lang || 'en')}catch(e){err.textContent=e instanceof Error?e.message:String(e)}}
-addEventListener('pagehide',()=>{stopManagerWatch();closeAdminDialog()});
-try{sessionStorage.removeItem('issued-key')}catch{}
-document.querySelector('#logout')?.addEventListener('click',async()=>{stopManagerWatch();closeAdminDialog();await fetch('/auth/logout',{method:'POST',credentials:'same-origin',headers:{'X-CSRF-Token':csrfToken}});location.replace('/login/')});
-document.querySelector('#refresh').onclick=()=>{ok.textContent='';closeAdminDialog();load()};await load();
-`;
+
+  return { system, audit };
+}
