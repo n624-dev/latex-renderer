@@ -114,7 +114,7 @@ function Assert-NativeExecutable {
 }
 
 function Assert-Installed {
-    param([string]$Version)
+    param([string]$Version, [switch]$MigrateLegacy)
     $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
     $normalized = @($userPath -split ';' | ForEach-Object {
         [Environment]::ExpandEnvironmentVariables($_).TrimEnd('\', '/')
@@ -134,11 +134,20 @@ function Assert-Installed {
     $executable = [IO.File]::ResolveLinkTarget($mcpPath, $true)
     if (!$executable) { throw 'WinGet did not create its expected launcher link.' }
     Assert-NativeExecutable (Join-Path $executable.DirectoryName 'runtime\node.exe')
-    $status = Invoke-Checked (Join-Path $links 'n624-latex.exe') @('auth', 'status', '--json') | ConvertFrom-Json
+    $cliPath = Join-Path $links 'n624-latex.exe'
+    if ($MigrateLegacy -and !$previousHasProfiles -and (Test-ConnectionProfiles $cliPath)) {
+        Invoke-Checked $cliPath @('connection', 'migrate', 'default', $origin, '--confirm-origin', '--json') | Out-Null
+    }
+    $status = Invoke-Checked $cliPath @('auth', 'status', '--json') | ConvertFrom-Json
     if (!$status.success -or !$status.result.configured) { throw 'The installed client cannot decrypt the saved key.' }
     if ((Get-FileHash -LiteralPath $credential -Algorithm SHA256).Hash -ne $credentialHash) {
         throw 'The saved DPAPI credential changed.'
     }
+}
+
+function Test-ConnectionProfiles {
+    param([string]$CliPath)
+    return ((Invoke-Checked $CliPath @('--help')) -join [Environment]::NewLine) -match '--profile <name>'
 }
 
 function Assert-ClientPath {
@@ -410,6 +419,10 @@ server.listen(0, "127.0.0.1", () => writeFileSync(ready, String(server.address()
     $fixtureKey | & node (Join-Path $legacyPayload 'install.mjs') --base-uri $origin --skill-target none --mcp-target codex --api-key-stdin --json | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'The verified prior legacy installer failed.' }
     $credential = Join-Path $env:APPDATA 'latex-renderer/credential.bin'
+    $previousHasProfiles = !(Test-Path -LiteralPath $credential)
+    if ($previousHasProfiles) {
+        $credential = Join-Path $env:APPDATA 'latex-renderer/connections/profile-default.json'
+    }
     if ([Text.Encoding]::UTF8.GetString([IO.File]::ReadAllBytes($credential)).Contains($fixtureKey)) {
         throw 'The prior client wrote a plaintext API key.'
     }
@@ -434,12 +447,9 @@ server.listen(0, "127.0.0.1", () => writeFileSync(ready, String(server.address()
 
     Invoke-Checked $winget (@('upgrade', '--manifest', $newManifest) + $installationOptions) | Out-Host
     $installedManifest = $newManifest
-    Assert-Installed $version
+    Assert-Installed $version -MigrateLegacy
     Assert-ClientPath
-    $supportsProfiles = ((Invoke-Checked $managedCli @('--help')) -join [Environment]::NewLine) -match '--profile <name>'
-    if ($supportsProfiles) {
-        Invoke-Checked $managedCli @('connection', 'migrate', 'default', $origin, '--confirm-origin', '--json') | Out-Null
-    }
+    $supportsProfiles = Test-ConnectionProfiles $managedCli
     $setupArgs = @('setup', 'integrations', '--mcp-target', 'codex', '--skill-target', 'none', '--json')
     $preserved = Invoke-Checked $managedCli $setupArgs | ConvertFrom-Json
     if (!$preserved.success -or 'mcp:codex:conflict' -notin $preserved.result.preserved -or
