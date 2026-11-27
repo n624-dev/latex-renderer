@@ -27,6 +27,18 @@ function renderUpdateOperation(operation,reconnecting=false){
   const pre=card.querySelector('pre'),text=operation.log||adminMessage("noLogEntriesYet");
   if(pre.textContent!==text){const scrollTop=updateLogView.scrollTop;pre.textContent=text;pre.scrollTop=scrollTop}
 }
+function toolchainDetails(toolchain) {
+  if (!toolchain?.node) return "";
+  const running = `Node.js ${esc(toolchain.node.version || "—")} · Corepack ${esc(toolchain.corepack?.version || "—")}`;
+  const apt = toolchain.apt;
+  const candidate = apt && apt.status !== "current"
+    ? `<p>${esc(adminMessage("updateCandidate"))} (APT) <strong>Node.js ${esc(apt.nodeVersion)} · Corepack ${esc(apt.corepackVersion)}</strong></p>`
+    : "";
+  const incompatible = apt?.status === "incompatible"
+    ? `<p class="error-summary">${esc(adminMessage("thisVersionCannotBeApplied"))}</p>`
+    : "";
+  return `<details><summary>Node.js / Corepack</summary><p>${esc(adminMessage("currentVersion"))} <strong>${running}</strong></p>${candidate}${incompatible}</details>`;
+}
 async function updates(){
   const signal=beginManagerWatch();
   const state=await request('/updates/state',{signal}).catch(error=>{if(!signal.aborted)throw error;return null});
@@ -39,7 +51,7 @@ async function updates(){
   const policyForm=("<form id=\"update-policy-form\" class=\"form-grid\"><label>"+esc(adminMessage("stableUpdates"))+"<select name=\"mode\"><option value=\"notify\"")+(policy.mode==='notify'?' selected':'')+(">"+esc(adminMessage("checkAndNotifyOnlyDefault"))+"</option><option value=\"automatic\"")+(policy.mode==='automatic'?' selected':'')+((">"+esc(adminMessage("applyAutomaticallyAfterVerification"))+"</option></select></label><label class=\"wide\">")+esc(adminMessage("reasonForTheChangeSavedIn"))+"<textarea name=\"reason\" required minlength=\"1\" maxlength=\"500\"></textarea><small>"+esc(adminMessage("doNotEnterSecretsOrApi"))+"</small></label><p class=\"wide\">"+esc(adminMessage("withAutomaticUpdatesServicesRestartAfter"))+"</p><button>"+esc(adminMessage("savePolicy"))+"</button></form>");
   const operationForm=("<form id=\"update-version-form\" class=\"form-grid\"><label>"+esc(adminMessage("versionLeaveBlankForTheLatest"))+"<input name=\"version\" pattern=\"v?(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)(?:-rc\\.[1-9]\\d*)?\" placeholder=\"vX.Y.Z\"></label><small class=\"wide\">"+esc(adminMessage("releaseCandidateVersionHint"))+"</small><div class=\"actions wide\"><button type=\"button\" id=\"update-check\" class=\"secondary\">"+esc(adminMessage("checkForUpdates"))+"</button><button type=\"button\" id=\"update-apply\">"+esc(adminMessage("downloadVerifyAndUpdate"))+"</button><button type=\"button\" id=\"update-rollback\" class=\"danger\"")+(state.previousReleaseId&&state.previousRollbackCompatible?'':' disabled')+(">"+esc(adminMessage("rollBackToPrevious"))+"</button></div></form><div id=\"update-operation\" class=\"stack\" aria-live=\"polite\"></div>");
   rememberUpdateLogView();
-  out.innerHTML=("<div class=\"page-heading\"><h1>"+esc(adminMessage("applicationUpdate"))+"</h1></div>")+section(adminMessage("status"),stateCards+updaterCard+unavailable+(state.lastError?("<div class=\"notice warning\"><strong>"+esc(adminMessage("applicationUpdatePreviousOperationFailed"))+"</strong><p>")+esc(state.lastError)+'</p></div>':''))+section(adminMessage("updatePolicy"),policyForm)+section(adminMessage("actions"),operationForm);
+  out.innerHTML=("<div class=\"page-heading\"><h1>"+esc(adminMessage("applicationUpdate"))+"</h1></div>")+section(adminMessage("status"),stateCards+updaterCard+toolchainDetails(state.toolchain)+unavailable+(state.lastError?("<div class=\"notice warning\"><strong>"+esc(adminMessage("applicationUpdatePreviousOperationFailed"))+"</strong><p>")+esc(state.lastError)+'</p></div>':''))+section(adminMessage("updatePolicy"),policyForm)+section(adminMessage("actions"),operationForm);
   const version=()=>String(new FormData(document.querySelector('#update-version-form')).get('version')||'').trim();
   document.querySelector('#update-policy-form').onsubmit=adminAction(async event=>{event.preventDefault();const data=new FormData(event.target),mode=String(data.get('mode')),reason=String(data.get('reason')||'').trim();await request('/updates/policy',{method:'POST',...jsonBody({channel:'stable',mode,reason})});ok.textContent=adminMessage("applicationUpdatePolicySaved");await updates()});
   document.querySelector('#update-check').onclick=adminAction(async()=>{const selected=version(),result=await request('/updates/check',{method:'POST',...jsonBody(selected?{version:selected}:{})});ok.textContent=adminMessage("versionChecked",{version:updateVersion(result.version)});await updates()});

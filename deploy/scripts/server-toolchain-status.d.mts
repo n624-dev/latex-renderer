@@ -2,6 +2,8 @@ export function serverToolchainStatus(options?: {
   nodePath?: string;
   nodeVersion?: string;
   corepackPath?: string;
+  aptManifestPath?: string;
+  managedRoot?: string;
   owner?: number;
 }): Promise<{
   node: {
@@ -13,5 +15,10 @@ export function serverToolchainStatus(options?: {
   corepack: {
     version: string | null;
     source: "managed-copy" | "host" | "unknown";
+  };
+  apt?: {
+    nodeVersion: string;
+    corepackVersion: string;
+    status: "available" | "current" | "incompatible";
   };
 }>;

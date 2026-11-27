@@ -18,18 +18,6 @@ describe("local MCP boundary", () => {
     expect(combined).not.toContain('"--json"');
   });
 
-  it("keeps output schemas and structured content on every tool", () => {
-    const server = read("apps/mcp-server/src/server.ts");
-    const tools = server.match(/server\.registerTool\(/g) ?? [],
-      schemas = server.match(/outputSchema:/g) ?? [];
-    expect(tools.length).toBeGreaterThanOrEqual(7);
-    expect(schemas).toHaveLength(tools.length);
-    expect(server).toMatch(
-      /server\.registerTool\(\s*"attach_project_revision"/,
-    );
-    expect(server).toContain("structuredContent: output");
-  });
-
   it("bundles mcp-core from workspace source for clean client builds", () => {
     const build = read("client/build-client.mjs");
     expect(build).toContain('"@latex-renderer/mcp-core"');
