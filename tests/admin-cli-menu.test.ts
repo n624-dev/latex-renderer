@@ -13,10 +13,10 @@ const { Command } = requireAdmin("commander") as {
 function terminal(answers: string[]) {
   return {
     write: vi.fn(),
-    ask: vi.fn(async () => {
+    ask: vi.fn(() => {
       const value = answers.shift();
       if (value === undefined) throw new Error("Unexpected terminal prompt");
-      return value;
+      return Promise.resolve(value);
     }),
   };
 }
@@ -43,7 +43,8 @@ it("keeps secrets out of command arguments and requires explicit confirmation", 
     secret: "fixture-secret",
   });
   expect(accepted.ask).toHaveBeenLastCalledWith(expect.any(String), true);
-  await program.parseAsync(invocation!.args, { from: "user" });
+  if (invocation === undefined) throw new Error("Expected a selected operation");
+  await program.parseAsync(invocation.args, { from: "user" });
   expect(run).toHaveBeenCalledTimes(1);
 });
 
@@ -65,7 +66,8 @@ it("passes variadic fields, literal arguments, and confirmed changes to Commande
     "y",
   ]);
   const invocation = await chooseAdminInvocation(program, io, true);
-  await program.parseAsync(invocation!.args, { from: "user" });
+  if (invocation === undefined) throw new Error("Expected a selected operation");
+  await program.parseAsync(invocation.args, { from: "user" });
   expect(run).toHaveBeenCalledWith(
     "--literal-name",
     {

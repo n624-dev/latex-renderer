@@ -36,7 +36,7 @@ describe("native PDF and browser opener", () => {
           ],
           { ...options, stdio: ["ignore", "ignore", "pipe"] },
         );
-        child.stderr?.setEncoding("utf8").on("data", (text: string) => {
+        child.stderr.setEncoding("utf8").on("data", (text: string) => {
           diagnostics = (diagnostics + text).slice(-4000);
         });
         child.once("error", (error) => {
