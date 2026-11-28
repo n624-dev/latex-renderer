@@ -1,11 +1,19 @@
 import { lstat, realpath } from "node:fs/promises";
-import { delimiter, dirname, isAbsolute, relative, resolve } from "node:path";
+import {
+  delimiter,
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+} from "node:path";
 import { randomUUID } from "node:crypto";
 import { RendererClient } from "@latex-renderer/api-client";
 import {
   acceptedJobRecovery,
   createSourceRenderJob,
   downloadJobArtifacts,
+  ensureSecureDirectory,
   getJob,
   readAcceptedJob,
   renderProject,
@@ -44,6 +52,7 @@ export const MCP_TOOL_NAMES = [
   "render_project",
   "get_render_status",
   "download_render_artifacts",
+  "get_project_revision_downloads",
   "cancel_render",
   "delete_render",
   "list_projects",
@@ -85,6 +94,11 @@ export const downloadArtifactsInputSchema = z
     previewPages: z.array(z.number().int().min(1).max(100)).max(100).optional(),
   })
   .strict();
+export const downloadRevisionSourceInputSchema = z.strictObject({
+  projectId: projectIdSchema,
+  revisionId: projectRevisionIdSchema,
+  outputDirectory: z.string().min(1).default(".render"),
+});
 export const projectIdInputSchema = z
   .object({ projectId: projectIdSchema })
   .strict();
@@ -231,6 +245,21 @@ export const renderProjectRevisionOutputSchema = projectOutput(
     })
     .strict(),
 );
+export const downloadRevisionSourceOutputSchema = projectOutput(
+  "get_project_revision_downloads",
+  z.strictObject({
+    projectId: projectIdSchema,
+    revisionId: projectRevisionIdSchema,
+    outputDirectory: z.string(),
+    sourceZip: z.strictObject({
+      path: z.string(),
+      filename: z.string(),
+      mimeType: z.literal("application/zip"),
+      size: z.number().int().nonnegative(),
+      sha256: z.string().regex(/^[a-f0-9]{64}$/),
+    }),
+  }),
+);
 
 export const uploadSourceOutputSchema = z
   .object({
@@ -319,6 +348,9 @@ export type GetRenderStatusOutput = z.infer<typeof getRenderStatusOutputSchema>;
 export type DownloadArtifactsOutput = z.infer<
   typeof downloadArtifactsOutputSchema
 >;
+export type DownloadRevisionSourceOutput = z.infer<
+  typeof downloadRevisionSourceOutputSchema
+>;
 export type CancelRenderOutput = z.infer<typeof cancelRenderOutputSchema>;
 export type DeleteRenderOutput = z.infer<typeof deleteRenderOutputSchema>;
 export type ListProjectsOutput = z.infer<typeof listProjectsOutputSchema>;
@@ -341,6 +373,7 @@ export type McpToolOutput =
   | RenderProjectOutput
   | GetRenderStatusOutput
   | DownloadArtifactsOutput
+  | DownloadRevisionSourceOutput
   | CancelRenderOutput
   | DeleteRenderOutput
   | ListProjectsOutput
@@ -391,6 +424,10 @@ export interface McpOperations {
     options: { cursor?: string | undefined; pageSize?: number | undefined },
   ): Promise<GetProjectRevisionJobsOutput>;
   listProjectRevisionFiles?: RendererClient["listProjectRevisionFiles"];
+  downloadProjectRevisionSource(
+    input: z.infer<typeof downloadRevisionSourceInputSchema>,
+    signal?: AbortSignal,
+  ): Promise<DownloadRevisionSourceOutput>;
   getProjectRevisionFile?: RendererClient["getProjectRevisionFile"];
   runAuthoringOperation?: RendererClient["runAuthoringOperation"];
   createProject(displayName: string): Promise<CreateProjectOutput>;
@@ -570,6 +607,43 @@ export function createMcpOperations(
       withClientOperationDeadline(async (signal) =>
         (await client()).listProjectRevisionFiles(projectId, revisionId, { ...options, signal }),
       { signal: options?.signal }),
+    downloadProjectRevisionSource: (
+      { projectId, revisionId, outputDirectory },
+      requestSignal,
+    ) =>
+      withClientOperationDeadline(
+        async (signal) => {
+          const output = await resolveAllowedMcpPath(
+            outputDirectory,
+            allowedRoots(),
+            false,
+          );
+          const filename = `${projectRevisionIdSchema.parse(revisionId)}.zip`;
+          const path = join(output, filename);
+          await ensureSecureDirectory(output);
+          const metadata = await (
+            await client()
+          ).downloadProjectRevisionSource(projectId, revisionId, path, {
+            signal,
+          });
+          return {
+            success: true,
+            operation: "get_project_revision_downloads",
+            result: {
+              projectId,
+              revisionId,
+              outputDirectory: output,
+              sourceZip: {
+                ...metadata,
+                path,
+                filename,
+                mimeType: "application/zip",
+              },
+            },
+          };
+        },
+        { signal: requestSignal },
+      ),
     getProjectRevisionFile: (projectId, revisionId, path, options) =>
       withClientOperationDeadline(async (signal) =>
         (await client()).getProjectRevisionFile(projectId, revisionId, path, { ...options, signal }),
@@ -797,6 +871,7 @@ export function assertValidMcpOutput(output: McpToolOutput): McpToolOutput {
     render_project: renderProjectOutputSchema,
     get_render_status: getRenderStatusOutputSchema,
     download_render_artifacts: downloadArtifactsOutputSchema,
+    get_project_revision_downloads: downloadRevisionSourceOutputSchema,
     cancel_render: cancelRenderOutputSchema,
     delete_render: deleteRenderOutputSchema,
     list_projects: listProjectsOutputSchema,

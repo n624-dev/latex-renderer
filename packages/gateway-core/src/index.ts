@@ -1,6 +1,9 @@
 const MAX_JSON_BYTES = 1024;
 const MAX_PROJECT_JSON_BYTES = 4096;
 const MAX_DRAFT_EDIT_JSON_BYTES = 8 * 1024 * 1024;
+const MAX_PROJECT_STATE_JSON_BYTES = 1024 * 1024;
+// One page can contain twenty reviews with up to 100 checks each.
+const MAX_PDF_REVIEWS_RESPONSE_BYTES = 16 * 1024 * 1024;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 // Only the scheme is case-insensitive. The token remains byte-for-byte and
 // retains its strict alphabet; RFC Bearer allows one or more ASCII spaces.
@@ -26,11 +29,15 @@ export async function proxyGatewayJson(input: {
   bodyRequired?: boolean | undefined;
 }): Promise<Response> {
   const bodyRequired = input.bodyRequired !== false;
+  const pdfReviews = input.upstreamPath.endsWith("/pdf-reviews");
+  const sourceZip = !bodyRequired && input.upstreamPath.endsWith("/source.zip");
   const maxJsonBytes = input.upstreamPath.endsWith("/draft/changes")
     ? MAX_DRAFT_EDIT_JSON_BYTES
-    : input.upstreamPath.startsWith("/internal/v1/projects")
-    ? MAX_PROJECT_JSON_BYTES
-    : MAX_JSON_BYTES;
+    : pdfReviews || input.upstreamPath.endsWith("/document-state/conditions")
+      ? MAX_PROJECT_STATE_JSON_BYTES
+      : input.upstreamPath.startsWith("/internal/v1/projects")
+        ? MAX_PROJECT_JSON_BYTES
+        : MAX_JSON_BYTES;
   const authorization = input.request.headers.get("Authorization");
   if (authorization === null || !API_KEY.test(authorization))
     return errorResponse("UNAUTHORIZED", "Bearer API key is required", 401);
@@ -138,7 +145,7 @@ export async function proxyGatewayJson(input: {
     headers,
     ...(body.byteLength === 0 ? {} : { body }),
     redirect: "manual",
-    signal: AbortSignal.timeout(10_000),
+    signal: sourceZip ? input.request.signal : AbortSignal.timeout(10_000),
   });
   if (response.status >= 300 && response.status < 400)
     return errorResponse(
@@ -146,7 +153,39 @@ export async function proxyGatewayJson(input: {
       "Private upstream returned a redirect",
       502,
     );
-  const responseBody = await readLimited(response.body, MAX_RESPONSE_BYTES);
+  if (sourceZip && response.ok) {
+    const headers = new Headers(GATEWAY_RESPONSE_HEADERS);
+    if (
+      response.status !== 200 ||
+      response.body === null ||
+      mediaType(response.headers.get("Content-Type")) !== "application/zip"
+    ) {
+      await response.body?.cancel();
+      return errorResponse(
+        "UPSTREAM_RESPONSE_INVALID",
+        "Private upstream returned an invalid Source archive response",
+        502,
+      );
+    }
+    for (const name of [
+      "Content-Type",
+      "Content-Length",
+      "Content-Disposition",
+      "ETag",
+      "X-Source-Zip-Size",
+    ]) {
+      const value = response.headers.get(name);
+      if (value !== null) headers.set(name, value);
+    }
+    headers.set("X-Content-Type-Options", "nosniff");
+    return new Response(response.body, { status: 200, headers });
+  }
+  const responseBody = await readLimited(
+    response.body,
+    pdfReviews && input.request.method === "GET"
+      ? MAX_PDF_REVIEWS_RESPONSE_BYTES
+      : MAX_RESPONSE_BYTES,
+  );
   if (mediaType(response.headers.get("Content-Type")) !== "application/json")
     return errorResponse(
       "UPSTREAM_RESPONSE_INVALID",
@@ -212,8 +251,29 @@ export function gatewayRoute(
       bodyRequired: hasBody,
     };
   }
+  const projectAuthoringPath =
+    /^\/api\/v1\/projects\/project_[a-f0-9]{32}\/(document-state(?:\/(?:conditions|adoption))?|pdf-reviews|storage-usage|revision-protection|revision-cleanup\/(?:plan|apply))$/.exec(
+      pathname,
+    );
+  if (projectAuthoringPath !== null) {
+    const suffix = projectAuthoringPath[1];
+    const allowed =
+      suffix === "document-state" || suffix === "storage-usage"
+        ? ["GET"]
+        : suffix === "document-state/conditions"
+          ? ["PATCH"]
+          : suffix === "pdf-reviews"
+            ? ["GET", "POST"]
+            : ["POST"];
+    if (!allowed.includes(method)) return "method-not-allowed";
+    return {
+      upstreamPath: pathname.replace(/^\/api\/v1/, "/internal/v1"),
+      idempotencyRequired: false,
+      bodyRequired: method !== "GET",
+    };
+  }
   const projectPath =
-    /^\/api\/v1\/projects(?:\/(project_[a-f0-9]{32})(?:\/revisions(?:\/(revision_[a-f0-9]{32})(?:\/(jobs|render|files))?)?)?)?$/.exec(
+    /^\/api\/v1\/projects(?:\/(project_[a-f0-9]{32})(?:\/revisions(?:\/(revision_[a-f0-9]{32})(?:\/(jobs|render|files|source\.zip))?)?)?)?$/.exec(
       pathname,
     );
   if (projectPath !== null) {
@@ -227,7 +287,7 @@ export function gatewayRoute(
           ? pathname.endsWith("/revisions")
             ? ["POST"]
             : ["GET", "PATCH", "DELETE"]
-          : suffix === "jobs" || suffix === "files"
+          : suffix === "jobs" || suffix === "files" || suffix === "source.zip"
             ? ["GET"]
             : suffix === "render"
               ? ["POST"]

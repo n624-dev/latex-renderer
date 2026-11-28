@@ -50,7 +50,7 @@
 | `get_project_revision_jobs` | 保存版のJob履歴 | ○ | ○ | ○ | Remote系 `mcp:read` |
 | `list_project_revision_files` | 保存版のファイル一覧 | ○ | ○ | ○ | Remote系 `mcp:read`。Local `render:project:read` |
 | `get_project_revision_file` | 保存版のテキスト本文 | ○ | ○ | ○ | Remote系 `mcp:read`。Local `render:project:read` |
-| `get_project_revision_downloads` | 保存版Source ZIPと成果物リンク | × | ○ | ○ | Remote系 `mcp:read` |
+| `get_project_revision_downloads` | 保存版のSource ZIPを取得 | ○ | ○ | ○ | Remote系 `mcp:read`。Local `render:project:read` でZIPをローカル保存。Remote系はZIPと任意のPDFのリンクを返す |
 | `update_project_file` | ファイルを更新して次の版を作成 | × | ○ | ○ | Remote系 `mcp:render`。Localは共有下書きを編集してから保存可 |
 | `delete_project_file` | ファイルを除いて次の版を作成 | × | ○ | ○ | Remote系 `mcp:render`。Localは共有下書きから削除してから保存可 |
 | `open_project_draft` | 共有下書きを開く・起点を選ぶ | ○ | ○ | ○ | Remote系 `mcp:render`。Local `render:draft:write` |
@@ -59,15 +59,15 @@
 | `apply_project_changes` | 共有下書きを版確認付きで一括変更 | ○ | ○ | ○ | Remote系 `mcp:render`。Local `render:draft:write` |
 | `render_project_draft` | 共有下書きを試し描画 | ○ | ○ | ○ | Remote系 `mcp:render`。Localは `render:create` と `render:draft:write`。共有プレビューの取得は読み取り専用 |
 | `save_project_draft` | 共有下書きを履歴へ保存 | ○ | ○ | ○ | Remote系 `mcp:render`。Local `render:draft:write` |
-| `get_project_document_state` | 文書条件と採用版 | × | ○ | ○ | Remote系 `mcp:read` |
-| `update_project_document_conditions` | 文書条件を編集 | × | ○ | ○ | Remote系 `mcp:render` |
-| `adopt_project_revision` | 採用する保存版を指定 | × | ○ | ○ | Remote系 `mcp:render` |
-| `record_project_pdf_review` | PDFの確認記録を保存 | × | ○ | ○ | Remote系 `mcp:render` |
-| `list_project_pdf_reviews` | PDFの確認記録一覧 | × | ○ | ○ | Remote系 `mcp:read` |
-| `get_project_storage_usage` | Projectの保存量 | × | ○ | ○ | Remote系 `mcp:read` |
-| `protect_project_revision` | 保存版の保護を設定 | × | ○ | ○ | Remote系 `mcp:render` |
-| `plan_project_revision_cleanup` | 保存版整理の候補を確認 | × | ○ | ○ | Remote系 `mcp:read` |
-| `apply_project_revision_cleanup` | 確認済みの保存版整理を実行 | × | ○ | ○ | Remote系 `mcp:delete` |
+| `get_project_document_state` | 文書条件と採用版 | ○ | ○ | ○ | Remote系 `mcp:read`。Local `render:project:state:read` |
+| `update_project_document_conditions` | 文書条件を編集 | ○ | ○ | ○ | Remote系 `mcp:render`。Local `render:project:state:write` |
+| `adopt_project_revision` | 採用する保存版を指定 | ○ | ○ | ○ | Remote系 `mcp:render`。Local `render:project:state:write` |
+| `record_project_pdf_review` | PDFの確認記録を保存 | ○ | ○ | ○ | Remote系 `mcp:render`。Local `render:project:state:write` |
+| `list_project_pdf_reviews` | PDFの確認記録一覧 | ○ | ○ | ○ | Remote系 `mcp:read`。Local `render:project:state:read` |
+| `get_project_storage_usage` | Projectの保存量 | ○ | ○ | ○ | Remote系 `mcp:read`。Local `render:project:read` |
+| `protect_project_revision` | 保存版の保護を設定 | ○ | ○ | ○ | Remote系 `mcp:render`。Local `render:create` |
+| `plan_project_revision_cleanup` | 保存版整理の候補を確認 | ○ | ○ | ○ | Remote系 `mcp:read`。Local `render:project:read` |
+| `apply_project_revision_cleanup` | 確認済みの保存版整理を実行 | ○ | ○ | ○ | Remote系 `mcp:delete`。Local `render:project:delete` |
 
 ## 描画・成果物・プレビュー
 

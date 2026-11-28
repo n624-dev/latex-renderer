@@ -10,6 +10,7 @@ import {
   projectDetailSchema,
   projectRevisionJobsPageSchema,
   projectIdSchema,
+  projectRevisionIdSchema,
   attachProjectRevisionResponseSchema,
   sourceRenderResponseSchema,
   sourceTicketResponseSchema,
@@ -302,11 +303,12 @@ export class RendererClient {
   }
   async runAuthoringOperation(
     operation: RendererApiAuthoringTool,
-    { projectId, jobId, ...parameters }: Readonly<Record<string, unknown>>,
+    input: Readonly<Record<string, unknown>>,
     options: RendererRequestOptions = {},
   ): Promise<unknown> {
     const route = rendererApiAuthoringRoutes[operation];
-    const id = route.resource === "project" ? projectId : jobId;
+    const idKey = route.resource === "project" ? "projectId" : "jobId";
+    const { [idKey]: id, ...parameters } = input;
     const pattern = route.resource === "project" ? /^project_[a-f0-9]{32}$/ : /^job_[a-f0-9]{32}$/;
     if (typeof id !== "string" || !pattern.test(id))
       throw new AppError("INVALID_REQUEST", "A valid Project or Job ID is required", 400);
@@ -319,17 +321,68 @@ export class RendererClient {
       for (const [key, value] of Object.entries(parameters)) {
         if (typeof value === "number" || typeof value === "string")
           url.searchParams.set(key, String(value));
+        else if (
+          operation === "get_project_document_state" &&
+          key === "history" &&
+          value !== undefined
+        )
+          url.searchParams.set(key, JSON.stringify(value));
       }
+    const hasBody = route.method !== "GET";
     const response = await fetch(url, {
       method: route.method,
-      headers: noStoreRequestHeaders(this.headers(route.method === "POST"
-        ? { "Content-Type": "application/json" } : undefined)),
+      headers: noStoreRequestHeaders(
+        this.headers(
+          hasBody ? { "Content-Type": "application/json" } : undefined,
+        ),
+      ),
       cache: "no-store",
       redirect: "error",
-      ...(route.method === "POST" ? { body: JSON.stringify(parameters) } : {}),
+      ...(hasBody ? { body: JSON.stringify(parameters) } : {}),
       ...(options.signal === undefined ? {} : { signal: options.signal }),
     });
     return await authoringResponse(response, route.resource === "job");
+  }
+  async downloadProjectRevisionSource(
+    projectId: string,
+    revisionId: string,
+    destination: string,
+    options: RendererRequestOptions = {},
+  ): Promise<{ size: number; sha256: string }> {
+    const path = `${PUBLIC_API_PREFIX}/projects/${projectIdSchema.parse(projectId)}/revisions/${projectRevisionIdSchema.parse(revisionId)}/source.zip`;
+    const response = await fetch(new URL(path, this.#baseUrl), {
+      headers: noStoreRequestHeaders(this.headers()),
+      cache: "no-store",
+      redirect: "error",
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+    });
+    if (!response.ok) await authoringResponse(response);
+    const length = response.headers.get("X-Source-Zip-Size") ?? "";
+    const size = Number(length);
+    const sha256 = /^"([a-f0-9]{64})"$/.exec(
+      response.headers.get("ETag") ?? "",
+    )?.[1];
+    if (
+      response.status !== 200 ||
+      response.headers.get("Content-Type") !== "application/zip" ||
+      !/^\d+$/.test(length) ||
+      !Number.isSafeInteger(size) ||
+      sha256 === undefined
+    ) {
+      await response.body?.cancel();
+      throw new AppError(
+        "INVALID_ARTIFACT_METADATA",
+        "Saved Source ZIP size and SHA-256 are required",
+        502,
+      );
+    }
+    await this.#saveDownload(
+      response,
+      destination,
+      { size, sha256 },
+      options.signal,
+    );
+    return { size, sha256 };
   }
   async getProjectRevisionFile(
     projectId: string,
@@ -668,6 +721,14 @@ export class RendererClient {
       ...(options?.signal === undefined ? {} : { signal: options.signal }),
     });
     if (!response.ok) await throwResponse(response);
+    await this.#saveDownload(response, destination, expected, options?.signal);
+  }
+  async #saveDownload(
+    response: Response,
+    destination: string,
+    expected: { size: number; sha256: string },
+    signal: AbortSignal | undefined,
+  ): Promise<void> {
     if (response.body === null)
       throw new AppError("EMPTY_DOWNLOAD", "Artifact response body is empty");
     const temporary = `${destination}.part-${randomUUID()}`;
@@ -711,12 +772,12 @@ export class RendererClient {
         ),
         verifier,
         createWriteStream(temporary, { flags: "wx", mode: 0o600 }),
-        options?.signal === undefined ? {} : { signal: options.signal },
+        signal === undefined ? {} : { signal },
       );
       if (size !== expected.size || hash.digest("hex") !== expected.sha256)
         throw new AppError(
           "ARTIFACT_INTEGRITY_MISMATCH",
-          "Artifact size or SHA-256 does not match Job metadata",
+          "Download size or SHA-256 does not match its metadata",
           502,
         );
       const current = await lstat(destination).catch((error: unknown) => {
@@ -733,7 +794,7 @@ export class RendererClient {
           "Artifact destination changed while downloading",
           400,
         );
-      options?.signal?.throwIfAborted();
+      signal?.throwIfAborted();
       await rename(temporary, destination);
     } catch (error) {
       await rm(temporary, { force: true }).catch(() => undefined);
@@ -832,9 +893,12 @@ function throwFromValue(status: number, value: unknown): never {
               previewErrorCode: error.previewErrorCode,
               retryable: error.retryable,
             }
-          : error.code === "DRAFT_VERSION_CONFLICT" &&
-              (error.currentVersion === null || typeof error.currentVersion === "number" &&
-                Number.isSafeInteger(error.currentVersion) && error.currentVersion >= 0)
+          : (error.code === "DRAFT_VERSION_CONFLICT" ||
+                error.code === "DOCUMENT_CONDITIONS_CONFLICT") &&
+              (error.currentVersion === null ||
+                (typeof error.currentVersion === "number" &&
+                  Number.isSafeInteger(error.currentVersion) &&
+                  error.currentVersion >= 0))
             ? { currentVersion: error.currentVersion }
             : undefined,
       );
