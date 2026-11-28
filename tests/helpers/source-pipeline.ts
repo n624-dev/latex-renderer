@@ -46,10 +46,15 @@ export function pipelineDocument(pages = 1, text = "Pipeline") {
 // Only the Docker child boundary is replaced in ordinary (no-image) tests.
 export async function sourcePipelineFixture(
   overrides: Partial<ResourceLimits> = {},
-  options: { lazyPreviews?: boolean } = {},
+  options: {
+    lazyPreviews?: boolean;
+    maxUserStorageBytes?: number;
+    inProcess?: boolean;
+  } = {},
 ) {
   // All consumers must see the same instance limits, not only the MCP producer.
   const limits = { ...DEFAULT_RESOURCE_LIMITS, ...overrides };
+  const maxUserStorageBytes = options.maxUserStorageBytes ?? 20 * 1024 * 1024;
   const root = await mkdtemp(join(tmpdir(), "source-pipeline-"));
   const gatePath = join(root, "renderer-gate");
   const database = await createFixtureDatabase(root);
@@ -59,6 +64,7 @@ export async function sourcePipelineFixture(
   const containers = new Map<ChildProcess, string>();
   let run: Promise<void> | undefined;
   let restoreSpawn = () => {};
+  let restoreFetch = () => {};
   let flushDiagnostics = async () => {};
   const close = async () => {
     for (const child of children) {
@@ -72,6 +78,7 @@ export async function sourcePipelineFixture(
     await run?.catch(() => undefined);
     await flushDiagnostics();
     restoreSpawn();
+    restoreFetch();
     const stopped = await Promise.allSettled(
       servers.map(
         (server) =>
@@ -146,9 +153,42 @@ export async function sourcePipelineFixture(
       [],
     );
     const requests: Array<{ method: string; path: string }> = [];
+    const handlers = new Map<
+      string,
+      (request: Request) => Promise<Response> | Response
+    >();
+    if (options.inProcess) {
+      const fetchSpy = vi
+        .spyOn(globalThis, "fetch")
+        .mockImplementation(async (input, init) => {
+          const request = new Request(input, init);
+          // Native fetch adds this header for string bodies on the wire.
+          if (
+            typeof init?.body === "string" &&
+            !request.headers.has("Content-Length")
+          )
+            request.headers.set(
+              "Content-Length",
+              String(Buffer.byteLength(init.body)),
+            );
+          const handler = handlers.get(new URL(request.url).origin);
+          assert.ok(
+            handler,
+            "Source pipeline fetch must stay within the fixture",
+          );
+          return handler(request);
+        });
+      restoreFetch = () => fetchSpy.mockRestore();
+    }
     const http = async (
       fetcher: (request: Request) => Promise<Response> | Response,
     ) => {
+      // Limit tests exercise the same handlers without depending on socket I/O.
+      if (options.inProcess) {
+        const origin = `http://127.0.0.1:${30_000 + handlers.size}`;
+        handlers.set(origin, fetcher);
+        return origin;
+      }
       const server = createServer((incoming, outgoing) => {
         void (async () => {
           const address = server.address();
@@ -222,9 +262,10 @@ export async function sourcePipelineFixture(
       rendererPublicUrl: rendererOrigin,
       rendererVersion: "pipeline-test",
       maxUploadBytes: limits.maxUploadBytes,
+      sourceLimits: limits,
       maxOutputBytes: 1024 * 1024,
       maxQueueLength: 20,
-      maxUserStorageBytes: 20 * 1024 * 1024,
+      maxUserStorageBytes,
     });
     const internalOrigin = await http((request) => internal.fetch(request));
     const origin = await http((request) => {
@@ -416,7 +457,7 @@ export async function sourcePipelineFixture(
       realPipelineImage ?? "pipeline-test",
       origin,
       20,
-      20 * 1024 * 1024,
+      maxUserStorageBytes,
       join(root, "environment"),
       limits,
       1024 * 1024,

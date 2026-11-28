@@ -17,7 +17,7 @@ import type {
   SourceTicketResponse,
 } from "@latex-renderer/contracts";
 import { AppError } from "@latex-renderer/shared";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   compileProjectPdf,
   acceptedJobRecovery,
@@ -36,6 +36,7 @@ import {
 const temporaryRoots: string[] = [];
 
 afterEach(async () => {
+  vi.useRealTimers();
   await Promise.all(
     temporaryRoots
       .splice(0)
@@ -445,9 +446,11 @@ describe("client core", () => {
   it("applies one deadline after acceptance and keeps the original Job ID", async () => {
     const client = new FakeClient([job("running")]);
     const result = withClientOperationDeadline(
-      (signal) => renderSource(client, "source_test", {
-        signal, pollIntervalMs: 1000,
-      }),
+      (signal) =>
+        renderSource(client, "source_test", {
+          signal,
+          pollIntervalMs: 1000,
+        }),
       { timeoutMs: 100 },
     );
     await expect(result).rejects.toMatchObject({
@@ -457,16 +460,53 @@ describe("client core", () => {
     expect(client.actions).toEqual([]);
   });
 
+  // Product gap: the operation deadline waits for preparation to settle even
+  // after aborting its signal. Release the fixture so it can clean up its ZIP.
+  it.fails(
+    "settles at the deadline even when preparation ignores the signal",
+    async () => {
+      const root = await temporaryRoot();
+      const started = deferred<undefined>();
+      const release = deferred<undefined>();
+      const client = Object.assign(new FakeClient([]), {
+        sourceLimits: () => {
+          started.resolve(undefined);
+          return release.promise;
+        },
+      });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      let finished = false;
+      const result = withClientOperationDeadline(
+        (signal) => renderProject(client, root, { signal }),
+        { timeoutMs: 100 },
+      ).catch((error: unknown) => {
+        finished = true;
+        return error;
+      });
+      await started.promise;
+      try {
+        await vi.advanceTimersByTimeAsync(100);
+        expect(finished).toBe(true);
+      } finally {
+        release.resolve(undefined);
+        await result;
+      }
+    },
+  );
+
   it("preflights the server's current file count before reserving an upload", async () => {
     const root = await temporaryRoot();
     await writeFile(join(root, "main.tex"), "main");
     await writeFile(join(root, "other.tex"), "other");
     const client = new FakeClient([]);
     const limited = Object.assign(client, {
-      sourceLimits: () => Promise.resolve({
-        maxUploadBytes: 2000, maxExtractedBytes: 1000,
-        maxFileCount: 2, maxZipEntries: 1,
-      }),
+      sourceLimits: () =>
+        Promise.resolve({
+          maxUploadBytes: 2000,
+          maxExtractedBytes: 1000,
+          maxFileCount: 2,
+          maxZipEntries: 1,
+        }),
     });
     await expect(uploadProjectSource(limited, root)).rejects.toMatchObject({
       code: "TOO_MANY_FILES",
@@ -721,6 +761,14 @@ class FakeClient implements ClientTransport {
     await mkdir(dirname(destination), { recursive: true });
     await writeFile(destination, url.replace(/^(?:artifact|preview):/, ""));
   }
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
 }
 
 function job(status: JobResponse["status"]): JobResponse {
