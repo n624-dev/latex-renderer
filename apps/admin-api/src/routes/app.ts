@@ -9,6 +9,7 @@ import {
   RendererDrafts,
   RendererEnvironment,
   RendererSourceStore,
+  downloadProjectSource,
   inlineArtifactLimit,
 } from "@latex-renderer/renderer-core";
 import {
@@ -39,7 +40,6 @@ import {
   adminPreviewResponse,
 } from "../services/artifacts.js";
 import { AdminJobsService } from "../services/jobs.js";
-import { downloadProjectSource } from "../services/project-source.js";
 import { AppProjectsService } from "../services/app-projects.js";
 import type { AdminDependencies, AppActor } from "../types.js";
 import { parse, readJson } from "./helpers.js";
@@ -366,7 +366,8 @@ export function createAppV1Router(deps: AdminDependencies): Hono {
   });
   router.get("/projects/:id/revisions/:revisionId/source.zip", async (c) =>
     downloadProjectSource(
-      deps,
+      deps.database,
+      deps.storageRoot,
       await requireAppActor(deps, c),
       parse(projectId, c.req.param("id")),
       parse(projectRevisionIdSchema, c.req.param("revisionId")),

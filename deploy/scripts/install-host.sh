@@ -19,6 +19,7 @@ id latex-renderer-web >/dev/null 2>&1 || useradd --system --gid latex-renderer -
 id latex-render-worker >/dev/null 2>&1 || useradd --system --gid latex-renderer --create-home --home-dir /var/lib/latex-render-worker --shell /bin/bash latex-render-worker
 flock /run/lock/latex-renderer-worker-subid.lock /usr/local/bin/node "$source_root/deploy/scripts/worker-subordinate-ids.mjs"
 id latex-renderer-backup >/dev/null 2>&1 || useradd --system --gid latex-renderer --home-dir /var/backups/latex-renderer --shell /usr/sbin/nologin latex-renderer-backup
+sh "$source_root/deploy/scripts/prepare-backup-verification.sh"
 id latex-renderer-update >/dev/null 2>&1 || useradd --system --gid latex-renderer --home-dir /var/lib/latex-renderer/update-manager --shell /usr/sbin/nologin latex-renderer-update
 id cloudflared >/dev/null 2>&1 || useradd --system --home-dir /var/lib/cloudflared --shell /usr/sbin/nologin cloudflared
 install -d -o root -g latex-renderer -m 2770 /var/lib/latex-renderer

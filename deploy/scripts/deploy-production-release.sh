@@ -320,6 +320,10 @@ deployment_checkpoint quiesce-and-prepare-host
 sh "$source_root/deploy/scripts/quiesce-image-manager.sh"
 deployment_quiesced=true
 require_normal_maintenance_for_smoke
+# Apply receipt permissions even when prepare-host.sh comes from older tooling.
+if [ -f "$source_root/deploy/scripts/prepare-backup-verification.sh" ]; then
+  sh "$source_root/deploy/scripts/prepare-backup-verification.sh"
+fi
 LATEX_RENDERER_PREPARE_SOURCE="$source_root" \
   sh "$tools_root/deploy/scripts/prepare-host.sh" "$release_id"
 if [ -f "$source_root/deploy/systemd/latex-renderer-backup-control.socket" ]; then
