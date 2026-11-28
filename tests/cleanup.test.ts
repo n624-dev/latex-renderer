@@ -1,7 +1,15 @@
 import { execFile } from "node:child_process";
-import { chmod, mkdtemp, mkdir, rm, stat, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdtemp,
+  mkdir,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { RendererDatabase } from "@latex-renderer/database";
@@ -9,6 +17,7 @@ import {
   readAuditDatabaseState,
   writeAuditCheckpoint,
 } from "../deploy/scripts/audit-checkpoint.mjs";
+import { protectBackupSources } from "../deploy/scripts/backup-source-protection.mjs";
 
 const execFileAsync = promisify(execFile),
   roots: string[] = [];
@@ -18,6 +27,107 @@ afterEach(async () => {
 });
 
 describe("scheduled cleanup", () => {
+  it.runIf(process.platform === "linux")(
+    "drains Job and Source backlogs while retaining recent files and backup Sources",
+    async () => {
+      const f = await cleanupBacklogFixture();
+      try {
+        const recentJob = await f.addJob(105, new Date().toISOString());
+        const futureSource = await f.addSource(
+          105,
+          new Date(Date.now() + 86_400_000).toISOString(),
+        );
+        const backupSource = await f.addSource(106);
+        const lease = await protectBackupSources(f.coordination, () => [
+          backupSource,
+        ]);
+        try {
+          expect(await f.run()).toMatchObject({
+            result: "success",
+            jobsProcessed: 105,
+            artifactsDeleted: 105,
+            sourcesProcessed: 105,
+            sourcesDeleted: 105,
+            budgetStopped: false,
+          });
+          expect(f.db.jobs.get(f.lastJob.id)?.status).toBe("deleted");
+          expect(f.db.sources.get(f.lastSource.id)?.status).toBe("deleted");
+          for (const path of [f.lastJob.path, f.lastSource.path])
+            await expect(stat(path)).rejects.toMatchObject({ code: "ENOENT" });
+          expect(f.db.jobs.get(recentJob.id)?.status).toBe("succeeded");
+          for (const { id } of [futureSource, backupSource])
+            expect(f.db.sources.get(id)?.status).toBe("ready");
+          for (const { path } of [recentJob, futureSource, backupSource])
+            expect(await readFile(path, "utf8")).toBe("x");
+        } finally {
+          await lease.release();
+        }
+        expect(await f.run()).toMatchObject({
+          jobsProcessed: 0,
+          sourcesProcessed: 1,
+          sourcesDeleted: 1,
+          budgetStopped: false,
+        });
+        await expect(stat(backupSource.path)).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      } finally {
+        f.db.close();
+      }
+    },
+  );
+
+  it("finishes the current batch when the budget expires and resumes on the next run", async () => {
+    const f = await cleanupBacklogFixture();
+    try {
+      expect(await f.run("jobs")).toMatchObject({
+        result: "success",
+        jobsProcessed: 100,
+        artifactsDeleted: 100,
+        sourcesProcessed: 0,
+        budgetStopped: true,
+      });
+      expect(f.deletionCounts("jobs")).toEqual([
+        { deletion_status: "deleted", deletion_attempts: 1, count: 100 },
+        { deletion_status: "retained", deletion_attempts: 0, count: 5 },
+      ]);
+      expect(f.deletionCounts("sources")).toEqual([
+        { deletion_status: "retained", deletion_attempts: 0, count: 105 },
+      ]);
+      expect(await readFile(f.lastJob.path, "utf8")).toBe("x");
+
+      expect(await f.run("sources")).toMatchObject({
+        result: "success",
+        jobsProcessed: 5,
+        artifactsDeleted: 5,
+        sourcesProcessed: 100,
+        sourcesDeleted: 100,
+        budgetStopped: true,
+      });
+      expect(f.deletionCounts("sources")).toEqual([
+        { deletion_status: "deleted", deletion_attempts: 1, count: 100 },
+        { deletion_status: "retained", deletion_attempts: 0, count: 5 },
+      ]);
+      expect(await readFile(f.lastSource.path, "utf8")).toBe("x");
+
+      expect(await f.run()).toMatchObject({
+        result: "success",
+        jobsProcessed: 0,
+        sourcesProcessed: 5,
+        sourcesDeleted: 5,
+        budgetStopped: false,
+      });
+      for (const table of ["jobs", "sources"] as const)
+        expect(f.deletionCounts(table)).toEqual([
+          { deletion_status: "deleted", deletion_attempts: 1, count: 105 },
+        ]);
+      for (const path of [f.lastJob.path, f.lastSource.path])
+        await expect(stat(path)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      f.db.close();
+    }
+  });
+
   it("collects obsolete draft output while retaining the latest PDF and leased work", async () => {
     const root = await mkdtemp(join(tmpdir(), "latex-draft-retention-"));
     roots.push(root);
@@ -845,3 +955,122 @@ describe("scheduled cleanup", () => {
     expired.close();
   });
 });
+
+async function cleanupBacklogFixture() {
+  const root = await mkdtemp(join(tmpdir(), "latex-cleanup-backlog-"));
+  roots.push(root);
+  const databasePath = join(root, "renderer.sqlite3"),
+    storageRoot = join(root, "storage"),
+    coordination = join(root, "backup-coordination"),
+    old = new Date(Date.now() - 48 * 3_600_000).toISOString(),
+    sha256 = "a".repeat(64);
+  await mkdir(coordination);
+  const db = new RendererDatabase(databasePath);
+  db.migrate();
+  db.raw
+    .prepare(
+      `INSERT INTO users(id,email,display_name,role,status,security_version,created_by,created_at,updated_at)
+       VALUES ('user','backlog@example.test','Owner','owner','active',1,'test',?,?)`,
+    )
+    .run(old, old);
+  db.webPrincipals.ensureAll();
+  const principal = db.raw
+    .prepare(
+      "SELECT service_account_id,api_key_id FROM web_principals WHERE user_id='user'",
+    )
+    .get() as { service_account_id: string; api_key_id: string };
+  const insertJob = db.raw.prepare(
+    `INSERT INTO jobs(id,user_id,service_account_id,api_key_id,status,renderer_version,
+      source_size,source_sha256,created_at,updated_at,completed_at)
+     VALUES (?,'user',?,?,'succeeded','test',1,?,?,?,?)`,
+  );
+  const insertSource = db.raw.prepare(
+    `INSERT INTO sources(id,owner_user_id,size,sha256,storage_key,status,created_at,updated_at,expires_at)
+     VALUES (?,'user',1,?,?,'ready',?,?,?)`,
+  );
+  const write = async (id: string, path: string) => {
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, "x");
+    return { id, path };
+  };
+  const addJob = (index: number, completedAt = old) => {
+    const id = `job_${index.toString(16).padStart(32, "0")}`;
+    insertJob.run(
+      id,
+      principal.service_account_id,
+      principal.api_key_id,
+      sha256,
+      completedAt,
+      completedAt,
+      completedAt,
+    );
+    return write(id, join(storageRoot, "jobs", id, "output", "result.pdf"));
+  };
+  const addSource = (index: number, expiresAt = old) => {
+    const id = `source_${index.toString(16).padStart(32, "0")}`;
+    const key = `sources/${id}/source.zip`;
+    insertSource.run(id, sha256, key, old, old, expiresAt);
+    return write(id, join(storageRoot, key));
+  };
+  for (let index = 0; index < 104; index++) {
+    await addJob(index);
+    await addSource(index);
+  }
+  const lastJob = await addJob(104),
+    lastSource = await addSource(104);
+
+  return {
+    db,
+    coordination,
+    addJob,
+    addSource,
+    lastJob,
+    lastSource,
+    deletionCounts(table: "jobs" | "sources") {
+      return db.raw
+        .prepare(
+          `SELECT deletion_status,deletion_attempts,COUNT(*) AS count FROM ${table}
+           GROUP BY deletion_status,deletion_attempts ORDER BY deletion_status`,
+        )
+        .all();
+    },
+    async run(expireDuring?: "jobs" | "sources") {
+      // Expire at the first filesystem removal in the chosen batch so this
+      // exercises an overrun without depending on how fast the test host is.
+      const preload = `
+        import fs from "node:fs/promises";
+        import { syncBuiltinESMExports } from "node:module";
+        import { join, sep } from "node:path";
+        import { performance } from "node:perf_hooks";
+        let elapsed = 0;
+        Object.defineProperty(performance, "now", { value: () => elapsed });
+        const parent = join(process.env.STORAGE_ROOT, ${JSON.stringify(expireDuring)});
+        const rm = fs.rm;
+        fs.rm = (path, options) => {
+          if (path.startsWith(parent + sep)) elapsed = 1000;
+          return rm(path, options);
+        };
+        syncBuiltinESMExports();
+      `;
+      const args = expireDuring
+        ? ["--import", `data:text/javascript,${encodeURIComponent(preload)}`]
+        : [];
+      const { stdout } = await execFileAsync(
+        process.execPath,
+        [...args, join(process.cwd(), "deploy/scripts/cleanup.mjs")],
+        {
+          env: {
+            ...process.env,
+            DATABASE_PATH: databasePath,
+            STORAGE_ROOT: storageRoot,
+            BACKUP_SOURCE_COORDINATION_DIR:
+              process.platform === "linux" ? coordination : undefined,
+            ARTIFACT_RETENTION_HOURS: "24",
+            CLEANUP_MAX_RUN_SECONDS: expireDuring ? "1" : undefined,
+          },
+        },
+      );
+      return JSON.parse(stdout) as unknown;
+    },
+  };
+}
