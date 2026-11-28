@@ -28,6 +28,9 @@ describe("production hardening", () => {
   it("keeps backup and audit exporters inside narrow filesystem boundaries", () => {
     const backup = read("deploy/systemd/latex-renderer-backup.service"),
       audit = read("deploy/systemd/latex-renderer-audit-export.service");
+    expect(backup).not.toMatch(
+      /^(?:AmbientCapabilities|CapabilityBoundingSet)=.+/m,
+    );
     expect(backup).toContain(
       "ReadOnlyPaths=/var/lib/latex-renderer/renderer.sqlite3 /var/lib/latex-renderer/storage",
     );
@@ -221,7 +224,9 @@ describe("production hardening", () => {
     expect(render).toContain('XDG_CONFIG_HOME="$temporary_root/config"');
     expect(render).toContain("-u LATEX_RENDER_API_KEY -u LATEX_RENDER_PROFILE");
     expect(smoke).toContain("run_smoke_render auth login --api-key-stdin");
-    expect(smoke).toContain('run_smoke_render render "$temporary_root/project"');
+    expect(smoke).toContain(
+      'run_smoke_render render "$temporary_root/project"',
+    );
     expect(smoke).toContain('run_smoke_render jobs delete "$job_id"');
   });
   it("exercises the published cross-platform setup lifecycle in an isolated temporary root", () => {

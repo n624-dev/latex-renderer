@@ -36,6 +36,8 @@ n624-latex admin backup status
 
 When creation finishes, run `n624-latex admin backup verify`. Use `n624-latex admin backup status` to check the file name and time in `latestVerification`. The server saves the backup in `BACKUP_DIRECTORY`, which defaults to `/var/lib/latex-renderer/backups`. On older clients that lack the `backup` command, use the administration page above.
 
+Use `n624-latex admin backup retention` to see the daily schedule, suggested limits, and current local retention plan. Supply `--max-age-days`, `--max-generations`, and `--max-total-bytes` together to preview the deletion list and warnings. After reviewing the preview, use `backup retention set` with the same limits, `--reason`, and `--yes` to save them and prune immediately. Successful backups apply those limits going forward. The newest archive and the latest restore-verified archive are protected. Uploaded copies follow their own retention policy.
+
 ### Verify on a separate host
 
 1. Copy the resulting `.tar.age` archive to a Linux verification host. Prepare GNU `tar`, `age`, a supported Node.js version (24 or 26) with `node:sqlite`, and the decryption key. For long-term storage, keep the archive and key separately.

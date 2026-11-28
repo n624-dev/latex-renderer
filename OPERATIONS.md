@@ -117,6 +117,11 @@ It accepts both current `sources/<source_id>/source.zip` and migration-3 legacy
 one Source share one archive entry. Arbitrary database-supplied paths are refused.
 The independent Updater's full DB/storage recovery points remain a separate system.
 
+Each successful backup applies the local retention policy from its database
+snapshot after any configured upload. All local archives are kept until an
+administrator confirms the policy. Retention protects the newest archive and the
+latest successfully verified archive. Uploaded copies are outside its scope.
+
 Both backup and `restore-test.mjs` require Linux `/proc/self/fd`, GNU tar and age.
 Directory descriptors pin the Source path; symbolic links, hardlinks, special
 files, size/hash mismatches and SQLite integrity/foreign-key failures are errors.
