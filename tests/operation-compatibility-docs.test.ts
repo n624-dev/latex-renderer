@@ -20,6 +20,19 @@ function registeredTools(path: string): string[] {
   ).filter((name): name is string => name !== undefined);
 }
 
+const localProjectScopes = new Map([
+  ["get_project_revision_downloads", "render:project:read"],
+  ["get_project_document_state", "render:project:state:read"],
+  ["update_project_document_conditions", "render:project:state:write"],
+  ["adopt_project_revision", "render:project:state:write"],
+  ["list_project_pdf_reviews", "render:project:state:read"],
+  ["record_project_pdf_review", "render:project:state:write"],
+  ["get_project_storage_usage", "render:project:read"],
+  ["protect_project_revision", "render:create"],
+  ["plan_project_revision_cleanup", "render:project:read"],
+  ["apply_project_revision_cleanup", "render:project:delete"],
+]);
+
 it("documents each MCP tool and its connection support", () => {
   const local = new Set([
     ...registeredTools("apps/mcp-server/src/server.ts"),
@@ -106,8 +119,21 @@ it("documents each MCP tool and its connection support", () => {
     expect(remoteMark === "○", name).toBe(remote.includes(name));
     expect(publicMark === "○", name).toBe(asRendererTool(name) !== undefined);
     if (policy?.scope) expect(note, name).toContain(`\`${policy.scope}\``);
-    const localScope = localScopes.get(name);
-    if (localScope) expect(note, name).toContain(`\`${localScope}\``);
+    const localScope = localProjectScopes.get(name) ?? localScopes.get(name);
+    if (localScope) expect(note, name).toContain(`Local \`${localScope}\``);
+  }
+  for (const [name, scope] of localProjectScopes) {
+    expect(local.has(name)).toBe(true);
+    for (const path of ["docs/public/mcp.md", "docs/public/en/mcp.md"]) {
+      // Find the tool name and scope in the same row within the Local tools table.
+      const toolTable = read(path)
+        .split(/## Local MCP(?:のツール| tools)/)[1]
+        ?.split("\n## ")[0];
+      const row = toolTable
+        ?.split("\n")
+        .find((line) => line.startsWith("|") && line.includes(`\`${name}\``));
+      expect(row, name).toContain(`\`${scope}\``);
+    }
   }
 });
 

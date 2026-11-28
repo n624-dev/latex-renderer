@@ -724,20 +724,12 @@ export class RemoteRenderService {
     history?: { revisionId: string; offset?: number | undefined },
   ) {
     requireScope(identity.scopes, "mcp:read");
-    const state = new ProjectDocumentState(this.database);
-    const actor = this.projectActor(identity);
-    return {
-      ...state.get(actor, projectId, conditionsVersion),
-      revisionChanges:
-        history === undefined
-          ? null
-          : state.revisionChanges(
-              actor,
-              projectId,
-              history.revisionId,
-              history.offset ?? 0,
-            ),
-    };
+    return new ProjectDocumentState(this.database).getWithHistory(
+      this.projectActor(identity),
+      projectId,
+      conditionsVersion,
+      history,
+    );
   }
 
   updateProjectDocumentConditions(

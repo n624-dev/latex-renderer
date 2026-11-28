@@ -2293,6 +2293,51 @@ export function rendererMcpResourceDefinitions(
 export const rendererAuthoringRequestBytes = 8 * 1024 * 1024;
 
 export const rendererApiAuthoringRoutes = {
+  get_project_document_state: {
+    method: "GET",
+    resource: "project",
+    suffix: "/document-state",
+  },
+  update_project_document_conditions: {
+    method: "PATCH",
+    resource: "project",
+    suffix: "/document-state/conditions",
+  },
+  adopt_project_revision: {
+    method: "POST",
+    resource: "project",
+    suffix: "/document-state/adoption",
+  },
+  list_project_pdf_reviews: {
+    method: "GET",
+    resource: "project",
+    suffix: "/pdf-reviews",
+  },
+  record_project_pdf_review: {
+    method: "POST",
+    resource: "project",
+    suffix: "/pdf-reviews",
+  },
+  get_project_storage_usage: {
+    method: "GET",
+    resource: "project",
+    suffix: "/storage-usage",
+  },
+  protect_project_revision: {
+    method: "POST",
+    resource: "project",
+    suffix: "/revision-protection",
+  },
+  plan_project_revision_cleanup: {
+    method: "POST",
+    resource: "project",
+    suffix: "/revision-cleanup/plan",
+  },
+  apply_project_revision_cleanup: {
+    method: "POST",
+    resource: "project",
+    suffix: "/revision-cleanup/apply",
+  },
   get_project_draft: { method: "GET", resource: "project", suffix: "/draft" },
   get_project_draft_file: {
     method: "GET",

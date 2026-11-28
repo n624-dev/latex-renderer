@@ -79,6 +79,46 @@
       "description": "Queue a render for an exact saved revision."
     },
     {
+      "name": "get_project_revision_downloads",
+      "description": "Save the Source ZIP for an exact saved revision locally and return its path and SHA-256."
+    },
+    {
+      "name": "get_project_document_state",
+      "description": "Read document conditions, the adopted revision, and optional revision history."
+    },
+    {
+      "name": "update_project_document_conditions",
+      "description": "Replace document conditions at the expected version."
+    },
+    {
+      "name": "adopt_project_revision",
+      "description": "Set or clear the adopted revision."
+    },
+    {
+      "name": "list_project_pdf_reviews",
+      "description": "List recorded checks for exact Project PDFs."
+    },
+    {
+      "name": "record_project_pdf_review",
+      "description": "Record checks for an exact saved revision and PDF."
+    },
+    {
+      "name": "get_project_storage_usage",
+      "description": "Read Project storage use and the account quota."
+    },
+    {
+      "name": "protect_project_revision",
+      "description": "Set or clear explicit protection for a saved revision."
+    },
+    {
+      "name": "plan_project_revision_cleanup",
+      "description": "Plan cleanup of selected saved revisions."
+    },
+    {
+      "name": "apply_project_revision_cleanup",
+      "description": "Apply a confirmed cleanup plan to selected saved revisions."
+    },
+    {
       "name": "list_project_revision_files",
       "description": "List files in a saved project revision with an explicitly authorized key."
     },

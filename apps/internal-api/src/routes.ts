@@ -9,6 +9,7 @@ import {
 } from "@latex-renderer/contracts";
 import { ProjectOperations } from "@latex-renderer/database";
 import {
+  downloadProjectSource,
   RendererSavedSources,
   RendererSourceStore,
 } from "@latex-renderer/renderer-core";
@@ -201,6 +202,23 @@ export function createInternalV1Router(deps: InternalApiDependencies): Hono {
         query.path,
         query.offset,
       ),
+    );
+  });
+  r.get("/projects/:id/revisions/:revisionId/source.zip", (c) => {
+    const owner = actor(c.req.header("Authorization"), "render:project:read");
+    if (deps.storageRoot === undefined)
+      throw new AppError(
+        "AUTHORING_UNAVAILABLE",
+        "Authoring operations are unavailable",
+        503,
+      );
+    return downloadProjectSource(
+      deps.database,
+      deps.storageRoot,
+      owner,
+      parse(projectId, c.req.param("id")),
+      parse(revisionId, c.req.param("revisionId")),
+      c.req.raw.signal,
     );
   });
   r.post("/projects/:id/revisions", async (c) => {

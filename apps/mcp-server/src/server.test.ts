@@ -1,9 +1,13 @@
+import { readFile, mkdtemp, readdir, rm } from "node:fs/promises";
 import { PassThrough } from "node:stream";
 import { createInterface } from "node:readline";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
-import { AppError } from "@latex-renderer/shared";
+import { AppError, sha256Hex } from "@latex-renderer/shared";
 import {
   MCP_TOOL_NAMES,
+  createMcpOperations,
   type McpOperations,
   type McpToolName,
 } from "@latex-renderer/mcp-core";
@@ -86,6 +90,23 @@ const operations: McpOperations = {
       success: true,
       operation: "download_render_artifacts",
       result: { job, outputDirectory: "/tmp/output", artifacts },
+    }),
+  downloadProjectRevisionSource: () =>
+    Promise.resolve({
+      success: true,
+      operation: "get_project_revision_downloads",
+      result: {
+        projectId,
+        revisionId,
+        outputDirectory: ".render",
+        sourceZip: {
+          path: "source.zip",
+          filename: "source.zip",
+          mimeType: "application/zip",
+          size: 10,
+          sha256: "e".repeat(64),
+        },
+      },
     }),
   cancelRender: () =>
     Promise.resolve({
@@ -178,6 +199,293 @@ afterEach(async () => {
 });
 
 describe("local MCP v2", () => {
+  it("uses the shared state and cleanup tools through the render-key API", async () => {
+    const origin = "https://renderer.example.test";
+    const client = new RendererClient(origin, secret);
+    const connection = await connect(
+      createMcpOperations({ clientFactory: () => Promise.resolve(client) }),
+    );
+    const listed = asRecordArray(
+      asRecord(await connection.request("tools/list", {})).tools,
+    );
+    const manifest = asRecord(
+      JSON.parse(
+        await readFile(
+          new URL("../../../client/mcpb/manifest.json", import.meta.url),
+          "utf8",
+        ),
+      ),
+    );
+    expect(listed).toHaveLength(53);
+    expect(listed.map(({ name }) => String(name)).sort()).toEqual(
+      asRecordArray(manifest.tools)
+        .map(({ name }) => String(name))
+        .sort(),
+    );
+    expect(
+      listed.find(({ name }) => name === "apply_project_revision_cleanup"),
+    ).toMatchObject({
+      annotations: { destructiveHint: true },
+    });
+    const adopted = { projectId, adoptedRevisionId: revisionId };
+    const history = { revisionId, offset: 1 };
+    const changes = { expectedVersion: 1, entries: [] };
+    const reviewInput = {
+      revisionId,
+      jobId,
+      pdfSha256: "f".repeat(64),
+      conditionsVersion: 1,
+      guideVersion: null,
+      checks: [{ type: "visual", status: "not_checked" }],
+    };
+    const review = {
+      ...reviewInput,
+      projectId,
+      id: "review_fixture",
+      runtimeDigest: null,
+      createdAt: job.createdAt,
+    };
+    const selection = { revisionIds: [revisionId] };
+    const planHash = "b".repeat(64);
+    const usage = {
+      projectId,
+      measuredAt: job.createdAt,
+      physicalBytes: null,
+      project: {
+        sourceCount: 1,
+        sourceBytes: 10,
+        outputBytes: 0,
+        reservedOutputBytes: 0,
+      },
+      user: {
+        sourceBytes: 10,
+        jobAndReservationBytes: 0,
+        previewReservationBytes: 0,
+        sourceTreeBytes: null,
+        draftCacheBytes: 0,
+        totalBytes: 10,
+        quotaBytes: 100,
+      },
+    };
+    const cases = [
+      {
+        name: "get_project_document_state",
+        input: { conditionsVersion: 1, history },
+        method: "GET",
+        path:
+          "/document-state?" +
+          new URLSearchParams({
+            conditionsVersion: "1",
+            history: JSON.stringify(history),
+          }).toString(),
+        result: {
+          ...adopted,
+          conditions: { version: 1, entries: [], createdAt: job.createdAt },
+          revisionChanges: { revisionId, items: [], nextOffset: null },
+        },
+      },
+      {
+        name: "update_project_document_conditions",
+        input: changes,
+        method: "PATCH",
+        path: "/document-state/conditions",
+        result: { projectId, version: 2, entries: [], changed: true },
+      },
+      {
+        name: "adopt_project_revision",
+        input: { revisionId, expectedRevisionId: null },
+        method: "POST",
+        path: "/document-state/adoption",
+        result: adopted,
+      },
+      {
+        name: "list_project_pdf_reviews",
+        input: { offset: 1 },
+        method: "GET",
+        path: "/pdf-reviews?offset=1",
+        result: { projectId, items: [review], nextOffset: null },
+      },
+      {
+        name: "record_project_pdf_review",
+        input: reviewInput,
+        method: "POST",
+        path: "/pdf-reviews",
+        result: { review },
+      },
+      {
+        name: "get_project_storage_usage",
+        input: {},
+        method: "GET",
+        path: "/storage-usage",
+        result: usage,
+      },
+      {
+        name: "protect_project_revision",
+        input: { revisionId, protected: true },
+        method: "POST",
+        path: "/revision-protection",
+        result: { projectId, revisionId, protected: true },
+      },
+      {
+        name: "plan_project_revision_cleanup",
+        input: selection,
+        method: "POST",
+        path: "/revision-cleanup/plan",
+        result: {
+          projectId,
+          planHash,
+          estimatedSourceBytes: 10,
+          entries: [
+            {
+              revisionId,
+              sourceId,
+              reasons: [],
+              sourceBytes: 10,
+              references: 1,
+            },
+          ],
+        },
+      },
+      {
+        name: "apply_project_revision_cleanup",
+        input: { ...selection, planHash },
+        method: "POST",
+        path: "/revision-cleanup/apply",
+        result: { projectId, removed: [revisionId], estimatedSourceBytes: 10 },
+      },
+    ];
+    const fetch = vi.spyOn(globalThis, "fetch");
+    try {
+      for (const { name, input, method, path, result } of cases) {
+        fetch.mockResolvedValueOnce(Response.json(result));
+        await expect(
+          connection.request("tools/call", {
+            name,
+            arguments: { projectId, ...input },
+          }),
+        ).resolves.toMatchObject({
+          structuredContent: { success: true, operation: name, result },
+        });
+        const [url, init] = fetch.mock.lastCall ?? [];
+        expect(url).toBeInstanceOf(URL);
+        expect(url instanceof URL && url.href).toBe(
+          `${origin}/api/v1/projects/${projectId}${path}`,
+        );
+        expect(init?.method).toBe(method);
+        expect(new Headers(init?.headers).get("Authorization")).toBe(
+          `Bearer ${secret}`,
+        );
+        if (method === "GET") {
+          expect(init?.body).toBeUndefined();
+        } else {
+          expect(
+            typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
+          ).toEqual(input);
+        }
+      }
+      fetch.mockResolvedValueOnce(
+        Response.json(
+          {
+            error: {
+              code: "DOCUMENT_CONDITIONS_CONFLICT",
+              message: "Conditions changed",
+              currentVersion: 3,
+            },
+          },
+          { status: 409 },
+        ),
+      );
+      await expect(
+        connection.request("tools/call", {
+          name: "update_project_document_conditions",
+          arguments: { projectId, ...changes },
+        }),
+      ).resolves.toMatchObject({
+        isError: true,
+        structuredContent: {
+          error: { code: "DOCUMENT_CONDITIONS_CONFLICT", currentVersion: 3 },
+        },
+      });
+    } finally {
+      fetch.mockRestore();
+    }
+  });
+
+  it("saves a verified revision ZIP under an allowed root and preserves it on corruption", async () => {
+    const root = await mkdtemp(join(tmpdir(), "local-mcp-revision-download-"));
+    const client = new RendererClient("https://renderer.example.test", secret);
+    const connection = await connect(
+      createMcpOperations({
+        allowedRoots: [root],
+        clientFactory: () => Promise.resolve(client),
+      }),
+    );
+    const filename = `${revisionId}.zip`;
+    const outputDirectory = join(root, "output");
+    const path = join(outputDirectory, filename);
+    const archive = Buffer.from(
+      "504b0506000000000000000000000000000000000000",
+      "hex",
+    );
+    const sha256 = sha256Hex(archive);
+    const headers = {
+      "Content-Type": "application/zip",
+      "X-Source-Zip-Size": String(archive.length),
+      ETag: `"${sha256}"`,
+    };
+    const fetch = vi.spyOn(globalThis, "fetch");
+    const call = (output: string) =>
+      connection.request("tools/call", {
+        name: "get_project_revision_downloads",
+        arguments: { projectId, revisionId, outputDirectory: output },
+      });
+    try {
+      await expect(call(tmpdir())).resolves.toMatchObject({
+        isError: true,
+        structuredContent: { error: { code: "OUTSIDE_ALLOWED_ROOT" } },
+      });
+      expect(fetch).not.toHaveBeenCalled();
+      fetch.mockResolvedValueOnce(new Response(archive, { headers }));
+      await expect(call(outputDirectory)).resolves.toMatchObject({
+        structuredContent: {
+          success: true,
+          result: {
+            projectId,
+            revisionId,
+            outputDirectory,
+            sourceZip: {
+              path,
+              filename,
+              size: archive.length,
+              sha256,
+              mimeType: "application/zip",
+            },
+          },
+        },
+      });
+      const [url, init] = fetch.mock.lastCall ?? [];
+      expect(url instanceof URL && url.href).toBe(
+        `https://renderer.example.test/api/v1/projects/${projectId}/revisions/${revisionId}/source.zip`,
+      );
+      expect(new Headers(init?.headers).get("Authorization")).toBe(
+        `Bearer ${secret}`,
+      );
+      await expect(readFile(path)).resolves.toEqual(archive);
+      fetch.mockResolvedValueOnce(
+        new Response(Buffer.alloc(archive.length), { headers }),
+      );
+      await expect(call(outputDirectory)).resolves.toMatchObject({
+        isError: true,
+        structuredContent: { error: { code: "ARTIFACT_INTEGRITY_MISMATCH" } },
+      });
+      await expect(readFile(path)).resolves.toEqual(archive);
+      await expect(readdir(outputDirectory)).resolves.toEqual([filename]);
+    } finally {
+      fetch.mockRestore();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("uses the scoped Gateway routes for draft and PDF operations and returns recovery details", async () => {
     const client = new RendererClient("https://renderer.example.test/", secret);
     const pdfSha256 = "1".repeat(64);
@@ -604,6 +912,7 @@ describe("local MCP v2", () => {
       render_project: { directory: "/tmp/project", entrypoint: "main.tex" },
       get_render_status: { jobId },
       download_render_artifacts: { jobId, outputDirectory: "/tmp/output" },
+      get_project_revision_downloads: { projectId, revisionId },
       cancel_render: { jobId },
       delete_render: { jobId },
       list_projects: {},
