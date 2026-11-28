@@ -490,6 +490,7 @@ describe.runIf(ageAvailable && linuxDescriptorAccess)(
         BACKUP_UPLOAD_EXECUTABLE: "/bin/false",
       });
       expect(result.status).not.toBe(0);
+      expect(result.stdout).toBe("");
       expect(readdirSync(fixture.backupDirectory)).toHaveLength(1);
       const restored = runRestore(fixture, backupArchive(fixture));
       expect(restored.status, restored.stderr).toBe(0);
@@ -530,7 +531,7 @@ describe.runIf(ageAvailable && linuxDescriptorAccess)(
       }
       const backup = runBackup(fixture);
       expect(backup.status, backup.stderr).toBe(0);
-      expect(JSON.parse(backup.stdout)).toMatchObject({
+      expect(backupEvents(backup.stdout)[0]).toMatchObject({
         projectSourceCount: 2,
         projectRevisionCount: 3,
       });
@@ -680,7 +681,7 @@ describe.runIf(ageAvailable && linuxDescriptorAccess)(
       );
       const backup = runBackup(fixture);
       expect(backup.status, backup.stderr).toBe(0);
-      expect(JSON.parse(backup.stdout)).toMatchObject({
+      expect(backupEvents(backup.stdout)[0]).toMatchObject({
         projectSourceCount: 0,
         projectRevisionCount: 0,
       });
@@ -927,11 +928,17 @@ if (process.argv.includes("-tf") || process.argv.includes("-tvf")) {
       const backup = runBackup(fixture);
       expect(backup.status, backup.stderr).toBe(0);
       expect(readFileSync(fixture.databasePath)).toEqual(originalDatabase);
-      expect(JSON.parse(backup.stdout)).toMatchObject({
+      const events = backupEvents(backup.stdout);
+      expect(events).toHaveLength(2);
+      expect(events[0]).toMatchObject({
         event: "backup.completed",
         projectSourceCount: 1,
         projectRevisionCount: 1,
       });
+      expect(events[1]).toHaveProperty(
+        "event",
+        expect.stringMatching(/^backup\.retention(?:_skipped)?$/),
+      );
       rmSync(fixture.storageRoot, { recursive: true, force: true });
 
       const archive = join(
@@ -1077,6 +1084,13 @@ function runBackup(
       ...environment,
     },
   });
+}
+
+function backupEvents(stdout: string): unknown[] {
+  return stdout
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as unknown);
 }
 
 function backupArchive(fixture: ReturnType<typeof backupFixture>) {
