@@ -40,14 +40,14 @@ since: "v1.0.0"
 
 > [!DETAILS] Инструменты и сведения для разработчиков
 >
-> | Категория | Инструменты |
-> | --- | --- |
-> | Профиль | `get_profile` |
-> | Исходные файлы | `create_source`, `update_source_file`, `delete_source_file`, `begin_source_upload`, `upload_source_chunk`, `finalize_source_upload`, `create_source_ref` |
+> | Категория           | Инструменты                                                                                                                                                                                                           |
+> | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+> | Профиль             | `get_profile`                                                                                                                                                                                                         |
+> | Исходные файлы      | `create_source`, `update_source_file`, `delete_source_file`, `begin_source_upload`, `upload_source_chunk`, `finalize_source_upload`, `create_source_ref`                                                              |
 > | Сохранённые проекты | `list_projects`, `get_project`, `get_project_revision_jobs`, `create_project`, `rename_project`, `delete_project`, `attach_project_revision`, `update_project_file`, `delete_project_file`, `render_project_revision` |
-> | Рендеринг | `create_render`, `retry_render`, `retry_svg_render`, `get_render_status`, `cancel_render`, `delete_render` |
-> | Диагностика | `get_render_diagnostics`, `get_render_preview`, `get_render_artifacts` |
-> | Среда | `get_renderer_capabilities`, `check_packages`, `search_packages`, `check_fonts`, `search_fonts` |
+> | Рендеринг           | `create_render`, `retry_render`, `retry_svg_render`, `get_render_status`, `cancel_render`, `delete_render`                                                                                                            |
+> | Диагностика         | `get_render_diagnostics`, `get_render_preview`, `get_render_artifacts`                                                                                                                                                |
+> | Среда               | `get_renderer_capabilities`, `check_packages`, `search_packages`, `check_fonts`, `search_fonts`                                                                                                                       |
 >
 > - **Идентификация и разрешения.** `get_profile` возвращает только стабильный непрозрачный идентификатор вошедшего пользователя. Он сохраняется после обновления токена или повторного подключения и не содержит почты или отображаемого имени. Каждый инструмент объявляет свои области OAuth в списке и проверяет их при вызове.
 > - **Подготовка исходников и ограничения**
@@ -87,18 +87,24 @@ claude mcp add --scope user latex-renderer -- latex-renderer-mcp
 
 ## Инструменты Local MCP {#local-mcpのツール}
 
-| Инструмент | Операция |
-| --- | --- |
-| `upload_source` | Подготовить папку или ZIP в качестве исходников |
-| `create_render_job` | Создать задание из `sourceId + entrypoint` и при необходимости запросить SVG в `outputs` |
-| `render_project` | Подготовить исходники, преобразовать и скачать за один вызов, при необходимости запросив SVG в `outputs` |
-| `list_projects` / `get_project` / `get_project_revision_jobs` | Просмотреть проекты, ревизии и историю заданий |
-| `create_project` / `rename_project` / `delete_project` | Управлять сохранёнными проектами |
-| `attach_project_revision` / `render_project_revision` | Сохранить загруженные исходники и создать задание из фиксированной ревизии |
-| `get_render_status` | Проверить состояние задания |
-| `download_render_artifacts` | Скачать PDF, SVG, журналы и структурированные ошибки |
-| `cancel_render` | Отменить активное задание |
-| `delete_render` | Удалить завершённое задание |
+| Инструмент                                                                                                 | Операция                                                                                                                    |
+| ---------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `upload_source`                                                                                            | Подготовить папку или ZIP в качестве исходников                                                                             |
+| `create_render_job`                                                                                        | Создать задание из `sourceId + entrypoint` и при необходимости запросить SVG в `outputs`                                    |
+| `render_project`                                                                                           | Подготовить исходники, преобразовать и скачать за один вызов, при необходимости запросив SVG в `outputs`                    |
+| `list_projects` / `get_project` / `get_project_revision_jobs`                                              | Просмотреть проекты, ревизии и историю заданий                                                                              |
+| `create_project` / `rename_project` / `delete_project`                                                     | Управлять сохранёнными проектами                                                                                            |
+| `attach_project_revision` / `render_project_revision`                                                      | Сохранить загруженные исходники и создать задание из фиксированной ревизии                                                  |
+| `get_render_status`                                                                                        | Проверить состояние задания                                                                                                 |
+| `get_renderer_capabilities` / `list_authoring_profiles`                                                    | Просматривать среду рендеринга и профили подготовки документов (`render:create`)                                            |
+| `check_packages` / `search_packages` / `check_fonts` / `search_fonts`                                      | Проверять или искать пакеты и шрифты (`render:create`)                                                                      |
+| `check_document_requirements` / `probe_document_requirements`                                              | Проверять требования документа или ставить пробный рендеринг в очередь (`render:create`)                                    |
+| `retry_render` / `retry_svg_render`                                                                        | Повторять всё задание или только этап SVG (`render:create`)                                                                 |
+| `get_render_diagnostics` / `read_render_log` / `get_render_manifest`                                       | Читать диагностику, фрагменты журнала и манифест своего задания (`render:read:own`)                                         |
+| `get_render_preview_crop` / `get_render_preview_sheet` / `locate_render_source` / `compare_render_quality` | Получать фрагменты и обзоры страниц PDF, искать позиции через SyncTeX или сравнивать отчёты проверки (`render:pdf:inspect`) |
+| `download_render_artifacts`                                                                                | Скачать PDF, SVG, журналы и структурированные ошибки                                                                        |
+| `cancel_render`                                                                                            | Отменить активное задание                                                                                                   |
+| `delete_render`                                                                                            | Удалить завершённое задание                                                                                                 |
 
 > [!DETAILS] Правила работы с инструментами Local MCP
 >

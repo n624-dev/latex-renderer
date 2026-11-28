@@ -40,14 +40,14 @@ Send dokumentteksten til assistenten for at generere PDF og SVG, diagnosticere f
 
 > [!DETAILS] Værktøjer og oplysninger til udviklere
 >
-> | Kategori | Værktøjer |
-> | --- | --- |
-> | Profil | `get_profile` |
-> | Kilde | `create_source`, `update_source_file`, `delete_source_file`, `begin_source_upload`, `upload_source_chunk`, `finalize_source_upload`, `create_source_ref` |
+> | Kategori        | Værktøjer                                                                                                                                                                                                             |
+> | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+> | Profil          | `get_profile`                                                                                                                                                                                                         |
+> | Kilde           | `create_source`, `update_source_file`, `delete_source_file`, `begin_source_upload`, `upload_source_chunk`, `finalize_source_upload`, `create_source_ref`                                                              |
 > | Gemte projekter | `list_projects`, `get_project`, `get_project_revision_jobs`, `create_project`, `rename_project`, `delete_project`, `attach_project_revision`, `update_project_file`, `delete_project_file`, `render_project_revision` |
-> | Rendering | `create_render`, `retry_render`, `retry_svg_render`, `get_render_status`, `cancel_render`, `delete_render` |
-> | Kontrol | `get_render_diagnostics`, `get_render_preview`, `get_render_artifacts` |
-> | Miljø | `get_renderer_capabilities`, `check_packages`, `search_packages`, `check_fonts`, `search_fonts` |
+> | Rendering       | `create_render`, `retry_render`, `retry_svg_render`, `get_render_status`, `cancel_render`, `delete_render`                                                                                                            |
+> | Kontrol         | `get_render_diagnostics`, `get_render_preview`, `get_render_artifacts`                                                                                                                                                |
+> | Miljø           | `get_renderer_capabilities`, `check_packages`, `search_packages`, `check_fonts`, `search_fonts`                                                                                                                       |
 >
 > - **Identitet og rettigheder.** `get_profile` returnerer kun et stabilt, uigennemsigtigt ID for den godkendte bruger. Det er uændret ved tokenfornyelse og genforbindelse og indeholder ikke mailadresse eller vist navn. Hvert værktøj angiver sine OAuth-adgangsomfang i listen og kontrollerer dem ved udførelse.
 > - **Oprettelse af input og grænser**
@@ -87,18 +87,24 @@ Brug `n624-latex setup repair` til at reparere uændrede registreringer oprettet
 
 ## Værktøjer i Local MCP {#local-mcpのツール}
 
-| Værktøj | Handling |
-| --- | --- |
-| `upload_source` | Klargør en mappe eller et ZIP-arkiv som input |
-| `create_render_job` | Opret et job fra `sourceId + entrypoint` med mulighed for at anmode om SVG i `outputs` |
-| `render_project` | Klargør input, konvertér og hent i ét kald, med valgfri SVG i `outputs` |
-| `list_projects` / `get_project` / `get_project_revision_jobs` | Læs projekter, revisioner og jobhistorik |
-| `create_project` / `rename_project` / `delete_project` | Administrer gemte projekter |
-| `attach_project_revision` / `render_project_revision` | Gem uploadet input, og opret et job fra en fast revision |
-| `get_render_status` | Kontroller jobstatus |
-| `download_render_artifacts` | Hent PDF, SVG, logfiler og strukturerede fejl |
-| `cancel_render` | Annuller et aktivt job |
-| `delete_render` | Slet et afsluttet job |
+| Værktøj                                                                                                    | Handling                                                                                                                      |
+| ---------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `upload_source`                                                                                            | Klargør en mappe eller et ZIP-arkiv som input                                                                                 |
+| `create_render_job`                                                                                        | Opret et job fra `sourceId + entrypoint` med mulighed for at anmode om SVG i `outputs`                                        |
+| `render_project`                                                                                           | Klargør input, konvertér og hent i ét kald, med valgfri SVG i `outputs`                                                       |
+| `list_projects` / `get_project` / `get_project_revision_jobs`                                              | Læs projekter, revisioner og jobhistorik                                                                                      |
+| `create_project` / `rename_project` / `delete_project`                                                     | Administrer gemte projekter                                                                                                   |
+| `attach_project_revision` / `render_project_revision`                                                      | Gem uploadet input, og opret et job fra en fast revision                                                                      |
+| `get_render_status`                                                                                        | Kontroller jobstatus                                                                                                          |
+| `get_renderer_capabilities` / `list_authoring_profiles`                                                    | Se renderingsmiljøet og forfatterprofiler (`render:create`)                                                                   |
+| `check_packages` / `search_packages` / `check_fonts` / `search_fonts`                                      | Kontrollér eller søg efter pakker og skrifttyper (`render:create`)                                                            |
+| `check_document_requirements` / `probe_document_requirements`                                              | Kontrollér dokumentkrav eller sæt en prøve i kø (`render:create`)                                                             |
+| `retry_render` / `retry_svg_render`                                                                        | Prøv hele jobbet eller kun SVG-trinnet igen (`render:create`)                                                                 |
+| `get_render_diagnostics` / `read_render_log` / `get_render_manifest`                                       | Læs diagnostik, logudsnit og manifest for et eget job (`render:read:own`)                                                     |
+| `get_render_preview_crop` / `get_render_preview_sheet` / `locate_render_source` / `compare_render_quality` | Beskær eller saml PDF-forhåndsvisninger, slå positioner op med SyncTeX, eller sammenlign PDF-rapporter (`render:pdf:inspect`) |
+| `download_render_artifacts`                                                                                | Hent PDF, SVG, logfiler og strukturerede fejl                                                                                 |
+| `cancel_render`                                                                                            | Annuller et aktivt job                                                                                                        |
+| `delete_render`                                                                                            | Slet et afsluttet job                                                                                                         |
 
 > [!DETAILS] Regler for Local MCP-værktøjer
 >
