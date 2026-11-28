@@ -35,6 +35,8 @@ n624-latex auth status
 n624-latex auth logout
 ```
 
+`auth status` は、実際に使う接続先のオリジンと認証情報の取得元（保存済みプロファイル名、環境変数 `LATEX_RENDER_API_KEY`、または「なし」）を表示します。`--json` でも `origin` と `credentialSource` を確認できます。
+
 - 接続先を明示的に選ばない場合、環境変数 `LATEX_RENDER_API_KEY` が保存されたキーよりも優先されます。
 - `logout` はローカルの保存済みキーだけを削除します。環境変数の解除や、サーバー側での API キー失効はそれぞれ別の操作です。
 

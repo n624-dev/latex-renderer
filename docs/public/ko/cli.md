@@ -35,6 +35,8 @@ n624-latex auth status
 n624-latex auth logout
 ```
 
+`auth status`는 실제 연결 오리진과 자격 증명의 출처를 표시합니다. 출처는 저장된 프로필 이름, 환경 변수 `LATEX_RENDER_API_KEY` 또는 없음입니다. `--json`에서는 `origin`과 `credentialSource` 필드를 확인하세요.
+
 - 환경 변수 `LATEX_RENDER_API_KEY`가 설정되어 있으면 로컬에 저장한 키보다 우선합니다.
 - `logout`은 로컬에 저장된 키만 지웁니다. 환경 변수를 해제하거나 서버의 키를 폐기하는 작업은 별도로 수행합니다.
 

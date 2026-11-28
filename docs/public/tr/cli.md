@@ -35,6 +35,8 @@ n624-latex auth status
 n624-latex auth logout
 ```
 
+`auth status` kullanılan sunucu adresini ve kimlik bilgisinin kaynağını gösterir: kayıtlı profil adı, `LATEX_RENDER_API_KEY` ortam değişkeni veya kimlik bilgisinin bulunmadığı. `--json` ile `origin` ve `credentialSource` alanlarını görebilirsiniz.
+
 - `LATEX_RENDER_API_KEY` ortam değişkeni ayarlanmışsa yerel anahtara göre önceliklidir.
 - `logout` yalnızca yerelde kayıtlı anahtarı kaldırır. Gerekiyorsa ortam değişkenini ayrıca kaldırın veya sunucuda anahtarı iptal edin.
 

@@ -35,6 +35,8 @@ n624-latex auth status
 n624-latex auth logout
 ```
 
+`auth status` viser serveradressen som brukes og kilden til påloggingsinformasjonen: navnet på en lagret profil, miljøvariabelen `LATEX_RENDER_API_KEY` eller ingen kilde. Med `--json` får du feltene `origin` og `credentialSource`.
+
 - Hvis miljøvariabelen `LATEX_RENDER_API_KEY` er satt, har den forrang foran den lokale nøkkelen.
 - `logout` fjerner bare den lokalt lagrede nøkkelen. Fjern miljøvariabelen eller trekk nøkkelen tilbake på serveren separat ved behov.
 

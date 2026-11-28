@@ -1115,7 +1115,7 @@ describe(`Source pipeline HTTP/DB/Worker E2E (${realPipelineImage === undefined 
       "SOURCE_FILE_SIZE",
     ],
   ] as const)(
-    "rejects an archive over its %s limit and releases HTTP upload claims",
+    "rejects an archive over its %s limit and clears HTTP and MCP upload reservations",
     async (boundary, texts, code, directCode) => {
       const limits = {
         maxUploadBytes: 1024,
@@ -1187,6 +1187,13 @@ describe(`Source pipeline HTTP/DB/Worker E2E (${realPipelineImage === undefined 
         await expect(
           f.client.uploadSource(source, path, archive.length),
         ).rejects.toMatchObject({ code });
+        expect(f.database.sources.get(source.sourceId)).toBeUndefined();
+        expect(
+          f.database.raw.prepare("SELECT * FROM source_upload_nonces").all(),
+        ).toEqual([]);
+        await expect(
+          readdir(join(f.storage, "sources", source.sourceId)),
+        ).rejects.toMatchObject({ code: "ENOENT" });
         await expect(
           f.client.createSourceJob(source.sourceId, "main.tex", randomUUID()),
         ).rejects.toMatchObject({
@@ -1201,29 +1208,47 @@ describe(`Source pipeline HTTP/DB/Worker E2E (${realPipelineImage === undefined 
           f.client.upload(legacy, path, archive.length),
         ).rejects.toMatchObject({ code });
         const job = defined(f.database.jobs.get(legacy.jobId));
-        expect(job.status).toBe("reserved");
+        expect(job).toMatchObject({ status: "rejected", error_code: code });
         expect(
           f.database.raw.prepare("SELECT id, status FROM jobs").all(),
-        ).toEqual([{ id: legacy.jobId, status: "reserved" }]);
-        for (const id of [source.sourceId, defined(job.source_id)]) {
-          const row = defined(f.database.sources.get(id));
-          expect(row.status).toBe("reserved");
-          expect(
-            await readdir(dirname(join(f.storage, row.storage_key))),
-          ).toEqual([]);
-        }
-        // A retryable reservation stays until expiry, but the failed writer has no claim.
-        for (const table of ["source_upload_nonces", "used_nonces"]) {
-          expect(
-            f.database.raw
-              .prepare(
-                `SELECT state, claim_owner, claim_expires_at FROM ${table}`,
-              )
-              .all(),
-          ).toEqual([
-            { state: "released", claim_owner: null, claim_expires_at: null },
-          ]);
-        }
+        ).toEqual([{ id: legacy.jobId, status: "rejected" }]);
+        const row = defined(f.database.sources.get(defined(job.source_id)));
+        expect(row.status).toBe("deleted");
+        await expect(
+          readdir(dirname(join(f.storage, row.storage_key))),
+        ).rejects.toMatchObject({ code: "ENOENT" });
+        expect(
+          f.database.raw
+            .prepare(
+              "SELECT state, claim_owner, claim_expires_at FROM used_nonces",
+            )
+            .all(),
+        ).toEqual([
+          { state: "released", claim_owner: null, claim_expires_at: null },
+        ]);
+        const upload = await f.renders.beginSourceUpload(
+          identity,
+          archive.length,
+          hash,
+        );
+        await f.renders.uploadSourceChunk(
+          identity,
+          upload.uploadId,
+          0,
+          archive.toString("base64"),
+        );
+        const uploadRoot = join(f.storage, "sources", upload.uploadId);
+        expect(await readdir(join(uploadRoot, ".chunks"))).toEqual(["0"]);
+        await expect(
+          f.renders.finalizeSourceUpload(identity, upload.uploadId),
+        ).rejects.toMatchObject({ code });
+        expect(f.database.sources.get(upload.sourceId)).toBeUndefined();
+        await expect(readdir(uploadRoot)).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        expect(await readdir(f.storage)).toEqual(["sources"]);
+        expect(f.database.jobs.countActiveForUser(identity.userId)).toBe(0);
+        expect(f.database.jobs.storageUsageForUser(identity.userId)).toBe(0);
       } finally {
         await f.close();
       }

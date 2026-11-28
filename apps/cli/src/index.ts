@@ -28,6 +28,7 @@ import { stripVTControlCharacters } from "node:util";
 import {
   AppError,
   CLIENT_VERSION,
+  clientRendererBaseUrl,
 } from "@latex-renderer/shared";
 import {
   DEFAULT_DISTRIBUTION_URI,
@@ -152,11 +153,55 @@ authLogin.action(async (options: { url?: string }) => {
 });
 
 auth.command("status").action(async () => {
-  await clientConnections().resolve(activeProfile());
-  emitSuccess("auth.status", { configured: true }, () => {
-    process.stdout.write(humanText("credentialIsConfigured") + "\n");
-  });
+  try {
+    const { origin, credentialSource, name } =
+      await clientConnections().resolve(activeProfile());
+    const environmentVariable = "LATEX_RENDER_API_KEY";
+    const result = {
+      configured: true,
+      origin,
+      credentialSource,
+      ...(credentialSource === "profile"
+        ? { profile: name }
+        : { environmentVariable }),
+    };
+    emitSuccess("auth.status", result, () => {
+      process.stdout.write(
+        humanText("credentialIsConfigured") +
+          "\n" +
+          humanConnectionStatus(origin, name ?? environmentVariable),
+      );
+    });
+  } catch (error) {
+    if (!(error instanceof AppError) || error.code !== "CREDENTIAL_NOT_FOUND")
+      throw error;
+    const parsed = URL.parse(clientRendererBaseUrl(process.env));
+    const origin =
+      parsed && ["https:", "http:"].includes(parsed.protocol)
+        ? parsed.origin
+        : null;
+    const result = { configured: false, origin, credentialSource: "none" };
+    if (isJsonMode())
+      writeJson({
+        success: false,
+        command: "auth.status",
+        error: normalizeError(error),
+        result,
+      });
+    else
+      process.stderr.write(
+        `${commandName}: ${humanDiagnostic(error.message)}\n` +
+          humanConnectionStatus(origin, humanText("noCredentialSource")),
+      );
+    process.exitCode = 1;
+  }
 });
+
+function humanConnectionStatus(origin: string | null, source: string): string {
+  return (
+    humanText("connectionStatus", { origin: origin ?? "—", source }) + "\n"
+  );
+}
 
 auth
   .command("logout")

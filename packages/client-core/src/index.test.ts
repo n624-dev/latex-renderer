@@ -682,39 +682,35 @@ describe("client core", () => {
     },
   );
 
-  // Product gap: the operation deadline waits for preparation to settle even
-  // after aborting its signal. Release the fixture so it can clean up its ZIP.
-  it.fails(
-    "settles at the deadline even when preparation ignores the signal",
-    async () => {
-      const root = await temporaryRoot();
-      const started = deferred<undefined>();
-      const release = deferred<undefined>();
-      const client = Object.assign(new FakeClient([]), {
-        sourceLimits: () => {
-          started.resolve(undefined);
-          return release.promise;
-        },
-      });
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      let finished = false;
-      const result = withClientOperationDeadline(
-        (signal) => renderProject(client, root, { signal }),
-        { timeoutMs: 100 },
-      ).catch((error: unknown) => {
-        finished = true;
-        return error;
-      });
-      await started.promise;
-      try {
-        await vi.advanceTimersByTimeAsync(100);
-        expect(finished).toBe(true);
-      } finally {
-        release.resolve(undefined);
-        await result;
-      }
-    },
-  );
+  it("settles at the deadline even when preparation ignores the signal", async () => {
+    const root = await temporaryRoot();
+    const started = deferred<undefined>();
+    const release = deferred<undefined>();
+    const client = Object.assign(new FakeClient([]), {
+      sourceLimits: () => {
+        started.resolve(undefined);
+        return release.promise;
+      },
+    });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    let finished = false;
+    const result = withClientOperationDeadline(
+      (signal) => renderProject(client, root, { signal }),
+      { timeoutMs: 100 },
+    ).catch((error: unknown) => {
+      finished = true;
+      return error;
+    });
+    await started.promise;
+    try {
+      await vi.advanceTimersByTimeAsync(100);
+      expect(finished).toBe(true);
+      expect(await result).toMatchObject({ code: "CLIENT_OPERATION_TIMEOUT" });
+    } finally {
+      release.resolve(undefined);
+      await result;
+    }
+  });
 
   it("preflights the server's current file count before reserving an upload", async () => {
     const root = await temporaryRoot();

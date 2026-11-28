@@ -224,28 +224,22 @@ it.skipIf(process.platform === "win32")(
   },
 );
 
-// Product gap: Setup diagnoses an environment credential without showing its origin.
-it.fails(
-  "reports the effective origin for an environment-only Setup credential",
-  async () => {
-    const home = await mkdtemp(join(tmpdir(), "renderer-profiles-"));
-    try {
-      const origin = "https://work.example";
-      const diagnostic = await doctorSetup({
-        home,
-        env: {
-          XDG_CONFIG_HOME: home,
-          LATEX_RENDER_BASE_URL: origin,
-          LATEX_RENDER_API_KEY: firstKey,
-        },
-      });
-      const credential = diagnostic.checks.find(
-        ({ id }) => id === "credential",
-      );
-      expect(credential?.message).not.toContain(firstKey);
-      expect(credential?.message).toContain(origin);
-    } finally {
-      await rm(home, { recursive: true, force: true });
-    }
-  },
-);
+it("reports the effective origin for an environment-only Setup credential", async () => {
+  const home = await mkdtemp(join(tmpdir(), "renderer-profiles-"));
+  try {
+    const origin = "https://work.example";
+    const diagnostic = await doctorSetup({
+      home,
+      env: {
+        XDG_CONFIG_HOME: home,
+        LATEX_RENDER_BASE_URL: origin,
+        LATEX_RENDER_API_KEY: firstKey,
+      },
+    });
+    const credential = diagnostic.checks.find(({ id }) => id === "credential");
+    expect(credential?.message).not.toContain(firstKey);
+    expect(credential?.message).toContain(origin);
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});

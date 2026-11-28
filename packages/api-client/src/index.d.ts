@@ -55,7 +55,11 @@ export declare class RendererClient {
         totalFiles: number;
         nextOffset: number | null;
     }>;
-    runAuthoringOperation(operation: RendererApiAuthoringTool, { projectId, jobId, ...parameters }: Readonly<Record<string, unknown>>, options?: RendererRequestOptions): Promise<unknown>;
+    runAuthoringOperation(operation: RendererApiAuthoringTool, input: Readonly<Record<string, unknown>>, options?: RendererRequestOptions): Promise<unknown>;
+    downloadProjectRevisionSource(projectId: string, revisionId: string, destination: string, options?: RendererRequestOptions): Promise<{
+        size: number;
+        sha256: string;
+    }>;
     getProjectRevisionFile(projectId: string, revisionId: string, path: string, options?: RendererRequestOptions & {
         offset?: number | undefined;
     }): Promise<{

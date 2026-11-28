@@ -17,6 +17,8 @@ latex-render jobs get job_...
 latex-render jobs download job_... --output .render
 ```
 
+`n624-latex auth status` shows the effective connection origin and the credential source, including the saved profile name, the environment variable `LATEX_RENDER_API_KEY`, or an indication that no credential is configured. The same information is available with `--json`.
+
 `main.tex` is only the default when no entrypoint is specified. Any valid relative `.tex` path can be selected with `--entrypoint`. For multiple documents from the same directory or ZIP, upload the Source once and reuse its ID:
 
 ```bash

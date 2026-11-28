@@ -50,6 +50,18 @@ export interface ExtractResult {
   paths: readonly string[];
 }
 
+export function isZipLimitError(error: unknown): error is AppError {
+  return (
+    error instanceof AppError &&
+    [
+      "ZIP_TOO_MANY_ENTRIES",
+      "ZIP_TOO_MANY_FILES",
+      "ZIP_FILE_TOO_LARGE",
+      "ZIP_BOMB",
+    ].includes(error.code)
+  );
+}
+
 export async function validateAndExtract(
   zipPath: string,
   destination: string,
