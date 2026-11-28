@@ -182,13 +182,15 @@ describe("Project editor", () => {
         posts = 0,
         replacements = 0,
         retiredPdfAssets = false,
-        locale = "ja";
+        locale = "ja",
+        engine = "lualatex";
+      const engines = ["lualatex", "pdflatex", "xelatex", "platex", "uplatex"];
       let previewGate: Promise<void> | undefined;
       const failedJobStatus = () => (running ? "running" : "failed");
       const draft = () => ({
         version,
         entrypoint: "main.tex",
-        engine: "lualatex",
+        engine,
         files: [{ path: "main.tex" }],
       });
       page.on("requestfailed", (request) =>
@@ -222,11 +224,24 @@ describe("Project editor", () => {
           locale = (request.postDataJSON() as { locale: string }).locale;
           return json({ displayLocale: locale });
         }
-        if (path === "/app/api/v1/environment")
-          return json({ engines: ["lualatex"] });
+        if (path === "/app/api/v1/environment") return json({ engines });
         if (path === "/app/api/v1/projects")
           return json({ items: [], hasMore: false });
-        if (path === draftPath) return json(draft());
+        if (path === draftPath) {
+          if (request.method() === "PATCH") {
+            const change = request.postDataJSON() as {
+              version: number;
+              engine: string;
+              files: unknown[];
+            };
+            expect(change.version).toBe(version);
+            expect(engines).toContain(change.engine);
+            expect(change.files).toEqual([]);
+            engine = change.engine;
+            version++;
+          }
+          return json(draft());
+        }
         if (path === draftPath + "/replace") {
           const input = request.postDataJSON() as { version: number };
           expect(input.version).toBe(version);
@@ -529,6 +544,9 @@ describe("Project editor", () => {
       await page.locator("#editor-template").waitFor({ state: "visible" });
       expect(replacements).toBe(1);
       expect(await page.locator(".cm-content").textContent()).toBe("");
+      expect(
+        await page.locator("#editor-template-japanese").getAttribute("hidden"),
+      ).not.toBeNull();
       await openOptions("settings");
       await page.locator("#editor-auto").uncheck();
       await page.keyboard.press("Escape");
@@ -629,6 +647,36 @@ describe("Project editor", () => {
         resumePreview?.();
       }
       await expect.poll(() => posts, { timeout: 5_000 }).toBe(initialPosts + 2);
+
+      // Compare the advertised engines with the localized blank-document picker.
+      await page.setViewportSize({ width: 1100, height: 810 });
+      for (const [nextEngine, options] of [
+        ["platex", "dvipdfmx"],
+        ["uplatex", "uplatex,dvipdfmx"],
+      ] as const) {
+        page.once("dialog", (dialog) => void dialog.accept());
+        await page.goto(savedRevision);
+        await page.locator("#editor-template").waitFor({ state: "visible" });
+        await openOptions("settings");
+        const enginePicker = page.locator("#editor-engine");
+        expect(
+          await enginePicker
+            .locator("option")
+            .evaluateAll((items) =>
+              items.map((item) => (item as HTMLOptionElement).value),
+            ),
+        ).toEqual(engines);
+        await enginePicker.selectOption(nextEngine);
+        await expect.poll(() => engine).toBe(nextEngine);
+        await page.keyboard.press("Escape");
+        const japanese = page.locator("#editor-template-japanese");
+        await expect.poll(() => japanese.getAttribute("hidden")).toBeNull();
+        expect(await japanese.textContent()).toBe("Japanisches Dokument");
+        await page.locator("#editor-template").selectOption("japanese");
+        await expect
+          .poll(() => text)
+          .toContain("\\documentclass[" + options + "]{jsarticle}");
+      }
     } catch (error) {
       throw new Error(
         `${String(error)}\n${JSON.stringify({

@@ -18,7 +18,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { RendererDatabase } from "@latex-renderer/database";
+import {
+  ProjectDocumentState,
+  RendererDatabase,
+} from "@latex-renderer/database";
+import { createRemoteMcpHandler } from "../apps/remote-mcp/src/mcp.js";
+import { RemoteRenderService } from "../packages/remote-mcp-core/src/index.js";
 import {
   claimUnprotectedSources,
   protectBackupSources,
@@ -236,6 +241,243 @@ describe.runIf(ageAvailable && linuxDescriptorAccess)(
       expect(JSON.parse(restored.stdout)).toMatchObject({
         projectSourceCount: 1,
       });
+    }, 20_000);
+
+    it("restores condition versions, provenance, adoption and an exact PDF review through MCP", async () => {
+      const fixture = backupFixture();
+      const { projectId } = fixture;
+      const userId = "user_backup_owner";
+      const identity = {
+        userId,
+        scopes: ["mcp:read", "mcp:render", "mcp:delete"] as const,
+      };
+      const actor = { type: "user", id: userId, userId };
+      const origin = "https://latex.example.test";
+      const service = (db: RendererDatabase, storage: string) =>
+        new RemoteRenderService(
+          db,
+          storage,
+          "renderer:test",
+          origin,
+          20,
+          1024 * 1024,
+        );
+      let reviewed: { id: string; sourceId: string };
+      let secondParentId: string;
+      let review: ReturnType<RemoteRenderService["recordProjectPdfReview"]>;
+      const baseCondition = {
+        kind: "preserve",
+        basis: "user_specified",
+        text: "Preserve the math",
+      } as const;
+      const revisedCondition = {
+        ...baseCondition,
+        text: "Preserve the math and layout",
+      };
+      const database = new RendererDatabase(fixture.databasePath);
+      try {
+        database.raw
+          .prepare("UPDATE users SET status='active' WHERE id=?")
+          .run(userId);
+        const renders = service(database, fixture.storageRoot);
+        const addRevision = async (text: string) => {
+          const source = await renders.createSource(identity, [
+            { path: "main.tex", text },
+          ]);
+          return renders.attachProjectRevision(identity, {
+            projectId,
+            sourceId: source.id,
+            entrypoint: "main.tex",
+            displayName: text,
+            originalFilename: "main.tex",
+            outputs: ["pdf"],
+          });
+        };
+        secondParentId = (await addRevision("Second parent")).id;
+        reviewed = await addRevision("Reviewed version");
+        await addRevision("Later version");
+        const state = new ProjectDocumentState(database);
+        const recordPath = (
+          parentRevisionId: string,
+          draftVersion: number,
+          description: string,
+        ) =>
+          database.transaction(() =>
+            state.recordRevisionChange(actor, {
+              projectId,
+              revisionId: reviewed.id,
+              parentRevisionId,
+              draftVersion,
+              description,
+            }),
+          );
+        renders.updateProjectDocumentConditions(identity, projectId, 0, [
+          baseCondition,
+        ]);
+        recordPath(fixture.revisionId, 2, "From first parent");
+        renders.updateProjectDocumentConditions(identity, projectId, 1, [
+          revisedCondition,
+        ]);
+        recordPath(secondParentId, 4, "From second parent");
+        renders.adoptProjectRevision(identity, projectId, reviewed.id, null);
+        const job = await renders.renderProjectRevision(
+          identity,
+          projectId,
+          reviewed.id,
+        );
+        const pdf = Buffer.from("%PDF-1.7\nBackup review fixture\n%%EOF\n");
+        const completedAt = new Date().toISOString();
+        const pdfSha256 = createHash("sha256").update(pdf).digest("hex");
+        database.raw
+          .prepare(
+            "UPDATE jobs SET status='succeeded',completed_at=?,runtime_digest=? WHERE id=?",
+          )
+          .run(completedAt, "sha256:" + "f".repeat(64), job.id);
+        database.artifacts.insert({
+          id: "artifact_backup_review",
+          job_id: job.id,
+          type: "pdf",
+          relative_path: "result.pdf",
+          size: pdf.length,
+          sha256: pdfSha256,
+          created_at: completedAt,
+        });
+        review = renders.recordProjectPdfReview(identity, projectId, {
+          revisionId: reviewed.id,
+          jobId: job.id,
+          pdfSha256,
+          conditionsVersion: 1,
+          checks: [{ type: "visual", status: "not_checked" }],
+          guideVersion: null,
+        });
+      } finally {
+        database.close();
+      }
+
+      const backedUp = runBackup(fixture);
+      expect(backedUp.status, backedUp.stderr).toBe(0);
+      const verified = runRestore(fixture, backupArchive(fixture));
+      expect(verified.status, verified.stderr).toBe(0);
+      const work = decryptBackup(fixture);
+      const restored = new RendererDatabase(join(work, "renderer.sqlite3"));
+      try {
+        // The archive stores Source bundles under project-sources.
+        const storage = join(work, "restored-storage");
+        mkdirSync(storage);
+        renameSync(join(work, "project-sources"), join(storage, "sources"));
+        const handler = createRemoteMcpHandler(
+          service(restored, storage),
+          "0.2.0",
+        );
+        const resource = new URL("/mcp", origin);
+        let id = 0;
+        const call = async (name: string, args: Record<string, unknown>) => {
+          const response = await handler.fetch(
+            new Request(resource, {
+              method: "POST",
+              headers: {
+                Accept: "application/json, text/event-stream",
+                "Content-Type": "application/json",
+                "MCP-Protocol-Version": "2025-06-18",
+              },
+              body: JSON.stringify({
+                jsonrpc: "2.0",
+                id: ++id,
+                method: "tools/call",
+                params: { name, arguments: { projectId, ...args } },
+              }),
+            }),
+            {
+              authInfo: {
+                token: "fixture",
+                clientId: "backup-test",
+                scopes: [...identity.scopes],
+                resource,
+                extra: { userId },
+              },
+            },
+          );
+          expect(response.status).toBe(200);
+          const wire = await response.text();
+          const json = response.headers
+            .get("Content-Type")
+            ?.includes("text/event-stream")
+            ? wire
+                .split(/\r?\n/)
+                .find((line) => line.startsWith("data: "))
+                ?.slice(6)
+            : wire;
+          if (!json) throw new Error("Missing restored MCP response");
+          const parsed = JSON.parse(json) as {
+            result?: {
+              structuredContent?: { success?: boolean; result?: unknown };
+            };
+          };
+          expect(parsed.result?.structuredContent?.success).toBe(true);
+          return parsed.result?.structuredContent?.result;
+        };
+        expect(
+          await call("get_project_document_state", {
+            conditionsVersion: 1,
+            history: { revisionId: reviewed.id },
+          }),
+        ).toMatchObject({
+          conditions: { version: 1, entries: [baseCondition] },
+          adoptedRevisionId: reviewed.id,
+          revisionChanges: {
+            items: expect.arrayContaining([
+              expect.objectContaining({
+                parentRevisionId: fixture.revisionId,
+                draftVersion: 2,
+                conditionsVersion: 1,
+                description: "From first parent",
+              }),
+              expect.objectContaining({
+                parentRevisionId: secondParentId,
+                draftVersion: 4,
+                conditionsVersion: 2,
+                description: "From second parent",
+              }),
+            ]) as unknown,
+            nextOffset: null,
+          },
+        });
+        expect(await call("get_project_document_state", {})).toMatchObject({
+          conditions: { version: 2, entries: [revisedCondition] },
+        });
+        expect(await call("list_project_pdf_reviews", {})).toMatchObject({
+          items: [review],
+          nextOffset: null,
+        });
+        expect(
+          await call("get_project_revision_file", {
+            revisionId: reviewed.id,
+            path: "main.tex",
+          }),
+        ).toMatchObject({
+          revisionId: reviewed.id,
+          sourceId: reviewed.sourceId,
+          text: "Reviewed version",
+        });
+        expect(
+          await call("plan_project_revision_cleanup", {
+            revisionIds: [reviewed.id],
+          }),
+        ).toMatchObject({
+          estimatedSourceBytes: 0,
+          entries: [
+            {
+              revisionId: reviewed.id,
+              reasons: expect.arrayContaining([
+                "adopted",
+                "reviewed",
+              ]) as unknown,
+            },
+          ],
+        });
+      } finally {
+        restored.close();
+      }
     }, 20_000);
 
     it("does not publish or retain partially encrypted backups on encryption failure", () => {
@@ -860,6 +1102,7 @@ function backupFixture({ generateAgeKeys = true } = {}) {
     sourcePath,
     sourceId,
     projectId,
+    revisionId,
   };
 }
 

@@ -192,6 +192,382 @@ describe(`Source pipeline HTTP/DB/Worker E2E (${realPipelineImage === undefined 
   );
 
   it.skipIf(realPipelineImage === undefined)(
+    "reports mixed page geometry, Japanese text and fonts, bookmarks and a page with no text",
+    async () => {
+      const f = await sourcePipelineFixture();
+      try {
+        const source = await f.renders.createSource(pdfTestIdentity, [
+          { path: "main.tex", text: qualityDocument() },
+          {
+            path: "figure.png",
+            base64:
+              "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR4nGNgAAAAAgABSK+kcQAAAABJRU5ErkJggg==",
+          },
+        ]);
+        const target = await renderQualityFixture(f, source.id);
+        const report = await inspectQualityFixture(f, target);
+        expect(report).toMatchObject({
+          coverage: { totalPages: 3, pageDetailsThrough: 3, sampledPages: 3 },
+          visual: "not_checked",
+          sourceComparison: "not_checked",
+        });
+        const pageInfo = observation(report, "page-info");
+        expect(pageInfo).toMatch(/^Title:\s+組版の検査$/mu);
+        // pdfinfo reports the unrotated MediaBox in points.
+        for (const [page, widthMm, heightMm] of [
+          [1, 210, 297],
+          [2, 148, 210],
+          [3, 105, 148],
+        ] as const) {
+          const [, width, height] =
+            pageInfo.match(
+              new RegExp(
+                "Page\\s+" +
+                  String(page) +
+                  "\\s+MediaBox:\\s+0\\.00\\s+0\\.00\\s+([\\d.]+)\\s+([\\d.]+)",
+              ),
+            ) ?? [];
+          expect((Number(width) * 25.4) / 72).toBeCloseTo(widthMm, 1);
+          expect((Number(height) * 25.4) / 72).toBeCloseTo(heightMm, 1);
+        }
+        expect(pageInfo).toMatch(/Page\s+2 rot:\s+90/u);
+        expect(pageInfo).toMatch(
+          /Page\s+2 CropBox:\s+10\.00\s+10\.00\s+400\.00\s+550\.00/u,
+        );
+        const fontInfo = observation(report, "font-info");
+        expect(fontInfo).toMatch(/HaranoAjiMincho/u);
+        expect(fontInfo).toMatch(/LatinModernRoman.*Bold/u);
+        expect(fontInfo).toMatch(/LatinModernMath/u);
+        const pages = observation(report, "extracted-text").split("\f");
+        expect(pages[0]).toContain("日本語本文");
+        expect(pages[0]).toContain("Bold sample");
+        expect(pages[0]).toContain("Heading");
+        expect(pages[0]).toMatch(/x.? \+ 1/u);
+        expect(pages[1]).toContain("Second page");
+        expect(pages[2]?.trim()).toBe("");
+        const navigation: unknown = JSON.parse(
+          observation(report, "navigation"),
+        );
+        expect(navigation).toMatchObject({
+          outlines: [
+            {
+              title: "Heading x squared",
+              kids: [{ title: "詳細" }],
+            },
+          ],
+        });
+      } finally {
+        await f.close();
+      }
+    },
+  );
+
+  it.skipIf(realPipelineImage === undefined)(
+    "compares distinct PDFs for a body-font edit, metadata edit, content edit and layout edit",
+    async () => {
+      const f = await sourcePipelineFixture();
+      try {
+        const baseline = {
+          font: "Latin Modern Roman",
+          title: "Baseline title",
+          text: "Keep this equation.",
+          left: "20mm",
+        };
+        const render = async (change: Partial<typeof baseline>) => {
+          const { font, title, text, left } = { ...baseline, ...change };
+          const source = await f.renders.createSource(pdfTestIdentity, [
+            {
+              path: "main.tex",
+              text: [
+                "\\documentclass{article}",
+                "\\usepackage[left=" + left + ",right=20mm]{geometry}",
+                "\\usepackage{unicode-math}",
+                "\\usepackage{hyperref}",
+                "\\input{body-font.tex}",
+                "\\setmathfont{Latin Modern Math}",
+                "\\hypersetup{pdftitle={" + title + "}}",
+                "\\pagestyle{empty}",
+                "\\begin{document}",
+                text + " $x+1$.",
+                "\\end{document}",
+              ].join("\n"),
+            },
+            { path: "body-font.tex", text: "\\setmainfont{" + font + "}" },
+          ]);
+          const target = await renderQualityFixture(f, source.id);
+          return { target, report: await inspectQualityFixture(f, target) };
+        };
+        const preflight = documentProbeSchema.parse({
+          engine: "lualatex",
+          font: baseline.font,
+        });
+        expect(f.renders.documentProbe(pdfTestIdentity, preflight).state).toBe(
+          "queued",
+        );
+        const probe = defined(
+          f.database.documentProbes.claim(
+            f.config.workerId,
+            new Date().toISOString(),
+          ),
+        );
+        await processDocumentProbe(f.database, f.config, probe);
+        expect(
+          f.renders.documentProbe(pdfTestIdentity, preflight),
+        ).toMatchObject({
+          state: "ready",
+          code: "DOCUMENT_PROBE_COMPILED",
+          input: { font: baseline.font },
+        });
+        const before = await render({});
+        expect(observation(before.report, "extracted-text")).toContain(
+          "Keep this equation.",
+        );
+        expect(observation(before.report, "font-info")).toMatch(
+          /LatinModernRoman/u,
+        );
+        const changedFont = await render({ font: "TeX Gyre Pagella" });
+        const compare = (after: typeof before) =>
+          f.renders.comparePdfInspections(
+            pdfTestIdentity,
+            before.target,
+            after.target,
+          );
+        expect(compare(changedFont)).toMatchObject({
+          samePdfBytes: false,
+          sameEngine: true,
+          sameRuntime: true,
+          extractedText: "same_observation",
+          fontInventory: "changed_observation",
+          visual: "changed_observation",
+          sourceComparison: "changed_observation",
+          documentMeaning: "not_checked",
+          visualCoverage: {
+            comparedPages: 1,
+            changedPreviewPages: [1],
+            maxPageSidePixels: 512,
+            pagePairing: "physical_page_number",
+          },
+        });
+        const finalFonts = observation(changedFont.report, "font-info");
+        expect(finalFonts).toMatch(/TeXGyrePagella/u);
+        expect(finalFonts).not.toMatch(/LatinModernRoman/u);
+        expect(finalFonts).toMatch(/LatinModernMath/u);
+        expect(observation(changedFont.report, "extracted-text")).not.toContain(
+          "Worked examples",
+        );
+        const metadata = await render({ title: "Changed title" });
+        expect(compare(metadata)).toMatchObject({
+          samePdfBytes: false,
+          extractedText: "same_observation",
+          pageInfoAndMetadata: "changed_observation",
+          visual: "same_observation",
+        });
+        const content = await render({ text: "Changed content." });
+        expect(compare(content)).toMatchObject({
+          samePdfBytes: false,
+          extractedText: "changed_observation",
+          visual: "changed_observation",
+        });
+        const layout = await render({ left: "35mm" });
+        expect(compare(layout)).toMatchObject({
+          samePdfBytes: false,
+          extractedText: "same_observation",
+          visual: "changed_observation",
+        });
+        for (const after of [changedFont, metadata, content, layout])
+          expect(observation(after.report, "versions")).toBe(
+            observation(before.report, "versions"),
+          );
+      } finally {
+        await f.close();
+      }
+    },
+  );
+
+  it.skipIf(realPipelineImage === undefined)(
+    "marks long extraction and sampled coverage as incomplete on a real PDF",
+    async () => {
+      const f = await sourcePipelineFixture();
+      try {
+        const paragraph =
+          "This line contributes text to the bounded PDF observation.";
+        const page = Array.from({ length: 15 }, () => paragraph + "\\par").join(
+          "\n",
+        );
+        const source = await f.renders.createSource(pdfTestIdentity, [
+          {
+            path: "main.tex",
+            text: pipelineDocument(13, page + "\n"),
+          },
+        ]);
+        const target = await renderQualityFixture(f, source.id);
+        const report = await inspectQualityFixture(f, target);
+        expect(report).toMatchObject({
+          checks: { "extracted-text": { status: "observed", truncated: true } },
+          coverage: {
+            totalPages: 13,
+            pageDetailsThrough: 13,
+            sampledPages: 12,
+          },
+          visual: "not_checked",
+          sourceComparison: "not_checked",
+        });
+        expect(
+          f.renders.comparePdfInspections(pdfTestIdentity, target, target),
+        ).toMatchObject({
+          samePdfBytes: true,
+          extractedText: "not_checked",
+          documentMeaning: "not_checked",
+        });
+      } finally {
+        await f.close();
+      }
+    },
+  );
+
+  it.skipIf(realPipelineImage === undefined)(
+    "extracts text from a font without ToUnicode and retains both columns",
+    async () => {
+      const f = await sourcePipelineFixture();
+      try {
+        const source = await f.renders.createSource(pdfTestIdentity, [
+          {
+            path: "main.tex",
+            text: [
+              "\\documentclass[twocolumn]{article}",
+              "\\pagestyle{empty}",
+              "\\begin{document}",
+              "\\pdfgentounicode=0",
+              "Left column first.\\par Left column second.",
+              "\\newpage",
+              "Right column first.\\par Right column second.",
+              "\\end{document}",
+            ].join("\n"),
+          },
+        ]);
+        const target = await renderQualityFixture(f, source.id, "pdflatex");
+        const report = await inspectQualityFixture(f, target);
+        expect(observation(report, "font-info")).toMatch(
+          /^[A-Z]{6}\+CMR10\s+.*\s+yes\s+yes\s+no\s+\d+\s+\d+\s*$/mu,
+        );
+        const extracted = observation(report, "extracted-text");
+        expect(extracted).toContain("Left column first.");
+        expect(extracted).toContain("Left column second.");
+        expect(extracted).toContain("Right column first.");
+        expect(extracted).toContain("Right column second.");
+        expect(report).toMatchObject({
+          coverage: { totalPages: 1, pageDetailsThrough: 1 },
+          sourceComparison: "not_checked",
+          visual: "not_checked",
+        });
+      } finally {
+        await f.close();
+      }
+    },
+  );
+
+  it.skipIf(realPipelineImage === undefined)(
+    "probes the same installed fontspec package on compatible and incompatible engines",
+    async () => {
+      const f = await sourcePipelineFixture();
+      try {
+        for (const [engine, state, code] of [
+          ["lualatex", "ready", "DOCUMENT_PROBE_COMPILED"],
+          ["pdflatex", "failed", "DOCUMENT_PROBE_DID_NOT_COMPILE"],
+        ] as const) {
+          const input = documentProbeSchema.parse({
+            engine,
+            documentClass: "article",
+            packages: ["fontspec"],
+          });
+          const started = f.renders.documentProbe(pdfTestIdentity, input);
+          expect(started.state).toBe("queued");
+          const request = defined(
+            f.database.documentProbes.claim(
+              f.config.workerId,
+              new Date().toISOString(),
+            ),
+          );
+          await processDocumentProbe(f.database, f.config, request);
+          expect(f.renders.documentProbe(pdfTestIdentity, input)).toMatchObject(
+            {
+              probeId: started.probeId,
+              runtimeDigest: started.runtimeDigest,
+              state,
+              code,
+            },
+          );
+        }
+        expect(f.database.jobs.countActive()).toBe(0);
+      } finally {
+        await f.close();
+      }
+    },
+  );
+
+  it.skipIf(realPipelineImage === undefined)(
+    "detects inline overflow and a blank middle page in a narrow Japanese handout and checks revised content",
+    async () => {
+      const f = await sourcePipelineFixture();
+      try {
+        const render = async (fixed: boolean) => {
+          const spacing = fixed ? "" : "\\hspace{110mm}";
+          const table =
+            "\\begin{tabular}{@{}ll@{}}入力 & 出力\\\\ 1 & 2\\end{tabular}";
+          const source = await f.renders.createSource(pdfTestIdentity, [
+            {
+              path: "main.tex",
+              text: [
+                "\\documentclass{ltjsarticle}",
+                "\\usepackage[a6paper,margin=12mm]{geometry}",
+                "\\usepackage{amsmath}",
+                "\\pagestyle{empty}",
+                "\\begin{document}",
+                fixed ? "\\section{関数}" : "\\textbf{関数}\\par",
+                "\\noindent\\mbox{領域 $D$" + spacing + "の関数 $f(x,y)$}",
+                "\\[\\int_0^1 (1-x)\\,\\mathrm{d}x = \\frac{1}{2}\\]",
+                "\\newpage",
+                fixed ? "\\section{結果}" : "\\textbf{結果}\\par",
+                table,
+                fixed ? "" : "\\par Remove this obsolete note.",
+                "\\end{document}",
+              ].join("\n"),
+            },
+          ]);
+          const target = await renderQualityFixture(f, source.id);
+          return {
+            report: await inspectQualityFixture(f, target),
+            diagnostics: await f.renders.diagnostics(
+              pdfTestIdentity,
+              target.jobId,
+            ),
+          };
+        };
+        const before = await render(false);
+        const after = await render(true);
+        expect(JSON.stringify(before.diagnostics)).toContain("Overfull");
+        expect(JSON.stringify(after.diagnostics)).not.toContain("Overfull");
+        const originalText = observation(before.report, "extracted-text");
+        expect(originalText).toContain("Remove this obsolete note.");
+        expect(originalText.split("\f")[1]?.trim()).toBe("");
+        expect(before.report).toMatchObject({
+          coverage: { totalPages: 3, sampledPages: 3 },
+        });
+        const text = observation(after.report, "extracted-text");
+        expect(text).not.toContain("Remove this obsolete note.");
+        expect(text).toContain("関数");
+        expect(text).toContain("出力");
+        expect(after.report).toMatchObject({
+          coverage: { totalPages: 2, sampledPages: 2 },
+          visual: "not_checked",
+        });
+      } finally {
+        await f.close();
+      }
+    },
+  );
+
+  it.skipIf(realPipelineImage === undefined)(
     "reuses a real Draft seed after a body edit and rebuilds after bibliography, image or file edits",
     async () => {
       const f = await sourcePipelineFixture();
@@ -1007,3 +1383,88 @@ describe(`Source pipeline HTTP/DB/Worker E2E (${realPipelineImage === undefined 
     }
   });
 });
+
+const pdfTestIdentity = {
+  userId: "pipeline_user",
+  scopes: ["mcp:read", "mcp:render"],
+} as const;
+type PipelineFixture = Awaited<ReturnType<typeof sourcePipelineFixture>>;
+
+async function renderQualityFixture(
+  fixture: PipelineFixture,
+  sourceId: string,
+  engine: "pdflatex" | "lualatex" = "lualatex",
+) {
+  const job = await fixture.renders.createRender(pdfTestIdentity, {
+    sourceId,
+    engine,
+    entrypoint: "main.tex",
+    outputs: ["pdf"],
+    reproducibility: { mode: "fixed", date: "2024-05-06T12:34:00Z" },
+  });
+  await fixture.runNext();
+  expect(fixture.renders.job(pdfTestIdentity, job.id).status).toBe("succeeded");
+  const pdf = defined(
+    fixture.database.artifacts.getDownloadable(job.id, "result.pdf"),
+  );
+  return { jobId: job.id, pdfSha256: pdf.sha256 };
+}
+
+async function inspectQualityFixture(
+  fixture: PipelineFixture,
+  { jobId, pdfSha256 }: Awaited<ReturnType<typeof renderQualityFixture>>,
+) {
+  const { renders, database, config } = fixture;
+  expect(
+    renders.pdfInspection(pdfTestIdentity, jobId, pdfSha256, true).state,
+  ).toBe("queued");
+  const request = defined(
+    database.pdfInspections.claim(config.workerId, new Date().toISOString()),
+  );
+  await processPdfInspection(database, config, request);
+  const result = renders.pdfInspection(pdfTestIdentity, jobId, pdfSha256);
+  expect(result).toMatchObject({ state: "ready", pdfSha256, errorCode: null });
+  return result.report as {
+    checks: Record<
+      string,
+      { status: string; text: string | null; truncated: boolean }
+    >;
+  };
+}
+
+function observation(
+  report: Awaited<ReturnType<typeof inspectQualityFixture>>,
+  name: string,
+) {
+  const check = defined(report.checks[name]);
+  expect(check).toMatchObject({ status: "observed", truncated: false });
+  return defined(check.text);
+}
+
+function qualityDocument() {
+  return [
+    "\\documentclass[a4paper]{ltjsarticle}",
+    "\\usepackage{luatexja-fontspec}",
+    "\\usepackage{unicode-math}",
+    "\\usepackage{graphicx}",
+    "\\usepackage{hyperref}",
+    "\\setmainfont{Latin Modern Roman}",
+    "\\setmainjfont{Harano Aji Mincho}",
+    "\\setmathfont{Latin Modern Math}",
+    "\\hypersetup{pdftitle={組版の検査},bookmarksopen=true}",
+    "\\pagestyle{empty}",
+    "\\begin{document}",
+    "\\section{Heading \\texorpdfstring{$x^2$}{x squared}}",
+    "\\subsection{詳細}",
+    "日本語本文。 \\textbf{Bold sample}. $x^2 + 1$.",
+    "\\newpage",
+    "\\pagewidth=148mm \\pageheight=210mm",
+    "\\pdfvariable pageattr{/Rotate 90 /CropBox [10 10 400 550]}",
+    "Second page.",
+    "\\newpage",
+    "\\pagewidth=105mm \\pageheight=148mm",
+    "\\pdfvariable pageattr{}",
+    "\\noindent\\includegraphics[width=10mm]{figure.png}",
+    "\\end{document}",
+  ].join("\n");
+}

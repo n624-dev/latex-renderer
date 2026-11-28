@@ -1,20 +1,30 @@
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import {
+  cp,
   mkdir,
   mkdtemp,
   readFile,
   readdir,
   rename,
   rm,
+  symlink,
   truncate,
   writeFile,
 } from "node:fs/promises";
 import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { PassThrough } from "node:stream";
-import type { AccessJwtVerifier } from "@latex-renderer/auth";
+import { promisify } from "node:util";
+import { readZipTextFiles } from "./fixtures/zip-text-files.mjs";
+import guideFiles from "../packages/contracts/src/authoring-guide-files.json" with { type: "json" };
+import { ApiKeyService, type AccessJwtVerifier } from "@latex-renderer/auth";
+import { createAdminApp } from "../apps/admin-api/src/app.js";
+import { loadWorkerConfig } from "../apps/renderer-worker/src/config.js";
+import { processPdfInspection } from "../apps/renderer-worker/src/pdf-inspection.js";
+import * as rendererStage from "../apps/renderer-worker/src/renderer-stage.js";
 import {
   rendererMcpResourceUris,
   rendererMcpToolPolicies,
@@ -1787,6 +1797,559 @@ describe("Remote MCP HTTP server", () => {
     ).toMatchObject({ text: "original" });
   });
 
+  it("rejects stale Remote edits and replacement after Web saves the shared Draft", async () => {
+    const f = await createFixture();
+    const { call, projectId, revisionId } = await draftProject(f, "original");
+    const web = createAdminApp({
+      database: f.database,
+      apiKeys: new ApiKeyService(
+        f.database,
+        new Map([["v1", Buffer.alloc(32, 1)]]),
+        "v1",
+      ),
+      browserAuth: legacyTestBrowserAuth(f.database, fixtureAccess()),
+      deploymentMode: "cloudflare",
+      publicOrigin: ORIGIN,
+      allowedOrigins: new Set(),
+      writeEnabled: true,
+      storageRoot: f.storage,
+      rendererVersion: "renderer:test",
+      maxOutputBytes: 1024 * 1024,
+      maxQueueLength: 20,
+      maxUserStorageBytes: 1024 * 1024,
+      minFreeStorageBytes: 1,
+      activeTicketKid: "v1",
+      verificationTicketKids: [],
+    });
+    const opened = await call("open_project_draft", { revisionId });
+    expect(structuredObject(opened, "draft")).toMatchObject({ version: 1 });
+    const mutation = await web.request(
+      "/app/api/v1/projects/" + projectId + "/draft/file",
+      {
+        method: "PUT",
+        headers: {
+          "Cf-Access-Jwt-Assertion": "test",
+          "X-CSRF-Token": "1",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          path: "main.tex",
+          version: 1,
+          text: "Web edit",
+        }),
+      },
+    );
+    expect(mutation.status).toBe(200);
+    const staleWrite = await call("apply_project_changes", {
+      version: 1,
+      idempotencyKey: "stale-remote-web-01",
+      files: [{ path: "main.tex", text: "Stale remote edit" }],
+    });
+    expect(staleWrite.result.structuredContent).toMatchObject({
+      success: false,
+      error: { code: "DRAFT_VERSION_CONFLICT", currentVersion: 2 },
+    });
+    const staleReplacement = await call("open_project_draft", {
+      revisionId,
+      replaceVersion: 1,
+    });
+    expect(staleReplacement.result.structuredContent).toMatchObject({
+      success: false,
+      error: { code: "DRAFT_VERSION_CONFLICT" },
+    });
+    expect(
+      structuredResult(
+        await call("get_project_draft_file", {
+          path: "main.tex",
+          version: 2,
+        }),
+      ),
+    ).toMatchObject({ text: "Web edit" });
+  });
+
+  it("rolls back a Source publication failure and replays the accepted edit after reopening the database", async () => {
+    const f = await createFixture(undefined, false, ORIGIN, true);
+    const { call, projectId, revisionId, token } = await draftProject(
+      f,
+      "original",
+    );
+    await call("open_project_draft", { revisionId });
+    const before = draftStorage(f);
+    const changes = {
+      version: 1,
+      idempotencyKey: "draft-publication-replay-01",
+      files: [
+        { path: "main.tex", text: "edited" },
+        { path: "notes.txt", text: "new file" },
+      ],
+    };
+    const publication = vi
+      .spyOn(f.database.sources, "transitionBeforeExpiry")
+      .mockImplementationOnce(() => {
+        throw new AppError(
+          "SOURCE_PUBLISH_TEST_FAILURE",
+          "Injected Source publication failure",
+          409,
+        );
+      });
+    expect(
+      (await call("apply_project_changes", changes)).result.structuredContent,
+    ).toMatchObject({
+      success: false,
+      error: { code: "SOURCE_PUBLISH_TEST_FAILURE" },
+    });
+    expect(publication).toHaveBeenCalledTimes(1);
+    expect(draftStorage(f)).toEqual(before);
+    expect(
+      structuredResult(
+        await call("get_project_draft_file", {
+          version: 1,
+          path: "main.tex",
+        }),
+      ),
+    ).toMatchObject({ text: "original" });
+    expect(await readdir(join(f.storage, "sources"))).toHaveLength(
+      before.sources.length,
+    );
+    expect(
+      (await readdir(f.storage)).filter((name) => name.startsWith(".remote-")),
+    ).toEqual([]);
+
+    const accepted = await call("apply_project_changes", changes);
+    expect(structuredResult(accepted)).toMatchObject({
+      baseVersion: 1,
+      version: 2,
+      changedPaths: ["main.tex", "notes.txt"],
+    });
+    const committed = draftStorage(f);
+    expect(committed.sources).toHaveLength(before.sources.length + 1);
+    expect(committed.bytes).toBeGreaterThan(before.bytes);
+
+    f.database.close();
+    databases.splice(databases.indexOf(f.database), 1);
+    const database = new RendererDatabase(join(f.storage, "renderer.sqlite3"));
+    databases.push(database);
+    database.migrate();
+    const restarted = remoteFixtureServices(database, f.storage, ORIGIN);
+    const replay = (files: typeof changes.files) =>
+      callTool(restarted.app, token, 1, "apply_project_changes", {
+        projectId,
+        ...changes,
+        files,
+      });
+    expect((await replay(changes.files)).result.structuredContent).toEqual(
+      accepted.result.structuredContent,
+    );
+    expect(
+      (await replay([{ path: "main.tex", text: "changed request" }])).result
+        .structuredContent,
+    ).toMatchObject({
+      success: false,
+      error: { code: "IDEMPOTENCY_CONFLICT" },
+    });
+    expect(draftStorage({ database })).toEqual(committed);
+    expect(
+      structuredObject(
+        await callTool(restarted.app, token, 2, "get_project_draft", {
+          projectId,
+        }),
+        "draft",
+      ),
+    ).toMatchObject({ version: 2 });
+  });
+
+  it.each([
+    {
+      label: "unique UTF-8 match",
+      text: "前𠮷旧後\n",
+      original: "𠮷旧",
+      matches: 1,
+      applied: "前新後\n",
+    },
+    {
+      label: "wrong digest",
+      text: "old",
+      original: "old",
+      matches: 1,
+      wrongDigest: true,
+      error: "DRAFT_PATCH_MISMATCH",
+    },
+    {
+      label: "missing match",
+      text: "old",
+      original: "absent",
+      matches: 1,
+      error: "DRAFT_PATCH_MISMATCH",
+    },
+    {
+      label: "ambiguous match",
+      text: "old old",
+      original: "old",
+      matches: 1,
+      error: "DRAFT_PATCH_MISMATCH",
+    },
+    {
+      label: "two exact matches",
+      text: "old old",
+      original: "old",
+      matches: 2,
+      applied: "新 新",
+    },
+    {
+      label: "overlapping matches",
+      text: "aaa",
+      original: "aa",
+      matches: 1,
+      error: "DRAFT_PATCH_MISMATCH",
+    },
+    {
+      label: "unsupported encoding",
+      text: Buffer.from([0x82, 0xa0]),
+      original: "あ",
+      matches: 1,
+      error: "DRAFT_TEXT_ENCODING",
+    },
+  ])("handles a draft patch with $label on the MCP wire", async (fixture) => {
+    const f = await createFixture();
+    const { call, revisionId } = await draftProject(f, fixture.text);
+    expect(
+      structuredObject(
+        await call("open_project_draft", { revisionId }),
+        "draft",
+      ),
+    ).toMatchObject({ version: 1 });
+    const before = draftStorage(f);
+    const patch = {
+      expectedSha256: fixture.wrongDigest
+        ? "0".repeat(64)
+        : digest(fixture.text),
+      original: fixture.original,
+      replacement: "新",
+      expectedMatches: fixture.matches,
+    };
+    const changes = {
+      version: 1,
+      idempotencyKey: "draft-patch-regression-01",
+      files: [
+        { path: "notes.txt", text: "Atomically add this with the patch" },
+        { path: "main.tex", patch },
+      ],
+    };
+    const patched = await call("apply_project_changes", changes);
+    if (fixture.applied !== undefined) {
+      expect(structuredResult(patched)).toMatchObject({
+        baseVersion: 1,
+        version: 2,
+        changedPaths: ["notes.txt", "main.tex"],
+      });
+      expect(
+        structuredResult(
+          await call("get_project_draft_file", {
+            version: 2,
+            path: "main.tex",
+          }),
+        ),
+      ).toMatchObject({
+        text: fixture.applied,
+        sha256: digest(fixture.applied),
+      });
+      expect(
+        (
+          await call("apply_project_changes", {
+            ...changes,
+            files: [
+              changes.files[0],
+              { path: "main.tex", patch: { ...patch, replacement: "別" } },
+            ],
+          })
+        ).result.structuredContent,
+      ).toMatchObject({
+        success: false,
+        error: { code: "IDEMPOTENCY_CONFLICT" },
+      });
+    } else {
+      expect(patched.result.structuredContent).toMatchObject({
+        success: false,
+        error: { code: fixture.error },
+      });
+      expect(draftStorage(f)).toEqual(before);
+      expect(
+        structuredObject(await call("get_project_draft", {}), "draft"),
+      ).toMatchObject({
+        version: 1,
+        files: [{ path: "main.tex" }],
+      });
+      if (typeof fixture.text === "string") {
+        expect(
+          structuredResult(
+            await call("get_project_draft_file", {
+              version: 1,
+              path: "main.tex",
+            }),
+          ),
+        ).toMatchObject({ text: fixture.text, sha256: digest(fixture.text) });
+      }
+    }
+  });
+
+  it("preserves both parents, descriptions and condition versions when a saved snapshot is reused", async () => {
+    const f = await createFixture();
+    const {
+      call,
+      identity,
+      projectId,
+      revisionId: firstParent,
+    } = await draftProject(f, "branch one");
+    const other = await f.renders.createSource(identity, [
+      { path: "main.tex", text: "branch two" },
+    ]);
+    const { id: secondParent } = f.renders.attachProjectRevision(identity, {
+      projectId,
+      sourceId: other.id,
+      entrypoint: "main.tex",
+      displayName: "Other parent",
+      originalFilename: "main.tex",
+      outputs: ["pdf"],
+    });
+    const saveFrom = async (
+      parentRevisionId: string,
+      conditionsVersion: number,
+      description: string,
+      replaceVersion?: number,
+    ) => {
+      const conditions = structuredResult(
+        await call("update_project_document_conditions", {
+          expectedVersion: conditionsVersion - 1,
+          entries: [
+            { kind: "preserve", basis: "user_specified", text: description },
+          ],
+        }),
+      );
+      expect(conditions.version).toBe(conditionsVersion);
+      const opened = structuredObject(
+        await call("open_project_draft", {
+          revisionId: parentRevisionId,
+          replaceVersion,
+        }),
+        "draft",
+      );
+      const applied = structuredResult(
+        await call("apply_project_changes", {
+          version: opened.version,
+          idempotencyKey: "draft-path-dedupe-000" + String(conditionsVersion),
+          files: [{ path: "main.tex", text: "identical result" }],
+        }),
+      );
+      const save = await call("save_project_draft", {
+        version: applied.version,
+        displayName: "Converged",
+        description,
+      });
+      return {
+        revision: structuredObject(save, "revision"),
+        version: Number(applied.version),
+      };
+    };
+    const first = await saveFrom(firstParent, 1, "Edit from first parent");
+    const second = await saveFrom(
+      secondParent,
+      2,
+      "Edit from second parent",
+      first.version,
+    );
+    expect(second.revision.id).toBe(first.revision.id);
+    expect(f.database.projects.revisionCount(projectId)).toBe(3);
+    const history = structuredObject(
+      await call("get_project_document_state", {
+        history: { revisionId: first.revision.id },
+      }),
+      "revisionChanges",
+    );
+    expect(history).toMatchObject({
+      revisionId: first.revision.id,
+      items: expect.arrayContaining([
+        expect.objectContaining({
+          parentRevisionId: firstParent,
+          draftVersion: first.version,
+          conditionsVersion: 1,
+          description: "Edit from first parent",
+        }),
+        expect.objectContaining({
+          parentRevisionId: secondParent,
+          draftVersion: second.version,
+          conditionsVersion: 2,
+          description: "Edit from second parent",
+        }),
+      ]) as unknown,
+      nextOffset: null,
+    });
+    expect(history.items).toHaveLength(2);
+  });
+
+  it("delivers the exact guide references and templates packaged by the authoring plugin build", async () => {
+    const f = await createFixture();
+    const token = issueAccessToken(f.oauth);
+    const packageRoot = join(f.storage, "plugin-build");
+    await mkdir(join(packageRoot, "client"), { recursive: true });
+    await cp("package.json", join(packageRoot, "package.json"));
+    await cp(
+      "client/build-authoring-plugin.mjs",
+      join(packageRoot, "client/build-authoring-plugin.mjs"),
+    );
+    await cp(
+      "integrations/latex-renderer",
+      join(packageRoot, "integrations/latex-renderer"),
+      { recursive: true },
+    );
+    await symlink(
+      resolve("node_modules"),
+      join(packageRoot, "node_modules"),
+      "junction",
+    );
+    await promisify(execFile)(
+      process.execPath,
+      ["client/build-authoring-plugin.mjs"],
+      {
+        cwd: packageRoot,
+        timeout: 10_000,
+      },
+    );
+    const output = join(packageRoot, "client-dist");
+    const [archive] = await readdir(output);
+    if (
+      !archive?.startsWith("latex-renderer-authoring-plugin-") ||
+      !archive.endsWith(".zip")
+    )
+      throw new Error("Authoring plugin archive was not built");
+    const packaged = await readZipTextFiles(join(output, archive));
+    expect(JSON.parse(packaged.get("mcp.json") ?? "")).toMatchObject({
+      mcpServers: {
+        "latex-renderer": {
+          type: "streamable-http",
+          url: "https://latex-render.n624.jp/mcp",
+        },
+      },
+    });
+    const versions = new Set<unknown>();
+    let requestId = 0;
+    for (const [topic, file] of Object.entries(guideFiles)) {
+      const guide = structuredResult(
+        await callTool(f.app, token, ++requestId, "get_authoring_guide", {
+          topic,
+        }),
+      );
+      const body = packaged.get("skills/latex-renderer/" + file);
+      expect(body).toBeTruthy();
+      expect(guide).toMatchObject({
+        topic,
+        body,
+        version: expect.stringMatching(/^[a-f0-9]{64}$/) as unknown,
+      });
+      versions.add(guide.version);
+    }
+    expect(versions.size).toBe(1);
+  });
+
+  it("carries forward paper, math, and exclusion conditions during a limited edit to a saved revision", async () => {
+    const f = await createFixture();
+    const entrypoint =
+      "\\documentclass[a5paper]{article}\n\\usepackage{style}\n\\begin{document}\n$f(x,y)=x^2-y^2$\n\\end{document}";
+    const style =
+      "\\setmainfont{Latin Modern Roman}\n\\setmathfont{Latin Modern Math}\n";
+    const { call, revisionId } = await draftProject(f, entrypoint, [
+      { path: "style.sty", text: style },
+    ]);
+    const entries = [
+      { kind: "format", basis: "existing_document", text: "Use A5 paper" },
+      {
+        kind: "preserve",
+        basis: "user_specified",
+        text: "Keep the equation and math font",
+      },
+      {
+        kind: "excluded",
+        basis: "user_specified",
+        text: "Exclude the worked examples table",
+      },
+    ];
+    expect(
+      structuredResult(
+        await call("update_project_document_conditions", {
+          expectedVersion: 0,
+          entries,
+        }),
+      ),
+    ).toMatchObject({ version: 1, entries });
+    const previous = structuredResult(
+      await call("get_project_revision_file", {
+        revisionId,
+        path: "style.sty",
+      }),
+    );
+    expect(previous.text).toBe(style);
+    await call("open_project_draft", { revisionId });
+    const edited = structuredResult(
+      await call("apply_project_changes", {
+        version: 1,
+        idempotencyKey: "authoring-limited-font-edit",
+        files: [
+          {
+            path: "style.sty",
+            patch: {
+              expectedSha256: previous.sha256,
+              original: "Latin Modern Roman",
+              replacement: "TeX Gyre Pagella",
+            },
+          },
+        ],
+      }),
+    );
+    const saved = structuredObject(
+      await call("save_project_draft", {
+        version: edited.version,
+        displayName: "Body font update",
+        description: "Change only the body font",
+      }),
+      "revision",
+    );
+    expect(saved.id).not.toBe(revisionId);
+    const list = structuredResult(
+      await call("list_project_revision_files", { revisionId: saved.id }),
+    );
+    expect(list).toMatchObject({
+      totalFiles: 2,
+      items: [{ path: "main.tex" }, { path: "style.sty" }],
+    });
+    expect(
+      structuredResult(
+        await call("get_project_revision_file", {
+          revisionId: saved.id,
+          path: "main.tex",
+        }),
+      ).text,
+    ).toBe(entrypoint);
+    expect(
+      structuredResult(
+        await call("get_project_revision_file", {
+          revisionId: saved.id,
+          path: "style.sty",
+        }),
+      ).text,
+    ).toBe(style.replace("Latin Modern Roman", "TeX Gyre Pagella"));
+    expect(
+      structuredResult(
+        await call("get_project_document_state", {
+          history: { revisionId: saved.id },
+        }),
+      ),
+    ).toMatchObject({
+      conditions: { version: 1, entries },
+      revisionChanges: {
+        items: [{ parentRevisionId: revisionId, conditionsVersion: 1 }],
+      },
+    });
+  });
+
   it("delivers the authoring guide and reads only the selected immutable revision", async () => {
     const f = await createFixture();
     const token = issueAccessToken(f.oauth);
@@ -2024,6 +2587,212 @@ describe("Remote MCP HTTP server", () => {
       },
     });
     expect(f.database.jobs.countActive()).toBe(0);
+  });
+
+  it("rejects foreign, missing and unavailable saved input in document requirements", async () => {
+    const f = await createFixture();
+    const { projectId, revisionId, token, identity } = await draftProject(
+      f,
+      "\\documentclass{article}",
+    );
+    const otherId = "user_requirements_other";
+    f.database.users.insertInvitation({
+      id: otherId,
+      email: null,
+      displayName: "Other owner",
+      role: "user",
+      createdBy: "test",
+      timestamp: new Date().toISOString(),
+    });
+    f.database.raw
+      .prepare("UPDATE users SET status='active' WHERE id=?")
+      .run(otherId);
+    const otherToken = issueAccessToken(f.oauth, otherId);
+    const check = async (
+      accessToken: string,
+      revision: string,
+      code: string,
+    ) => {
+      const response = await callTool(
+        f.app,
+        accessToken,
+        1,
+        "check_document_requirements",
+        {
+          engine: "lualatex",
+          revision: {
+            projectId,
+            revisionId: revision,
+            inspectEntrypoint: true,
+          },
+        },
+      );
+      expect(response.result.structuredContent).toMatchObject({
+        success: false,
+        error: { code },
+      });
+    };
+    await check(otherToken, revisionId, "PROJECT_REVISION_NOT_FOUND");
+    await check(
+      token,
+      "revision_" + "0".repeat(32),
+      "PROJECT_REVISION_NOT_FOUND",
+    );
+    const sourceId = f.renders.getProject(identity, projectId).latestRevision
+      ?.sourceId;
+    const source = sourceId && f.database.sources.get(sourceId);
+    if (!source) throw new Error("Missing saved Source");
+    f.database.raw
+      .prepare("UPDATE sources SET status='expired' WHERE id=?")
+      .run(source.id);
+    await check(token, revisionId, "SOURCE_EXPIRED");
+    expect(f.database.jobs.countActive()).toBe(0);
+  });
+
+  it("reports font face and glyph gaps and keeps installed packages separate from Runtime policy", async () => {
+    const f = await createFixture();
+    const token = issueAccessToken(f.oauth);
+    const inventory = join(
+      f.storage,
+      "environment",
+      "document-requirements.json",
+    );
+    const install = async (entries: string[]) => {
+      await writeFile(
+        inventory + ".next",
+        JSON.stringify({
+          version: 1,
+          runtime: "renderer:test",
+          entries: entries.join("\n"),
+        }),
+      );
+      await rename(inventory + ".next", inventory);
+    };
+    await install([
+      "font\tFixture Mincho\tRegular\t0041 65e5",
+      "font\tFixture Mincho\tItalic\t0041 672c",
+      "package\tminted",
+    ]);
+    const needs = [
+      { kind: "font", name: "fixture mincho", style: "Bold", characters: "日" },
+      { kind: "font", name: "Fixture Mincho", characters: "日本" },
+      {
+        kind: "font",
+        name: "Fixture Mincho",
+        style: "Regular",
+        characters: "A",
+        math: true,
+      },
+      { kind: "package", name: "minted" },
+      { kind: "feature", name: "shell_escape" },
+    ];
+    const check = async (engine: string, requirements = needs) =>
+      structuredResult(
+        await callTool(f.app, token, 1, "check_document_requirements", {
+          engine,
+          requirements,
+        }),
+      );
+    const original = await check("lualatex");
+    expect(original).toMatchObject({
+      inventoryVersion: 1,
+      items: [
+        {
+          state: "missing_style",
+          canonicalName: "Fixture Mincho",
+          styles: ["Regular", "Italic"],
+          loadable: "not_checked",
+        },
+        {
+          state: "missing_glyphs",
+          missingCodePoints: ["U+672C"],
+          evidence: "fontconfig_face_and_charset",
+        },
+        {
+          state: "installed",
+          loadable: "not_checked",
+          mathSupport: "not_checked",
+        },
+        {
+          state: "installed",
+          canonicalName: "minted",
+          loadable: "not_checked",
+        },
+        { state: "unsupported_by_sandbox", evidence: "sandbox_policy" },
+      ],
+    });
+    expect((await check("lualatex")).requirementFingerprint).toBe(
+      original.requirementFingerprint,
+    );
+    const engineChange = await check("pdflatex");
+    expect(engineChange).toMatchObject({
+      engine: "pdflatex",
+      engineState: "not_checked",
+    });
+    expect(engineChange.requirementFingerprint).not.toBe(
+      original.requirementFingerprint,
+    );
+    const charsetChange = await check(
+      "lualatex",
+      needs.map((need, index) =>
+        index === 1 ? { ...need, characters: "日" } : need,
+      ),
+    );
+    expect(charsetChange.requirementFingerprint).not.toBe(
+      original.requirementFingerprint,
+    );
+    expect(charsetChange.items).toMatchObject([
+      {},
+      { state: "installed", missingCodePoints: [] },
+      {},
+      {},
+      {},
+    ]);
+    await install(["font\tFixture Mincho\tBold\t65e5 672c"]);
+    const after = await check("lualatex");
+    expect(after.requirementFingerprint).toBe(original.requirementFingerprint);
+    expect(after.items).toMatchObject([
+      { state: "installed", missingCodePoints: [] },
+      { state: "installed", missingCodePoints: [] },
+      { state: "missing_style" },
+      { state: "not_found" },
+      { state: "unsupported_by_sandbox" },
+    ]);
+  });
+
+  it("keeps complex character requirements at code-point coverage with loadability unchecked", async () => {
+    const f = await createFixture();
+    const token = issueAccessToken(f.oauth);
+    await writeFile(
+      join(f.storage, "environment", "document-requirements.json"),
+      JSON.stringify({
+        version: 1,
+        runtime: "renderer:test",
+        entries: "font\tFixture Face\tRegular\t0065 0301 908a",
+      }),
+    );
+    const result = structuredResult(
+      await callTool(f.app, token, 1, "check_document_requirements", {
+        engine: "lualatex",
+        requirements: [
+          { kind: "font", name: "Fixture Face", characters: "e\u0301" },
+          { kind: "font", name: "Fixture Face", characters: "邊\u{E0100}" },
+        ],
+      }),
+    );
+    expect(result.items).toMatchObject([
+      {
+        state: "installed",
+        missingCodePoints: [],
+        loadable: "not_checked",
+        evidence: "fontconfig_face_and_charset",
+      },
+      {
+        state: "missing_glyphs",
+        missingCodePoints: ["U+E0100"],
+        loadable: "not_checked",
+      },
+    ]);
   });
 
   it.each(["2025-06-18", "2025-03-26"])(
@@ -3780,6 +4549,271 @@ describe("Remote MCP HTTP server", () => {
     });
   });
 
+  it("keeps a review pinned to its original PDF across a replacement and a rerender", async () => {
+    const f = await createFixture();
+    const { call, identity, projectId, revisionId } = await draftProject(
+      f,
+      "Shared input",
+    );
+    const render = async (bytes: Buffer) => {
+      const { id } = await f.renders.renderProjectRevision(
+        identity,
+        projectId,
+        revisionId,
+      );
+      f.database.raw
+        .prepare(
+          "UPDATE jobs SET status='succeeded', completed_at=? WHERE id=?",
+        )
+        .run(new Date().toISOString(), id);
+      await mkdir(join(f.storage, "jobs", id, "output"), { recursive: true });
+      await seedRemoteArtifact(f, id, "pdf", "result.pdf", bytes);
+      return id;
+    };
+    const jobId = await render(TEST_PDF);
+    const condition = {
+      kind: "preserve",
+      basis: "user_specified",
+      text: "Keep the math font",
+    };
+    expect(
+      structuredResult(
+        await call("update_project_document_conditions", {
+          expectedVersion: 0,
+          entries: [condition],
+        }),
+      ).version,
+    ).toBe(1);
+    const original = {
+      revisionId,
+      jobId,
+      pdfSha256: digest(TEST_PDF),
+      conditionsVersion: 1,
+      checks: [{ type: "visual", status: "not_checked" }],
+      guideVersion: null,
+    };
+    const review = structuredObject(
+      await call("record_project_pdf_review", original),
+      "review",
+    );
+    expect(review).toMatchObject(original);
+    expect(
+      structuredResult(
+        await call("update_project_document_conditions", {
+          expectedVersion: 1,
+          entries: [{ ...condition, text: "Use the revised math font" }],
+        }),
+      ).version,
+    ).toBe(2);
+    const replacement = Buffer.from("%PDF-1.7\nreplacement output\n%%EOF\n");
+    f.database.raw
+      .prepare(
+        "DELETE FROM artifacts WHERE job_id=? AND relative_path='result.pdf'",
+      )
+      .run(jobId);
+    await seedRemoteArtifact(f, jobId, "pdf", "result.pdf", replacement);
+    const rerenderedJobId = await render(replacement);
+    expect(rerenderedJobId).not.toBe(jobId);
+    for (const target of [jobId, rerenderedJobId]) {
+      expect(
+        (
+          await call("record_project_pdf_review", {
+            ...original,
+            jobId: target,
+          })
+        ).result.structuredContent,
+      ).toMatchObject({
+        success: false,
+        error: { code: "REVIEW_PDF_MISMATCH" },
+      });
+    }
+    expect(
+      structuredResult(await call("list_project_pdf_reviews", {})),
+    ).toMatchObject({
+      items: [review],
+      nextOffset: null,
+    });
+  });
+
+  it("keeps a saved PDF downloadable during inspection retry and terminal failure until PDF retention expires", async () => {
+    const f = await createFixture();
+    const { identity, projectId, revisionId, token } = await draftProject(
+      f,
+      "Saved for inspection",
+    );
+    const { id: jobId } = await f.renders.renderProjectRevision(
+      identity,
+      projectId,
+      revisionId,
+    );
+    f.database.raw
+      .prepare("UPDATE jobs SET status='succeeded',completed_at=? WHERE id=?")
+      .run(new Date().toISOString(), jobId);
+    await mkdir(join(f.storage, "jobs", jobId, "output"), { recursive: true });
+    await seedRemoteArtifact(f, jobId, "pdf", "result.pdf", TEST_PDF);
+    const pdfSha256 = digest(TEST_PDF);
+    const inspect = (name: string) =>
+      callTool(f.app, token, 1, name, { jobId, pdfSha256 });
+    expect(
+      structuredResult(await inspect("request_render_quality_report")),
+    ).toMatchObject({
+      state: "queued",
+      revisionId,
+    });
+    const now = Date.now();
+    const claim = f.database.pdfInspections.claim(
+      "worker",
+      new Date(now).toISOString(),
+    );
+    if (!claim) throw new Error("Inspection not queued");
+    expect(
+      f.database.pdfInspections.finish(
+        claim.id,
+        "worker",
+        {
+          error: "PDF_INSPECTION_INTERRUPTED",
+        },
+        new Date(now).toISOString(),
+      ),
+    ).toBe(true);
+    expect(
+      structuredResult(await inspect("get_render_quality_report")),
+    ).toMatchObject({
+      state: "queued",
+      report: null,
+    });
+    expect(
+      f.database.pdfInspections.claim(
+        "worker",
+        new Date(now + 29_999).toISOString(),
+      ),
+    ).toBeUndefined();
+    const retry = f.database.pdfInspections.claim(
+      "worker",
+      new Date(now + 30_000).toISOString(),
+    );
+    if (!retry) throw new Error("Interrupted inspection was not retried");
+    expect(retry.id).toBe(claim.id);
+    for (const [key, value] of Object.entries({
+      DATABASE_PATH: ":memory:",
+      STORAGE_ROOT: f.storage,
+      RENDERER_IMAGE: "sha256:" + "a".repeat(64),
+      RENDERER_SECCOMP_PROFILE: "fixture-only",
+      WORKER_ID: "worker",
+    }))
+      vi.stubEnv(key, value);
+    const run = vi
+      .spyOn(rendererStage, "runRendererStage")
+      .mockResolvedValueOnce({
+        exitCode: 137,
+        timedOut: true,
+        stderr: "",
+      });
+    await processPdfInspection(
+      f.database,
+      { ...loadWorkerConfig(), minFreeStorageBytes: 0 },
+      retry,
+    );
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(
+      structuredResult(await inspect("get_render_quality_report")),
+    ).toMatchObject({
+      state: "failed",
+      errorCode: "PDF_INSPECTION_FAILED",
+      report: null,
+    });
+    expect(f.renders.job(identity, jobId).status).toBe("succeeded");
+    await expect(
+      f.renders.artifact(identity, jobId, "result.pdf"),
+    ).resolves.toMatchObject({
+      sha256: pdfSha256,
+      bytes: TEST_PDF,
+    });
+    f.database.raw
+      .prepare("UPDATE jobs SET completed_at=?,updated_at=? WHERE id=?")
+      .run("2000-01-01T00:00:00Z", "2000-01-01T00:00:00Z", jobId);
+    expect(
+      (await inspect("get_render_quality_report")).result.structuredContent,
+    ).toMatchObject({
+      success: false,
+      error: { code: "PDF_UNAVAILABLE" },
+    });
+    expect(f.renders.job(identity, jobId).status).toBe("succeeded");
+  });
+
+  it("keeps unobserved text and incompatible raster samples unchecked in the MCP comparison", async () => {
+    const f = await createFixture();
+    const token = issueAccessToken(f.oauth);
+    const seedReport = async (
+      label: string,
+      rasterizer: string,
+      truncated: boolean,
+    ) => {
+      const bytes = Buffer.from("%PDF-1.7\n" + label + "\n%%EOF\n");
+      const jobId = await seedCompletedRemoteJob(f, "succeeded", bytes);
+      const pdfSha256 = digest(bytes);
+      const target = { jobId, pdfSha256 };
+      const queued = await callTool(
+        f.app,
+        token,
+        1,
+        "request_render_quality_report",
+        target,
+      );
+      expect(structuredResult(queued)).toMatchObject({ state: "queued" });
+      const claim = f.database.pdfInspections.claim(
+        "worker",
+        new Date().toISOString(),
+      );
+      if (!claim) throw new Error("Inspection not queued");
+      const observed = (text: string, truncated = false) => ({
+        status: "observed",
+        text,
+        truncated,
+      });
+      expect(
+        f.database.pdfInspections.finish(claim.id, "worker", {
+          json: JSON.stringify({
+            checks: {
+              versions: observed(rasterizer),
+              "page-rasters": observed(digest(label)),
+              "extracted-text": observed(label, truncated),
+              navigation: {
+                status: "not_checked",
+                text: null,
+                truncated: false,
+              },
+            },
+          }),
+        }),
+      ).toBe(true);
+      return target;
+    };
+    const before = await seedReport("Before", "renderer v1", false);
+    const after = await seedReport("After", "renderer v2", true);
+    const comparison = structuredResult(
+      await callTool(f.app, token, 2, "compare_render_quality", {
+        before,
+        after,
+      }),
+    );
+    expect(comparison).toMatchObject({
+      before: { ...before, state: "ready" },
+      after: { ...after, state: "ready" },
+      samePdfBytes: false,
+      extractedText: "not_checked",
+      navigation: "not_checked",
+      visual: "not_checked",
+      documentMeaning: "not_checked",
+      visualCoverage: {
+        comparedPages: 0,
+        changedPreviewPages: [],
+        maxPageSidePixels: 512,
+        pagePairing: "physical_page_number",
+      },
+    });
+  });
+
   it("queues one inspection for the exact artifact without creating a new render", async () => {
     const f = await createFixture(),
       token = issueAccessToken(f.oauth);
@@ -4176,8 +5210,13 @@ async function createFixture(
   resourceLimits?: Readonly<ResourceLimits>,
   actualHttp = false,
   publicOrigin = ORIGIN,
+  persist = false,
 ) {
-  const database = new RendererDatabase(":memory:");
+  const storage = await mkdtemp(join(tmpdir(), "remote-mcp-http-"));
+  temporary.push(storage);
+  const database = new RendererDatabase(
+    persist ? join(storage, "renderer.sqlite3") : ":memory:",
+  );
   databases.push(database);
   database.migrate();
   const timestamp = "2026-08-12T00:00:00.000Z";
@@ -4194,8 +5233,6 @@ async function createFixture(
       "UPDATE users SET access_subject='access-subject',access_subject_linked_at=? WHERE id='user_test'",
     )
     .run(timestamp);
-  const storage = await mkdtemp(join(tmpdir(), "remote-mcp-http-"));
-  temporary.push(storage);
   const environment = join(storage, "environment");
   await mkdir(environment, { recursive: true });
   await writeFile(
@@ -4206,33 +5243,12 @@ async function createFixture(
     join(environment, "fonts.txt"),
     "Latin Modern Roman\nNoto Sans CJK JP\n",
   );
-  const oauth = new RemoteOAuthService(database, publicOrigin, RESOURCE),
-    renders = new RemoteRenderService(
-      database,
-      storage,
-      "renderer:test",
-      ORIGIN,
-      100,
-      1024 * 1024 * 1024,
-      environment,
-      resourceLimits,
-    ),
-    access = {
-      verify: () =>
-        Promise.resolve({
-          subject: "access-subject",
-          payload: { sub: "access-subject" },
-        }),
-    } as unknown as AccessJwtVerifier,
-    app = createRemoteMcpApp({
-      database,
-      browserAuth: legacyTestBrowserAuth(database, access, {
-        enforceExactOrigin: true,
-      }),
-      oauth,
-      mcp: createRemoteMcpHandler(renders, "0.2.0"),
-      publicOrigin,
-    });
+  const { app, oauth, renders } = remoteFixtureServices(
+    database,
+    storage,
+    publicOrigin,
+    resourceLimits,
+  );
   if (actualHttp) {
     const server = createServer((req, res) => {
       void (async () => {
@@ -4276,10 +5292,14 @@ async function createFixture(
         }
       })().catch(() => res.destroy());
     });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => {
+        server.off("error", reject);
+        resolve();
+      });
+    });
     servers.push(server);
-    await new Promise<void>((resolve) =>
-      server.listen(0, "127.0.0.1", resolve),
-    );
     const address = server.address();
     if (!address || typeof address === "string")
       throw new Error("Fixture HTTP address unavailable");
@@ -4304,6 +5324,93 @@ async function createFixture(
   return { app, database, oauth, renders, storage };
 }
 
+function fixtureAccess(): AccessJwtVerifier {
+  return {
+    verify: () =>
+      Promise.resolve({
+        subject: "access-subject",
+        payload: { sub: "access-subject" },
+      }),
+  } as unknown as AccessJwtVerifier;
+}
+
+function remoteFixtureServices(
+  database: RendererDatabase,
+  storage: string,
+  publicOrigin: string,
+  resourceLimits?: Readonly<ResourceLimits>,
+) {
+  const environment = join(storage, "environment");
+  const oauth = new RemoteOAuthService(database, publicOrigin, RESOURCE),
+    renders = new RemoteRenderService(
+      database,
+      storage,
+      "renderer:test",
+      ORIGIN,
+      100,
+      1024 * 1024 * 1024,
+      environment,
+      resourceLimits,
+    ),
+    app = createRemoteMcpApp({
+      database,
+      browserAuth: legacyTestBrowserAuth(database, fixtureAccess(), {
+        enforceExactOrigin: true,
+      }),
+      oauth,
+      mcp: createRemoteMcpHandler(renders, "0.2.0"),
+      publicOrigin,
+    });
+  return { app, oauth, renders };
+}
+
+async function draftProject(
+  f: Awaited<ReturnType<typeof createFixture>>,
+  text: string | Buffer,
+  additionalFiles: { path: string; text: string }[] = [],
+) {
+  const identity = {
+    userId: "user_test",
+    scopes: ["mcp:read", "mcp:render"] as const,
+  };
+  const token = issueAccessToken(f.oauth);
+  const { id: projectId } = f.renders.createProject(
+    identity,
+    "Draft regression",
+  );
+  const source = await f.renders.createSource(identity, [
+    typeof text === "string"
+      ? { path: "main.tex", text }
+      : { path: "main.tex", base64: text.toString("base64") },
+    ...additionalFiles,
+  ]);
+  const { id: revisionId } = f.renders.attachProjectRevision(identity, {
+    projectId,
+    sourceId: source.id,
+    entrypoint: "main.tex",
+    displayName: "Initial",
+    originalFilename: "main.tex",
+    outputs: ["pdf"],
+  });
+  let requestId = 0;
+  const call = (name: string, args: Record<string, unknown>) =>
+    callTool(f.app, token, ++requestId, name, { projectId, ...args });
+  return { call, identity, projectId, revisionId, token };
+}
+
+function draftStorage({ database }: { database: RendererDatabase }) {
+  return {
+    bytes: database.sources.storageUsageForUser("user_test"),
+    sources: database.raw
+      .prepare("SELECT id, status, size FROM sources ORDER BY id")
+      .all(),
+  };
+}
+
+function digest(value: string | Buffer) {
+  return createHash("sha256").update(value).digest("hex");
+}
+
 const TEST_PDF = Buffer.from("%PDF-1.7\nphase-1-test\n%%EOF\n"),
   TEST_PNG = Buffer.from([
     0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x00,
@@ -4312,6 +5419,7 @@ const TEST_PDF = Buffer.from("%PDF-1.7\nphase-1-test\n%%EOF\n"),
 async function seedCompletedRemoteJob(
   fixture: Awaited<ReturnType<typeof createFixture>>,
   status: "failed" | "succeeded",
+  pdf = TEST_PDF,
 ): Promise<string> {
   const identity = {
       userId: "user_test",
@@ -4386,13 +5494,7 @@ async function seedCompletedRemoteJob(
       Buffer.from(diagnostics),
     );
   } else {
-    await seedRemoteArtifact(
-      fixture,
-      created.id,
-      "pdf",
-      "result.pdf",
-      TEST_PDF,
-    );
+    await seedRemoteArtifact(fixture, created.id, "pdf", "result.pdf", pdf);
     await seedRemoteArtifact(
       fixture,
       created.id,
