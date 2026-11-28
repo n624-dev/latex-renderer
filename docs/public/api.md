@@ -24,13 +24,18 @@ OpenAPI 定義：[予約とジョブ作成（gateway.openapi.yaml）](/openapi/g
 すべての認証は HTTP ヘッダー `Authorization: Bearer <TOKEN>` で送ります。
 
 - **API キー（`lrk_...`）を使う操作**：Source 予約、ジョブ作成、保存 Project 操作、ジョブ用トークンの再発行（`job-tickets`）、SVG 再試行
-  - `render:create`：ジョブ作成、Project の作成・改名・削除・改訂保存
+  - `render:create`：ジョブ作成、Project の作成・改名・削除・改訂保存・保存版の保護設定
   - `render:read:own`：自分のジョブ用短時間トークンの更新、Project と履歴の閲覧
-  - `render:project:read`：同じ利用者が所有するProjectの保存版で、ファイル一覧とUTF-8の本文を読む。キー発行時に明示的に選択する。
+  - `render:project:read` — 保存版のファイル・Source ZIP の取得、保存量の確認、保存版整理の計画。キー発行時に明示的に選択する。
+  - `render:project:state:read` — 文書条件、採用版、PDF 確認記録の閲覧。
+  - `render:project:state:write` — 文書条件の変更、保存版の採用、PDF 確認の記録。
+  - `render:project:delete` — 保存版整理の実行。
   - `render:draft:read` — 共有下書きの一覧と本文を読む。
   - `render:draft:write` — 共有下書きを開き、編集・保存する。
   - `render:pdf:inspect` — そのキーが所有するJobのPDF品質検査を要求し、結果を読む。
 - **短時間トークン（`uploadTicket` / `jobTicket`）を使う操作**：ZIP アップロード、ジョブの状態取得・キャンセル・成果物取得・削除
+
+文書状態の閲覧・変更と保存版整理の実行には、キー発行時に対応するスコープを明示的に選択してください。
 
 > [!WARNING]
 > API キー、`uploadTicket`、`jobTicket` をログ、URL クエリ、送信するソース ZIP 内に含めないでください。
@@ -69,6 +74,15 @@ API キーで作成した Job は、そのキーにひも付きます。管理�
 | `GET` | `/api/v1/projects/{projectId}/revisions/{revisionId}/jobs` | 指定した改訂の Job 履歴を取得 |
 | `GET` | `/api/v1/projects/{projectId}/revisions/{revisionId}/files` | 保存版のファイル一覧を取得。 `path` を指定すると本文を取得 |
 | `POST` | `/api/v1/projects/{projectId}/revisions/{revisionId}/render` | 指定した改訂を再レンダリング |
+| `GET` | `/api/v1/projects/{projectId}/document-state` | 文書条件、採用版、指定した保存版の変更履歴を取得 |
+| `PATCH` | `/api/v1/projects/{projectId}/document-state/conditions` | 指定版の文書条件を更新 |
+| `POST` | `/api/v1/projects/{projectId}/document-state/adoption` | 採用版を設定または解除 |
+| `GET` / `POST` | `/api/v1/projects/{projectId}/pdf-reviews` | Project の PDF 確認記録を一覧表示または追加 |
+| `GET` | `/api/v1/projects/{projectId}/storage-usage` | Project の保存量とアカウント上限を取得 |
+| `POST` | `/api/v1/projects/{projectId}/revision-protection` | 保存版の明示的な保護を設定または解除 |
+| `POST` | `/api/v1/projects/{projectId}/revision-cleanup/plan` | 指定した保存版の整理を計画 |
+| `POST` | `/api/v1/projects/{projectId}/revision-cleanup/apply` | 現在の計画ハッシュを使って保存版整理を実行 |
+| `GET` | `/api/v1/projects/{projectId}/revisions/{revisionId}/source.zip` | 指定した保存版の Source ZIP を取得 |
 
 > [!DETAILS] 保存 Project API と保守モード時の挙動を表示
 >

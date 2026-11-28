@@ -407,6 +407,11 @@ export const english = {
   readSharedDrafts: "Read shared project drafts",
   editSharedDrafts: "Open, edit and save shared project drafts",
   inspectOwnedPdfs: "Inspect PDFs from jobs owned by this key",
+  readProjectDocumentState:
+    "View document conditions, adopted revisions, and PDF reviews",
+  writeProjectDocumentState:
+    "Change document conditions, adopt revisions, and record PDF reviews",
+  applyProjectRevisionCleanup: "Apply saved revision cleanup",
   renderReadScope:
     "{scope}: Renew a short-lived token for your own job. Use it to check status, retrieve results, cancel or delete the job.",
   renderTarget: "Render target",
