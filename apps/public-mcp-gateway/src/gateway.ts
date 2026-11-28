@@ -29,6 +29,13 @@ export interface GatewayLimits {
   timeoutMs: number;
 }
 
+type CleanupStatus = { startedAt: string } & (
+  | ({ status: "ok"; dcrRegistrationCapacityRemaining: number } & ReturnType<
+      SqliteConnectionStore["pruneExpiredCredentials"]
+    >)
+  | { status: "failed" }
+);
+
 export function createGateway(options: {
   store: SqliteConnectionStore;
   origin: string;
@@ -143,6 +150,28 @@ export function createGateway(options: {
     download: downloads.link,
   });
 
+  let lastCleanup: CleanupStatus | undefined;
+  function cleanup(now = Date.now()): void {
+    const event = "public_mcp_gateway.cleanup";
+    const startedAt = new Date(now).toISOString();
+    try {
+      const counts = store.pruneExpiredCredentials(now);
+      lastCleanup = {
+        status: "ok",
+        startedAt,
+        ...counts,
+        dcrRegistrationCapacityRemaining: Math.max(
+          0,
+          limits.registrations - counts.dcrRegistrationsUsed,
+        ),
+      };
+      console.info(JSON.stringify({ event, ...lastCleanup }));
+    } catch {
+      lastCleanup = { status: "failed", startedAt };
+      console.error(JSON.stringify({ event, ...lastCleanup }));
+    }
+  }
+
   async function fetch(incoming: Request): Promise<Response> {
     const url = new URL(incoming.url);
     if (
@@ -193,6 +222,7 @@ export function createGateway(options: {
     server,
     tokens,
     pairing,
+    cleanup,
     closeConnections: () => agent.close(),
   };
 }
