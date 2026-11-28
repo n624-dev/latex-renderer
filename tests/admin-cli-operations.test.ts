@@ -6,6 +6,9 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { Worker } from "node:worker_threads";
 import { expect, it } from "vitest";
+import { readFixtureBody } from "./helpers/fixture-http.js";
+
+const run = promisify(execFile);
 
 it("downloads only from the authenticated Job endpoint and preserves existing local files", async () => {
   const jobId = `job_${"a".repeat(32)}`;
@@ -87,10 +90,10 @@ it("downloads only from the authenticated Job endpoint and preserves existing lo
 
 it("uses the existing authenticated routes for jobs, backups, audit filtering and runtime settings", async () => {
   const requests: Array<{
-    method: string;
+    method: string | undefined;
     path: string;
-    authorization: string | null;
-    key: string | null;
+    authorization: string | undefined;
+    key: string | string[] | undefined;
     body: unknown;
   }> = [];
   const server = createServer((request, response) => {
@@ -223,8 +226,6 @@ it("uses the existing authenticated routes for jobs, backups, audit filtering an
           encoding: "utf8",
           env: {
             ...process.env,
-            LANGUAGE: "",
-            LC_ALL: lang,
             LATEX_RENDER_BASE_URL: origin,
             LATEX_RENDER_TRUSTED_ADMIN_ORIGINS: origin,
             LATEX_RENDER_ADMIN_API_KEY: "fixture-key",
