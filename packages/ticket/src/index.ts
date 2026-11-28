@@ -15,6 +15,14 @@ import { AppError, nowIso } from "@latex-renderer/shared";
 
 export type TicketScope =
   "upload" | "status" | "download" | "cancel" | "delete";
+const jobTicketAuthScopes = [
+  "render:create",
+  "render:read:own",
+  "oauth:mcp",
+] as const;
+export type JobTicketAuthScope = (typeof jobTicketAuthScopes)[number];
+
+const JOB_TICKET_TTL_SECONDS = 1800;
 
 export interface TicketSubject {
   jobId: string;
@@ -55,6 +63,7 @@ export interface TicketClaims extends JWTPayload {
   sha256?: string;
   nonce?: string;
   draft_preview?: true;
+  auth_scope?: JobTicketAuthScope;
 }
 export interface SourceTicketClaims extends JWTPayload {
   source_id: string;
@@ -179,11 +188,16 @@ export class TicketService {
       .sign(this.activeKey.secret);
   }
 
-  async issueJob(subject: TicketSubject, ttlSeconds = 1800): Promise<string> {
+  async issueJob(
+    subject: TicketSubject,
+    authScope: JobTicketAuthScope,
+    ttlSeconds = JOB_TICKET_TTL_SECONDS,
+  ): Promise<string> {
     return this.sign(
       subject,
       ["status", "download", "cancel", "delete"],
       ttlSeconds,
+      { auth_scope: authScope },
     );
   }
 
@@ -239,6 +253,17 @@ export class TicketService {
       throw new AppError("INVALID_TICKET", "Ticket is invalid or expired", 401);
     }
     const claims = validateClaims(payload);
+    // Pre-auth_scope ordinary tickets retain their original authorization
+    // until expiry, for at most 30 minutes from issuance.
+    if (
+      requiredScope !== "upload" &&
+      claims.draft_preview !== true &&
+      claims.auth_scope === undefined &&
+      (typeof claims.iat !== "number" ||
+        typeof claims.exp !== "number" ||
+        Math.floor(Date.now() / 1000) >= claims.iat + JOB_TICKET_TTL_SECONDS)
+    )
+      throw new AppError("INVALID_TICKET", "Ticket is invalid or expired", 401);
     if (claims.job_id !== expectedJobId)
       throw new AppError(
         "TICKET_JOB_MISMATCH",
@@ -485,6 +510,15 @@ function validateClaims(payload: JWTPayload): TicketClaims {
       401,
     );
   }
+  if (
+    payload.auth_scope !== undefined &&
+    !jobTicketAuthScopes.some((scope) => scope === payload.auth_scope)
+  )
+    throw new AppError(
+      "INVALID_TICKET_CLAIMS",
+      "Ticket authorization scope is invalid",
+      401,
+    );
   return payload as TicketClaims;
 }
 

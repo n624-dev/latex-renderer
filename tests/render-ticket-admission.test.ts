@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pipeline } from "node:stream/promises";
 import yazl from "yazl";
+import { SignJWT } from "jose";
 import type { AuthenticatedServiceAccount } from "@latex-renderer/auth";
 import { ApiKeyService } from "@latex-renderer/auth";
 import {
@@ -509,6 +510,91 @@ it("inspects only the exact PDF of a job owned by an explicitly authorized key",
 
 describe("render ticket admission", () => {
   it.each(["legacy", "source"] as const)(
+    "binds the %s creation ticket to render:create for a create-only key",
+    async (mode) => {
+      const f = fixture({ maxStorage: 100, maxQueue: 20 });
+      const key = insertKey(f, "service", ["render:create"]);
+      const input =
+        mode === "legacy"
+          ? { size: 1, sha256: "b".repeat(64) }
+          : { sourceId: readySource(f.database) };
+      const {
+        value: { jobId, jobTicket },
+      } = await f.service.create(
+        f.apiKeys.authenticate(key.token),
+        input,
+        "create-only-job-ticket-fixture",
+      );
+      for (const scope of ["status", "download"] as const) {
+        await expect(
+          f.tickets.verify(jobTicket, scope, jobId),
+        ).resolves.toMatchObject({
+          api_key_id: key.id,
+          auth_scope: "render:create",
+        });
+      }
+      f.database.raw
+        .prepare("UPDATE api_keys SET scopes_json=? WHERE id=?")
+        .run('["render:read:own"]', key.id);
+      for (const scope of ["status", "download"] as const) {
+        await expect(
+          f.tickets.verify(jobTicket, scope, jobId),
+        ).rejects.toMatchObject({
+          code: "JOB_NOT_FOUND",
+          status: 404,
+        });
+      }
+    },
+  );
+
+  it("accepts legacy Job tickets within 30 minutes and rejects unknown authorization claims", async () => {
+    const f = fixture({ maxStorage: 100, maxQueue: 20 });
+    const {
+      value: { jobId },
+    } = await f.service.create(
+      f.actor,
+      { sourceId: readySource(f.database) },
+      "legacy-job-ticket-fixture",
+    );
+    f.database.raw
+      .prepare("UPDATE api_keys SET scopes_json='[]' WHERE id=?")
+      .run(f.actor.apiKeyId);
+    const now = Math.floor(Date.now() / 1000);
+    const sign = (issuedAt: number, claims: { auth_scope?: unknown } = {}) =>
+      new SignJWT({
+        job_id: jobId,
+        user_id: f.actor.userId,
+        service_account_id: f.actor.serviceAccountId,
+        api_key_id: f.actor.apiKeyId,
+        user_security_version: f.actor.userSecurityVersion,
+        service_account_security_version: f.actor.serviceAccountSecurityVersion,
+        scopes: ["status", "download"],
+        ...claims,
+      })
+        .setProtectedHeader({ alg: "HS256", typ: "JWT", kid: "v1" })
+        .setIssuer("latex-renderer")
+        .setAudience("latex-render")
+        .setIssuedAt(issuedAt)
+        .setExpirationTime(now + 60)
+        .setJti("legacy-job-ticket-fixture")
+        .sign(Buffer.alloc(32, 8));
+    const legacy = await sign(now - 60);
+    await expect(
+      f.tickets.verify(legacy, "status", jobId),
+    ).resolves.toMatchObject({
+      job_id: jobId,
+    });
+    await expect(
+      f.tickets.verify(await sign(now - 1801), "status", jobId),
+    ).rejects.toMatchObject({ code: "INVALID_TICKET", status: 401 });
+    for (const auth_scope of ["render:project:read", null]) {
+      await expect(
+        f.tickets.verify(await sign(now, { auth_scope }), "status", jobId),
+      ).rejects.toMatchObject({ code: "INVALID_TICKET_CLAIMS", status: 401 });
+    }
+  });
+
+  it.each(["legacy", "source"] as const)(
     "keeps %s Job renewal and replay bound to its original API key over HTTP",
     async (mode) => {
       const f = fixture({ maxStorage: 100, maxQueue: 20 }),
@@ -567,14 +653,17 @@ describe("render ticket admission", () => {
           });
         }
       }
-      const mismatched = await tickets.issueJob({
-        jobId: original.jobId,
-        userId: "user",
-        serviceAccountId: "service",
-        apiKeyId: keyB.id,
-        userSecurityVersion: 1,
-        serviceAccountSecurityVersion: 1,
-      });
+      const mismatched = await tickets.issueJob(
+        {
+          jobId: original.jobId,
+          userId: "user",
+          serviceAccountId: "service",
+          apiKeyId: keyB.id,
+          userSecurityVersion: 1,
+          serviceAccountSecurityVersion: 1,
+        },
+        "render:create",
+      );
       await expect(
         tickets.verify(mismatched, "status", original.jobId),
       ).rejects.toMatchObject({ code: "JOB_NOT_FOUND", status: 404 });
@@ -676,8 +765,9 @@ describe("render ticket admission", () => {
     expect(() => apiKeys.authenticate(original.token)).toThrow(/revoked/);
     await expect(tickets.verify(jobTicket, "status", jobId))
       .rejects.toMatchObject({ code: "TICKET_SUBJECT_INACTIVE" });
-    await expect(service.renew(apiKeys.authenticate(independent.token), jobId))
-      .rejects.toMatchObject({ code: "JOB_NOT_FOUND" });
+    await expect(
+      service.renewForApiKey(apiKeys.authenticate(independent.token), jobId),
+    ).rejects.toMatchObject({ code: "JOB_NOT_FOUND" });
     const sharedSourceJob = await service.create(
       apiKeys.authenticate(sameOwner.token),
       input,
@@ -698,7 +788,10 @@ describe("render ticket admission", () => {
       .resolves.toMatchObject({ api_key_id: rotated.id });
 
     const latest = actions.rotate(owner, rotated.id);
-    const access = await service.renew(apiKeys.authenticate(latest.apiKey), jobId);
+    const access = await service.renewForApiKey(
+      apiKeys.authenticate(latest.apiKey),
+      jobId,
+    );
     await expect(tickets.verify(access.jobTicket, "download", jobId))
       .resolves.toMatchObject({ api_key_id: latest.id });
     await expect(tickets.verify(replayed.value.jobTicket, "status", jobId))
@@ -910,7 +1003,7 @@ describe("render ticket admission", () => {
       role: "owner",
     } as const;
     const successor = keys.rotate(admin, original.id);
-    const { jobTicket } = await service.renew(
+    const { jobTicket } = await service.renewForApiKey(
       apiKeys.authenticate(successor.apiKey),
       jobId,
     );
@@ -922,8 +1015,21 @@ describe("render ticket admission", () => {
         method: "POST",
         headers: { Authorization: `Bearer ${successor.apiKey}` },
       });
+    for (const scope of ["status", "download"] as const) {
+      await expect(
+        tickets.verify(jobTicket, scope, jobId),
+      ).resolves.toMatchObject({
+        api_key_id: successor.id,
+        auth_scope: "render:read:own",
+      });
+    }
     updateScopes.run('["render:create"]', successor.id);
     expect((await renew()).status).toBe(403);
+    for (const scope of ["status", "download"] as const) {
+      await expect(
+        tickets.verify(jobTicket, scope, jobId),
+      ).rejects.toMatchObject({ code: "JOB_NOT_FOUND", status: 404 });
+    }
     updateScopes.run('["render:read:own"]', successor.id);
     expect(database.worker.subjectState(jobId)).toBeUndefined();
     expect((await renew()).status).toBe(200);
@@ -1043,9 +1149,15 @@ describe("render ticket admission", () => {
       retryKey,
     );
     expect(first.status).toBe(202);
+    expect(first.value).toMatchObject({
+      job: { id: jobId, stages: { svg: { status: "queued", attempt: 2 } } },
+    });
     await expect(
       tickets.verify(first.value.jobTicket, "status", jobId),
-    ).resolves.toMatchObject({ api_key_id: successor.apiKeyId });
+    ).resolves.toMatchObject({
+      api_key_id: successor.apiKeyId,
+      auth_scope: "render:create",
+    });
     const queued = snapshot();
     await expect(
       service.create(actorB, { retrySvgJobId: jobId }, retryKey),
