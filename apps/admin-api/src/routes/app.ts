@@ -209,18 +209,19 @@ export function createAppV1Router(deps: AdminDependencies): Hono {
       id = parse(jobId, c.req.param("id")),
       key = idempotencyKey(c.req.header("Idempotency-Key"));
     assertOwnedJob(deps, actor, id);
-    const retried = await jobs.retrySvg(actor, id, key),
-      access = await jobs.issueAccessTicket(actor, retried.id);
-    return c.json(access, retried.reused ? 200 : 202);
+    const retried = await jobs.retrySvg(actor, id, key, { accessTicket: true });
+    return c.json(retried.access, retried.reused ? 200 : 202);
   });
   router.post("/jobs/:id/retry", async (c) => {
     const actor = await requireAppActor(deps, c),
       id = parse(jobId, c.req.param("id")),
       key = idempotencyKey(c.req.header("Idempotency-Key"));
     assertOwnedJob(deps, actor, id);
-    const retried = await jobs.retry(actor, id, key),
-      access = await jobs.issueAccessTicket(actor, retried.id);
-    return c.json({ ...access, retryOfJobId: id }, retried.reused ? 200 : 202);
+    const retried = await jobs.retry(actor, id, key, { accessTicket: true });
+    return c.json(
+      { ...retried.access, retryOfJobId: retried.retryOfJobId },
+      retried.reused ? 200 : 202,
+    );
   });
   router.delete("/jobs/:id", async (c) => {
     const actor = await requireAppActor(deps, c),

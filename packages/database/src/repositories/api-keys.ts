@@ -190,7 +190,7 @@ export class ApiKeysRepository {
     return this.findActiveIdentity(id, now, false);
   }
 
-  activeJobIdentity(id: string, now: string): RenderIdentityRow | undefined {
+  activeJobIdentity(id: string, now: string) {
     return this.findActiveIdentity(id, now, true);
   }
 
@@ -199,13 +199,13 @@ export class ApiKeysRepository {
     return active && this.renderIdentity(active.api_key_id, now);
   }
 
-  private findActiveIdentity(id: string, now: string, followRotation: boolean): RenderIdentityRow | undefined {
+  private findActiveIdentity(id: string, now: string, followRotation: boolean) {
     const credential = followRotation
       ? `EXISTS (SELECT 1 FROM api_keys owner WHERE owner.id=? AND ${sameJobCredential("owner", "k")})`
       : "k.id=?";
     return this.db
       .prepare(
-        `SELECT k.id AS api_key_id,k.name AS api_key_name,
+        `SELECT k.id AS api_key_id,k.name AS api_key_name,k.scopes_json,
         s.id AS service_account_id,s.name AS service_account_name,
         s.security_version AS service_account_security_version,
         u.id AS user_id,u.email AS user_email,u.display_name AS user_display_name,
@@ -215,7 +215,8 @@ export class ApiKeysRepository {
         WHERE ${credential} AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at>?)
           AND s.status='active' AND s.purpose='user' AND u.status='active'`,
       )
-      .get(id, now) as unknown as RenderIdentityRow | undefined;
+      .get(id, now) as unknown as
+      (RenderIdentityRow & { scopes_json: string }) | undefined;
   }
 
   jobOwnerId(id: string): string | undefined {

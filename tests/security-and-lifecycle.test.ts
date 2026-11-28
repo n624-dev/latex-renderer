@@ -160,14 +160,17 @@ describe("state and credentials", () => {
       { kid: "v1", secret: Buffer.alloc(32, 9) },
       [],
     );
-    const token = await tickets.issueJob({
-      jobId: "job_00000000000000000000000000000000",
-      userId: "user_seed",
-      serviceAccountId: "sa_seed",
-      apiKeyId: generated.id,
-      userSecurityVersion: 1,
-      serviceAccountSecurityVersion: 1,
-    });
+    const token = await tickets.issueJob(
+      {
+        jobId: "job_00000000000000000000000000000000",
+        userId: "user_seed",
+        serviceAccountId: "sa_seed",
+        apiKeyId: generated.id,
+        userSecurityVersion: 1,
+        serviceAccountSecurityVersion: 1,
+      },
+      "render:create",
+    );
     await expect(
       tickets.verify(token, "status", "job_00000000000000000000000000000000"),
     ).resolves.toMatchObject({
