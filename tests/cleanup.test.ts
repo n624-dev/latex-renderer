@@ -535,6 +535,97 @@ describe("scheduled cleanup", () => {
     await expect(stat(path)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("collects physically deleted Source rows at the history cutoff when unreferenced", async () => {
+    const root = await mkdtemp(
+      join(tmpdir(), "latex-renderer-source-history-"),
+    );
+    roots.push(root);
+    const databasePath = join(root, "renderer.sqlite3");
+    const storageRoot = join(root, "storage");
+    await mkdir(storageRoot);
+    const now = Date.parse("2026-11-28T00:00:00.000Z");
+    const cutoff = now - 30 * 86_400_000;
+    const timestamp = new Date(cutoff - 1).toISOString();
+    const ownerUserId = "user_source_history";
+    const expired = `source_${"a".repeat(32)}`;
+    const recent = `source_${"b".repeat(32)}`;
+    const referenced = `source_${"c".repeat(32)}`;
+    const db = new RendererDatabase(databasePath);
+    try {
+      db.migrate();
+      db.users.insertInvitation({
+        id: ownerUserId,
+        displayName: "Owner",
+        role: "user",
+        createdBy: "test",
+        timestamp,
+      });
+      for (const [id, deletedAt] of [
+        [expired, cutoff],
+        [recent, cutoff + 1],
+        [referenced, cutoff - 1],
+      ] as const) {
+        db.sources.insertReserved({
+          id,
+          ownerUserId,
+          size: 1,
+          sha256: "a".repeat(64),
+          timestamp,
+          expiresAt: timestamp,
+          storageKey: `sources/${id}/source.zip`,
+        });
+        db.raw
+          .prepare(
+            "UPDATE sources SET status='deleted',deletion_status='deleted',deleted_at=? WHERE id=?",
+          )
+          .run(new Date(deletedAt).toISOString(), id);
+      }
+      const projectId = `project_${"a".repeat(32)}`;
+      db.projects.insert({
+        id: projectId,
+        ownerUserId,
+        displayName: "Retained history",
+        timestamp,
+      });
+      db.projects.insertRevision({
+        id: `revision_${"a".repeat(32)}`,
+        projectId,
+        sourceId: referenced,
+        displayName: "Original",
+        originalFilename: "source.zip",
+        entrypoint: "main.tex",
+        timestamp,
+      });
+    } finally {
+      db.close();
+    }
+
+    await execFileAsync(
+      process.execPath,
+      [
+        "--import",
+        `data:text/javascript,Date.now=()=>${now}`,
+        join(process.cwd(), "deploy/scripts/cleanup.mjs"),
+      ],
+      {
+        env: {
+          ...process.env,
+          DATABASE_PATH: databasePath,
+          STORAGE_ROOT: storageRoot,
+          SOURCE_HISTORY_RETENTION_DAYS: "30",
+        },
+      },
+    );
+    const verified = new RendererDatabase(databasePath);
+    try {
+      expect(verified.sources.get(expired)).toBeUndefined();
+      expect(verified.sources.get(recent)?.status).toBe("deleted");
+      expect(verified.sources.get(referenced)?.status).toBe("deleted");
+    } finally {
+      verified.close();
+    }
+  });
+
   it("records a failed Job deletion without changing its render result or starving later Jobs", async () => {
     const root = await mkdtemp(join(tmpdir(), "latex-renderer-job-retry-"));
     roots.push(root);
