@@ -4,6 +4,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { Worker } from "node:worker_threads";
 import { expect, it } from "vitest";
 import { readFixtureBody } from "./helpers/fixture-http.js";
 
@@ -437,4 +438,166 @@ it("uses the existing authenticated routes for jobs, backups, audit filtering an
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
+}, 30_000);
+
+it("previews and confirms backup retention through the admin API", async () => {
+  const requests: {
+    method?: string;
+    path: string;
+    authorization?: string | null;
+    key?: string | null;
+    body?: unknown;
+  }[] = [];
+  const retentionPath = "/admin/api/v1/backups/retention";
+  const limits = { maxAgeDays: 7, maxGenerations: 2, maxTotalBytes: 0 };
+  const retentionOptions = [
+    "--max-age-days",
+    "7",
+    "--max-generations",
+    "2",
+    "--max-total-bytes",
+    "0",
+  ];
+  const preview = {
+    delete: ["archive.age"],
+    warnings: ["PROTECTED_OVER_BYTES"],
+  };
+  const retentionStatus = {
+    policy: null,
+    candidates: limits,
+    plan: { delete: [] },
+  };
+  let pruneFails = false;
+  const origin = "https://admin.example.test";
+  // Run the real CLI in an isolated worker with an in-memory HTTP fixture.
+  const fixture = `
+    import { parentPort, workerData } from "node:worker_threads";
+    const { cli, args } = workerData;
+    process.argv = [process.execPath, cli, ...args];
+    globalThis.fetch = (url, options) => {
+      const headers = new Headers(options.headers);
+      const { pathname, search } = url;
+      const { method, body } = options;
+      parentPort.postMessage({
+        method, path: pathname + search,
+        authorization: headers.get("authorization"),
+        key: headers.get("idempotency-key"),
+        body: body === undefined ? undefined : JSON.parse(body),
+      });
+      const retentionPath = ${JSON.stringify(retentionPath)};
+      let value = { fixture: true };
+      if (pathname === retentionPath) {
+        value = method === "POST"
+          ? { policy: ${JSON.stringify(limits)}, prune: { status: workerData.pruneStatus } }
+          : { ...${JSON.stringify(retentionStatus)}, proposedPlan: search ? ${JSON.stringify(preview)} : null };
+      }
+      return Promise.resolve(Response.json(value));
+    };
+    await import(cli);
+  `;
+  const fixtureUrl = new URL(
+    "data:text/javascript," + encodeURIComponent(fixture),
+  );
+  const cliUrl = new URL("../apps/admin-cli/src/index.ts", import.meta.url)
+    .href;
+  const cli = (args: string[], lang = "C.UTF-8") =>
+    new Promise<{ code: number; stdout: string; stderr: string }>(
+      (resolve, reject) => {
+        const worker = new Worker(fixtureUrl, {
+          execArgv: ["--import", "tsx"],
+          workerData: {
+            cli: cliUrl,
+            args,
+            pruneStatus: pruneFails ? "failed" : "succeeded",
+          },
+          env: {
+            ...process.env,
+            LANGUAGE: "",
+            LC_ALL: lang,
+            LATEX_RENDER_BASE_URL: origin,
+            LATEX_RENDER_TRUSTED_ADMIN_ORIGINS: origin,
+            LATEX_RENDER_ADMIN_API_KEY: "fixture-key",
+            CF_ACCESS_CLIENT_ID: "",
+            CF_ACCESS_CLIENT_SECRET: "",
+          },
+          stdout: true,
+          stderr: true,
+        });
+        let stdout = "";
+        let stderr = "";
+        worker.stdout.setEncoding("utf8").on("data", (chunk: string) => {
+          stdout += chunk;
+        });
+        worker.stderr.setEncoding("utf8").on("data", (chunk: string) => {
+          stderr += chunk;
+        });
+        worker.on("message", (request: (typeof requests)[number]) =>
+          requests.push(request),
+        );
+        worker.once("error", reject);
+        worker.once("exit", (code) => resolve({ code, stdout, stderr }));
+      },
+    );
+  const base = ["backup", "retention"];
+  const set = [...base, "set", ...retentionOptions, "--reason", "Disk budget"];
+  const { stdout: current } = await cli(base);
+  expect(JSON.parse(current)).toEqual({
+    ...retentionStatus,
+    proposedPlan: null,
+  });
+  const { stdout: proposed } = await cli([
+    ...base,
+    ...retentionOptions,
+    "--json",
+  ]);
+  expect(JSON.parse(proposed)).toEqual({
+    ...retentionStatus,
+    proposedPlan: preview,
+  });
+  const { stdout: confirmation } = await cli([...set, "--yes"]);
+  expect(JSON.parse(confirmation)).toEqual({
+    policy: limits,
+    prune: { status: "succeeded" },
+  });
+  expect(
+    requests
+      .slice(-3)
+      .map(({ method, path, body }) => ({ method, path, body })),
+  ).toEqual([
+    { method: "GET", path: retentionPath, body: undefined },
+    {
+      method: "GET",
+      path: retentionPath + "?maxAgeDays=7&maxGenerations=2&maxTotalBytes=0",
+      body: undefined,
+    },
+    {
+      method: "POST",
+      path: retentionPath,
+      body: { ...limits, reason: "Disk budget" },
+    },
+  ]);
+
+  const requestCount = requests.length;
+  await expect(cli(set)).resolves.toMatchObject({
+    code: 1,
+    stderr: expect.stringContaining("--yes") as unknown,
+  });
+  await expect(cli([...base, "--max-age-days", "7"])).resolves.toMatchObject({
+    code: 1,
+    stderr: expect.stringContaining("Specify all three limits") as unknown,
+  });
+  expect(requests).toHaveLength(requestCount);
+
+  const { stdout: help } = await cli(["backup", "--help"], "ja_JP.UTF-8");
+  expect(help).toContain("retention");
+  expect(help).toContain("ローカルバックアップの保持設定を表示・プレビュー");
+
+  pruneFails = true;
+  await expect(cli([...set, "--yes"])).resolves.toMatchObject({
+    code: 1,
+    stdout: expect.stringContaining('"status": "failed"') as unknown,
+    stderr: expect.stringContaining(
+      "Retention policy saved. Pruning failed.",
+    ) as unknown,
+  });
 }, 30_000);

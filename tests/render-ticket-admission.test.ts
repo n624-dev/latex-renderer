@@ -20,6 +20,7 @@ import {
 import { createMcpOperations } from "../packages/mcp-core/src/index.js";
 import { RemoteRenderService } from "../packages/remote-mcp-core/src/index.js";
 import { TicketService } from "@latex-renderer/ticket";
+import { sha256Hex } from "@latex-renderer/shared";
 import { gatewayRoute, proxyGatewayJson } from "../packages/gateway-core/src/index.js";
 import { AdminApiKeysService } from "../apps/admin-api/src/services/api-keys.js";
 import { createInternalApp } from "../apps/internal-api/src/app.js";
@@ -56,6 +57,11 @@ it("reads saved revision files only with the explicit scope and matching owner",
   const write = pipeline(zip.outputStream, createWriteStream(join(sourceDirectory, "source.zip")));
   zip.end();
   await write;
+  const archive = await readFile(join(sourceDirectory, "source.zip"));
+  const sha256 = sha256Hex(archive);
+  f.database.raw
+    .prepare("UPDATE sources SET size=?, sha256=? WHERE id=?")
+    .run(archive.length, sha256, sourceId);
 
   f.database.raw.prepare(
     `INSERT INTO users(id,access_subject,email,display_name,role,status,security_version,created_by,created_at,updated_at)
@@ -88,6 +94,261 @@ it("reads saved revision files only with the explicit scope and matching owner",
     projectId, revisionId, sourceId, path: "main.tex",
     text: "𝑥", offset: 3, unit: "utf16", totalUnits: 5, nextOffset: null,
   });
+  const zipPath = endpoint.replace(/files$/, "source.zip");
+  const requestZip = (token: string) =>
+    f.app.request(zipPath, { headers: { Authorization: `Bearer ${token}` } });
+  expect((await requestZip(base.token)).status).toBe(403);
+  expect((await requestZip(other.token)).status).toBe(404);
+  const downloaded = await requestZip(own.token);
+  expect(downloaded.status).toBe(200);
+  expect(downloaded.headers.get("Content-Type")).toBe("application/zip");
+  expect(downloaded.headers.get("Content-Length")).toBe(String(archive.length));
+  expect(downloaded.headers.get("X-Source-Zip-Size")).toBe(String(archive.length));
+  expect(downloaded.headers.get("ETag")).toBe(`"${sha256}"`);
+  expect(downloaded.headers.get("Content-Disposition")).toContain(
+    `${revisionId}.zip`,
+  );
+  expect(Buffer.from(await downloaded.arrayBuffer())).toEqual(archive);
+  await rm(join(sourceDirectory, "source.zip"));
+  expect((await requestZip(own.token)).status).toBe(410);
+});
+
+it("enforces the state and cleanup scope split and reuses Project state and retention rules", async () => {
+  const f = fixture({ maxStorage: 10000, maxQueue: 20 });
+  const timestamp = new Date().toISOString();
+  const projectId = `project_${"1".repeat(32)}`;
+  const oldRevision = `revision_${"2".repeat(32)}`;
+  const latest = `revision_${"3".repeat(32)}`;
+  const sourceId = readySource(f.database);
+  f.database.projects.insert({
+    id: projectId,
+    ownerUserId: "user",
+    displayName: "Project",
+    timestamp,
+  });
+  for (const id of [oldRevision, latest]) {
+    f.database.projects.insertRevision({
+      id,
+      projectId,
+      sourceId,
+      displayName: "Revision",
+      originalFilename: "main.tex",
+      entrypoint: id === latest ? "main.tex" : "old.tex",
+      timestamp,
+    });
+  }
+  f.database.raw
+    .prepare(
+      `INSERT INTO users(id,access_subject,email,display_name,role,status,security_version,created_by,created_at,updated_at)
+     VALUES ('other','other-subject','other@example.test','Other','user','active',1,'test',?,?)`,
+    )
+    .run(timestamp, timestamp);
+  f.database.serviceAccounts.insert({
+    id: "other-account",
+    ownerUserId: "other",
+    name: "Other",
+    clientType: "generic",
+    timestamp,
+  });
+  const render = insertKey(f, "service", ["render:create"]);
+  const stateRead = insertKey(f, "service", ["render:project:state:read"]);
+  const stateWrite = insertKey(f, "service", ["render:project:state:write"]);
+  const projectRead = insertKey(f, "service", ["render:project:read"]);
+  const cleanup = insertKey(f, "service", ["render:project:delete"]);
+  const outsider = insertKey(f, "other-account", [
+    "render:create",
+    "render:project:state:read",
+    "render:project:state:write",
+    "render:project:read",
+    "render:project:delete",
+  ]);
+  const { jobId } = (
+    await f.service.create(
+      f.apiKeys.authenticate(render.token),
+      { sourceId, project: { projectId, revisionId: latest } },
+      "saved-revision-pdf-review-2026",
+    )
+  ).value;
+  f.database.raw
+    .prepare("UPDATE jobs SET status='succeeded',completed_at=? WHERE id=?")
+    .run(timestamp, jobId);
+  const pdfSha256 = "a".repeat(64);
+  f.database.artifacts.insert({
+    id: "review-pdf",
+    job_id: jobId,
+    type: "pdf",
+    relative_path: "result.pdf",
+    storage_generation: null,
+    size: 1,
+    sha256: pdfSha256,
+    created_at: timestamp,
+  });
+  const request = (
+    token: string,
+    method: string,
+    suffix: string,
+    body?: object,
+  ) =>
+    f.app.request(`/internal/v1/projects/${projectId}${suffix}`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+  const condition = {
+    kind: "preserve",
+    basis: "user_specified",
+    text: "Keep the layout",
+  };
+  const conditions = { expectedVersion: 0, entries: [condition] };
+  const adoption = { revisionId: latest, expectedRevisionId: null };
+  const review = {
+    jobId,
+    revisionId: latest,
+    pdfSha256,
+    conditionsVersion: 1,
+    guideVersion: null,
+    checks: [{ type: "visual", status: "passed", pages: [1] }],
+  };
+  const selection = { revisionIds: [oldRevision] };
+  const protection = { revisionId: oldRevision, protected: true };
+  const denied: [string, string, string, object?][] = [
+    [stateWrite.token, "GET", "/document-state"],
+    [stateRead.token, "PATCH", "/document-state/conditions", conditions],
+    [render.token, "POST", "/document-state/adoption", adoption],
+    [stateWrite.token, "GET", "/pdf-reviews"],
+    [stateRead.token, "POST", "/pdf-reviews", review],
+    [stateRead.token, "GET", "/storage-usage"],
+    [projectRead.token, "POST", "/revision-protection", protection],
+    [cleanup.token, "POST", "/revision-cleanup/plan", selection],
+    [
+      render.token,
+      "POST",
+      "/revision-cleanup/apply",
+      { ...selection, planHash: "0".repeat(64) },
+    ],
+  ];
+  for (const [token, method, path, body] of denied) {
+    expect((await request(token, method, path, body)).status, path).toBe(403);
+    expect(
+      (await request(outsider.token, method, path, body)).status,
+      path,
+    ).toBe(404);
+  }
+  const call = async (
+    token: string,
+    method: string,
+    path: string,
+    body?: object,
+  ) => {
+    const result = await request(token, method, path, body);
+    expect(result.status, path).toBe(200);
+    return (await result.json()) as unknown;
+  };
+  await expect(
+    call(stateWrite.token, "PATCH", "/document-state/conditions", conditions),
+  ).resolves.toEqual({
+    projectId,
+    version: 1,
+    entries: [condition],
+    changed: true,
+  });
+  const conflict = await request(
+    stateWrite.token,
+    "PATCH",
+    "/document-state/conditions",
+    conditions,
+  );
+  expect(conflict.status).toBe(409);
+  await expect(conflict.json()).resolves.toMatchObject({
+    error: { code: "DOCUMENT_CONDITIONS_CONFLICT", currentVersion: 1 },
+  });
+  await expect(
+    call(stateWrite.token, "POST", "/document-state/adoption", adoption),
+  ).resolves.toEqual({ projectId, adoptedRevisionId: latest });
+  const history = encodeURIComponent(
+    JSON.stringify({ revisionId: latest, offset: 0 }),
+  );
+  await expect(
+    call(
+      stateRead.token,
+      "GET",
+      `/document-state?conditionsVersion=1&history=${history}`,
+    ),
+  ).resolves.toMatchObject({
+    projectId,
+    adoptedRevisionId: latest,
+    conditions: { version: 1, entries: [condition] },
+    revisionChanges: { revisionId: latest, items: [], nextOffset: null },
+  });
+  expect(
+    (await request(stateRead.token, "GET", "/document-state?history=%7B"))
+      .status,
+  ).toBe(400);
+  const wrongPdf = await request(stateWrite.token, "POST", "/pdf-reviews", {
+    ...review,
+    pdfSha256: "b".repeat(64),
+  });
+  expect(wrongPdf.status).toBe(409);
+  await expect(
+    call(stateWrite.token, "POST", "/pdf-reviews", review),
+  ).resolves.toMatchObject({ review: { projectId, ...review } });
+  await expect(
+    call(stateRead.token, "GET", "/pdf-reviews?offset=0"),
+  ).resolves.toMatchObject({ projectId, items: [review], nextOffset: null });
+  await expect(
+    call(projectRead.token, "GET", "/storage-usage"),
+  ).resolves.toMatchObject({
+    projectId,
+    project: { sourceCount: 1, sourceBytes: 1 },
+    user: { quotaBytes: 10000 },
+  });
+
+  const plan = async () =>
+    (await call(
+      projectRead.token,
+      "POST",
+      "/revision-cleanup/plan",
+      selection,
+    )) as {
+      planHash: string;
+      entries: { reasons: string[] }[];
+    };
+  const original = await plan();
+  expect(original.entries[0]?.reasons).toEqual([]);
+  await expect(
+    call(render.token, "POST", "/revision-protection", protection),
+  ).resolves.toEqual({ projectId, ...protection });
+  expect((await plan()).entries[0]?.reasons).toEqual(["protected"]);
+  const stale = await request(
+    cleanup.token,
+    "POST",
+    "/revision-cleanup/apply",
+    { ...selection, planHash: original.planHash },
+  );
+  expect(stale.status).toBe(409);
+  await expect(stale.json()).resolves.toMatchObject({
+    error: { code: "REVISION_CLEANUP_CHANGED" },
+  });
+  await call(render.token, "POST", "/revision-protection", {
+    ...protection,
+    protected: false,
+  });
+  await expect(
+    call(cleanup.token, "POST", "/revision-cleanup/apply", {
+      ...selection,
+      planHash: (await plan()).planHash,
+    }),
+  ).resolves.toEqual({
+    projectId,
+    removed: [oldRevision],
+    estimatedSourceBytes: 0,
+  });
+  expect(
+    f.database.projects.revisionOwned(oldRevision, "user"),
+  ).toBeUndefined();
 });
 
 it("requires an authorized rendering key to disclose the effective ZIP limits", async () => {

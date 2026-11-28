@@ -56,6 +56,7 @@ import {
   ensureSecureDirectory,
   assertSafeOutputFile,
 } from "./output-safety.js";
+export { ensureSecureDirectory } from "./output-safety.js";
 
 export { shouldExcludeProjectPath } from "./project-files.js";
 export { openLocalTarget } from "./open-local-target.js";

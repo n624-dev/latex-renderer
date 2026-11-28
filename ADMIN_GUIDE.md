@@ -43,3 +43,11 @@ User creation and authentication changes are audited. Keep passwords, JWTs,
 OTPs and API secrets out of audit reasons and comments.
 
 API secrets are shown once. Never paste them into prompts, project files, logs, or issue comments.
+
+## Backups
+
+Owners can use `backup status`, `backup create`, and `backup verify` in
+`latex-render-admin`. Use `backup retention` to view local retention or preview
+proposed limits. `backup retention set` confirms the limits and prunes local
+archives immediately. See the preview and confirmation commands in the
+[backup and restore guide](BACKUP_RESTORE.md#local-retention).

@@ -1,9 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { ApiKeyService, type AccessJwtVerifier } from "@latex-renderer/auth";
 import { RendererDatabase } from "@latex-renderer/database";
 import { TicketService } from "@latex-renderer/ticket";
-import { createApiKeySchema } from "../packages/contracts/src/index.js";
+import {
+  apiKeyScopeSchema,
+  createApiKeySchema,
+  renderApiScopes,
+} from "../packages/contracts/src/index.js";
 import { AppProjectsService } from "../apps/admin-api/src/services/app-projects.js";
 import { AdminApiKeysService } from "../apps/admin-api/src/services/api-keys.js";
 import { createAdminApp } from "../apps/admin-api/src/app.js";
@@ -83,6 +88,29 @@ describe("admin API cleanup", () => {
     }
   });
   it("accepts only known, non-mixed API key scopes", () => {
+    const projectScopes = {
+      "render:project:state:read": "readProjectDocumentState",
+      "render:project:state:write": "writeProjectDocumentState",
+      "render:project:delete": "applyProjectRevisionCleanup",
+    };
+    expect(renderApiScopes).toEqual(
+      expect.arrayContaining(Object.keys(projectScopes)),
+    );
+    for (const [scope, label] of Object.entries(projectScopes)) {
+      expect(apiKeyScopeSchema.parse(scope)).toBe(scope);
+      expect(adminScript).toContain(
+        `['${scope}', adminMessage("${label}"), false]`,
+      );
+      expect(
+        createApiKeySchema.parse({ name: "project", scopes: [scope] }).scopes,
+      ).toEqual([scope]);
+      expect(
+        createApiKeySchema.safeParse({
+          name: "mixed",
+          scopes: [scope, "admin:jobs:read"],
+        }).success,
+      ).toBe(false);
+    }
     expect(
       createApiKeySchema.safeParse({
         name: "render",
@@ -610,13 +638,14 @@ describe("public and administrative Web", () => {
     expect(adminDocs).toContain("ブラウザー認証とは別の lra_ 管理APIキー");
   });
 
-  it("keeps the administrative module valid and exposes guarded operations", () => {
-    expect(() =>
-      execFileSync(process.execPath, ["--input-type=module", "--check"], {
-        input: localizedAdminScript("ja"),
-        timeout: 5000,
-      }),
-    ).not.toThrow();
+  it("keeps the administrative module valid and exposes guarded operations", async () => {
+    const check = promisify(execFile)(
+      process.execPath,
+      ["--input-type=module", "--check"],
+      { timeout: 5000 },
+    );
+    check.child.stdin?.end(localizedAdminScript("ja"));
+    await check;
     expect(adminScript).not.toMatch(/\b(?:prompt|confirm|alert)\s*\(/);
     expect(adminScript).toContain("openAdminDialog");
     expect(adminScript).toContain("formDialog");

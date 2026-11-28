@@ -50,6 +50,26 @@ export class ProjectDocumentState {
     };
   }
 
+  getWithHistory(
+    actor: ProjectActor,
+    projectId: string,
+    conditionsVersion?: number,
+    history?: { revisionId: string; offset?: number | undefined },
+  ) {
+    return {
+      ...this.get(actor, projectId, conditionsVersion),
+      revisionChanges:
+        history === undefined
+          ? null
+          : this.revisionChanges(
+              actor,
+              projectId,
+              history.revisionId,
+              history.offset ?? 0,
+            ),
+    };
+  }
+
   updateConditions(
     actor: ProjectActor,
     projectId: string,
