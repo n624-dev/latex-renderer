@@ -3,12 +3,13 @@ Description=Verify the latest encrypted LaTeX Renderer backup
 
 [Service]
 Type=oneshot
+Group=latex-renderer-backup
 WorkingDirectory=/opt/latex-renderer/current
 EnvironmentFile=/etc/latex-renderer/backup.env
 LoadCredential=age-identity:/etc/latex-renderer/secrets/backup-age-identity
 ExecStart=/usr/local/bin/node deploy/scripts/backup-control.mjs verify-latest
 StateDirectory=latex-renderer-backup-verification
-StateDirectoryMode=0700
+StateDirectoryMode=0750
 TimeoutStartSec=30min
 UMask=0077
 NoNewPrivileges=yes
