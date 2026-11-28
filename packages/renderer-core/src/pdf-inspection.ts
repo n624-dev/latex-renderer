@@ -107,3 +107,97 @@ export function inspectJobPdf(
   };
   return options.request ? database.transaction(lookup) : lookup();
 }
+
+export function compareJobPdfInspections(
+  before: { jobId: string; pdfSha256: string },
+  after: { jobId: string; pdfSha256: string },
+  inspect: (target: {
+    jobId: string;
+    pdfSha256: string;
+  }) => ReturnType<typeof inspectJobPdf>,
+  readJob: (jobId: string) => JobRow,
+) {
+  const left = inspect(before);
+  const right = inspect(after);
+  const observations = (value: unknown) => {
+    if (typeof value !== "object" || value === null || !("checks" in value))
+      return {};
+    return value.checks as Record<
+      string,
+      { text: string | null; truncated: boolean }
+    >;
+  };
+  const leftChecks = observations(left.report),
+    rightChecks = observations(right.report);
+  const compare = (name: string) => {
+    const a = leftChecks[name],
+      b = rightChecks[name];
+    if (
+      !a ||
+      !b ||
+      a.text === null ||
+      b.text === null ||
+      a.truncated ||
+      b.truncated
+    )
+      return "not_checked" as const;
+    return a.text === b.text
+      ? ("same_observation" as const)
+      : ("changed_observation" as const);
+  };
+  const rasterVersion = compare("versions");
+  const pageRasters = (checks: ReturnType<typeof observations>) => {
+    const sample = checks["page-rasters"];
+    if (sample?.text == null || sample.truncated) return [];
+    return sample.text
+      .trim()
+      .split("\n")
+      .filter((hash) => /^[a-f0-9]{64}$/.test(hash));
+  };
+  const leftPages = pageRasters(leftChecks),
+    rightPages = pageRasters(rightChecks);
+  const comparedPages =
+    rasterVersion === "same_observation"
+      ? Math.min(leftPages.length, rightPages.length)
+      : 0;
+  const changedPreviewPages = Array.from(
+    { length: comparedPages },
+    (_, i) => i + 1,
+  ).filter((page) => leftPages[page - 1] !== rightPages[page - 1]);
+  const leftJob = readJob(before.jobId);
+  const rightJob = readJob(after.jobId);
+  return {
+    before: { ...before, revisionId: left.revisionId, state: left.state },
+    after: { ...after, revisionId: right.revisionId, state: right.state },
+    samePdfBytes: left.pdfSha256 === right.pdfSha256,
+    extractedText: compare("extracted-text"),
+    fontInventory: compare("font-info"),
+    pageInfoAndMetadata: compare("page-info"),
+    navigation: compare("navigation"),
+    visual:
+      comparedPages === 0
+        ? ("not_checked" as const)
+        : changedPreviewPages.length > 0
+          ? ("changed_observation" as const)
+          : ("same_observation" as const),
+    visualCoverage: {
+      comparedPages,
+      changedPreviewPages,
+      maxPageSidePixels: 512,
+      pagePairing: "physical_page_number" as const,
+    },
+    sourceComparison:
+      leftJob.source_id !== null && rightJob.source_id !== null
+        ? leftJob.source_sha256 === rightJob.source_sha256 &&
+          leftJob.entrypoint === rightJob.entrypoint
+          ? ("same_observation" as const)
+          : ("changed_observation" as const)
+        : ("not_checked" as const),
+    documentMeaning: "not_checked" as const,
+    sameEngine: leftJob.engine === rightJob.engine,
+    sameRuntime:
+      leftJob.runtime_digest === null || rightJob.runtime_digest === null
+        ? null
+        : leftJob.runtime_digest === rightJob.runtime_digest,
+  };
+}

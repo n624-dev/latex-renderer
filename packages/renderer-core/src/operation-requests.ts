@@ -9,6 +9,7 @@ export type OperationRequest = {
   operation:
     | "remote_mcp.create_render"
     | "remote_mcp.retry_render"
+    | "render.retry"
     | "remote_mcp.render_project_revision"
     | "remote_mcp.apply_project_changes"
     | "remote_mcp.import_source_attachment";
