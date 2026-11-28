@@ -496,7 +496,7 @@ export async function stageBase(
           [
             "copy",
             "--retry-times",
-            "2",
+            "3",
             "--preserve-digests",
             `dir:${layout}`,
             `docker://${baseRepository}@${manifest.digest}`,
@@ -560,14 +560,18 @@ async function main() {
     canonical: process.env.TEXLIVE_REPOSITORY,
     commit: process.env.GITHUB_SHA,
     runId: process.env.GITHUB_RUN_ID,
-    attempt: process.env.GITHUB_RUN_ATTEMPT,
+    attempt: process.env.BASE_VALIDATION_ATTEMPT,
   };
   if (verb === "plan") {
+    const validationAttempt = process.env.GITHUB_RUN_ATTEMPT;
+    if (!/^[1-9]\d*$/.test(validationAttempt ?? ""))
+      throw new Error("Invalid source validation attempt");
     const plan = await planBase(argument);
     for (const [key, value] of Object.entries({
       mode: plan.mode,
       digest: plan.digest,
       architectures: JSON.stringify(plan.architectures),
+      validation_attempt: validationAttempt,
       amd64_digest: plan.manifests.amd64?.digest ?? "",
       arm64_digest: plan.manifests.arm64?.digest ?? "",
     }))
