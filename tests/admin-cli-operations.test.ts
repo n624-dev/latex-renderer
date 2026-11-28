@@ -290,6 +290,20 @@ it("uses the existing authenticated routes for jobs, backups, audit filtering an
         "--json",
       ],
       [
+        "api-keys",
+        "create",
+        "--service-account",
+        "account_one",
+        "--name",
+        "Fixture",
+        "--scope",
+        "render:create",
+        "render:read:own",
+      ],
+      ["api-keys", "rotate", "key_one", "--yes"],
+      ["api-keys", "revoke", "key_two", "--yes"],
+      ["service-accounts", "disable", "account_one", "--yes"],
+      [
         "users",
         "set-password",
         "user_one",
@@ -367,6 +381,10 @@ it("uses the existing authenticated routes for jobs, backups, audit filtering an
       ["PATCH", configPath],
       ["POST", configPath + "/reset"],
       ["GET", "/admin/api/v1/audit-logs?actor=user+%2F+owner&result=failed"],
+      ["POST", "/admin/api/v1/service-accounts/account_one/api-keys"],
+      ["POST", "/admin/api/v1/api-keys/key_one/rotate"],
+      ["POST", "/admin/api/v1/api-keys/key_two/revoke"],
+      ["POST", "/admin/api/v1/service-accounts/account_one/disable"],
       ["POST", "/admin/api/v1/users/user_one/password"],
     ]);
     expect(
@@ -386,6 +404,12 @@ it("uses the existing authenticated routes for jobs, backups, audit filtering an
       outputs: ["pdf", "svg"],
     });
     expect(requests[9]?.body).toEqual({ apiKeyId: "key_one" });
+    expect(
+      requests.find(({ path }) => path.endsWith("/account_one/api-keys"))?.body,
+    ).toEqual({
+      name: "Fixture",
+      scopes: ["render:create", "render:read:own"],
+    });
     expect(requests.at(-1)?.body).toEqual({
       loginName: "test-user",
       password: "Fixture password only",
