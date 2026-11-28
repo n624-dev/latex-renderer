@@ -1,20 +1,51 @@
+import type { AdminView } from "./view.js";
+import { formText, requireElement } from "./view.js";
+
+interface UpdateToolchain {
+  node?: { version?: string } | null;
+  corepack?: { version?: string } | null;
+  apt?: { status: string; nodeVersion?: string; corepackVersion?: string } | null;
+  update?: { status: string; checkedAt: string } | null;
+}
+
+interface UpdateState {
+  installed?: { version?: string; releaseId?: string } | null;
+  available?: { version?: string; unavailableReason?: string | null } | null;
+  policy?: { channel: string; mode: string } | null;
+  updater?: { status?: string; running?: { version?: string } | null } | null;
+  toolchain?: UpdateToolchain | null;
+  previousReleaseId?: string | null;
+  previousRollbackCompatible?: boolean;
+  lastError?: string | null;
+  activeOperationId?: string | null;
+  lastOperationId?: string | null;
+}
+
+interface UpdateOperation {
+  id: string;
+  status: string;
+  outcome?: { complete?: boolean; updater?: string } | null;
+  log?: string;
+  error?: string | null;
+}
+
 export function createUpdates({
   adminMessage, adminAction, beginManagerWatch, confirmDialog, err, esc, jsonBody, ok, out, request, section, watchManagerOperation
-}) {
-function updateVersion(value){return value?'v'+value:'—'}
+}: AdminView) {
+function updateVersion(value: string | null | undefined){return value?'v'+value:'—'}
 // One bounded view state; no log text or credentials are retained here.
-let updateLogView={id:null,open:false,scrollTop:0};
+let updateLogView: {id: string | null; open: boolean; scrollTop: number} = {id:null,open:false,scrollTop:0};
 function rememberUpdateLogView(){
-  const card=document.querySelector('#update-operation > article');
-  if(card&&card.dataset.operationId===updateLogView.id){updateLogView.open=card.querySelector('details').open;updateLogView.scrollTop=card.querySelector('pre').scrollTop}
+  const card=document.querySelector<HTMLElement>('#update-operation > article');
+  if(card&&card.dataset.operationId===updateLogView.id){updateLogView.open=requireElement<HTMLDetailsElement>(card,'details').open;updateLogView.scrollTop=requireElement<HTMLPreElement>(card,'pre').scrollTop}
 }
-function updateOperationLabel(operation){if(operation.status==='running')return adminMessage("processing");if(operation.status==='failed')return adminMessage("failed");if(operation.outcome&&operation.outcome.complete)return adminMessage("completedSuccessfully");return operation.outcome&&operation.outcome.updater==='activating'?adminMessage("applicationUpdatedWaitingForUpdaterTo"):adminMessage("applicationUpdatedCheckUpdater")}
-function renderUpdateOperation(operation,reconnecting=false){
+function updateOperationLabel(operation: UpdateOperation){if(operation.status==='running')return adminMessage("processing");if(operation.status==='failed')return adminMessage("failed");if(operation.outcome&&operation.outcome.complete)return adminMessage("completedSuccessfully");return operation.outcome&&operation.outcome.updater==='activating'?adminMessage("applicationUpdatedWaitingForUpdaterTo"):adminMessage("applicationUpdatedCheckUpdater")}
+function renderUpdateOperation(operation: UpdateOperation | null,reconnecting=false){
   const target=document.querySelector('#update-operation');if(!target||!operation)return;
   const status=reconnecting?adminMessage("reconnectingToAdminApi"):updateOperationLabel(operation);
   rememberUpdateLogView();
   if(updateLogView.id!==operation.id)updateLogView={id:operation.id,open:false,scrollTop:0};
-  let card=target.firstElementChild;
+  let card=target.firstElementChild as HTMLElement | null;
   if(!card||card.dataset.operationId!==operation.id){
     target.replaceChildren();card=document.createElement('article');card.className='card';card.dataset.operationId=operation.id;
     const strong=document.createElement('strong'),details=document.createElement('details'),summary=document.createElement('summary'),identifier=document.createElement('p'),pre=document.createElement('pre');
@@ -23,11 +54,11 @@ function renderUpdateOperation(operation,reconnecting=false){
     pre.addEventListener('scroll',()=>{if(updateLogView.id===operation.id)updateLogView.scrollTop=pre.scrollTop});
     pre.className='update-log';details.append(summary,identifier,pre);card.append(strong,details);target.append(card);
   }
-  card.querySelector('strong').textContent=status;
-  const pre=card.querySelector('pre'),text=operation.log||adminMessage("noLogEntriesYet");
+  requireElement<HTMLElement>(card,'strong').textContent=status;
+  const pre=requireElement<HTMLPreElement>(card,'pre'),text=operation.log||adminMessage("noLogEntriesYet");
   if(pre.textContent!==text){const scrollTop=updateLogView.scrollTop;pre.textContent=text;pre.scrollTop=scrollTop}
 }
-function toolchainDetails(toolchain) {
+function toolchainDetails(toolchain: UpdateToolchain | null | undefined) {
   if (!toolchain?.node) return "";
   const running = `Node.js ${esc(toolchain.node.version || "—")} · Corepack ${esc(toolchain.corepack?.version || "—")}`;
   const apt = toolchain.apt;
@@ -45,8 +76,9 @@ function toolchainDetails(toolchain) {
 }
 async function updates(){
   const signal=beginManagerWatch();
-  const state=await request('/updates/state',{signal}).catch(error=>{if(!signal.aborted)throw error;return null});
-  if(signal.aborted)return;
+  const aborted=()=>signal.aborted;
+  const state=await (request('/updates/state',{signal}) as Promise<UpdateState>).catch((error: unknown)=>{if(!signal.aborted)throw error;return undefined});
+  if(aborted()||state===undefined)return;
   const installed=state.installed||{},available=state.available||null,policy=state.policy||{channel:'stable',mode:'notify'};
   const updater=state.updater||{},running=updater.running||{};
   const updaterCard=("<details><summary>"+esc(adminMessage("updaterDetails"))+"</summary><p>Updater: <strong>")+esc(updateVersion(running.version))+'</strong></p><p>'+esc(updater.status==='ready'?adminMessage("switchAndRunningStateVerified"):updater.status==='activating'?adminMessage("switchInProgressNotComplete"):adminMessage("couldNotVerifyStatus"))+'</p></details>';
@@ -56,22 +88,23 @@ async function updates(){
   const operationForm=("<form id=\"update-version-form\" class=\"form-grid\"><label>"+esc(adminMessage("versionLeaveBlankForTheLatest"))+"<input name=\"version\" pattern=\"v?(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)(?:-rc\\.[1-9]\\d*)?\" placeholder=\"vX.Y.Z\"></label><small class=\"wide\">"+esc(adminMessage("releaseCandidateVersionHint"))+"</small><div class=\"actions wide\"><button type=\"button\" id=\"update-check\" class=\"secondary\">"+esc(adminMessage("checkForUpdates"))+"</button><button type=\"button\" id=\"update-apply\">"+esc(adminMessage("downloadVerifyAndUpdate"))+"</button><button type=\"button\" id=\"update-rollback\" class=\"danger\"")+(state.previousReleaseId&&state.previousRollbackCompatible?'':' disabled')+(">"+esc(adminMessage("rollBackToPrevious"))+"</button></div></form><div id=\"update-operation\" class=\"stack\" aria-live=\"polite\"></div>");
   rememberUpdateLogView();
   out.innerHTML=("<div class=\"page-heading\"><h1>"+esc(adminMessage("applicationUpdate"))+"</h1></div>")+section(adminMessage("status"),stateCards+updaterCard+toolchainDetails(state.toolchain)+unavailable+(state.lastError?("<div class=\"notice warning\"><strong>"+esc(adminMessage("applicationUpdatePreviousOperationFailed"))+"</strong><p>")+esc(state.lastError)+'</p></div>':''))+section(adminMessage("updatePolicy"),policyForm)+section(adminMessage("actions"),operationForm);
-  const version=()=>String(new FormData(document.querySelector('#update-version-form')).get('version')||'').trim();
-  document.querySelector('#update-policy-form').onsubmit=adminAction(async event=>{event.preventDefault();const data=new FormData(event.target),mode=String(data.get('mode')),reason=String(data.get('reason')||'').trim();await request('/updates/policy',{method:'POST',...jsonBody({channel:'stable',mode,reason})});ok.textContent=adminMessage("applicationUpdatePolicySaved");await updates()});
-  document.querySelector('#update-check').onclick=adminAction(async()=>{const selected=version(),result=await request('/updates/check',{method:'POST',...jsonBody(selected?{version:selected}:{})});ok.textContent=adminMessage("versionChecked",{version:updateVersion(result.version)});await updates()});
-  document.querySelector('#update-apply').onclick=()=>{const selected=version();confirmDialog({title:adminMessage("updateApplication"),description:adminMessage("servicesRestartAfterBackupAndVerification"),summary:("<p>"+esc(adminMessage("target2"))+" <strong>")+esc(selected||adminMessage("latestStableRelease"))+("</strong></p><p>"+esc(adminMessage("someFailedUpdatesCannotBeRolled"))+"</p>"),reason:true,submitLabel:adminMessage("startUpdate"),successMessage:adminMessage("applicationUpdateOperationStarted"),reload:false,onSubmit:f=>request('/updates/apply',{method:'POST',...jsonBody({...(selected?{version:selected}:{}),reason:String(f.get('reason')||'').trim()})}),afterSuccess:startUpdateOperation})};
-  document.querySelector('#update-rollback').onclick=()=>confirmDialog({title:adminMessage("restoreThePreviousApplicationVersion"),summary:'<p>'+esc(adminMessage("backUpAndRedeploy",{releaseId:state.previousReleaseId||''}))+'</p>',reason:true,submitLabel:adminMessage("rollBack"),danger:true,successMessage:adminMessage("rollbackStarted"),reload:false,onSubmit:f=>request('/updates/rollback',{method:'POST',...jsonBody({reason:String(f.get('reason')||'').trim()})}),afterSuccess:startUpdateOperation});
+  const version=()=>formText(new FormData(requireElement<HTMLFormElement>(document,'#update-version-form')),'version','').trim();
+  const form=requireElement<HTMLFormElement>(document,'#update-policy-form');
+  form.onsubmit=adminAction(async (event: SubmitEvent)=>{event.preventDefault();const data=new FormData(form),mode=formText(data,'mode'),reason=formText(data,'reason','').trim();await request('/updates/policy',{method:'POST',...jsonBody({channel:'stable',mode,reason})});ok.textContent=adminMessage("applicationUpdatePolicySaved");await updates()});
+  requireElement<HTMLButtonElement>(document,'#update-check').onclick=adminAction(async()=>{const selected=version(),result=await request('/updates/check',{method:'POST',...jsonBody(selected?{version:selected}:{})}) as {version?: string};ok.textContent=adminMessage("versionChecked",{version:updateVersion(result.version)});await updates()});
+  requireElement<HTMLButtonElement>(document,'#update-apply').onclick=()=>{const selected=version();confirmDialog({title:adminMessage("updateApplication"),description:adminMessage("servicesRestartAfterBackupAndVerification"),summary:("<p>"+esc(adminMessage("target2"))+" <strong>")+esc(selected||adminMessage("latestStableRelease"))+("</strong></p><p>"+esc(adminMessage("someFailedUpdatesCannotBeRolled"))+"</p>"),reason:true,submitLabel:adminMessage("startUpdate"),successMessage:adminMessage("applicationUpdateOperationStarted"),reload:false,onSubmit:f=>request('/updates/apply',{method:'POST',...jsonBody({...(selected?{version:selected}:{}),reason:formText(f,'reason','').trim()})}) as Promise<UpdateOperation>,afterSuccess:startUpdateOperation})};
+  requireElement<HTMLButtonElement>(document,'#update-rollback').onclick=()=>confirmDialog({title:adminMessage("restoreThePreviousApplicationVersion"),summary:'<p>'+esc(adminMessage("backUpAndRedeploy",{releaseId:state.previousReleaseId||''}))+'</p>',reason:true,submitLabel:adminMessage("rollBack"),danger:true,successMessage:adminMessage("rollbackStarted"),reload:false,onSubmit:f=>request('/updates/rollback',{method:'POST',...jsonBody({reason:formText(f,'reason','').trim()})}) as Promise<UpdateOperation>,afterSuccess:startUpdateOperation});
   const operationId=state.activeOperationId||state.lastOperationId;
   if(operationId){
-    const operation=await request('/updates/operations/'+encodeURIComponent(operationId),{signal})
-      .catch(error=>{if(!signal.aborted)throw error;return null});
-    if(signal.aborted)return;
+    const operation=await (request('/updates/operations/'+encodeURIComponent(operationId),{signal}) as Promise<UpdateOperation>)
+      .catch((error: unknown)=>{if(!signal.aborted)throw error;return undefined});
+    if(aborted()||operation===undefined)return;
     if(updateOperationPending(operation))startUpdateOperation(operation,signal);
     else renderUpdateOperation(operation);
   }
 }
-function updateOperationPending(operation){return operation.status==='running'||operation.outcome?.updater==='activating'}
-function startUpdateOperation(operation,signal) {
+function updateOperationPending(operation: UpdateOperation){return operation.status==='running'||operation.outcome?.updater==='activating'}
+function startUpdateOperation(operation: UpdateOperation | null,signal?: AbortSignal) {
   const target=document.querySelector('#update-operation');
   if(!operation?.id||!target)return;
   void adminAction(()=>watchManagerOperation(operation,{
