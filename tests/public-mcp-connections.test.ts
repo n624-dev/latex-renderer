@@ -2,11 +2,25 @@ import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createBrowserConsent } from "../apps/public-mcp-gateway/src/browser-consent.js";
 import type { NewAuthorization } from "../apps/public-mcp-gateway/src/connections.js";
+import { GatewayAgentPairing } from "../apps/public-mcp-gateway/src/agent-pairing.js";
 import { HttpsCredentialKeys } from "../apps/public-mcp-gateway/src/https-credential-keys.js";
-import { expiredConnectionRetentionMs } from "../apps/public-mcp-gateway/src/oauth-clients.js";
+import {
+  dcrClientRetentionMs,
+  expiredConnectionRetentionMs,
+} from "../apps/public-mcp-gateway/src/oauth-clients.js";
+import { GatewayOAuthTokens } from "../apps/public-mcp-gateway/src/oauth-tokens.js";
+import { RelayReferences } from "../apps/public-mcp-gateway/src/relay-references.js";
 import { SqliteConnectionStore } from "../apps/public-mcp-gateway/src/sqlite-connections.js";
+import {
+  agentRevocationSchema,
+  connectionApplicationId,
+  connectionSchema,
+  connectionSchemaVersion,
+} from "../apps/public-mcp-gateway/src/sqlite-schema.js";
+import { publicGatewayBearer } from "./helpers/public-mcp.js";
 
 const stores = new Set<SqliteConnectionStore>();
 const directories: string[] = [];
@@ -50,14 +64,249 @@ function fixture(store = open()) {
 describe("public MCP connection storage", () => {
   it("removes an expired approval after seven days and keeps the profile ID", () => {
     const { store, https, profile, input } = fixture();
+    expect(expiredConnectionRetentionMs).toBe(7 * 86_400_000);
     store.profileFor("instance-a", "local-user", "Example device");
     const approved = store.createAuthorization(input, 0, () => "fixture");
-    store.pruneExpiredCredentials(input.expiresAt + expiredConnectionRetentionMs - 1);
+    store.pruneExpiredCredentials(
+      input.expiresAt + expiredConnectionRetentionMs - 1,
+    );
     expect(store.authorization(approved.id)).toBeDefined();
-    store.pruneExpiredCredentials(input.expiresAt + expiredConnectionRetentionMs);
+    store.pruneExpiredCredentials(
+      input.expiresAt + expiredConnectionRetentionMs,
+    );
     expect(store.authorization(approved.id)).toBeUndefined();
     expect(store.transport(https.id)).toBeUndefined();
     expect(store.profileFor("instance-a", "local-user")).toEqual(profile);
+    const now = input.expiresAt + expiredConnectionRetentionMs;
+    const transport = store.addTransport("instance-a", https.endpoint);
+    const enrolled = store.profileFor(
+      "instance-a",
+      "local-user",
+      "Reconnected device",
+    );
+    const reconnected = store.createAuthorization(
+      {
+        ...input,
+        profileId: enrolled.id,
+        transportId: transport.id,
+        localGrantId: "grant-reconnected",
+        expiresAt: now + 60_000,
+      },
+      now,
+      () => "new-credentials",
+    );
+    const tokens = new GatewayOAuthTokens(
+      "https://gateway.example.com",
+      store.oauth,
+      Buffer.alloc(32, 6),
+      300_000,
+      () => now,
+    );
+    expect(
+      tokens.authenticate(publicGatewayBearer(tokens, reconnected)),
+    ).toMatchObject({
+      id: reconnected.id,
+      profileId: profile.id,
+      transportId: transport.id,
+    });
+    expect(reconnected.id).not.toBe(approved.id);
+  });
+
+  it("manages expired connections only with their own proof during the retention window", async () => {
+    const { store, input, https } = fixture();
+    const seal = () => "fixture";
+    const expired = store.createAuthorization(input, 0, seal);
+    const boundary = store.createAuthorization(
+      { ...input, localGrantId: "boundary" },
+      0,
+      seal,
+    );
+    const foreign = store.profileFor(
+      "instance-a",
+      "other-user",
+      "Other account",
+    );
+    const live = store.createAuthorization(
+      {
+        ...input,
+        profileId: foreign.id,
+        localGrantId: "live",
+        expiresAt: input.expiresAt + expiredConnectionRetentionMs + 60_000,
+      },
+      0,
+      seal,
+    );
+    let now = input.expiresAt;
+    const key = Buffer.alloc(32, 6);
+    const origin = "https://gateway.example.com";
+    const tokens = new GatewayOAuthTokens(
+      origin,
+      store.oauth,
+      key,
+      300_000,
+      () => now,
+    );
+    const references = new RelayReferences(key);
+    const revokeHttps = vi.fn<() => Promise<void>>();
+    const { handle } = createBrowserConsent({
+      tokens,
+      store,
+      references,
+      revokeHttps,
+      pairing: new GatewayAgentPairing(store.agentPairing, key, {
+        perTransport: 2,
+        perInstance: 2,
+        total: 5,
+      }),
+      keys: new HttpsCredentialKeys("test", new Map([["test", key]])),
+      capacity: 5,
+      timeoutMs: 1000,
+      maxMetadataBytes: 8192,
+      agentOnline: () => false,
+      deliverAgentRevocations: () => Promise.resolve(),
+    });
+    const cookie = (id: string, proof: string) => `relay_manage_${id}=${proof}`;
+    const proof = (authorization: typeof live) =>
+      references.seal(authorization, "manage-connection", authorization.id);
+    const manage = (cookies: string, id?: string) =>
+      handle(
+        new Request(
+          `${origin}/oauth/connection`,
+          id
+            ? {
+                method: "POST",
+                headers: {
+                  Origin: origin,
+                  Cookie: cookies,
+                  "Content-Type": "application/x-www-form-urlencoded",
+                },
+                body: new URLSearchParams({ id, action: "forget" }),
+              }
+            : { headers: { Cookie: cookies } },
+        ),
+      );
+    const expiredCookie = cookie(expired.id, proof(expired));
+    const boundaryCookie = cookie(boundary.id, proof(boundary));
+    const liveCookie = cookie(live.id, proof(live));
+    const foreignCookie = cookie(expired.id, proof(live));
+
+    for (const cookies of ["", liveCookie, foreignCookie]) {
+      expect(await (await manage(cookies))?.text()).not.toContain(expired.id);
+      expect((await manage(cookies, expired.id))?.status).toBe(404);
+    }
+    expect(store.authorization(expired.id)).toEqual(expired);
+    expect((await manage(liveCookie, live.id))?.status).toBe(409);
+
+    now += expiredConnectionRetentionMs - 1;
+    const list = await (
+      await manage([expiredCookie, boundaryCookie, liveCookie].join("; "))
+    )?.text();
+    expect(list).toContain("Expired");
+    expect(list).toContain("Forget connection");
+    expect(list).toContain("Other account");
+    expect(list).toContain("Authorized");
+    expect(list).toContain(expired.id);
+    expect(list).toContain(boundary.id);
+    const forgotten = await manage(expiredCookie, expired.id);
+    expect(forgotten?.status).toBe(200);
+    expect(await forgotten?.text()).toContain("Connection forgotten.");
+    expect(forgotten?.headers.get("Set-Cookie")).toMatch(/Max-Age=0/);
+    expect(store.authorization(expired.id)).toBeUndefined();
+
+    now++;
+    expect(await (await manage(boundaryCookie))?.text()).not.toContain(
+      boundary.id,
+    );
+    expect((await manage(boundaryCookie, boundary.id))?.status).toBe(404);
+    store.pruneExpiredCredentials(now);
+    expect(store.authorization(boundary.id)).toBeUndefined();
+    expect(store.authorization(live.id)).toEqual(live);
+    expect(store.httpsCredentials(live.id, now)?.envelope).toBe("fixture");
+    expect(store.transport(https.id)).toEqual(https);
+    expect(revokeHttps).not.toHaveBeenCalled();
+  });
+
+  it("migrates a populated version 2 database and preserves DCR authorization references", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "public-mcp-v2-database-"));
+    directories.push(dir);
+    const path = join(dir, "legacy.sqlite");
+    const now = Date.now();
+    const liveUntil = now + 2 * dcrClientRetentionMs;
+    const issuer = "https://gateway.example.com";
+    const clientId = "legacy-client";
+    const legacy = new DatabaseSync(path);
+    try {
+      legacy.exec(`
+        ${connectionSchema}
+        ${agentRevocationSchema}
+        PRAGMA application_id=${connectionApplicationId};
+        PRAGMA user_version=2;
+        INSERT INTO instances VALUES ('instance-a', 'instance-key');
+        INSERT INTO profiles VALUES ('stable-profile', 'instance-a', 'user', 'Legacy name');
+        INSERT INTO transports VALUES ('agent', 'instance-a', 'agent', NULL, 'agent-key', NULL);
+        INSERT INTO oauth_dcr_clients VALUES ('legacy-client', 'Legacy client', '["https://client.example.com/callback"]');
+      `);
+      legacy
+        .prepare(
+          `INSERT INTO authorizations (id, instance_id, profile_id, transport_id, local_grant_id, scopes, expires_at)
+        VALUES ('legacy-approval', 'instance-a', 'stable-profile', 'agent', 'local-grant', '["mcp:read"]', ?)`,
+        )
+        .run(liveUntil);
+      legacy
+        .prepare(
+          "INSERT INTO oauth_families VALUES ('legacy-approval', ?, ?, 0)",
+        )
+        .run(clientId, `${issuer}/mcp`);
+      legacy
+        .prepare(
+          `INSERT INTO oauth_tokens VALUES ('refresh-hash', 'access-hash', 'legacy-approval', 0, '["mcp:read"]', ?, NULL)`,
+        )
+        .run(liveUntil);
+    } finally {
+      legacy.close();
+    }
+    const store = open(path);
+    const aged = now + dcrClientRetentionMs + 60_000;
+    store.pruneExpiredCredentials(aged);
+    expect(store.dcrClient(clientId)?.clientName).toBe("Legacy client");
+    expect(
+      store.registerDcrClient(
+        {
+          clientName: "New client",
+          redirectUris: ["https://client.example.com/callback"],
+        },
+        1,
+        aged,
+      ),
+    ).toBeUndefined();
+    expect(
+      store.oauth.accessAuthorization("access-hash", `${issuer}/mcp`, aged),
+    ).toMatchObject({
+      id: "legacy-approval",
+      profileId: "stable-profile",
+      scopes: ["mcp:read"],
+    });
+    expect(
+      store.oauth.refresh({
+        oldHash: "refresh-hash",
+        clientId,
+        resource: `${issuer}/mcp`,
+        accessHash: "new-access-hash",
+        refreshHash: "new-refresh-hash",
+        now: aged,
+        retryWindowMs: 1000,
+        requestedScopes: null,
+      }),
+    ).toMatchObject({ scopes: ["mcp:read"] });
+    const migrated = new DatabaseSync(path, { readOnly: true });
+    try {
+      expect(migrated.prepare("PRAGMA user_version").get()?.user_version).toBe(
+        connectionSchemaVersion,
+      );
+      expect(migrated.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    } finally {
+      migrated.close();
+    }
   });
   it("forgets one approval and retains only its pending revocation while an agent is offline", () => {
     const { store, agent, profile, input } = fixture();
