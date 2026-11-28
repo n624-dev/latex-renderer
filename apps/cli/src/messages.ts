@@ -39,6 +39,8 @@ const english = {
     "setup --gui cannot be combined with --api-key-stdin",
   credentialStored: "Credential stored.",
   credentialIsConfigured: "Credential is configured.",
+  connectionStatus: "Connection origin: {origin}\nCredential source: {source}",
+  noCredentialSource: "none",
   credentialRemoved: "Credential removed.",
   svgRetrySucceededOriginalPdfRetained:
     "SVG retry succeeded; original PDF retained.",
@@ -145,6 +147,8 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "setup --gui と --api-key-stdin は併用できません。",
     credentialStored: "認証情報：保存しました。",
     credentialIsConfigured: "認証情報：設定済みです。",
+    connectionStatus: "接続先オリジン：{origin}\n認証情報の取得元：{source}",
+    noCredentialSource: "なし",
     credentialRemoved: "認証情報：削除しました。",
     svgRetrySucceededOriginalPdfRetained:
       "SVGの再実行に成功しました。元のPDFは保持されます。",
@@ -253,6 +257,8 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "setup --gui 不能与 --api-key-stdin 同时使用。",
     credentialStored: "凭据：已保存。",
     credentialIsConfigured: "凭据：已配置。",
+    connectionStatus: "连接源站：{origin}\n凭据来源：{source}",
+    noCredentialSource: "无",
     credentialRemoved: "凭据：已移除。",
     svgRetrySucceededOriginalPdfRetained: "SVG 重试成功。原 PDF 保留。",
     partialSuccessOriginalPdfRetainedSvg:
@@ -341,6 +347,8 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "setup --gui 및 --api-key-stdin은(는) 함께 사용할 수 없습니다.",
     credentialStored: "자격 증명: 저장했습니다.",
     credentialIsConfigured: "자격 증명: 설정되었습니다.",
+    connectionStatus: "연결 오리진: {origin}\n자격 증명 출처: {source}",
+    noCredentialSource: "없음",
     credentialRemoved: "자격 증명: 삭제했습니다.",
     svgRetrySucceededOriginalPdfRetained:
       "SVG 재시도에 성공했습니다. 원본 PDF는 유지됩니다.",
@@ -441,6 +449,9 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "No se pueden combinar setup --gui y --api-key-stdin.",
     credentialStored: "Credencial: se ha guardado.",
     credentialIsConfigured: "Credencial: configuración completada.",
+    connectionStatus:
+      "Origen de la conexión: {origin}\nOrigen de la credencial: {source}",
+    noCredentialSource: "ninguno",
     credentialRemoved: "Credencial: se ha eliminado.",
     svgRetrySucceededOriginalPdfRetained:
       "El reintento de SVG ha terminado correctamente. Se conserva el PDF original.",
@@ -554,6 +565,9 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Não é possível combinar setup --gui e --api-key-stdin.",
     credentialStored: "Credencial: guardado com êxito.",
     credentialIsConfigured: "Credencial: configuração efetuada.",
+    connectionStatus:
+      "Origem da conexão: {origin}\nOrigem da credencial: {source}",
+    noCredentialSource: "nenhuma",
     credentialRemoved: "Credencial: remoção concluída.",
     svgRetrySucceededOriginalPdfRetained:
       "A nova tentativa de SVG foi bem-sucedida. O PDF original é mantido.",
@@ -666,6 +680,9 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Impossible de combiner setup --gui et --api-key-stdin.",
     credentialStored: "Identifiant d’accès : enregistrement effectué.",
     credentialIsConfigured: "Identifiant d’accès : configuration effectuée.",
+    connectionStatus:
+      "Origine de la connexion : {origin}\nSource de l’identifiant : {source}",
+    noCredentialSource: "aucune",
     credentialRemoved: "Identifiant d’accès : suppression effectuée.",
     svgRetrySucceededOriginalPdfRetained:
       "La nouvelle tentative SVG a réussi. Le PDF d’origine est conservé.",
@@ -778,6 +795,9 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "setup --gui und --api-key-stdin können nicht kombiniert werden.",
     credentialStored: "Zugangsdaten: gespeichert.",
     credentialIsConfigured: "Zugangsdaten: konfiguriert.",
+    connectionStatus:
+      "Verbindungsursprung: {origin}\nQuelle der Zugangsdaten: {source}",
+    noCredentialSource: "keine",
     credentialRemoved: "Zugangsdaten: entfernt.",
     svgRetrySucceededOriginalPdfRetained:
       "Der erneute SVG-Versuch war erfolgreich. Die ursprüngliche PDF bleibt erhalten.",
@@ -889,6 +909,9 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Impossibile combinare setup --gui e --api-key-stdin.",
     credentialStored: "Credenziale: salvataggio completato.",
     credentialIsConfigured: "Credenziale: configurazione completata.",
+    connectionStatus:
+      "Origine della connessione: {origin}\nOrigine della credenziale: {source}",
+    noCredentialSource: "nessuna",
     credentialRemoved: "Credenziale: rimozione completata.",
     svgRetrySucceededOriginalPdfRetained:
       "Il nuovo tentativo SVG è riuscito. Il PDF originale viene conservato.",
@@ -1000,6 +1023,9 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Нельзя одновременно использовать setup --gui и --api-key-stdin.",
     credentialStored: "Учётные данные: сохранено.",
     credentialIsConfigured: "Учётные данные: настроено.",
+    connectionStatus:
+      "Адрес подключения: {origin}\nИсточник учётных данных: {source}",
+    noCredentialSource: "отсутствует",
     credentialRemoved: "Учётные данные: удалено.",
     svgRetrySucceededOriginalPdfRetained:
       "Повторная обработка SVG выполнена успешно. Исходный PDF сохраняется.",
@@ -1113,6 +1139,9 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "setup --gui ve --api-key-stdin birlikte kullanılamaz.",
     credentialStored: "Kimlik bilgisi: kaydedildi.",
     credentialIsConfigured: "Kimlik bilgisi: yapılandırıldı.",
+    connectionStatus:
+      "Bağlantı adresi: {origin}\nKimlik bilgisi kaynağı: {source}",
+    noCredentialSource: "yok",
     credentialRemoved: "Kimlik bilgisi: kaldırıldı.",
     svgRetrySucceededOriginalPdfRetained:
       "SVG yeniden denemesi başarılı oldu. Özgün PDF korunur.",
@@ -1219,6 +1248,9 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Nie można łączyć setup --gui i --api-key-stdin.",
     credentialStored: "Dane uwierzytelniające: zapisano.",
     credentialIsConfigured: "Dane uwierzytelniające: skonfigurowano.",
+    connectionStatus:
+      "Adres połączenia: {origin}\nŹródło danych uwierzytelniających: {source}",
+    noCredentialSource: "brak",
     credentialRemoved: "Dane uwierzytelniające: usunięto.",
     svgRetrySucceededOriginalPdfRetained:
       "Ponowienie SVG powiodło się. Oryginalny PDF zostaje zachowany.",
@@ -1329,6 +1361,9 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Nelze kombinovat setup --gui a --api-key-stdin.",
     credentialStored: "Přihlašovací údaj: uloženo.",
     credentialIsConfigured: "Přihlašovací údaj: nastaveno.",
+    connectionStatus:
+      "Adresa připojení: {origin}\nZdroj přihlašovacích údajů: {source}",
+    noCredentialSource: "žádný",
     credentialRemoved: "Přihlašovací údaj: odstraněno.",
     svgRetrySucceededOriginalPdfRetained:
       "Opakování SVG bylo úspěšné. Původní PDF zůstane zachováno.",
@@ -1438,6 +1473,9 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "setup --gui en --api-key-stdin kunnen niet samen worden gebruikt.",
     credentialStored: "Inloggegevens: opgeslagen.",
     credentialIsConfigured: "Inloggegevens: geconfigureerd.",
+    connectionStatus:
+      "Oorsprong van de verbinding: {origin}\nBron van inloggegevens: {source}",
+    noCredentialSource: "geen",
     credentialRemoved: "Inloggegevens: verwijderd.",
     svgRetrySucceededOriginalPdfRetained:
       "De nieuwe SVG-poging is geslaagd. De oorspronkelijke PDF blijft behouden.",
@@ -1548,6 +1586,9 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "setup --gui och --api-key-stdin kan inte användas tillsammans.",
     credentialStored: "Inloggningsuppgift: sparat.",
     credentialIsConfigured: "Inloggningsuppgift: konfigurerat.",
+    connectionStatus:
+      "Anslutningens ursprung: {origin}\nKälla för inloggningsuppgifter: {source}",
+    noCredentialSource: "ingen",
     credentialRemoved: "Inloggningsuppgift: borttaget.",
     svgRetrySucceededOriginalPdfRetained:
       "Det nya SVG-försöket lyckades. Den ursprungliga PDF-filen behålls.",
@@ -1659,6 +1700,9 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "setup --gui og --api-key-stdin kan ikke brukes sammen.",
     credentialStored: "Påloggingsinformasjon: lagret.",
     credentialIsConfigured: "Påloggingsinformasjon: konfigurert.",
+    connectionStatus:
+      "Tilkoblingens opprinnelse: {origin}\nKilde til påloggingsinformasjon: {source}",
+    noCredentialSource: "ingen",
     credentialRemoved: "Påloggingsinformasjon: fjernet.",
     svgRetrySucceededOriginalPdfRetained:
       "Det nye SVG-forsøket lyktes. Den opprinnelige PDF-filen beholdes.",
@@ -1771,6 +1815,9 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "setup --gui og --api-key-stdin kan ikke bruges sammen.",
     credentialStored: "Legitimationsoplysning: gemt.",
     credentialIsConfigured: "Legitimationsoplysning: konfigureret.",
+    connectionStatus:
+      "Forbindelsens oprindelse: {origin}\nKilde til legitimationsoplysninger: {source}",
+    noCredentialSource: "ingen",
     credentialRemoved: "Legitimationsoplysning: fjernet.",
     svgRetrySucceededOriginalPdfRetained:
       "Det nye SVG-forsøg lykkedes. Den oprindelige PDF bevares.",
@@ -1881,6 +1928,9 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Vaihtoehtoja setup --gui ja --api-key-stdin ei voi yhdistää.",
     credentialStored: "Tunnistetieto: tallennettu.",
     credentialIsConfigured: "Tunnistetieto: määritetty.",
+    connectionStatus:
+      "Yhteyden osoite: {origin}\nTunnistetiedon lähde: {source}",
+    noCredentialSource: "ei mitään",
     credentialRemoved: "Tunnistetieto: poistettu.",
     svgRetrySucceededOriginalPdfRetained:
       "SVG:n uusintayritys onnistui. Alkuperäinen PDF säilyy.",

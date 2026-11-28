@@ -35,6 +35,8 @@ n624-latex auth status
 n624-latex auth logout
 ```
 
+`auth status` muestra el origen efectivo de la conexión y de dónde se obtiene la credencial: del perfil guardado que indica por nombre, de la variable de entorno `LATEX_RENDER_API_KEY` o de ninguna fuente. Con `--json`, consulta `origin` y `credentialSource`.
+
 - La variable de entorno `LATEX_RENDER_API_KEY`, si está definida, tiene prioridad sobre la clave local.
 - `logout` elimina solo la clave guardada localmente. Desactiva la variable de entorno o revoca la clave en el servidor por separado cuando sea necesario.
 

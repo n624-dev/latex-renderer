@@ -35,6 +35,8 @@ n624-latex auth status
 n624-latex auth logout
 ```
 
+`auth status` näyttää käytössä olevan palvelimen osoitteen ja tunnistetiedon lähteen: tallennetun profiilin nimen, ympäristömuuttujan `LATEX_RENDER_API_KEY` tai tiedon siitä, ettei tunnistetta ole. Valitsin `--json` näyttää kentät `origin` ja `credentialSource`.
+
 - Jos ympäristömuuttuja `LATEX_RENDER_API_KEY` on asetettu, sen arvo ohittaa paikallisesti tallennetun avaimen.
 - `logout` poistaa vain paikallisesti tallennetun avaimen. Poista tarvittaessa ympäristömuuttuja käytöstä tai mitätöi avain palvelimella erikseen.
 

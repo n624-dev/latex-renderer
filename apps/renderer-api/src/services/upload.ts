@@ -15,7 +15,10 @@ import {
   assertSourceWritable,
   defaultSourceOrphanRetentionMinutes,
 } from "@latex-renderer/database";
-import { validateAndExtract } from "@latex-renderer/zip-validation";
+import {
+  isZipLimitError,
+  validateAndExtract,
+} from "@latex-renderer/zip-validation";
 import {
   syncFile,
   syncPublishedAncestors,
@@ -60,12 +63,15 @@ async function uploadSharedSource(
   claims: TicketClaims | SourceTicketClaims,
   context: { nonceKind: "job"; jobId: string } | { nonceKind: "source" },
 ): Promise<void> {
-  assertUploadClaims(deps, request, claims);
+  const sizeError = validateUploadRequest(deps, request, claims);
   assertSourceWritable(deps.database);
   const source = deps.database.sources.get(sourceId);
   if (source === undefined)
     throw new AppError("SOURCE_NOT_FOUND", "Source does not exist", 404);
-  if (source.status === "ready" && source.sha256 === claims.sha256) return;
+  if (source.status === "ready" && source.sha256 === claims.sha256) {
+    if (sizeError) throw sizeError;
+    return;
+  }
   if (source.status !== "reserved")
     throw new AppError(
       "SOURCE_NOT_UPLOADABLE",
@@ -110,6 +116,7 @@ async function uploadSharedSource(
   const temporaryPath = `${finalPath}.${claimOwner}.tmp`,
     inspectionPath = join(directory, `.inspect-${claimOwner}`);
   try {
+    if (sizeError) throw sizeError;
     await mkdir(directory, { recursive: true, mode: 0o770 });
     await writeVerifiedBody(
       deps,
@@ -180,12 +187,15 @@ async function uploadSharedSource(
       });
     });
   } catch (error) {
+    const limitError = uploadLimitError(error);
     await rm(temporaryPath, { force: true }).catch(() => {});
     // A timed-out writer must never remove an archive or reset state owned by
     // a recovery/retry writer. Retain the durable claim before touching shared
     // state; otherwise leave recovery to the scheduled cleanup process.
     if (heartbeat.tryRetain()) {
       await rm(finalPath, { force: true }).catch(() => {});
+      if (limitError && source.storage_key === `sources/${sourceId}/source.zip`)
+        await rm(directory, { recursive: true, force: true });
       deps.database.transaction(() => {
         const timestamp = nowIso(),
           released =
@@ -193,6 +203,33 @@ async function uploadSharedSource(
               ? deps.database.releaseSourceNonce(nonce, claimOwner, timestamp)
               : deps.database.releaseNonce(nonce, claimOwner, timestamp);
         if (released !== 1) return;
+        if (limitError) {
+          if (context.nonceKind === "source") {
+            deps.database.raw
+              .prepare("DELETE FROM source_upload_nonces WHERE source_id=?")
+              .run(sourceId);
+            deps.database.sources.discardReservation(sourceId);
+          } else {
+            deps.database.sources.transition(
+              sourceId,
+              ["uploading"],
+              "deleted",
+              timestamp,
+              {
+                deletion_status: "deleted",
+                deleted_at: timestamp,
+              },
+            );
+            rejectJobUpload(
+              deps,
+              context.jobId,
+              limitError,
+              timestamp,
+              sourceId,
+            );
+          }
+          return;
+        }
         deps.database.raw
           .prepare(
             "UPDATE sources SET status='reserved',updated_at=? WHERE id=? AND status='uploading'",
@@ -218,12 +255,14 @@ async function uploadLegacyJobSource(
   jobId: string,
   claims: TicketClaims,
 ): Promise<void> {
-  assertUploadClaims(deps, request, claims);
+  const sizeError = validateUploadRequest(deps, request, claims);
   assertSourceWritable(deps.database);
   const current = deps.database.jobs.getUploadState(jobId),
     finalPath = join(deps.storageRoot, "jobs", jobId, "input", "source.zip");
-  if (current?.status === "queued" && current.source_sha256 === claims.sha256)
+  if (current?.status === "queued" && current.source_sha256 === claims.sha256) {
+    if (sizeError) throw sizeError;
     return;
+  }
   if (current?.status !== "reserved")
     throw new AppError("JOB_NOT_UPLOADABLE", "Job is not awaiting upload", 409);
   const claimOwner = newId("upload");
@@ -245,6 +284,7 @@ async function uploadLegacyJobSource(
   );
   const temporaryPath = `${finalPath}.${claimOwner}.tmp`;
   try {
+    if (sizeError) throw sizeError;
     await mkdir(join(deps.storageRoot, "jobs", jobId, "input"), {
       recursive: true,
       mode: 0o770,
@@ -269,6 +309,7 @@ async function uploadLegacyJobSource(
       });
     });
   } catch (error) {
+    const limitError = uploadLimitError(error);
     await rm(temporaryPath, { force: true }).catch(() => {});
     if (heartbeat.tryRetain()) {
       await rm(finalPath, { force: true }).catch(() => {});
@@ -280,17 +321,44 @@ async function uploadLegacyJobSource(
             claimOwner,
             timestamp,
           ) === 1
-        )
-          deps.database.jobs.restoreReservedAfterUploadFailure(
-            jobId,
-            timestamp,
-          );
+        ) {
+          if (limitError)
+            rejectJobUpload(deps, jobId, limitError, timestamp, null);
+          else
+            deps.database.jobs.restoreReservedAfterUploadFailure(
+              jobId,
+              timestamp,
+            );
+        }
       });
     }
     throw error;
   } finally {
     heartbeat.stop();
   }
+}
+
+function uploadLimitError(error: unknown): AppError | undefined {
+  return isZipLimitError(error) ||
+    (error instanceof AppError && error.code === "UPLOAD_TOO_LARGE")
+    ? error
+    : undefined;
+}
+
+function rejectJobUpload(
+  deps: RendererApiDependencies,
+  jobId: string,
+  error: AppError,
+  timestamp: string,
+  sourceId: string | null,
+): void {
+  if (deps.database.jobs.getUploadState(jobId)?.status === "uploading")
+    deps.database.transitionJob(jobId, ["uploading"], "rejected", {
+      completed_at: timestamp,
+      error_code: error.code,
+      error_message: error.message,
+      ...(sourceId === null ? { source_size: 0 } : {}),
+    });
 }
 
 function startUploadClaimHeartbeat(
@@ -345,11 +413,11 @@ function startUploadClaimHeartbeat(
   };
 }
 
-function assertUploadClaims(
+function validateUploadRequest(
   deps: RendererApiDependencies,
   request: Request,
   claims: TicketClaims | SourceTicketClaims,
-): void {
+): AppError | undefined {
   if (
     typeof claims.size !== "number" ||
     typeof claims.sha256 !== "string" ||
@@ -361,7 +429,7 @@ function assertUploadClaims(
       401,
     );
   if (claims.size > deps.maxUploadBytes)
-    throw new AppError(
+    return new AppError(
       "UPLOAD_TOO_LARGE",
       "Upload exceeds configured limit",
       413,
@@ -381,6 +449,7 @@ function assertUploadClaims(
       "Content-Type must be application/zip",
       415,
     );
+  return undefined;
 }
 
 async function writeVerifiedBody(

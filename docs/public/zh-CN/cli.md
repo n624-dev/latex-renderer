@@ -35,6 +35,8 @@ n624-latex auth status
 n624-latex auth logout
 ```
 
+`auth status` 显示实际连接的源站和凭据来源：已保存的配置名称、环境变量 `LATEX_RENDER_API_KEY` 或无凭据。使用 `--json` 可以查看 `origin` 和 `credentialSource` 字段。
+
 - 若已设置环境变量 `LATEX_RENDER_API_KEY`，CLI 会优先使用它，而非本地保存的密钥。
 - `logout` 仅删除本地保存的密钥。清除环境变量或在服务器上撤销密钥需要分别操作。
 

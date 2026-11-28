@@ -53,6 +53,7 @@ since: "v1.0.0"
 > - **创建输入包及其限制**
 >   - 小型多文件输入可通过 `create_source` 直接以文本或 base64 创建。总计最多 4 MiB，每个文件最多 1 MiB，最多 100 个文件。服务器配置更低时以服务器为准，生成的 ZIP 也会按配置验证。
 >   - 较大的 ZIP 先通过 `begin_source_upload` 预约，再用 `upload_source_chunk` 按偏移量顺序发送最大 512 KiB 的 base64 分块，最后调用 `finalize_source_upload`。默认 ZIP 上限 20 MiB，解压后 100 MiB，最多 500 个文件，单文件 20 MiB。未完成的上传在 10 分钟后失效。调用 `get_renderer_capabilities` 可查看直接创建的上限 `directBytes`、`directFiles`、`directFileBytes` 和 ZIP 上传的上限 `uploadBytes`、`files`、`fileBytes`。
+>   - 更新修订版文件时若超出大小上限，错误信息会给出字节上限并提示使用分块上传。如果 `finalize_source_upload` 因 ZIP 超出上限而拒绝上传，预约和已上传的分块会立即删除。
 >   - `update_source_file` 和 `delete_source_file` 会返回新的不可变输入版本，原输入不变。在 Remote MCP 内创建的输入可直接用 `sourceId` 渲染。仅当需要交给其他接口继续处理时，才通过 `create_source_ref` 创建 `sourceRef`，该引用仅限同一所有者，有效期为 15 分钟。
 > - **已保存的项目和版本。** 对反复使用的文档，可用 `create_project` 建立项目，用 `attach_project_revision` 将就绪的输入保存为固定版本。使用 `update_project_file` 或 `delete_project_file` 编辑时，系统同时注册新输入和新版本，旧版本不变。调用 `render_project_revision` 编译后，作业会关联到版本历史。与 Web、CLI 和公开 API 共享同一用户的项目，也支持临时输入和作业。删除前需取得用户明确指示。
 > - **提前发布 PDF 与重试 SVG。** PDF 完成后即可下载。`stages.pdf` 和 `stages.svg` 返回各阶段状态，作业状态表示总体结果。若仅 SVG 提取失败，可用 `retry_svg_render` 在保留已定稿的 PDF、作业 ID 和输入的情况下重试。重发同一请求使用相同的 `idempotencyKey`，另一次尝试则使用新键。含首次在内最多 8 次，不延长 PDF 保留期。旧版作业缺少独立重试检查点，应使用 `retry_render`。调用 `get_render_diagnostics` 时将 `stage` 设为 `pdf` 或 `svg` 可查看各阶段日志，默认优先显示 SVG 错误。

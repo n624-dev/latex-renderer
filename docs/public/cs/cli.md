@@ -35,6 +35,8 @@ n624-latex auth status
 n624-latex auth logout
 ```
 
+`auth status` zobrazí skutečnou adresu připojení a zdroj přihlašovacích údajů: název uloženého profilu, proměnnou prostředí `LATEX_RENDER_API_KEY` nebo údaj, že nejsou nastavené. S `--json` se zobrazí pole `origin` a `credentialSource`.
+
 - Je-li nastavena proměnná prostředí `LATEX_RENDER_API_KEY`, má přednost před místním klíčem.
 - `logout` odebere jen místně uložený klíč. Proměnnou prostředí v případě potřeby zrušte nebo klíč odvolejte zvlášť na serveru.
 

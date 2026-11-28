@@ -1,7 +1,11 @@
 import { createHash, createPublicKey, sign } from "node:crypto";
 import { once } from "node:events";
 import { createServer } from "node:http";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { RendererDatabase } from "@latex-renderer/database";
 import {
   rendererRelayAgentPaths,
   rendererRelaySocketMessage,
@@ -10,6 +14,8 @@ import {
 } from "../packages/contracts/src/index.js";
 import { RelayRpc } from "../packages/shared/src/relay-rpc.js";
 import { createAgentEnrollmentKeys } from "../apps/public-mcp-agent/src/enrollment.js";
+import { zipStoredFiles } from "../apps/admin-web/src/assets/render-script.js";
+import { createRemoteMcpHandler } from "../apps/remote-mcp/src/mcp.js";
 import { createGatewayAgentSockets } from "../apps/public-mcp-gateway/src/agent-sockets.js";
 import { GatewayAgentPairing } from "../apps/public-mcp-gateway/src/agent-pairing.js";
 import { createDownloads } from "../apps/public-mcp-gateway/src/downloads.js";
@@ -20,9 +26,14 @@ import {
 } from "../apps/public-mcp-gateway/src/oauth-tokens.js";
 import { createPublicMcp } from "../apps/public-mcp-gateway/src/public-mcp.js";
 import { RelayReferences } from "../apps/public-mcp-gateway/src/relay-references.js";
-import { RendererDispatch } from "../apps/public-mcp-gateway/src/renderer-dispatch.js";
+import {
+  RendererDispatch,
+  type DispatchTransport,
+} from "../apps/public-mcp-gateway/src/renderer-dispatch.js";
 import { SqliteConnectionStore } from "../apps/public-mcp-gateway/src/sqlite-connections.js";
 import type { ConnectionAuthorization } from "../apps/public-mcp-gateway/src/connections.js";
+import { RemoteRenderService } from "../packages/remote-mcp-core/src/index.js";
+import { sourceLimitFiles } from "./helpers/source-limit-files.js";
 
 const key = Buffer.alloc(32, 10);
 const origin = "https://gateway.example.com";
@@ -109,6 +120,229 @@ function bearer(tokens: GatewayOAuthTokens, auth: ConnectionAuthorization) {
 }
 
 describe("public gateway wire", () => {
+  it("preserves selected Renderer capabilities and enforces the distinct public upload ceiling", async () => {
+    const store = new SqliteConnectionStore(":memory:");
+    const db = new RendererDatabase(":memory:");
+    const root = await mkdtemp(join(tmpdir(), "public-mcp-limits-"));
+    try {
+      db.migrate();
+      db.users.insertInvitation({
+        id: "local-user",
+        displayName: "Fixture",
+        role: "user",
+        createdBy: "test",
+        timestamp: new Date().toISOString(),
+      });
+      const { auth } = authorization(store, "https");
+      const tokens = new GatewayOAuthTokens(origin, store.oauth, key, 300_000);
+      const token = bearer(tokens, auth);
+      const publicMaxBytes = 1024 ** 2;
+      const instanceMaxBytes = 24 * 1024 ** 2;
+      const lowerOrigin = "https://renderer.example.com";
+      const service = new RemoteRenderService(
+        db,
+        root,
+        "test",
+        lowerOrigin,
+        10,
+        64 * 1024 ** 2,
+        join(root, "environment"),
+        {
+          maxUploadBytes: instanceMaxBytes,
+          maxExtractedBytes: 30 * 1024 ** 2,
+          maxFileCount: 501,
+          maxZipEntries: 600,
+        },
+      );
+      const renderer = createRemoteMcpHandler(service, "test");
+      const readRpc = async (
+        response: Response | undefined,
+      ): Promise<unknown> => {
+        if (!response?.ok) throw new Error("Expected an MCP response");
+        const text = await response.text();
+        const payload = text
+          .split(/\r?\n/)
+          .find((line) => line.startsWith("data: "))
+          ?.slice(6);
+        return JSON.parse(payload ?? text) as unknown;
+      };
+      const request = (
+        base: string,
+        name: string,
+        args: object,
+        access: string,
+      ) =>
+        new Request(`${base}/mcp`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${access}`,
+            "Content-Type": "application/json",
+            Accept: "application/json, text/event-stream",
+          },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            method: "tools/call",
+            params: { name, arguments: args },
+          }),
+        });
+      const direct = async (name: string, args: object): Promise<unknown> => {
+        const response = await renderer.fetch(
+          request(lowerOrigin, name, args, "fixture"),
+          {
+            authInfo: {
+              token: "fixture",
+              clientId: "fixture",
+              scopes: ["mcp:read", "mcp:render"],
+              extra: { userId: "local-user" },
+            },
+          },
+        );
+        return readRpc(response);
+      };
+      const https = vi.fn<DispatchTransport>(async ({ operation }) => {
+        if (operation.method !== "tools/call")
+          throw new Error("Expected a tool call");
+        return direct(operation.name, operation.arguments);
+      });
+      const mcp = createPublicMcp({
+        version: "test",
+        tokens,
+        dispatch: new RendererDispatch(store, { https, agent: https }, 2),
+        references: new RelayReferences(key),
+        maxRequestBytes: 1024 ** 2,
+        maxSourceBytes: publicMaxBytes,
+        transport: (id) => store.transport(id),
+      });
+      const gateway = async (name: string, args: object): Promise<unknown> => {
+        return readRpc(await mcp(request(origin, name, args, token)));
+      };
+      const capabilities = await direct("get_renderer_capabilities", {});
+      const sourceLimits = {
+        inlineBytes: 64 * 1024,
+        directBytes: 4 * 1024 ** 2,
+        directFiles: 100,
+        directFileBytes: 1024 ** 2,
+        uploadBytes: instanceMaxBytes,
+        files: 501,
+        fileBytes: instanceMaxBytes,
+        chunkBytes: 512 * 1024,
+      };
+      const limitsResult = {
+        result: {
+          structuredContent: { result: { capabilities: { sourceLimits } } },
+        },
+      };
+      expect(capabilities).toMatchObject(limitsResult);
+      expect(await gateway("get_renderer_capabilities", {})).toMatchObject(
+        limitsResult,
+      );
+      const accepted = { result: { structuredContent: { success: true } } };
+      const files = sourceLimitFiles(101);
+      expect(
+        await gateway("create_source", { files: files.slice(0, 100) }),
+      ).toMatchObject(accepted);
+      expect(await direct("create_source", { files })).not.toMatchObject(
+        accepted,
+      );
+      expect(await gateway("create_source", { files })).toMatchObject({
+        result: {
+          structuredContent: {
+            success: false,
+            error: { code: "invalid_operation" },
+          },
+        },
+      });
+
+      const uploadZip = async (count: number) => {
+        const archive = Buffer.from(
+          zipStoredFiles(
+            sourceLimitFiles(count).map(({ path, text }) => ({
+              name: path,
+              bytes: Buffer.from(text),
+            })),
+            count,
+          ),
+        );
+        const sha256 = createHash("sha256").update(archive).digest("hex");
+        const reservation = (await gateway("begin_source_upload", {
+          expectedBytes: archive.length,
+          sha256,
+        })) as {
+          result: {
+            structuredContent: { result: { upload: { uploadId: string } } };
+          };
+        };
+        const { uploadId } = reservation.result.structuredContent.result.upload;
+        expect(uploadId).toMatch(/^lrref_/);
+        expect(
+          await gateway("upload_source_chunk", {
+            uploadId,
+            offset: 0,
+            base64: archive.toString("base64"),
+          }),
+        ).toMatchObject(accepted);
+        return {
+          sha256,
+          result: await gateway("finalize_source_upload", { uploadId }),
+        };
+      };
+      const withinLimit = await uploadZip(sourceLimits.files);
+      expect(withinLimit.result).toMatchObject({
+        result: {
+          structuredContent: {
+            success: true,
+            result: { source: { status: "ready" } },
+          },
+        },
+      });
+      const overLimit = await uploadZip(sourceLimits.files + 1);
+      expect(overLimit.result).toMatchObject({
+        result: {
+          structuredContent: {
+            success: false,
+            error: { code: "ZIP_TOO_MANY_FILES" },
+          },
+        },
+      });
+      expect(
+        db.raw
+          .prepare(
+            "SELECT status, upload_lease_owner FROM sources WHERE sha256=?",
+          )
+          .get(overLimit.sha256),
+      ).toEqual({
+        status: "uploading",
+        upload_lease_owner: null,
+      });
+      expect(db.raw.prepare("SELECT COUNT(*) AS n FROM jobs").get()).toEqual({
+        n: 0,
+      });
+
+      const beforeDenied = https.mock.calls.length;
+      const upload = {
+        expectedBytes: publicMaxBytes + 1,
+        sha256: "f".repeat(64),
+      };
+      expect(await gateway("begin_source_upload", upload)).toMatchObject({
+        result: {
+          structuredContent: {
+            success: false,
+            error: { code: "invalid_operation" },
+          },
+        },
+      });
+      expect(https).toHaveBeenCalledTimes(beforeDenied);
+      expect(await direct("begin_source_upload", upload)).toMatchObject(
+        accepted,
+      );
+    } finally {
+      db.close();
+      store.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("serves the tool catalog, binds references to the installation, and omits lower download URLs", async () => {
     const store = new SqliteConnectionStore(":memory:");
     try {
@@ -171,7 +405,9 @@ describe("public gateway wire", () => {
           ?.split(/\r?\n/)
           .find((line) => line.startsWith("data: "))
           ?.slice(6) ?? catalogText;
-      const catalog = JSON.parse(data ?? "null") as { result: { tools: { name: string; inputSchema: unknown }[] } };
+      const catalog = JSON.parse(data ?? "null") as {
+        result: { tools: { name: string; inputSchema: unknown }[] };
+      };
       expect(catalog).toMatchObject({
         result: {
           tools: expect.arrayContaining([
@@ -181,11 +417,23 @@ describe("public gateway wire", () => {
           ]) as unknown,
         },
       });
-      const adoption = catalog.result.tools.find(({name}) => name === "adopt_project_revision");
+      const adoption = catalog.result.tools.find(
+        ({ name }) => name === "adopt_project_revision",
+      );
       expect(adoption?.inputSchema).toMatchObject({
         properties: {
-          revisionId: { anyOf: [{ type: "string", pattern: "^lrref_[A-Za-z0-9_-]+$" }, { type: "null" }] },
-          expectedRevisionId: { anyOf: [{ type: "string", pattern: "^lrref_[A-Za-z0-9_-]+$" }, { type: "null" }] },
+          revisionId: {
+            anyOf: [
+              { type: "string", pattern: "^lrref_[A-Za-z0-9_-]+$" },
+              { type: "null" },
+            ],
+          },
+          expectedRevisionId: {
+            anyOf: [
+              { type: "string", pattern: "^lrref_[A-Za-z0-9_-]+$" },
+              { type: "null" },
+            ],
+          },
         },
       });
       const protectedId = references.seal(auth, "object", jobId);

@@ -15,17 +15,25 @@ import {
   ProjectOperations,
 } from "@latex-renderer/database";
 import { defined } from "./helpers/assert-defined.js";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import {
+  inspectZipCandidates,
+  zipStoredFiles,
+} from "../apps/admin-web/src/assets/render-script.js";
 import { diagnosticWriter } from "../deploy/scripts/service-diagnostics.mjs";
 import { describe, expect, it } from "vitest";
 import {
   downloadJobArtifacts,
   renderProject,
   renderSource,
+  uploadProjectSource,
 } from "../packages/client-core/src/index.js";
+import { createMcpOperations } from "../packages/mcp-core/src/index.js";
+import { zipFiles } from "../packages/renderer-core/src/source-archive.js";
+import { sourceLimitFiles } from "./helpers/source-limit-files.js";
 import {
   pipelineDocument,
   realPipelineImage,
@@ -87,42 +95,92 @@ describe(`Source pipeline HTTP/DB/Worker E2E (${realPipelineImage === undefined 
     async () => {
       const f = await sourcePipelineFixture();
       try {
-        const identity = { userId: "pipeline_user", scopes: ["mcp:render", "mcp:read"] as const };
+        const identity = {
+          userId: "pipeline_user",
+          scopes: ["mcp:render", "mcp:read"] as const,
+        };
         const job = await f.renders.createRender(identity, {
-          inlineSource: pipelineDocument(2, "Exact source map and PDF inspection"),
+          inlineSource: pipelineDocument(
+            2,
+            "Exact source map and PDF inspection",
+          ),
           reproducibility: { mode: "fixed", date: "2024-05-06T12:34:00Z" },
         });
         await f.runNext();
         const status = f.renders.job(identity, job.id);
         expect(status.status).toBe("succeeded");
-        const pdf = defined(f.database.artifacts.getDownloadable(job.id, "result.pdf"));
+        const pdf = defined(
+          f.database.artifacts.getDownloadable(job.id, "result.pdf"),
+        );
         expect(f.database.artifacts.sourceMap(pdf)?.size).toBeGreaterThan(0);
-        expect(status.artifacts.some(({ relativePath }) => relativePath.endsWith(".synctex.gz"))).toBe(false);
+        expect(
+          status.artifacts.some(({ relativePath }) =>
+            relativePath.endsWith(".synctex.gz"),
+          ),
+        ).toBe(false);
 
         const inspect = async (params?: PdfInspectionInput) => {
-          expect(f.renders.pdfInspection(identity, job.id, pdf.sha256, true, params).state).toBe("queued");
-          const request = defined(f.database.pdfInspections.claim(f.config.workerId, new Date().toISOString()));
+          expect(
+            f.renders.pdfInspection(identity, job.id, pdf.sha256, true, params)
+              .state,
+          ).toBe("queued");
+          const request = defined(
+            f.database.pdfInspections.claim(
+              f.config.workerId,
+              new Date().toISOString(),
+            ),
+          );
           await processPdfInspection(f.database, f.config, request);
-          const result = f.renders.pdfInspection(identity, job.id, pdf.sha256, false, params);
-          expect(result).toMatchObject({ state: "ready", pdfSha256: pdf.sha256, errorCode: null });
+          const result = f.renders.pdfInspection(
+            identity,
+            job.id,
+            pdf.sha256,
+            false,
+            params,
+          );
+          expect(result).toMatchObject({
+            state: "ready",
+            pdfSha256: pdf.sha256,
+            errorCode: null,
+          });
           return result.report;
         };
         expect(await inspect()).toMatchObject({
           checks: { "page-rasters": { status: "observed", truncated: false } },
-          coverage: { totalPages: 2, pageDetailsThrough: 2, sampledPages: 2, maxSampleSidePixels: 512 },
+          coverage: {
+            totalPages: 2,
+            pageDetailsThrough: 2,
+            sampledPages: 2,
+            maxSampleSidePixels: 512,
+          },
         });
         expect(await inspect({ pages: [2, 1] })).toMatchObject({
-          pages: [2, 1], columns: 2, mimeType: "image/jpeg",
+          pages: [2, 1],
+          columns: 2,
+          mimeType: "image/jpeg",
         });
-        expect(await inspect({ page: 1, x: 0.1, y: 0.1, width: 0.5, height: 0.5 })).toMatchObject({
-          page: 1, mimeType: "image/jpeg",
+        expect(
+          await inspect({ page: 1, x: 0.1, y: 0.1, width: 0.5, height: 0.5 }),
+        ).toMatchObject({
+          page: 1,
+          mimeType: "image/jpeg",
         });
-        expect(await inspect({ direction: "source_to_pdf", path: "main.tex", line: 4 })).toMatchObject({
-          state: "candidate", evidence: "canonical_synctex",
+        expect(
+          await inspect({
+            direction: "source_to_pdf",
+            path: "main.tex",
+            line: 4,
+          }),
+        ).toMatchObject({
+          state: "candidate",
+          evidence: "canonical_synctex",
         });
         const target = { jobId: job.id, pdfSha256: pdf.sha256 };
-        expect(f.renders.comparePdfInspections(identity, target, target)).toMatchObject({
-          visual: "same_observation", samePdfBytes: true,
+        expect(
+          f.renders.comparePdfInspections(identity, target, target),
+        ).toMatchObject({
+          visual: "same_observation",
+          samePdfBytes: true,
           visualCoverage: { comparedPages: 2, changedPreviewPages: [] },
         });
 
@@ -134,7 +192,9 @@ describe(`Source pipeline HTTP/DB/Worker E2E (${realPipelineImage === undefined 
           "e".repeat(64),
           timestamp,
         );
-        const bytes = await readFile(artifactStoragePath(f.config.storageRoot, pdf));
+        const bytes = await readFile(
+          artifactStoragePath(f.config.storageRoot, pdf),
+        );
         const directory = join(
           pdfInspectionUploadDirectory(f.config.storageRoot, upload.id),
           "original",
@@ -146,13 +206,19 @@ describe(`Source pipeline HTTP/DB/Worker E2E (${realPipelineImage === undefined 
           timestamp,
         );
         const runInspection = async () => {
-          const row = defined(db.claim(f.config.workerId, new Date().toISOString()));
+          const row = defined(
+            db.claim(f.config.workerId, new Date().toISOString()),
+          );
           expect(row).toMatchObject({ upload_id: upload.id, job_id: null });
           await processPdfInspection(f.database, f.config, row);
         };
         await runInspection();
         expect(
-          await f.renders.attachedPdfInspection(identity, upload.id, pdf.sha256),
+          await f.renders.attachedPdfInspection(
+            identity,
+            upload.id,
+            pdf.sha256,
+          ),
         ).toMatchObject({
           state: "ready",
           pdfSha256: pdf.sha256,
@@ -163,27 +229,48 @@ describe(`Source pipeline HTTP/DB/Worker E2E (${realPipelineImage === undefined 
         });
         const crop = { page: 2, x: 0.1, y: 0.1, width: 0.5, height: 0.5 };
         expect(
-          (await f.renders.attachedPdfInspection(identity, upload.id, pdf.sha256, crop))
-            .state,
+          (
+            await f.renders.attachedPdfInspection(
+              identity,
+              upload.id,
+              pdf.sha256,
+              crop,
+            )
+          ).state,
         ).toBe("queued");
         await runInspection();
         expect(
-          await f.renders.attachedPdfInspection(identity, upload.id, pdf.sha256, crop),
+          await f.renders.attachedPdfInspection(
+            identity,
+            upload.id,
+            pdf.sha256,
+            crop,
+          ),
         ).toMatchObject({
           state: "ready",
           report: { page: 2, mimeType: "image/jpeg" },
         });
 
         const input = documentProbeSchema.parse({
-          engine: "lualatex", japanese: true, font: "Harano Aji Mincho",
-          mathFont: "Latin Modern Math", packages: ["amsmath"],
+          engine: "lualatex",
+          japanese: true,
+          font: "Harano Aji Mincho",
+          mathFont: "Latin Modern Math",
+          packages: ["amsmath"],
         });
         const probe = f.renders.documentProbe(identity, input);
         expect(probe.state).toBe("queued");
-        const request = defined(f.database.documentProbes.claim(f.config.workerId, new Date().toISOString()));
+        const request = defined(
+          f.database.documentProbes.claim(
+            f.config.workerId,
+            new Date().toISOString(),
+          ),
+        );
         await processDocumentProbe(f.database, f.config, request);
         expect(f.renders.documentProbe(identity, input)).toMatchObject({
-          probeId: probe.probeId, state: "ready", code: "DOCUMENT_PROBE_COMPILED",
+          probeId: probe.probeId,
+          state: "ready",
+          code: "DOCUMENT_PROBE_COMPILED",
         });
       } finally {
         await f.close();
@@ -941,6 +1028,227 @@ describe(`Source pipeline HTTP/DB/Worker E2E (${realPipelineImage === undefined 
         expect(
           f.database.raw.prepare("PRAGMA foreign_key_check").all(),
         ).toEqual([]);
+      } finally {
+        await f.close();
+      }
+    },
+  );
+
+  it("accepts a Web ZIP over 20 MiB and 500 files through HTTP, CLI preflight and Local MCP", async () => {
+    const limits = {
+      maxUploadBytes: 24 * MIB,
+      maxExtractedBytes: 24 * MIB,
+      maxFileCount: 501,
+      maxZipEntries: 501,
+    };
+    const files = sourceLimitFiles(limits.maxFileCount).map(
+      ({ path, text }) => ({
+        name: path,
+        bytes: Buffer.from(text),
+      }),
+    );
+    files[0] = { name: "main.tex", bytes: Buffer.alloc(21 * MIB, 0x25) };
+    const archive = zipStoredFiles(files, limits.maxFileCount);
+    const digest = createHash("sha256").update(archive).digest("hex");
+    const f = await sourcePipelineFixture(limits, {
+      maxUserStorageBytes: 64 * MIB,
+      inProcess: true,
+    });
+    try {
+      const discovered = await f.client.sourceLimits();
+      expect(discovered).toEqual(limits);
+      expect(archive.length).toBeGreaterThan(20 * MIB);
+      expect(() => inspectZipCandidates(archive)).toThrow(`${20 * MIB} B`);
+      expect(inspectZipCandidates(archive, discovered)).toMatchObject({
+        files: 501,
+        entries: 501,
+      });
+      const path = join(f.root, "raised.zip");
+      await writeFile(path, archive);
+      const cli = await uploadProjectSource(f.client, path);
+      expect(f.database.sources.get(cli.sourceId)).toMatchObject({
+        status: "ready",
+      });
+
+      const local = createMcpOperations({
+        allowedRoots: [f.root],
+        clientFactory: () => Promise.resolve(f.client),
+      });
+      const uploaded = await local.uploadSource(path);
+      expect(uploaded).toMatchObject({
+        success: true,
+        result: { source: { sourceId: cli.sourceId, uploadRequired: false } },
+      });
+    } finally {
+      await f.close();
+    }
+    const reduced = await sourcePipelineFixture(
+      { ...limits, maxUploadBytes: 20 * MIB },
+      { inProcess: true },
+    );
+    try {
+      await expect(
+        reduced.client.createSource(archive.length, digest, randomUUID()),
+      ).rejects.toMatchObject({ code: "INVALID_REQUEST", status: 400 });
+      expect(
+        reduced.database.raw.prepare("SELECT COUNT(*) AS n FROM sources").get(),
+      ).toEqual({ n: 0 });
+      expect(
+        reduced.database.raw.prepare("SELECT COUNT(*) AS n FROM jobs").get(),
+      ).toEqual({ n: 0 });
+    } finally {
+      await reduced.close();
+    }
+  });
+
+  it.each([
+    [
+      "extracted bytes",
+      ["%日本語\n".repeat(70), "%日本語\n".repeat(70)],
+      "ZIP_BOMB",
+      "SOURCE_TOTAL_SIZE",
+    ],
+    [
+      "individual file",
+      ["%日本語\n".repeat(200)],
+      "ZIP_FILE_TOO_LARGE",
+      "SOURCE_FILE_SIZE",
+    ],
+  ] as const)(
+    "rejects an archive over its %s limit and clears HTTP and MCP upload reservations",
+    async (boundary, texts, code, directCode) => {
+      const limits = {
+        maxUploadBytes: 1024,
+        maxExtractedBytes: boundary === "individual file" ? 8192 : 1024,
+        maxFileCount: 2,
+        maxZipEntries: 2,
+      };
+      const f = await sourcePipelineFixture(limits, { inProcess: true });
+      const identity = {
+        userId: "pipeline_user",
+        scopes: ["mcp:render", "mcp:read"] as const,
+      };
+      try {
+        const files = texts.map((text, index) => ({
+          path: index === 0 ? "main.tex" : "other.tex",
+          text,
+        }));
+        const archive = await zipFiles(
+          files.map(({ path, text }) => ({ path, bytes: Buffer.from(text) })),
+          {
+            maxArchiveBytes: 8192,
+            maxExtractedBytes: 16384,
+            maxFileBytes: 16384,
+            maxFiles: 2,
+            maxEntries: 2,
+            maxDepth: 10,
+            maxNameLength: 200,
+          },
+        );
+        const path = join(f.root, "rejected.zip"),
+          hash = createHash("sha256").update(archive).digest("hex");
+        await writeFile(path, archive);
+        expect(archive.length).toBeLessThan(limits.maxUploadBytes);
+        expect(() => inspectZipCandidates(archive, limits)).toThrow(
+          `${boundary === "individual file" ? limits.maxUploadBytes : limits.maxExtractedBytes} B`,
+        );
+        await expect(uploadProjectSource(f.client, path)).rejects.toMatchObject(
+          {
+            code:
+              boundary === "individual file"
+                ? "INVALID_SOURCE_ARCHIVE"
+                : "PROJECT_TOO_LARGE",
+          },
+        );
+        await expect(
+          f.renders.createSource(identity, files),
+        ).rejects.toMatchObject({ code: directCode });
+        const inlineSource = "日本語".repeat(114);
+        expect(inlineSource.length).toBeLessThan(limits.maxUploadBytes);
+        expect(Buffer.byteLength(inlineSource)).toBeGreaterThan(
+          limits.maxUploadBytes,
+        );
+        await expect(
+          f.renders.createRender(identity, { inlineSource }),
+        ).rejects.toMatchObject({ code: "SOURCE_FILE_SIZE" });
+        expect(
+          f.database.raw.prepare("SELECT COUNT(*) AS n FROM sources").get(),
+        ).toEqual({ n: 0 });
+        expect(
+          f.database.raw.prepare("SELECT COUNT(*) AS n FROM jobs").get(),
+        ).toEqual({ n: 0 });
+        expect(await readdir(f.storage)).toEqual([]);
+
+        const source = await f.client.createSource(
+          archive.length,
+          hash,
+          randomUUID(),
+        );
+        await expect(
+          f.client.uploadSource(source, path, archive.length),
+        ).rejects.toMatchObject({ code });
+        expect(f.database.sources.get(source.sourceId)).toBeUndefined();
+        expect(
+          f.database.raw.prepare("SELECT * FROM source_upload_nonces").all(),
+        ).toEqual([]);
+        await expect(
+          readdir(join(f.storage, "sources", source.sourceId)),
+        ).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(
+          f.client.createSourceJob(source.sourceId, "main.tex", randomUUID()),
+        ).rejects.toMatchObject({
+          code: "SOURCE_NOT_READY",
+        });
+        const legacy = await f.client.createTicket(
+          archive.length,
+          hash,
+          randomUUID(),
+        );
+        await expect(
+          f.client.upload(legacy, path, archive.length),
+        ).rejects.toMatchObject({ code });
+        const job = defined(f.database.jobs.get(legacy.jobId));
+        expect(job).toMatchObject({ status: "rejected", error_code: code });
+        expect(
+          f.database.raw.prepare("SELECT id, status FROM jobs").all(),
+        ).toEqual([{ id: legacy.jobId, status: "rejected" }]);
+        const row = defined(f.database.sources.get(defined(job.source_id)));
+        expect(row.status).toBe("deleted");
+        await expect(
+          readdir(dirname(join(f.storage, row.storage_key))),
+        ).rejects.toMatchObject({ code: "ENOENT" });
+        expect(
+          f.database.raw
+            .prepare(
+              "SELECT state, claim_owner, claim_expires_at FROM used_nonces",
+            )
+            .all(),
+        ).toEqual([
+          { state: "released", claim_owner: null, claim_expires_at: null },
+        ]);
+        const upload = await f.renders.beginSourceUpload(
+          identity,
+          archive.length,
+          hash,
+        );
+        await f.renders.uploadSourceChunk(
+          identity,
+          upload.uploadId,
+          0,
+          archive.toString("base64"),
+        );
+        const uploadRoot = join(f.storage, "sources", upload.uploadId);
+        expect(await readdir(join(uploadRoot, ".chunks"))).toEqual(["0"]);
+        await expect(
+          f.renders.finalizeSourceUpload(identity, upload.uploadId),
+        ).rejects.toMatchObject({ code });
+        expect(f.database.sources.get(upload.sourceId)).toBeUndefined();
+        await expect(readdir(uploadRoot)).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        expect(await readdir(f.storage)).toEqual(["sources"]);
+        expect(f.database.jobs.countActiveForUser(identity.userId)).toBe(0);
+        expect(f.database.jobs.storageUsageForUser(identity.userId)).toBe(0);
       } finally {
         await f.close();
       }

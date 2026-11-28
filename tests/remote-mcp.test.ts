@@ -2809,6 +2809,32 @@ describe("Remote MCP HTTP server", () => {
     expect(contentText(rejected)).toContain("SOURCE_FILE_COUNT");
   });
 
+  it("reports the configured revision file ceiling and the chunked upload path", async () => {
+    const fixture = await createFixture({
+      maxUploadBytes: 1024,
+      maxExtractedBytes: 2048,
+      maxFileCount: 2,
+      maxZipEntries: 2,
+    });
+    const identity = { userId: "user_test", scopes: ["mcp:render"] as const };
+    const file = { path: "main.tex", text: "x".repeat(1025) };
+    const expected = {
+      code: "SOURCE_FILE_SIZE",
+      message:
+        "Source file exceeds the 1024-byte revision file limit; use chunked upload with begin_source_upload for a ZIP within the upload limits",
+    };
+    await expect(
+      fixture.renders.updateSourceFile(identity, "source_unused", file),
+    ).rejects.toMatchObject(expected);
+    await expect(
+      fixture.renders.updateProjectFile(identity, {
+        projectId: "project_unused",
+        revisionId: "revision_unused",
+        file,
+      }),
+    ).rejects.toMatchObject(expected);
+  });
+
   it("rejects direct Source archives larger than configured upload bytes", async () => {
     const limits = {
         maxUploadBytes: 1024,

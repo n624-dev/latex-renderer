@@ -29,6 +29,59 @@ afterEach(async () => {
 });
 
 describe("immutable shared Sources", () => {
+  it.each(["configured limit", "ticket size"] as const)(
+    "immediately clears a Source reservation when HTTP upload exceeds the %s",
+    async (limit) => {
+      const { database, actor, tickets, sourceService, storageRoot } =
+        await fixture();
+      const bytes = await zip([["main.tex", "Fixture"]]);
+      const { value } = await sourceService.create(
+        actor,
+        {
+          size: bytes.length,
+          sha256: createHash("sha256").update(bytes).digest("hex"),
+        },
+        "oversized-source-upload",
+      );
+      const app = createRendererApp({
+        database,
+        tickets,
+        storageRoot,
+        maxUploadBytes:
+          limit === "configured limit" ? bytes.length - 1 : bytes.length + 1,
+        minFreeStorageBytes: 1,
+        artifactRetentionHours: 24,
+      });
+      const response = await app.request(
+        `/api/v1/sources/${value.sourceId}/content`,
+        {
+          method: "PUT",
+          headers: {
+            Authorization: `Bearer ${value.uploadTicket}`,
+            "Content-Type": "application/zip",
+            "Content-Length": String(bytes.length),
+          },
+          body: new Uint8Array(Buffer.concat([bytes, Buffer.of(0)])).buffer,
+        },
+      );
+      expect(response.status).toBe(413);
+      await expect(response.json()).resolves.toMatchObject({
+        error: { code: "UPLOAD_TOO_LARGE" },
+      });
+      expect(database.sources.get(value.sourceId)).toBeUndefined();
+      expect(
+        database.security.latestUsableSourceNonce(
+          value.sourceId,
+          new Date().toISOString(),
+        ),
+      ).toBeUndefined();
+      expect(database.jobs.storageUsageForUser(actor.userId)).toBe(0);
+      await expect(
+        lstat(join(storageRoot, "sources", value.sourceId)),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
   it("does not mark a Source ready when the published directory fails to sync", async () => {
     const { database, actor, tickets, sourceService, storageRoot } = await fixture();
     const bytes = await zip([["main.tex", "Fixture"]]);

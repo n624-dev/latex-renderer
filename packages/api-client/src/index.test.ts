@@ -8,17 +8,116 @@ import { RendererClient } from "./index.js";
 afterEach(() => vi.unstubAllGlobals());
 
 describe("RendererClient cache safety", () => {
-  it.each([404, 405])("falls back only when Source limit discovery is unavailable (%i)", async (status) => {
-    const fetcher = vi.fn((url: URL, init?: RequestInit) => {
+  it.each([404, 405])(
+    "falls back only when Source limit discovery is unavailable (%i)",
+    async (status) => {
+      const fetcher = vi.fn((url: URL, init?: RequestInit) => {
+        expect(url.pathname).toBe("/api/v1/source-tickets");
+        expect(init?.redirect).toBe("error");
+        expect(new Headers(init?.headers).get("Authorization")).toBe(
+          "Bearer fixture",
+        );
+        return Promise.resolve(Response.json({}, { status }));
+      });
+      vi.stubGlobal("fetch", fetcher);
+      await expect(
+        new RendererClient(
+          "https://renderer.example.test",
+          "fixture",
+        ).sourceLimits(),
+      ).resolves.toBeUndefined();
+      expect(fetcher).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("reads limits from the selected origin again after reconfiguration", async () => {
+    const first = "https://first.example.test";
+    const second = "https://second.example.test";
+    const reduced = {
+      maxUploadBytes: 4096,
+      maxExtractedBytes: 8192,
+      maxFileCount: 100,
+      maxZipEntries: 105,
+    };
+    const raised = {
+      maxUploadBytes: 32 * 1024 ** 2,
+      maxExtractedBytes: 128 * 1024 ** 2,
+      maxFileCount: 600,
+      maxZipEntries: 1200,
+    };
+    const byOrigin = new Map([
+      [first, reduced],
+      [second, raised],
+    ]);
+    const requests: string[] = [];
+    vi.stubGlobal("fetch", (url: URL, init?: RequestInit) => {
+      requests.push(url.origin);
       expect(url.pathname).toBe("/api/v1/source-tickets");
-      expect(init?.redirect).toBe("error");
-      expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer fixture");
-      return Promise.resolve(Response.json({}, { status }));
+      const headers = new Headers(init?.headers);
+      expect(headers.get("Authorization")).toBe(`Bearer ${url.hostname}`);
+      expect(headers.get("Cache-Control")).toBe("no-store");
+      return Promise.resolve(Response.json(byOrigin.get(url.origin)));
     });
-    vi.stubGlobal("fetch", fetcher);
-    await expect(new RendererClient("https://renderer.example.test", "fixture").sourceLimits())
-      .resolves.toBeUndefined();
-    expect(fetcher).toHaveBeenCalledOnce();
+    const a = new RendererClient(first, "first.example.test");
+    const b = new RendererClient(second, "second.example.test");
+    await expect(a.sourceLimits()).resolves.toEqual(reduced);
+    await expect(b.sourceLimits()).resolves.toEqual(raised);
+    byOrigin.set(first, { ...reduced, maxFileCount: 60 });
+    await expect(a.sourceLimits()).resolves.toEqual({
+      ...reduced,
+      maxFileCount: 60,
+    });
+    expect(requests).toEqual([first, second, first]);
+  });
+
+  it.each([
+    [401, "UNAUTHORIZED"],
+    [403, "FORBIDDEN"],
+    [429, "RATE_LIMITED"],
+    [503, "SERVICE_UNAVAILABLE"],
+  ])(
+    "propagates discovery failure %i without a legacy fallback",
+    async (status, code) => {
+      vi.stubGlobal(
+        "fetch",
+        vi
+          .fn()
+          .mockResolvedValue(
+            Response.json(
+              { error: { code, message: "Discovery failed" } },
+              { status },
+            ),
+          ),
+      );
+      await expect(
+        new RendererClient(
+          "https://renderer.example.test",
+          "fixture",
+        ).sourceLimits(),
+      ).rejects.toMatchObject({ code, status });
+    },
+  );
+
+  it("rejects a malformed limits document and propagates network failure", async () => {
+    const disconnected = new TypeError("fetch failed");
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(
+          Response.json({ maxUploadBytes: 0, maxFileCount: 500 }),
+        )
+        .mockRejectedValueOnce(disconnected),
+    );
+    const client = new RendererClient(
+      "https://renderer.example.test",
+      "fixture",
+    );
+    await expect(client.sourceLimits()).rejects.toMatchObject({
+      code: "INVALID_RESPONSE",
+      status: 502,
+    });
+    await expect(client.sourceLimits()).rejects.toBe(disconnected);
   });
 
   it("uses owner-scoped saved Project endpoints without changing temporary render requests", async () => {

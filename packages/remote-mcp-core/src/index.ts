@@ -52,6 +52,7 @@ import {
   type ResourceLimits,
 } from "@latex-renderer/shared";
 import {
+  isZipLimitError,
   validateAndExtract,
   validateEntrypointPath,
   validateSourceFilePath,
@@ -1057,16 +1058,7 @@ export class RemoteRenderService {
       file.text === undefined
         ? decodeSourceBase64(file.base64 as string)
         : Buffer.from(file.text, "utf8");
-    const maxRevisionFileBytes = Math.min(
-      20 * 1024 * 1024,
-      this.resourceLimits.maxUploadBytes,
-    );
-    if (bytes.byteLength > maxRevisionFileBytes)
-      throw new AppError(
-        "SOURCE_FILE_SIZE",
-        "Source file exceeds the configured revision file limit",
-        400,
-      );
+    this.assertRevisionFileSize(bytes.byteLength);
     return this.reviseSource(identity.userId, sourceId, async (root) => {
       const target = join(root, ...path.split("/"));
       await mkdir(dirname(target), { recursive: true, mode: 0o770 });
@@ -1367,15 +1359,7 @@ export class RemoteRenderService {
       input.file.text === undefined
         ? decodeSourceBase64(input.file.base64 as string)
         : Buffer.from(input.file.text, "utf8");
-    if (
-      bytes.byteLength >
-      Math.min(20 * 1024 * 1024, this.resourceLimits.maxUploadBytes)
-    )
-      throw new AppError(
-        "SOURCE_FILE_SIZE",
-        "Source file exceeds the configured revision file limit",
-        400,
-      );
+    this.assertRevisionFileSize(bytes.byteLength);
     return this.reviseProjectFile(
       identity,
       input.projectId,
@@ -1414,6 +1398,19 @@ export class RemoteRenderService {
         await rm(target);
       },
     );
+  }
+
+  private assertRevisionFileSize(bytes: number): void {
+    const limit = Math.min(
+      20 * 1024 * 1024,
+      this.resourceLimits.maxUploadBytes,
+    );
+    if (bytes > limit)
+      throw new AppError(
+        "SOURCE_FILE_SIZE",
+        `Source file exceeds the ${limit}-byte revision file limit; use chunked upload with begin_source_upload for a ZIP within the upload limits`,
+        400,
+      );
   }
 
   private async reviseProjectFile(
@@ -2517,6 +2514,20 @@ export class RemoteRenderService {
             : []),
         ]);
       }
+    } catch (error) {
+      if (isZipLimitError(error)) {
+        assertHeartbeat();
+        renewLease();
+        await rm(dirname(this.sources.sourcePath(leased)), {
+          recursive: true,
+          force: true,
+        });
+        this.database.transaction(() => {
+          renewLease();
+          this.database.sources.discardReservation(uploadId);
+        });
+      }
+      throw error;
     } finally {
       clearInterval(heartbeat);
       this.database.sources.releaseUploadLease(uploadId, leaseOwner);

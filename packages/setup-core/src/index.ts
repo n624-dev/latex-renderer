@@ -531,6 +531,7 @@ export async function inspectSetup(
   options: CoreOptions = {},
 ): Promise<SetupStatus> {
   const paths = resolveSetupPaths(options);
+  const env = options.env ?? process.env;
   if (options.systemPackage !== undefined) {
     const { directory, version, manager } = options.systemPackage;
     const managedPaths = packageSetupPaths(paths, options.systemPackage);
@@ -551,7 +552,7 @@ export async function inspectSetup(
           : `${manager}-managed payload is missing`,
       });
     }
-    checks.push(await inspectCredential(paths, options.env ?? process.env));
+    checks.push(await inspectCredential(paths, env));
     return {
       status: checks.some((check) => check.status === "fail")
         ? "degraded"
@@ -578,6 +579,9 @@ export async function inspectSetup(
             : "Managed installation state was not found",
           path: paths.statePath,
         },
+        ...(env.LATEX_RENDER_API_KEY === undefined
+          ? []
+          : [await inspectCredential(paths, env)]),
       ],
     };
   }
@@ -630,7 +634,7 @@ export async function inspectSetup(
   }
   checks.push(await inspectLauncher(paths, "cli"));
   checks.push(await inspectLauncher(paths, "mcp"));
-  checks.push(await inspectCredential(paths, options.env ?? process.env));
+  checks.push(await inspectCredential(paths, env));
   checks.push(...(await inspectSkillTargets(paths, state.skillTarget)));
   checks.push(
     ...inspectMcpTargets(
@@ -1334,21 +1338,23 @@ async function inspectCredential(
   env: NodeJS.ProcessEnv,
 ): Promise<DiagnosticCheck> {
   const connections = rendererConnectionProfiles({ platform: paths.platform, path: paths.credentialPath, env });
-  if (env.LATEX_RENDER_PROFILE !== undefined || await connections.defaultName() !== undefined) {
+  if (
+    env.LATEX_RENDER_PROFILE !== undefined ||
+    env.LATEX_RENDER_API_KEY !== undefined ||
+    (await connections.defaultName()) !== undefined
+  ) {
     try {
       const selected = await connections.resolve();
-      return { id: "credential", status: "pass", message: `Renderer connection: ${selected.name ?? "environment"} · ${selected.origin}` };
+      return {
+        id: "credential",
+        status: "pass",
+        message: `Renderer connection: ${selected.name ?? "LATEX_RENDER_API_KEY"} · ${selected.origin}`,
+      };
     } catch (error) {
       if (!(error instanceof AppError)) throw error;
       return { id: "credential", status: "fail", message: error.message };
     }
   }
-  if (env.LATEX_RENDER_API_KEY !== undefined)
-    return {
-      id: "credential",
-      status: "pass",
-      message: "Render API credential is provided by the environment",
-    };
   const info = await lstat(paths.credentialPath).catch(() => undefined);
   if (!info)
     return {

@@ -47,6 +47,7 @@ import { shouldExcludeProjectPath } from "./project-files.js";
 import { resolveLocalTexEngine } from "./tex-engine.js";
 import { pollUntilTerminal } from "./polling.js";
 import {
+  abortable,
   createJobTicketAccess,
   type JobTicketAccess,
 } from "./job-ticket-access.js";
@@ -197,10 +198,10 @@ export async function renderProject(
       options.outputDirectory === undefined
         ? undefined
         : resolve(options.outputDirectory);
+  const limits = await sourceLimits(client, options.signal);
   const temporary = await mkdtemp(join(tmpdir(), "latex-render-"));
   try {
     const zipPath = join(temporary, "source.zip");
-    const limits = await client.sourceLimits?.({ signal: options.signal });
     const prepared = await prepareInputArchive(
       input,
       zipPath,
@@ -269,11 +270,11 @@ export async function compileProjectPdf(
       400,
     );
   await assertSafeOutputFile(destination);
+  const limits = await sourceLimits(client, options.signal);
   const work = await mkdtemp(join(tmpdir(), "n624-latex-"));
   let jobId: string | undefined;
   try {
     const zip = join(work, "source.zip");
-    const limits = await client.sourceLimits?.({ signal: options.signal });
     const archive = await createProjectArchive(
       root,
       zip,
@@ -401,10 +402,10 @@ export async function uploadProjectSource(
   projectPath: string,
   options: ClientCoreOptions = {},
 ): Promise<UploadedSource> {
+  const limits = await sourceLimits(client, options.signal);
   const temporary = await mkdtemp(join(tmpdir(), "latex-source-"));
   try {
     const zipPath = join(temporary, "source.zip"),
-      limits = await client.sourceLimits?.({ signal: options.signal }),
       prepared = await prepareInputArchive(
         resolve(projectPath),
         zipPath,
@@ -423,6 +424,10 @@ export async function uploadProjectSource(
   } finally {
     await rm(temporary, { recursive: true, force: true });
   }
+}
+
+function sourceLimits(client: ClientTransport, signal?: AbortSignal) {
+  return abortable(signal, async () => client.sourceLimits?.({ signal }));
 }
 
 export async function createSourceRenderJob(
