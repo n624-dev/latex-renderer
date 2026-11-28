@@ -74,6 +74,9 @@ latex.example.com/api/v1/health
 latex.example.com/api/v1/render-tickets
 latex.example.com/api/v1/source-tickets
 latex.example.com/api/v1/job-tickets/*
+latex.example.com/api/v1/environment
+latex.example.com/api/v1/environment/*
+latex.example.com/api/v1/pdf-inspections/compare
 latex.example.com/api/v1/projects
 latex.example.com/api/v1/projects/*
 ```

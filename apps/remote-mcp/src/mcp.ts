@@ -1,4 +1,3 @@
-import { sha256Hex } from "@latex-renderer/shared";
 import { getAuthoringGuide } from "./authoring-guide.js";
 import type { DisplayLocale } from "@latex-renderer/shared/locale";
 import { mcpText } from "./mcp-messages.js";
@@ -23,6 +22,7 @@ import {
 } from "@latex-renderer/contracts";
 import {
   rendererMcpResourceDefinitions,
+  pdfInspectionToolResult,
   rendererMcpToolDefinitions,
 } from "@latex-renderer/contracts/renderer-mcp-definitions";
 import {
@@ -100,43 +100,33 @@ export function createRemoteMcpHandler(
         "list_authoring_profiles",
         definitions.list_authoring_profiles,
         () =>
-          execute(
-            "list_authoring_profiles",
-            identity,
-            renders,
-            30,
-            async () => ({
-              profiles: [
-                await renders.taggedJapaneseProfile(
-                  identity,
-                  sha256Hex((await getAuthoringGuide("japanese-tagged")).body),
-                ),
-              ],
-            }),
+          execute("list_authoring_profiles", identity, renders, 30, () =>
+            renders.listAuthoringProfiles(identity),
           ),
       );
       registerJobResources(server, renders, identity, resourceDefinitions);
       registerProjectTools(server, renders, identity, definitions);
-      server.registerTool(
-        "get_profile",
-        definitions.get_profile,
-        () => {
-          const profile = { id: identity.userId };
-          return {
-            structuredContent: profile,
-            content: [{ type: "text" as const, text: JSON.stringify(profile) }],
-          };
-        },
-      );
+      server.registerTool("get_profile", definitions.get_profile, () => {
+        const profile = { id: identity.userId };
+        return {
+          structuredContent: profile,
+          content: [{ type: "text" as const, text: JSON.stringify(profile) }],
+        };
+      });
       if (renders.canVerifyAttachmentOrigin(identity)) {
         server.registerTool(
           "verify_attachment_delivery_origin",
           definitions.verify_attachment_delivery_origin,
           ({ file }) =>
-            execute("verify_attachment_delivery_origin", identity, renders, 10, () =>
-              Promise.resolve(
-                renders.verifyAttachmentOrigin(identity, file.download_url),
-              ),
+            execute(
+              "verify_attachment_delivery_origin",
+              identity,
+              renders,
+              10,
+              () =>
+                Promise.resolve(
+                  renders.verifyAttachmentOrigin(identity, file.download_url),
+                ),
             ),
         );
       }
@@ -307,7 +297,9 @@ export function createRemoteMcpHandler(
         definitions.request_render_quality_report,
         ({ jobId: id, pdfSha256 }) =>
           execute("request_render_quality_report", identity, renders, 10, () =>
-            Promise.resolve(renders.pdfInspection(identity, id, pdfSha256, true)),
+            Promise.resolve(
+              renders.pdfInspection(identity, id, pdfSha256, true),
+            ),
           ),
       );
       server.registerTool(
@@ -315,41 +307,32 @@ export function createRemoteMcpHandler(
         definitions.get_render_quality_report,
         ({ jobId: id, pdfSha256 }) =>
           execute("get_render_quality_report", identity, renders, 45, () =>
-            Promise.resolve(renders.pdfInspection(identity, id, pdfSha256, false)),
+            Promise.resolve(
+              renders.pdfInspection(identity, id, pdfSha256, false),
+            ),
           ),
       );
       server.registerTool(
         "get_render_preview_crop",
         definitions.get_render_preview_crop,
         async ({ jobId: id, pdfSha256, crop }) => {
-          let image: string | undefined;
+          let image: ReturnType<typeof pdfInspectionToolResult>["image"];
           const output = await execute(
             "get_render_preview_crop",
             identity,
             renders,
             20,
             () => {
-              const { report, ...result } = renders.pdfInspection(
-                identity,
-                id,
-                pdfSha256,
-                true,
-                crop,
+              const prepared = pdfInspectionToolResult(
+                renders.pdfInspection(identity, id, pdfSha256, true, crop),
+                "crop",
               );
-              const { base64, ...metadata } = asRecord(report);
-              if (typeof base64 === "string") image = base64;
-              return Promise.resolve({
-                ...result,
-                crop: image === undefined ? null : metadata,
-              });
+              image = prepared.image;
+              return Promise.resolve(prepared.result);
             },
           );
           if (image !== undefined && !("isError" in output))
-            output.content.push({
-              type: "image",
-              data: image,
-              mimeType: "image/jpeg",
-            });
+            output.content.push(image);
           return output;
         },
       );
@@ -412,49 +395,36 @@ export function createRemoteMcpHandler(
         "locate_render_source",
         definitions.locate_render_source,
         ({ jobId: id, pdfSha256, query }) =>
-          execute("locate_render_source", identity, renders, 20, () => {
-            const { report, ...result } = renders.pdfInspection(
-              identity,
-              id,
-              pdfSha256,
-              true,
-              query,
-            );
-            return Promise.resolve({ ...result, matches: report });
-          }),
+          execute("locate_render_source", identity, renders, 20, () =>
+            Promise.resolve(
+              pdfInspectionToolResult(
+                renders.pdfInspection(identity, id, pdfSha256, true, query),
+                "query",
+              ).result,
+            ),
+          ),
       );
       server.registerTool(
         "get_render_preview_sheet",
         definitions.get_render_preview_sheet,
         async ({ jobId: id, pdfSha256, sheet }) => {
-          let image: string | undefined;
+          let image: ReturnType<typeof pdfInspectionToolResult>["image"];
           const output = await execute(
             "get_render_preview_sheet",
             identity,
             renders,
             20,
             () => {
-              const { report, ...status } = renders.pdfInspection(
-                identity,
-                id,
-                pdfSha256,
-                true,
-                sheet,
+              const prepared = pdfInspectionToolResult(
+                renders.pdfInspection(identity, id, pdfSha256, true, sheet),
+                "sheet",
               );
-              const { base64, ...metadata } = asRecord(report);
-              if (typeof base64 === "string") image = base64;
-              return Promise.resolve({
-                ...status,
-                sheet: image === undefined ? null : metadata,
-              });
+              image = prepared.image;
+              return Promise.resolve(prepared.result);
             },
           );
           if (image !== undefined && !("isError" in output))
-            output.content.push({
-              type: "image",
-              data: image,
-              mimeType: "image/jpeg",
-            });
+            output.content.push(image);
           return output;
         },
       );
@@ -538,20 +508,8 @@ export function createRemoteMcpHandler(
         "get_renderer_capabilities",
         definitions.get_renderer_capabilities,
         () =>
-          execute(
-            "get_renderer_capabilities",
-            identity,
-            renders,
-            60,
-            async () => ({
-              capabilities: {
-                ...(await renders.verifiedCapabilities(identity)),
-                serverVersion: version,
-                contractVersion: 2,
-                attachmentImport: renders.hasAttachmentImport(),
-                guideVersion: (await getAuthoringGuide("overview")).version,
-              },
-            }),
+          execute("get_renderer_capabilities", identity, renders, 60, () =>
+            renders.rendererCapabilities(identity, version),
           ),
       );
       server.registerTool(
@@ -629,13 +587,10 @@ function registerEnvironmentTools(
         ),
       })),
   );
-  server.registerTool(
-    "check_fonts",
-    definitions.check_fonts,
-    ({ names }) =>
-      execute("check_fonts", identity, renders, 60, async () => ({
-        fonts: await renders.checkFonts(identity, names),
-      })),
+  server.registerTool("check_fonts", definitions.check_fonts, ({ names }) =>
+    execute("check_fonts", identity, renders, 60, async () => ({
+      fonts: await renders.checkFonts(identity, names),
+    })),
   );
   server.registerTool(
     "search_fonts",
@@ -1132,12 +1087,32 @@ function registerJobResources(
       const id = resourceJobId(variables.jobId);
       const sha256 = resourceVariable(variables.pdfSha256);
       if (!/^[a-f0-9]{64}$/.test(sha256))
-        throw new AppError("PDF_CHECKSUM_INVALID", "The PDF digest is invalid", 400);
-      renders.enforceRateLimit(identity.userId, "read_render_manifest_resource", 60);
+        throw new AppError(
+          "PDF_CHECKSUM_INVALID",
+          "The PDF digest is invalid",
+          400,
+        );
+      renders.enforceRateLimit(
+        identity.userId,
+        "read_render_manifest_resource",
+        60,
+      );
       const manifest = renders.renderManifest(identity, id);
       if (manifest.pdfSha256 !== sha256)
-        throw new AppError("PDF_CHECKSUM_MISMATCH", "The requested PDF is unavailable or has changed", 409);
-      return { contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(manifest) }] };
+        throw new AppError(
+          "PDF_CHECKSUM_MISMATCH",
+          "The requested PDF is unavailable or has changed",
+          409,
+        );
+      return {
+        contents: [
+          {
+            uri: uri.href,
+            mimeType: "application/json",
+            text: JSON.stringify(manifest),
+          },
+        ],
+      };
     },
   );
   server.registerResource(
@@ -1336,7 +1311,9 @@ function modelReadableContent(
 ): ContentBlock[] {
   switch (operation) {
     case "verify_attachment_delivery_origin":
-      return textContent([`Attachment delivery origin: ${stringField(result, "origin")}.`]);
+      return textContent([
+        `Attachment delivery origin: ${stringField(result, "origin")}.`,
+      ]);
     case "get_project_document_state":
     case "update_project_document_conditions": {
       const condition =
@@ -1545,9 +1522,15 @@ function modelReadableContent(
     case "update_project_file": {
       const revision = recordField(result, "revision");
       return textContent([
-        mcpText(locale, "projectRevisionValue", { value: stringField(revision, "id") }),
-        mcpText(locale, "projectIdValue", { value: stringField(revision, "projectId") }),
-        mcpText(locale, "sourceIdValue", { value: stringField(revision, "sourceId") }),
+        mcpText(locale, "projectRevisionValue", {
+          value: stringField(revision, "id"),
+        }),
+        mcpText(locale, "projectIdValue", {
+          value: stringField(revision, "projectId"),
+        }),
+        mcpText(locale, "sourceIdValue", {
+          value: stringField(revision, "sourceId"),
+        }),
       ]);
     }
     case "delete_project_file": {
@@ -1581,8 +1564,12 @@ function modelReadableContent(
     case "create_source_ref":
       return textContent([
         mcpText(locale, "sourceReferenceCreated"),
-        mcpText(locale, "sourceRefValue", { value: stringField(result, "sourceRef") }),
-        mcpText(locale, "expiresAtValue", { value: stringField(result, "expiresAt") }),
+        mcpText(locale, "sourceRefValue", {
+          value: stringField(result, "sourceRef"),
+        }),
+        mcpText(locale, "expiresAtValue", {
+          value: stringField(result, "expiresAt"),
+        }),
       ]);
     case "create_render":
     case "retry_render":
@@ -1611,7 +1598,9 @@ function modelReadableContent(
         `PDF inspection: ${stringField(result, "state")}. ${typeof result.uploadId === "string" ? `Attachment ${result.uploadId}` : `Job ${stringField(result, "jobId")}`}; PDF SHA-256 ${stringField(result, "pdfSha256")}.`,
         `Expires at ${stringField(result, "expiresAt")}.`,
         ...(typeof coverage.sampledPages === "number"
-          ? [`Total pages: ${String(coverage.totalPages)}. Page details attempted through page ${String(coverage.pageDetailsThrough)}. Raster samples: ${coverage.sampledPages} at up to 512 px on the long side.`]
+          ? [
+              `Total pages: ${String(coverage.totalPages)}. Page details attempted through page ${String(coverage.pageDetailsThrough)}. Raster samples: ${coverage.sampledPages} at up to 512 px on the long side.`,
+            ]
           : []),
         ...(typeof result.errorCode === "string"
           ? [`Inspection failure: ${result.errorCode}.`]
@@ -1747,8 +1736,12 @@ function sourceContent(
       `Status: ${stringField(source, "status")}`,
       `Files: ${paths.length}`,
       `Size: ${numberField(source, "size")} bytes`,
-      mcpText(locale, "expiresAtValue", { value: stringField(source, "expiresAt") }),
-      ...(revisionOf === null ? [] : [mcpText(locale, "revisionOfValue", { value: revisionOf })]),
+      mcpText(locale, "expiresAtValue", {
+        value: stringField(source, "expiresAt"),
+      }),
+      ...(revisionOf === null
+        ? []
+        : [mcpText(locale, "revisionOfValue", { value: revisionOf })]),
       mcpText(locale, "pathsUntrustedData"),
       ...quotedList(paths, 20),
     ];
@@ -1766,12 +1759,18 @@ function uploadContent(
     operation === "begin_source_upload"
       ? "Source upload started."
       : "Source chunk accepted.",
-    mcpText(locale, "uploadIdValue", { value: stringField(upload, "uploadId") }),
+    mcpText(locale, "uploadIdValue", {
+      value: stringField(upload, "uploadId"),
+    }),
     mcpText(locale, "expectedBytesValue", { value: expected }),
     mcpText(locale, "receivedBytesValue", { value: received }),
     mcpText(locale, "nextOffsetValue", { value: received }),
-    mcpText(locale, "maxChunkBytesValue", { value: numberField(upload, "maxChunkBytes") }),
-    mcpText(locale, "expiresAtValue", { value: stringField(upload, "expiresAt") }),
+    mcpText(locale, "maxChunkBytesValue", {
+      value: numberField(upload, "maxChunkBytes"),
+    }),
+    mcpText(locale, "expiresAtValue", {
+      value: stringField(upload, "expiresAt"),
+    }),
   ]);
 }
 
@@ -1802,26 +1801,60 @@ function jobContent(
       `Status: ${stringField(job, "status")}`,
       ...(typeof job.stages === "object" && job.stages !== null
         ? [
-            mcpText(locale, "pdfStatusValue", { value: stringField(recordField(job.stages as Record<string, unknown>, "pdf"), "status") }),
-            mcpText(locale, "svgStatusValue", { value: stringField(recordField(job.stages as Record<string, unknown>, "svg"), "status") }),
+            mcpText(locale, "pdfStatusValue", {
+              value: stringField(
+                recordField(job.stages as Record<string, unknown>, "pdf"),
+                "status",
+              ),
+            }),
+            mcpText(locale, "svgStatusValue", {
+              value: stringField(
+                recordField(job.stages as Record<string, unknown>, "svg"),
+                "status",
+              ),
+            }),
           ]
         : []),
-      ...(source === null ? [] : [mcpText(locale, "sourceIdValue", { value: source })]),
+      ...(source === null
+        ? []
+        : [mcpText(locale, "sourceIdValue", { value: source })]),
       ...(projectRevision === null
         ? []
-        : [mcpText(locale, "projectRevisionIdValue", { value: projectRevision })]),
-      mcpText(locale, "entrypointUntrustedDataValue", { value: quoted(stringField(job, "entrypoint")) }),
+        : [
+            mcpText(locale, "projectRevisionIdValue", {
+              value: projectRevision,
+            }),
+          ]),
+      mcpText(locale, "entrypointUntrustedDataValue", {
+        value: quoted(stringField(job, "entrypoint")),
+      }),
       `Outputs: ${stringArray(job.outputs).join(", ")}`,
-      ...(retryOf === null ? [] : [mcpText(locale, "retryOfValue", { value: retryOf })]),
-      mcpText(locale, "exitCodeValue", { value: exitCode === null ? "not available" : exitCode }),
-      ...(errorCode === null ? [] : [mcpText(locale, "errorCodeValue", { value: safeValue(errorCode) })]),
+      ...(retryOf === null
+        ? []
+        : [mcpText(locale, "retryOfValue", { value: retryOf })]),
+      mcpText(locale, "exitCodeValue", {
+        value: exitCode === null ? "not available" : exitCode,
+      }),
+      ...(errorCode === null
+        ? []
+        : [mcpText(locale, "errorCodeValue", { value: safeValue(errorCode) })]),
       ...(errorMessage === null
         ? []
-        : [mcpText(locale, "errorMessageUntrustedDataValue", { value: quoted(errorMessage) })]),
-      mcpText(locale, "previewAvailableValue", { value: String(job.previewAvailable === true) }),
+        : [
+            mcpText(locale, "errorMessageUntrustedDataValue", {
+              value: quoted(errorMessage),
+            }),
+          ]),
+      mcpText(locale, "previewAvailableValue", {
+        value: String(job.previewAvailable === true),
+      }),
       ...(previewPages.length === 0
         ? []
-        : [mcpText(locale, "previewPagesValue", { value: previewPages.join(", ") })]),
+        : [
+            mcpText(locale, "previewPagesValue", {
+              value: previewPages.join(", "),
+            }),
+          ]),
       `Artifacts: ${artifacts.length}`,
       ...artifacts
         .slice(0, 20)
@@ -1838,8 +1871,7 @@ function jobContent(
       name: "human-render-result",
       title: mcpText(locale, "humanWebResult"),
       uri: stringField(job, "webResultUrl"),
-      description:
-        mcpText(locale, "optionalAccessProtectedResultPageFor"),
+      description: mcpText(locale, "optionalAccessProtectedResultPageFor"),
       mimeType: "text/html",
     },
   ];
@@ -1857,7 +1889,9 @@ function diagnosticsContent(
     next = nullableNumber(coverage.nextOffset),
     lines = [
       mcpText(locale, "renderDiagnostics"),
-      mcpText(locale, "jobIdValue", { value: stringField(diagnostics, "jobId") }),
+      mcpText(locale, "jobIdValue", {
+        value: stringField(diagnostics, "jobId"),
+      }),
       `Status: ${stringField(diagnostics, "status")}`,
       ...(diagnostics.stage === "pdf" || diagnostics.stage === "svg"
         ? [`Stage: ${diagnostics.stage}`]
@@ -1926,17 +1960,39 @@ function capabilitiesContent(
     `Outputs: ${stringArray(capabilities.outputs)
       .map((value) => safeValue(value))
       .join(", ")}`,
-    mcpText(locale, "shellEscapeValue", { value: String(capabilities.shellEscape === true) }),
-    mcpText(locale, "networkAccessValue", { value: String(capabilities.networkAccess === true) }),
-    mcpText(locale, "maxCompileSecondsValue", { value: numberField(capabilities, "maxCompileSeconds") }),
-    mcpText(locale, "maxPdfPagesValue", { value: numberField(capabilities, "maxPdfPages") }),
-    mcpText(locale, "directSourceBytesValue", { value: numberField(limits, "directBytes") }),
-    mcpText(locale, "directSourceFilesValue", { value: numberField(limits, "directFiles") }),
-    mcpText(locale, "directSourceFileBytesValue", { value: numberField(limits, "directFileBytes") }),
-    mcpText(locale, "uploadSourceBytesValue", { value: numberField(limits, "uploadBytes") }),
-    mcpText(locale, "maxSourceFilesValue", { value: numberField(limits, "files") }),
-    mcpText(locale, "maxFileBytesValue", { value: numberField(limits, "fileBytes") }),
-    mcpText(locale, "maxChunkBytesValue", { value: numberField(limits, "chunkBytes") }),
+    mcpText(locale, "shellEscapeValue", {
+      value: String(capabilities.shellEscape === true),
+    }),
+    mcpText(locale, "networkAccessValue", {
+      value: String(capabilities.networkAccess === true),
+    }),
+    mcpText(locale, "maxCompileSecondsValue", {
+      value: numberField(capabilities, "maxCompileSeconds"),
+    }),
+    mcpText(locale, "maxPdfPagesValue", {
+      value: numberField(capabilities, "maxPdfPages"),
+    }),
+    mcpText(locale, "directSourceBytesValue", {
+      value: numberField(limits, "directBytes"),
+    }),
+    mcpText(locale, "directSourceFilesValue", {
+      value: numberField(limits, "directFiles"),
+    }),
+    mcpText(locale, "directSourceFileBytesValue", {
+      value: numberField(limits, "directFileBytes"),
+    }),
+    mcpText(locale, "uploadSourceBytesValue", {
+      value: numberField(limits, "uploadBytes"),
+    }),
+    mcpText(locale, "maxSourceFilesValue", {
+      value: numberField(limits, "files"),
+    }),
+    mcpText(locale, "maxFileBytesValue", {
+      value: numberField(limits, "fileBytes"),
+    }),
+    mcpText(locale, "maxChunkBytesValue", {
+      value: numberField(limits, "chunkBytes"),
+    }),
   ]);
 }
 
@@ -1962,7 +2018,9 @@ function searchContent(
     cursor = nullableString(search.nextCursor);
   return textContent([
     mcpText(locale, "valueSearchResults", { value: label }),
-    mcpText(locale, "queryUntrustedDataValue", { value: quoted(stringField(search, "query")) }),
+    mcpText(locale, "queryUntrustedDataValue", {
+      value: quoted(stringField(search, "query")),
+    }),
     `Matches: ${matches.length}`,
     ...quotedList(matches, MODEL_LIST_LIMIT),
     mcpText(locale, "nextCursorValue", { value: cursor ?? "none" }),
@@ -2008,7 +2066,11 @@ function modelReadableFailure(
         ]),
     ...(error.retryAfterSeconds === undefined
       ? []
-      : [mcpText(locale, "retryAfterSecondsValue", { value: error.retryAfterSeconds })]),
+      : [
+          mcpText(locale, "retryAfterSecondsValue", {
+            value: error.retryAfterSeconds,
+          }),
+        ]),
   ]);
 }
 
