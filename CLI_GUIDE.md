@@ -28,3 +28,6 @@ latex-render render --source source_... --entrypoint reports/b.tex --output .ren
 Symlinks are rejected when packaging local projects. Use `--output` to select the artifact directory; `.render` is the default, not a fixed destination.
 
 For the complete and current command reference, setup/repair flow, JSON contract, and artifact layout, use [`docs/public/cli.md`](docs/public/cli.md).
+
+For owner commands that create, verify, and manage backup retention, see the
+[administrator guide](ADMIN_GUIDE.md#backups).

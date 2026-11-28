@@ -2,6 +2,7 @@
 Description=LaTeX Renderer local backup control
 
 [Service]
+EnvironmentFile=/etc/latex-renderer/backup.env
 ExecStart=/usr/local/bin/node /opt/latex-renderer/current/deploy/scripts/backup-control.mjs request
 StandardInput=socket
 StandardOutput=socket
@@ -9,6 +10,7 @@ StandardError=journal
 RuntimeMaxSec=15s
 NoNewPrivileges=yes
 ProtectSystem=strict
+ReadWritePaths=/var/lib/latex-renderer/backups /var/lib/latex-renderer-backup-verification
 ProtectHome=yes
 PrivateTmp=yes
 RestrictAddressFamilies=AF_UNIX
