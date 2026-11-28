@@ -4,6 +4,36 @@ import { RendererDatabase } from "@latex-renderer/database";
 import { AdminSystemService } from "../apps/admin-api/src/services/system.js";
 import { createDashboard } from "../apps/admin-web/src/browser/admin/dashboard.js";
 
+// The Admin API fallback currently accepts a negative heartbeat age.
+it.fails(
+  "reports a future database heartbeat as unavailable without a host status reader",
+  () => {
+    const database = new RendererDatabase(":memory:");
+    try {
+      database.migrate();
+      const at = new Date(Date.now() + 60_000).toISOString();
+      database.settings.upsert(
+        "worker_heartbeat",
+        { workerId: "test", at },
+        "test",
+        at,
+      );
+      const service = new AdminSystemService({
+        database,
+        writeEnabled: true,
+      } as never);
+      expect(service.status().rendering).toMatchObject({
+        operational: false,
+        state: "unavailable",
+        fresh: false,
+        lastHeartbeatAt: at,
+      });
+    } finally {
+      database.close();
+    }
+  },
+);
+
 describe("admin system status and dashboard contract", () => {
   it.each([
     [undefined, undefined, true, "正常", "通常運転", "稼働中", undefined],
@@ -20,7 +50,15 @@ describe("admin system status and dashboard contract", () => {
     ],
     ["lockdown", "running", true, "要確認", "緊急停止", "稼働中", undefined],
     ["normal", "paused", true, "要確認", "通常運転", "停止中", undefined],
-    ["normal", "draining", true, "要確認", "通常運転", "処理の終了待ち", undefined],
+    [
+      "normal",
+      "draining",
+      true,
+      "要確認",
+      "通常運転",
+      "処理の終了待ち",
+      undefined,
+    ],
     ["normal", "running", false, "要確認", "通常運転", "稼働中", undefined],
     [
       "normal",

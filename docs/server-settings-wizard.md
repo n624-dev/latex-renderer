@@ -6,6 +6,36 @@ packages, service users/groups, Node, subordinate IDs and rootless Docker must
 already be prepared. No wizard runs apt/useradd, reconfigures Docker or changes
 firewalls, Cloudflare, partitions or quotas.
 
+## Worker subordinate UID and GID policy
+
+`deploy/scripts/install-host.sh` and `deploy/scripts/prepare-host.sh` use the
+same allocator for `latex-render-worker`. For a noninteractive installation,
+run `install-host.sh` before configuring rootless Docker and invoking
+`deploy/scripts/bootstrap-published-host.mjs`. The prepared-host CUI and Web
+wizards also expect the mappings to be in place before setup. See the
+[manual self-hosting guide](public/en/self-hosting.md).
+
+The allocator requires the file-backed `subid` provider. An absent `subid`
+entry or `subid: files` in `/etc/nsswitch.conf` is supported. Allocation uses
+`/etc/subuid` and `/etc/subgid` and looks for one contiguous block of 65,536
+IDs in each file. The inclusive search bounds come from `SUB_UID_MIN` and
+`SUB_UID_MAX`, and separately from `SUB_GID_MIN` and `SUB_GID_MAX`, in
+`/etc/login.defs`. The defaults for missing bounds are 100,000 and 600,100,000.
+
+Both host scripts take `/run/lock/latex-renderer-worker-subid.lock` around
+allocation, so concurrent runs of these scripts check the files in turn. A
+rerun keeps valid existing Worker assignments, including entries keyed by the
+Worker's numeric UID, and adds only missing assignments. Coordinate changes
+from other host account tools with the host administrator.
+
+For an unsupported provider, use a file-backed host approved for this
+deployment. For malformed entries, overlaps, undersized Worker mappings or
+exhausted ranges, review both subordinate ID files and the allocation bounds
+with the host administrator before retrying. If the host has no free block,
+provide sufficient capacity within its approved bounds. If an existing Worker
+mapping needs to change, plan the rootless Docker and storage ownership
+migration before changing it.
+
 ## Select scope and one frontend
 
 Managed HTTP services can wait without a Node process and restart on access.

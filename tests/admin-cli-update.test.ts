@@ -11,7 +11,11 @@ const outcome = (updater: string, complete = false) => ({
   outcome: { application: "succeeded", updater, complete },
 });
 
-async function run(command: string, replies: unknown[]) {
+async function run(
+  command: string,
+  replies: unknown[],
+  failure?: { status: number; code: string; message: string },
+) {
   const requests: Array<{ method: string; path: string; body: string }> = [];
   let read = 0;
   const server = createServer((request, response) => {
@@ -26,8 +30,18 @@ async function run(command: string, replies: unknown[]) {
         if (
           request.method === "POST" &&
           request.url === `/admin/api/v1/updates/${command}`
+        ) {
+          if (failure) {
+            const { status, code, message } = failure;
+            response
+              .writeHead(status)
+              .end(JSON.stringify({ error: { code, message } }));
+          } else response.end(JSON.stringify({ id, status: "running" }));
+        } else if (
+          request.method === "GET" &&
+          request.url === "/admin/api/v1/updates/state"
         )
-          response.end(JSON.stringify({ id, status: "running" }));
+          response.end(JSON.stringify(replies[0]));
         else if (
           request.method === "GET" &&
           request.url === `/admin/api/v1/updates/operations/${id}`
@@ -58,9 +72,10 @@ async function run(command: string, replies: unknown[]) {
       "update",
       command,
       ...(command === "apply" ? ["7.8.9-rc.4"] : []),
-      "--reason",
-      "Fixture deployment",
-      "--yes",
+      ...(command === "policy" ? ["--mode", "notify"] : []),
+      ...(command === "status"
+        ? []
+        : ["--reason", "Fixture deployment", "--yes"]),
     ],
     {
       env: {
@@ -107,6 +122,7 @@ it.each(["apply", "rollback"])(
     ]);
     expect(result.code).toBe(0);
     expect(JSON.parse(result.stdout) as unknown).toMatchObject({
+      id,
       outcome: { complete: true },
     });
     expect(
@@ -147,3 +163,37 @@ it("preserves terminal application failure and its nonzero exit", async () => {
   expect(result.stderr).toContain("Fixture deployment failed");
   expect(result.requests).toHaveLength(2);
 });
+
+it.each([
+  {
+    status: 409,
+    code: "UPDATE_OPERATION_ACTIVE",
+    message: "Update policy cannot change while an operation is running",
+  },
+  { status: 500, code: "ENOENT", message: "Update state rename failed" },
+])(
+  "reports the $code policy error and reads the last confirmed policy",
+  async (failure) => {
+    const rejected = await run("policy", [], failure);
+    expect(rejected.code).toBe(1);
+    expect(rejected.stdout).toBe("");
+    expect(rejected.stderr).toContain(failure.message);
+    expect(rejected.requests).toHaveLength(1);
+    expect(JSON.parse(rejected.requests[0]?.body ?? "")).toEqual({
+      channel: "stable",
+      mode: "notify",
+      reason: "Fixture deployment",
+    });
+
+    const persisted = {
+      policy: { channel: "stable", mode: "automatic" },
+      lastOperationId: id,
+    };
+    const status = await run("status", [persisted]);
+    expect(status.code).toBe(0);
+    expect(JSON.parse(status.stdout)).toEqual(persisted);
+    expect(status.requests).toEqual([
+      { method: "GET", path: "/admin/api/v1/updates/state", body: "" },
+    ]);
+  },
+);

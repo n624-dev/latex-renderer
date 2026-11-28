@@ -2,13 +2,21 @@ import { afterEach, expect, it, vi } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import { createServer } from "node:net";
 import { setTimeout } from "node:timers";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { RendererDatabase } from "../packages/database/src/index.js";
 import * as demand from "../deploy/scripts/worker-demand.mjs";
 import { readWorkerHealth } from "../deploy/scripts/worker-health.mjs";
+import { claimAuxiliaryWork } from "../apps/renderer-worker/src/auxiliary-work.js";
 import {
   reconcileWorker,
   workerMaintenanceDue,
@@ -120,11 +128,13 @@ it("reports a listening Worker as idle while cleanup is the only demand", () => 
     INSERT INTO system_settings VALUES ('maintenance_mode','"reject-new-jobs"');`);
   expect(demand.workerHasDemand(database)).toBe(true);
   expect(readWorkerHealth({ path, databasePath, run })).toEqual({
-    operational: true, state: "idle",
+    operational: true,
+    state: "idle",
   });
   database.exec("INSERT INTO jobs VALUES ('queued',NULL)");
   expect(readWorkerHealth({ path, databasePath, run })).toEqual({
-    operational: false, state: "unavailable",
+    operational: false,
+    state: "unavailable",
   });
 });
 
@@ -155,6 +165,353 @@ it("distinguishes pending PDF work from expired maintenance records", () => {
     demand.workerHasDemand(database, { now, includeMaintenance: false }),
   ).toBe(true);
 });
+
+const parityTime = "2026-11-27T00:00:00.000Z";
+const before = "2026-11-26T23:59:59.999Z";
+const after = "2026-11-27T00:00:00.001Z";
+const active = { ActiveState: "active", MainPID: "1234" };
+const listening = { ActiveState: "active", SubState: "listening" };
+const fresh = { pid: 1234, at: parityTime, mode: "running", stopping: false };
+
+function healthReaders(
+  f: ReturnType<typeof fixture>,
+  {
+    heartbeat = fresh,
+    service = { ActiveState: "inactive", MainPID: "0" },
+    socket = listening,
+    checkDemand = false,
+    databasePath = f.path,
+  } = {},
+) {
+  const states = {
+    "latex-renderer-api.service": {
+      LoadState: "loaded",
+      Result: "success",
+      ActiveState: "active",
+    },
+    "latex-renderer-api.socket": listening,
+    "latex-renderer-worker.service": {
+      LoadState: "loaded",
+      Result: "success",
+      ...service,
+    },
+    "latex-renderer-worker.socket": socket,
+  };
+  const path = join(f.root, "health.json");
+  writeFileSync(path, JSON.stringify(heartbeat), { mode: 0o600 });
+  const run = vi.fn((...args: string[]) => {
+    const name = args.at(-1) as keyof typeof states;
+    return Object.entries(states[name])
+      .map(([key, value]) => `${key}=${value}`)
+      .join("\n");
+  });
+  const node = readWorkerHealth({
+    path,
+    databasePath,
+    now: Date.parse(parityTime),
+    run,
+  });
+  expect(run.mock.calls.every(([verb]) => verb === "show")).toBe(true);
+  const outputPath = join(f.root, "python-health.json");
+  const descriptor = openSync(outputPath, "w");
+  try {
+    execFileSync(
+      "python3",
+      [
+        "-B",
+        "-c",
+        String.raw`
+import importlib.util, io, json, os, sqlite3, sys
+spec = importlib.util.spec_from_file_location('passive_health', 'deploy/scripts/passive-health.py')
+health = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(health)
+path, now, states, heartbeat, check_demand = json.loads(sys.argv[1])
+os.environ['DEPLOYMENT_MODE'] = 'cloudflare'
+class Clock(health.datetime.datetime):
+    @classmethod
+    def now(cls, tz=None):
+        return cls.fromisoformat(now)
+health.datetime.datetime = Clock
+snapshot = health.snapshot(path, lambda: states, lambda: heartbeat)
+result = dict(state=snapshot['worker'], operational=snapshot['rendering'])
+class Connection:
+    def __init__(self, path):
+        self.request = io.BytesIO(f'GET {path} HTTP/1.1\r\n\r\n'.encode('ascii'))
+    def settimeout(self, timeout):
+        pass
+    def makefile(self, mode):
+        return self.request
+    def sendall(self, data):
+        self.status = int(data.split(b' ', 2)[1])
+result['http'] = []
+for endpoint in ('/health', '/api/v1/health', '/health/status', '/health/rendering'):
+    connection = Connection(endpoint)
+    health.respond(connection, lambda: snapshot)
+    result['http'].append(connection.status)
+if check_demand:
+    db = sqlite3.connect('file:' + path + '?mode=ro', uri=True)
+    try:
+        result['demand'] = [health.worker_has_demand(db, now, flag) for flag in (True, False)]
+    finally:
+        db.close()
+print(json.dumps(result))
+`,
+        JSON.stringify([
+          databasePath,
+          parityTime,
+          states,
+          heartbeat,
+          checkDemand,
+        ]),
+      ],
+      { stdio: ["ignore", descriptor, "inherit"], timeout: 5000 },
+    );
+  } finally {
+    closeSync(descriptor);
+  }
+  const {
+    demand: pythonDemand,
+    http,
+    ...python
+  } = JSON.parse(readFileSync(outputPath, "utf8")) as {
+    demand?: [boolean, boolean];
+    http: number[];
+    state: string;
+    operational: boolean;
+  };
+  return { node, python, pythonDemand, http };
+}
+
+const demandCases = [
+  { name: "empty", sql: "", interactive: false },
+  {
+    name: "queued Job",
+    sql: "INSERT INTO jobs VALUES ('queued',NULL)",
+    interactive: true,
+  },
+  {
+    name: "validating Job",
+    sql: "INSERT INTO jobs VALUES ('validating','owner')",
+    interactive: true,
+  },
+  {
+    name: "running Job",
+    sql: "INSERT INTO jobs VALUES ('running','owner')",
+    interactive: true,
+  },
+  {
+    name: "queued Preview",
+    sql: "INSERT INTO job_preview_requests VALUES ('queued',NULL)",
+    interactive: true,
+  },
+  {
+    name: "running Preview",
+    sql: "INSERT INTO job_preview_requests VALUES ('running','owner')",
+    interactive: true,
+  },
+  ...["pdf_inspections", "document_probes"].flatMap((table) => [
+    {
+      name: `queued ${table}`,
+      sql: `INSERT INTO ${table} VALUES ('queued','${after}')`,
+      interactive: true,
+    },
+    {
+      name: `expired ${table}`,
+      sql: `INSERT INTO ${table} VALUES ('queued','${parityTime}')`,
+      interactive: false,
+    },
+    {
+      name: `running ${table} after expiry`,
+      sql: `INSERT INTO ${table} VALUES ('running','${before}')`,
+      interactive: true,
+    },
+  ]),
+  {
+    name: "unexpired upload",
+    sql: `INSERT INTO pdf_inspection_uploads VALUES ('${after}')`,
+    interactive: false,
+  },
+  {
+    name: "expired upload",
+    sql: `INSERT INTO pdf_inspection_uploads VALUES ('${parityTime}')`,
+    interactive: false,
+    maintenance: true,
+  },
+  {
+    name: "Job cleanup lease",
+    sql: "INSERT INTO jobs VALUES ('canceled','recovery')",
+    interactive: false,
+    maintenance: true,
+  },
+  {
+    name: "Preview cleanup lease",
+    sql: "INSERT INTO job_preview_requests VALUES ('failed','recovery')",
+    interactive: false,
+    maintenance: true,
+  },
+  {
+    name: "Source Tree reader",
+    sql: "INSERT INTO source_tree_readers VALUES ('reader')",
+    interactive: false,
+    maintenance: true,
+  },
+  ...["building", "deleting"].map((status) => ({
+    name: `${status} Source Tree`,
+    sql: `INSERT INTO source_trees VALUES ('${status}')`,
+    interactive: false,
+    maintenance: true,
+  })),
+];
+
+it.each(demandCases)(
+  "shares the same SQLite demand semantics for $name",
+  ({ sql, interactive, ...entry }) => {
+    const f = fixture();
+    f.database.exec(`CREATE TABLE pdf_inspections(status TEXT,expires_at TEXT);
+    CREATE TABLE document_probes(status TEXT,expires_at TEXT);
+    CREATE TABLE pdf_inspection_uploads(expires_at TEXT); ${sql}`);
+    const { node, python, pythonDemand, http } = healthReaders(f, {
+      checkDemand: true,
+    });
+    const expected = [
+      interactive || ("maintenance" in entry && entry.maintenance),
+      interactive,
+    ];
+    expect(
+      [true, false].map((includeMaintenance) =>
+        demand.workerHasDemand(f.database, {
+          includeMaintenance,
+          now: parityTime,
+        }),
+      ),
+    ).toEqual(expected);
+    expect(pythonDemand).toEqual(expected);
+    const health = {
+      operational: !interactive,
+      state: interactive ? "unavailable" : "idle",
+    };
+    expect([node, python]).toEqual([health, health]);
+    expect(http).toEqual([200, 200, 200, interactive ? 503 : 200]);
+  },
+);
+
+it("requires a standalone interactive-demand fixture for each queue dispatched by the Worker", () => {
+  const queues = [
+    ...claimAuxiliaryWork.toString().matchAll(/\bFROM\s+(\w+)/gi),
+  ].map(([, table]) => table);
+  expect(queues).toContain("job_preview_requests");
+  for (const queue of queues)
+    expect(
+      demandCases.some(
+        ({ sql, interactive }) =>
+          interactive && sql.startsWith(`INSERT INTO ${queue} `),
+      ),
+    ).toBe(true);
+});
+
+it.each([
+  { name: "listening on the old schema", state: "idle" },
+  { name: "fresh running", service: active, state: "running" },
+  { name: "idle paused", mode: "paused", state: "paused" },
+  {
+    name: "running draining",
+    mode: "draining",
+    service: active,
+    heartbeat: { ...fresh, mode: "draining" },
+    state: "draining",
+  },
+  {
+    name: "stopped",
+    socket: { ActiveState: "inactive", SubState: "dead" },
+    state: "unavailable",
+  },
+  {
+    name: "starting",
+    service: { ...active, ActiveState: "activating" },
+    state: "unavailable",
+  },
+  {
+    name: "stale heartbeat",
+    service: active,
+    heartbeat: { ...fresh, at: "2026-11-26T23:59:29.999Z" },
+    state: "unavailable",
+  },
+  {
+    name: "future heartbeat",
+    service: active,
+    heartbeat: { ...fresh, at: after },
+    state: "unavailable",
+  },
+  {
+    name: "PID mismatch",
+    service: active,
+    heartbeat: { ...fresh, pid: 4321 },
+    state: "unavailable",
+  },
+  {
+    name: "stopping heartbeat",
+    service: active,
+    heartbeat: { ...fresh, stopping: true },
+    state: "unavailable",
+  },
+  { name: "locked DB", fault: "lock", state: "unavailable" },
+  { name: "corrupt DB", fault: "corrupt", state: "unavailable" },
+  { name: "missing DB", fault: "missing", state: "unavailable" },
+])(
+  "shares health semantics for $name",
+  ({ mode, state, fault, ...options }) => {
+    const f = fixture();
+    if (mode)
+      f.database
+        .prepare("INSERT INTO system_settings VALUES ('worker_mode',?)")
+        .run(JSON.stringify(mode));
+    if (fault === "lock") f.database.exec("BEGIN EXCLUSIVE");
+    const databasePath =
+      fault === "missing" || fault === "corrupt" ? join(f.root, fault) : f.path;
+    if (fault === "corrupt")
+      writeFileSync(databasePath, "not a SQLite database");
+    const { node, python, http } = healthReaders(f, {
+      databasePath,
+      ...options,
+    });
+    const expected = {
+      state,
+      operational: state === "idle" || state === "running",
+    };
+    expect([node, python]).toEqual([expected, expected]);
+    expect(http).toEqual([200, 200, 200, expected.operational ? 200 : 503]);
+  },
+);
+
+// The direct reader trusts the heartbeat mode, while passive health reads worker_mode from SQLite.
+it.fails(
+  "agrees on the configured pause while the last heartbeat still says running",
+  () => {
+    const f = fixture();
+    f.database.exec(
+      `INSERT INTO system_settings VALUES ('worker_mode','"paused"')`,
+    );
+    const { node, python } = healthReaders(f, { service: active });
+    expect(python).toEqual({ state: "paused", operational: false });
+    expect(node).toEqual(python);
+  },
+);
+
+// The direct reader skips the database on its healthy running path.
+it.fails(
+  "agrees on unavailable health when the database is corrupt during a fresh heartbeat",
+  () => {
+    const f = fixture();
+    const databasePath = join(f.root, "corrupt");
+    writeFileSync(databasePath, "not a SQLite database");
+    const { node, python } = healthReaders(f, {
+      service: active,
+      databasePath,
+    });
+    expect(python).toEqual({ state: "unavailable", operational: false });
+    expect(node).toEqual(python);
+  },
+);
 
 it("notifies after commit, observes committed state, and never notifies on rollback", () => {
   const db = new RendererDatabase(":memory:");

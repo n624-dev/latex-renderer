@@ -42,11 +42,12 @@ export function pipelineDocument(pages = 1, text = "Pipeline") {
   return `% pipeline-pages: ${pages}\n\\documentclass{article}\n\\begin{document}\n${Array.from({ length: pages }, () => text).join("\\newpage\n")}\n\\end{document}\n`;
 }
 
-// Three independent loopback HTTP listeners; no global fetch or service mocks.
+// HTTP tests use three independent loopback listeners. DB/Worker-only tests
+// can opt out of starting them.
 // Only the Docker child boundary is replaced in ordinary (no-image) tests.
 export async function sourcePipelineFixture(
   overrides: Partial<ResourceLimits> = {},
-  options: { lazyPreviews?: boolean } = {},
+  options: { lazyPreviews?: boolean; listenForHttp?: boolean } = {},
 ) {
   // All consumers must see the same instance limits, not only the MCP producer.
   const limits = { ...DEFAULT_RESOURCE_LIMITS, ...overrides };
@@ -149,6 +150,8 @@ export async function sourcePipelineFixture(
     const http = async (
       fetcher: (request: Request) => Promise<Response> | Response,
     ) => {
+      if (options.listenForHttp === false)
+        return "https://source-pipeline.invalid";
       const server = createServer((incoming, outgoing) => {
         void (async () => {
           const address = server.address();
