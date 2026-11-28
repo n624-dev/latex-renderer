@@ -40,14 +40,14 @@ Send teksten til assistenten for å generere PDF og SVG, diagnostisere feil, se 
 
 > [!DETAILS] Verktøy og detaljer for utviklere
 >
-> | Kategori | Verktøy |
-> | --- | --- |
-> | Profil | `get_profile` |
-> | Kilde | `create_source`, `update_source_file`, `delete_source_file`, `begin_source_upload`, `upload_source_chunk`, `finalize_source_upload`, `create_source_ref` |
+> | Kategori           | Verktøy                                                                                                                                                                                                               |
+> | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+> | Profil             | `get_profile`                                                                                                                                                                                                         |
+> | Kilde              | `create_source`, `update_source_file`, `delete_source_file`, `begin_source_upload`, `upload_source_chunk`, `finalize_source_upload`, `create_source_ref`                                                              |
 > | Lagrede prosjekter | `list_projects`, `get_project`, `get_project_revision_jobs`, `create_project`, `rename_project`, `delete_project`, `attach_project_revision`, `update_project_file`, `delete_project_file`, `render_project_revision` |
-> | Rendring | `create_render`, `retry_render`, `retry_svg_render`, `get_render_status`, `cancel_render`, `delete_render` |
-> | Kontroll | `get_render_diagnostics`, `get_render_preview`, `get_render_artifacts` |
-> | Miljø | `get_renderer_capabilities`, `check_packages`, `search_packages`, `check_fonts`, `search_fonts` |
+> | Rendring           | `create_render`, `retry_render`, `retry_svg_render`, `get_render_status`, `cancel_render`, `delete_render`                                                                                                            |
+> | Kontroll           | `get_render_diagnostics`, `get_render_preview`, `get_render_artifacts`                                                                                                                                                |
+> | Miljø              | `get_renderer_capabilities`, `check_packages`, `search_packages`, `check_fonts`, `search_fonts`                                                                                                                       |
 >
 > - **Identitet og rettigheter.** `get_profile` returnerer bare en stabil, ugjennomsiktig ID for den autentiserte brukeren. Den er uendret ved tokenfornyelse og ny tilkobling og inneholder ikke e-post eller visningsnavn. Hvert verktøy oppgir sine OAuth-tilgangsomfang i listen og kontrollerer dem ved kjøring.
 > - **Opprett inndata og kontroller grenser**
@@ -87,18 +87,24 @@ For å reparere uendrede registreringer opprettet av det nedlastbare installasjo
 
 ## Verktøy i Local MCP {#local-mcpのツール}
 
-| Verktøy | Operasjon |
-| --- | --- |
-| `upload_source` | Klargjør en mappe eller ZIP som inndata |
-| `create_render_job` | Opprett en jobb fra `sourceId + entrypoint` og be eventuelt om SVG i `outputs` |
-| `render_project` | Klargjør inndata, konverter og last ned i ett kall, med valgfri SVG i `outputs` |
-| `list_projects` / `get_project` / `get_project_revision_jobs` | Les prosjekter, revisjoner og jobbhistorikk |
-| `create_project` / `rename_project` / `delete_project` | Administrer lagrede prosjekter |
-| `attach_project_revision` / `render_project_revision` | Lagre opplastede inndata og opprett jobb fra en fast revisjon |
-| `get_render_status` | Kontroller jobbstatus |
-| `download_render_artifacts` | Last ned PDF, SVG, logger og strukturerte feil |
-| `cancel_render` | Avbryt en aktiv jobb |
-| `delete_render` | Slett en avsluttet jobb |
+| Verktøy                                                                                                    | Operasjon                                                                                                                                |
+| ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `upload_source`                                                                                            | Klargjør en mappe eller ZIP som inndata                                                                                                  |
+| `create_render_job`                                                                                        | Opprett en jobb fra `sourceId + entrypoint` og be eventuelt om SVG i `outputs`                                                           |
+| `render_project`                                                                                           | Klargjør inndata, konverter og last ned i ett kall, med valgfri SVG i `outputs`                                                          |
+| `list_projects` / `get_project` / `get_project_revision_jobs`                                              | Les prosjekter, revisjoner og jobbhistorikk                                                                                              |
+| `create_project` / `rename_project` / `delete_project`                                                     | Administrer lagrede prosjekter                                                                                                           |
+| `attach_project_revision` / `render_project_revision`                                                      | Lagre opplastede inndata og opprett jobb fra en fast revisjon                                                                            |
+| `get_render_status`                                                                                        | Kontroller jobbstatus                                                                                                                    |
+| `get_renderer_capabilities` / `list_authoring_profiles`                                                    | Se rendringsmiljøet og forfatterprofiler (`render:create`)                                                                               |
+| `check_packages` / `search_packages` / `check_fonts` / `search_fonts`                                      | Kontrollere eller søke etter pakker og skrifter (`render:create`)                                                                        |
+| `check_document_requirements` / `probe_document_requirements`                                              | Kontrollere dokumentkrav eller sette en test i kø (`render:create`)                                                                      |
+| `retry_render` / `retry_svg_render`                                                                        | Prøve hele jobben eller bare SVG-trinnet på nytt (`render:create`)                                                                       |
+| `get_render_diagnostics` / `read_render_log` / `get_render_manifest`                                       | Lese diagnostikk, loggutdrag og manifest for en egen jobb (`render:read:own`)                                                            |
+| `get_render_preview_crop` / `get_render_preview_sheet` / `locate_render_source` / `compare_render_quality` | Beskjære eller sette sammen PDF-forhåndsvisninger, slå opp posisjoner med SyncTeX eller sammenligne PDF-rapporter (`render:pdf:inspect`) |
+| `download_render_artifacts`                                                                                | Last ned PDF, SVG, logger og strukturerte feil                                                                                           |
+| `cancel_render`                                                                                            | Avbryt en aktiv jobb                                                                                                                     |
+| `delete_render`                                                                                            | Slett en avsluttet jobb                                                                                                                  |
 
 > [!DETAILS] Regler for verktøyene i Local MCP
 >

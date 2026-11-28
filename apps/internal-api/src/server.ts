@@ -48,6 +48,12 @@ const app = createInternalApp({
     signingKeys.verification,
   ),
   rendererPublicUrl: required("RENDERER_PUBLIC_URL"),
+  ...(process.env.PUBLIC_ORIGIN === undefined
+    ? {}
+    : { publicOrigin: process.env.PUBLIC_ORIGIN }),
+  environmentRoot:
+    process.env.RENDERER_ENVIRONMENT_ROOT ??
+    "/var/lib/latex-renderer/environment",
   rendererVersion: process.env.RENDERER_IMAGE ?? "latex-renderer:development",
   maxUploadBytes: sourceLimits.maxUploadBytes,
   sourceLimits,

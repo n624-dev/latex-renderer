@@ -164,11 +164,14 @@ const jobSchema = z
   })
   .strict();
 export const rendererMcpRecoveryDetailsSchema = z.object({
-    retryAfterSeconds: z.number().int().positive().optional(),
-    expectedOffset: z.number().int().nonnegative().optional(),
-    previewErrorCode: z.string().regex(/^[A-Z0-9_]{1,64}$/).optional(),
-    retryable: z.boolean().optional(),
-    currentVersion: z.number().int().nonnegative().nullable().optional(),
+  retryAfterSeconds: z.number().int().positive().optional(),
+  expectedOffset: z.number().int().nonnegative().optional(),
+  previewErrorCode: z
+    .string()
+    .regex(/^[A-Z0-9_]{1,64}$/)
+    .optional(),
+  retryable: z.boolean().optional(),
+  currentVersion: z.number().int().nonnegative().nullable().optional(),
 });
 const errorSchema = z
   .object({
@@ -188,7 +191,10 @@ function oauthToolMeta(tool: RendererMcpTool) {
   };
 }
 
-function operationOutput<T extends z.ZodType, const Name extends string>(operation: Name, result: T) {
+function operationOutput<T extends z.ZodType, const Name extends string>(
+  operation: Name,
+  result: T,
+) {
   return z
     .object({
       success: z.boolean(),
@@ -200,31 +206,31 @@ function operationOutput<T extends z.ZodType, const Name extends string>(operati
 }
 
 export const authoringGuideToolDefinition = {
-      _meta: oauthToolMeta("get_authoring_guide"),
-      title: "Get the LaTeX authoring guide",
-      description:
-        "Read the published LaTeX Renderer authoring guide by topic. Start with overview; choose remote or local for tool-specific steps, then use layout and quality for the final PDF.",
-      inputSchema: z
-        .object({ topic: z.enum(authoringTopics).default("overview") })
-        .strict(),
-      outputSchema: operationOutput(
-        "get_authoring_guide",
-        z
-          .object({
-            version: z.string(),
-            topic: z.enum(authoringTopics),
-            body: z.string(),
-            topics: z.array(z.enum(authoringTopics)),
-          })
-          .strict(),
-      ),
-      annotations: {
-        readOnlyHint: true,
-        destructiveHint: false,
-        idempotentHint: true,
-        openWorldHint: false,
-      },
-    };
+  _meta: oauthToolMeta("get_authoring_guide"),
+  title: "Get the LaTeX authoring guide",
+  description:
+    "Read the published LaTeX Renderer authoring guide by topic. Start with overview; choose remote or local for tool-specific steps, then use layout and quality for the final PDF.",
+  inputSchema: z
+    .object({ topic: z.enum(authoringTopics).default("overview") })
+    .strict(),
+  outputSchema: operationOutput(
+    "get_authoring_guide",
+    z
+      .object({
+        version: z.string(),
+        topic: z.enum(authoringTopics),
+        body: z.string(),
+        topics: z.array(z.enum(authoringTopics)),
+      })
+      .strict(),
+  ),
+  annotations: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+};
 
 function rendererMcpRenderToolDefinitions(
   translate: RendererMcpTranslate,
@@ -1491,68 +1497,86 @@ const savedRevisionFileIdentity = {
   sourceSha256: z.string().regex(/^[a-f0-9]{64}$/),
 };
 
-export const savedRevisionFilesPageSchema = z.object({
-  ...savedRevisionFileIdentity,
-  items: z.array(z.object({
-    path: z.string(),
-    size: z.number().int().nonnegative(),
-    kind: z.enum(["text", "binary"]),
-  }).strict()),
-  totalFiles: z.number().int().nonnegative(),
-  nextOffset: z.number().int().nonnegative().nullable(),
-}).strict();
+export const savedRevisionFilesPageSchema = z
+  .object({
+    ...savedRevisionFileIdentity,
+    items: z.array(
+      z
+        .object({
+          path: z.string(),
+          size: z.number().int().nonnegative(),
+          kind: z.enum(["text", "binary"]),
+        })
+        .strict(),
+    ),
+    totalFiles: z.number().int().nonnegative(),
+    nextOffset: z.number().int().nonnegative().nullable(),
+  })
+  .strict();
 
-export const savedRevisionFileTextSchema = z.object({
-  ...savedRevisionFileIdentity,
-  path: z.string(),
-  sha256: z.string().regex(/^[a-f0-9]{64}$/),
-  size: z.number().int().nonnegative(),
-  text: z.string(),
-  unit: z.literal("utf16"),
-  offset: z.number().int().nonnegative(),
-  nextOffset: z.number().int().nonnegative().nullable(),
-  totalUnits: z.number().int().nonnegative(),
-}).strict();
+export const savedRevisionFileTextSchema = z
+  .object({
+    ...savedRevisionFileIdentity,
+    path: z.string(),
+    sha256: z.string().regex(/^[a-f0-9]{64}$/),
+    size: z.number().int().nonnegative(),
+    text: z.string(),
+    unit: z.literal("utf16"),
+    offset: z.number().int().nonnegative(),
+    nextOffset: z.number().int().nonnegative().nullable(),
+    totalUnits: z.number().int().nonnegative(),
+  })
+  .strict();
 
 export const savedRevisionFileTools = {
-    list_project_revision_files: {
-      _meta: oauthToolMeta("list_project_revision_files"),
-      title: "List files in a saved Project revision",
-      description:
-        "List the exact saved revision's files, sizes in bytes, and kinds. Supply projectId and revisionId from get_project. Continue with nextOffset; use get_project_revision_file to read text.",
-      inputSchema: z
-        .object({
-          projectId: projectIdSchema,
-          revisionId: projectRevisionIdSchema,
-          offset: z.number().int().nonnegative().optional(),
-          limit: z.number().int().min(1).max(25).optional(),
-        })
-        .strict(),
-      outputSchema: operationOutput(
-        "list_project_revision_files",
-        savedRevisionFilesPageSchema,
-      ),
-      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  list_project_revision_files: {
+    _meta: oauthToolMeta("list_project_revision_files"),
+    title: "List files in a saved Project revision",
+    description:
+      "List the exact saved revision's files, sizes in bytes, and kinds. Supply projectId and revisionId from get_project. Continue with nextOffset; use get_project_revision_file to read text.",
+    inputSchema: z
+      .object({
+        projectId: projectIdSchema,
+        revisionId: projectRevisionIdSchema,
+        offset: z.number().int().nonnegative().optional(),
+        limit: z.number().int().min(1).max(25).optional(),
+      })
+      .strict(),
+    outputSchema: operationOutput(
+      "list_project_revision_files",
+      savedRevisionFilesPageSchema,
+    ),
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
     },
-    get_project_revision_file: {
-      _meta: oauthToolMeta("get_project_revision_file"),
-      title: "Read text from a saved Project revision",
-      description:
-        "Read UTF-8 text from the exact saved revision without opening a draft. Use the path returned by list_project_revision_files. Offset is in UTF-16 code units; follow nextOffset until null before replacing a file.",
-      inputSchema: z
-        .object({
-          projectId: projectIdSchema,
-          revisionId: projectRevisionIdSchema,
-          offset: z.number().int().nonnegative().optional(),
-          path: z.string().min(1).max(2048),
-        })
-        .strict(),
-      outputSchema: operationOutput(
-        "get_project_revision_file",
-        savedRevisionFileTextSchema,
-      ),
-      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  get_project_revision_file: {
+    _meta: oauthToolMeta("get_project_revision_file"),
+    title: "Read text from a saved Project revision",
+    description:
+      "Read UTF-8 text from the exact saved revision without opening a draft. Use the path returned by list_project_revision_files. Offset is in UTF-16 code units; follow nextOffset until null before replacing a file.",
+    inputSchema: z
+      .object({
+        projectId: projectIdSchema,
+        revisionId: projectRevisionIdSchema,
+        offset: z.number().int().nonnegative().optional(),
+        path: z.string().min(1).max(2048),
+      })
+      .strict(),
+    outputSchema: operationOutput(
+      "get_project_revision_file",
+      savedRevisionFileTextSchema,
+    ),
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
     },
+  },
 };
 
 function rendererMcpProjectToolDefinitions(translate: RendererMcpTranslate) {
@@ -2324,56 +2348,147 @@ export const rendererApiAuthoringRoutes = {
     suffix: "/revision-cleanup/apply",
   },
   get_project_draft: { method: "GET", resource: "project", suffix: "/draft" },
-  get_project_draft_file: { method: "GET", resource: "project", suffix: "/draft/file" },
-  open_project_draft: { method: "POST", resource: "project", suffix: "/draft/open" },
-  apply_project_changes: { method: "POST", resource: "project", suffix: "/draft/changes" },
-  render_project_draft: { method: "POST", resource: "project", suffix: "/draft/preview" },
-  save_project_draft: { method: "POST", resource: "project", suffix: "/draft/save" },
-  get_render_quality_report: { method: "GET", resource: "job", suffix: "/pdf-inspection" },
-  request_render_quality_report: { method: "POST", resource: "job", suffix: "/pdf-inspection" },
+  get_project_draft_file: {
+    method: "GET",
+    resource: "project",
+    suffix: "/draft/file",
+  },
+  open_project_draft: {
+    method: "POST",
+    resource: "project",
+    suffix: "/draft/open",
+  },
+  apply_project_changes: {
+    method: "POST",
+    resource: "project",
+    suffix: "/draft/changes",
+  },
+  render_project_draft: {
+    method: "POST",
+    resource: "project",
+    suffix: "/draft/preview",
+  },
+  save_project_draft: {
+    method: "POST",
+    resource: "project",
+    suffix: "/draft/save",
+  },
+  get_render_quality_report: {
+    method: "GET",
+    resource: "job",
+    suffix: "/pdf-inspection",
+  },
+  request_render_quality_report: {
+    method: "POST",
+    resource: "job",
+    suffix: "/pdf-inspection",
+  },
+  get_renderer_capabilities: {
+    method: "GET",
+    resource: "collection",
+    suffix: "/environment",
+  },
+  list_authoring_profiles: {
+    method: "GET",
+    resource: "collection",
+    suffix: "/environment/profiles",
+  },
+  check_packages: {
+    method: "POST",
+    resource: "collection",
+    suffix: "/environment/packages/check",
+  },
+  search_packages: {
+    method: "GET",
+    resource: "collection",
+    suffix: "/environment/packages/search",
+  },
+  check_fonts: {
+    method: "POST",
+    resource: "collection",
+    suffix: "/environment/fonts/check",
+  },
+  search_fonts: {
+    method: "GET",
+    resource: "collection",
+    suffix: "/environment/fonts/search",
+  },
+  check_document_requirements: {
+    method: "POST",
+    resource: "collection",
+    suffix: "/environment/requirements/check",
+  },
+  probe_document_requirements: {
+    method: "POST",
+    resource: "collection",
+    suffix: "/environment/requirements/probe",
+  },
+  retry_render: { method: "POST", resource: "job", suffix: "/retry" },
+  retry_svg_render: {
+    method: "POST",
+    resource: "render-ticket",
+    suffix: "/render-tickets",
+  },
+  get_render_diagnostics: {
+    method: "GET",
+    resource: "job",
+    suffix: "/diagnostics",
+  },
+  read_render_log: { method: "GET", resource: "job", suffix: "/log" },
+  get_render_preview_crop: {
+    method: "POST",
+    resource: "job",
+    suffix: "/pdf-inspection",
+    inspectionParam: "crop",
+  },
+  get_render_preview_sheet: {
+    method: "POST",
+    resource: "job",
+    suffix: "/pdf-inspection",
+    inspectionParam: "sheet",
+  },
+  locate_render_source: {
+    method: "POST",
+    resource: "job",
+    suffix: "/pdf-inspection",
+    inspectionParam: "query",
+  },
+  compare_render_quality: {
+    method: "POST",
+    resource: "collection",
+    suffix: "/pdf-inspections/compare",
+  },
+  get_render_manifest: { method: "GET", resource: "job", suffix: "/manifest" },
 } as const;
 
 export type RendererApiAuthoringTool = keyof typeof rendererApiAuthoringRoutes;
 
 export function rendererApiAuthoringTools() {
-  const {
-    get_project_document_state,
-    update_project_document_conditions,
-    adopt_project_revision,
-    list_project_pdf_reviews,
-    record_project_pdf_review,
-    get_project_storage_usage,
-    protect_project_revision,
-    plan_project_revision_cleanup,
-    apply_project_revision_cleanup,
-    get_project_draft,
-    get_project_draft_file,
-    open_project_draft,
-    apply_project_changes,
-    render_project_draft,
-    save_project_draft,
-  } = rendererMcpProjectToolDefinitions(rendererMcpEnglishText);
-  const { get_render_quality_report, request_render_quality_report } =
-    rendererMcpRenderToolDefinitions(rendererMcpEnglishText, 1);
-  return {
-    get_project_document_state,
-    update_project_document_conditions,
-    adopt_project_revision,
-    list_project_pdf_reviews,
-    record_project_pdf_review,
-    get_project_storage_usage,
-    protect_project_revision,
-    plan_project_revision_cleanup,
-    apply_project_revision_cleanup,
-    get_project_draft,
-    get_project_draft_file,
-    open_project_draft,
-    apply_project_changes,
-    render_project_draft,
-    save_project_draft,
-    get_render_quality_report,
-    request_render_quality_report,
-  } satisfies Record<RendererApiAuthoringTool, unknown>;
+  const definitions = rendererMcpToolDefinitions(1);
+  return Object.fromEntries(
+    (Object.keys(rendererApiAuthoringRoutes) as RendererApiAuthoringTool[]).map(
+      (name) => [name, definitions[name]],
+    ),
+  ) as Pick<typeof definitions, RendererApiAuthoringTool>;
+}
+
+// PDF inspection stores the image with the report. MCP delivers the JPEG as a
+// content block and keeps just the inspection and image metadata in the result.
+export function pdfInspectionToolResult(
+  inspection: unknown,
+  kind: "crop" | "sheet" | "query",
+) {
+  const { report, ...status } = z
+    .looseObject({ report: z.unknown() })
+    .parse(inspection);
+  if (kind === "query") return { result: { ...status, matches: report } };
+  const parsed = z.record(z.string(), z.unknown()).safeParse(report);
+  const { base64, ...metadata } = parsed.success ? parsed.data : {};
+  const image =
+    typeof base64 === "string"
+      ? { type: "image" as const, data: base64, mimeType: "image/jpeg" }
+      : undefined;
+  return { result: { ...status, [kind]: image ? metadata : null }, image };
 }
 
 export function rendererMcpToolDefinitions(

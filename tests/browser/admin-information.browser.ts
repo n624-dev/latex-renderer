@@ -16,6 +16,8 @@ const userId = `user_${"a".repeat(32)}`;
 const accountId = `sa_${"a".repeat(32)}`;
 const requestedId = `sa_${"b".repeat(32)}`;
 const fixtureCredential = "issued-credential-fixture-not-a-key";
+const rotatedCredential = "rotated-credential-fixture-not-a-key";
+const fixtureIssuancePath = `/admin/api/v1/service-accounts/${requestedId}/api-keys`;
 const jobId = `job_${"c".repeat(32)}`;
 const retryId = `job_${"f".repeat(32)}`;
 const sourceId = `source_${"d".repeat(32)}`;
@@ -71,12 +73,29 @@ afterAll(async () => {
   await browser?.close();
 });
 
-async function fixture(kind: string, query = "", pagedOwners = false, pagedAccounts = false) {
+async function fixture(
+  kind: string,
+  query = "",
+  pagedOwners = false,
+  pagedAccounts = false,
+  denyStorage = false,
+) {
   if (!browser) throw new Error("Browser not started");
   const page = await newTestPage(browser, {
     viewport: { width: 390, height: 844 },
   });
   pages.push(page);
+  if (denyStorage) {
+    await page.addInitScript(() => {
+      for (const name of ["localStorage", "sessionStorage"]) {
+        Object.defineProperty(window, name, {
+          get() {
+            throw new DOMException("Fixture denies storage", "SecurityError");
+          },
+        });
+      }
+    });
+  }
   const errors: string[] = [],
     mutations: Array<{
       path: string;
@@ -84,6 +103,8 @@ async function fixture(kind: string, query = "", pagedOwners = false, pagedAccou
       body: string | null;
     }> = [];
   const ownerState = { disabled: false };
+  const identity = { userId, displayName: user.display_name, role: "owner" };
+  const keyResponse: { wait?: Promise<void> } = {};
   const jobState: { current: JobFixture } = { current: job };
   const queueSetting = {
     key: "max_queue_length",
@@ -116,13 +137,25 @@ async function fixture(kind: string, query = "", pagedOwners = false, pagedAccou
         await route.fulfill({ json: queueSetting });
         return;
       }
+      if (
+        url.pathname === "/admin/api/v1/api-keys/key-fixture/rotate" ||
+        url.pathname === fixtureIssuancePath
+      ) {
+        await keyResponse.wait;
+        await route.fulfill({
+          json: {
+            apiKey: url.pathname.endsWith("/rotate")
+              ? rotatedCredential
+              : fixtureCredential,
+          },
+        });
+        return;
+      }
       await route.fulfill({
         json:
           url.pathname === `/admin/api/v1/jobs/${jobId}/retry`
             ? { id: retryId, retryOfJobId: jobId }
-            : url.pathname.includes("/service-accounts/") && url.pathname.endsWith("/api-keys")
-              ? { apiKey: fixtureCredential }
-              : {},
+            : {},
       });
       return;
     }
@@ -205,7 +238,7 @@ async function fixture(kind: string, query = "", pagedOwners = false, pagedAccou
       return;
     }
     const values: Record<string, unknown> = {
-      "/me": { userId, displayName: "検証ユーザー", role: "owner" },
+      "/me": identity,
       "/users": { items: [user], nextCursor: null },
       "/service-accounts": { items: [account], nextCursor: "more" },
       [`/service-accounts/${requestedId}`]: {
@@ -352,7 +385,15 @@ async function fixture(kind: string, query = "", pagedOwners = false, pagedAccou
     expect(await page.locator("#error").textContent()).toBe("");
     expect(errors).toEqual([]);
   }
-  return { page, errors, mutations, ownerState, jobState };
+  return {
+    page,
+    errors,
+    mutations,
+    ownerState,
+    jobState,
+    identity,
+    keyResponse,
+  };
 }
 
 it.each([false, true])(
@@ -554,6 +595,200 @@ it("selects an explicit account outside the first page and keeps scope labels al
   await value.waitFor({ state: "detached" });
   expect(errors).toEqual([]);
 });
+
+it.each([
+  ["dismiss", "#dismiss-issued"],
+  ["X", ".dialog-close"],
+  ["copy", "#copy-issued"],
+])(
+  "clears a rotated credential with %s even when storage is denied",
+  async (exit, selector) => {
+    const { page, errors, mutations } = await fixture(
+      "keys",
+      "",
+      false,
+      false,
+      true,
+    );
+    const copied: string[] = [];
+    await page.exposeFunction("recordFixtureCopy", (value: string) => {
+      copied.push(value);
+    });
+    await page.evaluate(() => {
+      Object.defineProperty(navigator, "clipboard", {
+        value: {
+          writeText: Reflect.get(window, "recordFixtureCopy") as (
+            value: string,
+          ) => Promise<void>,
+        },
+      });
+    });
+    await page.locator("[data-k-rotate]").click();
+    await page.locator('dialog button[type="submit"]').click();
+    const credentialDialog = page.getByRole("dialog", {
+      name: "APIキーを発行しました",
+      exact: true,
+    });
+    const credential = page.locator("[data-issued-credential]");
+    await expect.poll(() => credential.textContent()).toBe(rotatedCredential);
+    expect(await page.locator("dialog[open]").count()).toBe(1);
+    const element = await credential.elementHandle();
+    await credentialDialog.locator(selector).click();
+    await credential.waitFor({ state: "detached" });
+    expect(await element.evaluate((node) => node.textContent)).toBe("");
+    expect(copied).toEqual(exit === "copy" ? [rotatedCredential] : []);
+    expect(mutations).toEqual([
+      {
+        path: "/admin/api/v1/api-keys/key-fixture/rotate",
+        csrf: "fixture-csrf",
+        body: "{}",
+      },
+    ]);
+    expect(page.url()).not.toContain(rotatedCredential);
+    expect(await page.locator("body").textContent()).not.toContain(
+      rotatedCredential,
+    );
+    expect(errors).toEqual([]);
+  },
+);
+
+it.each(["reload", "back", "logout", "principal change"])(
+  "discards a displayed credential on %s",
+  async (exit) => {
+    const keysPage = `${origin}/admin/api-keys/?account=${requestedId}`;
+    const { page, errors, identity, mutations } = await fixture(
+      "keys",
+      `?account=${requestedId}`,
+      false,
+      false,
+      exit === "reload",
+    );
+    await page.locator("#key-create").click();
+    await page.locator('dialog [name="name"]').fill("Fixture");
+    await page.locator('dialog button[type="submit"]').click();
+    const credential = page.locator("[data-issued-credential]");
+    await expect.poll(() => credential.textContent()).toBe(fixtureCredential);
+    switch (exit) {
+      case "reload":
+        await page.reload();
+        break;
+      case "back":
+        await page.goto(`${origin}/admin/api-keys/`);
+        await page.goBack();
+        expect(page.url()).toBe(keysPage);
+        break;
+      case "logout":
+        // The modal makes the toolbar inert to pointer events.
+        await page
+          .locator("#logout")
+          .evaluate((button: HTMLElement) => button.click());
+        await page.waitForURL(`${origin}/login/`);
+        expect(mutations.at(-1)).toMatchObject({
+          path: "/auth/logout",
+          csrf: "fixture-csrf",
+        });
+        break;
+      case "principal change":
+        identity.userId = "other-fixture-user";
+        identity.displayName = "Different fixture administrator";
+        await page
+          .locator("#refresh")
+          .evaluate((button: HTMLElement) => button.click());
+        await expect
+          .poll(() => page.locator("#identity").textContent())
+          .toContain(identity.displayName);
+        break;
+    }
+    if (exit !== "logout") await page.locator("#key-create").waitFor();
+    expect(await credential.count()).toBe(0);
+    expect(await page.locator("body").textContent()).not.toContain(
+      fixtureCredential,
+    );
+    expect(page.url()).not.toContain(fixtureCredential);
+    expect(errors).toEqual([]);
+  },
+);
+
+it("discards an in-flight issuance response after the administrator changes", async () => {
+  const { page, errors, identity, mutations, keyResponse } = await fixture(
+    "keys",
+    `?account=${requestedId}`,
+  );
+  let releaseResponse = () => {};
+  keyResponse.wait = new Promise<void>((resolve) => {
+    releaseResponse = resolve;
+  });
+  await page.evaluate((issuancePath) => {
+    const fetchResponse = window.fetch.bind(window);
+    window.fetch = async (input, init) => {
+      const response = await fetchResponse(input, init);
+      if (new URL(response.url).pathname === issuancePath) {
+        const text = response.text.bind(response);
+        response.text = async () => {
+          const body = await text();
+          document.body.dataset.fixtureResponseRead = "true";
+          return body;
+        };
+      }
+      return response;
+    };
+  }, fixtureIssuancePath);
+  try {
+    await page.locator("#key-create").click();
+    await page.locator('dialog [name="name"]').fill("Fixture");
+    await page.locator('dialog button[type="submit"]').click();
+    await expect.poll(() => mutations.length).toBe(1);
+    identity.userId = "other-fixture-user";
+    identity.displayName = "Different fixture administrator";
+    await page
+      .locator("#refresh")
+      .evaluate((button: HTMLElement) => button.click());
+    await expect
+      .poll(() => page.locator("#identity").textContent())
+      .toContain(identity.displayName);
+    await page.locator("dialog").waitFor({ state: "detached" });
+    const response = page.waitForResponse(
+      (value) =>
+        value.url().endsWith(fixtureIssuancePath) &&
+        value.request().method() === "POST",
+    );
+    releaseResponse();
+    expect(await (await response).finished()).toBeNull();
+    await page.waitForFunction(
+      () => document.body.dataset.fixtureResponseRead === "true",
+    );
+    expect(await page.locator("[data-issued-credential]").count()).toBe(0);
+    expect(await page.locator("body").textContent()).not.toContain(
+      fixtureCredential,
+    );
+    expect(errors).toEqual([]);
+  } finally {
+    releaseResponse();
+  }
+});
+
+it.each([
+  ["keys", "[data-k-revoke]", "/admin/api/v1/api-keys/key-fixture/revoke"],
+  [
+    "accounts",
+    "[data-a-status]",
+    `/admin/api/v1/service-accounts/${accountId}/disable`,
+  ],
+])(
+  "uses the guarded management request on the %s page",
+  async (kind, selector, path) => {
+    const { page, errors, mutations } = await fixture(kind);
+    if (kind === "accounts") await page.locator(".row-options summary").click();
+    await page.locator(selector).click();
+    expect(mutations).toEqual([]);
+    await page.locator('dialog button[type="submit"]').click();
+    await expect
+      .poll(() => page.locator("#success").textContent())
+      .not.toBe("");
+    expect(mutations).toEqual([{ path, csrf: "fixture-csrf", body: "{}" }]);
+    expect(errors).toEqual([]);
+  },
+);
 
 it("pages and searches API key accounts beyond the first 50 results", async () => {
   const { page, errors } = await fixture("keys", "", false, true);

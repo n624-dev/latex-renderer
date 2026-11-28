@@ -13,6 +13,7 @@ import type { ClientDistribution } from "../../apps/admin-web/src/client-distrib
 const origin = "http://127.0.0.1:43128";
 const projectId = `project_${"a".repeat(32)}`;
 const jobId = `job_${"1".repeat(32)}`;
+const failedJobId = `job_${"2".repeat(32)}`;
 const editorPath = `/app/projects/${projectId}/edit/`;
 const draftPath = `/app/api/v1/projects/${projectId}/draft`;
 const appScript = localizedAppScript("ja");
@@ -183,6 +184,7 @@ describe("Project editor", () => {
         retiredPdfAssets = false,
         locale = "ja";
       let previewGate: Promise<void> | undefined;
+      const failedJobStatus = () => (running ? "running" : "failed");
       const draft = () => ({
         version,
         entrypoint: "main.tex",
@@ -265,7 +267,11 @@ describe("Project editor", () => {
               latest:
                 posts === 0
                   ? null
-                  : { jobId, version, status: running ? "running" : fail ? "failed" : "succeeded" },
+                  : {
+                      jobId: fail ? failedJobId : jobId,
+                      version,
+                      status: fail ? failedJobStatus() : "succeeded",
+                    },
               successful:
                 posts === 0 ? null : { jobId, version: 1, pageCount: 2 },
             });
@@ -279,14 +285,16 @@ describe("Project editor", () => {
               error: { code: "TEMPORARY_FAILURE", message: "Preview unavailable" },
             } });
           }
-          return json({ jobId, version: requested.version });
+          return json({
+            jobId: fail ? failedJobId : jobId,
+            version: requested.version,
+          });
         }
         if (path === `/app/api/v1/jobs/${jobId}`)
-          return json({
-            status: running ? "running" : fail ? "failed" : "succeeded",
-            pdfPageCount: 2,
-          });
-        if (path === `/app/api/v1/jobs/${jobId}/artifacts/errors.json`)
+          return json({ status: "succeeded", pdfPageCount: 2 });
+        if (path === `/app/api/v1/jobs/${failedJobId}`)
+          return json({ status: failedJobStatus() });
+        if (path === `/app/api/v1/jobs/${failedJobId}/artifacts/errors.json`)
           return json({
             success: false,
             exitCode: 1,
@@ -313,11 +321,14 @@ describe("Project editor", () => {
         });
       });
       await page.goto(origin + "/app/projects/");
+      await expect
+        .poll(() => page.locator("#app-projects").textContent(), { timeout: 8000 })
+        .toBe("プロジェクトはありません。");
+      await page.setViewportSize({ width: 390, height: 780 });
       expect(observed).not.toContain(entrypoint);
       expect(observed.some((path) => path.startsWith(assetRoot + "pdf/"))).toBe(
         false,
       );
-      await page.setViewportSize({ width: 390, height: 780 });
       await page.goto(origin + editorPath);
       await page.locator(".cm-content").waitFor({ timeout: 7000 });
       const openOptions = (panel: string) =>
@@ -402,6 +413,7 @@ describe("Project editor", () => {
         .poll(() => page.locator("#editor-preview-status").textContent())
         .toBe("コンパイル中");
       const activeJob = await page.locator("#editor-build-detail").getAttribute("href");
+      expect(activeJob).toBe(`/app/jobs/${failedJobId}/`);
       await openOptions("settings");
       await page.locator("#editor-language").selectOption("en");
       await expect
@@ -423,8 +435,12 @@ describe("Project editor", () => {
         .toBe("コンパイル失敗");
       expect(await page.locator("#editor-canvas").isVisible()).toBe(true);
       expect(
-        await page.locator("#editor-preview-version").textContent(),
-      ).toContain("最新の編集は反映されていません");
+        await page.locator("#editor-canvas").getAttribute("aria-label"),
+      ).toBe("PDF 1 / 2");
+      expect(await page.locator("#editor-pdf").getAttribute("href")).toBe(pdfPath);
+      const retainedVersion = await page.locator("#editor-preview-version").textContent();
+      expect(retainedVersion).toContain("下書き版 1");
+      expect(retainedVersion).toContain("最新の編集は反映されていません");
       await page.setViewportSize({ width: 390, height: 780 });
       await page.getByRole("button", { name: "エラー", exact: true }).click();
       expect(await page.locator("#editor-error-detail").isVisible()).toBe(true);
@@ -444,6 +460,14 @@ describe("Project editor", () => {
         .poll(() => page.locator("#editor-canvas").getAttribute("aria-label"))
         .toBe("PNG 1 / 2");
       const pngMs = Math.round(performance.now() - pngStart);
+      // The canvas is painted before the previous PDF is torn down and timed.
+      await page.waitForFunction(
+        () =>
+          performance.getEntriesByName(
+            "latex-renderer:editor:png-load-and-paint",
+            "measure",
+          ).length > 0,
+      );
       const browserTiming = await page.evaluate(() =>
         performance
           .getEntriesByType("measure")
@@ -488,9 +512,9 @@ describe("Project editor", () => {
       expect(await page.locator("#editor-preview-status").textContent()).toBe(
         "コンパイル失敗",
       );
-      expect(
-        await page.locator("#editor-preview-version").textContent(),
-      ).toContain("下書き版 1");
+      await expect
+        .poll(() => page.locator("#editor-preview-version").textContent())
+        .toContain("下書き版 1");
       expect(posts).toBe(2);
       const savedRevision =
         origin + editorPath + "?revision=revision_" + "b".repeat(32);
@@ -625,3 +649,304 @@ describe("Project editor", () => {
     }
   }, 50_000);
 });
+
+describe("Project editor failure recovery", () => {
+  it("discards the old buffer when a committed rename is followed by a failed read", async () => {
+    const f = await editorRecoveryFixture();
+    try {
+      f.state.failRead = "renamed.tex";
+      await f.fileAction("#editor-rename-file", "renamed.tex");
+      await expect
+        .poll(() => f.saveStatus.textContent())
+        .toContain("Draft file read failed");
+      expect(f.state.files).toEqual(new Map([["renamed.tex", "Original"]]));
+      expect(f.state.version).toBe(2);
+      expect(await f.source.count()).toBe(0);
+      expect(f.state.writes).toEqual([]);
+
+      f.state.failRead = undefined;
+      await f.page.reload();
+      await f.source.waitFor();
+      expect(await f.page.locator("#editor-files").inputValue()).toBe(
+        "renamed.tex",
+      );
+      expect(await f.source.textContent()).toBe("Original");
+    } finally {
+      await f.page.close();
+    }
+  });
+
+  it("creates a file after the in-flight autosave commits its newer Draft version", async () => {
+    const f = await editorRecoveryFixture();
+    const hold = holdEditorRequest();
+    try {
+      f.state.holdSave = hold.promise;
+      await f.source.focus();
+      await f.page.keyboard.press("Home");
+      await f.page.keyboard.insertText("Autosaved edit ");
+      await expect.poll(() => f.state.writes.length, { timeout: 4000 }).toBe(1);
+      await f.fileAction("#editor-new-file", "chapter.tex");
+      expect(f.state.writes).toEqual([
+        { version: 1, path: "main.tex", text: "Autosaved edit Original" },
+      ]);
+      hold.resolve();
+
+      await expect
+        .poll(() => f.page.locator("#editor-files").inputValue())
+        .toBe("chapter.tex");
+      expect(f.state.writes).toEqual([
+        { version: 1, path: "main.tex", text: "Autosaved edit Original" },
+        { version: 2, path: "chapter.tex", text: "" },
+      ]);
+      expect(f.state.files.get("main.tex")).toBe("Autosaved edit Original");
+      expect(f.state.version).toBe(3);
+    } finally {
+      hold.resolve();
+      await f.page.close();
+    }
+  });
+
+  it("retries transient autosaves, resets after success, and stops after five retries", async () => {
+    const f = await editorRecoveryFixture({ pausedClock: true });
+    try {
+      f.state.failSaves = 2;
+      await f.source.focus();
+      await f.page.keyboard.press("Home");
+      await f.page.keyboard.insertText("First ");
+      await expect
+        .poll(() => f.saveStatus.getAttribute("data-state"))
+        .toBe("unsaved");
+      const failAfter = async (milliseconds: number, attempt: number) => {
+        await f.page.clock.runFor(milliseconds);
+        await expect
+          .poll(() => f.saveStatus.textContent())
+          .toContain(`Temporary save failure ${attempt}`);
+        expect(f.state.writes).toHaveLength(attempt);
+      };
+      await failAfter(1500, 1);
+      await failAfter(1000, 2);
+      await f.page.clock.runFor(2000);
+      await expect
+        .poll(() => f.saveStatus.getAttribute("data-state"))
+        .toBe("saved");
+      expect(f.state.files.get("main.tex")).toBe("First Original");
+      expect(f.state.writes.map(({ version }) => version)).toEqual([1, 1, 1]);
+
+      f.state.failSaves = 20;
+      await f.page.keyboard.insertText("Second ");
+      await expect
+        .poll(() => f.saveStatus.getAttribute("data-state"))
+        .toBe("unsaved");
+      for (const [index, delay] of [
+        1500, 1000, 2000, 4000, 8000, 8000,
+      ].entries())
+        await failAfter(delay, 4 + index);
+      await f.page.clock.runFor(16_000);
+      expect(f.state.writes).toHaveLength(9);
+      expect(f.state.files.get("main.tex")).toBe("First Original");
+      expect(await f.source.textContent()).toBe("First Second Original");
+      expect(await f.saveStatus.textContent()).toContain(
+        "Temporary save failure 9",
+      );
+    } finally {
+      await f.page.close();
+    }
+  });
+
+  it("enables PNG paging while the abandoned PDF request is still held", async () => {
+    const hold = holdEditorRequest();
+    const f = await editorRecoveryFixture({ holdPdf: hold.promise });
+    try {
+      const canvas = f.page.locator("#editor-canvas");
+      await expect
+        .poll(() => canvas.getAttribute("aria-label"))
+        .toBe("PNG 1 / 2");
+      await f.openOptions("preview");
+      const mode = f.page.locator("#editor-preview-mode");
+      await mode.selectOption("pdf");
+      await expect
+        .poll(() => f.state.pdfRequests, { timeout: 5000 })
+        .toBeGreaterThan(0);
+      const next = f.page.locator("#editor-next");
+      expect(await next.isDisabled()).toBe(true);
+      const png = f.page.waitForResponse((response) =>
+        response.url().endsWith("/previews/page-1.png"),
+      );
+      await mode.selectOption("png");
+      await f.page.keyboard.press("Escape");
+      await png;
+      await expect.poll(() => next.isEnabled()).toBe(true);
+      await next.click();
+      await expect
+        .poll(() => canvas.getAttribute("aria-label"))
+        .toBe("PNG 2 / 2");
+    } finally {
+      hold.resolve();
+      await f.page.close();
+    }
+  });
+});
+
+function holdEditorRequest() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((release) => {
+    resolve = release;
+  });
+  return { promise, resolve };
+}
+
+async function editorRecoveryFixture({
+  holdPdf,
+  pausedClock = false,
+}: { holdPdf?: Promise<void>; pausedClock?: boolean } = {}) {
+  if (!browser) throw new Error("Test browser did not start");
+  const appPath = new URL("../../apps/admin-web/dist/app.js", import.meta.url)
+    .href;
+  const { createWebApp } = (await import(
+    appPath
+  )) as typeof import("../../apps/admin-web/src/app.js");
+  const app = createWebApp({ archive: new Uint8Array() } as ClientDistribution);
+  const page = await newTestPage(browser, {
+    viewport: { width: 1100, height: 800 },
+  });
+  page.setDefaultTimeout(4000);
+  const state = {
+    version: 1,
+    entrypoint: "main.tex",
+    files: new Map([["main.tex", "Original"]]),
+    writes: [] as Array<{ version: number; path: string; text: string }>,
+    failRead: undefined as string | undefined,
+    failSaves: 0,
+    holdSave: undefined as Promise<void> | undefined,
+    pdfRequests: 0,
+  };
+  const draft = () => ({
+    version: state.version,
+    entrypoint: state.entrypoint,
+    engine: "lualatex",
+    files: Array.from(state.files.keys(), (path) => ({ path })),
+  });
+  const png = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4//8/AAX+Av4N70a4AAAAAElFTkSuQmCC",
+    "base64",
+  );
+  try {
+    if (pausedClock)
+      await page.clock.install({ time: new Date("2026-11-28T00:00:00Z") });
+    await page.addInitScript(() =>
+      localStorage.setItem("latex-renderer-editor-preview-format", "png"),
+    );
+    await page.route("**/*", async (route) => {
+      const request = route.request(),
+        url = new URL(request.url()),
+        path = url.pathname;
+      if (url.origin !== origin) return route.abort();
+      const json = (value: unknown) => route.fulfill({ json: value });
+      const error = (status: number, message: string) =>
+        route.fulfill({
+          status,
+          json: { error: { code: "FIXTURE_FAILURE", message } },
+        });
+      if (path === "/app/assets/app.js")
+        return route.fulfill({
+          body: appScript,
+          contentType: "text/javascript",
+        });
+      if (path === "/auth/session") return json({ csrfToken: "fixture" });
+      if (path === "/app/api/v1/me")
+        return json({ isAdmin: false, resolvedDisplayLocale: "ja" });
+      if (path === "/app/api/v1/environment")
+        return json({ engines: ["lualatex"] });
+      if (path === draftPath) {
+        if (request.method() === "PATCH") {
+          const edit = request.postDataJSON() as {
+            version: number;
+            entrypoint: string;
+          };
+          if (edit.version !== state.version)
+            return error(409, "Stale Draft version");
+          const content = state.files.get(state.entrypoint);
+          if (content === undefined) return error(404, "Missing rename source");
+          state.files.delete(state.entrypoint);
+          state.entrypoint = edit.entrypoint;
+          state.files.set(edit.entrypoint, content);
+          state.version++;
+        }
+        return json(draft());
+      }
+      if (path === draftPath + "/file") {
+        if (request.method() === "PUT") {
+          const edit = request.postDataJSON() as (typeof state.writes)[number];
+          state.writes.push(edit);
+          if (edit.path === "main.tex" && state.holdSave) await state.holdSave;
+          if (state.failSaves > 0) {
+            state.failSaves--;
+            return error(503, `Temporary save failure ${state.writes.length}`);
+          }
+          if (edit.version !== state.version)
+            return error(409, "Stale Draft version");
+          state.files.set(edit.path, edit.text);
+          state.version++;
+          return json(draft());
+        }
+        const filePath = url.searchParams.get("path") ?? "";
+        if (filePath === state.failRead)
+          return error(503, "Draft file read failed");
+        return json({
+          text: state.files.get(filePath),
+          version: state.version,
+        });
+      }
+      if (path === draftPath + "/preview")
+        return json({
+          latest: null,
+          successful: holdPdf
+            ? { jobId, version: 1, status: "succeeded", pageCount: 2 }
+            : null,
+        });
+      if (
+        path === `/app/api/v1/jobs/${jobId}/artifacts/result.pdf` &&
+        holdPdf
+      ) {
+        state.pdfRequests++;
+        await holdPdf;
+        return route.abort().catch(() => {});
+      }
+      if (/\/previews\/page-[12]\.png$/.test(path))
+        return route.fulfill({ body: png, contentType: "image/png" });
+      const response = await app.request(url);
+      return route.fulfill({
+        status: response.status,
+        headers: Object.fromEntries(response.headers),
+        body: Buffer.from(await response.arrayBuffer()),
+      });
+    });
+    await page.goto(origin + editorPath);
+    const source = page.locator(".cm-content");
+    await source.waitFor();
+    const openOptions = (panel: string) =>
+      page.locator(`[data-editor-dialog="editor-${panel}-dialog"]`).click();
+    await openOptions("settings");
+    await page.locator("#editor-auto").uncheck();
+    await page.keyboard.press("Escape");
+    if (pausedClock) {
+      const now = await page.evaluate(() => Date.now());
+      await page.clock.pauseAt(now + 100);
+    }
+    return {
+      page,
+      source,
+      state,
+      openOptions,
+      saveStatus: page.locator("#editor-save-status"),
+      async fileAction(selector: string, name: string) {
+        await openOptions("file");
+        page.once("dialog", (dialog) => void dialog.accept(name));
+        await page.locator(selector).click();
+      },
+    };
+  } catch (error) {
+    await page.close();
+    throw error;
+  }
+}

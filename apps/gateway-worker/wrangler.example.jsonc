@@ -23,6 +23,18 @@
       "zone_name": "example.com",
     },
     {
+      "pattern": "latex.example.com/api/v1/environment",
+      "zone_name": "example.com",
+    },
+    {
+      "pattern": "latex.example.com/api/v1/environment/*",
+      "zone_name": "example.com",
+    },
+    {
+      "pattern": "latex.example.com/api/v1/pdf-inspections/compare",
+      "zone_name": "example.com",
+    },
+    {
       "pattern": "latex.example.com/api/v1/projects",
       "zone_name": "example.com",
     },
