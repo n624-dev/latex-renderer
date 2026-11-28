@@ -1149,6 +1149,9 @@ describe("render ticket admission", () => {
       retryKey,
     );
     expect(first.status).toBe(202);
+    expect(first.value).toMatchObject({
+      job: { id: jobId, stages: { svg: { status: "queued", attempt: 2 } } },
+    });
     await expect(
       tickets.verify(first.value.jobTicket, "status", jobId),
     ).resolves.toMatchObject({

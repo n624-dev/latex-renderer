@@ -12,7 +12,12 @@ import {
   canRenderDraftPreview,
   ProjectDraftOperations,
   SvgRetryOperations,
+  type JobRow,
 } from "@latex-renderer/database";
+import {
+  retryRenderJob,
+  summarizeRenderJob,
+} from "@latex-renderer/renderer-core";
 import { validateEntrypointPath } from "@latex-renderer/zip-validation";
 import type { InternalApiDependencies } from "../types.js";
 
@@ -101,13 +106,50 @@ export class RenderTicketsService {
       );
       return {
         status: result.reused ? (200 as const) : (202 as const),
-        value: await this.issueAccess(actor, result.id, "render:create"),
+        value: {
+          ...(await this.issueAccess(actor, result.id, "render:create")),
+          job: this.summarize(this.requireOwnedJob(actor, result.id)),
+        },
       };
     }
     if ("sourceId" in input)
       return this.createFromSource(actor, input, idempotencyKey);
     return this.createLegacy(actor, input, idempotencyKey);
   }
+  retry(
+    actor: AuthenticatedServiceAccount,
+    jobId: string,
+    idempotencyKey?: string,
+  ) {
+    this.requireOwnedJob(actor, jobId);
+    const row = retryRenderJob(
+      this.deps.database,
+      {
+        type: "service_account",
+        id: actor.serviceAccountId,
+        userId: actor.userId,
+      },
+      jobId,
+      idempotencyKey,
+      {
+        readJob: (id) => this.requireOwnedJob(actor, id),
+        admit: () => this.assertAccepting(actor, 0),
+        rendererVersion: this.deps.rendererVersion,
+        maxOutputBytes: this.deps.maxOutputBytes,
+      },
+    );
+    return { job: this.summarize(row) };
+  }
+
+  private summarize(row: JobRow) {
+    return summarizeRenderJob(
+      this.deps.database,
+      row,
+      this.deps.artifactRetentionHours ?? 24,
+      this.deps.publicOrigin ?? this.deps.rendererPublicUrl,
+    );
+  }
+
   private async createLegacy(
     actor: AuthenticatedServiceAccount,
     input: {
