@@ -37,6 +37,44 @@ afterEach(() => {
     rmSync(root, { recursive: true, force: true });
 });
 
+it.runIf(linuxDescriptorAccess)(
+  "records the creating release in the backup manifest",
+  () => {
+    const fixture = backupFixture({ generateAgeKeys: false });
+    const bin = join(fixture.root, "bin");
+    mkdirSync(bin);
+    // Keep the archive readable by tar while exercising the production backup script.
+    writeFileSync(
+      join(bin, "age"),
+      `#!/bin/sh
+case "$1" in
+  -R) exec cp -- "$5" "$4" ;;
+  *) exit 64 ;;
+esac
+`,
+      { mode: 0o700 },
+    );
+    const application = {
+      version: "1.7.2-rc.6",
+      commit: "a".repeat(40),
+      rendererRuntimeFingerprint: "b".repeat(64),
+    };
+    writeFileSync(
+      join(fixture.root, ".latex-renderer-release.json"),
+      JSON.stringify(application),
+    );
+    const environment = { PATH: `${bin}:${process.env.PATH ?? ""}` };
+    const created = runBackup(fixture, environment, fixture.root);
+    expect(created.status, created.stderr).toBe(0);
+    const archive = backupArchive(fixture);
+    const manifest = spawnSync("tar", ["-xOf", archive, "manifest.json"], {
+      encoding: "utf8",
+    });
+    expect(manifest.status, manifest.stderr).toBe(0);
+    expect(JSON.parse(manifest.stdout)).toMatchObject({ application });
+  },
+);
+
 describe.runIf(ageAvailable && linuxDescriptorAccess)(
   "Project Source backup boundary",
   () => {
@@ -729,7 +767,7 @@ if (process.argv.includes("-tf") || process.argv.includes("-tvf")) {
   },
 );
 
-function backupFixture() {
+function backupFixture({ generateAgeKeys = true } = {}) {
   const root = mkdtempSync(join(tmpdir(), "latex-backup-test-"));
   roots.push(root);
   const databasePath = join(root, "renderer.sqlite3");
@@ -794,15 +832,17 @@ function backupFixture() {
   });
   database.close();
 
-  const generated = spawnSync("age-keygen", ["-o", identity], {
-    encoding: "utf8",
-  });
-  expect(generated.status, generated.stderr).toBe(0);
-  const publicKey = spawnSync("age-keygen", ["-y", identity], {
-    encoding: "utf8",
-  });
-  expect(publicKey.status, publicKey.stderr).toBe(0);
-  writeFileSync(recipient, publicKey.stdout, { mode: 0o600 });
+  if (generateAgeKeys) {
+    const generated = spawnSync("age-keygen", ["-o", identity], {
+      encoding: "utf8",
+    });
+    expect(generated.status, generated.stderr).toBe(0);
+    const publicKey = spawnSync("age-keygen", ["-y", identity], {
+      encoding: "utf8",
+    });
+    expect(publicKey.status, publicKey.stderr).toBe(0);
+    writeFileSync(recipient, publicKey.stdout, { mode: 0o600 });
+  }
   return {
     root,
     databasePath,
@@ -819,21 +859,26 @@ function backupFixture() {
 function runBackup(
   fixture: ReturnType<typeof backupFixture>,
   environment: NodeJS.ProcessEnv = {},
+  cwd = process.cwd(),
 ) {
-  return spawnSync(process.execPath, ["deploy/scripts/backup.mjs"], {
-    cwd: process.cwd(),
-    encoding: "utf8",
-    timeout: 15_000,
-    env: {
-      ...process.env,
-      DATABASE_PATH: fixture.databasePath,
-      STORAGE_ROOT: fixture.storageRoot,
-      BACKUP_DIRECTORY: fixture.backupDirectory,
-      BACKUP_AGE_RECIPIENT_FILE: fixture.recipient,
-      BACKUP_UPLOAD_EXECUTABLE: "",
-      ...environment,
+  return spawnSync(
+    process.execPath,
+    [join(process.cwd(), "deploy/scripts/backup.mjs")],
+    {
+      cwd,
+      encoding: "utf8",
+      timeout: 15_000,
+      env: {
+        ...process.env,
+        DATABASE_PATH: fixture.databasePath,
+        STORAGE_ROOT: fixture.storageRoot,
+        BACKUP_DIRECTORY: fixture.backupDirectory,
+        BACKUP_AGE_RECIPIENT_FILE: fixture.recipient,
+        BACKUP_UPLOAD_EXECUTABLE: "",
+        ...environment,
+      },
     },
-  });
+  );
 }
 
 function backupArchive(fixture: ReturnType<typeof backupFixture>) {
