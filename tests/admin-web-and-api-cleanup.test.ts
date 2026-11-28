@@ -3,12 +3,14 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { ApiKeyService, type AccessJwtVerifier } from "@latex-renderer/auth";
 import { RendererDatabase } from "@latex-renderer/database";
+import { TicketService } from "@latex-renderer/ticket";
 import {
   apiKeyScopeSchema,
   createApiKeySchema,
   renderApiScopes,
 } from "../packages/contracts/src/index.js";
 import { AppProjectsService } from "../apps/admin-api/src/services/app-projects.js";
+import { AdminApiKeysService } from "../apps/admin-api/src/services/api-keys.js";
 import { createAdminApp } from "../apps/admin-api/src/app.js";
 import { createWebApp } from "../apps/admin-web/src/app.js";
 import { localizedAdminScript } from "../apps/admin-web/src/assets/admin-script.js";
@@ -194,6 +196,236 @@ describe("admin API cleanup", () => {
         )
         .get(),
     ).toMatchObject({ action: "api_key.revoked" });
+  });
+
+  it("commits one successor and one audit entry when two rotations overlap", () => {
+    const { database, apiKeys } = adminApp();
+    const keys = new AdminApiKeysService({ database, apiKeys });
+    const owner = {
+      type: "user",
+      id: "user_owner",
+      userId: "user_owner",
+      role: "owner",
+    } as const;
+    const generate = apiKeys.create.bind(apiKeys);
+    let winner: ReturnType<typeof keys.rotate> | undefined;
+    const spy = vi.spyOn(apiKeys, "create").mockImplementationOnce((kind) => {
+      // The second caller commits after the first read but before its transaction.
+      winner = keys.rotate(owner, "key_seed");
+      return generate(kind);
+    });
+    try {
+      expect(() => keys.rotate(owner, "key_seed")).toThrow(
+        expect.objectContaining({ code: "API_KEY_STATE_CONFLICT" }),
+      );
+      expect(winner).toBeDefined();
+      const active = database.apiKeys.activeJobIdentity(
+        "key_seed",
+        new Date().toISOString(),
+      );
+      expect(active).toMatchObject({ api_key_id: winner?.id });
+      expect(
+        database.apiKeys
+          .listPage()
+          .items.map(({ id }) => id)
+          .sort(),
+      ).toEqual(["key_seed", winner?.id].sort());
+      expect(
+        database.raw
+          .prepare(
+            "SELECT actor_id, target_id FROM audit_logs WHERE action='api_key.rotated'",
+          )
+          .all(),
+      ).toEqual([{ actor_id: owner.id, target_id: winner?.id }]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("returns secrets only on successful authorized issuance or rotation and keeps audit metadata safe", async () => {
+    const { app, database } = adminApp();
+    const headers = {
+      "Cf-Access-Jwt-Assertion": "test",
+      "X-CSRF-Token": "1",
+      "Content-Type": "application/json",
+    };
+    const creation = "/admin/api/v1/service-accounts/sa_seed/api-keys";
+    const body = JSON.stringify({ name: "fixture", scopes: ["render:create"] });
+    expect((await app.request(creation, { method: "POST", body })).status).toBe(
+      401,
+    );
+    expect(
+      (
+        await app.request(creation, {
+          method: "POST",
+          headers: { ...headers, "X-CSRF-Token": "bad" },
+          body,
+        })
+      ).status,
+    ).toBe(403);
+    const issued = await app.request(creation, {
+      method: "POST",
+      headers,
+      body,
+    });
+    expect(issued.status).toBe(201);
+    expect(issued.headers.get("Cache-Control")).toContain("no-store");
+    const { id, apiKey } = (await issued.json()) as {
+      id: string;
+      apiKey: string;
+    };
+    expect(apiKey).toMatch(/^lrk_/);
+    const path = `/admin/api/v1/api-keys/${id}`;
+    const rotate = () =>
+      app.request(`${path}/rotate`, { method: "POST", headers, body: "{}" });
+    const rotated = await rotate();
+    expect(rotated.status).toBe(201);
+    expect(rotated.headers.get("Cache-Control")).toContain("no-store");
+    const replacement = (await rotated.json()) as {
+      id: string;
+      apiKey: string;
+      replaces: string;
+    };
+    expect(replacement.replaces).toBe(id);
+    expect(replacement.apiKey).toMatch(/^lrk_/);
+    expect(replacement.apiKey).not.toBe(apiKey);
+    const responses = await Promise.all([
+      app.request(path, { headers }),
+      app.request(`/admin/api/v1/api-keys/${replacement.id}`, { headers }),
+      app.request("/admin/api/v1/api-keys", { headers }),
+      app.request("/admin/api/v1/audit-logs", { headers }),
+      rotate(),
+    ]);
+    expect(responses.map((response) => response.status)).toEqual([
+      200, 200, 200, 200, 404,
+    ]);
+    const audit = database.raw
+      .prepare(
+        "SELECT action, actor_id, target_id, metadata_json FROM audit_logs WHERE action IN ('api_key.created','api_key.rotated') ORDER BY action",
+      )
+      .all();
+    expect(audit).toEqual([
+      expect.objectContaining({
+        action: "api_key.created",
+        actor_id: "user_owner",
+        target_id: id,
+      }),
+      expect.objectContaining({
+        action: "api_key.rotated",
+        actor_id: "user_owner",
+        target_id: replacement.id,
+      }),
+    ]);
+    for (const value of [
+      ...(await Promise.all(responses.map((response) => response.text()))),
+      JSON.stringify(audit),
+    ]) {
+      expect(value).not.toContain(apiKey);
+      expect(value).not.toContain(replacement.apiKey);
+    }
+  });
+
+  it("keeps owner Web and Admin access to a rotated Job bound to the successor", async () => {
+    const { app, database, tickets } = adminApp(process.cwd());
+    const jobId = `job_${"2".repeat(32)}`;
+    const sourceId = `source_${"3".repeat(32)}`;
+    const timestamp = new Date().toISOString();
+    database.sources.insertReserved({
+      id: sourceId,
+      ownerUserId: "user_owner",
+      size: 1,
+      sha256: "a".repeat(64),
+      storageKey: `sources/${sourceId}/source.zip`,
+      timestamp,
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+    database.raw
+      .prepare("UPDATE sources SET status='ready',uploaded_at=? WHERE id=?")
+      .run(timestamp, sourceId);
+    database.jobs.insertReserved({
+      id: jobId,
+      userId: "user_owner",
+      serviceAccountId: "sa_seed",
+      apiKeyId: "key_seed",
+      rendererVersion: "fixture",
+      sourceSize: 1,
+      sourceSha256: "a".repeat(64),
+      timestamp,
+      sourceId,
+      reservedOutputBytes: 1,
+    });
+    database.raw
+      .prepare("UPDATE jobs SET status='failed',completed_at=? WHERE id=?")
+      .run(timestamp, jobId);
+    const headers = {
+      "Cf-Access-Jwt-Assertion": "test",
+      "X-CSRF-Token": "1",
+      "Content-Type": "application/json",
+    };
+    const call = (path: string, method = "GET", extraHeaders = {}) =>
+      app.request(path, {
+        method,
+        headers: { ...headers, ...extraHeaders },
+        ...(method === "POST" ? { body: "{}" } : {}),
+      });
+    const rotated = await call(
+      "/admin/api/v1/api-keys/key_seed/rotate",
+      "POST",
+    );
+    expect(rotated.status).toBe(201);
+    const { id } = (await rotated.json()) as { id: string };
+    for (const prefix of ["/app/api/v1", "/admin/api/v1"]) {
+      const path = `${prefix}/jobs/${jobId}`;
+      expect((await call(path)).status).toBe(200);
+      const access = await call(`${path}/access-ticket`, "POST");
+      expect(access.status).toBe(200);
+      const { jobTicket } = (await access.json()) as { jobTicket: string };
+      await expect(
+        tickets.verify(jobTicket, "status", jobId),
+      ).resolves.toMatchObject({ api_key_id: id });
+      const retried = await call(`${path}/retry`, "POST", {
+        "Idempotency-Key": `fixture-retry-${prefix}`,
+      });
+      expect(retried.status).toBe(202);
+      const retry = (await retried.json()) as {
+        id?: string;
+        jobId?: string;
+        retryOfJobId: string;
+      };
+      expect(retry.retryOfJobId).toBe(jobId);
+      const retryId = retry.id ?? retry.jobId;
+      if (retryId === undefined) throw new Error("Missing retry Job ID");
+      expect(database.jobs.getVisible(retryId)).toMatchObject({
+        user_id: "user_owner",
+        service_account_id: "sa_seed",
+        api_key_id: "key_seed",
+        retry_of_job_id: jobId,
+        status: "queued",
+      });
+      expect(database.worker.subjectState(retryId)).toMatchObject({
+        sa_status: "active",
+        revoked_at: null,
+      });
+      expect(
+        (await call(`${prefix}/jobs/${retryId}/cancel`, "POST")).status,
+      ).toBe(202);
+    }
+    expect(
+      (await call(`/admin/api/v1/api-keys/${id}/revoke`, "POST")).status,
+    ).toBe(200);
+    for (const prefix of ["/app/api/v1", "/admin/api/v1"]) {
+      const path = `${prefix}/jobs/${jobId}`;
+      expect((await call(path)).status).toBe(200);
+      const access = await call(`${path}/access-ticket`, "POST");
+      expect(access.status).toBe(403);
+      await expect(access.json()).resolves.toMatchObject({
+        error: { code: "JOB_IDENTITY_REVOKED" },
+      });
+    }
+    expect((await call(`/app/api/v1/jobs/${jobId}`, "DELETE")).status).toBe(
+      204,
+    );
+    expect(database.jobs.get(jobId)?.status).toBe("deleting");
   });
 
   it("pages audit logs and enforces ticket-key rotation safety", async () => {
@@ -445,10 +677,7 @@ describe("public and administrative Web", () => {
   });
 });
 
-function adminApp(): {
-  app: ReturnType<typeof createAdminApp>;
-  database: RendererDatabase;
-} {
+function adminApp(storageRoot = "/nonexistent") {
   const database = new RendererDatabase(":memory:");
   databases.push(database);
   database.migrate();
@@ -482,19 +711,31 @@ function adminApp(): {
     verify: () =>
       Promise.resolve({ subject: "subject", payload: { sub: "subject" } }),
   } as unknown as AccessJwtVerifier;
+  const apiKeys = new ApiKeyService(
+    database,
+    new Map([["v1", Buffer.alloc(32, 1)]]),
+    "v1",
+  );
+  const tickets = new TicketService(
+    database,
+    "latex-renderer",
+    "latex-render",
+    {
+      kid: "v1",
+      secret: Buffer.alloc(32, 8),
+    },
+    [],
+  );
   const app = createAdminApp({
     database,
-    apiKeys: new ApiKeyService(
-      database,
-      new Map([["v1", Buffer.alloc(32, 1)]]),
-      "v1",
-    ),
+    apiKeys,
+    renderTickets: { tickets, rendererPublicUrl: "https://latex.example.com" },
     browserAuth: legacyTestBrowserAuth(database, access),
     deploymentMode: "cloudflare",
     publicOrigin: "https://latex.example.com",
     allowedOrigins: new Set(),
     writeEnabled: true,
-    storageRoot: "/nonexistent",
+    storageRoot,
     rendererVersion: "sha256:" + "0".repeat(64),
     maxOutputBytes: 1,
     maxQueueLength: 100,
@@ -503,5 +744,5 @@ function adminApp(): {
     activeTicketKid: "v2",
     verificationTicketKids: ["v1"],
   });
-  return { app, database };
+  return { app, database, apiKeys, tickets };
 }

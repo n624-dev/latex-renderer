@@ -13,6 +13,8 @@ Use one interface for a task; do not mix direct REST calls with CLI/MCP state. A
 
 For a CLI installation that exposes the legacy command, use `latex-render` in place of `n624-latex`. If local waiting ends after a server Job was accepted, use its ID with `get_render_status` or `n624-latex jobs get <job-id>` to resume.
 
+On a compatible server, use `check_document_requirements` before rendering. For an owned Job, use `get_render_diagnostics` and `read_render_log` to inspect a failure. Use `retry_render` to queue a new Job with the same Source, or `retry_svg_render` with an idempotency key to retry only SVG conversion and preserve the PDF.
+
 Expected files include `job.json`, `result.pdf`, `errors.json`, `compile.log`, and preview PNGs. A failed job may omit `result.pdf` while still providing diagnostics.
 
 To review an existing PDF in Codex, inspect the local file. Record its SHA-256. If installed, use `qpdf --check` for structure and `qpdf --json --json-key=outlines` for bookmarks. Poppler tools can read page dimensions (`pdfinfo`), embedded fonts (`pdffonts`), text (`pdftotext`), and preview images (`pdftoppm`). Request specific pages and magnify small formulas, table labels, or figures. Clean up generated preview files after the review. Report any checks you could not run.
