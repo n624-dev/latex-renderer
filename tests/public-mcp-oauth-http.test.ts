@@ -242,36 +242,38 @@ describe("central OAuth HTTP protocol", () => {
     expect(
       store.registerDcrClient(registration, 1, expiresAt - 1),
     ).toBeUndefined();
-    store.pruneExpiredCredentials(expiresAt);
+    expect(store.pruneExpiredCredentials(expiresAt)).toEqual({
+      expiredRecordsRemoved: 1,
+      expiredConnectionsRemoved: 0,
+      dcrRegistrationsReclaimed: 1,
+      dcrRegistrationsUsed: 0,
+    });
     expect(store.dcrClient(client.id)).toBeUndefined();
     expect(store.registerDcrClient(registration, 1, expiresAt)).toBeDefined();
   });
 
-  // BEGIN IMMEDIATE surfaces SQLITE_BUSY across writers without a busy timeout.
-  it.fails(
-    "completes simultaneous registration and cleanup from independent SQLite connections under contention",
-    async () => {
-      const dir = await mkdtemp(join(tmpdir(), "public-mcp-dcr-race-"));
-      const path = join(dir, "gateway.sqlite");
-      const store = new SqliteConnectionStore(path);
-      const writer = new DatabaseSync(path);
-      const workers: Worker[] = [];
-      const gate = new Int32Array(
-        new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT),
+  it("completes simultaneous registration and cleanup from independent SQLite connections under contention", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "public-mcp-dcr-race-"));
+    const path = join(dir, "gateway.sqlite");
+    const store = new SqliteConnectionStore(path);
+    const writer = new DatabaseSync(path);
+    const workers: Worker[] = [];
+    const gate = new Int32Array(
+      new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT),
+    );
+    try {
+      const now = 1_800_000_000_000;
+      const registration = {
+        clientName: "Review Client",
+        redirectUris: [redirect],
+      };
+      const old = store.registerDcrClient(registration, 1, now);
+      if (!old) throw new Error("Missing test registration");
+      const module = new URL(
+        "../apps/public-mcp-gateway/src/sqlite-connections.ts",
+        import.meta.url,
       );
-      try {
-        const now = 1_800_000_000_000;
-        const registration = {
-          clientName: "Review Client",
-          redirectUris: [redirect],
-        };
-        const old = store.registerDcrClient(registration, 1, now);
-        if (!old) throw new Error("Missing test registration");
-        const module = new URL(
-          "../apps/public-mcp-gateway/src/sqlite-connections.ts",
-          import.meta.url,
-        );
-        const source = `
+      const source = `
         import { parentPort, workerData } from "node:worker_threads";
         import { SqliteConnectionStore } from ${JSON.stringify(module.href)};
         const { path, operation, time, registration, gate } = workerData;
@@ -291,51 +293,50 @@ describe("central OAuth HTTP protocol", () => {
           store.close();
         }
       `;
-        for (const operation of ["register", "cleanup"]) {
-          const worker = new Worker(
-            new URL(`data:text/javascript,${encodeURIComponent(source)}`),
-            {
-              execArgv: ["--import", "tsx"],
-              workerData: {
-                path,
-                operation,
-                time: now + dcrClientRetentionMs,
-                registration,
-                gate,
-              },
+      for (const operation of ["register", "cleanup"]) {
+        const worker = new Worker(
+          new URL(`data:text/javascript,${encodeURIComponent(source)}`),
+          {
+            execArgv: ["--import", "tsx"],
+            workerData: {
+              path,
+              operation,
+              time: now + dcrClientRetentionMs,
+              registration,
+              gate,
             },
-          );
-          workers.push(worker);
-          expect(await once(worker, "message")).toEqual(["ready"]);
-        }
-        const results = workers.map((worker) => once(worker, "message"));
-        writer.exec("BEGIN IMMEDIATE");
-        try {
-          Atomics.store(gate, 0, 1);
-          Atomics.notify(gate, 0);
-          // Force a short overlap with an existing writer, then let both operations finish.
-          await new Promise<void>((resolve) => setTimeout(resolve, 100));
-        } finally {
-          writer.exec("ROLLBACK");
-        }
-        const [[registered], [cleaned]] = (await Promise.all(results)) as [
-          [unknown],
-          [unknown],
-        ];
-        expect(registered).toMatch(/^gateway_client_/);
-        expect(cleaned).toBe("cleaned");
-        expect(store.dcrClient(old.id)).toBeUndefined();
-        expect(
-          store.registerDcrClient(registration, 1, now + dcrClientRetentionMs),
-        ).toBeUndefined();
-      } finally {
-        await Promise.all(workers.map((worker) => worker.terminate()));
-        writer.close();
-        store.close();
-        await rm(dir, { recursive: true, force: true });
+          },
+        );
+        workers.push(worker);
+        expect(await once(worker, "message")).toEqual(["ready"]);
       }
-    },
-  );
+      const results = workers.map((worker) => once(worker, "message"));
+      writer.exec("BEGIN IMMEDIATE");
+      try {
+        Atomics.store(gate, 0, 1);
+        Atomics.notify(gate, 0);
+        // Force a short overlap with an existing writer, then let both operations finish.
+        await new Promise<void>((resolve) => setTimeout(resolve, 100));
+      } finally {
+        writer.exec("ROLLBACK");
+      }
+      const [[registered], [cleaned]] = (await Promise.all(results)) as [
+        [unknown],
+        [unknown],
+      ];
+      expect(registered).toMatch(/^gateway_client_/);
+      expect(cleaned).toBe("cleaned");
+      expect(store.dcrClient(old.id)).toBeUndefined();
+      expect(
+        store.registerDcrClient(registration, 1, now + dcrClientRetentionMs),
+      ).toBeUndefined();
+    } finally {
+      await Promise.all(workers.map((worker) => worker.terminate()));
+      writer.close();
+      store.close();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 
   it("rejects unauthorised callbacks, duplicate grants and cross-origin consent", async () => {
     using fixture = createFixture();

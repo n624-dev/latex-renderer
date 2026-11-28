@@ -823,31 +823,26 @@ describe("public gateway wire", () => {
     }
   });
 
-  // The profile fast path returns before the shared argument validator.
-  it.fails(
-    "rejects get_profile arguments that its published schema forbids",
-    async () => {
-      const store = new SqliteConnectionStore(":memory:");
-      try {
-        const fixture = catalogFixture(store);
-        const {
-          result: { tools },
-        } = await fixture.catalog();
-        const tool = tools.find(({ name }) => name === "get_profile");
-        if (!tool) throw new Error("Missing get_profile");
-        const args = { unexpectedField: true };
-        expect(new Ajv2020().compile(tool.inputSchema)(args)).toBe(false);
-        expect(
-          (await fixture.call(tool.name, args)).result.structuredContent.error,
-        ).toEqual({ code: "invalid_operation" });
-      } finally {
-        store.close();
-      }
-    },
-  );
+  it("rejects get_profile arguments that its published schema forbids", async () => {
+    const store = new SqliteConnectionStore(":memory:");
+    try {
+      const fixture = catalogFixture(store);
+      const {
+        result: { tools },
+      } = await fixture.catalog();
+      const tool = tools.find(({ name }) => name === "get_profile");
+      if (!tool) throw new Error("Missing get_profile");
+      const args = { unexpectedField: true };
+      expect(new Ajv2020().compile(tool.inputSchema)(args)).toBe(false);
+      expect(
+        (await fixture.call(tool.name, args)).result.structuredContent.error,
+      ).toEqual({ code: "invalid_operation" });
+    } finally {
+      store.close();
+    }
+  });
 
-  // Public JSON Schema serialization currently drops these Zod refinements.
-  it.fails.each([
+  it.each([
     ["create_render", () => ({})],
     ["create_source", () => ({ files: [{ path: "main.tex" }] })],
     ["read_render_log", (args) => ({ ...args, startByte: 0, startLine: 1 })],
