@@ -3,6 +3,9 @@ import * as fs from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import * as docker from "../apps/renderer-worker/src/docker.js";
+import * as rendererStage from "../apps/renderer-worker/src/renderer-stage.js";
+import { processPdfInspection } from "../apps/renderer-worker/src/pdf-inspection.js";
+import { defined } from "./helpers/assert-defined.js";
 import yazl from "yazl";
 import { pipeline } from "node:stream/promises";
 import { createWriteStream, writeFileSync } from "node:fs";
@@ -10,6 +13,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  ProjectDraftOperations,
+  ProjectOperations,
   RendererDatabase,
   artifactStoragePath,
 } from "@latex-renderer/database";
@@ -57,6 +62,133 @@ afterEach(async () => {
 });
 
 describe("renderer transient workspace cleanup", () => {
+  it("maps a completed Draft PDF using its frozen paths after render inputs are released", async () => {
+    const { database, config, root } = await fixture("canceled");
+    config.minFreeStorageBytes = 1;
+    const actor = { userId: "user", type: "user", id: "user" };
+    const sourceId = `source_${"a".repeat(32)}`;
+    const storageKey = `sources/${sourceId}/source.zip`;
+    const chapter = "chapter/body.tex";
+    const input = join(root, storageKey);
+    await mkdir(join(root, "sources", sourceId), { recursive: true });
+    const zip = new yazl.ZipFile();
+    const writing = pipeline(zip.outputStream, createWriteStream(input));
+    zip.addBuffer(Buffer.from("test input"), "main.tex");
+    zip.addBuffer(Buffer.from("chapter input"), chapter);
+    zip.end();
+    await writing;
+    const bytes = await fs.readFile(input);
+    const timestamp = new Date().toISOString();
+    const expiresAt = new Date(Date.now() + 60_000).toISOString();
+    database.sources.insertReserved({
+      id: sourceId,
+      ownerUserId: actor.userId,
+      size: bytes.length,
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+      storageKey,
+      timestamp,
+      expiresAt,
+    });
+    database.raw
+      .prepare("UPDATE sources SET status='ready',paths_json=? WHERE id=?")
+      .run(JSON.stringify(["main.tex", chapter]), sourceId);
+    const projects = new ProjectOperations(database);
+    const project = projects.create(actor, "Draft source map");
+    projects.attachRevision(actor, {
+      projectId: project.id,
+      sourceId,
+      entrypoint: "main.tex",
+      displayName: "Original",
+      originalFilename: "source.zip",
+      outputs: ["pdf"],
+    });
+    const drafts = new ProjectDraftOperations(database);
+    const draft = drafts.open(actor, project.id);
+    const { jobId } = drafts.queuePreview(actor, project.id, draft.version, {
+      serviceAccountId: "service",
+      apiKeyId: "key",
+      rendererVersion: "test",
+      runtime: config.image,
+      reservedOutputBytes: 1024,
+      admit: () => {},
+    });
+    const job = defined(
+      database.worker.claimNext(
+        config.workerId,
+        new Date().toISOString(),
+        expiresAt,
+      ),
+    );
+    expect(job.id).toBe(jobId);
+    vi.spyOn(docker, "spawnRenderer").mockImplementation(
+      (_config, _id, _generation, _input, staging) => {
+        writeFileSync(join(staging, "result.pdf"), "%PDF-1.7\n%%EOF\n");
+        writeFileSync(join(staging, "main.synctex.gz"), "fixture source map");
+        writeFileSync(
+          join(staging, "compile.log"),
+          "Output written on result.pdf\n",
+        );
+        return {
+          containerName: "fixture",
+          process: spawn(process.execPath, ["-e", ""], {
+            stdio: ["ignore", "pipe", "pipe"],
+          }),
+        };
+      },
+    );
+    await processJob(database, config, job);
+    expect(database.jobs.get(jobId)?.status).toBe("succeeded");
+    expect(database.drafts.renderInput(jobId)?.files).toEqual([]);
+    const pdf = defined(
+      database.artifacts.getDownloadable(jobId, "result.pdf"),
+    );
+    const params = {
+      direction: "source_to_pdf",
+      path: chapter,
+      line: 4,
+    } as const;
+    vi.spyOn(rendererStage, "runRendererStage").mockImplementation(
+      async (_db, _config, _job, _input, output, options) => {
+        expect(options.inspectionArguments).toEqual([
+          "source_to_pdf",
+          "4",
+          chapter,
+        ]);
+        await writeFile(
+          join(output, "source-map-result"),
+          [
+            "SyncTeX result begin",
+            "Output:/work/pdf/result.pdf",
+            "Page:1",
+            "x:12.5",
+            "y:30",
+            "SyncTeX result end",
+            "",
+          ].join("\n"),
+        );
+        return { exitCode: 0, timedOut: false, stderr: "" };
+      },
+    );
+    const inspection = database.pdfInspections.request(
+      pdf,
+      expiresAt,
+      timestamp,
+      params,
+    );
+    const claimed = defined(
+      database.pdfInspections.claim(config.workerId, timestamp),
+    );
+    expect(claimed.id).toBe(inspection.id);
+    await processPdfInspection(database, config, claimed);
+    const completed = defined(database.pdfInspections.get(inspection.id));
+    expect(completed).toMatchObject({ status: "ready", error_code: null });
+    expect(JSON.parse(defined(completed.result_json))).toMatchObject({
+      state: "candidate",
+      evidence: "canonical_synctex",
+      locations: [{ page: 1, x: 12.5, y: 30 }],
+    });
+  });
+
   it.each(["rotate", "revoke"] as const)(
     "checks queued Job ownership at the Worker after %s",
     async (action) => {
