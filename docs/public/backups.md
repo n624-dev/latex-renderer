@@ -36,6 +36,8 @@ n624-latex admin backup status
 
 作成が終わったら `n624-latex admin backup verify` を実行し、`n624-latex admin backup status` の `latestVerification` に対象のファイル名と検証時刻が載ることを確認します。バックアップはサーバーの `BACKUP_DIRECTORY` に保存します。既定値は `/var/lib/latex-renderer/backups` です。`backup` コマンドに未対応の版では上記の管理画面を使えます。
 
+`n624-latex admin backup retention` は、日次スケジュール、推奨値、現在の保持計画を表示します。`--max-age-days`、`--max-generations`、`--max-total-bytes` をまとめて指定すると、削除候補と警告をプレビューできます。確認後、`backup retention set` に同じ上限値、`--reason`、`--yes` を指定すると設定を保存し、すぐに整理します。以後はバックアップの成功時にも整理します。最新のバックアップと、復元検証に成功した最新のバックアップは保持します。アップロード済みのコピーには保管先の保持設定が適用されます。
+
 ### 別のホストで検証する
 
 1. 作成した `.tar.age` アーカイブを検証用の Linux ホストにコピーします。GNU `tar`、`age`、`node:sqlite` を使える対応 Node.js（24 または 26）、復号鍵を準備します。長期保管時はアーカイブと復号鍵を別々に保管します。
