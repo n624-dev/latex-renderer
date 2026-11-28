@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { expect, it } from "vitest";
 import { asRendererTool } from "../apps/public-mcp-gateway/src/renderer-dispatch.js";
 import {
@@ -43,18 +43,72 @@ it("documents each MCP tool and its connection support", () => {
   const bundle = JSON.parse(read("client/mcpb/manifest.json")) as {
     tools: Array<{ name: string }>;
   };
-  expect(bundle.tools.map(({ name }) => name).sort()).toEqual([...local].sort());
+  expect(bundle.tools.map(({ name }) => name).sort()).toEqual(
+    [...local].sort(),
+  );
   expect(remote.toSorted()).toEqual(
     Object.keys(rendererMcpToolPolicies).sort(),
   );
   const rows = Array.from(
     read("docs/mcp-operation-compatibility.md").matchAll(
-      /^\| `([a-z_]+)` \| [^|]+ \| ([○×]) \| ([○×]) \| ([○×]) \| ([^|]*) \|$/gm,
+      /^\| +`([a-z_]+)` +\| [^|]+ \| +([○×]) +\| +([○×]) +\| +([○×]) +\| ([^|]*) \|$/gm,
     ),
   );
   expect(rows.map(([, name]) => name).sort()).toEqual(
     [...new Set([...local, ...remote])].sort(),
   );
+  const localScopes = new Map<string, string>(
+    (
+      [
+        [
+          "render:create",
+          "get_renderer_capabilities",
+          "list_authoring_profiles",
+          "check_packages",
+          "search_packages",
+          "check_fonts",
+          "search_fonts",
+          "check_document_requirements",
+          "probe_document_requirements",
+          "retry_render",
+          "retry_svg_render",
+        ],
+        [
+          "render:read:own",
+          "get_render_diagnostics",
+          "read_render_log",
+          "get_render_manifest",
+        ],
+        [
+          "render:pdf:inspect",
+          "get_render_preview_crop",
+          "get_render_preview_sheet",
+          "locate_render_source",
+          "compare_render_quality",
+        ],
+      ] as const
+    ).flatMap(([scope, ...tools]) =>
+      tools.map((tool) => [tool, scope] as const),
+    ),
+  );
+  const guides = [
+    "docs/public/mcp.md",
+    ...readdirSync(new URL("../docs/public/", import.meta.url), {
+      withFileTypes: true,
+    })
+      .filter((entry) => entry.isDirectory())
+      .map(({ name }) => `docs/public/${name}/mcp.md`),
+  ];
+  for (const guide of guides) {
+    const localTools = read(guide)
+      .split(/\| `upload_source` +\|/)[1]
+      ?.split("\n\n")[0];
+    for (const [name, scope] of localScopes)
+      expect(
+        localTools?.split("\n").find((row) => row.includes(`\`${name}\``)),
+        `${guide} ${name}`,
+      ).toContain(`\`${scope}\``);
+  }
   const policies = new Map<string, { scope: string | null }>(
     Object.entries(rendererMcpToolPolicies),
   );
@@ -65,7 +119,7 @@ it("documents each MCP tool and its connection support", () => {
     expect(remoteMark === "○", name).toBe(remote.includes(name));
     expect(publicMark === "○", name).toBe(asRendererTool(name) !== undefined);
     if (policy?.scope) expect(note, name).toContain(`\`${policy.scope}\``);
-    const localScope = localProjectScopes.get(name);
+    const localScope = localProjectScopes.get(name) ?? localScopes.get(name);
     if (localScope) expect(note, name).toContain(`Local \`${localScope}\``);
   }
   for (const [name, scope] of localProjectScopes) {

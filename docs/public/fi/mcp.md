@@ -40,14 +40,14 @@ Anna teksti avustajalle PDF:n ja SVG:n tuottamista, virheiden selvittämistä, s
 
 > [!DETAILS] Työkalut ja lisätiedot kehittäjille
 >
-> | Luokka | Työkalut |
-> | --- | --- |
-> | Profiili | `get_profile` |
-> | Lähde | `create_source`, `update_source_file`, `delete_source_file`, `begin_source_upload`, `upload_source_chunk`, `finalize_source_upload`, `create_source_ref` |
+> | Luokka                | Työkalut                                                                                                                                                                                                              |
+> | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+> | Profiili              | `get_profile`                                                                                                                                                                                                         |
+> | Lähde                 | `create_source`, `update_source_file`, `delete_source_file`, `begin_source_upload`, `upload_source_chunk`, `finalize_source_upload`, `create_source_ref`                                                              |
 > | Tallennetut projektit | `list_projects`, `get_project`, `get_project_revision_jobs`, `create_project`, `rename_project`, `delete_project`, `attach_project_revision`, `update_project_file`, `delete_project_file`, `render_project_revision` |
-> | Käännös | `create_render`, `retry_render`, `retry_svg_render`, `get_render_status`, `cancel_render`, `delete_render` |
-> | Tarkistus | `get_render_diagnostics`, `get_render_preview`, `get_render_artifacts` |
-> | Ympäristö | `get_renderer_capabilities`, `check_packages`, `search_packages`, `check_fonts`, `search_fonts` |
+> | Käännös               | `create_render`, `retry_render`, `retry_svg_render`, `get_render_status`, `cancel_render`, `delete_render`                                                                                                            |
+> | Tarkistus             | `get_render_diagnostics`, `get_render_preview`, `get_render_artifacts`                                                                                                                                                |
+> | Ympäristö             | `get_renderer_capabilities`, `check_packages`, `search_packages`, `check_fonts`, `search_fonts`                                                                                                                       |
 >
 > - **Henkilöllisyys ja käyttöoikeudet.** `get_profile` palauttaa vain kirjautuneen käyttäjän pysyvän läpinäkymättömän tunnisteen. Se säilyy tunnisteiden uusimisessa ja uudelleenyhdistämisessä eikä sisällä sähköpostia tai näyttönimeä. Työkaluluettelo kertoo kunkin työkalun OAuth-oikeudet, ja työkalu tarkistaa ne suorituksen yhteydessä.
 > - **Syötteiden luominen ja rajoitukset**
@@ -87,18 +87,24 @@ Korjaa ladattavan asennusohjelman luomat muokkaamattomat rekisteröinnit komenno
 
 ## Paikallisen MCP:n työkalut {#local-mcpのツール}
 
-| Työkalu | Toiminto |
-| --- | --- |
-| `upload_source` | Valmistelee kansion tai ZIP-tiedoston syötteeksi |
-| `create_render_job` | Luo työn syötteestä `sourceId + entrypoint` ja pyytää valinnaisesti SVG:t asetuksella `outputs` |
-| `render_project` | Valmistelee syötteen, muuntaa ja lataa yhdellä kutsulla, SVG:t valinnaisesti asetuksella `outputs` |
-| `list_projects` / `get_project` / `get_project_revision_jobs` | Näyttävät projektit, versiot ja työhistorian |
-| `create_project` / `rename_project` / `delete_project` | Hallitsevat tallennettuja projekteja |
-| `attach_project_revision` / `render_project_revision` | Tallentavat lähetetyn syötteen ja luovat työn pysyvästä versiosta |
-| `get_render_status` | Tarkistaa työn tilan |
-| `download_render_artifacts` | Lataa PDF:n, SVG:t, lokit ja rakenteiset virheet |
-| `cancel_render` | Peruu aktiivisen työn |
-| `delete_render` | Poistaa päättyneen työn |
+| Työkalu                                                                                                    | Toiminto                                                                                                                 |
+| ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `upload_source`                                                                                            | Valmistelee kansion tai ZIP-tiedoston syötteeksi                                                                         |
+| `create_render_job`                                                                                        | Luo työn syötteestä `sourceId + entrypoint` ja pyytää valinnaisesti SVG:t asetuksella `outputs`                          |
+| `render_project`                                                                                           | Valmistelee syötteen, muuntaa ja lataa yhdellä kutsulla, SVG:t valinnaisesti asetuksella `outputs`                       |
+| `list_projects` / `get_project` / `get_project_revision_jobs`                                              | Näyttävät projektit, versiot ja työhistorian                                                                             |
+| `create_project` / `rename_project` / `delete_project`                                                     | Hallitsevat tallennettuja projekteja                                                                                     |
+| `attach_project_revision` / `render_project_revision`                                                      | Tallentavat lähetetyn syötteen ja luovat työn pysyvästä versiosta                                                        |
+| `get_render_status`                                                                                        | Tarkistaa työn tilan                                                                                                     |
+| `get_renderer_capabilities` / `list_authoring_profiles`                                                    | Näytä renderöintiympäristö ja kirjoitusprofiilit (`render:create`)                                                       |
+| `check_packages` / `search_packages` / `check_fonts` / `search_fonts`                                      | Tarkista tai hae paketteja ja fontteja (`render:create`)                                                                 |
+| `check_document_requirements` / `probe_document_requirements`                                              | Tarkista asiakirjan vaatimukset tai jonota testiajo (`render:create`)                                                    |
+| `retry_render` / `retry_svg_render`                                                                        | Yritä koko työtä tai vain SVG-vaihetta uudelleen (`render:create`)                                                       |
+| `get_render_diagnostics` / `read_render_log` / `get_render_manifest`                                       | Lue oman työn diagnostiikka, lokikatkelmat ja manifesti (`render:read:own`)                                              |
+| `get_render_preview_crop` / `get_render_preview_sheet` / `locate_render_source` / `compare_render_quality` | Rajaa tai kokoa PDF-esikatseluja, hae sijainteja SyncTeXillä tai vertaile PDF-tarkastusraportteja (`render:pdf:inspect`) |
+| `download_render_artifacts`                                                                                | Lataa PDF:n, SVG:t, lokit ja rakenteiset virheet                                                                         |
+| `cancel_render`                                                                                            | Peruu aktiivisen työn                                                                                                    |
+| `delete_render`                                                                                            | Poistaa päättyneen työn                                                                                                  |
 
 > [!DETAILS] Paikallisen MCP:n työkalujen käyttötavat
 >

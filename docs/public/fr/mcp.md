@@ -40,14 +40,14 @@ Transmettez le texte à l’assistant pour produire un PDF et des SVG, diagnosti
 
 > [!DETAILS] Outils et détails pour les développeurs
 >
-> | Catégorie | Outils |
-> | --- | --- |
-> | Profil | `get_profile` |
-> | Source | `create_source`, `update_source_file`, `delete_source_file`, `begin_source_upload`, `upload_source_chunk`, `finalize_source_upload`, `create_source_ref` |
+> | Catégorie           | Outils                                                                                                                                                                                                                |
+> | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+> | Profil              | `get_profile`                                                                                                                                                                                                         |
+> | Source              | `create_source`, `update_source_file`, `delete_source_file`, `begin_source_upload`, `upload_source_chunk`, `finalize_source_upload`, `create_source_ref`                                                              |
 > | Projets enregistrés | `list_projects`, `get_project`, `get_project_revision_jobs`, `create_project`, `rename_project`, `delete_project`, `attach_project_revision`, `update_project_file`, `delete_project_file`, `render_project_revision` |
-> | Rendu | `create_render`, `retry_render`, `retry_svg_render`, `get_render_status`, `cancel_render`, `delete_render` |
-> | Inspection | `get_render_diagnostics`, `get_render_preview`, `get_render_artifacts` |
-> | Environnement | `get_renderer_capabilities`, `check_packages`, `search_packages`, `check_fonts`, `search_fonts` |
+> | Rendu               | `create_render`, `retry_render`, `retry_svg_render`, `get_render_status`, `cancel_render`, `delete_render`                                                                                                            |
+> | Inspection          | `get_render_diagnostics`, `get_render_preview`, `get_render_artifacts`                                                                                                                                                |
+> | Environnement       | `get_renderer_capabilities`, `check_packages`, `search_packages`, `check_fonts`, `search_fonts`                                                                                                                       |
 >
 > - **Identité et permissions.** `get_profile` renvoie uniquement un identifiant opaque et stable de l’utilisateur connecté. Il reste identique après un renouvellement de jeton ou une reconnexion et n’inclut ni adresse électronique ni nom affiché. Chaque outil publie ses portées OAuth dans la liste et les contrôle à l’exécution.
 > - **Création des sources et limites**
@@ -87,18 +87,24 @@ Pour réparer les inscriptions non modifiées créées par le programme d’inst
 
 ## Outils de Local MCP {#local-mcpのツール}
 
-| Outil | Opération |
-| --- | --- |
-| `upload_source` | Préparer un dossier ou un ZIP comme jeu de sources |
-| `create_render_job` | Créer une tâche à partir de `sourceId + entrypoint` et demander éventuellement des SVG dans `outputs` |
-| `render_project` | Préparer les sources, convertir et télécharger en un appel, avec SVG facultatif dans `outputs` |
-| `list_projects` / `get_project` / `get_project_revision_jobs` | Consulter les projets, les révisions et l’historique des tâches |
-| `create_project` / `rename_project` / `delete_project` | Gérer les projets enregistrés |
-| `attach_project_revision` / `render_project_revision` | Enregistrer les sources envoyées et créer une tâche à partir d’une révision figée |
-| `get_render_status` | Consulter l’état d’une tâche |
-| `download_render_artifacts` | Télécharger le PDF, les SVG, les journaux et les erreurs structurées |
-| `cancel_render` | Annuler une tâche active |
-| `delete_render` | Supprimer une tâche terminée |
+| Outil                                                                                                      | Opération                                                                                                              |
+| ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `upload_source`                                                                                            | Préparer un dossier ou un ZIP comme jeu de sources                                                                     |
+| `create_render_job`                                                                                        | Créer une tâche à partir de `sourceId + entrypoint` et demander éventuellement des SVG dans `outputs`                  |
+| `render_project`                                                                                           | Préparer les sources, convertir et télécharger en un appel, avec SVG facultatif dans `outputs`                         |
+| `list_projects` / `get_project` / `get_project_revision_jobs`                                              | Consulter les projets, les révisions et l’historique des tâches                                                        |
+| `create_project` / `rename_project` / `delete_project`                                                     | Gérer les projets enregistrés                                                                                          |
+| `attach_project_revision` / `render_project_revision`                                                      | Enregistrer les sources envoyées et créer une tâche à partir d’une révision figée                                      |
+| `get_render_status`                                                                                        | Consulter l’état d’une tâche                                                                                           |
+| `get_renderer_capabilities` / `list_authoring_profiles`                                                    | Consulter l’environnement de rendu et les profils de rédaction (`render:create`)                                       |
+| `check_packages` / `search_packages` / `check_fonts` / `search_fonts`                                      | Vérifier ou rechercher des paquets et des polices (`render:create`)                                                    |
+| `check_document_requirements` / `probe_document_requirements`                                              | Vérifier les prérequis du document ou lancer un essai (`render:create`)                                                |
+| `retry_render` / `retry_svg_render`                                                                        | Relancer le rendu complet ou uniquement la conversion SVG (`render:create`)                                            |
+| `get_render_diagnostics` / `read_render_log` / `get_render_manifest`                                       | Lire les diagnostics, des extraits du journal et le manifeste d’un rendu détenu par la clé (`render:read:own`)         |
+| `get_render_preview_crop` / `get_render_preview_sheet` / `locate_render_source` / `compare_render_quality` | Recadrer ou regrouper des aperçus PDF, interroger SyncTeX ou comparer les rapports d’inspection (`render:pdf:inspect`) |
+| `download_render_artifacts`                                                                                | Télécharger le PDF, les SVG, les journaux et les erreurs structurées                                                   |
+| `cancel_render`                                                                                            | Annuler une tâche active                                                                                               |
+| `delete_render`                                                                                            | Supprimer une tâche terminée                                                                                           |
 
 > [!DETAILS] Conventions des outils Local MCP
 >

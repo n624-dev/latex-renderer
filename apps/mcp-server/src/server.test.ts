@@ -13,6 +13,7 @@ import {
 } from "@latex-renderer/mcp-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { RendererClient } from "@latex-renderer/api-client";
+import { rendererApiAuthoringRoutes } from "@latex-renderer/contracts/renderer-mcp-definitions";
 import { createLatexRendererMcpServer } from "./server.js";
 
 const jobId = `job_${"a".repeat(32)}`;
@@ -215,6 +216,7 @@ describe("local MCP v2", () => {
         ),
       ),
     );
+    expect(listed).toHaveLength(53);
     expect(listed.map(({ name }) => String(name)).sort()).toEqual(
       asRecordArray(manifest.tools)
         .map(({ name }) => String(name))
@@ -488,86 +490,389 @@ describe("local MCP v2", () => {
     const client = new RendererClient("https://renderer.example.test/", secret);
     const pdfSha256 = "1".repeat(64);
     const origin = "https://renderer.example.test";
-    const calls: Array<{ path: string; method: string; body: BodyInit | null | undefined }> = [];
-    const fetch = vi.spyOn(globalThis, "fetch").mockImplementation((url, options) => {
-      if (!(url instanceof URL)) throw new Error("Expected a URL");
-      expect(url.origin).toBe(origin);
-      expect(options?.redirect).toBe("error");
-      expect(new Headers(options?.headers).get("Authorization")).toBe(`Bearer ${secret}`);
-      calls.push({ path: url.pathname + url.search, method: options?.method ?? "GET", body: options?.body });
-      if (url.pathname.endsWith("/draft")) return Promise.resolve(Response.json({ draft: null }));
-      if (url.pathname.endsWith("/draft/preview"))
-        return Promise.resolve(Response.json({ jobId, version: 5, reused: true }));
-      if (url.pathname.endsWith("/changes")) return Promise.resolve(Response.json({
-        error: { code: "DRAFT_VERSION_CONFLICT", message: "The draft changed", currentVersion: 6 },
-      }, { status: 409 }));
-      return Promise.resolve(Response.json({
-        jobId, revisionId: null, pdfSha256, generation: null,
-        inspectorVersion: 1, expiresAt: "2026-11-28T00:00:00.000Z",
-        state: "not_requested", errorCode: null, report: null,
-      }));
-    });
+    const calls: Array<{
+      path: string;
+      method: string;
+      body: BodyInit | null | undefined;
+    }> = [];
+    const fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation((url, options) => {
+        if (!(url instanceof URL)) throw new Error("Expected a URL");
+        expect(url.origin).toBe(origin);
+        expect(options?.redirect).toBe("error");
+        expect(new Headers(options?.headers).get("Authorization")).toBe(
+          `Bearer ${secret}`,
+        );
+        calls.push({
+          path: url.pathname + url.search,
+          method: options?.method ?? "GET",
+          body: options?.body,
+        });
+        if (url.pathname.endsWith("/draft"))
+          return Promise.resolve(Response.json({ draft: null }));
+        if (url.pathname.endsWith("/draft/preview"))
+          return Promise.resolve(
+            Response.json({ jobId, version: 5, reused: true }),
+          );
+        if (url.pathname.endsWith("/changes"))
+          return Promise.resolve(
+            Response.json(
+              {
+                error: {
+                  code: "DRAFT_VERSION_CONFLICT",
+                  message: "The draft changed",
+                  currentVersion: 6,
+                },
+              },
+              { status: 409 },
+            ),
+          );
+        return Promise.resolve(
+          Response.json({
+            jobId,
+            revisionId: null,
+            pdfSha256,
+            generation: null,
+            inspectorVersion: 1,
+            expiresAt: "2026-11-28T00:00:00.000Z",
+            state: "not_requested",
+            errorCode: null,
+            report: null,
+          }),
+        );
+      });
     try {
       const connection = await connect({
-        ...operations, runAuthoringOperation: client.runAuthoringOperation.bind(client),
+        ...operations,
+        runAuthoringOperation: client.runAuthoringOperation.bind(client),
       });
       const call = (name: string, args: Record<string, unknown>) =>
         connection.request("tools/call", { name, arguments: args });
-      await expect(call("get_project_draft", { projectId })).resolves.toMatchObject({
+      await expect(
+        call("get_project_draft", { projectId }),
+      ).resolves.toMatchObject({
         structuredContent: { success: true, result: { draft: null } },
       });
-      const changes = { version: 5, idempotencyKey: "test-draft-edit-key", files: [] };
-      await expect(call("apply_project_changes", { projectId, ...changes })).resolves.toMatchObject({
+      const changes = {
+        version: 5,
+        idempotencyKey: "test-draft-edit-key",
+        files: [],
+      };
+      await expect(
+        call("apply_project_changes", { projectId, ...changes }),
+      ).resolves.toMatchObject({
         isError: true,
-        structuredContent: { error: { code: "DRAFT_VERSION_CONFLICT", status: 409, currentVersion: 6 } },
+        structuredContent: {
+          error: {
+            code: "DRAFT_VERSION_CONFLICT",
+            status: 409,
+            currentVersion: 6,
+          },
+        },
       });
-      await expect(call("render_project_draft", { projectId, version: 5 })).resolves.toMatchObject({
-        structuredContent: { success: true, result: { jobId, version: 5, reused: true } },
+      await expect(
+        call("render_project_draft", { projectId, version: 5 }),
+      ).resolves.toMatchObject({
+        structuredContent: {
+          success: true,
+          result: { jobId, version: 5, reused: true },
+        },
       });
-      await expect(call("get_render_quality_report", { jobId, pdfSha256 })).resolves.toMatchObject({
-        structuredContent: { success: true, result: { pdfSha256, state: "not_requested" } },
+      await expect(
+        call("get_render_quality_report", { jobId, pdfSha256 }),
+      ).resolves.toMatchObject({
+        structuredContent: {
+          success: true,
+          result: { pdfSha256, state: "not_requested" },
+        },
       });
       expect(calls).toEqual([
-        { path: `/api/v1/projects/${projectId}/draft`, method: "GET", body: undefined },
-        { path: `/api/v1/projects/${projectId}/draft/changes`, method: "POST", body: JSON.stringify(changes) },
-        { path: `/api/v1/projects/${projectId}/draft/preview`, method: "POST", body: JSON.stringify({ version: 5 }) },
-        { path: `/api/v1/job-tickets/${jobId}/pdf-inspection?pdfSha256=${pdfSha256}`, method: "GET", body: undefined },
+        {
+          path: `/api/v1/projects/${projectId}/draft`,
+          method: "GET",
+          body: undefined,
+        },
+        {
+          path: `/api/v1/projects/${projectId}/draft/changes`,
+          method: "POST",
+          body: JSON.stringify(changes),
+        },
+        {
+          path: `/api/v1/projects/${projectId}/draft/preview`,
+          method: "POST",
+          body: JSON.stringify({ version: 5 }),
+        },
+        {
+          path: `/api/v1/job-tickets/${jobId}/pdf-inspection?pdfSha256=${pdfSha256}`,
+          method: "GET",
+          body: undefined,
+        },
       ]);
     } finally {
       fetch.mockRestore();
     }
   });
 
+  it("registers the shared tools and forwards environment, log, PDF and retry inputs", async () => {
+    const client = new RendererClient("https://renderer.example.test/", secret);
+    const pdfSha256 = "1".repeat(64);
+    const base64 = "/9g=";
+    const idempotencyKey = "retry-job-123456789";
+    const crop = { page: 1, x: 0.1, y: 0.2, width: 0.3, height: 0.4 };
+    const inspection = {
+      jobId,
+      revisionId: null,
+      pdfSha256,
+      generation: 1,
+      inspectorVersion: 2,
+      expiresAt: "2026-11-28T00:00:00.000Z",
+      state: "ready",
+      errorCode: null,
+    };
+    const retried = {
+      id: jobId,
+      status: "queued",
+      engine: "lualatex",
+      runtimeDigest: null,
+      rendererVersion: "fixture",
+      sourceId,
+      projectRevisionId: null,
+      entrypoint: "main.tex",
+      outputs: ["pdf", "svg"],
+      createdAt: job.createdAt,
+      updatedAt: job.updatedAt,
+      queuedAt: job.updatedAt,
+      startedAt: null,
+      finishedAt: null,
+      retentionExpiresAt: null,
+      exitCode: null,
+      retryOf: null,
+      errorCode: null,
+      errorMessage: null,
+      previewAvailable: false,
+      previewPages: [],
+      artifacts: [],
+      webResultUrl: `https://renderer.example.test/app/jobs/${jobId}/`,
+    };
+    const fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation((url, options) => {
+        if (!(url instanceof URL)) throw new Error("Expected URL");
+        expect(new Headers(options?.headers).get("Authorization")).toBe(
+          `Bearer ${secret}`,
+        );
+        expect(options?.redirect).toBe("error");
+        switch (url.pathname) {
+          case "/api/v1/environment/packages/search":
+            expect(url.search).toBe("?query=ams&cursor=2");
+            expect(options?.method).toBe("GET");
+            return Promise.resolve(
+              Response.json({
+                search: {
+                  query: "ams",
+                  matches: ["amsmath"],
+                  nextCursor: null,
+                },
+              }),
+            );
+          case `/api/v1/job-tickets/${jobId}/log`:
+            expect(url.searchParams.get("startLine")).toBe("2");
+            expect(url.searchParams.get("stage")).toBe("pdf");
+            return Promise.resolve(
+              Response.json({
+                log: {
+                  jobId,
+                  stage: "pdf",
+                  sha256: pdfSha256,
+                  startByte: 2,
+                  endByte: 4,
+                  totalBytes: 4,
+                  startLine: 2,
+                  nextByte: null,
+                  text: "b\n",
+                },
+              }),
+            );
+          case `/api/v1/job-tickets/${jobId}/pdf-inspection`:
+            expect(options?.method).toBe("POST");
+            expect(options?.body).toBe(
+              JSON.stringify({ pdfSha256, params: crop }),
+            );
+            return Promise.resolve(
+              Response.json({
+                ...inspection,
+                report: {
+                  page: 1,
+                  normalizedCrop: crop,
+                  cropPixels: { x: 1, y: 2, width: 3, height: 4 },
+                  displayPagePoints: { width: 10, height: 10 },
+                  rotation: 0,
+                  dpi: 72,
+                  pixelWidth: 3,
+                  pixelHeight: 4,
+                  mimeType: "image/jpeg",
+                  sha256: pdfSha256,
+                  base64,
+                },
+              }),
+            );
+          case `/api/v1/job-tickets/${jobId}/retry`:
+            expect(options?.method).toBe("POST");
+            expect(options?.body).toBe(JSON.stringify({ idempotencyKey }));
+            return Promise.resolve(
+              Response.json({ job: { ...retried, retryOf: jobId } }),
+            );
+          case "/api/v1/render-tickets":
+            expect(options?.method).toBe("POST");
+            expect(new Headers(options?.headers).get("Idempotency-Key")).toBe(
+              idempotencyKey,
+            );
+            expect(options?.body).toBe(
+              JSON.stringify({ retrySvgJobId: jobId }),
+            );
+            return Promise.resolve(
+              Response.json({
+                jobId,
+                jobTicket: "fixture-job-ticket",
+                expiresAt: inspection.expiresAt,
+                job: retried,
+              }),
+            );
+          default:
+            throw new Error(`Unexpected route ${url.pathname}`);
+        }
+      });
+    try {
+      const connection = await connect({
+        ...operations,
+        runAuthoringOperation: client.runAuthoringOperation.bind(client),
+      });
+      const catalog = asRecordArray(
+        asRecord(await connection.request("tools/list", {})).tools,
+      );
+      expect(catalog.map(({ name }) => name)).toEqual(
+        expect.arrayContaining(Object.keys(rendererApiAuthoringRoutes)),
+      );
+      const call = (name: string, args: Record<string, unknown>) =>
+        connection.request("tools/call", { name, arguments: args });
+      await expect(
+        call("search_packages", { query: "ams", cursor: "2" }),
+      ).resolves.toMatchObject({
+        structuredContent: {
+          success: true,
+          result: { search: { matches: ["amsmath"] } },
+        },
+      });
+      await expect(
+        call("read_render_log", { jobId, startLine: 2 }),
+      ).resolves.toMatchObject({
+        structuredContent: {
+          success: true,
+          result: { log: { startLine: 2, text: "b\n" } },
+        },
+      });
+      const preview = asRecord(
+        await call("get_render_preview_crop", { jobId, pdfSha256, crop }),
+      );
+      expect(preview).toMatchObject({
+        content: [
+          expect.objectContaining({ type: "text" }),
+          { type: "image", mimeType: "image/jpeg", data: base64 },
+        ],
+        structuredContent: {
+          success: true,
+          result: { crop: { normalizedCrop: crop, sha256: pdfSha256 } },
+        },
+      });
+      expect(JSON.stringify(preview.structuredContent)).not.toContain("base64");
+      await expect(
+        call("retry_render", { jobId, idempotencyKey }),
+      ).resolves.toMatchObject({
+        structuredContent: {
+          success: true,
+          result: { job: { retryOf: jobId } },
+        },
+      });
+      await expect(
+        call("retry_svg_render", { jobId, idempotencyKey }),
+      ).resolves.toMatchObject({
+        structuredContent: { success: true, result: { job: { id: jobId } } },
+      });
+    } finally {
+      fetch.mockRestore();
+    }
+  });
+
   it("lists and reads saved revision files with the shared tool schema", async () => {
-    const identity = { projectId, revisionId, sourceId, sourceSha256: "a".repeat(64) };
+    const identity = {
+      projectId,
+      revisionId,
+      sourceId,
+      sourceSha256: "a".repeat(64),
+    };
     const connection = await connect({
       ...operations,
-      listProjectRevisionFiles: () => Promise.resolve({
-        ...identity, items: [{ path: "main.tex", size: 9, kind: "text" }],
-        totalFiles: 1, nextOffset: null,
-      }),
+      listProjectRevisionFiles: () =>
+        Promise.resolve({
+          ...identity,
+          items: [{ path: "main.tex", size: 9, kind: "text" }],
+          totalFiles: 1,
+          nextOffset: null,
+        }),
       getProjectRevisionFile: (_projectId, _revisionId, path, options) => {
         if (path !== "main.tex")
-          return Promise.reject(new AppError("SOURCE_FILE_NOT_FOUND", "File does not exist", 404));
+          return Promise.reject(
+            new AppError("SOURCE_FILE_NOT_FOUND", "File does not exist", 404),
+          );
         return Promise.resolve({
-          ...identity, path, sha256: "b".repeat(64), size: 9, text: "日本語",
-          unit: "utf16", offset: options?.offset ?? 0, totalUnits: 3, nextOffset: null,
+          ...identity,
+          path,
+          sha256: "b".repeat(64),
+          size: 9,
+          text: "日本語",
+          unit: "utf16",
+          offset: options?.offset ?? 0,
+          totalUnits: 3,
+          nextOffset: null,
         });
       },
     });
-    const tools = asRecordArray(asRecord(await connection.request("tools/list", {})).tools);
-    expect(tools.map((tool) => tool.name)).toContain("get_project_revision_file");
+    const tools = asRecordArray(
+      asRecord(await connection.request("tools/list", {})).tools,
+    );
+    expect(tools.map((tool) => tool.name)).toContain(
+      "get_project_revision_file",
+    );
     const invoke = (name: string, args: Record<string, unknown>) =>
-      connection.request("tools/call", { name, arguments: { projectId, revisionId, ...args } });
-    await expect(invoke("list_project_revision_files", { limit: 1 })).resolves.toMatchObject({
-      structuredContent: { success: true, result: { ...identity, totalFiles: 1 } },
+      connection.request("tools/call", {
+        name,
+        arguments: { projectId, revisionId, ...args },
+      });
+    await expect(
+      invoke("list_project_revision_files", { limit: 1 }),
+    ).resolves.toMatchObject({
+      structuredContent: {
+        success: true,
+        result: { ...identity, totalFiles: 1 },
+      },
     });
-    await expect(invoke("get_project_revision_file", { path: "main.tex" })).resolves.toMatchObject({
-      structuredContent: { success: true, result: { ...identity, text: "日本語" } },
+    await expect(
+      invoke("get_project_revision_file", { path: "main.tex" }),
+    ).resolves.toMatchObject({
+      structuredContent: {
+        success: true,
+        result: { ...identity, text: "日本語" },
+      },
     });
-    await expect(invoke("get_project_revision_file", { path: "missing.tex" })).resolves.toMatchObject({
+    await expect(
+      invoke("get_project_revision_file", { path: "missing.tex" }),
+    ).resolves.toMatchObject({
       isError: true,
-      structuredContent: { success: false, error: { code: "SOURCE_FILE_NOT_FOUND", status: 404 } },
+      structuredContent: {
+        success: false,
+        error: { code: "SOURCE_FILE_NOT_FOUND", status: 404 },
+      },
     });
   });
 
@@ -576,20 +881,27 @@ describe("local MCP v2", () => {
     const listed = await connection.request("tools/list", {});
     const tools = asRecordArray(asRecord(listed).tools);
 
-    expect(tools.map((tool) => tool.name)).toEqual([...MCP_TOOL_NAMES, "get_authoring_guide"]);
+    expect(tools.map((tool) => tool.name)).toEqual([
+      ...MCP_TOOL_NAMES,
+      "get_authoring_guide",
+    ]);
     for (const tool of tools)
       expect(asRecord(tool.outputSchema).type).toBe("object");
-    const guide = asRecord(await connection.request("tools/call", {
-      name: "get_authoring_guide",
-      arguments: { topic: "local" },
-    }));
+    const guide = asRecord(
+      await connection.request("tools/call", {
+        name: "get_authoring_guide",
+        arguments: { topic: "local" },
+      }),
+    );
     expect(guide.isError).not.toBe(true);
     expect(asRecord(guide.structuredContent)).toMatchObject({
       success: true,
       operation: "get_authoring_guide",
       result: { topic: "local" },
     });
-    expect(asRecord(asRecord(guide.structuredContent).result).body).toContain("Local MCP");
+    expect(asRecord(asRecord(guide.structuredContent).result).body).toContain(
+      "Local MCP",
+    );
 
     const argumentsByTool: Record<McpToolName, Record<string, string>> = {
       upload_source: { path: "/tmp/project" },
