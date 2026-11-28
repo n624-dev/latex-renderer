@@ -1,4 +1,3 @@
-import type { DisplayLocale } from "@latex-renderer/shared/locale";
 import { matchDisplayLocale } from "@latex-renderer/shared/locale";
 import type { AdminMessage } from "../../admin-messages.js";
 import { synchronizeDisplayLocale } from "../../browser-locale.js";
@@ -10,13 +9,15 @@ import { createSystem } from "./system.js";
 import { createTex } from "./tex.js";
 import { createUpdates } from "./updates.js";
 import { createUsers } from "./users.js";
+import type { AdminIdentity, AdminInput, AdminView } from "./view.js";
 
 type AdminCatalog = Readonly<Record<AdminMessage, string>>;
-type Identity = {
-  role: "admin" | "owner";
-  displayName?: string;
-  displayLocale?: DisplayLocale | null;
-};
+
+// Give the legacy JavaScript factory the same typed boundary as the other views.
+const createSystemView: (view: AdminView) => {
+  system: () => Promise<void>;
+  audit: () => Promise<void>;
+} = createSystem;
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -52,7 +53,7 @@ export function installAdmin(catalog: AdminCatalog): void {
   const updated = document.querySelector<HTMLElement>("#updated");
   if (!out || !err || !ok || !identity || !updated) return;
 
-  const me: Identity = { role: "admin" };
+  const me: AdminIdentity = { role: "admin" };
   let csrfToken = "";
 
   const showError = (error: unknown) => {
@@ -93,9 +94,9 @@ export function installAdmin(catalog: AdminCatalog): void {
     return value;
   }
 
-  const input = { adminMessage, out, err, ok, me, request };
+  const input: AdminInput = { adminMessage, out, err, ok, me, request };
   const controls = createControls({ ...input, refreshPage: () => load() });
-  const context = { ...input, ...controls };
+  const context: AdminView = { ...input, ...controls };
   const jobs = createJobs(context);
   const pages: Readonly<Record<string, () => Promise<void>>> = {
     dashboard: createDashboard({
@@ -109,7 +110,7 @@ export function installAdmin(catalog: AdminCatalog): void {
     sources: jobs.sources,
     tex: createTex(context).texEnvironment,
     ...createUpdates(context),
-    ...createSystem(context),
+    ...createSystemView(context),
   };
 
   const load = async () => {
