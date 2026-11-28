@@ -24,13 +24,18 @@ OpenAPI definitions cover [reservation and job creation (gateway.openapi.yaml)](
 Send all credentials in the HTTP header `Authorization: Bearer <TOKEN>`.
 
 - **API key (`lrk_...`).** Use it for source reservation, job creation, saved projects, reissuing job tokens (`job-tickets`), and retrying SVG extraction.
-  - `render:create` permits job creation and creating, renaming, or deleting projects and saving revisions.
+  - `render:create` permits job creation, creating, renaming, or deleting projects, saving revisions, and setting revision protection.
   - `render:read:own` permits refreshing short-lived tokens for your jobs and viewing projects and history.
-  - `render:project:read` permits listing files and reading UTF-8 text from your saved project revisions. Select it explicitly when issuing a key.
+  - `render:project:read` — Read saved-revision files and Source ZIPs, check project storage usage, and plan revision cleanup. Select it explicitly when issuing a key.
+  - `render:project:state:read` — Read document conditions, the adopted revision, and PDF review records.
+  - `render:project:state:write` — Change document conditions, adopt a revision, and record a PDF review.
+  - `render:project:delete` — Apply saved-revision cleanup.
   - `render:draft:read` — Read the shared draft metadata and files.
   - `render:draft:write` — Open, edit, and save shared drafts.
   - `render:pdf:inspect` — Request and read PDF inspections for jobs owned by that key.
 - **Short-lived tokens (`uploadTicket` and `jobTicket`).** Use these to upload a ZIP, read job status, cancel a job, retrieve artifacts, or delete a job.
+
+Select the scopes for reading or changing document state and applying revision cleanup explicitly when issuing a key.
 
 > [!WARNING]
 > Keep API keys, `uploadTicket`, and `jobTicket` out of logs, URL query strings, and source ZIPs.
@@ -67,6 +72,15 @@ Independently issued keys receive `404` for these operations, even when they bel
 | `GET` | `/api/v1/projects/{projectId}/revisions/{revisionId}/jobs` | Get the job history for a revision |
 | `GET` | `/api/v1/projects/{projectId}/revisions/{revisionId}/files` | List saved revision files or read text by supplying `path` |
 | `POST` | `/api/v1/projects/{projectId}/revisions/{revisionId}/render` | Render a revision again |
+| `GET` | `/api/v1/projects/{projectId}/document-state` | Read conditions, adoption, and optional revision change history |
+| `PATCH` | `/api/v1/projects/{projectId}/document-state/conditions` | Replace conditions at the expected version |
+| `POST` | `/api/v1/projects/{projectId}/document-state/adoption` | Set or clear the adopted revision |
+| `GET` / `POST` | `/api/v1/projects/{projectId}/pdf-reviews` | List or record PDF reviews for the project |
+| `GET` | `/api/v1/projects/{projectId}/storage-usage` | Read project storage and account quota |
+| `POST` | `/api/v1/projects/{projectId}/revision-protection` | Set or clear explicit saved-revision protection |
+| `POST` | `/api/v1/projects/{projectId}/revision-cleanup/plan` | Plan cleanup of selected saved revisions |
+| `POST` | `/api/v1/projects/{projectId}/revision-cleanup/apply` | Apply cleanup using the current plan hash |
+| `GET` | `/api/v1/projects/{projectId}/revisions/{revisionId}/source.zip` | Download the exact saved Source ZIP |
 
 > [!DETAILS] Saved project API and maintenance modes
 >

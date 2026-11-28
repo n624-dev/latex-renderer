@@ -122,6 +122,12 @@ To repair a registration created by the downloadable installer, run `n624-latex 
 | `get_authoring_guide` | Read the bundled LaTeX authoring guide |
 | `list_projects` / `get_project` / `get_project_revision_jobs` | View saved projects, revisions, and job history |
 | `list_project_revision_files` / `get_project_revision_file` | List files and read text in your saved revisions. Requires a compatible server and a key with the `render:project:read` scope |
+| `get_project_revision_downloads` | Save the exact revision's Source ZIP as `<revisionId>.zip` in `outputDirectory` (default `.render`). Returns the local path and SHA-256. Requires `render:project:read`. To save a Job PDF, use `download_render_artifacts` |
+| `get_project_document_state` / `list_project_pdf_reviews` | Read conditions, the adopted revision, change history, and PDF review records with `render:project:state:read` |
+| `update_project_document_conditions` / `adopt_project_revision` / `record_project_pdf_review` | Change conditions, adopt a revision, or record a PDF review with `render:project:state:write` |
+| `get_project_storage_usage` / `plan_project_revision_cleanup` | Check storage usage and plan saved revision cleanup with `render:project:read` |
+| `protect_project_revision` | Set or clear explicit protection for a revision with `render:create` |
+| `apply_project_revision_cleanup` | Apply cleanup to the user-confirmed selection using the current `planHash` with `render:project:delete` |
 | `get_project_draft` / `get_project_draft_file` | Read shared draft metadata and text with `render:draft:read` |
 | `open_project_draft` / `apply_project_changes` / `save_project_draft` | Open, edit, and save shared drafts with `render:draft:write` |
 | `request_render_quality_report` / `get_render_quality_report` | Inspect PDFs from jobs that the key owns with `render:pdf:inspect` |

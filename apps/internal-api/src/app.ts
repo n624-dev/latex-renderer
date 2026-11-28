@@ -26,7 +26,9 @@ export function createInternalApp(deps: InternalApiDependencies): Hono {
       JSON.stringify({ event: "internal_api.error", code, path: c.req.path }),
     );
     const currentVersion =
-      error instanceof AppError && code === "DRAFT_VERSION_CONFLICT"
+      error instanceof AppError &&
+      (code === "DRAFT_VERSION_CONFLICT" ||
+        code === "DOCUMENT_CONDITIONS_CONFLICT")
         ? error.details?.currentVersion
         : undefined;
     const recovery =

@@ -92,6 +92,335 @@ paths:
       responses:
         "200": { description: Project ID and deleted flag }
         "404": { $ref: "#/components/responses/Error" }
+  /api/v1/projects/{projectId}/document-state:
+    parameters:
+      - { $ref: "#/components/parameters/ProjectId" }
+    get:
+      summary: Read document conditions and the adopted revision
+      description: Requires the render:project:state:read scope and ownership of the Project.
+      security: [{ renderApiKey: [] }]
+      parameters:
+        - in: query
+          name: conditionsVersion
+          description: Read a specific historical conditions version.
+          schema: { type: integer, minimum: 1 }
+        - in: query
+          name: history
+          description: URL-encode a JSON object to include one revision's change history.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [revisionId]
+                properties:
+                  revisionId:
+                    { type: string, pattern: "^revision_[a-f0-9]{32}$" }
+                  offset: { type: integer, minimum: 0 }
+      responses:
+        "200":
+          {
+            description: Conditions and current adoption with optional revision changes,
+          }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/projects/{projectId}/document-state/conditions:
+    parameters:
+      - { $ref: "#/components/parameters/ProjectId" }
+    patch:
+      summary: Replace document conditions at the expected version
+      description: Requires the render:project:state:write scope and ownership of the Project.
+      security: [{ renderApiKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expectedVersion, entries]
+              properties:
+                expectedVersion: { type: integer, minimum: 0 }
+                entries:
+                  type: array
+                  maxItems: 50
+                  items:
+                    type: object
+                    additionalProperties: false
+                    required: [kind, basis, text]
+                    properties:
+                      kind:
+                        {
+                          type: string,
+                          enum:
+                            [
+                              purpose,
+                              format,
+                              required,
+                              excluded,
+                              change,
+                              preserve,
+                              unresolved,
+                            ],
+                        }
+                      basis:
+                        {
+                          type: string,
+                          enum:
+                            [user_specified, existing_document, unconfirmed],
+                        }
+                      text: { type: string, minLength: 1, maxLength: 1000 }
+      responses:
+        "200": { description: Current conditions version and change status }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
+  /api/v1/projects/{projectId}/document-state/adoption:
+    parameters:
+      - { $ref: "#/components/parameters/ProjectId" }
+    post:
+      summary: Set or clear the explicitly adopted revision
+      description: Requires the render:project:state:write scope and ownership of the Project.
+      security: [{ renderApiKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [revisionId, expectedRevisionId]
+              properties:
+                revisionId:
+                  { type: [string, "null"], pattern: "^revision_[a-f0-9]{32}$" }
+                expectedRevisionId:
+                  { type: [string, "null"], pattern: "^revision_[a-f0-9]{32}$" }
+      responses:
+        "200": { description: Project and adopted revision ID }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/projects/{projectId}/pdf-reviews:
+    parameters:
+      - { $ref: "#/components/parameters/ProjectId" }
+    get:
+      summary: List recorded PDF reviews
+      description: Requires the render:project:state:read scope and ownership of the Project.
+      security: [{ renderApiKey: [] }]
+      parameters:
+        - in: query
+          name: offset
+          schema: { type: integer, minimum: 0 }
+      responses:
+        "200": { description: Page of reviews with nextOffset }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    post:
+      summary: Record checks for an exact saved revision and Job PDF
+      description: Requires the render:project:state:write scope and ownership of the Project.
+      security: [{ renderApiKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                [
+                  revisionId,
+                  jobId,
+                  pdfSha256,
+                  conditionsVersion,
+                  guideVersion,
+                  checks,
+                ]
+              properties:
+                revisionId: { type: string, pattern: "^revision_[a-f0-9]{32}$" }
+                jobId: { type: string, pattern: "^job_[a-f0-9]{32}$" }
+                pdfSha256: { type: string, pattern: "^[a-f0-9]{64}$" }
+                conditionsVersion: { type: [integer, "null"], minimum: 1 }
+                guideVersion: { type: [string, "null"], maxLength: 128 }
+                checks:
+                  type: array
+                  minItems: 1
+                  maxItems: 100
+                  items:
+                    type: object
+                    additionalProperties: false
+                    required: [type, status]
+                    properties:
+                      type:
+                        {
+                          type: string,
+                          enum: [machine, visual, source_comparison],
+                        }
+                      status:
+                        {
+                          type: string,
+                          enum:
+                            [
+                              passed,
+                              needs_attention,
+                              not_checked,
+                              unavailable,
+                              accepted_issue,
+                            ],
+                        }
+                      pages:
+                        type: array
+                        maxItems: 100
+                        items: { type: integer, minimum: 1, maximum: 100 }
+                      note: { type: string, maxLength: 1000 }
+      responses:
+        "200": { description: Recorded PDF review }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
+  /api/v1/projects/{projectId}/storage-usage:
+    parameters:
+      - { $ref: "#/components/parameters/ProjectId" }
+    get:
+      summary: Read logical storage usage and account quota
+      description: Requires the render:project:read scope and ownership of the Project.
+      security: [{ renderApiKey: [] }]
+      responses:
+        "200": { description: Project and user storage totals in bytes }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/projects/{projectId}/revision-protection:
+    parameters:
+      - { $ref: "#/components/parameters/ProjectId" }
+    post:
+      summary: Set or clear explicit protection for a saved revision
+      description: Requires the render:create scope and ownership of the Project.
+      security: [{ renderApiKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [revisionId, protected]
+              properties:
+                revisionId: { type: string, pattern: "^revision_[a-f0-9]{32}$" }
+                protected: { type: boolean }
+      responses:
+        "200": { description: Project, revision, and protection status }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/projects/{projectId}/revision-cleanup/plan:
+    parameters:
+      - { $ref: "#/components/parameters/ProjectId" }
+    post:
+      summary: Plan cleanup for selected saved revisions
+      description: Requires the render:project:read scope and ownership of the Project.
+      security: [{ renderApiKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [revisionIds]
+              properties:
+                revisionIds:
+                  type: array
+                  minItems: 1
+                  maxItems: 50
+                  uniqueItems: true
+                  items: { type: string, pattern: "^revision_[a-f0-9]{32}$" }
+      responses:
+        "200":
+          {
+            description: Cleanup plan with planHash,
+            protection reasons,
+            and estimated reclaimable Source bytes,
+          }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/projects/{projectId}/revision-cleanup/apply:
+    parameters:
+      - { $ref: "#/components/parameters/ProjectId" }
+    post:
+      summary: Apply cleanup for the confirmed selection and current plan hash
+      description: Requires the render:project:delete scope and ownership of the Project.
+      security: [{ renderApiKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [revisionIds, planHash]
+              properties:
+                revisionIds:
+                  type: array
+                  minItems: 1
+                  maxItems: 50
+                  uniqueItems: true
+                  items: { type: string, pattern: "^revision_[a-f0-9]{32}$" }
+                planHash: { type: string, pattern: "^[a-f0-9]{64}$" }
+      responses:
+        "200":
+          {
+            description: Removed revision IDs and estimated reclaimable Source bytes,
+          }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/projects/{projectId}/revisions/{revisionId}/source.zip:
+    parameters:
+      - { $ref: "#/components/parameters/ProjectId" }
+      - { $ref: "#/components/parameters/RevisionId" }
+    get:
+      summary: Download the exact saved revision Source ZIP
+      description: Requires the render:project:read scope and ownership of the Project.
+      security: [{ renderApiKey: [] }]
+      responses:
+        "200":
+          description: Saved Source ZIP
+          headers:
+            Content-Length:
+              schema: { type: integer, minimum: 0 }
+            X-Source-Zip-Size:
+              description: Size in bytes, including when the response is streamed without Content-Length.
+              schema: { type: integer, minimum: 0 }
+            Content-Disposition:
+              description: Attachment with filename <revisionId>.zip.
+              schema: { type: string }
+            ETag:
+              description: Quoted SHA-256 of the Source ZIP.
+              schema: { type: string }
+          content:
+            application/zip:
+              schema: { type: string, format: binary }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "410": { $ref: "#/components/responses/Error" }
   /api/v1/projects/{projectId}/draft:
     parameters:
       - { $ref: "#/components/parameters/ProjectId" }

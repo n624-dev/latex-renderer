@@ -2,7 +2,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
 import { ApiKeyService, type AccessJwtVerifier } from "@latex-renderer/auth";
 import { RendererDatabase } from "@latex-renderer/database";
-import { createApiKeySchema } from "../packages/contracts/src/index.js";
+import {
+  apiKeyScopeSchema,
+  createApiKeySchema,
+  renderApiScopes,
+} from "../packages/contracts/src/index.js";
 import { AppProjectsService } from "../apps/admin-api/src/services/app-projects.js";
 import { createAdminApp } from "../apps/admin-api/src/app.js";
 import { createWebApp } from "../apps/admin-web/src/app.js";
@@ -81,6 +85,29 @@ describe("admin API cleanup", () => {
     }
   });
   it("accepts only known, non-mixed API key scopes", () => {
+    const projectScopes = {
+      "render:project:state:read": "readProjectDocumentState",
+      "render:project:state:write": "writeProjectDocumentState",
+      "render:project:delete": "applyProjectRevisionCleanup",
+    };
+    expect(renderApiScopes).toEqual(
+      expect.arrayContaining(Object.keys(projectScopes)),
+    );
+    for (const [scope, label] of Object.entries(projectScopes)) {
+      expect(apiKeyScopeSchema.parse(scope)).toBe(scope);
+      expect(adminScript).toContain(
+        `['${scope}', adminMessage("${label}"), false]`,
+      );
+      expect(
+        createApiKeySchema.parse({ name: "project", scopes: [scope] }).scopes,
+      ).toEqual([scope]);
+      expect(
+        createApiKeySchema.safeParse({
+          name: "mixed",
+          scopes: [scope, "admin:jobs:read"],
+        }).success,
+      ).toBe(false);
+    }
     expect(
       createApiKeySchema.safeParse({
         name: "render",

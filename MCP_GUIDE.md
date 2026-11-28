@@ -20,4 +20,6 @@ The stdio MCP server delegates authenticated operations to the installed client 
 
 Use Local MCP when an AI client must work directly with local directories or ZIP files. For multiple selected entrypoints, prepare one Source and create one Job per entrypoint rather than uploading the same project repeatedly.
 
+`get_project_revision_downloads` saves the exact revision's Source ZIP as `<revisionId>.zip` in `outputDirectory` (default `.render`). Use `download_render_artifacts` for Job PDFs. The [Local tool inventory](docs/public/mcp.md#local-mcpのツール) lists the key scopes for document state, PDF reviews, storage usage, and revision cleanup.
+
 The signed MCPB build in `client/mcpb` bundles the stdio server for Claude Desktop. Remote MCP remains the normal cloud connector.
