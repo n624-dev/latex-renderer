@@ -82,14 +82,17 @@ describe("bounded lazy preview publication (fixture conversion, no TeX)", () => 
     try {
       const row = defined(f.database.jobs.get(f.job.id)),
         ticket = {
-          jobTicket: await f.tickets.issueJob({
-            jobId: f.job.id,
-            userId: row.user_id,
-            serviceAccountId: row.service_account_id,
-            apiKeyId: row.api_key_id,
-            userSecurityVersion: 1,
-            serviceAccountSecurityVersion: 1,
-          }),
+          jobTicket: await f.tickets.issueJob(
+            {
+              jobId: f.job.id,
+              userId: row.user_id,
+              serviceAccountId: row.service_account_id,
+              apiKeyId: row.api_key_id,
+              userSecurityVersion: 1,
+              serviceAccountSecurityVersion: 1,
+            },
+            "oauth:mcp",
+          ),
         },
         url = f.client.previewUrl(f.job.id, "page-2.png");
       expect((await fetch(url)).status).toBe(401);
