@@ -132,6 +132,12 @@ claude mcp add --scope user latex-renderer -- latex-renderer-mcp
 | `get_authoring_guide` | 同梱されたLaTeX制作ガイドを読む |
 | `list_projects` / `get_project` / `get_project_revision_jobs` | 保存 Project・改訂・Job 履歴を閲覧 |
 | `list_project_revision_files` / `get_project_revision_file` | 自分の保存版のファイルを一覧・閲覧。対応サーバーと `render:project:read` 権限付きAPIキーが必要 |
+| `get_project_revision_downloads` | 保存版の Source ZIP を `outputDirectory`（既定値 `.render`）に `<revisionId>.zip` として保存し、ローカルパスと SHA-256 を返す。 `render:project:read` が必要。Job の PDF は `download_render_artifacts` で保存できる |
+| `get_project_document_state` / `list_project_pdf_reviews` | 文書条件、採用版、変更履歴、PDF 確認記録を読む。 `render:project:state:read` が必要 |
+| `update_project_document_conditions` / `adopt_project_revision` / `record_project_pdf_review` | 文書条件の変更、保存版の採用、PDF 確認の記録。 `render:project:state:write` が必要 |
+| `get_project_storage_usage` / `plan_project_revision_cleanup` | 保存量を確認し、整理する保存版の計画を作る。 `render:project:read` が必要 |
+| `protect_project_revision` | 保存版の明示的な保護を設定または解除する。 `render:create` が必要 |
+| `apply_project_revision_cleanup` | 利用者が確認した保存版だけを、現在の `planHash` を使って整理する。 `render:project:delete` が必要 |
 | `get_project_draft` / `get_project_draft_file` | 共有下書きの版と本文を読む。`render:draft:read` が必要 |
 | `open_project_draft` / `apply_project_changes` / `save_project_draft` | 共有下書きを開く・編集する・保存する。`render:draft:write` が必要 |
 | `render_project_draft` | 共有下書きを試し描画する。`render:create` と `render:draft:write` が必要。同じ利用者のプレビューを再利用し、状態と成果物を取得できる |
