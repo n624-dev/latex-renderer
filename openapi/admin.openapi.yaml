@@ -761,6 +761,29 @@ paths:
             schema: { $ref: "#/components/schemas/UpdateSystemConfigRequest" }
       responses:
         "200": { description: Updated }
+  /system/config/reset:
+    post:
+      summary: Clear a runtime setting override
+      description: >-
+        Requires admin:system:write. Only an owner can reset a limit to a
+        higher value. Returns the effective entry as in GET /system/config,
+        including when the override is already absent. Successful requests
+        are recorded in the audit log.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ResetSystemConfigRequest" }
+      responses:
+        "200":
+          description: Effective configuration entry after reset
+          content:
+            application/json:
+              schema:
+                { $ref: "#/components/schemas/EffectiveSystemConfigEntry" }
+        "400": { description: Invalid request body }
+        "403": { description: Missing write scope or owner permission }
+        "409": { description: The current limit is invalid }
   /system/maintenance/enable:
     post:
       summary: Enable maintenance mode
@@ -1211,22 +1234,43 @@ components:
       required: [apiKeyId]
       properties:
         apiKeyId: { type: string, minLength: 1, maxLength: 128 }
+    RuntimeSettingKey:
+      type: string
+      enum:
+        [
+          max_queue_length,
+          max_user_storage_bytes,
+          max_user_active_jobs,
+          source_orphan_retention_minutes,
+        ]
     UpdateSystemConfigRequest:
       type: object
       additionalProperties: false
       required: [key, value, reason]
       properties:
-        key:
-          type: string
-          enum:
-            [
-              max_queue_length,
-              max_user_storage_bytes,
-              max_user_active_jobs,
-              source_orphan_retention_minutes,
-            ]
+        key: { $ref: "#/components/schemas/RuntimeSettingKey" }
         value: { type: integer, minimum: 1 }
         reason: { type: string, minLength: 1, maxLength: 500 }
+    ResetSystemConfigRequest:
+      type: object
+      additionalProperties: false
+      required: [key, reason]
+      properties:
+        key: { $ref: "#/components/schemas/RuntimeSettingKey" }
+        reason: { type: string, minLength: 1, maxLength: 500 }
+    EffectiveSystemConfigEntry:
+      type: object
+      required:
+        [key, value, source, unit, minimum, maximum, fallback, environment]
+      properties:
+        key: { $ref: "#/components/schemas/RuntimeSettingKey" }
+        value: { type: integer, minimum: 1 }
+        source: { type: string, enum: [database, host, default] }
+        unit: { type: string, enum: [jobs, bytes, minutes] }
+        minimum: { type: integer, minimum: 1 }
+        maximum: { type: integer, minimum: 1 }
+        fallback: { type: integer, minimum: 1 }
+        environment: { type: [string, "null"] }
     EnableMaintenanceRequest:
       type: object
       additionalProperties: false

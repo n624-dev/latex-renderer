@@ -526,9 +526,49 @@ const system = program.command("system");
 system
   .command("status")
   .action(async () => print(await request("GET", "/system/status")));
-const systemConfig = system
-  .command("config")
-  .action(async () => print(await request("GET", "/system/config")));
+type EffectiveSetting = {
+  key: string;
+  value: number;
+  source: "database" | "host" | "default";
+  fallback: number;
+  unit: string;
+  minimum: number;
+  maximum: number;
+};
+const configSourceLabels = {
+  database: "adminOverride",
+  host: "hostSetting",
+  default: "builtInDefault",
+} as const;
+const systemConfig = system.command("config").action(async () => {
+  const response = await request("GET", "/system/config");
+  const config = asRecord(response);
+  const effective = config.effective as EffectiveSetting[] | undefined;
+  if (!Array.isArray(effective)) {
+    print(response);
+    return;
+  }
+  if (program.opts<{ json?: boolean }>().json) {
+    print({
+      ...config,
+      effective: effective.map((entry) => ({
+        ...entry,
+        hostDefault: entry.fallback,
+        adminOverride: entry.source === "database" ? entry.value : null,
+      })),
+    });
+    return;
+  }
+  for (const entry of effective) {
+    const source = humanText(configSourceLabels[entry.source]);
+    process.stdout.write(
+      entry.key +
+        "\n  " +
+        humanText("runtimeSettingSummary", { ...entry, source }) +
+        "\n",
+    );
+  }
+});
 systemConfig
   .command("set")
   .argument("<key>")
@@ -551,6 +591,20 @@ systemConfig
       }),
     );
   });
+systemConfig
+  .command("reset")
+  .description(humanText("returnToHostDefault"))
+  .argument("<key>")
+  .requiredOption("--reason <reason>", humanText("reasonRecordedInTheAuditLog"))
+  .requiredOption("--yes")
+  .action(async (key: string, options: { reason: string }) =>
+    print(
+      await request("POST", "/system/config/reset", {
+        key,
+        reason: options.reason,
+      }),
+    ),
+  );
 
 const backup = program.command("backup");
 backup

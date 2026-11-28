@@ -8,7 +8,11 @@ import {
   type RenderApiScope,
 } from "@latex-renderer/contracts";
 import { ProjectOperations } from "@latex-renderer/database";
-import { RendererSavedSources, RendererSourceStore } from "@latex-renderer/renderer-core";
+import {
+  downloadProjectSource,
+  RendererSavedSources,
+  RendererSourceStore,
+} from "@latex-renderer/renderer-core";
 import {
   AppError,
   DEFAULT_RESOURCE_LIMITS,
@@ -149,6 +153,23 @@ export function createInternalV1Router(deps: InternalApiDependencies): Hono {
       return c.json(await files.listProjectRevisionFiles(owner, project, revision, query.offset, query.limit));
     }
     return c.json(await files.getProjectRevisionFile(owner, project, revision, query.path, query.offset));
+  });
+  r.get("/projects/:id/revisions/:revisionId/source.zip", (c) => {
+    const owner = actor(c.req.header("Authorization"), "render:project:read");
+    if (deps.storageRoot === undefined)
+      throw new AppError(
+        "AUTHORING_UNAVAILABLE",
+        "Authoring operations are unavailable",
+        503,
+      );
+    return downloadProjectSource(
+      deps.database,
+      deps.storageRoot,
+      owner,
+      parse(projectId, c.req.param("id")),
+      parse(revisionId, c.req.param("revisionId")),
+      c.req.raw.signal,
+    );
   });
   r.post("/projects/:id/revisions", async (c) => {
     const owner = actor(c.req.header("Authorization"), "render:create"),

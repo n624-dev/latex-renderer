@@ -6,9 +6,45 @@ import {
   runtimeSettingKeys,
   type AuditLogQuery,
   type RuntimeSettingKey,
+  type SettingRow,
 } from "@latex-renderer/database";
 
 export const ticketRevocationMinimumSeconds = 35 * 60;
+
+function configValue(value: unknown): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0)
+    throw new AppError(
+      "CONFIG_STATE_INVALID",
+      "Current resource limit is invalid",
+      409,
+    );
+  return value;
+}
+
+function effectiveConfigEntry(
+  key: RuntimeSettingKey,
+  definition: ReturnType<typeof runtimeSettingDefinitions>[RuntimeSettingKey],
+  row?: SettingRow,
+) {
+  const value = configValue(
+    row === undefined ? definition.fallback : JSON.parse(row.value_json),
+  );
+  const source = row ? "database" : definition.environment ? "host" : "default";
+  return { key, value, source, ...definition };
+}
+
+function requireOwnerToRaiseLimit(
+  actor: AdminActor,
+  previous: number,
+  value: number,
+): void {
+  if (value > previous && actor.role !== "owner")
+    throw new AppError(
+      "OWNER_REQUIRED",
+      "Only an owner can relax resource limits",
+      403,
+    );
+}
 
 export class AdminSystemService {
   constructor(private readonly deps: AdminDependencies) {}
@@ -35,34 +71,13 @@ export class AdminSystemService {
     const definitions = runtimeSettingDefinitions(this.deps);
     return {
       items,
-      effective: runtimeSettingKeys.map((key) => {
-        const row = items.find((item) => item.key === key),
-          definition = definitions[key],
-          value: unknown =
-            row === undefined
-              ? definition.fallback
-              : JSON.parse(row.value_json);
-        if (
-          typeof value !== "number" ||
-          !Number.isSafeInteger(value) ||
-          value <= 0
-        )
-          throw new AppError(
-            "CONFIG_STATE_INVALID",
-            "Current resource limit is invalid",
-            409,
-          );
-        return {
+      effective: runtimeSettingKeys.map((key) =>
+        effectiveConfigEntry(
           key,
-          value,
-          source: row
-            ? "database"
-            : definition.environment
-              ? "host"
-              : "default",
-          ...definition,
-        };
-      }),
+          definitions[key],
+          items.find((item) => item.key === key),
+        ),
+      ),
     };
   }
   audit(query: AuditLogQuery) {
@@ -117,42 +132,60 @@ export class AdminSystemService {
         400,
       );
     this.deps.database.transaction(() => {
-      const previous = this.deps.database.settings.value<number>(
-        input.key,
-        fallback,
+      const previous = configValue(
+        this.deps.database.settings.value<unknown>(input.key, fallback),
       );
-      if (!Number.isSafeInteger(previous) || previous <= 0)
-        throw new AppError(
-          "CONFIG_STATE_INVALID",
-          "Current resource limit is invalid",
-          409,
-        );
-      if (input.value > previous && actor.role !== "owner")
-        throw new AppError(
-          "OWNER_REQUIRED",
-          "Only an owner can relax resource limits",
-          403,
-        );
+      requireOwnerToRaiseLimit(actor, previous, input.value);
       this.deps.database.settings.upsert(
         input.key,
         input.value,
         actor.id,
         nowIso(),
       );
-      this.deps.database.audit({
-        actorType: actor.type,
-        actorId: actor.id,
-        action: "system.config_updated",
-        targetType: "system_setting",
-        targetId: input.key,
-        result: "success",
-        metadata: {
-          oldValue: previous,
-          newValue: input.value,
-          reason: input.reason,
-          restartRequired: false,
-        },
+      this.auditConfigChange(actor, "system.config_updated", input.key, {
+        oldValue: previous,
+        newValue: input.value,
+        reason: input.reason,
       });
+    });
+  }
+
+  resetConfig(
+    actor: AdminActor,
+    { key, reason }: { key: RuntimeSettingKey; reason: string },
+  ) {
+    const { database } = this.deps;
+    const definition = runtimeSettingDefinitions(this.deps)[key];
+    return database.transaction(() => {
+      const previous = configValue(
+        database.settings.value<unknown>(key, definition.fallback),
+      );
+      const entry = effectiveConfigEntry(key, definition);
+      requireOwnerToRaiseLimit(actor, previous, entry.value);
+      database.settings.delete(key);
+      this.auditConfigChange(actor, "system.config.reset", key, {
+        oldValue: previous,
+        newValue: entry.value,
+        reason,
+      });
+      return entry;
+    });
+  }
+
+  private auditConfigChange(
+    actor: AdminActor,
+    action: "system.config_updated" | "system.config.reset",
+    key: RuntimeSettingKey,
+    metadata: { oldValue: number; newValue: number; reason: string },
+  ): void {
+    this.deps.database.audit({
+      actorType: actor.type,
+      actorId: actor.id,
+      action,
+      targetType: "system_setting",
+      targetId: key,
+      result: "success",
+      metadata: { ...metadata, restartRequired: false },
     });
   }
 
