@@ -60,14 +60,20 @@ To update an existing installation, enter each setting when prompted. Leave a fi
 
 ### Change the queue limit on a running server {#稼働中のキュー上限を変更する}
 
-Use the admin CLI to see the effective settings and their units. For example, to limit all unfinished jobs, including queued and running jobs, to 50, run these commands.
+Use `system config` to see each setting's effective value, source, host default, unit, and allowed range. For example, to limit all unfinished jobs, including queued and running jobs, to 50, run these commands.
 
 ```sh
 n624-latex admin system config
 n624-latex admin system config set max_queue_length 50 --reason "Queue capacity review" --yes
 ```
 
-Changing a setting requires write access to the admin API. The `system config` output lists the keys, minimums, and maximums.
+To clear the override and restore the host default, run this command.
+
+```sh
+n624-latex admin system config reset max_queue_length --reason "Restore host queue limit" --yes
+```
+
+The admin web System page also shows the effective value, source, and host default. To clear an override, choose **Return to host default**, enter a reason, and confirm. Setting and clearing an override require write access to the admin API. Only an owner can raise a limit.
 
 ### Older releases and manual installations {#旧版-手動配置の場合}
 

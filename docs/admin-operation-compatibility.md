@@ -48,7 +48,9 @@
 | 既存Sourceから管理者として描画 | ○ | ○ | ○ | `sources render`。操作を再送する場合は同じ `--idempotency-key` を指定する。 |
 | 既存Sourceの引き渡し用参照の発行 | ○ | ○ | ○ | `sources reference`。 |
 | Sourceを削除 | ○ | ○ | ○ | `sources delete`。削除可能なSourceが対象。 |
-| 実効設定の表示・変更 | ○ | ○ | ○ | `system config`、`system config set`。設定キーは下表。 |
+| 実効値・設定元・ホスト既定値を表示 | ○ | ○ | ○ | `system config`。設定キーは下表。 |
+| 実効設定を上書き | ○ | ○ | ○ | `system config set`、または管理Webの「編集」。 |
+| 上書きを解除してホスト既定値に戻す | ○ | ○ | ○ | `system config reset <key> --reason <reason> --yes`、または管理Webの「ホスト既定値に戻す」。 |
 | 保守モードの確認・開始・終了 | ○ | ○ | ○ | `maintenance status`、`enable`、`disable`。 |
 | Workerの状態・pause・resume・drain | ○ | ○ | ○ | `worker status`、`pause`、`resume`、`drain`。 |
 | チケット署名鍵の一覧・失効 | ○ | ○ | ○ | `ticket-keys list`、`revoke`。 |
@@ -73,7 +75,7 @@
 
 ### 管理Webと管理CLIで変更できる実効設定
 
-各キーは `n624-latex admin system config` に表示されます。変更には適切なスコープ・権限と変更理由が必要です。構成の初期値とDBで上書きされた実効値を区別します。
+各キーの実効値、設定元（管理者による上書き、ホスト設定、組み込みの既定値）、ホスト既定値は `n624-latex admin system config` と管理Webのシステム設定に表示されます。ホストに対応する設定がないキーは、組み込みの既定値をホスト既定値として表示します。上書きと解除には管理APIの書き込み権限と理由が必要です。上限が現在より高くなる操作にはOwner権限が必要です。
 
 | 設定キー | 対話 | サブコマンド | 管理Web |
 | --- | :---: | :---: | :---: |
@@ -109,7 +111,8 @@ CUIは `sudo n624-latex server setup --cui`、Webウィザードは `sudo n624-l
 | 既存認証をAccessとNativeの間で切り替える | × | × | × | 専用入力なし。事前準備と既存の認証切替手順が必要。 |
 | 初回のOIDC署名アルゴリズムを指定 | × | × | ○ | CUIの案内は既定の組合せ。WebはOIDCを選択後、許可リストを入力できる。 |
 | 既存OIDCの署名アルゴリズムを変更 | × | × | × | 高度なJSON経路。 |
-| 既存サーバーのRuntime制限20項目を変更 | ○ | × | ○ | CUIは順に入力し、空欄で現状維持。下表に全項目を掲載。 |
+| 既存サーバーのRuntime制限20項目を変更 | ○ | × | ○ | ホスト設定を変更。CUIは順に入力し、空欄で現状維持。 |
+| Runtime制限の実効値・設定元を確認し、管理者の上書きを解除 | × | ○ | × | CUIを使用している場合も、別途 `n624-latex admin system config` と `system config reset`、または管理Webで操作。 |
 | 初回・IngressでRuntime制限を個別入力 | × | × | ○ | CUIの初回用フローは候補JSONで指定できる。 |
 | 設定カテゴリを選んで該当項目だけ入力 | × | × | × | #381で要求されているCUIの改善。 |
 | HTTP・Worker・Managerのアイドル設定、稼働モードを変更 | × | × | × | 専用の設定項目は未実装。 |
@@ -123,7 +126,7 @@ CUIは `sudo n624-latex server setup --cui`、Webウィザードは `sudo n624-l
 
 ### 既存サーバーのRuntime制限
 
-ここでのキュー数とユーザー容量はサーバー構成の値です。管理APIに上書きがある場合はそちらが優先されます。CUI・Web・非対話で両方を一貫して表示する対応は [#381](https://github.com/n624-dev/latex-renderer/issues/381) で追跡します。
+下表のキュー数とユーザー保存容量は、サーバー設定のCUIとWebウィザードで変更するホスト既定値です。管理者が上書きすると、その値が実効値になります。端末では `n624-latex admin system config`、ブラウザでは管理Webのシステム設定で、実効値・設定元・ホスト既定値を確認できます。上書きを解除するには、端末で `n624-latex admin system config reset <key> --reason <reason> --yes` を実行するか、管理Webで「ホスト既定値に戻す」を選び、理由を入力して確定します。
 
 | 設定 | CUI | 非対話 | Webウィザード |
 | --- | :---: | :---: | :---: |

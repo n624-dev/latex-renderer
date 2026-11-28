@@ -60,14 +60,20 @@ sudo n624-latex server setup --cui
 
 ### 稼働中のキュー上限を変更する
 
-管理CLIで現在の実効値と単位を確認できます。例えば、待機中や実行中など、未完了ジョブの全体上限を50件に変更するには次を実行します。
+管理CLIの `system config` で、各設定の実効値、設定元、ホスト既定値、単位、設定可能範囲を確認できます。例えば、待機中や実行中など、未完了ジョブの全体上限を50件に変更するには次を実行します。
 
 ```sh
 n624-latex admin system config
 n624-latex admin system config set max_queue_length 50 --reason "Queue capacity review" --yes
 ```
 
-変更には管理APIの書き込み権限が必要です。設定キー、最小値と最大値は `system config` の結果に表示されます。
+上書きを解除してホスト既定値に戻すには、次を実行します。
+
+```sh
+n624-latex admin system config reset max_queue_length --reason "Restore host queue limit" --yes
+```
+
+管理Webのシステム設定でも実効値、設定元、ホスト既定値を確認できます。上書きを解除するときは「ホスト既定値に戻す」を選び、理由を入力して確定します。上書きと解除には管理APIの書き込み権限が必要です。上限が現在より高くなる操作にはOwner権限が必要です。
 
 ### 旧版・手動配置の場合
 

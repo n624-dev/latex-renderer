@@ -12,6 +12,12 @@ const english = {
   backupRetentionLimitsRequired:
     "Specify all three limits as integers. Days and generations must be positive. Bytes may be zero.",
   backupRetentionSavedPruneFailed: "Retention policy saved. Pruning failed.",
+  adminOverride: "Admin override",
+  hostSetting: "Host setting",
+  builtInDefault: "Built-in default",
+  returnToHostDefault: "Return to host default",
+  runtimeSettingSummary:
+    "Effective value: {value} {unit} ({source}) · Host default: {fallback} {unit} · Allowed range: {minimum}–{maximum} {unit}",
   modeMustBeNotifyOrAutomatic: "mode must be notify or automatic",
   chooseExactlyOneOfLanguageAll:
     "Choose exactly one of --language, --all-languages, or --clear-languages",
@@ -68,6 +74,12 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "3つの上限をすべて整数で指定してください。日数と世代数は1以上、バイト数は0以上です。",
     backupRetentionSavedPruneFailed:
       "保持設定を保存しました。バックアップの整理に失敗しました。",
+    adminOverride: "管理者による上書き",
+    hostSetting: "ホスト設定",
+    builtInDefault: "組み込みの既定値",
+    returnToHostDefault: "ホスト既定値に戻す",
+    runtimeSettingSummary:
+      "実効値：{value} {unit}（{source}）・ホスト既定値：{fallback} {unit}・設定可能範囲：{minimum}～{maximum} {unit}",
     modeMustBeNotifyOrAutomatic: "mode の許容値：notify, automatic",
     chooseExactlyOneOfLanguageAll:
       "--language、--all-languages、--clear-languages のいずれか1つだけを指定してください。",
@@ -118,6 +130,12 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
     backupRetentionLimitsRequired:
       "请将三个上限都指定为整数。天数和代数须为正数，字节数可以为零。",
     backupRetentionSavedPruneFailed: "已保存保留策略。清理备份失败。",
+    adminOverride: "管理员覆盖",
+    hostSetting: "主机设置",
+    builtInDefault: "内置默认值",
+    returnToHostDefault: "恢复主机默认值",
+    runtimeSettingSummary:
+      "生效值：{value} {unit}（{source}）· 主机默认值：{fallback} {unit} · 允许范围：{minimum}–{maximum} {unit}",
     modeMustBeNotifyOrAutomatic: "mode 的允许值：notify, automatic",
     chooseExactlyOneOfLanguageAll:
       "请从 --language、--all-languages、--clear-languages 中选择且仅选择一项。",
@@ -164,6 +182,12 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "세 가지 한도를 모두 정수로 지정하세요. 일수와 세대 수는 양수이며 바이트 수는 0일 수 있습니다.",
     backupRetentionSavedPruneFailed:
       "보존 정책을 저장했습니다. 백업 정리에 실패했습니다.",
+    adminOverride: "관리자 재정의",
+    hostSetting: "호스트 설정",
+    builtInDefault: "기본 제공 값",
+    returnToHostDefault: "호스트 기본값으로 되돌리기",
+    runtimeSettingSummary:
+      "적용 값: {value} {unit} ({source}) · 호스트 기본값: {fallback} {unit} · 허용 범위: {minimum}–{maximum} {unit}",
     modeMustBeNotifyOrAutomatic: "mode에 허용되는 값: notify, automatic",
     chooseExactlyOneOfLanguageAll:
       "--language, --all-languages, --clear-languages 중 하나만 지정하세요.",
@@ -216,6 +240,12 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Indica los tres límites como enteros. Los días y las generaciones deben ser positivos. Los bytes pueden ser cero.",
     backupRetentionSavedPruneFailed:
       "Se guardó la política de retención. La depuración falló.",
+    adminOverride: "Valor fijado por el administrador",
+    hostSetting: "Configuración del servidor",
+    builtInDefault: "Valor predeterminado integrado",
+    returnToHostDefault: "Restablecer el valor predeterminado del servidor",
+    runtimeSettingSummary:
+      "Valor efectivo: {value} {unit} ({source}) · Valor predeterminado del servidor: {fallback} {unit} · Intervalo permitido: {minimum}–{maximum} {unit}",
     modeMustBeNotifyOrAutomatic:
       "Valores permitidos para mode: notify, automatic",
     chooseExactlyOneOfLanguageAll:
@@ -273,6 +303,12 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Indique os três limites como números inteiros. Os dias e as gerações devem ser positivos. Os bytes podem ser zero.",
     backupRetentionSavedPruneFailed:
       "A política de retenção foi guardada. A limpeza falhou.",
+    adminOverride: "Valor definido pelo administrador",
+    hostSetting: "Configuração do servidor",
+    builtInDefault: "Valor padrão integrado",
+    returnToHostDefault: "Restaurar o valor padrão do servidor",
+    runtimeSettingSummary:
+      "Valor efetivo: {value} {unit} ({source}) · Valor padrão do servidor: {fallback} {unit} · Intervalo permitido: {minimum}–{maximum} {unit}",
     modeMustBeNotifyOrAutomatic:
       "Valores permitidos para mode: notify, automatic",
     chooseExactlyOneOfLanguageAll:
@@ -330,6 +366,12 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Indiquez les trois limites en nombres entiers. Les jours et les générations doivent être positifs. Les octets peuvent valoir zéro.",
     backupRetentionSavedPruneFailed:
       "La politique de rétention a été enregistrée. La purge a échoué.",
+    adminOverride: "Valeur imposée par l’administrateur",
+    hostSetting: "Paramètre de l’hôte",
+    builtInDefault: "Valeur par défaut intégrée",
+    returnToHostDefault: "Rétablir la valeur par défaut de l’hôte",
+    runtimeSettingSummary:
+      "Valeur effective : {value} {unit} ({source}) · Valeur par défaut de l’hôte : {fallback} {unit} · Plage autorisée : {minimum}–{maximum} {unit}",
     modeMustBeNotifyOrAutomatic:
       "Valeurs autorisées pour mode : notify, automatic",
     chooseExactlyOneOfLanguageAll:
@@ -388,6 +430,12 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Gib alle drei Grenzen als ganze Zahlen an. Tage und Generationen müssen positiv sein. Byte dürfen null sein.",
     backupRetentionSavedPruneFailed:
       "Aufbewahrungsrichtlinie gespeichert. Bereinigung fehlgeschlagen.",
+    adminOverride: "Vom Administrator gesetzter Wert",
+    hostSetting: "Host-Einstellung",
+    builtInDefault: "Integrierter Standardwert",
+    returnToHostDefault: "Host-Standardwert wiederherstellen",
+    runtimeSettingSummary:
+      "Wirksamer Wert: {value} {unit} ({source}) · Host-Standardwert: {fallback} {unit} · Zulässiger Bereich: {minimum}–{maximum} {unit}",
     modeMustBeNotifyOrAutomatic: "Zulässige Werte für mode: notify, automatic",
     chooseExactlyOneOfLanguageAll:
       "Wählen Sie genau eine Option: --language, --all-languages oder --clear-languages.",
@@ -443,6 +491,12 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Specifica tutti e tre i limiti come interi. Giorni e generazioni devono essere positivi. I byte possono essere zero.",
     backupRetentionSavedPruneFailed:
       "Politica di conservazione salvata. Rimozione non riuscita.",
+    adminOverride: "Valore impostato dall’amministratore",
+    hostSetting: "Impostazione dell’host",
+    builtInDefault: "Valore predefinito integrato",
+    returnToHostDefault: "Ripristina il valore predefinito dell’host",
+    runtimeSettingSummary:
+      "Valore effettivo: {value} {unit} ({source}) · Valore predefinito dell’host: {fallback} {unit} · Intervallo consentito: {minimum}–{maximum} {unit}",
     modeMustBeNotifyOrAutomatic: "Valori ammessi per mode: notify, automatic",
     chooseExactlyOneOfLanguageAll:
       "Specificare una sola opzione: --language, --all-languages o --clear-languages.",
@@ -500,6 +554,12 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Укажите все три ограничения целыми числами. Дни и поколения должны быть положительными. Число байтов может быть нулём.",
     backupRetentionSavedPruneFailed:
       "Политика хранения сохранена. Не удалось очистить резервные копии.",
+    adminOverride: "Значение, заданное администратором",
+    hostSetting: "Настройка хоста",
+    builtInDefault: "Встроенное значение по умолчанию",
+    returnToHostDefault: "Восстановить значение хоста по умолчанию",
+    runtimeSettingSummary:
+      "Действующее значение: {value} {unit} ({source}) · Значение хоста по умолчанию: {fallback} {unit} · Допустимый диапазон: {minimum}–{maximum} {unit}",
     modeMustBeNotifyOrAutomatic:
       "Допустимые значения для mode: notify, automatic",
     chooseExactlyOneOfLanguageAll:
@@ -554,6 +614,12 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Üç sınırı da tam sayı olarak belirtin. Gün ve nesil sayısı pozitif olmalıdır. Bayt sayısı sıfır olabilir.",
     backupRetentionSavedPruneFailed:
       "Saklama politikası kaydedildi. Yedekler temizlenemedi.",
+    adminOverride: "Yönetici tarafından belirlenen değer",
+    hostSetting: "Sunucu ayarı",
+    builtInDefault: "Yerleşik varsayılan değer",
+    returnToHostDefault: "Sunucu varsayılanına dön",
+    runtimeSettingSummary:
+      "Geçerli değer: {value} {unit} ({source}) · Sunucu varsayılanı: {fallback} {unit} · İzin verilen aralık: {minimum}–{maximum} {unit}",
     modeMustBeNotifyOrAutomatic:
       "mode için izin verilen değerler: notify, automatic",
     chooseExactlyOneOfLanguageAll:
@@ -609,6 +675,12 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Podaj wszystkie trzy limity jako liczby całkowite. Dni i generacje muszą być dodatnie. Liczba bajtów może wynosić zero.",
     backupRetentionSavedPruneFailed:
       "Zapisano zasady przechowywania. Usuwanie kopii nie powiodło się.",
+    adminOverride: "Wartość ustawiona przez administratora",
+    hostSetting: "Ustawienie hosta",
+    builtInDefault: "Wbudowana wartość domyślna",
+    returnToHostDefault: "Przywróć wartość domyślną hosta",
+    runtimeSettingSummary:
+      "Wartość obowiązująca: {value} {unit} ({source}) · Wartość domyślna hosta: {fallback} {unit} · Dozwolony zakres: {minimum}–{maximum} {unit}",
     modeMustBeNotifyOrAutomatic:
       "Dozwolone wartości dla mode: notify, automatic",
     chooseExactlyOneOfLanguageAll:
@@ -667,6 +739,12 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Zadejte všechny tři limity jako celá čísla. Počet dnů a generací musí být kladný. Počet bajtů může být nula.",
     backupRetentionSavedPruneFailed:
       "Pravidla uchovávání byla uložena. Odstranění záloh se nezdařilo.",
+    adminOverride: "Hodnota nastavená správcem",
+    hostSetting: "Nastavení hostitele",
+    builtInDefault: "Vestavěná výchozí hodnota",
+    returnToHostDefault: "Obnovit výchozí hodnotu hostitele",
+    runtimeSettingSummary:
+      "Platná hodnota: {value} {unit} ({source}) · Výchozí hodnota hostitele: {fallback} {unit} · Povolený rozsah: {minimum}–{maximum} {unit}",
     modeMustBeNotifyOrAutomatic: "Povolené hodnoty pro mode: notify, automatic",
     chooseExactlyOneOfLanguageAll:
       "Zadejte právě jednu možnost: --language, --all-languages nebo --clear-languages.",
@@ -722,6 +800,12 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Geef alle drie de limieten op als gehele getallen. Dagen en generaties moeten positief zijn. Bytes mogen nul zijn.",
     backupRetentionSavedPruneFailed:
       "Bewaarbeleid opgeslagen. Opschonen van back-ups mislukt.",
+    adminOverride: "Waarde ingesteld door de beheerder",
+    hostSetting: "Instelling van de host",
+    builtInDefault: "Ingebouwde standaardwaarde",
+    returnToHostDefault: "Standaardwaarde van de host herstellen",
+    runtimeSettingSummary:
+      "Effectieve waarde: {value} {unit} ({source}) · Standaardwaarde van de host: {fallback} {unit} · Toegestaan bereik: {minimum}–{maximum} {unit}",
     modeMustBeNotifyOrAutomatic:
       "Toegestane waarden voor mode: notify, automatic",
     chooseExactlyOneOfLanguageAll:
@@ -780,6 +864,12 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Ange alla tre gränser som heltal. Dagar och generationer måste vara positiva. Antalet byte får vara noll.",
     backupRetentionSavedPruneFailed:
       "Lagringspolicyn sparades. Rensningen misslyckades.",
+    adminOverride: "Värde angivet av administratören",
+    hostSetting: "Värdinställning",
+    builtInDefault: "Inbyggt standardvärde",
+    returnToHostDefault: "Återställ värdens standardvärde",
+    runtimeSettingSummary:
+      "Gällande värde: {value} {unit} ({source}) · Värdens standardvärde: {fallback} {unit} · Tillåtet intervall: {minimum}–{maximum} {unit}",
     modeMustBeNotifyOrAutomatic: "Tillåtna värden för mode: notify, automatic",
     chooseExactlyOneOfLanguageAll:
       "Ange exakt ett alternativ: --language, --all-languages eller --clear-languages.",
@@ -836,6 +926,12 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Oppgi alle tre grensene som heltall. Dager og generasjoner må være positive. Antall byte kan være null.",
     backupRetentionSavedPruneFailed:
       "Oppbevaringspolicyen ble lagret. Oppryddingen mislyktes.",
+    adminOverride: "Verdi satt av administrator",
+    hostSetting: "Vertsinnstilling",
+    builtInDefault: "Innebygd standardverdi",
+    returnToHostDefault: "Gjenopprett vertens standardverdi",
+    runtimeSettingSummary:
+      "Gjeldende verdi: {value} {unit} ({source}) · Vertens standardverdi: {fallback} {unit} · Tillatt område: {minimum}–{maximum} {unit}",
     modeMustBeNotifyOrAutomatic: "Tillatte verdier for mode: notify, automatic",
     chooseExactlyOneOfLanguageAll:
       "Angi nøyaktig ett alternativ: --language, --all-languages eller --clear-languages.",
@@ -893,6 +989,12 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Angiv alle tre grænser som hele tal. Dage og generationer skal være positive. Antallet af byte må være nul.",
     backupRetentionSavedPruneFailed:
       "Opbevaringspolitikken blev gemt. Oprydningen mislykkedes.",
+    adminOverride: "Værdi angivet af administratoren",
+    hostSetting: "Værtsindstilling",
+    builtInDefault: "Indbygget standardværdi",
+    returnToHostDefault: "Gendan værtens standardværdi",
+    runtimeSettingSummary:
+      "Gældende værdi: {value} {unit} ({source}) · Værtens standardværdi: {fallback} {unit} · Tilladt interval: {minimum}–{maximum} {unit}",
     modeMustBeNotifyOrAutomatic: "Tilladte værdier for mode: notify, automatic",
     chooseExactlyOneOfLanguageAll:
       "Angiv præcis én mulighed: --language, --all-languages eller --clear-languages.",
@@ -947,6 +1049,12 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Anna kaikki kolme rajaa kokonaislukuina. Päivien ja sukupolvien määrän on oltava positiivinen. Tavujen määrä voi olla nolla.",
     backupRetentionSavedPruneFailed:
       "Säilytyskäytäntö tallennettiin. Varmuuskopioiden poistaminen epäonnistui.",
+    adminOverride: "Järjestelmänvalvojan asettama arvo",
+    hostSetting: "Isännän asetus",
+    builtInDefault: "Sisäinen oletusarvo",
+    returnToHostDefault: "Palauta isännän oletusarvo",
+    runtimeSettingSummary:
+      "Käytössä oleva arvo: {value} {unit} ({source}) · Isännän oletusarvo: {fallback} {unit} · Sallittu väli: {minimum}–{maximum} {unit}",
     modeMustBeNotifyOrAutomatic: "Sallitut arvot (mode): notify, automatic",
     chooseExactlyOneOfLanguageAll:
       "Anna täsmälleen yksi vaihtoehdoista --language, --all-languages ja --clear-languages.",

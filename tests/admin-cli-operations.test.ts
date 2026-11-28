@@ -9,6 +9,67 @@ import { expect, it } from "vitest";
 import { readFixtureBody } from "./helpers/fixture-http.js";
 
 const run = promisify(execFile);
+const cli = ["--import", "tsx", "apps/admin-cli/src/index.ts"];
+const configPath = "/admin/api/v1/system/config";
+const effective = [
+  {
+    key: "max_queue_length",
+    value: 15,
+    source: "database",
+    fallback: 60,
+    unit: "jobs",
+    minimum: 1,
+    maximum: 10000,
+    environment: "MAX_QUEUE_LENGTH",
+  },
+  {
+    key: "max_user_storage_bytes",
+    value: 524288000,
+    source: "host",
+    fallback: 524288000,
+    unit: "bytes",
+    minimum: 104857600,
+    maximum: 107374182400,
+    environment: "MAX_USER_STORAGE_BYTES",
+  },
+  {
+    key: "max_user_active_jobs",
+    value: 20,
+    source: "default",
+    fallback: 20,
+    unit: "jobs",
+    minimum: 1,
+    maximum: 1000,
+    environment: null,
+  },
+] as const;
+const config = {
+  items: [{ key: "max_queue_length", value_json: "15" }],
+  effective,
+};
+const afterReset = { ...effective[0], value: 60, source: "host" };
+
+it("lists config reset in help and requires a reason and confirmation", async () => {
+  const options = {
+    env: { ...process.env, LC_ALL: "C.UTF-8" },
+    encoding: "utf8",
+  } as const;
+  const { stdout } = await run(
+    process.execPath,
+    [...cli, "system", "config", "--help"],
+    options,
+  );
+  expect(stdout).toContain("reset [options] <key>");
+  expect(stdout).toContain("Return to host default");
+
+  const reset = [...cli, "system", "config", "reset", "max_queue_length"];
+  await expect(
+    run(process.execPath, [...reset, "--yes"], options),
+  ).rejects.toThrow(/required option '--reason <reason>'/);
+  await expect(
+    run(process.execPath, [...reset, "--reason", "Queue policy"], options),
+  ).rejects.toThrow(/required option '--yes'/);
+});
 
 it("downloads only from the authenticated Job endpoint and preserves existing local files", async () => {
   const jobId = `job_${"a".repeat(32)}`;
@@ -108,12 +169,24 @@ it("uses the existing authenticated routes for jobs, backups, audit filtering an
             bytes.length === 0 ? undefined : JSON.parse(bytes.toString("utf8")),
         });
         response.setHeader("Content-Type", "application/json");
-        response.statusCode = request.method === "POST" ? 202 : 200;
-        response.end('{"fixture":true}');
+        if (request.url === configPath && request.method === "GET") {
+          response.end(JSON.stringify(config));
+        } else if (request.url === configPath + "/reset") {
+          response.end(JSON.stringify(afterReset));
+        } else {
+          response.statusCode = request.method === "POST" ? 202 : 200;
+          response.end('{"fixture":true}');
+        }
       })
       .catch(() => response.writeHead(400).end());
   });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
   try {
     const address = server.address();
     if (address === null || typeof address === "string")
@@ -187,6 +260,7 @@ it("uses the existing authenticated routes for jobs, backups, audit filtering an
       ["sources", "delete", "source_one", "--yes"],
       ["backup", "create"],
       ["system", "config"],
+      ["system", "config", "--json"],
       [
         "system",
         "config",
@@ -195,6 +269,15 @@ it("uses the existing authenticated routes for jobs, backups, audit filtering an
         "15",
         "--reason",
         "Queue policy",
+        "--yes",
+      ],
+      [
+        "system",
+        "config",
+        "reset",
+        "max_queue_length",
+        "--reason",
+        "Restore host limit",
         "--yes",
       ],
       [
@@ -218,34 +301,50 @@ it("uses the existing authenticated routes for jobs, backups, audit filtering an
         "--yes",
       ],
     ]) {
-      const execution = run(
-        process.execPath,
-        ["--import", "tsx", "apps/admin-cli/src/index.ts", ...args],
-        {
-          timeout: 10_000,
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            LATEX_RENDER_BASE_URL: origin,
-            LATEX_RENDER_TRUSTED_ADMIN_ORIGINS: origin,
-            LATEX_RENDER_ADMIN_API_KEY: "fixture-key",
-            CF_ACCESS_CLIENT_ID: "",
-            CF_ACCESS_CLIENT_SECRET: "",
-          },
+      const execution = run(process.execPath, [...cli, ...args], {
+        timeout: 10_000,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          LC_ALL: "C.UTF-8",
+          LATEX_RENDER_BASE_URL: origin,
+          LATEX_RENDER_TRUSTED_ADMIN_ORIGINS: origin,
+          LATEX_RENDER_ADMIN_API_KEY: "fixture-key",
+          CF_ACCESS_CLIENT_ID: "",
+          CF_ACCESS_CLIENT_SECRET: "",
         },
-      );
+      });
       if (args.includes("--password-stdin"))
         execution.child.stdin?.end("Fixture password only\r\n");
       const { stdout } = await execution;
       expect(stdout).not.toContain("Fixture password only");
       const deleted = args[1] === "delete";
-      expect(JSON.parse(stdout)).toEqual(
-        deleted
-          ? args[0] === "service-accounts"
-            ? { id: args[2], disabled: true }
-            : { id: args[2], accepted: true }
-          : { fixture: true },
-      );
+      if (args[0] === "system" && args[2] === undefined) {
+        expect(stdout).toContain(
+          "max_queue_length\n  Effective value: 15 jobs (Admin override) · Host default: 60 jobs",
+        );
+        expect(stdout).toContain("524288000 bytes (Host setting)");
+        expect(stdout).toContain("20 jobs (Built-in default)");
+      } else if (args[0] === "system" && args[2] === "--json") {
+        expect(JSON.parse(stdout)).toEqual({
+          ...config,
+          effective: [
+            { ...effective[0], hostDefault: 60, adminOverride: 15 },
+            { ...effective[1], hostDefault: 524288000, adminOverride: null },
+            { ...effective[2], hostDefault: 20, adminOverride: null },
+          ],
+        });
+      } else if (args[0] === "system" && args[2] === "reset") {
+        expect(JSON.parse(stdout)).toEqual(afterReset);
+      } else {
+        expect(JSON.parse(stdout)).toEqual(
+          deleted
+            ? args[0] === "service-accounts"
+              ? { id: args[2], disabled: true }
+              : { id: args[2], accepted: true }
+            : { fixture: true },
+        );
+      }
     }
     expect(requests.map(({ method, path }) => [method, path])).toEqual([
       [
@@ -263,8 +362,10 @@ it("uses the existing authenticated routes for jobs, backups, audit filtering an
       ["POST", "/admin/api/v1/sources/source_one/source-ref"],
       ["DELETE", "/admin/api/v1/sources/source_one"],
       ["POST", "/admin/api/v1/backups/create"],
-      ["GET", "/admin/api/v1/system/config"],
-      ["PATCH", "/admin/api/v1/system/config"],
+      ["GET", configPath],
+      ["GET", configPath],
+      ["PATCH", configPath],
+      ["POST", configPath + "/reset"],
       ["GET", "/admin/api/v1/audit-logs?actor=user+%2F+owner&result=failed"],
       ["POST", "/admin/api/v1/users/user_one/password"],
     ]);
@@ -299,6 +400,15 @@ it("uses the existing authenticated routes for jobs, backups, audit filtering an
       key: "max_queue_length",
       value: 15,
       reason: "Queue policy",
+    });
+    expect(
+      requests.find(
+        ({ method, path }) =>
+          method === "POST" && path.endsWith("/system/config/reset"),
+      )?.body,
+    ).toEqual({
+      key: "max_queue_length",
+      reason: "Restore host limit",
     });
   } finally {
     server.closeAllConnections();
