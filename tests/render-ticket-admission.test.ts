@@ -93,7 +93,7 @@ it("requires an authorized rendering key to disclose the effective ZIP limits", 
   });
 });
 
-it("opens, edits and saves a draft across the Gateway with independent scopes", async () => {
+it("opens, edits, previews and saves a draft across the Gateway with explicit scopes", async () => {
   const storageRoot = await mkdtemp(join(tmpdir(), "render-authoring-"));
   roots.push(storageRoot);
   const f = fixture({ maxStorage: 2 * 1024 * 1024, maxQueue: 20, storageRoot });
@@ -104,6 +104,20 @@ it("opens, edits and saves a draft across the Gateway with independent scopes", 
   const base = insertKey(f, "service");
   const reader = insertKey(f, "service", ["render:draft:read"]);
   const writer = insertKey(f, "service", ["render:draft:write"]);
+  const previewKey = insertKey(f, "service", ["render:create", "render:draft:write"]);
+  const timestamp = new Date().toISOString();
+  f.database.serviceAccounts.insert({
+    id: "web", ownerUserId: "user", name: "Web", clientType: "generic", timestamp,
+  });
+  const web = insertKey(f, "web", ["render:create", "render:draft:write"]);
+  f.database.raw.prepare(
+    `INSERT INTO users(id,access_subject,email,display_name,role,status,security_version,created_by,created_at,updated_at)
+     VALUES ('other','other-subject','other@example.test','Other','user','active',1,'test',?,?)`,
+  ).run(timestamp, timestamp);
+  f.database.serviceAccounts.insert({
+    id: "other-account", ownerUserId: "other", name: "Other", clientType: "generic", timestamp,
+  });
+  const other = insertKey(f, "other-account", ["render:create", "render:read:own", "render:draft:write"]);
   const text = "% " + "shared draft ".repeat(350);
   async function call(token: string, suffix = "", data?: object) {
     const url = new URL(`https://renderer.example.test/api/v1/projects/${projectId}/draft${suffix}`);
@@ -144,6 +158,41 @@ it("opens, edits and saves a draft across the Gateway with independent scopes", 
     .resolves.toMatchObject({ status: 409, value: { error: { code: "DRAFT_VERSION_CONFLICT", currentVersion: 2 } } });
   await expect(call(reader.token, "/file?version=2&path=main.tex"))
     .resolves.toMatchObject({ status: 200, value: { text: text.slice(0, 4000), nextOffset: 4000 } });
+  const preview = { version: 2 };
+  await expect(call(writer.token, "/preview", preview)).resolves.toMatchObject({ status: 403 });
+  await expect(call(base.token, "/preview", preview)).resolves.toMatchObject({ status: 403 });
+  await expect(call(other.token, "/preview", preview)).resolves.toMatchObject({ status: 404 });
+  await expect(call(previewKey.token, "/preview", { version: 1 })).resolves.toMatchObject({ status: 409 });
+  const { jobId } = await f.service.createDraftPreview(
+    f.apiKeys.authenticate(web.token), projectId, preview.version,
+  );
+  await expect(call(previewKey.token, "/preview", preview)).resolves.toEqual({
+    status: 200, value: { jobId, version: 2, reused: true },
+  });
+  expect(f.database.jobs.countActive()).toBe(1);
+  const ticket = (token: string, id = jobId) =>
+    f.app.request(`/internal/v1/jobs/${id}/ticket`, {
+      method: "POST", headers: { Authorization: `Bearer ${token}` },
+    });
+  expect((await ticket(base.token)).status).toBe(404);
+  expect((await ticket(writer.token)).status).toBe(403);
+  expect((await ticket(other.token)).status).toBe(404);
+  const access = await ticket(previewKey.token);
+  expect(access.status).toBe(200);
+  const grant = await access.json() as { jobTicket: string };
+  for (const scope of ["status", "download"] as const)
+    await expect(f.tickets.verify(grant.jobTicket, scope, jobId)).resolves.toMatchObject({
+      api_key_id: previewKey.id, draft_preview: true,
+    });
+  for (const scope of ["cancel", "delete", "upload"] as const)
+    await expect(f.tickets.verify(grant.jobTicket, scope, jobId)).rejects.toMatchObject({
+      code: "TICKET_SCOPE_MISSING",
+    });
+  f.database.raw.prepare("UPDATE api_keys SET scopes_json=? WHERE id=?")
+    .run(JSON.stringify(["render:create", "render:read:own"]), previewKey.id);
+  await expect(f.tickets.verify(grant.jobTicket, "download", jobId))
+    .rejects.toMatchObject({ code: "JOB_NOT_FOUND" });
+  expect((await ticket(previewKey.token)).status).toBe(404);
   await expect(call(writer.token, "/save", { version: 2, displayName: "Reviewed" }))
     .resolves.toMatchObject({ status: 200, value: { revision: { projectId, revisionNumber: 1 } } });
 });

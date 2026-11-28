@@ -47,6 +47,38 @@
       "description": "Read the bundled LaTeX authoring guide."
     },
     {
+      "name": "list_projects",
+      "description": "List saved projects on the connected renderer."
+    },
+    {
+      "name": "get_project",
+      "description": "Read a saved project and its revisions."
+    },
+    {
+      "name": "get_project_revision_jobs",
+      "description": "Read the render history for a saved revision."
+    },
+    {
+      "name": "create_project",
+      "description": "Create a saved project on the connected renderer."
+    },
+    {
+      "name": "rename_project",
+      "description": "Change a saved project's display name."
+    },
+    {
+      "name": "delete_project",
+      "description": "Hide an owned project after confirmation."
+    },
+    {
+      "name": "attach_project_revision",
+      "description": "Save an uploaded Source as a project revision."
+    },
+    {
+      "name": "render_project_revision",
+      "description": "Queue a render for an exact saved revision."
+    },
+    {
       "name": "list_project_revision_files",
       "description": "List files in a saved project revision with an explicitly authorized key."
     },
@@ -69,6 +101,10 @@
     {
       "name": "apply_project_changes",
       "description": "Apply an explicitly authorized batch of changes to a shared draft."
+    },
+    {
+      "name": "render_project_draft",
+      "description": "Queue or reuse a PDF preview of a shared draft version with explicit rendering and draft editing permissions."
     },
     {
       "name": "save_project_draft",

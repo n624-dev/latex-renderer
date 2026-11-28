@@ -183,6 +183,40 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
         "413": { $ref: "#/components/responses/Error" }
+  /api/v1/projects/{projectId}/draft/preview:
+    parameters:
+      - { $ref: "#/components/parameters/ProjectId" }
+    post:
+      summary: Queue or reuse a PDF preview of the exact shared draft version
+      description: Requires both render:create and render:draft:write. A reused preview belongs to the same user.
+      security: [{ renderApiKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [version]
+              additionalProperties: false
+              properties:
+                version: { type: integer, minimum: 1 }
+      responses:
+        "200":
+          description: Queued or reused preview
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [jobId, version, reused]
+                properties:
+                  jobId: { type: string, pattern: "^job_[a-f0-9]{32}$" }
+                  version: { type: integer, minimum: 1 }
+                  reused: { type: boolean }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /api/v1/projects/{projectId}/draft/save:
     parameters:
       - { $ref: "#/components/parameters/ProjectId" }
@@ -420,6 +454,7 @@ paths:
   /api/v1/job-tickets/{jobId}:
     post:
       summary: Renew a job-operation ticket
+      description: Ordinary jobs require render:read:own and the owning key. An API key with render:create and render:draft:write can obtain a status and download ticket for a preview of its owner's shared draft.
       security: [{ renderApiKey: [] }]
       parameters:
         - in: path

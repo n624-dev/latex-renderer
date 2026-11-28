@@ -7,7 +7,10 @@ import {
   SignJWT,
   type JWTPayload,
 } from "jose";
-import { jobTicketCredential, type RendererDatabase } from "@latex-renderer/database";
+import {
+  jobTicketCredential,
+  type RendererDatabase,
+} from "@latex-renderer/database";
 import { AppError, nowIso } from "@latex-renderer/shared";
 
 export type TicketScope =
@@ -51,6 +54,7 @@ export interface TicketClaims extends JWTPayload {
   size?: number;
   sha256?: string;
   nonce?: string;
+  draft_preview?: true;
 }
 export interface SourceTicketClaims extends JWTPayload {
   source_id: string;
@@ -183,6 +187,15 @@ export class TicketService {
     );
   }
 
+  async issueDraftPreview(
+    subject: TicketSubject,
+    ttlSeconds = 1800,
+  ): Promise<string> {
+    return this.sign(subject, ["status", "download"], ttlSeconds, {
+      draft_preview: true,
+    });
+  }
+
   async verify(
     token: string,
     requiredScope: TicketScope,
@@ -232,7 +245,12 @@ export class TicketService {
         "Ticket does not match job",
         403,
       );
-    if (!claims.scopes.includes(requiredScope))
+    if (
+      !claims.scopes.includes(requiredScope) ||
+      (claims.draft_preview === true &&
+        requiredScope !== "status" &&
+        requiredScope !== "download")
+    )
       throw new AppError(
         "TICKET_SCOPE_MISSING",
         "Ticket scope is insufficient",
@@ -458,7 +476,8 @@ function validateClaims(payload: JWTPayload): TicketClaims {
   }
   if (
     !Array.isArray(payload.scopes) ||
-    !payload.scopes.every((scope) => typeof scope === "string")
+    !payload.scopes.every((scope) => typeof scope === "string") ||
+    (payload.draft_preview !== undefined && payload.draft_preview !== true)
   ) {
     throw new AppError(
       "INVALID_TICKET_CLAIMS",

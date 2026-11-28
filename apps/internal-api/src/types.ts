@@ -14,5 +14,6 @@ export interface InternalApiDependencies {
   maxOutputBytes: number;
   maxQueueLength: number;
   maxUserStorageBytes: number;
+  minFreeStorageBytes?: number;
   artifactRetentionHours?: number;
 }

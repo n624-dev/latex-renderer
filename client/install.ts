@@ -8,7 +8,6 @@ import {
   type McpTarget,
   type SkillTarget,
 } from "@latex-renderer/setup-core";
-import { clientRendererOverride } from "@latex-renderer/shared";
 import process from "node:process";
 import { Writable } from "node:stream";
 
@@ -44,7 +43,7 @@ async function main(): Promise<void> {
   if (args.includes("--api-key-stdin")) {
     phase = "credential";
     const connections = clientConnections();
-    const { name, origin } = await connections.target(undefined, clientRendererOverride(process.env));
+    const { name, origin } = await connections.target();
     await connections.save(name, origin, (await readStdin()).trim());
     credentialStored = true;
   }

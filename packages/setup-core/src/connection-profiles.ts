@@ -122,14 +122,14 @@ export function rendererConnectionProfiles(legacy: CredentialFile) {
     save,
     select,
     async target(explicit?: string, url?: string) {
-      const name =
-        explicit ??
-        legacy.env.LATEX_RENDER_PROFILE ??
-        (await defaultName()) ??
-        "default";
+      const selected = explicit ?? legacy.env.LATEX_RENDER_PROFILE;
+      const name = selected ?? (await defaultName()) ?? "default";
       const profile = await read(name);
+      const environmentOrigin = selected !== undefined && profile
+        ? undefined
+        : clientRendererOverride(legacy.env);
       const origin = credentialUrl(
-        url ?? profile?.origin ?? PUBLIC_ORIGIN,
+        url ?? environmentOrigin ?? profile?.origin ?? PUBLIC_ORIGIN,
       ).origin;
       if (profile && profile.origin !== origin)
         throw new AppError(

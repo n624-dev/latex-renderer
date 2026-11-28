@@ -28,7 +28,6 @@ import { stripVTControlCharacters } from "node:util";
 import {
   AppError,
   CLIENT_VERSION,
-  clientRendererOverride,
 } from "@latex-renderer/shared";
 import {
   DEFAULT_DISTRIBUTION_URI,
@@ -146,7 +145,7 @@ authLogin.action(async (options: { url?: string }) => {
   const secret = (await readStdin()).trim();
   if (!/^lrk_[a-f0-9]{32}_[A-Za-z0-9_-]{43}$/.test(secret))
     throw new AppError("INVALID_API_KEY", "Input is not a render API key", 400);
-  await saveConnectionCredential(secret, options.url ?? rendererOverride());
+  await saveConnectionCredential(secret, options.url);
   emitSuccess("auth.login", { stored: true }, () => {
     process.stdout.write(humanText("credentialStored") + "\n");
   });
@@ -231,7 +230,7 @@ const setup = program
       options.apiKeyStdin === true &&
       options.gui !== true
     ) {
-      await saveConnectionCredential((await readStdin()).trim(), rendererOverride());
+      await saveConnectionCredential((await readStdin()).trim());
       emitSuccess("setup", { configured: true }, () =>
         process.stdout.write(humanText("credentialStored") + "\n"),
       );
@@ -263,7 +262,6 @@ const setup = program
         ...setupCoreOptions(options),
         distributionBaseUri: options.baseUri ?? DEFAULT_DISTRIBUTION_URI,
         ...(activeProfile() ? { profile: activeProfile() } : {}),
-        ...(rendererOverride() ? { rendererBaseUrl: rendererOverride() } : {}),
       };
       if (packageManager) {
         const core = setupCoreOptions(options);
@@ -297,7 +295,7 @@ const setup = program
       ...(isJsonMode() ? { output: quietWriter, warning: quietWriter } : {}),
     });
     if (options.apiKeyStdin === true)
-      await saveConnectionCredential((await readStdin()).trim(), rendererOverride());
+      await saveConnectionCredential((await readStdin()).trim());
     emitSuccess("setup", result, () => {
       process.stdout.write(
         `Setup ${result.action}: ${result.installDirectory} (${result.version})\n`,
@@ -363,7 +361,7 @@ setup
       ...(isJsonMode() ? { output: quietWriter, warning: quietWriter } : {}),
     });
     if (merged.apiKeyStdin === true)
-      await saveConnectionCredential((await readStdin()).trim(), rendererOverride());
+      await saveConnectionCredential((await readStdin()).trim());
     emitSuccess("setup.repair", result, () => {
       process.stdout.write(
         humanText("repairedItems", { count: result.repaired.length }) + "\n",
@@ -803,10 +801,6 @@ async function configuredClient(): Promise<RendererClient> {
 
 function activeProfile() {
   return program.opts<{ profile?: string }>().profile;
-}
-
-function rendererOverride() {
-  return clientRendererOverride(process.env);
 }
 
 async function saveConnectionCredential(secret: string, url?: string): Promise<void> {

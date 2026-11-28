@@ -6,7 +6,10 @@ import {
   rendererApiAuthoringTools,
   rendererAuthoringRequestBytes,
 } from "@latex-renderer/contracts/renderer-mcp-definitions";
-import type { ProjectActor } from "@latex-renderer/database";
+import {
+  canRenderDraftPreview,
+  type ProjectActor,
+} from "@latex-renderer/database";
 import {
   RendererDrafts,
   inspectJobPdf,
@@ -108,6 +111,25 @@ export function mountAuthoringRoutes(
       return c.json(await drafts().applyProjectChanges(owner, input));
     },
   );
+  router.post(`${projectDraft}/preview`, async (c) => {
+    const identity = deps.apiKeys.authenticate(
+      parseBearer(c.req.header("Authorization")),
+      "render:draft:write",
+    );
+    if (!canRenderDraftPreview(identity))
+      throw new AppError(
+        "INSUFFICIENT_SCOPE",
+        "Draft preview requires rendering and draft editing permissions",
+        403,
+      );
+    const { projectId, version } = await projectInput(
+      c,
+      definitions.render_project_draft.inputSchema,
+    );
+    return c.json(
+      await tickets.createDraftPreview(identity, projectId, version),
+    );
+  });
   router.post(`${projectDraft}/save`, async (c) => {
     const owner = actor(c, "render:draft:write");
     const input = await projectInput(

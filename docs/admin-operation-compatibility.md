@@ -1,74 +1,75 @@
 # 管理操作の対応表
 
-関連Issueは [#381](https://github.com/n624-dev/latex-renderer/issues/381) と [#399](https://github.com/n624-dev/latex-renderer/issues/399) です。確認基準はコミット `17b0de83`。**○** はその経路で操作できる項目、**×** は専用の経路がない項目です。○の操作にもロール、認可、構成による条件があります。
+関連Issueは [#381](https://github.com/n624-dev/latex-renderer/issues/381) と [#399](https://github.com/n624-dev/latex-renderer/issues/399) です。**○** はその経路で操作できる項目、**×** は専用の経路がない項目です。○の操作にもロール、認可、構成による条件があります。
 
 ## 管理画面と管理コマンド
 
-**管理Web** はサイトの認証付き `/admin/` です。**対話** は `n624-latex admin` から端末で対象や操作を選べるかを示します。このコマンドには対話メニューがありません。**サブコマンド**欄の例には `n624-latex admin` を前置します。利用者が公開Webで自分のデータを扱う操作は、末尾の表に記載します。
+**管理Web** はサイトの認証付き `/admin/` です。**対話** は `n624-latex admin` から端末で対象や操作を選べるかを示します。端末で実行すると、カテゴリと操作を選ぶメニューが開きます。入力を確認し、操作を1件実行します。**サブコマンド**欄の例には `n624-latex admin` を前置します。利用者が公開Webで自分のデータを扱う操作は、末尾の表に記載します。
 
 | 操作 | 対話 | サブコマンド | 管理Web | 補足 |
 | --- | :---: | :---: | :---: | --- |
-| 管理者のログイン・資格情報登録 | × | ○ | ○ | `auth login --api-key-stdin`。Webは設定済みのログイン方式。 |
+| 管理者のログイン・資格情報登録 | ○ | ○ | ○ | `auth login --api-key-stdin`。Webは設定済みのログイン方式。 |
 | 管理者のセッション終了 | × | × | ○ | 管理Webのログアウト。 |
 | 管理Webの表示言語を変更 | × | × | ○ | アカウントの表示言語を保存する。 |
-| ダッシュボード・稼働状態 | × | ○ | ○ | `system status`。CLIは基礎データを表示。 |
-| ユーザー一覧・検索・ページ送り | × | ○ | ○ | `users list`。 |
-| ユーザーの詳細・登録情報 | × | ○ | ○ | `users get`。Webは一覧に登録情報と操作を表示。 |
-| ユーザーを作成 | × | ○ | ○ | `users create`。パスワードまたは外部認証。 |
-| ユーザーの表示名・メールアドレスを編集 | × | × | ○ | |
-| ユーザーのロールを変更 | × | × | ○ | Owner権限が必要。 |
-| ユーザーのログイン名・パスワードを更新 | × | × | ○ | |
-| ユーザーの外部認証の紐付けを解除 | × | × | ○ | |
-| ユーザーを無効化・再有効化 | × | ○ | ○ | `users disable`、`users enable`。 |
-| サービスアカウント一覧・ページ送り | × | ○ | ○ | `service-accounts list`。 |
-| サービスアカウントの登録情報 | × | ○ | ○ | `service-accounts get`。Webは一覧に表示。 |
-| サービスアカウントを作成 | × | ○ | ○ | `service-accounts create`。 |
-| サービスアカウント名・種類を編集 | × | × | ○ | |
-| サービスアカウントを無効化・再有効化 | × | ○ | ○ | `service-accounts disable`、`service-accounts enable`。 |
-| サービスアカウントの無効化と全キーの失効を一括実行 | × | × | ○ | |
-| APIキー一覧・ページ送り | × | ○ | ○ | `api-keys list`。 |
-| APIキーの登録情報・スコープを確認 | × | ○ | ○ | `api-keys get`。 |
-| APIキーの発行・スコープ選択 | × | ○ | ○ | `api-keys create`。 |
-| APIキーをローテーション | × | ○ | ○ | `api-keys rotate`。 |
-| APIキーを失効 | × | ○ | ○ | `api-keys revoke`。 |
-| Job一覧・検索・状態フィルター | × | ○ | ○ | `jobs list`。 |
-| Job詳細と成果物メタデータ | × | ○ | ○ | `jobs get`。ファイル本体の取得は別の行。 |
-| 実行中Jobの取消 | × | ○ | ○ | `jobs cancel`。 |
-| Job全体の再試行 | × | ○ | ○ | `jobs retry`。 |
-| SVGだけ再試行 | × | ○ | ○ | `jobs retry-svg`。 |
-| Jobの個別削除 | × | ○ | ○ | `jobs delete`。 |
-| Jobの一括削除 | × | × | ○ | |
+| ダッシュボード・稼働状態 | ○ | ○ | ○ | `system status`。CLIは基礎データを表示。 |
+| ユーザー一覧・検索・ページ送り | ○ | ○ | ○ | `users list`。 |
+| ユーザーの詳細・登録情報 | ○ | ○ | ○ | `users get`。Webは一覧に登録情報と操作を表示。 |
+| ユーザーを作成 | ○ | ○ | ○ | `users create`。パスワードまたは外部認証。 |
+| ユーザーの表示名・メールアドレスを編集 | ○ | ○ | ○ | `users update`。メールを削除する場合は `--clear-email`。 |
+| ユーザーのロールを変更 | ○ | ○ | ○ | `users update --role`。Owner権限が必要。 |
+| ユーザーのログイン名・パスワードを更新 | ○ | ○ | ○ | `users set-password`。パスワードは標準入力で渡す。 |
+| ユーザーの外部認証の紐付けを解除 | ○ | ○ | ○ | `users unlink-identity`。 |
+| ユーザーを無効化・再有効化 | ○ | ○ | ○ | `users disable`、`users enable`。 |
+| サービスアカウント一覧・ページ送り | ○ | ○ | ○ | `service-accounts list`。 |
+| サービスアカウントの登録情報 | ○ | ○ | ○ | `service-accounts get`。Webは一覧に表示。 |
+| サービスアカウントを作成 | ○ | ○ | ○ | `service-accounts create`。 |
+| サービスアカウント名・種類を編集 | ○ | ○ | ○ | `service-accounts update`。 |
+| サービスアカウントを無効化・再有効化 | ○ | ○ | ○ | `service-accounts disable`、`service-accounts enable`。 |
+| サービスアカウントの無効化と全キーの失効を一括実行 | ○ | ○ | ○ | `service-accounts delete`。 |
+| APIキー一覧・ページ送り | ○ | ○ | ○ | `api-keys list`。 |
+| APIキーの登録情報・スコープを確認 | ○ | ○ | ○ | `api-keys get`。 |
+| APIキーの発行・スコープ選択 | ○ | ○ | ○ | `api-keys create`。 |
+| APIキーをローテーション | ○ | ○ | ○ | `api-keys rotate`。 |
+| APIキーを失効 | ○ | ○ | ○ | `api-keys revoke`。 |
+| Job一覧・検索・状態フィルター | ○ | ○ | ○ | `jobs list`。 |
+| Job詳細と成果物メタデータ | ○ | ○ | ○ | `jobs get`。ファイル本体の取得は別の行。 |
+| 実行中Jobの取消 | ○ | ○ | ○ | `jobs cancel`。 |
+| Job全体の再試行 | ○ | ○ | ○ | `jobs retry`。 |
+| SVGだけ再試行 | ○ | ○ | ○ | `jobs retry-svg`。 |
+| Jobの個別削除 | ○ | ○ | ○ | `jobs delete`。 |
+| Jobの一括削除 | ○ | ○ | ○ | `jobs bulk-delete` に対象IDを列挙。 |
+| 管理者として使える描画先と入力上限を確認 | ○ | ○ | ○ | `jobs render-targets`。 |
 | 管理画面から入力を登録して描画・描画先を選ぶ | × | × | ○ | 通常の利用者CLIでの描画とは別の管理経路。 |
-| 管理者としてPDF・SVG等の個別ファイルを取得 | × | × | ○ | |
-| 管理者として成果物の一括ZIPを取得 | × | × | ○ | |
-| 管理者としてエラー詳細・描画ログ・PNGを表示 | × | × | ○ | CLIの `jobs get` はファイル本体の取得に未対応。 |
-| Source一覧・検索・ページ送り | × | ○ | ○ | `sources list`。 |
-| Source詳細・ファイル一覧・関連Job | × | ○ | ○ | `sources get`。 |
-| 既存Sourceから管理者として描画 | × | × | ○ | |
-| 既存Sourceの引き渡し用参照の発行 | × | × | ○ | |
-| Sourceを削除 | × | × | ○ | 削除可能なSourceが対象。 |
-| 実効設定の表示・変更 | × | ○ | ○ | `system config`、`system config set`。設定キーは下表。 |
-| 保守モードの確認・開始・終了 | × | ○ | ○ | `maintenance status`、`enable`、`disable`。 |
-| Workerの状態・pause・resume・drain | × | ○ | ○ | `worker status`、`pause`、`resume`、`drain`。 |
-| チケット署名鍵の一覧・失効 | × | ○ | ○ | `ticket-keys list`、`revoke`。 |
-| 監査ログの表示・検索 | × | ○ | ○ | `audit list`。両方で絞り込み・ページ送りが可能。 |
-| 定期バックアップの状態・最終検証の表示 | × | ○ | ○ | `backup status`。 |
-| バックアップ作成・検証を要求 | × | ○ | ○ | `backup create`、`backup verify`。 |
+| 管理者としてPDF・SVG等の個別ファイルを取得 | ○ | ○ | ○ | `jobs download <id> --artifact result.pdf --output result.pdf`。 |
+| 管理者として成果物の一括ZIPを取得 | ○ | ○ | ○ | `jobs download <id> --output artifacts.zip`。 |
+| 管理者としてエラー詳細・描画ログ・PNGを確認 | ○ | ○ | ○ | CLIは `jobs download` でファイルに保存。 |
+| Source一覧・検索・ページ送り | ○ | ○ | ○ | `sources list`。 |
+| Source詳細・ファイル一覧・関連Job | ○ | ○ | ○ | `sources get`。 |
+| 既存Sourceから管理者として描画 | ○ | ○ | ○ | `sources render`。操作を再送する場合は同じ `--idempotency-key` を指定する。 |
+| 既存Sourceの引き渡し用参照の発行 | ○ | ○ | ○ | `sources reference`。 |
+| Sourceを削除 | ○ | ○ | ○ | `sources delete`。削除可能なSourceが対象。 |
+| 実効設定の表示・変更 | ○ | ○ | ○ | `system config`、`system config set`。設定キーは下表。 |
+| 保守モードの確認・開始・終了 | ○ | ○ | ○ | `maintenance status`、`enable`、`disable`。 |
+| Workerの状態・pause・resume・drain | ○ | ○ | ○ | `worker status`、`pause`、`resume`、`drain`。 |
+| チケット署名鍵の一覧・失効 | ○ | ○ | ○ | `ticket-keys list`、`revoke`。 |
+| 監査ログの表示・検索 | ○ | ○ | ○ | `audit list`。両方で絞り込み・ページ送りが可能。 |
+| 定期バックアップの状態・最終検証の表示 | ○ | ○ | ○ | `backup status`。 |
+| バックアップ作成・検証を要求 | ○ | ○ | ○ | `backup create`、`backup verify`。 |
 | バックアップの日数・世代・容量・頻度の設定 | × | × | × | #381の追加受入条件。 |
 | バックアップの削除候補・容量予算・保持超過の確認 | × | × | × | #381の追加受入条件。 |
 | バックアップから本番DBを復元 | × | × | × | 権限を持つ運用者向けの[復旧手順](public/backups.md)を使用。 |
-| TeX環境の状態・イメージ・言語一覧 | × | ○ | ○ | `tex status`、`images`、`languages`。 |
-| TeX環境の国設定・解除 | × | ○ | ○ | `tex country set`、`tex country clear`。 |
-| TeX環境のパッケージ・フォント検索 | × | ○ | ○ | `tex packages`、`tex fonts`。 |
-| TeX環境の適用・ロールバック | × | ○ | ○ | `tex apply`、`tex rollback`。 |
-| TeX環境の再検証・整理・一覧更新 | × | ○ | ○ | `tex revalidate`、`tex cleanup`、`tex refresh`。 |
-| TeX環境の操作結果を確認 | × | ○ | ○ | `tex operation`。 |
-| アプリとUpdaterの稼働版・更新候補を確認 | × | ○ | ○ | `update status`、`update check`。 |
-| 更新候補の一覧を更新 | × | ○ | × | `update refresh`。Webに個別の候補確認はある。 |
-| アプリの更新ポリシーを設定 | × | ○ | ○ | `update policy`。 |
-| アプリを更新・ロールバック | × | ○ | ○ | `update apply`、`update rollback`。 |
-| アプリ更新の操作結果・ログを確認 | × | ○ | ○ | `update operation`。 |
-| 管理対象Node.jsとCorepackの版・候補・切替結果 | × | ○ | ○ | `update status` のツールチェーン情報。適用は対応するAPT更新で自動実行。 |
+| TeX環境の状態・イメージ・言語一覧 | ○ | ○ | ○ | `tex status`、`images`、`languages`。 |
+| TeX環境の国設定・解除 | ○ | ○ | ○ | `tex country set`、`tex country clear`。 |
+| TeX環境のパッケージ・フォント検索 | ○ | ○ | ○ | `tex packages`、`tex fonts`。 |
+| TeX環境の適用・ロールバック | ○ | ○ | ○ | `tex apply`、`tex rollback`。 |
+| TeX環境の再検証・整理・一覧更新 | ○ | ○ | ○ | `tex revalidate`、`tex cleanup`、`tex refresh`。 |
+| TeX環境の操作結果を確認 | ○ | ○ | ○ | `tex operation`。 |
+| アプリとUpdaterの稼働版・更新候補を確認 | ○ | ○ | ○ | `update status`、`update check`。 |
+| 更新候補の一覧を更新 | ○ | ○ | × | `update refresh`。Webに個別の候補確認はある。 |
+| アプリの更新ポリシーを設定 | ○ | ○ | ○ | `update policy`。 |
+| アプリを更新・ロールバック | ○ | ○ | ○ | `update apply`、`update rollback`。 |
+| アプリ更新の操作結果・ログを確認 | ○ | ○ | ○ | `update operation`。 |
+| 管理対象Node.jsとCorepackの版・候補・切替結果 | ○ | ○ | ○ | `update status` のツールチェーン情報。適用は対応するAPT更新で自動実行。 |
 
 ### 管理Webと管理CLIで変更できる実効設定
 
@@ -76,10 +77,10 @@
 
 | 設定キー | 対話 | サブコマンド | 管理Web |
 | --- | :---: | :---: | :---: |
-| `max_queue_length` | × | ○ | ○ |
-| `max_user_storage_bytes` | × | ○ | ○ |
-| `max_user_active_jobs` | × | ○ | ○ |
-| `source_orphan_retention_minutes` | × | ○ | ○ |
+| `max_queue_length` | ○ | ○ | ○ |
+| `max_user_storage_bytes` | ○ | ○ | ○ |
+| `max_user_active_jobs` | ○ | ○ | ○ |
+| `source_orphan_retention_minutes` | ○ | ○ | ○ |
 
 ## サーバー設定ウィザード
 

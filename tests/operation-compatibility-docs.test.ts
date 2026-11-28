@@ -27,6 +27,10 @@ it("documents each MCP tool and its connection support", () => {
     ...Object.keys(savedRevisionFileTools),
   ]);
   const remote = registeredTools("apps/remote-mcp/src/mcp.ts");
+  const bundle = JSON.parse(read("client/mcpb/manifest.json")) as {
+    tools: Array<{ name: string }>;
+  };
+  expect(bundle.tools.map(({ name }) => name).sort()).toEqual([...local].sort());
   expect(remote.toSorted()).toEqual(
     Object.keys(rendererMcpToolPolicies).sort(),
   );

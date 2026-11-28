@@ -10,7 +10,7 @@ import { DocumentProbesRepository } from "./repositories/document-probes.js";
 import { PdfInspectionsRepository } from "./repositories/pdf-inspections.js";
 export { ProjectStorage } from "./project-storage.js";
 export { ProjectDocumentState } from "./project-document-state.js";
-export { jobTicketCredential } from "./job-credentials.js";
+export { canRenderDraftPreview, jobTicketCredential } from "./job-credentials.js";
 export * from "./runtime-settings.js";
 export {
   assertRenderAdmission,

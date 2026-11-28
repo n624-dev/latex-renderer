@@ -2273,6 +2273,7 @@ export const rendererApiAuthoringRoutes = {
   get_project_draft_file: { method: "GET", resource: "project", suffix: "/draft/file" },
   open_project_draft: { method: "POST", resource: "project", suffix: "/draft/open" },
   apply_project_changes: { method: "POST", resource: "project", suffix: "/draft/changes" },
+  render_project_draft: { method: "POST", resource: "project", suffix: "/draft/preview" },
   save_project_draft: { method: "POST", resource: "project", suffix: "/draft/save" },
   get_render_quality_report: { method: "GET", resource: "job", suffix: "/pdf-inspection" },
   request_render_quality_report: { method: "POST", resource: "job", suffix: "/pdf-inspection" },
@@ -2283,7 +2284,7 @@ export type RendererApiAuthoringTool = keyof typeof rendererApiAuthoringRoutes;
 export function rendererApiAuthoringTools() {
   const {
     get_project_draft, get_project_draft_file, open_project_draft,
-    apply_project_changes, save_project_draft,
+    apply_project_changes, render_project_draft, save_project_draft,
   } = rendererMcpProjectToolDefinitions(rendererMcpEnglishText);
   const { get_render_quality_report, request_render_quality_report } =
     rendererMcpRenderToolDefinitions(rendererMcpEnglishText, 1);
@@ -2292,6 +2293,7 @@ export function rendererApiAuthoringTools() {
     get_project_draft_file,
     open_project_draft,
     apply_project_changes,
+    render_project_draft,
     save_project_draft,
     get_render_quality_report,
     request_render_quality_report,

@@ -285,11 +285,8 @@ export function createInternalV1Router(deps: InternalApiDependencies): Hono {
     return c.json(result.value, result.status);
   });
   r.post("/jobs/:jobId/ticket", async (c) => {
-    const actor = deps.apiKeys.authenticate(
-      parseBearer(c.req.header("Authorization")),
-      "render:read:own",
-    );
-    return c.json(await service.renew(actor, c.req.param("jobId")));
+    const actor = deps.apiKeys.authenticate(parseBearer(c.req.header("Authorization")));
+    return c.json(await service.renewForApiKey(actor, c.req.param("jobId")));
   });
   return r;
 }

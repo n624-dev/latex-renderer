@@ -45,6 +45,19 @@ it.skipIf(process.platform === "win32")(
         origin: "https://home.example:8443",
         apiKey: otherKey,
       });
+      await expect(overridden.target()).rejects.toMatchObject({
+        code: "PROFILE_ORIGIN_CONFLICT",
+      });
+      await expect(overridden.target("home")).resolves.toEqual({
+        name: "home",
+        origin: "https://home.example:8443",
+      });
+      await expect(overridden.target("new")).resolves.toEqual({
+        name: "new",
+        origin: "https://different.example",
+      });
+      await expect(overridden.target("home", "https://different.example"))
+        .rejects.toMatchObject({ code: "PROFILE_ORIGIN_CONFLICT" });
       await expect(
         overridden.resolve("home", "https://different.example"),
       ).rejects.toMatchObject({ code: "PROFILE_ORIGIN_CONFLICT" });
