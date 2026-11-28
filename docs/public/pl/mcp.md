@@ -40,14 +40,14 @@ Przekaż asystentowi treść dokumentu, aby generować PDF i SVG, diagnozować b
 
 > [!DETAILS] Narzędzia i szczegóły dla programistów
 >
-> | Kategoria | Narzędzia |
-> | --- | --- |
-> | Profil | `get_profile` |
-> | Źródło | `create_source`, `update_source_file`, `delete_source_file`, `begin_source_upload`, `upload_source_chunk`, `finalize_source_upload`, `create_source_ref` |
+> | Kategoria         | Narzędzia                                                                                                                                                                                                             |
+> | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+> | Profil            | `get_profile`                                                                                                                                                                                                         |
+> | Źródło            | `create_source`, `update_source_file`, `delete_source_file`, `begin_source_upload`, `upload_source_chunk`, `finalize_source_upload`, `create_source_ref`                                                              |
 > | Zapisane projekty | `list_projects`, `get_project`, `get_project_revision_jobs`, `create_project`, `rename_project`, `delete_project`, `attach_project_revision`, `update_project_file`, `delete_project_file`, `render_project_revision` |
-> | Renderowanie | `create_render`, `retry_render`, `retry_svg_render`, `get_render_status`, `cancel_render`, `delete_render` |
-> | Diagnostyka | `get_render_diagnostics`, `get_render_preview`, `get_render_artifacts` |
-> | Środowisko | `get_renderer_capabilities`, `check_packages`, `search_packages`, `check_fonts`, `search_fonts` |
+> | Renderowanie      | `create_render`, `retry_render`, `retry_svg_render`, `get_render_status`, `cancel_render`, `delete_render`                                                                                                            |
+> | Diagnostyka       | `get_render_diagnostics`, `get_render_preview`, `get_render_artifacts`                                                                                                                                                |
+> | Środowisko        | `get_renderer_capabilities`, `check_packages`, `search_packages`, `check_fonts`, `search_fonts`                                                                                                                       |
 >
 > - **Tożsamość i uprawnienia.** `get_profile` zwraca jedynie nieprzezroczysty, stabilny identyfikator uwierzytelnionego użytkownika. Pozostaje on taki sam po odnowieniu tokenów i ponownym połączeniu. Adres e-mail i nazwa wyświetlana są pomijane. Każde narzędzie deklaruje swoje zakresy OAuth na liście i sprawdza je przy wywołaniu.
 > - **Tworzenie wejść i limity**
@@ -88,18 +88,24 @@ Do naprawy niezmodyfikowanych wpisów utworzonych przez pobrany instalator użyj
 
 ## Narzędzia Local MCP {#local-mcpのツール}
 
-| Narzędzie | Działanie |
-| --- | --- |
-| `upload_source` | Przygotowanie katalogu lub ZIP jako wejścia |
-| `create_render_job` | Utworzenie zadania z `sourceId + entrypoint` z opcjonalnym żądaniem SVG w `outputs` |
-| `render_project` | Przygotowanie wejścia, konwersja i pobranie w jednym wywołaniu, opcjonalnie SVG w `outputs` |
-| `list_projects` / `get_project` / `get_project_revision_jobs` | Odczyt projektów, rewizji i historii zadań |
-| `create_project` / `rename_project` / `delete_project` | Zarządzanie zapisanymi projektami |
-| `attach_project_revision` / `render_project_revision` | Zapisanie przesłanego wejścia i utworzenie zadania ze stałej rewizji |
-| `get_render_status` | Sprawdzenie stanu zadania |
-| `download_render_artifacts` | Pobranie PDF, SVG, dzienników i ustrukturyzowanych błędów |
-| `cancel_render` | Anulowanie aktywnego zadania |
-| `delete_render` | Usunięcie zakończonego zadania |
+| Narzędzie                                                                                                  | Działanie                                                                                                                       |
+| ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `upload_source`                                                                                            | Przygotowanie katalogu lub ZIP jako wejścia                                                                                     |
+| `create_render_job`                                                                                        | Utworzenie zadania z `sourceId + entrypoint` z opcjonalnym żądaniem SVG w `outputs`                                             |
+| `render_project`                                                                                           | Przygotowanie wejścia, konwersja i pobranie w jednym wywołaniu, opcjonalnie SVG w `outputs`                                     |
+| `list_projects` / `get_project` / `get_project_revision_jobs`                                              | Odczyt projektów, rewizji i historii zadań                                                                                      |
+| `create_project` / `rename_project` / `delete_project`                                                     | Zarządzanie zapisanymi projektami                                                                                               |
+| `attach_project_revision` / `render_project_revision`                                                      | Zapisanie przesłanego wejścia i utworzenie zadania ze stałej rewizji                                                            |
+| `get_render_status`                                                                                        | Sprawdzenie stanu zadania                                                                                                       |
+| `get_renderer_capabilities` / `list_authoring_profiles`                                                    | Sprawdzać środowisko renderowania i profile tworzenia dokumentów (`render:create`)                                              |
+| `check_packages` / `search_packages` / `check_fonts` / `search_fonts`                                      | Sprawdzać lub wyszukiwać pakiety i czcionki (`render:create`)                                                                   |
+| `check_document_requirements` / `probe_document_requirements`                                              | Sprawdzać wymagania dokumentu lub kolejkować próbne renderowanie (`render:create`)                                              |
+| `retry_render` / `retry_svg_render`                                                                        | Ponawiać całe zadanie lub tylko etap SVG (`render:create`)                                                                      |
+| `get_render_diagnostics` / `read_render_log` / `get_render_manifest`                                       | Odczytywać diagnostykę, fragmenty dziennika i manifest własnego zadania (`render:read:own`)                                     |
+| `get_render_preview_crop` / `get_render_preview_sheet` / `locate_render_source` / `compare_render_quality` | Pobierać wycinki lub zestawy podglądów PDF, wyszukiwać pozycje przez SyncTeX albo porównywać raporty PDF (`render:pdf:inspect`) |
+| `download_render_artifacts`                                                                                | Pobranie PDF, SVG, dzienników i ustrukturyzowanych błędów                                                                       |
+| `cancel_render`                                                                                            | Anulowanie aktywnego zadania                                                                                                    |
+| `delete_render`                                                                                            | Usunięcie zakończonego zadania                                                                                                  |
 
 > [!DETAILS] Zasady działania narzędzi Local MCP
 >

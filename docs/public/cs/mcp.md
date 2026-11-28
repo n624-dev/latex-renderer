@@ -40,14 +40,14 @@ Předejte asistentovi text dokumentu pro vytvoření PDF a SVG, diagnostiku chyb
 
 > [!DETAILS] Nástroje a podrobnosti pro vývojáře
 >
-> | Kategorie | Nástroje |
-> | --- | --- |
-> | Profil | `get_profile` |
-> | Zdroj | `create_source`, `update_source_file`, `delete_source_file`, `begin_source_upload`, `upload_source_chunk`, `finalize_source_upload`, `create_source_ref` |
+> | Kategorie        | Nástroje                                                                                                                                                                                                              |
+> | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+> | Profil           | `get_profile`                                                                                                                                                                                                         |
+> | Zdroj            | `create_source`, `update_source_file`, `delete_source_file`, `begin_source_upload`, `upload_source_chunk`, `finalize_source_upload`, `create_source_ref`                                                              |
 > | Uložené projekty | `list_projects`, `get_project`, `get_project_revision_jobs`, `create_project`, `rename_project`, `delete_project`, `attach_project_revision`, `update_project_file`, `delete_project_file`, `render_project_revision` |
-> | Sazba | `create_render`, `retry_render`, `retry_svg_render`, `get_render_status`, `cancel_render`, `delete_render` |
-> | Kontrola | `get_render_diagnostics`, `get_render_preview`, `get_render_artifacts` |
-> | Prostředí | `get_renderer_capabilities`, `check_packages`, `search_packages`, `check_fonts`, `search_fonts` |
+> | Sazba            | `create_render`, `retry_render`, `retry_svg_render`, `get_render_status`, `cancel_render`, `delete_render`                                                                                                            |
+> | Kontrola         | `get_render_diagnostics`, `get_render_preview`, `get_render_artifacts`                                                                                                                                                |
+> | Prostředí        | `get_renderer_capabilities`, `check_packages`, `search_packages`, `check_fonts`, `search_fonts`                                                                                                                       |
 >
 > - **Identita a oprávnění.** `get_profile` vrací pouze neprůhledné stabilní ID ověřeného uživatele. Zůstává stejné při obnovení tokenů i opětovném připojení. E-mail a zobrazované jméno se nevracejí. Každý nástroj v seznamu uvádí své rozsahy OAuth a ověřuje je při spuštění.
 > - **Vytváření vstupů a limity**
@@ -88,18 +88,24 @@ Pro opravu nezměněných registrací vytvořených staženým instalátorem pou
 
 ## Nástroje Local MCP {#local-mcpのツール}
 
-| Nástroj | Operace |
-| --- | --- |
-| `upload_source` | Připraví složku nebo ZIP jako vstup |
-| `create_render_job` | Vytvoří úlohu z `sourceId + entrypoint` a volitelně požádá o SVG v `outputs` |
-| `render_project` | Připraví vstup, převede jej a stáhne výsledek jedním voláním, volitelně se SVG v `outputs` |
-| `list_projects` / `get_project` / `get_project_revision_jobs` | Čte projekty, revize a historii úloh |
-| `create_project` / `rename_project` / `delete_project` | Spravuje uložené projekty |
-| `attach_project_revision` / `render_project_revision` | Uloží nahraný vstup a vytvoří úlohu z pevné revize |
-| `get_render_status` | Zjistí stav úlohy |
-| `download_render_artifacts` | Stáhne PDF, SVG, protokoly a strukturované chyby |
-| `cancel_render` | Zruší aktivní úlohu |
-| `delete_render` | Odstraní dokončenou úlohu |
+| Nástroj                                                                                                    | Operace                                                                                                               |
+| ---------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `upload_source`                                                                                            | Připraví složku nebo ZIP jako vstup                                                                                   |
+| `create_render_job`                                                                                        | Vytvoří úlohu z `sourceId + entrypoint` a volitelně požádá o SVG v `outputs`                                          |
+| `render_project`                                                                                           | Připraví vstup, převede jej a stáhne výsledek jedním voláním, volitelně se SVG v `outputs`                            |
+| `list_projects` / `get_project` / `get_project_revision_jobs`                                              | Čte projekty, revize a historii úloh                                                                                  |
+| `create_project` / `rename_project` / `delete_project`                                                     | Spravuje uložené projekty                                                                                             |
+| `attach_project_revision` / `render_project_revision`                                                      | Uloží nahraný vstup a vytvoří úlohu z pevné revize                                                                    |
+| `get_render_status`                                                                                        | Zjistí stav úlohy                                                                                                     |
+| `get_renderer_capabilities` / `list_authoring_profiles`                                                    | Zobrazit prostředí vykreslování a profily pro tvorbu dokumentů (`render:create`)                                      |
+| `check_packages` / `search_packages` / `check_fonts` / `search_fonts`                                      | Ověřit nebo vyhledat balíčky a písma (`render:create`)                                                                |
+| `check_document_requirements` / `probe_document_requirements`                                              | Ověřit požadavky dokumentu nebo naplánovat zkušební vykreslení (`render:create`)                                      |
+| `retry_render` / `retry_svg_render`                                                                        | Opakovat celou úlohu nebo jen převod SVG (`render:create`)                                                            |
+| `get_render_diagnostics` / `read_render_log` / `get_render_manifest`                                       | Číst diagnostiku, části protokolu a manifest vlastní úlohy (`render:read:own`)                                        |
+| `get_render_preview_crop` / `get_render_preview_sheet` / `locate_render_source` / `compare_render_quality` | Získat výřez nebo přehled stránek PDF, vyhledat pozici přes SyncTeX nebo porovnat kontroly PDF (`render:pdf:inspect`) |
+| `download_render_artifacts`                                                                                | Stáhne PDF, SVG, protokoly a strukturované chyby                                                                      |
+| `cancel_render`                                                                                            | Zruší aktivní úlohu                                                                                                   |
+| `delete_render`                                                                                            | Odstraní dokončenou úlohu                                                                                             |
 
 > [!DETAILS] Pravidla nástrojů Local MCP
 >

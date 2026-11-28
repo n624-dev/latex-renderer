@@ -40,14 +40,14 @@ Stuur de tekst naar de assistent om PDF en SVG te genereren, fouten te onderzoek
 
 > [!DETAILS] Tools en technische details
 >
-> | Categorie | Tools |
-> | --- | --- |
-> | Profiel | `get_profile` |
-> | Bron | `create_source`, `update_source_file`, `delete_source_file`, `begin_source_upload`, `upload_source_chunk`, `finalize_source_upload`, `create_source_ref` |
+> | Categorie            | Tools                                                                                                                                                                                                                 |
+> | -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+> | Profiel              | `get_profile`                                                                                                                                                                                                         |
+> | Bron                 | `create_source`, `update_source_file`, `delete_source_file`, `begin_source_upload`, `upload_source_chunk`, `finalize_source_upload`, `create_source_ref`                                                              |
 > | Opgeslagen projecten | `list_projects`, `get_project`, `get_project_revision_jobs`, `create_project`, `rename_project`, `delete_project`, `attach_project_revision`, `update_project_file`, `delete_project_file`, `render_project_revision` |
-> | Renderen | `create_render`, `retry_render`, `retry_svg_render`, `get_render_status`, `cancel_render`, `delete_render` |
-> | Controle | `get_render_diagnostics`, `get_render_preview`, `get_render_artifacts` |
-> | Omgeving | `get_renderer_capabilities`, `check_packages`, `search_packages`, `check_fonts`, `search_fonts` |
+> | Renderen             | `create_render`, `retry_render`, `retry_svg_render`, `get_render_status`, `cancel_render`, `delete_render`                                                                                                            |
+> | Controle             | `get_render_diagnostics`, `get_render_preview`, `get_render_artifacts`                                                                                                                                                |
+> | Omgeving             | `get_renderer_capabilities`, `check_packages`, `search_packages`, `check_fonts`, `search_fonts`                                                                                                                       |
 >
 > - **Identiteit en rechten.** `get_profile` retourneert alleen een stabiel, ondoorzichtig ID van de aangemelde gebruiker. Dit blijft hetzelfde bij tokenvernieuwing en opnieuw verbinden en bevat geen e-mailadres of weergavenaam. Elke tool vermeldt zijn OAuth-scopes in de lijst en controleert ze bij uitvoering.
 > - **Invoer maken en limieten**
@@ -88,18 +88,24 @@ Gebruik `n624-latex setup repair` om ongewijzigde registraties van het downloadb
 
 ## Local MCP-tools {#local-mcpのツール}
 
-| Tool | Bewerking |
-| --- | --- |
-| `upload_source` | Een map of ZIP als invoer voorbereiden |
-| `create_render_job` | Een taak maken met `sourceId + entrypoint` en eventueel SVG aanvragen via `outputs` |
-| `render_project` | Invoer voorbereiden, converteren en downloaden in één aanroep, met optionele SVG via `outputs` |
-| `list_projects` / `get_project` / `get_project_revision_jobs` | Projecten, revisies en taakgeschiedenis opvragen |
-| `create_project` / `rename_project` / `delete_project` | Opgeslagen projecten beheren |
-| `attach_project_revision` / `render_project_revision` | Geüploade invoer opslaan en een taak maken vanuit een vaste revisie |
-| `get_render_status` | Taakstatus opvragen |
-| `download_render_artifacts` | PDF, SVG, logboeken en gestructureerde fouten downloaden |
-| `cancel_render` | Een actieve taak annuleren |
-| `delete_render` | Een voltooide taak verwijderen |
+| Tool                                                                                                       | Bewerking                                                                                                                       |
+| ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `upload_source`                                                                                            | Een map of ZIP als invoer voorbereiden                                                                                          |
+| `create_render_job`                                                                                        | Een taak maken met `sourceId + entrypoint` en eventueel SVG aanvragen via `outputs`                                             |
+| `render_project`                                                                                           | Invoer voorbereiden, converteren en downloaden in één aanroep, met optionele SVG via `outputs`                                  |
+| `list_projects` / `get_project` / `get_project_revision_jobs`                                              | Projecten, revisies en taakgeschiedenis opvragen                                                                                |
+| `create_project` / `rename_project` / `delete_project`                                                     | Opgeslagen projecten beheren                                                                                                    |
+| `attach_project_revision` / `render_project_revision`                                                      | Geüploade invoer opslaan en een taak maken vanuit een vaste revisie                                                             |
+| `get_render_status`                                                                                        | Taakstatus opvragen                                                                                                             |
+| `get_renderer_capabilities` / `list_authoring_profiles`                                                    | De renderomgeving en auteursprofielen bekijken (`render:create`)                                                                |
+| `check_packages` / `search_packages` / `check_fonts` / `search_fonts`                                      | Pakketten en lettertypen controleren of zoeken (`render:create`)                                                                |
+| `check_document_requirements` / `probe_document_requirements`                                              | Documentvereisten controleren of een testrun inplannen (`render:create`)                                                        |
+| `retry_render` / `retry_svg_render`                                                                        | De hele taak of alleen de SVG-stap opnieuw uitvoeren (`render:create`)                                                          |
+| `get_render_diagnostics` / `read_render_log` / `get_render_manifest`                                       | Diagnostiek, logfragmenten en het manifest van een eigen taak lezen (`render:read:own`)                                         |
+| `get_render_preview_crop` / `get_render_preview_sheet` / `locate_render_source` / `compare_render_quality` | PDF-voorbeelden bijsnijden of groeperen, posities opzoeken met SyncTeX of inspectierapporten vergelijken (`render:pdf:inspect`) |
+| `download_render_artifacts`                                                                                | PDF, SVG, logboeken en gestructureerde fouten downloaden                                                                        |
+| `cancel_render`                                                                                            | Een actieve taak annuleren                                                                                                      |
+| `delete_render`                                                                                            | Een voltooide taak verwijderen                                                                                                  |
 
 > [!DETAILS] Conventies voor Local MCP-tools
 >

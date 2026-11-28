@@ -54,22 +54,22 @@ AI に文書のテキストを送って PDF や SVG に変換し、エラー診�
 
 > [!DETAILS] ツール一覧と開発者向けの仕様を表示
 >
-> | 分類 | ツール |
-> | --- | --- |
-> | Profile | `get_profile` |
-> | Source | `create_source`、`update_source_file`、`delete_source_file`、`begin_source_upload`、`upload_source_chunk`、`finalize_source_upload`、`create_source_ref` |
-> | 保存Project | `list_projects`、`get_project`、`get_project_revision_jobs`、`create_project`、`rename_project`、`delete_project`、`attach_project_revision`、`update_project_file`、`delete_project_file`、`render_project_revision` |
-> | Render | `create_render`、`retry_render`、`retry_svg_render`、`get_render_status`、`cancel_render`、`delete_render` |
-> | 保存版の内容 | `list_project_revision_files`、`get_project_revision_file`、`get_project_revision_downloads` |
-> | 下書き | `get_project_draft`、`open_project_draft`、`get_project_draft_file`、`apply_project_changes`、`render_project_draft`、`save_project_draft` |
-> | 文書条件と確認記録 | `get_project_document_state`、`update_project_document_conditions`、`adopt_project_revision`、`record_project_pdf_review`、`list_project_pdf_reviews` |
-> | 保存版の整理 | `get_project_storage_usage`、`protect_project_revision`、`plan_project_revision_cleanup`、`apply_project_revision_cleanup` |
-> | アップロード再開と添付 | `get_source_upload_status`、`import_source_attachment`（管理者が設定した場合） |
-> | 添付の接続確認 | `verify_attachment_delivery_origin`（管理者が指定した検証アカウントのみ） |
-> | 診断と結果 | `get_render_diagnostics`、`read_render_log`、`get_render_artifacts`、`get_render_manifest` |
-> | プレビュー | `get_render_preview`、`get_render_preview_pages`、`get_render_preview_crop`、`locate_render_source`、`get_render_preview_sheet` |
-> | PDF品質検査 | `request_render_quality_report`、`get_render_quality_report`、`compare_render_quality` |
-> | 環境とガイド | `get_renderer_capabilities`、`get_authoring_guide`、`list_authoring_profiles`、`check_document_requirements`、`probe_document_requirements`、`check_packages`、`search_packages`、`check_fonts`、`search_fonts` |
+> | 分類                   | ツール                                                                                                                                                                                                                |
+> | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+> | Profile                | `get_profile`                                                                                                                                                                                                         |
+> | Source                 | `create_source`、`update_source_file`、`delete_source_file`、`begin_source_upload`、`upload_source_chunk`、`finalize_source_upload`、`create_source_ref`                                                              |
+> | 保存Project            | `list_projects`、`get_project`、`get_project_revision_jobs`、`create_project`、`rename_project`、`delete_project`、`attach_project_revision`、`update_project_file`、`delete_project_file`、`render_project_revision` |
+> | Render                 | `create_render`、`retry_render`、`retry_svg_render`、`get_render_status`、`cancel_render`、`delete_render`                                                                                                            |
+> | 保存版の内容           | `list_project_revision_files`、`get_project_revision_file`、`get_project_revision_downloads`                                                                                                                          |
+> | 下書き                 | `get_project_draft`、`open_project_draft`、`get_project_draft_file`、`apply_project_changes`、`render_project_draft`、`save_project_draft`                                                                            |
+> | 文書条件と確認記録     | `get_project_document_state`、`update_project_document_conditions`、`adopt_project_revision`、`record_project_pdf_review`、`list_project_pdf_reviews`                                                                 |
+> | 保存版の整理           | `get_project_storage_usage`、`protect_project_revision`、`plan_project_revision_cleanup`、`apply_project_revision_cleanup`                                                                                            |
+> | アップロード再開と添付 | `get_source_upload_status`、`import_source_attachment`（管理者が設定した場合）                                                                                                                                        |
+> | 添付の接続確認         | `verify_attachment_delivery_origin`（管理者が指定した検証アカウントのみ）                                                                                                                                             |
+> | 診断と結果             | `get_render_diagnostics`、`read_render_log`、`get_render_artifacts`、`get_render_manifest`                                                                                                                            |
+> | プレビュー             | `get_render_preview`、`get_render_preview_pages`、`get_render_preview_crop`、`locate_render_source`、`get_render_preview_sheet`                                                                                       |
+> | PDF品質検査            | `request_render_quality_report`、`get_render_quality_report`、`compare_render_quality`                                                                                                                                |
+> | 環境とガイド           | `get_renderer_capabilities`、`get_authoring_guide`、`list_authoring_profiles`、`check_document_requirements`、`probe_document_requirements`、`check_packages`、`search_packages`、`check_fonts`、`search_fonts`       |
 >
 > - **利用者識別とスコープ**：`get_profile` は認証済み利用者を識別する不透明な固定 ID だけを返します（トークン更新や再接続後も同一ですが、メールアドレスや表示名は返しません）。各ツールが必要とする OAuth スコープはツール一覧で宣言され、実行時に検査されます。
 > - **Source の作成と上限**：
@@ -88,11 +88,11 @@ AI に文書のテキストを送って PDF や SVG に変換し、エラー診�
 
 ### 接続方式ごとの操作と権限
 
-| 接続 | 認証 | 向いている操作 |
-| --- | --- | --- |
-| Local MCP（stdio） | レンダリングAPIキーと短時間のJobチケット | 手元のフォルダーやZIPから描画して、PDF・SVG・ログを手元に保存する |
-| 直接Remote MCP（HTTPS） | 接続先の利用者アカウントとOAuthスコープ | 接続先の保存版を読む、共有下書きを編集する、PDFを検査する |
-| 公開MCPゲートウェイ | ゲートウェイで承認した接続先と操作の範囲 | 承認したRendererで制作・描画し、MCPリソースやダウンロードリンクから成果物を取得する |
+| 接続                    | 認証                                     | 向いている操作                                                                      |
+| ----------------------- | ---------------------------------------- | ----------------------------------------------------------------------------------- |
+| Local MCP（stdio）      | レンダリングAPIキーと短時間のJobチケット | 手元のフォルダーやZIPから描画して、PDF・SVG・ログを手元に保存する                   |
+| 直接Remote MCP（HTTPS） | 接続先の利用者アカウントとOAuthスコープ  | 接続先の保存版を読む、共有下書きを編集する、PDFを検査する                           |
+| 公開MCPゲートウェイ     | ゲートウェイで承認した接続先と操作の範囲 | 承認したRendererで制作・描画し、MCPリソースやダウンロードリンクから成果物を取得する |
 
 接続先やバージョンによって利用できる操作は変わります。実際のMCPツール一覧を確認し、`get_renderer_capabilities` があればレンダリング構成や添付ファイルの対応を確認できます。Local MCPでは、対応するサーバーと明示的なAPIキー権限があれば、共有下書きの閲覧・編集やPDF品質検査を使えます。ローカルの成果物はLocal MCPやCLIから取得できます。
 
@@ -125,30 +125,36 @@ claude mcp add --scope user latex-renderer -- latex-renderer-mcp
 
 ## Local MCPのツール
 
-| ツール | 操作 |
-| --- | --- |
-| `upload_source` | ディレクトリまたは ZIP を 1 つの Source として準備 |
-| `create_render_job` | `sourceId + entrypoint` から 1 つの Job を作成（`outputs` で SVG も選択可） |
-| `render_project` | Source 準備から成果物取得までを一括実行（`outputs` で SVG も選択可） |
-| `get_authoring_guide` | 同梱されたLaTeX制作ガイドを読む |
-| `list_projects` / `get_project` / `get_project_revision_jobs` | 保存 Project・改訂・Job 履歴を閲覧 |
-| `list_project_revision_files` / `get_project_revision_file` | 自分の保存版のファイルを一覧・閲覧。対応サーバーと `render:project:read` 権限付きAPIキーが必要 |
-| `get_project_revision_downloads` | 保存版の Source ZIP を `outputDirectory`（既定値 `.render`）に `<revisionId>.zip` として保存し、ローカルパスと SHA-256 を返す。 `render:project:read` が必要。Job の PDF は `download_render_artifacts` で保存できる |
-| `get_project_document_state` / `list_project_pdf_reviews` | 文書条件、採用版、変更履歴、PDF 確認記録を読む。 `render:project:state:read` が必要 |
-| `update_project_document_conditions` / `adopt_project_revision` / `record_project_pdf_review` | 文書条件の変更、保存版の採用、PDF 確認の記録。 `render:project:state:write` が必要 |
-| `get_project_storage_usage` / `plan_project_revision_cleanup` | 保存量を確認し、整理する保存版の計画を作る。 `render:project:read` が必要 |
-| `protect_project_revision` | 保存版の明示的な保護を設定または解除する。 `render:create` が必要 |
-| `apply_project_revision_cleanup` | 利用者が確認した保存版だけを、現在の `planHash` を使って整理する。 `render:project:delete` が必要 |
-| `get_project_draft` / `get_project_draft_file` | 共有下書きの版と本文を読む。`render:draft:read` が必要 |
-| `open_project_draft` / `apply_project_changes` / `save_project_draft` | 共有下書きを開く・編集する・保存する。`render:draft:write` が必要 |
-| `render_project_draft` | 共有下書きを試し描画する。`render:create` と `render:draft:write` が必要。同じ利用者のプレビューを再利用し、状態と成果物を取得できる |
-| `request_render_quality_report` / `get_render_quality_report` | そのキーが所有するJobのPDFを検査する。`render:pdf:inspect` が必要 |
-| `create_project` / `rename_project` / `delete_project` | 保存 Project を管理 |
-| `attach_project_revision` / `render_project_revision` | アップロード済み Source を保存し、固定改訂から Job を作成 |
-| `get_render_status` | ジョブ状態を確認 |
-| `download_render_artifacts` | PDF、SVG、ログ、構造化エラーをローカルへ取得 |
-| `cancel_render` | 実行中ジョブを中止 |
-| `delete_render` | 終了済みジョブを削除 |
+| ツール                                                                                                     | 操作                                                                                                                                 |
+| ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `upload_source`                                                                                            | ディレクトリまたは ZIP を 1 つの Source として準備                                                                                   |
+| `create_render_job`                                                                                        | `sourceId + entrypoint` から 1 つの Job を作成（`outputs` で SVG も選択可）                                                          |
+| `render_project`                                                                                           | Source 準備から成果物取得までを一括実行（`outputs` で SVG も選択可）                                                                 |
+| `get_authoring_guide`                                                                                      | 同梱されたLaTeX制作ガイドを読む                                                                                                      |
+| `list_projects` / `get_project` / `get_project_revision_jobs`                                              | 保存 Project・改訂・Job 履歴を閲覧                                                                                                   |
+| `list_project_revision_files` / `get_project_revision_file`                                                | 自分の保存版のファイルを一覧・閲覧。対応サーバーと `render:project:read` 権限付きAPIキーが必要                                       |
+| `get_project_revision_downloads`                                                                           | 保存版の Source ZIP を `outputDirectory`（既定値 `.render`）に `<revisionId>.zip` として保存し、ローカルパスと SHA-256 を返す。 `render:project:read` が必要。Job の PDF は `download_render_artifacts` で保存できる |
+| `get_project_document_state` / `list_project_pdf_reviews`                                                  | 文書条件、採用版、変更履歴、PDF 確認記録を読む。 `render:project:state:read` が必要 |
+| `update_project_document_conditions` / `adopt_project_revision` / `record_project_pdf_review`              | 文書条件の変更、保存版の採用、PDF 確認の記録。 `render:project:state:write` が必要 |
+| `get_project_storage_usage` / `plan_project_revision_cleanup`                                              | 保存量を確認し、整理する保存版の計画を作る。 `render:project:read` が必要 |
+| `protect_project_revision`                                                                                 | 保存版の明示的な保護を設定または解除する。 `render:create` が必要 |
+| `apply_project_revision_cleanup`                                                                           | 利用者が確認した保存版だけを、現在の `planHash` を使って整理する。 `render:project:delete` が必要 |
+| `get_project_draft` / `get_project_draft_file`                                                             | 共有下書きの版と本文を読む。`render:draft:read` が必要                                                                               |
+| `open_project_draft` / `apply_project_changes` / `save_project_draft`                                      | 共有下書きを開く・編集する・保存する。`render:draft:write` が必要                                                                    |
+| `render_project_draft`                                                                                     | 共有下書きを試し描画する。`render:create` と `render:draft:write` が必要。同じ利用者のプレビューを再利用し、状態と成果物を取得できる |
+| `request_render_quality_report` / `get_render_quality_report`                                              | そのキーが所有するJobのPDFを検査する。`render:pdf:inspect` が必要                                                                    |
+| `create_project` / `rename_project` / `delete_project`                                                     | 保存 Project を管理                                                                                                                  |
+| `attach_project_revision` / `render_project_revision`                                                      | アップロード済み Source を保存し、固定改訂から Job を作成                                                                            |
+| `get_render_status`                                                                                        | ジョブ状態を確認                                                                                                                     |
+| `get_renderer_capabilities` / `list_authoring_profiles`                                                    | 描画環境と制作プロファイルを確認 (`render:create`)                                                                                   |
+| `check_packages` / `search_packages` / `check_fonts` / `search_fonts`                                      | パッケージとフォントの有無を確認・検索 (`render:create`)                                                                             |
+| `check_document_requirements` / `probe_document_requirements`                                              | 文書要件を確認し、検証用文書の描画を予約 (`render:create`)                                                                           |
+| `retry_render` / `retry_svg_render`                                                                        | Job全体またはSVG変換だけを再試行 (`render:create`)                                                                                   |
+| `get_render_diagnostics` / `read_render_log` / `get_render_manifest`                                       | 所有Jobの診断、ログ範囲、マニフェストを取得 (`render:read:own`)                                                                      |
+| `get_render_preview_crop` / `get_render_preview_sheet` / `locate_render_source` / `compare_render_quality` | PDFの拡大領域、コンタクトシート、SyncTeX位置、検査結果の比較を取得 (`render:pdf:inspect`)                                            |
+| `download_render_artifacts`                                                                                | PDF、SVG、ログ、構造化エラーをローカルへ取得                                                                                         |
+| `cancel_render`                                                                                            | 実行中ジョブを中止                                                                                                                   |
+| `delete_render`                                                                                            | 終了済みジョブを削除                                                                                                                 |
 
 > [!DETAILS] Local MCP ツールの呼び出し規則と仕様を表示
 >

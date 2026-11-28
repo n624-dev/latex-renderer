@@ -40,14 +40,14 @@ since: "v1.0.0"
 
 > [!DETAILS] 工具列表与开发者规范
 >
-> | 类别 | 工具 |
-> | --- | --- |
-> | 用户 | `get_profile` |
-> | 输入 | `create_source`、`update_source_file`、`delete_source_file`、`begin_source_upload`、`upload_source_chunk`、`finalize_source_upload`、`create_source_ref` |
+> | 类别         | 工具                                                                                                                                                                                                                  |
+> | ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+> | 用户         | `get_profile`                                                                                                                                                                                                         |
+> | 输入         | `create_source`、`update_source_file`、`delete_source_file`、`begin_source_upload`、`upload_source_chunk`、`finalize_source_upload`、`create_source_ref`                                                              |
 > | 已保存的项目 | `list_projects`、`get_project`、`get_project_revision_jobs`、`create_project`、`rename_project`、`delete_project`、`attach_project_revision`、`update_project_file`、`delete_project_file`、`render_project_revision` |
-> | 渲染 | `create_render`、`retry_render`、`retry_svg_render`、`get_render_status`、`cancel_render`、`delete_render` |
-> | 检查 | `get_render_diagnostics`、`get_render_preview`、`get_render_artifacts` |
-> | 环境 | `get_renderer_capabilities`、`check_packages`、`search_packages`、`check_fonts`、`search_fonts` |
+> | 渲染         | `create_render`、`retry_render`、`retry_svg_render`、`get_render_status`、`cancel_render`、`delete_render`                                                                                                            |
+> | 检查         | `get_render_diagnostics`、`get_render_preview`、`get_render_artifacts`                                                                                                                                                |
+> | 环境         | `get_renderer_capabilities`、`check_packages`、`search_packages`、`check_fonts`、`search_fonts`                                                                                                                       |
 >
 > - **用户标识和权限范围。** `get_profile` 仅返回已认证用户的固定、不透明 ID，刷新令牌或重新连接均不会改变该 ID。响应不含邮箱或显示名称。每个工具都会在工具列表中声明 OAuth 权限范围，并在调用时检查。
 > - **创建输入包及其限制**
@@ -88,18 +88,24 @@ claude mcp add --scope user latex-renderer -- latex-renderer-mcp
 
 ## Local MCP 工具 {#local-mcpのツール}
 
-| 工具 | 操作 |
-| --- | --- |
-| `upload_source` | 将目录或 ZIP 准备为一个输入包 |
-| `create_render_job` | 从 `sourceId + entrypoint` 创建一个作业，可在 `outputs` 中同时选择 SVG |
-| `render_project` | 从准备输入到获取输出一次完成，可在 `outputs` 中选择 SVG |
-| `list_projects` / `get_project` / `get_project_revision_jobs` | 查看已保存的项目、版本和作业历史 |
-| `create_project` / `rename_project` / `delete_project` | 管理已保存的项目 |
-| `attach_project_revision` / `render_project_revision` | 保存已上传的输入，并从固定版本创建作业 |
-| `get_render_status` | 查看作业状态 |
-| `download_render_artifacts` | 将 PDF、SVG、日志和结构化错误下载至本地 |
-| `cancel_render` | 取消运行中的作业 |
-| `delete_render` | 删除已结束的作业 |
+| 工具                                                                                                       | 操作                                                                            |
+| ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `upload_source`                                                                                            | 将目录或 ZIP 准备为一个输入包                                                   |
+| `create_render_job`                                                                                        | 从 `sourceId + entrypoint` 创建一个作业，可在 `outputs` 中同时选择 SVG          |
+| `render_project`                                                                                           | 从准备输入到获取输出一次完成，可在 `outputs` 中选择 SVG                         |
+| `list_projects` / `get_project` / `get_project_revision_jobs`                                              | 查看已保存的项目、版本和作业历史                                                |
+| `create_project` / `rename_project` / `delete_project`                                                     | 管理已保存的项目                                                                |
+| `attach_project_revision` / `render_project_revision`                                                      | 保存已上传的输入，并从固定版本创建作业                                          |
+| `get_render_status`                                                                                        | 查看作业状态                                                                    |
+| `get_renderer_capabilities` / `list_authoring_profiles`                                                    | 查看渲染环境和文档编写配置 (`render:create`)                                    |
+| `check_packages` / `search_packages` / `check_fonts` / `search_fonts`                                      | 检查或搜索宏包和字体 (`render:create`)                                          |
+| `check_document_requirements` / `probe_document_requirements`                                              | 检查文档要求或将测试文档加入渲染队列 (`render:create`)                          |
+| `retry_render` / `retry_svg_render`                                                                        | 重试整个任务或仅重试 SVG 阶段 (`render:create`)                                 |
+| `get_render_diagnostics` / `read_render_log` / `get_render_manifest`                                       | 读取密钥所属任务的诊断、日志片段和清单 (`render:read:own`)                      |
+| `get_render_preview_crop` / `get_render_preview_sheet` / `locate_render_source` / `compare_render_quality` | 获取 PDF 局部或多页预览、查询 SyncTeX 位置或比较检查报告 (`render:pdf:inspect`) |
+| `download_render_artifacts`                                                                                | 将 PDF、SVG、日志和结构化错误下载至本地                                         |
+| `cancel_render`                                                                                            | 取消运行中的作业                                                                |
+| `delete_render`                                                                                            | 删除已结束的作业                                                                |
 
 > [!DETAILS] Local MCP 工具的调用规则
 >

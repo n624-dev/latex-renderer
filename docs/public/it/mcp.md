@@ -40,14 +40,14 @@ Invia il testo all’assistente per generare PDF e SVG, diagnosticare errori, vi
 
 > [!DETAILS] Strumenti e dettagli per sviluppatori
 >
-> | Categoria | Strumenti |
-> | --- | --- |
-> | Profilo | `get_profile` |
-> | Sorgente | `create_source`, `update_source_file`, `delete_source_file`, `begin_source_upload`, `upload_source_chunk`, `finalize_source_upload`, `create_source_ref` |
+> | Categoria        | Strumenti                                                                                                                                                                                                             |
+> | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+> | Profilo          | `get_profile`                                                                                                                                                                                                         |
+> | Sorgente         | `create_source`, `update_source_file`, `delete_source_file`, `begin_source_upload`, `upload_source_chunk`, `finalize_source_upload`, `create_source_ref`                                                              |
 > | Progetti salvati | `list_projects`, `get_project`, `get_project_revision_jobs`, `create_project`, `rename_project`, `delete_project`, `attach_project_revision`, `update_project_file`, `delete_project_file`, `render_project_revision` |
-> | Rendering | `create_render`, `retry_render`, `retry_svg_render`, `get_render_status`, `cancel_render`, `delete_render` |
-> | Ispezione | `get_render_diagnostics`, `get_render_preview`, `get_render_artifacts` |
-> | Ambiente | `get_renderer_capabilities`, `check_packages`, `search_packages`, `check_fonts`, `search_fonts` |
+> | Rendering        | `create_render`, `retry_render`, `retry_svg_render`, `get_render_status`, `cancel_render`, `delete_render`                                                                                                            |
+> | Ispezione        | `get_render_diagnostics`, `get_render_preview`, `get_render_artifacts`                                                                                                                                                |
+> | Ambiente         | `get_renderer_capabilities`, `check_packages`, `search_packages`, `check_fonts`, `search_fonts`                                                                                                                       |
 >
 > - **Identità e permessi.** `get_profile` restituisce solo un identificatore opaco e stabile dell’utente autenticato. Rimane invariato dopo il rinnovo dei token o la riconnessione e non comprende e-mail o nome visualizzato. Ogni strumento elenca i propri ambiti OAuth e li verifica durante l’esecuzione.
 > - **Creazione degli input e limiti**
@@ -88,18 +88,24 @@ Per riparare registrazioni non modificate create dal programma di installazione 
 
 ## Strumenti di Local MCP {#local-mcpのツール}
 
-| Strumento | Operazione |
-| --- | --- |
-| `upload_source` | Preparare una cartella o uno ZIP come input |
-| `create_render_job` | Creare un processo da `sourceId + entrypoint` e richiedere facoltativamente gli SVG in `outputs` |
-| `render_project` | Preparare l’input, convertire e scaricare in un’unica chiamata, con SVG facoltativo in `outputs` |
-| `list_projects` / `get_project` / `get_project_revision_jobs` | Consultare progetti, revisioni e cronologia dei processi |
-| `create_project` / `rename_project` / `delete_project` | Gestire progetti salvati |
-| `attach_project_revision` / `render_project_revision` | Salvare un input caricato e creare un processo da una revisione fissa |
-| `get_render_status` | Consultare lo stato del processo |
-| `download_render_artifacts` | Scaricare PDF, SVG, log ed errori strutturati |
-| `cancel_render` | Annullare un processo attivo |
-| `delete_render` | Eliminare un processo terminato |
+| Strumento                                                                                                  | Operazione                                                                                                      |
+| ---------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `upload_source`                                                                                            | Preparare una cartella o uno ZIP come input                                                                     |
+| `create_render_job`                                                                                        | Creare un processo da `sourceId + entrypoint` e richiedere facoltativamente gli SVG in `outputs`                |
+| `render_project`                                                                                           | Preparare l’input, convertire e scaricare in un’unica chiamata, con SVG facoltativo in `outputs`                |
+| `list_projects` / `get_project` / `get_project_revision_jobs`                                              | Consultare progetti, revisioni e cronologia dei processi                                                        |
+| `create_project` / `rename_project` / `delete_project`                                                     | Gestire progetti salvati                                                                                        |
+| `attach_project_revision` / `render_project_revision`                                                      | Salvare un input caricato e creare un processo da una revisione fissa                                           |
+| `get_render_status`                                                                                        | Consultare lo stato del processo                                                                                |
+| `get_renderer_capabilities` / `list_authoring_profiles`                                                    | Consultare l’ambiente di rendering e i profili di scrittura (`render:create`)                                   |
+| `check_packages` / `search_packages` / `check_fonts` / `search_fonts`                                      | Controllare o cercare pacchetti e font (`render:create`)                                                        |
+| `check_document_requirements` / `probe_document_requirements`                                              | Verificare i requisiti del documento o accodare una prova (`render:create`)                                     |
+| `retry_render` / `retry_svg_render`                                                                        | Riprovare l’intero job o solo la fase SVG (`render:create`)                                                     |
+| `get_render_diagnostics` / `read_render_log` / `get_render_manifest`                                       | Leggere diagnostica, intervalli di log e manifesto di un proprio job (`render:read:own`)                        |
+| `get_render_preview_crop` / `get_render_preview_sheet` / `locate_render_source` / `compare_render_quality` | Ritagliare o raggruppare anteprime PDF, interrogare SyncTeX o confrontare i rapporti PDF (`render:pdf:inspect`) |
+| `download_render_artifacts`                                                                                | Scaricare PDF, SVG, log ed errori strutturati                                                                   |
+| `cancel_render`                                                                                            | Annullare un processo attivo                                                                                    |
+| `delete_render`                                                                                            | Eliminare un processo terminato                                                                                 |
 
 > [!DETAILS] Convenzioni degli strumenti Local MCP
 >

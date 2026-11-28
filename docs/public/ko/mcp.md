@@ -40,14 +40,14 @@ ChatGPT 또는 Claude(웹, 데스크톱 등)에서 서버에 연결하려면 **R
 
 > [!DETAILS] 도구 목록과 개발자 규격
 >
-> | 분류 | 도구 |
-> | --- | --- |
-> | 프로필 | `get_profile` |
-> | 소스 | `create_source`, `update_source_file`, `delete_source_file`, `begin_source_upload`, `upload_source_chunk`, `finalize_source_upload`, `create_source_ref` |
+> | 분류          | 도구                                                                                                                                                                                                                  |
+> | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+> | 프로필        | `get_profile`                                                                                                                                                                                                         |
+> | 소스          | `create_source`, `update_source_file`, `delete_source_file`, `begin_source_upload`, `upload_source_chunk`, `finalize_source_upload`, `create_source_ref`                                                              |
 > | 저장 프로젝트 | `list_projects`, `get_project`, `get_project_revision_jobs`, `create_project`, `rename_project`, `delete_project`, `attach_project_revision`, `update_project_file`, `delete_project_file`, `render_project_revision` |
-> | 렌더링 | `create_render`, `retry_render`, `retry_svg_render`, `get_render_status`, `cancel_render`, `delete_render` |
-> | 검사 | `get_render_diagnostics`, `get_render_preview`, `get_render_artifacts` |
-> | 환경 | `get_renderer_capabilities`, `check_packages`, `search_packages`, `check_fonts`, `search_fonts` |
+> | 렌더링        | `create_render`, `retry_render`, `retry_svg_render`, `get_render_status`, `cancel_render`, `delete_render`                                                                                                            |
+> | 검사          | `get_render_diagnostics`, `get_render_preview`, `get_render_artifacts`                                                                                                                                                |
+> | 환경          | `get_renderer_capabilities`, `check_packages`, `search_packages`, `check_fonts`, `search_fonts`                                                                                                                       |
 >
 > - **사용자 식별과 범위.** `get_profile`은 인증된 사용자를 식별하는 불투명한 고정 ID만 반환합니다. 토큰 갱신이나 재연결 후에도 같으며 이메일과 표시 이름은 반환하지 않습니다. 각 도구는 필요한 OAuth 범위를 도구 목록에 선언하고 실행 시 검사합니다.
 > - **소스 생성 및 제한**
@@ -88,18 +88,24 @@ claude mcp add --scope user latex-renderer -- latex-renderer-mcp
 
 ## Local MCP 도구 {#local-mcpのツール}
 
-| 도구 | 기능 |
-| --- | --- |
-| `upload_source` | 폴더나 ZIP을 하나의 소스로 준비 |
-| `create_render_job` | `sourceId + entrypoint`로 한 작업 생성. `outputs`에서 SVG 선택 가능 |
-| `render_project` | 소스 준비부터 결과 다운로드까지 한 번에 실행. `outputs`에서 SVG 선택 가능 |
-| `list_projects` / `get_project` / `get_project_revision_jobs` | 저장 프로젝트, 버전, 작업 기록 조회 |
-| `create_project` / `rename_project` / `delete_project` | 저장 프로젝트 관리 |
-| `attach_project_revision` / `render_project_revision` | 업로드한 소스를 저장하고 고정 버전에서 작업 생성 |
-| `get_render_status` | 작업 상태 확인 |
-| `download_render_artifacts` | PDF, SVG, 로그 및 구조화된 오류를 로컬로 다운로드 |
-| `cancel_render` | 진행 중인 작업 취소 |
-| `delete_render` | 종료된 작업 삭제 |
+| 도구                                                                                                       | 기능                                                                                         |
+| ---------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `upload_source`                                                                                            | 폴더나 ZIP을 하나의 소스로 준비                                                              |
+| `create_render_job`                                                                                        | `sourceId + entrypoint`로 한 작업 생성. `outputs`에서 SVG 선택 가능                          |
+| `render_project`                                                                                           | 소스 준비부터 결과 다운로드까지 한 번에 실행. `outputs`에서 SVG 선택 가능                    |
+| `list_projects` / `get_project` / `get_project_revision_jobs`                                              | 저장 프로젝트, 버전, 작업 기록 조회                                                          |
+| `create_project` / `rename_project` / `delete_project`                                                     | 저장 프로젝트 관리                                                                           |
+| `attach_project_revision` / `render_project_revision`                                                      | 업로드한 소스를 저장하고 고정 버전에서 작업 생성                                             |
+| `get_render_status`                                                                                        | 작업 상태 확인                                                                               |
+| `get_renderer_capabilities` / `list_authoring_profiles`                                                    | 렌더링 환경과 작성 프로필 확인 (`render:create`)                                             |
+| `check_packages` / `search_packages` / `check_fonts` / `search_fonts`                                      | 패키지와 글꼴 확인 또는 검색 (`render:create`)                                               |
+| `check_document_requirements` / `probe_document_requirements`                                              | 문서 요구사항 확인 또는 시험 문서 렌더링 예약 (`render:create`)                              |
+| `retry_render` / `retry_svg_render`                                                                        | 전체 작업 또는 SVG 단계만 재시도 (`render:create`)                                           |
+| `get_render_diagnostics` / `read_render_log` / `get_render_manifest`                                       | 키가 소유한 작업의 진단 정보, 로그 범위, 매니페스트 읽기 (`render:read:own`)                 |
+| `get_render_preview_crop` / `get_render_preview_sheet` / `locate_render_source` / `compare_render_quality` | PDF 미리보기 영역과 모아보기, SyncTeX 위치 조회 또는 검사 보고서 비교 (`render:pdf:inspect`) |
+| `download_render_artifacts`                                                                                | PDF, SVG, 로그 및 구조화된 오류를 로컬로 다운로드                                            |
+| `cancel_render`                                                                                            | 진행 중인 작업 취소                                                                          |
+| `delete_render`                                                                                            | 종료된 작업 삭제                                                                             |
 
 > [!DETAILS] Local MCP 도구 호출 규칙
 >

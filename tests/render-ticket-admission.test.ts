@@ -1,23 +1,36 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
 import { createWriteStream } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { pipeline } from "node:stream/promises";
 import yazl from "yazl";
 import type { AuthenticatedServiceAccount } from "@latex-renderer/auth";
 import { ApiKeyService } from "@latex-renderer/auth";
-import { RendererDatabase } from "@latex-renderer/database";
+import {
+  artifactStoragePath,
+  RendererDatabase,
+} from "@latex-renderer/database";
+import { RendererClient } from "../packages/api-client/src/index.js";
+import {
+  downloadJobArtifacts,
+  getJob,
+} from "../packages/client-core/src/index.js";
+import { createMcpOperations } from "../packages/mcp-core/src/index.js";
+import { RemoteRenderService } from "../packages/remote-mcp-core/src/index.js";
 import { TicketService } from "@latex-renderer/ticket";
 import { sha256Hex } from "@latex-renderer/shared";
 import { gatewayRoute, proxyGatewayJson } from "../packages/gateway-core/src/index.js";
 import { AdminApiKeysService } from "../apps/admin-api/src/services/api-keys.js";
 import { createInternalApp } from "../apps/internal-api/src/app.js";
 import { RenderTicketsService } from "../apps/internal-api/src/services/render-tickets.js";
+import { createRendererApp } from "../apps/renderer-api/src/app.js";
 
 const databases: RendererDatabase[] = [];
 const roots: string[] = [];
 afterEach(async () => {
+  vi.unstubAllGlobals();
   for (const database of databases.splice(0)) database.close();
   for (const root of roots.splice(0))
     await rm(root, { recursive: true, force: true });
@@ -617,6 +630,14 @@ describe("render ticket admission", () => {
     const projectId = `project_${"1".repeat(32)}`;
     const revisionId = `revision_${"2".repeat(32)}`;
     const timestamp = new Date().toISOString();
+    database.serviceAccounts.insert({
+      id: "other-service",
+      ownerUserId: "user",
+      name: "Other Service",
+      clientType: "generic",
+      timestamp,
+    });
+    const sameOwner = insertKey(f, "other-service");
     database.projects.insert({ id: projectId, ownerUserId: "user", displayName: "Shared", timestamp });
     database.projects.insertRevision({
       id: revisionId, projectId, sourceId, displayName: "Revision",
@@ -642,6 +663,9 @@ describe("render ticket admission", () => {
     await expect(history(independent.token)).resolves.toMatchObject({
       items: [{ id: jobId, detailAccess: "different_connection" }],
     });
+    await expect(history(sameOwner.token)).resolves.toMatchObject({
+      items: [{ id: jobId, detailAccess: "different_connection" }],
+    });
     await expect(history(rotated.apiKey)).resolves.toMatchObject({
       items: [{ id: jobId, detailAccess: "available" }],
     });
@@ -654,6 +678,19 @@ describe("render ticket admission", () => {
       .rejects.toMatchObject({ code: "TICKET_SUBJECT_INACTIVE" });
     await expect(service.renew(apiKeys.authenticate(independent.token), jobId))
       .rejects.toMatchObject({ code: "JOB_NOT_FOUND" });
+    const sharedSourceJob = await service.create(
+      apiKeys.authenticate(sameOwner.token),
+      input,
+      "rotation-shared-source-fixture",
+    );
+    expect(sharedSourceJob.value.jobId).not.toBe(jobId);
+    expect(database.jobs.getVisible(sharedSourceJob.value.jobId)).toMatchObject(
+      {
+        source_id: sourceId,
+        project_revision_id: revisionId,
+        api_key_id: sameOwner.id,
+      },
+    );
     const successor = apiKeys.authenticate(rotated.apiKey);
     const replayed = await service.create(successor, input, idempotencyKey);
     expect(replayed).toMatchObject({ status: 200, value: { jobId } });
@@ -673,9 +710,247 @@ describe("render ticket admission", () => {
     expect(database.apiKeys.activeJobIdentity(original.id, new Date().toISOString())).toBeUndefined();
   });
 
-  it("rejects another key's SVG retry before mutating stages, audit or idempotency", async () => {
+  it("lets the successor manage existing Jobs through the CLI and Local MCP client paths", async () => {
+    const storageRoot = await mkdtemp(join(tmpdir(), "rotated-job-"));
+    roots.push(storageRoot);
+    const f = fixture({ maxStorage: 100, maxQueue: 20, storageRoot });
+    const { database, service, apiKeys, tickets } = f;
+    const original = insertKey(f, "service");
+    const independent = insertKey(f, "service");
+    const timestamp = new Date().toISOString();
+    database.users.insertInvitation({
+      id: "other-user",
+      email: "other-rotation@example.test",
+      role: "user",
+      displayName: "Other",
+      createdBy: "fixture",
+      timestamp,
+    });
+    for (const [id, ownerUserId] of [
+      ["same-user-account", "user"],
+      ["other-account", "other-user"],
+    ] as const) {
+      database.serviceAccounts.insert({
+        id,
+        ownerUserId,
+        name: id,
+        clientType: "generic",
+        timestamp,
+      });
+    }
+    const sameUser = insertKey(f, "same-user-account");
+    const otherUser = insertKey(f, "other-account");
+    const sourceId = readySource(database);
+    const actor = apiKeys.authenticate(original.token);
+    const completed = (
+      await service.create(actor, { sourceId }, "rotation-completed-fixture")
+    ).value;
+    const queued = (
+      await service.create(actor, { sourceId }, "rotation-queued-fixture")
+    ).value;
+    database.raw
+      .prepare("UPDATE jobs SET status='succeeded',completed_at=? WHERE id=?")
+      .run(timestamp, completed.jobId);
+    const pdf = Buffer.from("%PDF-1.7\nfixture\n");
+    const artifact = {
+      id: "rotation-artifact",
+      job_id: completed.jobId,
+      type: "pdf",
+      relative_path: "result.pdf",
+      size: pdf.length,
+      sha256: createHash("sha256").update(pdf).digest("hex"),
+      created_at: timestamp,
+    };
+    database.artifacts.insert(artifact);
+    const path = artifactStoragePath(storageRoot, artifact);
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, pdf);
+    const admissionAudit = () =>
+      database.raw
+        .prepare(
+          "SELECT * FROM audit_logs WHERE target_id=? AND action='render.queued'",
+        )
+        .get(completed.jobId);
+    const beforeRotation = admissionAudit();
+    expect(beforeRotation).toMatchObject({
+      actor_id: "service",
+      actor_type: "service_account",
+    });
+    const admin = {
+      type: "user",
+      id: "user",
+      userId: "user",
+      role: "owner",
+    } as const;
+    const keys = new AdminApiKeysService({ database, apiKeys });
+    const successor = keys.rotate(admin, original.id);
+
+    const origin = "https://latex.example.com";
+    const renderer = createRendererApp({
+      database,
+      tickets,
+      storageRoot,
+      maxUploadBytes: 1024,
+      minFreeStorageBytes: 0,
+      artifactRetentionHours: 24,
+    });
+    vi.stubGlobal(
+      "fetch",
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request = new Request(input, init);
+        const url = new URL(request.url);
+        expect(url.origin).toBe(origin);
+        const route = gatewayRoute(url.pathname, request.method);
+        return typeof route === "object"
+          ? await proxyGatewayJson({
+              ...route,
+              requestId: "rotation-fixture",
+              request,
+              fetchUpstream: async (target, options) =>
+                await f.app.request(target, options),
+            })
+          : await renderer.request(request);
+      },
+    );
+    const oldClient = new RendererClient(origin, original.token);
+    await expect(getJob(oldClient, completed.jobId)).rejects.toMatchObject({
+      status: 401,
+    });
+    await expect(
+      oldClient.job(completed.jobId, completed.jobTicket),
+    ).rejects.toMatchObject({ code: "TICKET_SUBJECT_INACTIVE" });
+    await expect(
+      oldClient.action(queued.jobId, queued.jobTicket, "cancel"),
+    ).rejects.toMatchObject({ code: "TICKET_SUBJECT_INACTIVE" });
+    for (const key of [independent, sameUser, otherUser]) {
+      const unrelated = new RendererClient(origin, key.token);
+      await expect(getJob(unrelated, completed.jobId)).rejects.toMatchObject({
+        code: "JOB_NOT_FOUND",
+      });
+    }
+    const client = new RendererClient(origin, successor.apiKey);
+    const operations = createMcpOperations({
+      clientFactory: () => Promise.resolve(client),
+    });
+    await expect(
+      operations.getRenderStatus(queued.jobId),
+    ).resolves.toMatchObject({
+      success: true,
+      result: { job: { id: queued.jobId, status: "queued" } },
+    });
+    await expect(getJob(client, completed.jobId)).resolves.toMatchObject({
+      id: completed.jobId,
+      status: "succeeded",
+    });
+    const output = join(storageRoot, "download");
+    const downloaded = await downloadJobArtifacts(
+      client,
+      completed.jobId,
+      output,
+    );
+    expect(downloaded.job.id).toBe(completed.jobId);
+    expect(await readFile(join(output, "result.pdf"))).toEqual(pdf);
+    const remote = new RemoteRenderService(
+      database,
+      storageRoot,
+      "test",
+      origin,
+    );
+    const oauthOwner = { userId: actor.userId, scopes: ["mcp"] } as const;
+    expect(() => remote.job(oauthOwner, completed.jobId)).toThrow(
+      expect.objectContaining({ code: "JOB_NOT_FOUND" }),
+    );
+    await expect(
+      remote.artifact(oauthOwner, completed.jobId, "result.pdf"),
+    ).rejects.toMatchObject({ code: "JOB_NOT_FOUND" });
+    expect(() => remote.cancel(oauthOwner, queued.jobId)).toThrow(
+      expect.objectContaining({ code: "JOB_NOT_FOUND" }),
+    );
+    expect(() => remote.delete(oauthOwner, completed.jobId)).toThrow(
+      expect.objectContaining({ code: "JOB_NOT_FOUND" }),
+    );
+    expect(database.jobs.getVisible(completed.jobId)).toMatchObject({
+      user_id: "user",
+      service_account_id: "service",
+      api_key_id: original.id,
+    });
+    expect(admissionAudit()).toEqual(beforeRotation);
+    await expect(operations.cancelRender(queued.jobId)).resolves.toMatchObject({
+      success: true,
+      result: { requested: true },
+    });
+    await expect(
+      operations.deleteRender(completed.jobId),
+    ).resolves.toMatchObject({
+      success: true,
+      result: { requested: true },
+    });
+    expect(database.jobs.get(queued.jobId)?.cancel_requested_at).toEqual(
+      expect.any(String),
+    );
+    expect(database.jobs.get(completed.jobId)?.status).toBe("deleting");
+  });
+
+  it("denies renewal without the read scope and denies queued work and tickets after account disable", async () => {
+    const f = fixture({ maxStorage: 100, maxQueue: 20 });
+    const { database, service, apiKeys, tickets } = f;
+    const original = insertKey(f, "service");
+    const {
+      value: { jobId },
+    } = await service.create(
+      apiKeys.authenticate(original.token),
+      { sourceId: readySource(database) },
+      "rotation-scope-fixture",
+    );
+    const keys = new AdminApiKeysService({ database, apiKeys });
+    const admin = {
+      type: "user",
+      id: "user",
+      userId: "user",
+      role: "owner",
+    } as const;
+    const successor = keys.rotate(admin, original.id);
+    const { jobTicket } = await service.renew(
+      apiKeys.authenticate(successor.apiKey),
+      jobId,
+    );
+    const updateScopes = database.raw.prepare(
+      "UPDATE api_keys SET scopes_json=? WHERE id=?",
+    );
+    const renew = () =>
+      f.app.request(`/internal/v1/jobs/${jobId}/ticket`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${successor.apiKey}` },
+      });
+    updateScopes.run('["render:create"]', successor.id);
+    expect((await renew()).status).toBe(403);
+    updateScopes.run('["render:read:own"]', successor.id);
+    expect(database.worker.subjectState(jobId)).toBeUndefined();
+    expect((await renew()).status).toBe(200);
+    updateScopes.run('["render:create","render:read:own"]', successor.id);
+    expect(
+      database.serviceAccounts.setStatus(
+        "service",
+        "disabled",
+        new Date().toISOString(),
+      ),
+    ).toBe(1);
+    const disabled = await renew();
+    expect(disabled.status).toBe(403);
+    await expect(disabled.json()).resolves.toMatchObject({
+      error: { code: "ACCOUNT_DISABLED" },
+    });
+    await expect(
+      tickets.verify(jobTicket, "status", jobId),
+    ).rejects.toMatchObject({ code: "TICKET_SUBJECT_INACTIVE" });
+    expect(database.worker.subjectState(jobId)?.sa_status).toBe("disabled");
+  });
+
+  it("allows the successor's SVG retry while rejecting an unrelated key without side effects", async () => {
     const f = fixture({ maxStorage: 100, maxQueue: 20 }),
-      { database, service, tickets, actor } = f,
+      { database, service, tickets, apiKeys } = f,
+      original = insertKey(f, "service"),
+      actor = apiKeys.authenticate(original.token),
       keyB = insertKey(f, actor.serviceAccountId),
       actorB = f.apiKeys.authenticate(keyB.token),
       created = await service.create(
@@ -731,6 +1006,17 @@ describe("render ticket admission", () => {
         output_size: 1,
       },
     );
+    const admin = {
+      type: "user",
+      id: "user",
+      userId: "user",
+      role: "owner",
+    } as const;
+    const rotated = new AdminApiKeysService({ database, apiKeys }).rotate(
+      admin,
+      original.id,
+    );
+    const successor = apiKeys.authenticate(rotated.apiKey);
     const snapshot = () => ({
         job: database.jobs.getOwned(
           jobId,
@@ -752,21 +1038,22 @@ describe("render ticket admission", () => {
     ).rejects.toMatchObject({ code: "JOB_NOT_FOUND", status: 404 });
     expect(snapshot()).toEqual(before);
     const first = await service.create(
-      actor,
+      successor,
       { retrySvgJobId: jobId },
       retryKey,
     );
     expect(first.status).toBe(202);
     await expect(
       tickets.verify(first.value.jobTicket, "status", jobId),
-    ).resolves.toMatchObject({ api_key_id: actor.apiKeyId });
+    ).resolves.toMatchObject({ api_key_id: successor.apiKeyId });
     const queued = snapshot();
     await expect(
       service.create(actorB, { retrySvgJobId: jobId }, retryKey),
     ).rejects.toMatchObject({ code: "JOB_NOT_FOUND", status: 404 });
     expect(snapshot()).toEqual(queued);
     expect(
-      (await service.create(actor, { retrySvgJobId: jobId }, retryKey)).status,
+      (await service.create(successor, { retrySvgJobId: jobId }, retryKey))
+        .status,
     ).toBe(200);
     expect(database.outputStages.publicState(jobId)?.svg).toMatchObject({
       status: "queued",

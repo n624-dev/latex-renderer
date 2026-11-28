@@ -40,14 +40,14 @@ PDF ve SVG üretmek, hataları incelemek, sayfaları görmek ve kullanılabilir 
 
 > [!DETAILS] Geliştiriciler için araçlar ve ayrıntılar
 >
-> | Kategori | Araçlar |
-> | --- | --- |
-> | Profil | `get_profile` |
-> | Kaynak | `create_source`, `update_source_file`, `delete_source_file`, `begin_source_upload`, `upload_source_chunk`, `finalize_source_upload`, `create_source_ref` |
+> | Kategori         | Araçlar                                                                                                                                                                                                               |
+> | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+> | Profil           | `get_profile`                                                                                                                                                                                                         |
+> | Kaynak           | `create_source`, `update_source_file`, `delete_source_file`, `begin_source_upload`, `upload_source_chunk`, `finalize_source_upload`, `create_source_ref`                                                              |
 > | Kayıtlı projeler | `list_projects`, `get_project`, `get_project_revision_jobs`, `create_project`, `rename_project`, `delete_project`, `attach_project_revision`, `update_project_file`, `delete_project_file`, `render_project_revision` |
-> | Derleme | `create_render`, `retry_render`, `retry_svg_render`, `get_render_status`, `cancel_render`, `delete_render` |
-> | İnceleme | `get_render_diagnostics`, `get_render_preview`, `get_render_artifacts` |
-> | Ortam | `get_renderer_capabilities`, `check_packages`, `search_packages`, `check_fonts`, `search_fonts` |
+> | Derleme          | `create_render`, `retry_render`, `retry_svg_render`, `get_render_status`, `cancel_render`, `delete_render`                                                                                                            |
+> | İnceleme         | `get_render_diagnostics`, `get_render_preview`, `get_render_artifacts`                                                                                                                                                |
+> | Ortam            | `get_renderer_capabilities`, `check_packages`, `search_packages`, `check_fonts`, `search_fonts`                                                                                                                       |
 >
 > - **Kimlik ve izinler.** `get_profile` yalnızca giriş yapan kullanıcının sabit, içeriği anlam taşımayan kimliğini döndürür. Belirteç yenilenince veya yeniden bağlanılınca değişmez, e-posta ve görünen adı içermez. Her araç OAuth kapsamlarını listede bildirir ve çağrıldığında denetler.
 > - **Girdi oluşturma ve sınırlar**
@@ -88,18 +88,24 @@ claude mcp add --scope user latex-renderer -- latex-renderer-mcp
 
 ## Local MCP araçları {#local-mcpのツール}
 
-| Araç | İşlem |
-| --- | --- |
-| `upload_source` | Klasör veya ZIP’i girdi olarak hazırlama |
-| `create_render_job` | `sourceId + entrypoint` ile iş oluşturma ve isteğe bağlı olarak `outputs` içinde SVG isteme |
-| `render_project` | Tek çağrıda girdiyi hazırlama, dönüştürme ve indirme; isteğe bağlı SVG için `outputs` |
-| `list_projects` / `get_project` / `get_project_revision_jobs` | Projeleri, revizyonları ve iş geçmişini inceleme |
-| `create_project` / `rename_project` / `delete_project` | Kayıtlı projeleri yönetme |
-| `attach_project_revision` / `render_project_revision` | Yüklenmiş girdiyi kaydetme ve sabit revizyondan iş oluşturma |
-| `get_render_status` | İş durumunu sorgulama |
-| `download_render_artifacts` | PDF, SVG, günlük ve yapılandırılmış hataları indirme |
-| `cancel_render` | Etkin işi iptal etme |
-| `delete_render` | Tamamlanmış işi silme |
+| Araç                                                                                                       | İşlem                                                                                                                           |
+| ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `upload_source`                                                                                            | Klasör veya ZIP’i girdi olarak hazırlama                                                                                        |
+| `create_render_job`                                                                                        | `sourceId + entrypoint` ile iş oluşturma ve isteğe bağlı olarak `outputs` içinde SVG isteme                                     |
+| `render_project`                                                                                           | Tek çağrıda girdiyi hazırlama, dönüştürme ve indirme; isteğe bağlı SVG için `outputs`                                           |
+| `list_projects` / `get_project` / `get_project_revision_jobs`                                              | Projeleri, revizyonları ve iş geçmişini inceleme                                                                                |
+| `create_project` / `rename_project` / `delete_project`                                                     | Kayıtlı projeleri yönetme                                                                                                       |
+| `attach_project_revision` / `render_project_revision`                                                      | Yüklenmiş girdiyi kaydetme ve sabit revizyondan iş oluşturma                                                                    |
+| `get_render_status`                                                                                        | İş durumunu sorgulama                                                                                                           |
+| `get_renderer_capabilities` / `list_authoring_profiles`                                                    | İşleme ortamını ve yazım profillerini görüntüleme (`render:create`)                                                             |
+| `check_packages` / `search_packages` / `check_fonts` / `search_fonts`                                      | Paketleri ve yazı tiplerini denetleme veya arama (`render:create`)                                                              |
+| `check_document_requirements` / `probe_document_requirements`                                              | Belge gereksinimlerini denetleme veya bir denemeyi kuyruğa alma (`render:create`)                                               |
+| `retry_render` / `retry_svg_render`                                                                        | İşin tamamını veya yalnızca SVG aşamasını yeniden deneme (`render:create`)                                                      |
+| `get_render_diagnostics` / `read_render_log` / `get_render_manifest`                                       | Anahtarın sahibi olduğu işin tanılarını, günlük aralıklarını ve manifestosunu okuma (`render:read:own`)                         |
+| `get_render_preview_crop` / `get_render_preview_sheet` / `locate_render_source` / `compare_render_quality` | PDF önizlemelerini kırpma veya gruplama, SyncTeX ile konum arama veya inceleme raporlarını karşılaştırma (`render:pdf:inspect`) |
+| `download_render_artifacts`                                                                                | PDF, SVG, günlük ve yapılandırılmış hataları indirme                                                                            |
+| `cancel_render`                                                                                            | Etkin işi iptal etme                                                                                                            |
+| `delete_render`                                                                                            | Tamamlanmış işi silme                                                                                                           |
 
 > [!DETAILS] Local MCP araçlarının kullanım kuralları
 >

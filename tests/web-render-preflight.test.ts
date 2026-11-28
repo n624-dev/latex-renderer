@@ -24,9 +24,17 @@ import {
   type RenderFetch,
 } from "../apps/admin-web/src/assets/render-script.js";
 import { adminRenderPage } from "../apps/admin-web/src/templates-admin.js";
-import { localizedAppScript } from "../apps/admin-web/src/assets/localized-app-script.js";
+import {
+  appBrowserConfig,
+  localizedAppScript,
+} from "../apps/admin-web/src/assets/localized-app-script.js";
+import { installApp } from "../apps/admin-web/src/assets/app-script.js";
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
 
 describe("admin batch bearer renewal", () => {
   it("uses a newly authenticated session's CSRF token without resubmitting a Job", async () => {
@@ -412,6 +420,146 @@ describe("Web render ZIP preflight", () => {
       expect(script).toContain("rendererAppController.installApp");
     }
   });
+
+  it.each([
+    { status: "queued", action: "cancel", method: "POST", suffix: "/cancel" },
+    { status: "failed", action: "retry", method: "POST", suffix: "/retry" },
+    { status: "succeeded", action: "delete", method: "DELETE", suffix: "" },
+  ] as const)(
+    "lets a regular user $action a $status Job from its detail page",
+    async ({ status, action, method, suffix }) => {
+      vi.useFakeTimers();
+      class ElementFixture {
+        children: ElementFixture[] = [];
+        textContent = "";
+        hidden = false;
+        onclick?: () => void;
+        getButtons() {
+          return this.children.filter((item) => item.tag === "button");
+        }
+        constructor(readonly tag: string) {}
+        append(...children: ElementFixture[]) {
+          this.children.push(...children);
+        }
+        replaceChildren(...children: ElementFixture[]) {
+          this.children = children;
+        }
+        querySelector() {
+          return null;
+        }
+        querySelectorAll(selector: string) {
+          return selector === "button" ? this.getButtons() : [];
+        }
+        setAttribute() {}
+      }
+      const detail = new ElementFixture("main");
+      const admin = new ElementFixture("a");
+      const after = vi.fn<(element: ElementFixture) => void>();
+      const assign = vi.fn();
+      const detailPath = `/app/jobs/${JOB_ID}/`;
+      const endpoint = `/app/api/v1/jobs/${JOB_ID}`;
+      const retryId = `job_${"b".repeat(32)}`;
+      Object.assign(detail, { after });
+      vi.stubGlobal("document", {
+        documentElement: { lang: "en" },
+        body: { dataset: { appPage: "history" } },
+        querySelector: (selector: string) =>
+          selector === "#app-job-detail"
+            ? detail
+            : selector === "#admin-link"
+              ? admin
+              : null,
+        querySelectorAll: () => [],
+        createElement: (tag: string) => new ElementFixture(tag),
+      });
+      vi.stubGlobal("location", {
+        href: ORIGIN + detailPath,
+        pathname: detailPath,
+        assign,
+      });
+      vi.stubGlobal("window", { confirm: () => true });
+      const access = {
+        jobId: JOB_ID,
+        jobTicket: "fixture-ticket",
+        expiresAt: "2099-01-01T00:00:00Z",
+      };
+      const mutations: Array<{
+        path: string;
+        method: string;
+        headers: Headers;
+      }> = [];
+      const fetcher: Parameters<typeof installApp>[1] = (input, init) => {
+        const path = inputUrl(input);
+        if (path === "/auth/session")
+          return Promise.resolve(Response.json({ csrfToken: "fixture-csrf" }));
+        if (path === "/app/api/v1/me")
+          return Promise.resolve(
+            Response.json({ role: "user", isAdmin: false }),
+          );
+        if (path === endpoint + "/access-ticket")
+          return Promise.resolve(Response.json(access));
+        if (path === endpoint && init?.method === undefined)
+          return Promise.resolve(
+            Response.json({ entrypoint: "main.tex", status }),
+          );
+        if (path === `/api/v1/jobs/${JOB_ID}`)
+          return Promise.resolve(
+            Response.json({
+              id: JOB_ID,
+              status,
+              errorCode: null,
+              errorMessage: null,
+              retentionExpiresAt: null,
+              artifacts: [],
+              previews: [],
+            }),
+          );
+        if (!init?.method)
+          throw new Error(`Unexpected fixture request ${path}`);
+        mutations.push({ path, method: init.method, headers: headers(init) });
+        return Promise.resolve(
+          action === "retry"
+            ? Response.json({ ...access, jobId: retryId })
+            : new Response(null, { status: 204 }),
+        );
+      };
+      const config = appBrowserConfig("en");
+      await installApp(config, fetcher);
+      expect(admin.hidden).toBe(true);
+      const panel = after.mock.calls[0]?.[0];
+      expect(panel).toBeDefined();
+      const controls = panel?.children[0];
+      const labels =
+        status === "queued"
+          ? [config.jobActions.cancel]
+          : [config.jobActions.retry, config.jobActions.delete];
+      await vi.waitFor(() =>
+        expect(
+          controls?.getButtons().map((button) => button.textContent),
+        ).toEqual(labels),
+      );
+      const button = controls
+        ?.getButtons()
+        .find((item) => item.textContent === config.jobActions[action]);
+      expect(button?.onclick).toBeTypeOf("function");
+      button?.onclick?.();
+      await vi.waitFor(() => {
+        if (action === "cancel")
+          expect(panel?.children[1]?.textContent).toBe(
+            config.jobActions.canceled,
+          );
+        else
+          expect(assign).toHaveBeenCalledExactlyOnceWith(
+            action === "retry" ? `/app/jobs/${retryId}/` : "/app/jobs/",
+          );
+      });
+      expect(mutations).toHaveLength(1);
+      expect(mutations[0]).toMatchObject({ path: endpoint + suffix, method });
+      expect(mutations[0]?.headers.get("X-CSRF-Token")).toBe("fixture-csrf");
+      if (action === "retry")
+        expect(mutations[0]?.headers.get("Idempotency-Key")).toBeTruthy();
+    },
+  );
 
   it("renders an accessible batch workflow without operator details", () => {
     const page = adminRenderPage();
