@@ -184,6 +184,13 @@ async function bundle(entry, outfile, define = {}, format = "cjs") {
     legalComments: "none",
     define,
     alias: workspaceAliases,
+    ...(format === "esm"
+      ? {
+          banner: {
+            js: 'import { createRequire } from "node:module"; const require = createRequire(import.meta.url);',
+          },
+        }
+      : {}),
   });
 }
 

@@ -1,4 +1,9 @@
 {
+  "renderNow": "Rendera nu",
+  "selectSourceOwnerKey": "Välj en renderingsnyckel",
+  "noSourceOwnerKeys": "Inga renderingsnycklar tillgängliga",
+  "sourceRegistered": "Källan har registrerats.",
+  "includeSvgOutput": "Inkludera SVG-utdata",
   "aNewJobWillBeCreated": "Ett nytt jobb skapas med ursprungliga indata.",
   "aShortLivedReferenceForPassing": "En kortlivad referens för att skicka samma indata till Remote MCP.",
   "accountAndAppearance": "Konto och utseende",

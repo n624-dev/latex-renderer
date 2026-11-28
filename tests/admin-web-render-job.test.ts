@@ -149,7 +149,7 @@ describe("administrator Web render jobs", () => {
       publicOrigin: "https://latex.example.com",
       allowedOrigins: new Set(),
       writeEnabled: true,
-      storageRoot: "/tmp",
+      storageRoot: process.cwd(),
       rendererVersion: "test",
       maxOutputBytes: 1,
       maxQueueLength: 5,
@@ -373,5 +373,96 @@ describe("administrator Web render jobs", () => {
         sourceJobValue.jobId,
       );
     expect((await renew()).status).toBe(410);
+
+    database.raw.exec(`
+      INSERT INTO users(id,email,display_name,role,status,security_version,created_by,created_at,updated_at)
+        VALUES ('user_target','target@example.test','Target','user','active',1,'test',datetime('now'),datetime('now'));
+      INSERT INTO service_accounts(id,owner_user_id,name,client_type,status,security_version,created_at,updated_at)
+        VALUES ('sa_target','user_target','Target','generic','active',1,datetime('now'),datetime('now'));
+      INSERT INTO api_keys(id,service_account_id,name,prefix,secret_hash,pepper_id,scopes_json,created_at,created_by)
+        VALUES ('key_target','sa_target','Target key','lrk_target','target-hash','v1','["render:create"]',datetime('now'),'test');
+    `);
+    const post = (path: string, key: string, body: unknown) =>
+      app.request(`/admin/api/v1${path}`, {
+        method: "POST",
+        headers: {
+          ...accessHeaders,
+          "X-CSRF-Token": "1",
+          "Content-Type": "application/json",
+          "Idempotency-Key": key,
+        },
+        body: JSON.stringify(body),
+      });
+    const metadata = { size: 12, sha256: "c".repeat(64) };
+    const sourceTicketPath = "/jobs/source-tickets";
+    const registrationKey = "admin-register-only-fixture";
+    expect(
+      (await post(sourceTicketPath, registrationKey, metadata)).status,
+    ).toBe(400);
+    const register = () =>
+      post(sourceTicketPath, registrationKey, {
+        apiKeyId: "key_target",
+        ...metadata,
+      });
+    const registration = await register();
+    expect(registration.status).toBe(201);
+    const { sourceId, uploadTicket } = (await registration.json()) as {
+      sourceId: string;
+      uploadTicket: string;
+    };
+    await expect(
+      tickets.verifySourceUpload(uploadTicket, sourceId),
+    ).resolves.toMatchObject({
+      user_id: "user_target",
+      service_account_id: "sa_target",
+      api_key_id: "key_target",
+    });
+    expect(database.sources.get(sourceId)?.owner_user_id).toBe("user_target");
+    database.sources.transition(sourceId, ["reserved"], "ready", now, {
+      paths_json: JSON.stringify(["main.tex"]),
+      uploaded_at: now,
+    });
+    expect(
+      database.sources.getOwnedReady(sourceId, "user_owner", now),
+    ).toBeUndefined();
+    const detail = await app.request(`/admin/api/v1/sources/${sourceId}`, {
+      headers: accessHeaders,
+    });
+    expect(await detail.json()).toMatchObject({
+      owner_user_id: "user_target",
+      jobs: [],
+    });
+    const render = (apiKeyId: string, key: string, entrypoint = "main.tex") =>
+      post(`/sources/${sourceId}/render`, key, {
+        apiKeyId,
+        entrypoint,
+        outputs: ["pdf"],
+      });
+    expect(
+      (await render("key_target", "first-source-invalid-entry", "missing.tex"))
+        .status,
+    ).toBe(422);
+    expect((await render("key_web", "other-user-source-fixture")).status).toBe(
+      409,
+    );
+    const rendered = await render("key_target", "first-source-render-fixture");
+    expect(rendered.status).toBe(201);
+    const { jobId } = (await rendered.json()) as { jobId: string };
+    expect(database.jobs.get(jobId)).toMatchObject({
+      user_id: "user_target",
+      service_account_id: "sa_target",
+      api_key_id: "key_target",
+      source_id: sourceId,
+    });
+    expect(database.sources.get(sourceId)?.owner_user_id).toBe("user_target");
+    const duplicate = await render("key_target", "first-source-render-fixture");
+    expect(duplicate.status).toBe(200);
+    expect(await duplicate.json()).toMatchObject({ jobId });
+    const replay = await register();
+    expect(replay.status).toBe(200);
+    expect(await replay.json()).toMatchObject({
+      sourceId,
+      uploadRequired: false,
+    });
   });
 });

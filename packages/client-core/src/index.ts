@@ -397,9 +397,12 @@ export async function compileProjectPdf(
 }
 
 export async function uploadProjectSource(
-  client: ClientTransport,
+  client: Pick<
+    ClientTransport,
+    "sourceLimits" | "createSource" | "uploadSource"
+  >,
   projectPath: string,
-  options: ClientCoreOptions = {},
+  options: ClientCoreOptions & { idempotencyKey?: string } = {},
 ): Promise<UploadedSource> {
   const temporary = await mkdtemp(join(tmpdir(), "latex-source-"));
   try {
@@ -419,6 +422,7 @@ export async function uploadProjectSource(
       zipPath,
       prepared.source,
       options,
+      options.idempotencyKey,
     );
   } finally {
     await rm(temporary, { recursive: true, force: true });
@@ -743,16 +747,17 @@ function assertExtractedSize(bytes: number, limits: Readonly<ResourceLimits>): v
 }
 
 async function reserveAndUploadSource(
-  client: ClientTransport,
+  client: Pick<ClientTransport, "createSource" | "uploadSource">,
   zipPath: string,
   source: { size: number; sha256: string; files: number },
   options: ClientCoreOptions,
+  idempotencyKey: string = randomUUID(),
 ): Promise<UploadedSource> {
   options.signal?.throwIfAborted();
   const ticket = await client.createSource(
     source.size,
     source.sha256,
-    randomUUID(),
+    idempotencyKey,
     { signal: options.signal },
   );
   if (ticket.uploadRequired)

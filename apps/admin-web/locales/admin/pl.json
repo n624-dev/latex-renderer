@@ -1,4 +1,9 @@
 {
+  "renderNow": "Renderuj teraz",
+  "selectSourceOwnerKey": "Wybierz klucz renderowania",
+  "noSourceOwnerKeys": "Brak dostępnych kluczy renderowania",
+  "sourceRegistered": "Źródło zarejestrowane.",
+  "includeSvgOutput": "Uwzględnij pliki SVG",
   "aNewJobWillBeCreated": "Z oryginalnych danych wejściowych zostanie utworzone nowe zadanie.",
   "aShortLivedReferenceForPassing": "Krótkotrwałe odwołanie umożliwiające przekazanie tych samych danych do Remote MCP.",
   "accountAndAppearance": "Konto i wygląd",

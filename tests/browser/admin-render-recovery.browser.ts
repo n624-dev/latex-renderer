@@ -1,21 +1,14 @@
-import { readFileSync } from "node:fs";
 import type { Browser, Page } from "playwright";
 import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
 import { launchTestBrowser, newTestPage } from "../helpers/browser-engine.js";
 import { routeWebFonts } from "../helpers/browser-web-fonts.js";
+import { localizedAdminRenderScript } from "../../apps/admin-web/src/assets/admin-script.js";
 import { adminRenderPage } from "../../apps/admin-web/src/templates-admin.js";
 import { styles } from "../../apps/admin-web/src/assets/styles.js";
 import { readBrowserAsset } from "../../apps/admin-web/src/browser-assets.js";
 import { zipStoredFiles } from "../../apps/admin-web/src/assets/render-script.js";
 
 // Exercise the browser asset built for distribution.
-const script = readFileSync(
-  new URL(
-    "../../apps/admin-web/dist/browser-assets/admin-render.js",
-    import.meta.url,
-  ),
-  "utf8",
-);
 const origin = "https://renderer.invalid";
 const sourceId = `source_${"a".repeat(32)}`;
 let browser: Browser | undefined;
@@ -49,7 +42,7 @@ it.each([true, false])(
       if (url.origin !== origin) return route.abort();
       if (url.pathname === "/favicon.ico")
         return route.fulfill({ status: 204 });
-      if (url.pathname === "/admin/render")
+      if (url.pathname === "/admin/render/")
         return route.fulfill({
           contentType: "text/html",
           body: adminRenderPage(),
@@ -64,7 +57,7 @@ it.each([true, false])(
       if (url.pathname === "/admin/assets/render.js")
         return route.fulfill({
           contentType: "application/javascript",
-          body: script,
+          body: localizedAdminRenderScript("ja"),
         });
       if (url.pathname === "/auth/session")
         return route.fulfill({ json: { csrfToken: "fixture-csrf" } });
@@ -134,7 +127,7 @@ it.each([true, false])(
       return route.abort();
     });
     await routeWebFonts(page, origin);
-    await page.goto(`${origin}/admin/render`);
+    await page.goto(`${origin}/admin/render/`);
     const document = Buffer.from(
       "\\documentclass{article}\\begin{document}Fixture\\end{document}",
     );

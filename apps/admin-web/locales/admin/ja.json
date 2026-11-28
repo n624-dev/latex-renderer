@@ -1,4 +1,9 @@
 {
+  "renderNow": "今すぐ描画",
+  "selectSourceOwnerKey": "描画キーを選択",
+  "noSourceOwnerKeys": "利用できる描画キーがありません",
+  "sourceRegistered": "Sourceを登録しました。",
+  "includeSvgOutput": "SVGも出力",
   "aNewJobWillBeCreated": "元の入力を使って新しいジョブを作成します。",
   "aShortLivedReferenceForPassing": "Remote MCPへ同じ入力を渡すための短時間参照です。",
   "accountAndAppearance": "アカウント・表示",

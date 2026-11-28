@@ -1,25 +1,21 @@
-import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Browser, Route } from "playwright";
 import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
 import { launchTestBrowser, newTestPage } from "../helpers/browser-engine.js";
 import { routeWebFonts } from "../helpers/browser-web-fonts.js";
+import { localizedAdminRenderScript } from "../../apps/admin-web/src/assets/admin-script.js";
 import { adminRenderPage } from "../../apps/admin-web/src/templates-admin.js";
 import { readBrowserAsset } from "../../apps/admin-web/src/browser-assets.js";
 import { styles } from "../../apps/admin-web/src/assets/styles.js";
 import {
   zipSingleTex,
   zipStoredFiles,
-  parseRenderTicket,
+  inspectZipCandidates,
 } from "../../apps/admin-web/src/assets/render-script.js";
 
-const script = readFileSync(
-  new URL(
-    "../../apps/admin-web/dist/browser-assets/admin-render.js",
-    import.meta.url,
-  ),
-  "utf8",
-);
 const origin = "https://renderer.invalid",
   sourceId = `source_${"a".repeat(32)}`;
 const jobId = (n: number) => `job_${String(n).padStart(32, "0")}`;
@@ -76,7 +72,7 @@ async function fixture(
     const url = new URL(route.request().url());
     if (url.origin !== origin) return route.abort();
     if (await intercept(route)) return;
-    if (url.pathname === "/admin/render")
+    if (url.pathname === "/admin/render/")
       return route.fulfill({
         contentType: "text/html",
         body: adminRenderPage(),
@@ -84,7 +80,7 @@ async function fixture(
     if (url.pathname === "/admin/assets/render.js")
       return route.fulfill({
         contentType: "application/javascript",
-        body: script,
+        body: localizedAdminRenderScript("ja"),
       });
     if (url.pathname === "/admin/assets/site.js")
       return route.fulfill({
@@ -133,20 +129,15 @@ async function fixture(
     return route.abort();
   });
   await routeWebFonts(page, origin);
-  await page.goto(`${origin}/admin/render`);
+  await page.goto(`${origin}/admin/render/`);
   return { page, errors };
 }
 function ticket(n: number) {
-  return parseRenderTicket(
-    {
-      jobId: jobId(n),
-      jobTicket: `fixture-job-ticket-${n}`,
-      uploadTicket: `fixture-upload-ticket-${n}`,
-      uploadUrl: `${origin}/api/v1/jobs/${jobId(n)}/source`,
-      expiresAt: "2099-01-01T00:00:00Z",
-    },
-    origin,
-  );
+  return {
+    jobId: jobId(n),
+    jobTicket: `fixture-job-ticket-${n}`,
+    expiresAt: "2099-01-01T00:00:00Z",
+  };
 }
 function job(id: string, status: string) {
   return {
@@ -248,14 +239,14 @@ it.each(["zip", "tex"])(
 );
 
 it.each(
-  [true, false].flatMap((legacy) => [
-    { legacy, retry: false, cancelFailure: false },
-    { legacy, retry: true, cancelFailure: false },
-    { legacy, retry: false, cancelFailure: true },
+  ["main.tex", "other.tex"].flatMap((entrypoint) => [
+    { entrypoint, retry: false, cancelFailure: false },
+    { entrypoint, retry: true, cancelFailure: false },
+    { entrypoint, retry: false, cancelFailure: true },
   ]),
 )(
-  "honors cancellation during reservation (legacy=$legacy, retry=$retry, cancel failure=$cancelFailure)",
-  async ({ legacy, retry, cancelFailure }) => {
+  "honors cancellation during reservation (entrypoint=$entrypoint, retry=$retry, cancel failure=$cancelFailure)",
+  async ({ entrypoint, retry, cancelFailure }) => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
       release = resolve;
@@ -319,7 +310,7 @@ it.each(
       return false;
     });
     try {
-      await prepare(f.page, legacy ? ["main.tex"] : ["other.tex"]);
+      await prepare(f.page, [entrypoint]);
       await f.page.locator("#start-render").click();
       await expect.poll(() => reserved).toBe(retry ? 2 : 1);
       await f.page.locator("#cancel-all-render").click();
@@ -555,3 +546,145 @@ it.each([false, true])(
     expect(f.errors).toEqual([]);
   },
 );
+
+it("requires a render key even with Render now cleared and no keys available", async () => {
+  const mutations: string[] = [];
+  const f = await fixture(async (route) => {
+    const request = route.request();
+    if (request.url().endsWith("/render-targets")) {
+      await route.fulfill({ json: { items: [] } });
+      return true;
+    }
+    if (request.method() === "POST" || request.method() === "PUT")
+      mutations.push(request.url());
+    return false;
+  });
+  await f.page.locator("#project-files").setInputFiles({
+    name: "project.zip",
+    mimeType: "application/zip",
+    buffer: zip(),
+  });
+  await f.page.locator("#inspect-files").click();
+  await f.page.locator("#render-summary").waitFor();
+  await f.page.locator("#render-now").uncheck();
+  expect(await f.page.locator("#render-target").isDisabled()).toBe(true);
+  expect(await f.page.locator("#render-target").textContent()).toContain(
+    "利用できる描画キーがありません",
+  );
+  expect(await f.page.locator("#start-render").isDisabled()).toBe(true);
+  await f.page.locator("#render-start").dispatchEvent("submit");
+  expect(mutations).toEqual([]);
+  expect(f.errors).toEqual([]);
+});
+
+it("registers a ZIP for the selected render key without queuing a Job", async () => {
+  const requests: {
+    path: string;
+    body: unknown;
+    auth?: string;
+    csrf?: string;
+  }[] = [];
+  const f = await fixture((route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    const headers = request.headers();
+    if (request.method() === "POST" || request.method() === "PUT")
+      requests.push({
+        path,
+        body: request.method() === "POST" ? request.postDataJSON() : undefined,
+        ...(headers.authorization ? { auth: headers.authorization } : {}),
+        ...(headers["x-csrf-token"] ? { csrf: headers["x-csrf-token"] } : {}),
+      });
+    return Promise.resolve(false);
+  });
+  const archive = zip(
+    Array.from({ length: 21 }, (_, i) => `chapter-${i + 1}.tex`),
+  );
+  await f.page.locator("#project-files").setInputFiles({
+    name: "project.zip",
+    mimeType: "application/zip",
+    buffer: archive,
+  });
+  await f.page.locator("#inspect-files").click();
+  await f.page.locator("#render-summary").waitFor();
+  const renderNow = f.page.locator("#render-now");
+  expect(await renderNow.isChecked()).toBe(true);
+  await renderNow.uncheck();
+  expect(await f.page.locator("#render-svg").isDisabled()).toBe(true);
+  expect(await f.page.locator("#start-render").isDisabled()).toBe(true);
+  await f.page.locator("#render-target").selectOption("key_fixture");
+  await f.page.locator("#start-render").click();
+  const link = f.page.locator(`a[href="/admin/sources/?source=${sourceId}"]`);
+  await link.waitFor();
+  expect(await link.textContent()).toBe(sourceId);
+  expect(requests).toEqual([
+    {
+      path: "/admin/api/v1/jobs/source-tickets",
+      csrf: "fixture-csrf",
+      body: {
+        apiKeyId: "key_fixture",
+        size: archive.length,
+        sha256: createHash("sha256").update(archive).digest("hex"),
+      },
+    },
+    {
+      path: `/api/v1/sources/${sourceId}/content`,
+      auth: "Bearer fixture-source-upload-ticket",
+      body: undefined,
+    },
+  ]);
+  expect(
+    await f.page.locator('#render-items a[href^="/admin/jobs/"]').count(),
+  ).toBe(0);
+  expect(f.errors).toEqual([]);
+});
+
+it("packages a folder and links to the Source and Job under the selected render key", async () => {
+  let reservation: unknown, render: unknown;
+  const f = await fixture((route) => {
+    const request = route.request();
+    if (request.url().endsWith("/source-tickets"))
+      reservation = request.postDataJSON();
+    if (request.url().endsWith("/render-tickets"))
+      render = request.postDataJSON();
+    return Promise.resolve(false);
+  }, true);
+  const folder = await mkdtemp(join(tmpdir(), "admin-web-source-"));
+  try {
+    await mkdir(join(folder, "reports"));
+    await writeFile(join(folder, "reports", "report.tex"), "fixture");
+    await f.page.locator("#project-directory").setInputFiles(folder);
+    await f.page.locator("#inspect-files").click();
+    await f.page.locator("#render-target").selectOption("key_fixture");
+    expect(await f.page.locator("#render-now").isChecked()).toBe(true);
+    await f.page.locator("#render-svg").check();
+    await f.page.locator("#start-render").click();
+    await f.page.locator(`a[href="/admin/jobs/?job=${jobId(1)}"]`).waitFor();
+    await f.page
+      .locator(`a[href="/admin/sources/?source=${sourceId}"]`)
+      .waitFor();
+    const [body] = await f.page.evaluate(
+      () =>
+        (globalThis as typeof globalThis & { uploadBodies: number[][] })
+          .uploadBodies,
+    );
+    const bytes = new Uint8Array(body ?? []);
+    expect(inspectZipCandidates(bytes).texFiles).toEqual([
+      "reports/report.tex",
+    ]);
+    expect(reservation).toEqual({
+      apiKeyId: "key_fixture",
+      size: bytes.length,
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+    });
+    expect(render).toEqual({
+      apiKeyId: "key_fixture",
+      sourceId,
+      entrypoint: "reports/report.tex",
+      outputs: ["pdf", "svg"],
+    });
+    expect(f.errors).toEqual([]);
+  } finally {
+    await rm(folder, { recursive: true, force: true });
+  }
+});

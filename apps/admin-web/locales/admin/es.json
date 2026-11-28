@@ -1,4 +1,9 @@
 {
+  "renderNow": "Renderizar ahora",
+  "selectSourceOwnerKey": "Selecciona una clave de renderizado",
+  "noSourceOwnerKeys": "No hay claves de renderizado disponibles",
+  "sourceRegistered": "Fuente registrada.",
+  "includeSvgOutput": "Incluir salida SVG",
   "aNewJobWillBeCreated": "Se creará un trabajo con la entrada original.",
   "aShortLivedReferenceForPassing": "Referencia de corta duración para pasar la misma entrada a Remote MCP.",
   "accountAndAppearance": "Cuenta y apariencia",

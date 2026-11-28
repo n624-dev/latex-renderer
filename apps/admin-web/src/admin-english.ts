@@ -1,4 +1,9 @@
 export const english = {
+  renderNow: "Render now",
+  selectSourceOwnerKey: "Select a render key",
+  noSourceOwnerKeys: "No render keys available",
+  sourceRegistered: "Source registered.",
+  includeSvgOutput: "Include SVG output",
   aNewJobWillBeCreated: "A new job will be created with the original input.",
   aShortLivedReferenceForPassing:
     "A short-lived reference for passing the same input to Remote MCP.",

@@ -19,11 +19,19 @@ import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { Command } from "commander";
+import { RendererClient } from "@latex-renderer/api-client";
+import { uploadProjectSource } from "@latex-renderer/client-core";
+import {
+  sourceRenderResponseSchema,
+  sourceTicketResponseSchema,
+} from "@latex-renderer/contracts";
 import {
   ADMIN_API_PREFIX,
   AppError,
   CLIENT_VERSION,
   PUBLIC_ORIGIN,
+  credentialUrl,
+  type ResourceLimits,
 } from "@latex-renderer/shared";
 import { adminApiBaseUrl } from "./base-url.js";
 import { openAdminMenu } from "./menu.js";
@@ -467,6 +475,81 @@ for (const action of ["pause", "resume", "drain"] as const)
 const sources = program.command("sources");
 addReadCommands(sources, "/sources", ["--status <status>"]);
 sources
+  .command("create")
+  .description(humanText("registerAndOptionallyRenderSource"))
+  .argument("<path>")
+  .requiredOption("--key <apiKeyId>", humanText("sourceOwnerKey"))
+  .option("--render", humanText("renderSourceAfterRegistration"))
+  .option("--entrypoint <path>")
+  .option("--svg")
+  .option("--idempotency-key <key>")
+  .requiredOption("--yes")
+  .action(
+    async (
+      path: string,
+      options: SourceRenderOptions & { key: string; render?: boolean },
+    ) => {
+      const idempotencyKey = options.idempotencyKey ?? randomUUID();
+      const base = adminBaseUrl();
+      const renderer = new RendererClient(base.origin, "", {
+        trustedRendererOrigins: [PUBLIC_ORIGIN],
+      });
+      const { sourceId } = await uploadProjectSource(
+        {
+          async sourceLimits() {
+            const targets = asRecord(
+              await request("GET", "/jobs/render-targets"),
+            );
+            return targets.sourceLimits as ResourceLimits | undefined;
+          },
+          async createSource(size, sha256, key) {
+            return sourceTicketResponseSchema.parse(
+              await request(
+                "POST",
+                "/jobs/source-tickets",
+                { apiKeyId: options.key, size, sha256 },
+                { "Idempotency-Key": key },
+              ),
+            );
+          },
+          async uploadSource(ticket, zipPath, size) {
+            if (ticket.uploadUrl !== undefined) {
+              const url = credentialUrl(ticket.uploadUrl);
+              if (
+                url.pathname !== `/api/v1/sources/${ticket.sourceId}/content` ||
+                url.search ||
+                url.hash
+              )
+                throw new AppError(
+                  "INVALID_SOURCE_TICKET",
+                  "Invalid Source upload URL",
+                  502,
+                );
+            }
+            await renderer.uploadSource(ticket, zipPath, size);
+          },
+        },
+        path,
+        { idempotencyKey },
+      );
+      let jobId: string | undefined;
+      try {
+        if (options.render) {
+          const job = sourceRenderResponseSchema.parse(
+            await renderAdminSource(sourceId, {
+              ...options,
+              apiKeyId: options.key,
+              idempotencyKey,
+            }),
+          );
+          jobId = job.jobId;
+        }
+      } finally {
+        print({ sourceId, jobId });
+      }
+    },
+  );
+sources
   .command("render")
   .description("Render an existing source with the specified render API key ID")
   .argument("<id>")
@@ -476,27 +559,8 @@ sources
   .option("--idempotency-key <key>")
   .requiredOption("--yes")
   .action(
-    async (
-      id: string,
-      options: {
-        apiKeyId: string;
-        entrypoint?: string;
-        svg?: boolean;
-        idempotencyKey?: string;
-      },
-    ) =>
-      print(
-        await request(
-          "POST",
-          `/sources/${encodeURIComponent(id)}/render`,
-          {
-            apiKeyId: options.apiKeyId,
-            entrypoint: options.entrypoint,
-            outputs: options.svg ? ["pdf", "svg"] : ["pdf"],
-          },
-          { "Idempotency-Key": options.idempotencyKey ?? randomUUID() },
-        ),
-      ),
+    async (id: string, options: SourceRenderOptions & { apiKeyId: string }) =>
+      print(await renderAdminSource(id, options)),
   );
 sources
   .command("reference")
@@ -1012,6 +1076,36 @@ async function request(
   return value;
 }
 
+interface SourceRenderOptions {
+  entrypoint?: string;
+  svg?: boolean;
+  idempotencyKey?: string;
+}
+
+function renderAdminSource(
+  id: string,
+  options: SourceRenderOptions & { apiKeyId: string },
+) {
+  return request(
+    "POST",
+    `/sources/${encodeURIComponent(id)}/render`,
+    {
+      apiKeyId: options.apiKeyId,
+      entrypoint: options.entrypoint,
+      outputs: options.svg ? ["pdf", "svg"] : ["pdf"],
+    },
+    { "Idempotency-Key": options.idempotencyKey ?? randomUUID() },
+  );
+}
+
+function adminBaseUrl(): URL {
+  return adminApiBaseUrl(
+    process.env.LATEX_RENDER_BASE_URL ?? process.env.LATEX_RENDER_ADMIN_API_URL,
+    PUBLIC_ORIGIN,
+    process.env.LATEX_RENDER_TRUSTED_ADMIN_ORIGINS,
+  );
+}
+
 async function adminFetch(
   method: string,
   path: string,
@@ -1019,11 +1113,7 @@ async function adminFetch(
   extraHeaders: Readonly<Record<string, string>> = {},
   signal?: AbortSignal,
 ): Promise<Response> {
-  const base = adminApiBaseUrl(
-    process.env.LATEX_RENDER_BASE_URL ?? process.env.LATEX_RENDER_ADMIN_API_URL,
-    PUBLIC_ORIGIN,
-    process.env.LATEX_RENDER_TRUSTED_ADMIN_ORIGINS,
-  );
+  const base = adminBaseUrl();
   const accessId = process.env.CF_ACCESS_CLIENT_ID,
     accessSecret = process.env.CF_ACCESS_CLIENT_SECRET;
   if (Boolean(accessId) !== Boolean(accessSecret))

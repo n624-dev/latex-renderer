@@ -8,3 +8,10 @@ ${readBrowserAsset("admin")}
 rendererAdminController.installAdmin(${JSON.stringify(adminCatalog(locale))});
 })();\n`;
 }
+
+export function localizedAdminRenderScript(locale: DisplayLocale): string {
+  return `(() => {
+${readBrowserAsset("admin-render")}
+rendererAdminRenderController.installAdminRender(${JSON.stringify(adminCatalog(locale))});
+})();\n`;
+}

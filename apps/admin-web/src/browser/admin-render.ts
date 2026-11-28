@@ -2,8 +2,11 @@ import {
   installRenderWorkflow,
   responseError,
 } from "../assets/render-script.js";
+import type { AdminMessage } from "../admin-messages.js";
 
-async function startRenderPage(): Promise<void> {
+async function startRenderPage(
+  catalog: Readonly<Record<AdminMessage, string>>,
+): Promise<void> {
   const response = await fetch("/auth/session", {
     credentials: "same-origin",
     cache: "no-store",
@@ -22,12 +25,17 @@ async function startRenderPage(): Promise<void> {
     !("csrfToken" in session) ||
     typeof session.csrfToken !== "string"
   )
-    throw new Error("ログインできませんでした。");
-  installRenderWorkflow(session.csrfToken);
+    throw new Error(catalog.couldNotSignIn);
+  installRenderWorkflow(session.csrfToken, (key) => catalog[key]);
 }
 
-void startRenderPage().catch((error: unknown) => {
-  const output = document.querySelector("#render-error");
-  if (output)
-    output.textContent = error instanceof Error ? error.message : String(error);
-});
+export function installAdminRender(
+  catalog: Readonly<Record<AdminMessage, string>>,
+): void {
+  void startRenderPage(catalog).catch((error: unknown) => {
+    const output = document.querySelector("#render-error");
+    if (output)
+      output.textContent =
+        error instanceof Error ? error.message : String(error);
+  });
+}

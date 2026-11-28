@@ -276,12 +276,10 @@ paths:
           }
   /jobs/source-tickets:
     post:
-      summary: Reserve or reuse a Source for administrator browser rendering
+      summary: Reserve or reuse a Source for administrator registration and rendering
+      description: The selected render key identifies the user who owns the Source and the service account authorized to upload it.
       parameters:
-        - in: header
-          name: X-CSRF-Token
-          required: true
-          schema: { type: string, pattern: "^[A-Za-z0-9_-]{43}$" }
+        - $ref: "#/components/parameters/BrowserCsrf"
         - in: header
           name: Idempotency-Key
           required: true

@@ -1,4 +1,9 @@
 {
+  "renderNow": "Jetzt rendern",
+  "selectSourceOwnerKey": "Render-Schlüssel auswählen",
+  "noSourceOwnerKeys": "Keine Render-Schlüssel verfügbar",
+  "sourceRegistered": "Quelle registriert.",
+  "includeSvgOutput": "SVG-Ausgabe hinzufügen",
   "aNewJobWillBeCreated": "Mit der ursprünglichen Eingabe wird ein neuer Auftrag erstellt.",
   "aShortLivedReferenceForPassing": "Kurzlebiger Verweis zur Übergabe derselben Eingabe an Remote MCP.",
   "accountAndAppearance": "Konto und Darstellung",

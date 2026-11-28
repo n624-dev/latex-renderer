@@ -1,4 +1,9 @@
 {
+  "renderNow": "Convertir maintenant",
+  "selectSourceOwnerKey": "Sélectionnez une clé de rendu",
+  "noSourceOwnerKeys": "Aucune clé de rendu disponible",
+  "sourceRegistered": "Source enregistrée.",
+  "includeSvgOutput": "Inclure une sortie SVG",
   "aNewJobWillBeCreated": "Une nouvelle tâche sera créée avec l’entrée d’origine.",
   "aShortLivedReferenceForPassing": "Référence de courte durée permettant de transmettre la même entrée à Remote MCP.",
   "accountAndAppearance": "Compte et apparence",

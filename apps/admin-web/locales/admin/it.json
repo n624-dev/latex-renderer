@@ -1,4 +1,9 @@
 {
+  "renderNow": "Converti ora",
+  "selectSourceOwnerKey": "Seleziona una chiave di rendering",
+  "noSourceOwnerKeys": "Nessuna chiave di rendering disponibile",
+  "sourceRegistered": "Sorgente registrato.",
+  "includeSvgOutput": "Includi l’output SVG",
   "aNewJobWillBeCreated": "Verrà creato un nuovo processo con l’input originale.",
   "aShortLivedReferenceForPassing": "Riferimento di breve durata per passare lo stesso input a Remote MCP.",
   "accountAndAppearance": "Account e aspetto",
