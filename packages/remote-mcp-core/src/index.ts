@@ -1692,7 +1692,9 @@ export class RemoteRenderService {
         timestamp,
       );
       if (replay) return replay.id;
-      const previous = this.assertOwned(identity.userId, jobId);
+      const previous = this.assertOwned(identity.userId, jobId, {
+        provisionPrincipal: false,
+      });
       if (
         ![
           "succeeded",
@@ -1763,7 +1765,9 @@ export class RemoteRenderService {
     timestamp: string,
   ): JobRow | undefined {
     const jobId = this.findOperationRequest(userId, request, timestamp);
-    return jobId === undefined ? undefined : this.assertOwned(userId, jobId);
+    return jobId === undefined
+      ? undefined
+      : this.assertOwned(userId, jobId, { provisionPrincipal: false });
   }
 
   private recordOperationRequest(userId: string, request: OperationRequest | undefined, resourceId: string, timestamp: string) {
@@ -1812,7 +1816,10 @@ export class RemoteRenderService {
   ) {
     requireScope(identity.scopes, "mcp:read");
     return inspectJobPdf(this.database, jobId, sha256, {
-      readJob: () => this.assertReadableJob(identity.userId, jobId),
+      readJob: () =>
+        this.assertReadableJob(identity.userId, jobId, {
+          provisionPrincipal: false,
+        }),
       sources: this.sources,
       retentionHours: this.artifactRetentionHours,
       request,
@@ -3141,7 +3148,11 @@ export class RemoteRenderService {
     );
   }
 
-  private assertReadableJob(userId: string, jobId: string): JobRow {
+  private assertReadableJob(
+    userId: string,
+    jobId: string,
+    options?: { provisionPrincipal: boolean },
+  ): JobRow {
     const visible = this.database.jobs.getVisible(jobId);
     if (
       visible?.user_id === userId &&
@@ -3149,16 +3160,20 @@ export class RemoteRenderService {
       this.database.drafts.isOwnedProjectPreview(jobId, userId)
     )
       return visible;
-    return this.assertOwned(userId, jobId);
+    return this.assertOwned(userId, jobId, options);
   }
 
-  private assertOwned(userId: string, jobId: string): JobRow {
-    const principal = this.ensurePrincipal(userId),
-      row = this.database.jobs.getOwned(
-        jobId,
-        userId,
-        principal.service_account_id,
-      );
+  private assertOwned(
+    userId: string,
+    jobId: string,
+    { provisionPrincipal = true } = {},
+  ): JobRow {
+    const principal = provisionPrincipal
+      ? this.ensurePrincipal(userId)
+      : this.database.remoteMcp.principal(userId);
+    const row =
+      principal &&
+      this.database.jobs.getOwned(jobId, userId, principal.service_account_id);
     if (row === undefined)
       throw new AppError("JOB_NOT_FOUND", "Job does not exist", 404);
     return row;

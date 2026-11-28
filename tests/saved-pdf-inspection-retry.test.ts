@@ -7,6 +7,10 @@ import {
 } from "../apps/renderer-worker/src/pdf-inspection.js";
 import * as docker from "../apps/renderer-worker/src/docker.js";
 import * as stage from "../apps/renderer-worker/src/renderer-stage.js";
+import {
+  operationRequest,
+  recordOperationRequest,
+} from "../packages/renderer-core/src/operation-requests.js";
 import { defined } from "./helpers/assert-defined.js";
 import {
   pipelineDocument,
@@ -214,21 +218,48 @@ describe.skipIf(realPipelineImage !== undefined)(
       }
     });
 
-    // inspectJobPdf runs the ownership check inside a transaction in
-    // packages/renderer-core/src/pdf-inspection.ts:108. With no principal yet,
-    // packages/remote-mcp-core/src/index.ts:3037 opens a nested transaction,
-    // producing ERR_SQLITE_ERROR instead of JOB_NOT_FOUND.
-    it.fails(
-      "returns JOB_NOT_FOUND on a first inspection request by another user",
-      async () => {
+    it.each([true, false])(
+      "returns JOB_NOT_FOUND without writes on first inspection by another user (request=%s)",
+      async (request) => {
         const f = await savedPdfFixture();
         try {
           expect(
             f.database.remoteMcp.principal(outsider.userId),
           ).toBeUndefined();
+          const writes = f.database.raw.prepare("SELECT total_changes()");
+          const before = writes.get();
           expect(() =>
-            f.renders.pdfInspection(outsider, f.job.id, f.pdf.sha256, true),
+            f.renders.pdfInspection(outsider, f.job.id, f.pdf.sha256, request),
           ).toThrow(expect.objectContaining({ code: "JOB_NOT_FOUND" }));
+          expect(writes.get()).toEqual(before);
+        } finally {
+          await f.close();
+        }
+      },
+    );
+
+    it.each([undefined, "foreign-render-retry-replay"])(
+      "returns JOB_NOT_FOUND without writes on a first render retry by another user (replay key=%s)",
+      async (key) => {
+        const f = await savedPdfFixture();
+        try {
+          const actor = { ...outsider, scopes: ["mcp:render"] as const };
+          recordOperationRequest(
+            f.database,
+            { type: "oauth", id: actor.userId },
+            operationRequest("remote_mcp.retry_render", key, {
+              jobId: f.job.id,
+            }),
+            f.job.id,
+            new Date().toISOString(),
+          );
+          const writes = f.database.raw.prepare("SELECT total_changes()");
+          const before = writes.get();
+          expect(f.database.remoteMcp.principal(actor.userId)).toBeUndefined();
+          expect(() => f.renders.retryRender(actor, f.job.id, key)).toThrow(
+            expect.objectContaining({ code: "JOB_NOT_FOUND" }),
+          );
+          expect(writes.get()).toEqual(before);
         } finally {
           await f.close();
         }

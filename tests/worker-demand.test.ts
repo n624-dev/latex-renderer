@@ -44,6 +44,27 @@ function fixture() {
   return { root, path, database };
 }
 
+function workerUnitStatus(
+  service: Record<string, string>,
+  socket = { ActiveState: "active", SubState: "listening" },
+) {
+  return [
+    {
+      Id: "latex-renderer-worker.service",
+      LoadState: "loaded",
+      Result: "success",
+      ...service,
+    },
+    { Id: "latex-renderer-worker.socket", ...socket },
+  ]
+    .map((unit) =>
+      Object.entries(unit)
+        .map(([key, value]) => `${key}=${value}`)
+        .join("\n"),
+    )
+    .join("\n\n");
+}
+
 it("requires explicit opt-in and bounds the idle deadline", () => {
   expect(demand.workerIdleConfiguration({})).toEqual({
     enabled: false,
@@ -95,7 +116,8 @@ it("treats a stopping Worker as unavailable in the direct health reader", () => 
   const { root, path: databasePath } = fixture();
   const path = join(root, "health.json"),
     now = Date.now();
-  const run = () => "ActiveState=active\nMainPID=1234\n";
+  const run = () =>
+    workerUnitStatus({ ActiveState: "active", MainPID: "1234" });
   for (const [stopping, state] of [
     [false, "running"],
     [true, "unavailable"],
@@ -120,10 +142,7 @@ it("treats a stopping Worker as unavailable in the direct health reader", () => 
 it("reports a listening Worker as idle while cleanup is the only demand", () => {
   const { root, path: databasePath, database } = fixture();
   const path = join(root, "health.json");
-  const run = (...args: string[]) =>
-    args.at(-1)?.endsWith(".socket")
-      ? "LoadState=loaded\nActiveState=active\nSubState=listening\n"
-      : "LoadState=loaded\nActiveState=inactive\nResult=success\n";
+  const run = () => workerUnitStatus({ ActiveState: "inactive" });
   database.exec(`INSERT INTO source_trees VALUES ('deleting');
     INSERT INTO system_settings VALUES ('maintenance_mode','"reject-new-jobs"');`);
   expect(demand.workerHasDemand(database)).toBe(true);
@@ -199,19 +218,25 @@ function healthReaders(
   };
   const path = join(f.root, "health.json");
   writeFileSync(path, JSON.stringify(heartbeat), { mode: 0o600 });
-  const run = vi.fn((...args: string[]) => {
-    const name = args.at(-1) as keyof typeof states;
-    return Object.entries(states[name])
-      .map(([key, value]) => `${key}=${value}`)
-      .join("\n");
-  });
+  const run = vi.fn(() =>
+    workerUnitStatus(
+      states["latex-renderer-worker.service"],
+      states["latex-renderer-worker.socket"],
+    ),
+  );
   const node = readWorkerHealth({
     path,
     databasePath,
     now: Date.parse(parityTime),
     run,
   });
-  expect(run.mock.calls.every(([verb]) => verb === "show")).toBe(true);
+  expect(run).toHaveBeenCalledExactlyOnceWith(
+    "show",
+    "--no-pager",
+    "--property=Id,LoadState,ActiveState,SubState,Result,MainPID",
+    "latex-renderer-worker.service",
+    "latex-renderer-worker.socket",
+  );
   const outputPath = join(f.root, "python-health.json");
   const descriptor = openSync(outputPath, "w");
   try {
@@ -414,6 +439,12 @@ it.each([
   { name: "fresh running", service: active, state: "running" },
   { name: "idle paused", mode: "paused", state: "paused" },
   {
+    name: "configured pause while the last heartbeat still says running",
+    mode: "paused",
+    service: active,
+    state: "paused",
+  },
+  {
     name: "running draining",
     mode: "draining",
     service: active,
@@ -431,15 +462,27 @@ it.each([
     state: "unavailable",
   },
   {
+    name: "running with a failed listener",
+    service: active,
+    socket: { ActiveState: "failed", SubState: "failed" },
+    state: "unavailable",
+  },
+  {
     name: "stale heartbeat",
     service: active,
     heartbeat: { ...fresh, at: "2026-11-26T23:59:29.999Z" },
     state: "unavailable",
   },
   {
-    name: "future heartbeat",
+    name: "future heartbeat within the clock-skew allowance",
     service: active,
-    heartbeat: { ...fresh, at: after },
+    heartbeat: { ...fresh, at: "2026-11-27T00:00:01.000Z" },
+    state: "running",
+  },
+  {
+    name: "future heartbeat beyond the clock-skew allowance",
+    service: active,
+    heartbeat: { ...fresh, at: "2026-11-27T00:00:01.001Z" },
     state: "unavailable",
   },
   {
@@ -456,6 +499,12 @@ it.each([
   },
   { name: "locked DB", fault: "lock", state: "unavailable" },
   { name: "corrupt DB", fault: "corrupt", state: "unavailable" },
+  {
+    name: "corrupt DB during a fresh heartbeat",
+    fault: "corrupt",
+    service: active,
+    state: "unavailable",
+  },
   { name: "missing DB", fault: "missing", state: "unavailable" },
 ])(
   "shares health semantics for $name",
@@ -480,36 +529,6 @@ it.each([
     };
     expect([node, python]).toEqual([expected, expected]);
     expect(http).toEqual([200, 200, 200, expected.operational ? 200 : 503]);
-  },
-);
-
-// The direct reader trusts the heartbeat mode, while passive health reads worker_mode from SQLite.
-it.fails(
-  "agrees on the configured pause while the last heartbeat still says running",
-  () => {
-    const f = fixture();
-    f.database.exec(
-      `INSERT INTO system_settings VALUES ('worker_mode','"paused"')`,
-    );
-    const { node, python } = healthReaders(f, { service: active });
-    expect(python).toEqual({ state: "paused", operational: false });
-    expect(node).toEqual(python);
-  },
-);
-
-// The direct reader skips the database on its healthy running path.
-it.fails(
-  "agrees on unavailable health when the database is corrupt during a fresh heartbeat",
-  () => {
-    const f = fixture();
-    const databasePath = join(f.root, "corrupt");
-    writeFileSync(databasePath, "not a SQLite database");
-    const { node, python } = healthReaders(f, {
-      service: active,
-      databasePath,
-    });
-    expect(python).toEqual({ state: "unavailable", operational: false });
-    expect(node).toEqual(python);
   },
 );
 

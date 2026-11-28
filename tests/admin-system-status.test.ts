@@ -1,17 +1,21 @@
 import { japaneseAdminMessage } from "./helpers/admin-message.js";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { RendererDatabase } from "@latex-renderer/database";
 import { AdminSystemService } from "../apps/admin-api/src/services/system.js";
 import { createDashboard } from "../apps/admin-web/src/browser/admin/dashboard.js";
 
-// The Admin API fallback currently accepts a negative heartbeat age.
-it.fails(
-  "reports a future database heartbeat as unavailable without a host status reader",
-  () => {
+it.each([
+  { offset: 1_000, fresh: true, state: "running" },
+  { offset: 1_001, fresh: false, state: "unavailable" },
+  { offset: 60_000, fresh: false, state: "unavailable" },
+])(
+  "reports a database heartbeat $offset ms ahead as $state without a host status reader",
+  ({ offset, fresh, state }) => {
     const database = new RendererDatabase(":memory:");
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
     try {
       database.migrate();
-      const at = new Date(Date.now() + 60_000).toISOString();
+      const at = new Date(Date.now() + offset).toISOString();
       database.settings.upsert(
         "worker_heartbeat",
         { workerId: "test", at },
@@ -23,12 +27,13 @@ it.fails(
         writeEnabled: true,
       } as never);
       expect(service.status().rendering).toMatchObject({
-        operational: false,
-        state: "unavailable",
-        fresh: false,
+        operational: fresh,
+        state,
+        fresh,
         lastHeartbeatAt: at,
       });
     } finally {
+      clock.mockRestore();
       database.close();
     }
   },

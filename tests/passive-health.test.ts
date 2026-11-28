@@ -1,6 +1,7 @@
 import { chmodSync, mkdtempSync, rmSync, symlinkSync, linkSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import {
   readWorkerHealth,
@@ -13,9 +14,22 @@ it.skipIf(process.platform === "win32")(
   "keeps passive worker health bounded, fresh and bound to the running PID",
   () => {
     const directory = mkdtempSync(join(tmpdir(), "worker-health-")),
-      path = join(directory, "state.json");
-    const now = Date.now(),
-      run = () => `ActiveState=active\nMainPID=${process.pid}\n`;
+      path = join(directory, "state.json"),
+      databasePath = join(directory, "state.sqlite3");
+    const db = new DatabaseSync(databasePath);
+    const now = Date.now();
+    const run =
+      (pid = process.pid, active = "active") =>
+      () => `Id=latex-renderer-worker.service
+LoadState=loaded
+ActiveState=${active}
+MainPID=${pid}
+Result=success
+
+Id=latex-renderer-worker.socket
+ActiveState=active
+SubState=listening`;
+    const options = { path, now, databasePath, run: run() };
     const write = (mode = "running", stopping = false, at = now) =>
       writeWorkerHealth(path, {
         at: new Date(at).toISOString(),
@@ -23,41 +37,41 @@ it.skipIf(process.platform === "win32")(
         stopping,
       });
     try {
+      db.exec("CREATE TABLE system_settings(key TEXT, value_json TEXT)");
       write();
-      expect(readWorkerHealth({ path, now, run }).operational).toBe(true);
+      expect(readWorkerHealth(options).operational).toBe(true);
       expect(
-        readWorkerHealth({ path, now: now + 31_000, run }).operational,
+        readWorkerHealth({ ...options, now: now + 31_000 }).operational,
       ).toBe(false);
       expect(
         readWorkerHealth({
-          path,
-          now,
-          run: () => "ActiveState=active\nMainPID=999999\n",
+          ...options,
+          run: run(999999),
         }).operational,
       ).toBe(false);
       expect(
         readWorkerHealth({
-          path,
-          now,
-          run: () => `ActiveState=inactive\nMainPID=${process.pid}\n`,
+          ...options,
+          run: run(process.pid, "activating"),
         }).operational,
       ).toBe(false);
       write("paused");
-      expect(readWorkerHealth({ path, now, run }).operational).toBe(false);
+      expect(readWorkerHealth(options).operational).toBe(true);
       write("running", true);
-      expect(readWorkerHealth({ path, now, run }).operational).toBe(false);
+      expect(readWorkerHealth(options).operational).toBe(false);
       write();
       linkSync(path, join(directory, "second-link"));
-      expect(readWorkerHealth({ path, now, run }).operational).toBe(false);
+      expect(readWorkerHealth(options).operational).toBe(false);
       rmSync(join(directory, "second-link"));
       const alias = join(directory, "alias.json");
       symlinkSync(path, alias);
-      expect(readWorkerHealth({ path: alias, now, run }).operational).toBe(
+      expect(readWorkerHealth({ ...options, path: alias }).operational).toBe(
         false,
       );
       chmodSync(directory, 0o770);
-      expect(readWorkerHealth({ path, now, run }).operational).toBe(false);
+      expect(readWorkerHealth(options).operational).toBe(false);
     } finally {
+      db.close();
       rmSync(directory, { recursive: true, force: true });
     }
   },

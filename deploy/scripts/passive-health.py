@@ -108,7 +108,7 @@ def snapshot(database=DB, states=service_states, health=read_worker_health):
                 heartbeat = health()
                 age = (now - datetime.datetime.fromisoformat(heartbeat["at"])).total_seconds()
                 pid = heartbeat.get("pid")
-                if (0 <= age <= 30 and heartbeat.get("stopping") is False and
+                if (-1 <= age <= 30 and heartbeat.get("stopping") is False and
                         type(pid) is int and pid > 1 and
                         str(pid) == records["latex-renderer-worker.service"].get("MainPID")):
                     value["worker"] = mode

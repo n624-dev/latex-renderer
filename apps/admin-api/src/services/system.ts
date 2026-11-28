@@ -1,5 +1,6 @@
 import { AppError, nowIso } from "@latex-renderer/shared";
 import type { MaintenanceMode } from "@latex-renderer/contracts";
+import { isWorkerHeartbeatFresh } from "../../../../deploy/scripts/worker-health.mjs";
 import type { AdminActor, AdminDependencies } from "../types.js";
 import {
   runtimeSettingDefinitions,
@@ -100,10 +101,8 @@ export class AdminSystemService {
         "worker_mode",
         "running",
       ),
-      age =
-        heartbeat === null ? Infinity : Date.now() - Date.parse(heartbeat.at),
       fresh =
-        Number.isFinite(age) && age <= 30_000 && heartbeat?.stopping !== true;
+        isWorkerHeartbeatFresh(heartbeat?.at) && heartbeat?.stopping !== true;
     const status = this.deps.workerStatus?.();
     return {
       operational: (status?.operational ?? fresh) && mode === "running",
