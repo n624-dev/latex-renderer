@@ -1125,7 +1125,14 @@ function installJob(fetcher: Fetcher) {
       };
       controls.append(button);
     };
-    const terminal = ["succeeded", "failed", "timeout", "canceled", "rejected"];
+    const terminal = [
+      "succeeded",
+      "failed",
+      "timeout",
+      "canceled",
+      "rejected",
+      "expired",
+    ];
     if (
       ["reserved", "uploading", "queued", "validating", "running"].includes(
         status,
@@ -1152,7 +1159,7 @@ function installJob(fetcher: Fetcher) {
         location.assign(`/app/jobs/${encodeURIComponent(result.jobId)}/`);
       });
     }
-    if (terminal.includes(status) || status === "expired") {
+    if (terminal.includes(status)) {
       add(
         jobActionLabels.delete,
         async () => {

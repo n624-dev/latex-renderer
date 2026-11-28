@@ -695,11 +695,7 @@ export class JobsRepository {
   findRetrySource(id: string): JobRow | undefined {
     return this.db
       .prepare(
-        `SELECT id,user_id,service_account_id,api_key_id,status,renderer_version,source_size,source_sha256,
-      created_at,updated_at,queued_at,started_at,completed_at,exit_code,error_code,error_message,output_size,
-      cancel_requested_at,retry_of_job_id,lease_owner,lease_expires_at,heartbeat_at,lease_generation,deleted_at,source_id,entrypoint,project_revision_id,outputs_json,engine,runtime_digest,reserved_output_bytes,
-      render_status,deletion_status,deletion_attempts,deletion_error,deletion_next_attempt_at FROM jobs
-      WHERE id=? AND ${userJobSql()} AND status IN ('succeeded','failed','timeout','canceled','rejected')`,
+        `SELECT * FROM jobs WHERE id=? AND ${userJobSql()} AND status IN (${TERMINAL})`,
       )
       .get(id) as unknown as JobRow | undefined;
   }

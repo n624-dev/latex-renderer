@@ -9,7 +9,9 @@ terminal -> deleting -> deleted
 
 All transitions use compare-and-swap updates inside SQLite transactions. Upload nonces move `unused -> claimed -> consumed`; interrupted claims may be released, while a consumed nonce cannot be replayed. A worker atomically leases one queued job, heartbeats every second, and extends a 30-second lease. At startup it stops an orphaned container and fails that job, or requeues a stale job only when no container exists. Overall job timeout is independent of compile and preview subprocess limits.
 
-Cancellation prevents queued work from entering `running` and stops an active named container. Cleanup enters `deleting`, checks leases, removes job files, then records `deleted`. A retry must be a new job; it never rewrites the original record.
+Cancellation prevents queued work from entering `running` and stops an active named container. Cleanup enters `deleting`, checks leases, removes job files, then records `deleted`. A whole-Job retry creates a new Job linked to the original. An `expired` Job remains eligible while its original Source is ready. An SVG-only retry requeues the existing Job and uses its retained PDF.
+
+Ready-Source renders, new draft previews, and both kinds of retry check free storage at registration. Legacy reservations check free storage when the upload arrives. Each new draft preview records a `render.draft_preview.queued` audit event with the project ID, draft version, and Job ID in the registration transaction. Reusing an existing preview creates no registration event.
 
 The renderer reports timeout stages separately in Job `errorCode`: `LATEX_COMPILE_TIMEOUT`
 for LaTeX, `PREVIEW_TIMEOUT` for PDF inspection/PNG generation, and `SVG_TIMEOUT`

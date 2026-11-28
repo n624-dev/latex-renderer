@@ -1,8 +1,37 @@
+import { statfsSync } from "node:fs";
 import { AppError } from "@latex-renderer/shared";
 import type { RendererDatabase } from "./index.js";
 import { defaultMaxUserActiveJobs } from "./runtime-settings.js";
 
 type AdmissionDatabase = Pick<RendererDatabase, "jobs" | "settings">;
+
+export interface RenderStorageLimits {
+  storageRoot?: string | undefined;
+  minFreeStorageBytes?: number | undefined;
+  readFreeStorageBytes?: ((storageRoot: string) => number) | undefined;
+}
+
+export interface RenderAdmissionLimits extends RenderStorageLimits {
+  maxQueueLength: number;
+  maxUserStorageBytes: number;
+}
+
+export function assertMinimumFreeStorage(
+  storageRoot: string | undefined,
+  minFreeBytes = 0,
+  readFreeStorageBytes = availableStorageBytes,
+): void {
+  if (minFreeBytes === 0) return;
+  if (storageRoot === undefined) throw new Error("Storage root is required");
+  if (readFreeStorageBytes(storageRoot) < minFreeBytes)
+    throw new AppError("STORAGE_PRESSURE", "Insufficient free storage", 503);
+}
+
+function availableStorageBytes(storageRoot: string): number {
+  // Sample inside the synchronous registration transaction, after replay checks.
+  const { bavail, bsize } = statfsSync(storageRoot);
+  return bavail * bsize;
+}
 
 export function assertRenderAvailable(
   db: Pick<RendererDatabase, "settings">,
@@ -39,9 +68,14 @@ export function assertUserStorageQuota(
 export function assertRenderAdmission(
   db: AdmissionDatabase,
   { userId, serviceAccountId }: { userId: string; serviceAccountId: string },
-  limits: { maxQueueLength: number; maxUserStorageBytes: number },
+  limits: RenderAdmissionLimits,
   requestedBytes: number,
 ): void {
+  assertMinimumFreeStorage(
+    limits.storageRoot,
+    limits.minFreeStorageBytes,
+    limits.readFreeStorageBytes,
+  );
   assertRenderAvailable(db);
   if (
     db.jobs.countActive() >=

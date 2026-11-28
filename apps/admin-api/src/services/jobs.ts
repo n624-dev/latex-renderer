@@ -1,12 +1,13 @@
 import { createHash, randomBytes } from "node:crypto";
-import { statfs } from "node:fs/promises";
 import { AppError, newId, nowIso } from "@latex-renderer/shared";
 import {
-  ProjectOperations,
   ProjectDraftOperations,
   SvgRetryOperations,
   sourceRequestExpiresAt,
-  assertRenderAdmission,
+  registerReadyRender,
+  registerReservedRender,
+  registerWholeRenderRetry,
+  requireReadyRenderSource,
   assertSourceWritable,
   createSourceReference,
   assertUserStorageQuota,
@@ -38,30 +39,20 @@ export class AdminJobsService {
     version: number,
     principal: { api_key_id: string; service_account_id: string },
   ) {
-    const free = await statfs(this.deps.storageRoot);
     const drafts = new ProjectDraftOperations(
       this.deps.database,
       this.deps.maxFileCount,
       this.deps.maxZipEntries,
     );
-    const result = drafts.queuePreview(actor, projectId, version, {
-      apiKeyId: principal.api_key_id,
-      serviceAccountId: principal.service_account_id,
-      rendererVersion: this.deps.rendererVersion,
-      runtime: process.env.RENDERER_IMAGE ?? null,
-      retentionHours: this.deps.artifactRetentionHours,
-      reservedOutputBytes: this.deps.maxOutputBytes,
-      admit: () => {
-        if (free.bavail * free.bsize < this.deps.minFreeStorageBytes)
-          throw new AppError(
-            "STORAGE_PRESSURE",
-            "Insufficient free storage",
-            503,
-          );
-        this.assertAccepting(actor.userId, principal.service_account_id, 0);
-      },
-    });
-    return result;
+    return Promise.resolve(
+      drafts.queuePreview(actor, projectId, version, {
+        ...this.deps,
+        apiKeyId: principal.api_key_id,
+        serviceAccountId: principal.service_account_id,
+        runtime: process.env.RENDERER_IMAGE ?? null,
+        retentionHours: this.deps.artifactRetentionHours,
+      }),
+    );
   }
   list(
     filters: {
@@ -340,57 +331,22 @@ export class AdminJobsService {
     ]);
     try {
       this.deps.database.transaction(() => {
-        this.assertAccepting(
-          identity.user_id,
-          identity.service_account_id,
-          input.size,
-        );
-        this.deps.database.sources.insertReserved({
-          id: sourceId,
-          ownerUserId: identity.user_id,
-          size: input.size,
-          sha256: input.sha256,
-          storageKey: `sources/${sourceId}/source.zip`,
-          timestamp,
-          expiresAt,
-          dedupeEligible: false,
-        });
-        this.deps.database.jobs.insertReserved({
+        registerReservedRender(this.deps.database, this.deps, {
+          ...subject,
           id: jobId,
-          userId: identity.user_id,
-          serviceAccountId: identity.service_account_id,
-          apiKeyId: identity.api_key_id,
-          rendererVersion: this.deps.rendererVersion,
+          actor,
+          operation: "admin.render.create",
+          sourceId,
           sourceSize: input.size,
           sourceSha256: input.sha256,
-          timestamp,
-          sourceId,
           outputs: input.outputs,
           engine,
-          reservedOutputBytes: this.deps.maxOutputBytes,
-        });
-        this.deps.database.security.insertNonce(nonce, jobId, expiresAt);
-        this.deps.database.security.insertIdempotency({
-          actorType: actor.type,
-          actorId: actor.id,
-          operation: "admin.render.create",
+          nonce,
           keyHash,
           requestHash,
-          resourceId: jobId,
-          responseCode: 201,
+          timestamp,
           expiresAt,
-          createdAt: timestamp,
-        });
-        this.deps.database.audit({
-          actorType: actor.type,
-          actorId: actor.id,
-          action: "render.reserved",
-          targetType: "job",
-          targetId: jobId,
-          result: "success",
-          metadata: {
-            sourceSize: input.size,
-            sourceSha256: input.sha256,
+          auditMetadata: {
             apiKeyId: identity.api_key_id,
             serviceAccountId: identity.service_account_id,
           },
@@ -709,23 +665,13 @@ export class AdminJobsService {
         value: await this.issueExistingSourceJob(existing.resource_id),
       };
     }
-    const source = this.deps.database.sources.getOwnedReady(
-      input.sourceId,
-      identity.user_id,
-      nowIso(),
-    );
-    if (source === undefined)
-      throw new AppError(
-        "SOURCE_NOT_READY",
-        "Source does not exist or is not ready",
-        409,
-      );
-    if (!this.deps.database.sources.paths(source).includes(entrypoint))
-      throw new AppError(
-        "ENTRYPOINT_MISSING",
-        "Source does not contain the requested entrypoint",
-        422,
-      );
+    requireReadyRenderSource(this.deps.database, {
+      sourceId: input.sourceId,
+      userId: identity.user_id,
+      serviceAccountId: identity.service_account_id,
+      entrypoint,
+      timestamp: nowIso(),
+    });
     const jobId = newId("job"),
       timestamp = nowIso(),
       jobTicket = await this.renderTicketConfig().tickets.issueJob({
@@ -740,59 +686,27 @@ export class AdminJobsService {
     let createdProjectRevisionId: string | undefined;
     try {
       this.deps.database.transaction(() => {
-        this.assertAccepting(identity.user_id, identity.service_account_id, 0);
-        const currentSource = this.deps.database.sources.getOwnedReady(
-          input.sourceId,
-          identity.user_id,
-          timestamp,
-        );
-        if (currentSource === undefined)
-          throw new AppError(
-            "SOURCE_NOT_READY",
-            "Source does not exist or is not ready",
-            409,
-          );
-        if (
-          !this.deps.database.sources.paths(currentSource).includes(entrypoint)
-        )
-          throw new AppError(
-            "ENTRYPOINT_MISSING",
-            "Source does not contain the requested entrypoint",
-            422,
-          );
-        const resolvedProject =
-            input.project === undefined
-              ? undefined
-              : this.resolveProjectRevision(
-                  actor,
-                  currentSource.id,
-                  entrypoint,
-                  engine,
-                  input.project,
-                ),
-          projectRevisionId = resolvedProject?.id;
-        createdProjectRevisionId = projectRevisionId;
-        if (
-          this.deps.database.jobs.insertQueued({
+        createdProjectRevisionId = registerReadyRender(
+          this.deps.database,
+          this.deps,
+          {
             id: jobId,
             userId: identity.user_id,
             serviceAccountId: identity.service_account_id,
             apiKeyId: identity.api_key_id,
-            rendererVersion: this.deps.rendererVersion,
-            sourceId: currentSource.id,
+            actor,
+            action: "render.queued",
+            sourceId: input.sourceId,
             entrypoint,
             outputs: input.outputs,
             engine,
-            ...(projectRevisionId === undefined ? {} : { projectRevisionId }),
+            project:
+              input.project && "revisionId" in input.project
+                ? { ...input.project, touch: true }
+                : input.project,
             timestamp,
-            reservedOutputBytes: this.deps.maxOutputBytes,
-          }) !== 1
-        )
-          throw new AppError(
-            "SOURCE_NOT_READY",
-            "Source changed while the Render Job was being created",
-            409,
-          );
+          },
+        );
         this.deps.database.security.insertIdempotency({
           actorType: actor.type,
           actorId: actor.id,
@@ -803,19 +717,6 @@ export class AdminJobsService {
           responseCode: 201,
           expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
           createdAt: timestamp,
-        });
-        this.deps.database.audit({
-          actorType: actor.type,
-          actorId: actor.id,
-          action: "render.queued",
-          targetType: "job",
-          targetId: jobId,
-          result: "success",
-          metadata: {
-            sourceId: currentSource.id,
-            entrypoint,
-            ...(projectRevisionId === undefined ? {} : { projectRevisionId }),
-          },
         });
         if (input.project !== undefined && "revisionId" in input.project)
           this.deps.database.audit({
@@ -856,63 +757,6 @@ export class AdminJobsService {
           : { projectRevisionId: createdProjectRevisionId }),
         expiresAt: new Date(Date.now() + 1_800_000).toISOString(),
       },
-    };
-  }
-
-  private resolveProjectRevision(
-    actor: AppActor,
-    sourceId: string,
-    entrypoint: string,
-    engine: RenderEngine,
-    project:
-      | {
-          projectId: string;
-          displayName: string;
-          originalFilename: string;
-          outputs: RenderOutput[];
-        }
-      | { projectId: string; revisionId: string },
-  ): { id: string } {
-    const owned = this.deps.database.projects.getOwned(
-      project.projectId,
-      actor.userId,
-    );
-    if (owned === undefined)
-      throw new AppError("PROJECT_NOT_FOUND", "Project does not exist", 404);
-    if ("revisionId" in project) {
-      const revision = this.deps.database.projects.revisionOwned(
-        project.revisionId,
-        actor.userId,
-      );
-      if (
-        revision?.project_id !== owned.id ||
-        revision.source_id !== sourceId ||
-        revision.entrypoint !== entrypoint ||
-        revision.engine !== engine
-      )
-        throw new AppError(
-          "PROJECT_REVISION_NOT_FOUND",
-          "Project revision does not exist",
-          404,
-        );
-      this.deps.database.projects.touch(owned.id, nowIso());
-      return {
-        id: revision.id,
-      };
-    }
-    const revision = new ProjectOperations(
-      this.deps.database,
-    ).attachRevisionInTransaction(actor, {
-      projectId: owned.id,
-      sourceId,
-      entrypoint,
-      displayName: project.displayName,
-      originalFilename: project.originalFilename,
-      outputs: project.outputs,
-      engine,
-    });
-    return {
-      id: revision.id,
     };
   }
 
@@ -985,13 +829,16 @@ export class AdminJobsService {
   ): Promise<{ id: string; reused: boolean }> {
     const row = this.deps.database.jobs.getVisible(id);
     if (!row) throw new AppError("JOB_NOT_FOUND", "Job does not exist", 404);
-    const fs = await statfs(this.deps.storageRoot);
-    if (fs.bavail * fs.bsize < this.deps.minFreeStorageBytes)
-      throw new AppError("STORAGE_PRESSURE", "Insufficient free storage", 503);
-    return new SvgRetryOperations(this.deps.database, {
-      ...this.deps,
-      runtimeImage: process.env.RENDERER_IMAGE,
-    }).retry({ userId: row.user_id, type: actor.type, id: actor.id }, id, key);
+    return Promise.resolve(
+      new SvgRetryOperations(this.deps.database, {
+        ...this.deps,
+        runtimeImage: process.env.RENDERER_IMAGE,
+      }).retry(
+        { userId: row.user_id, type: actor.type, id: actor.id },
+        id,
+        key,
+      ),
+    );
   }
 
   async retry(
@@ -1035,53 +882,23 @@ export class AdminJobsService {
         reused: true,
       };
     }
-    if (this.deps.database.jobs.getVisible(sourceJobId) === undefined)
-      throw new AppError("JOB_NOT_FOUND", "Job does not exist", 404);
-    const source = this.deps.database.jobs.findRetrySource(sourceJobId);
-    if (source === undefined)
-      throw new AppError(
-        "JOB_NOT_RETRYABLE",
-        "Job does not exist or is not retryable",
-        409,
-      );
-    const fs = await statfs(this.deps.storageRoot);
-    if (fs.bavail * fs.bsize < this.deps.minFreeStorageBytes)
-      throw new AppError("STORAGE_PRESSURE", "Insufficient free storage", 503);
-    if (source.source_id === null)
-      throw new AppError(
-        "SOURCE_EXPIRED",
-        "The original source is unavailable",
-        410,
-      );
-    const sourceId = source.source_id;
-    const shared = this.deps.database.sources.getReady(sourceId, nowIso());
-    if (shared === undefined)
-      throw new AppError(
-        "SOURCE_EXPIRED",
-        "The original source is unavailable",
-        410,
-      );
-    const id = newId("job");
+    let id: string;
     try {
       const timestamp = nowIso();
-      this.deps.database.transaction(() => {
-        this.assertAccepting(source.user_id, source.service_account_id, 0);
-        const currentSource = this.deps.database.sources.getReady(
-          sourceId,
+      id = this.deps.database.transaction(() => {
+        if (this.deps.database.jobs.getVisible(sourceJobId) === undefined)
+          throw new AppError("JOB_NOT_FOUND", "Job does not exist", 404);
+        const id = registerWholeRenderRetry(this.deps.database, this.deps, {
+          originalId: sourceJobId,
           timestamp,
-        );
-        if (currentSource === undefined)
-          throw new AppError(
-            "SOURCE_EXPIRED",
-            "The original source is unavailable",
-            410,
-          );
-        this.deps.database.jobs.insertRetry({
-          id,
-          source,
-          rendererVersion: this.deps.rendererVersion,
-          timestamp,
-          reservedOutputBytes: this.deps.maxOutputBytes,
+          notRetryable: "Job does not exist or is not retryable",
+          checkSourceBeforeAdmission: true,
+          sourceUnavailable: () =>
+            new AppError(
+              "SOURCE_EXPIRED",
+              "The original source is unavailable",
+              410,
+            ),
         });
         this.deps.database.security.insertIdempotency({
           actorType: actor.type,
@@ -1103,8 +920,8 @@ export class AdminJobsService {
           result: "success",
           metadata: { retryOfJobId: sourceJobId },
         });
+        return id;
       });
-      return { id, retryOfJobId: sourceJobId, reused: false };
     } catch (error) {
       const raced = this.deps.database.security.idempotency(
         actor.type,
@@ -1121,19 +938,7 @@ export class AdminJobsService {
         };
       throw error;
     }
-  }
-
-  private assertAccepting(
-    userId: string,
-    serviceAccountId: string,
-    requestedBytes: number,
-  ): void {
-    assertRenderAdmission(
-      this.deps.database,
-      { userId, serviceAccountId },
-      this.deps,
-      requestedBytes + this.deps.maxOutputBytes,
-    );
+    return Promise.resolve({ id, retryOfJobId: sourceJobId, reused: false });
   }
 
   private renderTicketConfig() {

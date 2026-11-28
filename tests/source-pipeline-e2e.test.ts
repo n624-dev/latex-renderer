@@ -283,8 +283,9 @@ describe(`Source pipeline HTTP/DB/Worker E2E (${realPipelineImage === undefined 
             apiKeyId: row.api_key_id,
             rendererVersion: "pipeline-test",
             runtime: f.config.image,
-            reservedOutputBytes: 256 * 1024,
-            admit: () => {},
+            maxOutputBytes: 256 * 1024,
+            maxQueueLength: 100,
+            maxUserStorageBytes: 1024 ** 3,
           });
           await f.runNext();
           await diagnostic.flush();

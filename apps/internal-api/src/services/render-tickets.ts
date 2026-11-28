@@ -1,5 +1,4 @@
 import { createHash, randomBytes } from "node:crypto";
-import { statfs } from "node:fs/promises";
 import type { AuthenticatedServiceAccount } from "@latex-renderer/auth";
 import {
   defaultRenderEngine,
@@ -8,7 +7,9 @@ import {
 } from "@latex-renderer/contracts";
 import { AppError, nowIso } from "@latex-renderer/shared";
 import {
-  assertRenderAdmission,
+  registerReadyRender,
+  registerReservedRender,
+  requireReadyRenderSource,
   canRenderDraftPreview,
   ProjectDraftOperations,
   SvgRetryOperations,
@@ -23,45 +24,35 @@ export class RenderTicketsService {
     projectId: string,
     version: number,
   ) {
-    const { database, sourceLimits, storageRoot, minFreeStorageBytes } =
-      this.deps;
+    const { database, sourceLimits, storageRoot } = this.deps;
     if (storageRoot === undefined)
       throw new AppError(
         "AUTHORING_UNAVAILABLE",
         "Authoring operations are unavailable",
         503,
       );
-    const free = await statfs(storageRoot);
     const drafts = new ProjectDraftOperations(
       database,
       sourceLimits?.maxFileCount,
       sourceLimits?.maxZipEntries,
     );
-    return drafts.queuePreview(
-      {
-        userId: actor.userId,
-        type: "service_account",
-        id: actor.serviceAccountId,
-      },
-      projectId,
-      version,
-      {
-        apiKeyId: actor.apiKeyId,
-        serviceAccountId: actor.serviceAccountId,
-        rendererVersion: this.deps.rendererVersion,
-        runtime: process.env.RENDERER_IMAGE ?? null,
-        retentionHours: this.deps.artifactRetentionHours,
-        reservedOutputBytes: this.deps.maxOutputBytes,
-        admit: () => {
-          if (free.bavail * free.bsize < (minFreeStorageBytes ?? 0))
-            throw new AppError(
-              "STORAGE_PRESSURE",
-              "Insufficient free storage",
-              503,
-            );
-          this.assertAccepting(actor, 0);
+    return Promise.resolve(
+      drafts.queuePreview(
+        {
+          userId: actor.userId,
+          type: "service_account",
+          id: actor.serviceAccountId,
         },
-      },
+        projectId,
+        version,
+        {
+          apiKeyId: actor.apiKeyId,
+          serviceAccountId: actor.serviceAccountId,
+          runtime: process.env.RENDERER_IMAGE ?? null,
+          retentionHours: this.deps.artifactRetentionHours,
+          ...this.deps,
+        },
+      ),
     );
   }
   async create(
@@ -174,52 +165,21 @@ export class RenderTicketsService {
       expiresAt = new Date(Date.now() + 600_000).toISOString();
     try {
       this.deps.database.transaction(() => {
-        this.assertAccepting(actor, input.size);
-        this.deps.database.sources.insertReserved({
-          id: sourceId,
-          ownerUserId: actor.userId,
-          serviceAccountId: actor.serviceAccountId,
-          size: input.size,
-          sha256: input.sha256,
-          storageKey: `sources/${sourceId}/source.zip`,
-          timestamp,
-          expiresAt,
-          dedupeEligible: false,
-        });
-        this.deps.database.jobs.insertReserved({
+        registerReservedRender(this.deps.database, this.deps, {
+          ...subject,
           id: jobId,
-          userId: actor.userId,
-          serviceAccountId: actor.serviceAccountId,
-          apiKeyId: actor.apiKeyId,
-          rendererVersion: this.deps.rendererVersion,
+          actor: { type: "service_account", id: actor.serviceAccountId },
+          operation: "render.create",
+          sourceId,
           sourceSize: input.size,
           sourceSha256: input.sha256,
-          timestamp,
-          sourceId,
           outputs,
           engine,
-          reservedOutputBytes: this.deps.maxOutputBytes,
-        });
-        this.deps.database.security.insertNonce(nonce, jobId, expiresAt);
-        this.deps.database.security.insertIdempotency({
-          actorType: "service_account",
-          actorId: actor.serviceAccountId,
-          operation: "render.create",
+          nonce,
           keyHash,
           requestHash,
-          resourceId: jobId,
-          responseCode: 201,
+          timestamp,
           expiresAt,
-          createdAt: timestamp,
-        });
-        this.deps.database.audit({
-          actorType: "service_account",
-          actorId: actor.serviceAccountId,
-          action: "render.reserved",
-          targetType: "job",
-          targetId: jobId,
-          result: "success",
-          metadata: { sourceSize: input.size, sourceSha256: input.sha256 },
         });
       });
     } catch (error) {
@@ -304,96 +264,33 @@ export class RenderTicketsService {
         value: await this.issueExistingSourceJob(actor, existing.resource_id),
       };
     }
-    const source = this.deps.database.sources.getOwnedReady(
-      input.sourceId,
-      actor.userId,
-      nowIso(),
-      actor.serviceAccountId,
-    );
-    if (source === undefined)
-      throw new AppError(
-        "SOURCE_NOT_READY",
-        "Source does not exist or is not ready",
-        409,
-      );
-    if (!this.deps.database.sources.paths(source).includes(entrypoint))
-      throw new AppError(
-        "ENTRYPOINT_MISSING",
-        "Source does not contain the requested entrypoint",
-        422,
-      );
+    requireReadyRenderSource(this.deps.database, {
+      ...actor,
+      sourceId: input.sourceId,
+      entrypoint,
+      timestamp: nowIso(),
+    });
     const jobId = `job_${randomBytes(16).toString("hex")}`,
       timestamp = nowIso(),
       jobTicket = await this.deps.tickets.issueJob(toSubject(actor, jobId));
     try {
       this.deps.database.transaction(() => {
-        this.assertAccepting(actor, 0);
-        const currentSource = this.deps.database.sources.getOwnedReady(
-          input.sourceId,
-          actor.userId,
-          timestamp,
-          actor.serviceAccountId,
-        );
-        if (currentSource === undefined)
-          throw new AppError(
-            "SOURCE_NOT_READY",
-            "Source does not exist or is not ready",
-            409,
-          );
-        if (
-          !this.deps.database.sources.paths(currentSource).includes(entrypoint)
-        )
-          throw new AppError(
-            "ENTRYPOINT_MISSING",
-            "Source does not contain the requested entrypoint",
-            422,
-          );
-        const revision =
-          input.project === undefined
-            ? undefined
-            : this.deps.database.projects.revisionOwned(
-                input.project.revisionId,
-                actor.userId,
-              );
-        if (
-          input.project !== undefined &&
-          (this.deps.database.projects.getOwned(
-            input.project.projectId,
-            actor.userId,
-          ) === undefined ||
-            revision?.project_id !== input.project.projectId ||
-            revision.source_id !== currentSource.id ||
-            revision.entrypoint !== entrypoint ||
-            revision.engine !== engine)
-        )
-          throw new AppError(
-            "PROJECT_REVISION_NOT_FOUND",
-            "Project revision does not exist",
-            404,
-          );
-        if (
-          this.deps.database.jobs.insertQueued({
-            id: jobId,
+        registerReadyRender(this.deps.database, this.deps, {
+          ...toSubject(actor, jobId),
+          id: jobId,
+          actor: {
+            type: "service_account",
+            id: actor.serviceAccountId,
             userId: actor.userId,
-            serviceAccountId: actor.serviceAccountId,
-            apiKeyId: actor.apiKeyId,
-            rendererVersion: this.deps.rendererVersion,
-            sourceId: currentSource.id,
-            entrypoint,
-            outputs,
-            engine,
-            ...(revision === undefined
-              ? {}
-              : { projectRevisionId: revision.id }),
-            timestamp,
-            reservedOutputBytes: this.deps.maxOutputBytes,
-          }) !== 1
-        )
-          throw new AppError(
-            "SOURCE_NOT_READY",
-            "Source changed while the Render Job was being created",
-            409,
-          );
+          },
+          action: "render.queued",
+          sourceId: input.sourceId,
+          entrypoint,
+          outputs,
+          engine,
+          project: input.project,
+          timestamp,
+        });
         this.deps.database.security.insertIdempotency({
           actorType: "service_account",
           actorId: actor.serviceAccountId,
@@ -404,23 +301,6 @@ export class RenderTicketsService {
           responseCode: 201,
           expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
           createdAt: timestamp,
-        });
-        this.deps.database.audit({
-          actorType: "service_account",
-          actorId: actor.serviceAccountId,
-          action: "render.queued",
-          targetType: "job",
-          targetId: jobId,
-          result: "success",
-          metadata: {
-            sourceId: currentSource.id,
-            entrypoint,
-            outputs,
-            engine,
-            ...(revision === undefined
-              ? {}
-              : { projectRevisionId: revision.id }),
-          },
         });
       });
     } catch (caught) {
@@ -494,17 +374,6 @@ export class RenderTicketsService {
     )
       throw new AppError("JOB_NOT_FOUND", "Job does not exist", 404);
     return row;
-  }
-  private assertAccepting(
-    actor: AuthenticatedServiceAccount,
-    requestedBytes: number,
-  ): void {
-    assertRenderAdmission(
-      this.deps.database,
-      actor,
-      this.deps,
-      requestedBytes + this.deps.maxOutputBytes,
-    );
   }
   private async issueExisting(
     actor: AuthenticatedServiceAccount,

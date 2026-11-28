@@ -13,10 +13,20 @@ export { ProjectDocumentState } from "./project-document-state.js";
 export { canRenderDraftPreview, jobTicketCredential } from "./job-credentials.js";
 export * from "./runtime-settings.js";
 export {
+  assertMinimumFreeStorage,
   assertRenderAdmission,
   assertRenderAvailable,
   assertUserStorageQuota,
+  type RenderStorageLimits,
 } from "./render-admission.js";
+export {
+  assertRenderEntrypoint,
+  requireReadyRenderSource,
+  registerReadyRender,
+  registerReservedRender,
+  registerWholeRenderRetry,
+  type RenderRegistrationLimits,
+} from "./render-registration.js";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import type { JobStatus } from "@latex-renderer/contracts";
 import { AppError, newId, nowIso } from "@latex-renderer/shared";

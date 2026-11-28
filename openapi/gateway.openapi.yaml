@@ -188,7 +188,7 @@ paths:
       - { $ref: "#/components/parameters/ProjectId" }
     post:
       summary: Queue or reuse a PDF preview of the exact shared draft version
-      description: Requires both render:create and render:draft:write. A reused preview belongs to the same user.
+      description: Requires both render:create and render:draft:write. A reused preview belongs to the same user. A new preview returns 503 STORAGE_PRESSURE if free storage falls below the configured minimum.
       security: [{ renderApiKey: [] }]
       requestBody:
         required: true
@@ -305,6 +305,7 @@ paths:
       - { $ref: "#/components/parameters/RevisionId" }
     post:
       summary: Queue a Job bound to this exact Project revision
+      description: A new render returns 503 STORAGE_PRESSURE if free storage falls below the configured minimum.
       security: [{ renderApiKey: [] }]
       parameters:
         - in: header
@@ -377,7 +378,7 @@ paths:
   /api/v1/render-tickets:
     post:
       summary: Create a render job
-      description: Reserve a job using the ZIP size and SHA-256, then return upload and job-operation tickets.
+      description: Queue a render from a ready Source, retry the SVG stage of an existing job, or reserve a job using the ZIP size and SHA-256. New queued work returns 503 STORAGE_PRESSURE if free storage falls below the configured minimum. ZIP reservations check free storage at upload.
       security: [{ renderApiKey: [] }]
       parameters:
         - in: header

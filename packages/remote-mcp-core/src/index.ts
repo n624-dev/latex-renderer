@@ -49,7 +49,11 @@ import {
   pdfInspectionUploadDirectory,
   pdfInspectionUploadResult,
   waitForPreview,
-  assertRenderAdmission,
+  assertRenderEntrypoint,
+  registerReadyRender,
+  registerWholeRenderRetry,
+  type RenderRegistrationLimits,
+  type RenderStorageLimits,
   assertRenderAvailable,
   assertSourceWritable,
   createSourceReference,
@@ -231,6 +235,7 @@ export class RemoteRenderService {
   private readonly maxInlineArtifactBytes: number;
   private readonly environment: RendererEnvironment;
   private readonly sources: RendererSourceStore;
+  private readonly registrationLimits: RenderRegistrationLimits;
   readonly draftFiles: RendererDrafts;
   private inlineArtifactBytesInFlight = 0;
   private attachmentImportsInFlight = 0;
@@ -244,13 +249,22 @@ export class RemoteRenderService {
     private readonly storageRoot: string,
     private readonly rendererVersion: string,
     private readonly publicOrigin: string,
-    private readonly maxQueueLength = 100,
+    maxQueueLength = 100,
     private readonly maxUserStorageBytes = 1024 * 1024 * 1024,
     private readonly environmentRoot = "/var/lib/latex-renderer/environment",
     private readonly resourceLimits: Readonly<ResourceLimits> = DEFAULT_RESOURCE_LIMITS,
-    private readonly maxOutputBytes = 200 * 1024 * 1024,
+    maxOutputBytes = 200 * 1024 * 1024,
     private readonly artifactRetentionHours = 24,
+    storageAdmission: Omit<RenderStorageLimits, "storageRoot"> = {},
   ) {
+    this.registrationLimits = {
+      ...storageAdmission,
+      maxQueueLength,
+      maxUserStorageBytes,
+      maxOutputBytes,
+      rendererVersion,
+      storageRoot,
+    };
     this.maxInlineArtifactBytes = inlineArtifactLimit(maxOutputBytes);
     this.sources = new RendererSourceStore(
       database,
@@ -884,13 +898,11 @@ export class RemoteRenderService {
     const actor = this.projectActor(identity);
     const principal = this.ensurePrincipal(actor.userId);
     return this.draftOperations().queuePreview(actor, projectId, version, {
+      ...this.registrationLimits,
       apiKeyId: principal.api_key_id,
       serviceAccountId: principal.service_account_id,
-      rendererVersion: this.rendererVersion,
       runtime: process.env.RENDERER_IMAGE ?? null,
       retentionHours: this.artifactRetentionHours,
-      reservedOutputBytes: this.maxOutputBytes,
-      admit: () => this.assertQueue(actor.userId, principal.service_account_id),
     });
   }
 
@@ -1571,12 +1583,7 @@ export class RemoteRenderService {
                 input.inlineSource,
                 entrypoint,
               );
-    if (!this.database.sources.paths(source).includes(entrypoint))
-      throw new AppError(
-        "ENTRYPOINT_MISSING",
-        "Source does not contain the requested entrypoint",
-        422,
-      );
+    assertRenderEntrypoint(this.database, source, entrypoint);
     const acceptedId = this.database.transaction(() => {
       const timestamp = nowIso();
       const replay = this.findRenderRequest(
@@ -1586,75 +1593,19 @@ export class RemoteRenderService {
       );
       if (replay) return replay.id;
       const jobId = newId("job");
-      this.assertQueue(identity.userId, principal.service_account_id);
-      const currentSource = this.database.sources.getOwnedReady(
-        source.id,
-        identity.userId,
-        timestamp,
-      );
-      if (currentSource === undefined)
-        throw new AppError(
-          "SOURCE_NOT_READY",
-          "Source does not exist or is not ready",
-          409,
-        );
-      if (!this.database.sources.paths(currentSource).includes(entrypoint))
-        throw new AppError(
-          "ENTRYPOINT_MISSING",
-          "Source does not contain the requested entrypoint",
-          422,
-        );
-      const project = "project" in input ? input.project : undefined;
-      const revision =
-        project !== undefined
-          ? this.database.projects.revisionOwned(
-              project.revisionId,
-              identity.userId,
-            )
-          : undefined;
-      if (
-        project !== undefined &&
-        (this.database.projects.getOwned(project.projectId, identity.userId) ===
-          undefined ||
-          revision?.project_id !== project.projectId ||
-          revision.source_id !== currentSource.id ||
-          revision.entrypoint !== entrypoint ||
-          revision.engine !== engine)
-      )
-        throw new AppError(
-          "PROJECT_REVISION_NOT_FOUND",
-          "Project revision does not exist",
-          404,
-        );
-      if (
-        this.database.jobs.insertQueued({
-          id: jobId,
-          userId: identity.userId,
-          serviceAccountId: principal.service_account_id,
-          apiKeyId: principal.api_key_id,
-          rendererVersion: this.rendererVersion,
-          sourceId: currentSource.id,
-          entrypoint,
-          outputs,
-          engine,
-          ...(revision === undefined ? {} : { projectRevisionId: revision.id }),
-          timestamp,
-          reservedOutputBytes: this.maxOutputBytes,
-        }) !== 1
-      )
-        throw new AppError(
-          "SOURCE_NOT_READY",
-          "Source changed while the Render Job was being created",
-          409,
-        );
-      this.database.audit({
-        actorType: "oauth",
-        actorId: identity.userId,
+      registerReadyRender(this.database, this.registrationLimits, {
+        id: jobId,
+        userId: identity.userId,
+        serviceAccountId: principal.service_account_id,
+        apiKeyId: principal.api_key_id,
+        actor: this.projectActor(identity),
         action: "remote_mcp.render.queued",
-        targetType: "job",
-        targetId: jobId,
-        result: "success",
-        metadata: { sourceId: currentSource.id, entrypoint, outputs },
+        sourceId: source.id,
+        entrypoint,
+        outputs,
+        engine,
+        project: "project" in input ? input.project : undefined,
+        timestamp,
       });
       if (dateProfile)
         this.database.jobs.setReproducibility(
@@ -1693,48 +1644,23 @@ export class RemoteRenderService {
       );
       if (replay) return replay.id;
       const previous = this.assertOwned(identity.userId, jobId);
-      if (
-        ![
-          "succeeded",
-          "failed",
-          "timeout",
-          "canceled",
-          "rejected",
-          "expired",
-        ].includes(previous.status)
-      )
-        throw new AppError(
-          "JOB_NOT_RETRYABLE",
-          "Only a terminal Job can be retried",
-          409,
-        );
-      if (previous.source_id === null)
-        throw new AppError(
-          "SOURCE_NOT_READY",
-          "The previous Job has no reusable Source",
-          409,
-        );
-      const sourceId = previous.source_id;
-      const retryId = newId("job");
-      this.assertQueue(identity.userId, previous.service_account_id);
-      const currentSource = this.database.sources.getOwnedReady(
-        sourceId,
-        identity.userId,
-        timestamp,
+      const retryId = registerWholeRenderRetry(
+        this.database,
+        this.registrationLimits,
+        {
+          originalId: previous.id,
+          timestamp,
+          notRetryable: "Only a terminal Job can be retried",
+          sourceUnavailable: (sourceId) =>
+            new AppError(
+              "SOURCE_NOT_READY",
+              sourceId === null
+                ? "The previous Job has no reusable Source"
+                : "The previous Job Source is not ready",
+              409,
+            ),
+        },
       );
-      if (currentSource === undefined)
-        throw new AppError(
-          "SOURCE_NOT_READY",
-          "The previous Job Source is not ready",
-          409,
-        );
-      this.database.jobs.insertRetry({
-        id: retryId,
-        source: previous,
-        rendererVersion: this.rendererVersion,
-        timestamp,
-        reservedOutputBytes: this.maxOutputBytes,
-      });
       this.database.audit({
         actorType: "oauth",
         actorId: identity.userId,
@@ -1778,9 +1704,7 @@ export class RemoteRenderService {
     requireScope(identity.scopes, "mcp:render");
     const previous = this.assertOwned(identity.userId, jobId);
     new SvgRetryOperations(this.database, {
-      maxQueueLength: this.maxQueueLength,
-      maxUserStorageBytes: this.maxUserStorageBytes,
-      maxOutputBytes: this.maxOutputBytes,
+      ...this.registrationLimits,
       artifactRetentionHours: this.artifactRetentionHours,
       runtimeImage: process.env.RENDERER_IMAGE,
     }).retry(
@@ -3126,18 +3050,6 @@ export class RemoteRenderService {
         [{ path: entrypoint, bytes: Buffer.from(content, "utf8") }],
         this.sources.zipLimits(),
       ),
-    );
-  }
-
-  private assertQueue(userId: string, serviceAccountId: string): void {
-    assertRenderAdmission(
-      this.database,
-      { userId, serviceAccountId },
-      {
-        maxQueueLength: this.maxQueueLength,
-        maxUserStorageBytes: this.maxUserStorageBytes,
-      },
-      this.maxOutputBytes,
     );
   }
 

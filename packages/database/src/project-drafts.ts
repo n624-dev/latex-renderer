@@ -18,6 +18,8 @@ import {
 } from "@latex-renderer/zip-validation";
 import type { RendererDatabase } from "./index.js";
 import { ProjectOperations, type ProjectActor } from "./project-operations.js";
+import { assertRenderAdmission } from "./render-admission.js";
+import type { RenderRegistrationLimits } from "./render-registration.js";
 import type { DraftFileRow, DraftRow } from "./repositories/drafts.js";
 import { assertSourceWritable } from "./source-lifecycle.js";
 
@@ -218,14 +220,11 @@ export class ProjectDraftOperations {
     actor: ProjectActor,
     projectId: string,
     version: number,
-    options: {
+    options: RenderRegistrationLimits & {
       serviceAccountId: string;
       apiKeyId: string;
-      rendererVersion: string;
       runtime: string | null;
       retentionHours?: number | undefined;
-      reservedOutputBytes: number;
-      admit: () => void;
     },
   ): { jobId: string; version: number; reused: boolean } {
     return this.db.transaction(() => {
@@ -279,7 +278,12 @@ export class ProjectDraftOperations {
         jobId = newId("job");
       // Rollback restores the older queued request if admission or insertion fails.
       this.db.drafts.supersedeQueued(projectId, timestamp);
-      options.admit();
+      assertRenderAdmission(
+        this.db,
+        { userId: actor.userId, serviceAccountId: options.serviceAccountId },
+        options,
+        options.maxOutputBytes,
+      );
       this.db.jobs.insertDraftRender({
         id: jobId,
         userId: actor.userId,
@@ -290,9 +294,18 @@ export class ProjectDraftOperations {
         entrypoint: row.entrypoint,
         engine: row.engine,
         timestamp,
-        reservedOutputBytes: options.reservedOutputBytes,
+        reservedOutputBytes: options.maxOutputBytes,
       });
       this.db.drafts.attachRender(jobId, projectId, version, options.runtime);
+      this.db.audit({
+        actorType: actor.type,
+        actorId: actor.id,
+        action: "render.draft_preview.queued",
+        targetType: "job",
+        targetId: jobId,
+        result: "success",
+        metadata: { projectId, draftVersion: version, jobId },
+      });
       return { jobId, version, reused: false };
     });
   }
