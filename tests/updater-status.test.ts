@@ -15,6 +15,8 @@ import {
 } from "../deploy/scripts/updater-status.mjs";
 import { runInNewContext } from "node:vm";
 import { updateViewSource as part7 } from "./helpers/admin-ui-source.js";
+import { installAdmin } from "../apps/admin-web/src/browser/admin/controller.js";
+import { adminCatalog } from "../apps/admin-web/src/admin-messages.js";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -137,4 +139,135 @@ it("renders application success separately until controller activation is confir
   expect(label({ status: "succeeded", outcome: { complete: true } })).toBe(
     "正常に完了",
   );
+});
+
+it("aborts the update poll on pagehide and reconnects on return", async () => {
+  vi.useFakeTimers();
+  class ElementFixture {
+    readonly dataset: Record<string, string> = {};
+    textContent = "";
+    children: ElementFixture[] = [];
+    isConnected = true;
+    constructor(readonly tag: string) {}
+    get firstElementChild() {
+      return this.children[0];
+    }
+    append(...children: ElementFixture[]) {
+      this.children.push(...children);
+    }
+    replaceChildren() {
+      this.children = [];
+    }
+    querySelector(selector: string): ElementFixture | null {
+      for (const child of this.children) {
+        if (child.tag === selector) return child;
+        const match = child.querySelector(selector);
+        if (match) return match;
+      }
+      return null;
+    }
+    addEventListener() {}
+  }
+  const elements = new Map(
+    [
+      "#content",
+      "#error",
+      "#success",
+      "#identity",
+      "#updated",
+      "#update-operation",
+      "#update-policy-form",
+      "#update-check",
+      "#update-apply",
+      "#update-rollback",
+    ].map((selector) => [selector, new ElementFixture(selector)]),
+  );
+  const target = elements.get("#update-operation");
+  const catalog = adminCatalog("en");
+  const operation = { id: "op-fixture", status: "running", log: "Installing" };
+  const completed = {
+    ...operation,
+    status: "succeeded",
+    log: "Done",
+    outcome: { complete: true },
+  };
+  const polls: AbortSignal[] = [];
+  let finished = false;
+  const startPage = () => {
+    const events = new EventTarget();
+    vi.stubGlobal("addEventListener", events.addEventListener.bind(events));
+    installAdmin(catalog);
+    return events;
+  };
+  try {
+    vi.stubGlobal("document", {
+      documentElement: { lang: "en" },
+      body: { dataset: { page: "updates" } },
+      querySelectorAll: () => [],
+      querySelector: (selector: string) =>
+        selector === "#update-operation > article"
+          ? target?.firstElementChild
+          : elements.get(selector),
+      createElement: (tag: string) => new ElementFixture(tag),
+    });
+    vi.stubGlobal("location", {
+      href: "https://renderer.invalid/admin/updates/",
+    });
+    vi.stubGlobal("fetch", (path: string, options: RequestInit) => {
+      if (path === "/auth/session")
+        return Promise.resolve(Response.json({ csrfToken: "fixture" }));
+      if (path === "/admin/api/v1/me")
+        return Promise.resolve(Response.json({ role: "owner" }));
+      if (path === "/admin/api/v1/updates/state")
+        return Promise.resolve(
+          Response.json(
+            finished
+              ? { lastOperationId: operation.id }
+              : { activeOperationId: operation.id },
+          ),
+        );
+      if (
+        path !== "/admin/api/v1/updates/operations/op-fixture" ||
+        !options.signal
+      )
+        throw new Error(`Unexpected fixture request ${path}`);
+      const { signal } = options;
+      polls.push(signal);
+      if (polls.length === 2)
+        return new Promise((_resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => reject(new DOMException("Poll aborted", "AbortError")),
+            { once: true },
+          );
+        });
+      if (polls.length === 4) finished = true;
+      return Promise.resolve(Response.json(finished ? completed : operation));
+    });
+
+    const first = startPage();
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(polls).toHaveLength(2);
+    expect(polls[0]).toBe(polls[1]);
+    first.dispatchEvent(new Event("pagehide"));
+    expect(polls[1]?.aborted).toBe(true);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(polls).toHaveLength(2);
+
+    startPage();
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(polls).toHaveLength(5);
+    expect(polls[2]).toBe(polls[3]);
+    expect(polls[3]?.aborted).toBe(true);
+    expect(target?.querySelector("pre")?.textContent).toBe(completed.log);
+    expect(elements.get("#success")?.textContent).toBe(
+      catalog.confirmedThatTheApplicationAndUpdater,
+    );
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(polls).toHaveLength(5);
+    expect(elements.get("#error")?.textContent).toBe("");
+  } finally {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  }
 });
