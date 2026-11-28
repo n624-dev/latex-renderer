@@ -539,7 +539,8 @@ export function createRemoteMcpApp(dependencies: RemoteMcpAppDependencies) {
   app.get("/health", (c) => c.json({ status: "ok" }));
   app.onError((error, c) => {
     const safe = safeError(error),
-      oauth = c.req.path.startsWith("/oauth/");
+      oauth =
+        c.req.path.startsWith("/oauth/") && c.req.path !== localApprovalPath;
     if (error instanceof RegistrationError)
       c.header("Retry-After", String(error.retryAfter));
     else if (safe.status === 503)

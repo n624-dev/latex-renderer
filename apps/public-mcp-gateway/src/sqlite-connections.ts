@@ -79,6 +79,8 @@ export class SqliteConnectionStore
       enableForeignKeyConstraints: true,
     });
     try {
+      // SQLite retries lock acquisition for up to five seconds per busy wait.
+      this.#database.exec("PRAGMA busy_timeout=5000");
       this.#transaction(() => {
         const version = this.#database
           .prepare("PRAGMA user_version")
@@ -664,9 +666,10 @@ export class SqliteConnectionStore
     });
   }
 
-  pruneExpiredCredentials(now: number): void {
-    this.#transaction(() => {
+  pruneExpiredCredentials(now: number) {
+    return this.#transaction(() => {
       const expired = "SELECT id FROM authorizations WHERE expires_at <= ?";
+      let expiredRecordsRemoved = 0;
       for (const statement of [
         "DELETE FROM oauth_codes WHERE expires_at <= ?",
         `DELETE FROM oauth_families WHERE authorization_id IN (${expired})`,
@@ -677,13 +680,20 @@ export class SqliteConnectionStore
         "DELETE FROM agent_pairing_attempts WHERE window_end <= ?",
         "DELETE FROM agent_revocations WHERE expires_at <= ?",
       ]) {
-        this.#database.prepare(statement).run(now);
+        expiredRecordsRemoved += Number(
+          this.#database.prepare(statement).run(now).changes,
+        );
       }
-      const removed = this.#database.prepare(
-        `DELETE FROM authorizations WHERE id IN (
+      const removed = this.#database
+        .prepare(
+          `DELETE FROM authorizations WHERE id IN (
           SELECT id FROM authorizations WHERE expires_at <= ? ORDER BY expires_at, id LIMIT 200
         ) RETURNING profile_id, transport_id`,
-      ).all(now - expiredConnectionRetentionMs) as { profile_id: string; transport_id: string }[];
+        )
+        .all(now - expiredConnectionRetentionMs) as {
+        profile_id: string;
+        transport_id: string;
+      }[];
       const clearProfile = this.#database.prepare(
         `UPDATE profiles SET display_name=NULL WHERE id=?
           AND NOT EXISTS (SELECT 1 FROM authorizations WHERE profile_id=profiles.id)`,
@@ -696,14 +706,24 @@ export class SqliteConnectionStore
         clearProfile.run(row.profile_id);
         removeTransport.run(row.transport_id);
       }
-      this.#pruneDcrClients(now);
+      const dcrRegistrationsReclaimed = this.#pruneDcrClients(now);
+      const { count } = this.#database
+        .prepare("SELECT COUNT(*) AS count FROM oauth_dcr_clients")
+        .get() as { count: number };
+      return {
+        expiredRecordsRemoved,
+        expiredConnectionsRemoved: removed.length,
+        dcrRegistrationsReclaimed,
+        dcrRegistrationsUsed: count,
+      };
     });
   }
 
-  #pruneDcrClients(now: number): void {
+  #pruneDcrClients(now: number): number {
     const cutoff = now - dcrClientRetentionMs;
-    this.#database.prepare(
-      `DELETE FROM oauth_dcr_clients AS client
+    const { changes } = this.#database
+      .prepare(
+        `DELETE FROM oauth_dcr_clients AS client
         WHERE client.created_at <= ? AND client.last_authorization_end <= ?
           AND NOT EXISTS (
             SELECT 1 FROM authorizations
@@ -713,7 +733,9 @@ export class SqliteConnectionStore
           AND NOT EXISTS (
             SELECT 1 FROM oauth_consents WHERE client_id = client.id AND expires_at > ?
           )`,
-    ).run(cutoff, cutoff, cutoff, now);
+      )
+      .run(cutoff, cutoff, cutoff, now);
+    return Number(changes);
   }
 
   claimClientAssertion(hash: string, expiresAt: number, now: number): boolean {
