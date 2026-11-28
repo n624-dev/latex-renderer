@@ -1,14 +1,16 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
-import { lstat, readFile, readdir, rename, writeFile } from "node:fs/promises";
+import { readdir, rename, writeFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { openBackupFile } from "./backup-boundary.mjs";
+import {
+  archivePattern,
+  readVerificationReceipt,
+} from "./backup-retention.mjs";
 
 const backup = "latex-renderer-backup.service";
 const verify = "latex-renderer-backup-verify.service";
 const receipt = "/var/lib/latex-renderer-backup-verification/latest.json";
-const archivePattern =
-  /^latex-renderer-\d{4}-\d\d-\d\dT\d\d-\d\d-\d\d\.\d{3}Z\.tar\.age$/;
 
 function systemctl(args) {
   return execFileSync("/usr/bin/systemctl", args, {
@@ -25,28 +27,6 @@ function state(unit) {
     )?.[1];
   const result = /^Result=([a-z-]{1,32})$/m.exec(text)?.[1];
   return { active: active ?? "unknown", result: result ?? "unknown" };
-}
-
-async function latestVerification() {
-  try {
-    const info = await lstat(receipt);
-    if (
-      !info.isFile() ||
-      info.uid !== 0 ||
-      info.mode & 0o077 ||
-      info.size > 4096
-    )
-      return null;
-    const record = JSON.parse(await readFile(receipt, "utf8"));
-    if (
-      archivePattern.test(record.archive) &&
-      typeof record.verifiedAt === "string"
-    )
-      return { archive: record.archive, verifiedAt: record.verifiedAt };
-  } catch (error) {
-    if (error.code !== "ENOENT") throw error;
-  }
-  return null;
 }
 
 async function request() {
@@ -72,7 +52,7 @@ async function request() {
     JSON.stringify({
       backup: state(backup),
       verification: state(verify),
-      latestVerification: await latestVerification(),
+      latestVerification: await readVerificationReceipt(receipt),
     }),
   );
 }

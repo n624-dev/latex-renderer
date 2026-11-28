@@ -1,9 +1,32 @@
-import { describe, expect, it } from "vitest";
+import {
+  chmod,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readdir,
+  rm,
+  symlink,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   type BackupRetentionOptions,
+  applyBackupRetention,
   archivePattern,
+  backupRetentionSettingKey,
   planBackupRetention,
+  readBackupRetentionPolicy,
+  readVerificationReceipt,
 } from "../deploy/scripts/backup-retention.mjs";
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual, unlink: vi.fn(actual.unlink) };
+});
 
 function archive(stamp: string, bytes = 10) {
   return { name: `latex-renderer-${stamp}.tar.age`, bytes };
@@ -233,3 +256,262 @@ describe("encrypted backup retention", () => {
     );
   });
 });
+
+describe("readBackupRetentionPolicy", () => {
+  let db: DatabaseSync;
+  beforeEach(() => {
+    db = new DatabaseSync(":memory:");
+  });
+  afterEach(() => db.close());
+
+  function createSettings() {
+    db.exec("CREATE TABLE system_settings (key TEXT PRIMARY KEY, value_json)");
+    return db.prepare("INSERT INTO system_settings VALUES (?, ?)");
+  }
+
+  it("returns no policy when the settings table is missing", () => {
+    expect(readBackupRetentionPolicy(db)).toEqual({
+      policy: null,
+      warning: null,
+    });
+  });
+
+  it("returns no policy when the setting is missing", () => {
+    createSettings().run("other_setting", JSON.stringify(policy));
+    expect(readBackupRetentionPolicy(db)).toEqual({
+      policy: null,
+      warning: null,
+    });
+  });
+
+  it("reads the three limits and ignores confirmation metadata", () => {
+    expect(backupRetentionSettingKey).toBe("backup_retention_policy");
+    createSettings().run(
+      backupRetentionSettingKey,
+      JSON.stringify({
+        ...policy,
+        confirmedAt: now.toISOString(),
+        confirmedBy: "admin",
+      }),
+    );
+    expect(readBackupRetentionPolicy(db)).toEqual({ policy, warning: null });
+  });
+
+  it.each([
+    { description: "invalid JSON", value: "{" },
+    { description: "JSON null", value: "null" },
+    { description: "JSON array", value: "[]" },
+    { description: "missing limits", value: "{}" },
+    {
+      description: "zero days",
+      value: JSON.stringify({ ...policy, maxAgeDays: 0 }),
+    },
+    {
+      description: "fractional generations",
+      value: JSON.stringify({ ...policy, maxGenerations: 1.5 }),
+    },
+    {
+      description: "unsafe byte count",
+      value: JSON.stringify({ ...policy, maxTotalBytes: 2 ** 53 }),
+    },
+    {
+      description: "numeric string",
+      value: JSON.stringify({ ...policy, maxTotalBytes: "100" }),
+    },
+    { description: "SQLite null", value: null },
+    { description: "SQLite integer", value: 2n ** 63n - 1n },
+  ])("rejects $description", ({ value }) => {
+    createSettings().run(backupRetentionSettingKey, value);
+    expect(readBackupRetentionPolicy(db)).toEqual({
+      policy: null,
+      warning: "POLICY_INVALID",
+    });
+  });
+});
+
+describe.skipIf(process.platform === "win32")(
+  "backup retention filesystem",
+  () => {
+    let directory: string;
+    beforeEach(async ({ onTestFinished }) => {
+      const root = await mkdtemp(join(tmpdir(), "backup-retention-"));
+      directory = root;
+      onTestFinished(() => rm(root, { recursive: true, force: true }));
+    });
+
+    describe("readVerificationReceipt", () => {
+      const expectedUid = process.getuid?.() ?? 0;
+      const record = { archive: newest.name, verifiedAt: now.toISOString() };
+      let path: string;
+      beforeEach(() => {
+        path = join(directory, "latest.json");
+      });
+
+      it("reads a private receipt owned by the expected user", async () => {
+        await writeFile(path, JSON.stringify(record), { mode: 0o600 });
+        await expect(
+          readVerificationReceipt(path, { expectedUid }),
+        ).resolves.toEqual(record);
+        await expect(
+          readVerificationReceipt(path, { expectedUid: expectedUid + 1 }),
+        ).resolves.toBeNull();
+      });
+
+      it("ignores a receipt with group or other permissions", async () => {
+        await writeFile(path, JSON.stringify(record));
+        await chmod(path, 0o640);
+        await expect(
+          readVerificationReceipt(path, { expectedUid }),
+        ).resolves.toBeNull();
+      });
+
+      it("ignores a receipt larger than 4096 bytes", async () => {
+        await writeFile(path, JSON.stringify(record).padEnd(4097), {
+          mode: 0o600,
+        });
+        await expect(
+          readVerificationReceipt(path, { expectedUid }),
+        ).resolves.toBeNull();
+      });
+
+      it("ignores a receipt with a bad archive name", async () => {
+        await writeFile(
+          path,
+          JSON.stringify({ ...record, archive: `${newest.name}.partial` }),
+          { mode: 0o600 },
+        );
+        await expect(
+          readVerificationReceipt(path, { expectedUid }),
+        ).resolves.toBeNull();
+      });
+
+      it("returns null when the receipt is missing", async () => {
+        await expect(
+          readVerificationReceipt(path, { expectedUid }),
+        ).resolves.toBeNull();
+      });
+
+      it("propagates malformed JSON", async () => {
+        await writeFile(path, "{", { mode: 0o600 });
+        await expect(
+          readVerificationReceipt(path, { expectedUid }),
+        ).rejects.toThrow(SyntaxError);
+      });
+    });
+
+    describe("applyBackupRetention", () => {
+      afterEach(() => {
+        vi.mocked(unlink).mockReset();
+      });
+
+      async function writeArchives(
+        ...archives: BackupRetentionOptions["archives"]
+      ) {
+        for (const { name, bytes } of archives)
+          await writeFile(join(directory, name), Buffer.alloc(bytes));
+      }
+
+      it("deletes planned files and leaves protected archives and other entries in place", async () => {
+        await writeArchives(newest, recent, atAgeLimit, older);
+        const link = archive("2026-11-30T00-00-00.000Z").name;
+        const folder = archive("2026-11-29T00-00-00.000Z").name;
+        const partial = `${newest.name}.partial`;
+        await symlink(older.name, join(directory, link));
+        await mkdir(join(directory, folder));
+        await writeFile(join(directory, partial), "partial");
+
+        expect(
+          await applyBackupRetention({
+            directory,
+            policy: { ...policy, maxGenerations: 2 },
+            now,
+            latestVerifiedArchive: older.name,
+          }),
+        ).toEqual({
+          configured: true,
+          keep: [newest.name, older.name],
+          delete: [recent.name, atAgeLimit.name],
+          protected: [newest.name, older.name],
+          keptBytes: 20,
+          deletedBytes: 20,
+          warnings: [],
+          deleted: [recent.name, atAgeLimit.name],
+          alreadyAbsent: [],
+        });
+        expect((await readdir(directory)).sort()).toEqual(
+          [newest.name, older.name, link, folder, partial].sort(),
+        );
+      });
+
+      it("keeps all archives when the policy is null", async () => {
+        await writeArchives(newest, older);
+        expect(
+          await applyBackupRetention({ directory, policy: null, now }),
+        ).toMatchObject({
+          configured: false,
+          keep: [newest.name, older.name],
+          delete: [],
+          deleted: [],
+          alreadyAbsent: [],
+        });
+        expect((await readdir(directory)).sort()).toEqual(
+          [newest.name, older.name].sort(),
+        );
+      });
+
+      it("rechecks each candidate after planning", async () => {
+        await writeArchives(newest, recent, atAgeLimit, older);
+        const absent = join(directory, atAgeLimit.name);
+        const replaced = join(directory, older.name);
+        const actual =
+          await vi.importActual<typeof import("node:fs/promises")>(
+            "node:fs/promises",
+          );
+        vi.mocked(unlink).mockImplementationOnce(async (path) => {
+          await actual.unlink(path);
+          await actual.unlink(absent);
+          await actual.unlink(replaced);
+          await symlink(newest.name, replaced);
+        });
+
+        expect(
+          await applyBackupRetention({
+            directory,
+            policy: { ...policy, maxGenerations: 1 },
+            now,
+          }),
+        ).toMatchObject({
+          delete: [recent.name, atAgeLimit.name, older.name],
+          deleted: [recent.name],
+          alreadyAbsent: [atAgeLimit.name],
+        });
+        expect((await lstat(replaced)).isSymbolicLink()).toBe(true);
+      });
+
+      it("counts an archive removed between the second lstat and unlink as already absent", async () => {
+        await writeArchives(newest, older);
+        const actual =
+          await vi.importActual<typeof import("node:fs/promises")>(
+            "node:fs/promises",
+          );
+        vi.mocked(unlink).mockImplementationOnce(async (path) => {
+          await actual.unlink(path);
+          await actual.unlink(path);
+        });
+
+        expect(
+          await applyBackupRetention({
+            directory,
+            policy: { ...policy, maxGenerations: 1 },
+            now,
+          }),
+        ).toMatchObject({
+          delete: [older.name],
+          deleted: [],
+          alreadyAbsent: [older.name],
+        });
+        expect(await readdir(directory)).toEqual([newest.name]);
+      });
+    });
+  },
+);

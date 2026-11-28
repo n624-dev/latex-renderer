@@ -1,7 +1,72 @@
+import { lstat, open, readFile, readdir, unlink } from "node:fs/promises";
+import { join } from "node:path";
+
 export const archivePattern =
   /^latex-renderer-\d{4}-\d\d-\d\dT\d\d-\d\d-\d\d\.\d{3}Z\.tar\.age$/;
+export const backupRetentionSettingKey = "backup_retention_policy";
 
 const dayMs = 86_400_000;
+const retentionLimits = ["maxAgeDays", "maxGenerations", "maxTotalBytes"];
+
+function isPositiveSafeInteger(value) {
+  return Number.isSafeInteger(value) && value > 0;
+}
+
+export function readBackupRetentionPolicy(db) {
+  let row;
+  try {
+    const statement = db.prepare(
+      "SELECT value_json FROM system_settings WHERE key=?",
+    );
+    // Read unexpected SQLite integers without a conversion error.
+    statement.setReadBigInts(true);
+    row = statement.get(backupRetentionSettingKey);
+  } catch (error) {
+    if (
+      error.code === "ERR_SQLITE_ERROR" &&
+      error.message === "no such table: system_settings"
+    )
+      return { policy: null, warning: null };
+    throw error;
+  }
+  if (!row) return { policy: null, warning: null };
+
+  let value;
+  try {
+    if (typeof row.value_json === "string") value = JSON.parse(row.value_json);
+  } catch {
+    return { policy: null, warning: "POLICY_INVALID" };
+  }
+  if (!retentionLimits.every((limit) => isPositiveSafeInteger(value?.[limit])))
+    return { policy: null, warning: "POLICY_INVALID" };
+  const { maxAgeDays, maxGenerations, maxTotalBytes } = value;
+  return {
+    policy: { maxAgeDays, maxGenerations, maxTotalBytes },
+    warning: null,
+  };
+}
+
+export async function readVerificationReceipt(path, { expectedUid = 0 } = {}) {
+  try {
+    const info = await lstat(path);
+    if (
+      !info.isFile() ||
+      info.uid !== expectedUid ||
+      info.mode & 0o077 ||
+      info.size > 4096
+    )
+      return null;
+    const record = JSON.parse(await readFile(path, "utf8"));
+    if (
+      archivePattern.test(record.archive) &&
+      typeof record.verifiedAt === "string"
+    )
+      return { archive: record.archive, verifiedAt: record.verifiedAt };
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  return null;
+}
 
 export function planBackupRetention({
   archives,
@@ -10,9 +75,8 @@ export function planBackupRetention({
   latestVerifiedArchive,
 }) {
   if (policy !== null) {
-    for (const limit of ["maxAgeDays", "maxGenerations", "maxTotalBytes"]) {
-      const value = policy?.[limit];
-      if (!Number.isSafeInteger(value) || value < 1)
+    for (const limit of retentionLimits) {
+      if (!isPositiveSafeInteger(policy?.[limit]))
         throw new Error(`${limit} must be a positive safe integer`);
     }
   }
@@ -102,4 +166,54 @@ export function planBackupRetention({
   result.keptBytes = Number(keptBytes);
   result.deletedBytes = Number(deletedBytes);
   return result;
+}
+
+export async function applyBackupRetention({
+  directory,
+  policy,
+  now,
+  latestVerifiedArchive,
+}) {
+  const archives = [];
+  for (const name of await readdir(directory)) {
+    if (!archivePattern.test(name)) continue;
+    try {
+      const info = await lstat(join(directory, name));
+      if (info.isFile()) archives.push({ name, bytes: info.size });
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+  }
+
+  const plan = planBackupRetention({
+    archives,
+    policy,
+    now,
+    latestVerifiedArchive,
+  });
+  const deleted = [];
+  const alreadyAbsent = [];
+  try {
+    for (const name of plan.delete) {
+      const path = join(directory, name);
+      try {
+        if (!(await lstat(path)).isFile()) continue;
+        await unlink(path);
+        deleted.push(name);
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+        alreadyAbsent.push(name);
+      }
+    }
+  } finally {
+    if (deleted.length > 0) {
+      const handle = await open(directory, "r");
+      try {
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+    }
+  }
+  return { ...plan, deleted, alreadyAbsent };
 }
