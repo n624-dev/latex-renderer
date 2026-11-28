@@ -64,6 +64,13 @@ const oauth = new RemoteOAuthService(
       200 * 1024 * 1024,
     ),
     positiveIntegerEnvironment(process.env, "ARTIFACT_RETENTION_HOURS", 24),
+    {
+      minFreeStorageBytes: positiveBytesEnvironment(
+        process.env,
+        "MIN_FREE_STORAGE_BYTES",
+        5 * 1024 * 1024 * 1024,
+      ),
+    },
   ),
   registrationLimiter = new AnonymousRegistrationLimiter(),
   relayIdentity = rendererIdentityFromEnvironment(publicOrigin, process.env),

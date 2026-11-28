@@ -1,9 +1,11 @@
-import type {
-  JobRow,
-  ProjectActor,
-  RendererDatabase,
+import {
+  registerWholeRenderRetry,
+  type JobRow,
+  type ProjectActor,
+  type RendererDatabase,
+  type RenderRegistrationLimits,
 } from "@latex-renderer/database";
-import { AppError, newId, nowIso } from "@latex-renderer/shared";
+import { AppError, nowIso } from "@latex-renderer/shared";
 import {
   findOperationRequest,
   operationRequest,
@@ -17,9 +19,7 @@ export function retryRenderJob(
   idempotencyKey: string | undefined,
   options: {
     readJob: (jobId: string) => JobRow;
-    admit: (previous: JobRow) => void;
-    rendererVersion: string;
-    maxOutputBytes: number;
+    limits: RenderRegistrationLimits;
   },
 ): JobRow {
   const request = operationRequest(
@@ -32,47 +32,18 @@ export function retryRenderJob(
     const replay = findOperationRequest(database, actor, request, timestamp);
     if (replay !== undefined) return options.readJob(replay);
     const previous = options.readJob(jobId);
-    if (
-      ![
-        "succeeded",
-        "failed",
-        "timeout",
-        "canceled",
-        "rejected",
-        "expired",
-      ].includes(previous.status)
-    )
-      throw new AppError(
-        "JOB_NOT_RETRYABLE",
-        "Only a terminal Job can be retried",
-        409,
-      );
-    if (previous.source_id === null)
-      throw new AppError(
-        "SOURCE_NOT_READY",
-        "The previous Job has no reusable Source",
-        409,
-      );
-    const sourceId = previous.source_id;
-    const retryId = newId("job");
-    options.admit(previous);
-    const currentSource = database.sources.getOwnedReady(
-      sourceId,
-      actor.userId,
+    const retryId = registerWholeRenderRetry(database, options.limits, {
+      originalId: previous.id,
       timestamp,
-    );
-    if (currentSource === undefined)
-      throw new AppError(
-        "SOURCE_NOT_READY",
-        "The previous Job Source is not ready",
-        409,
-      );
-    database.jobs.insertRetry({
-      id: retryId,
-      source: previous,
-      rendererVersion: options.rendererVersion,
-      timestamp,
-      reservedOutputBytes: options.maxOutputBytes,
+      notRetryable: "Only a terminal Job can be retried",
+      sourceUnavailable: (sourceId) =>
+        new AppError(
+          "SOURCE_NOT_READY",
+          sourceId === null
+            ? "The previous Job has no reusable Source"
+            : "The previous Job Source is not ready",
+          409,
+        ),
     });
     database.audit({
       actorType: actor.type,

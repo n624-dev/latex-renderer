@@ -1,7 +1,10 @@
-import type { RendererDatabase } from "@latex-renderer/database";
+import type {
+  RendererDatabase,
+  RenderStorageLimits,
+} from "@latex-renderer/database";
 import type { TicketService } from "@latex-renderer/ticket";
 
-export interface RendererApiDependencies {
+export interface RendererApiDependencies extends RenderStorageLimits {
   database: RendererDatabase;
   tickets: TicketService;
   storageRoot: string;

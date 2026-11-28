@@ -655,7 +655,10 @@ describe("public and administrative Web", () => {
     expect(adminScript).toContain("renderScopes");
     expect(adminScript).toContain("adminScopes");
     expect(adminScript).toContain("pageSize:'50'");
-    expect(adminScript).toContain("jobDeletable.has(job.status)");
+    expect(adminScript).toContain("jobTerminal.has(job.status)&&job.source_id");
+    expect(adminScript).toContain(
+      "jobTerminal=new Set(['succeeded','failed','timeout','canceled','rejected','expired'])",
+    );
     expect(adminScript).toContain("params.get('job')");
     expect(adminScript).toContain("await jobDetail(requested)");
     const markup = adminScript.replaceAll(String.raw`\"`, '"');

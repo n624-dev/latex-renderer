@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { createWriteStream } from "node:fs";
 import { isAbsolute, join } from "node:path";
-import { mkdir, rename, rm, statfs } from "node:fs/promises";
+import { mkdir, rename, rm } from "node:fs/promises";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import {
@@ -12,6 +12,7 @@ import {
 } from "@latex-renderer/shared";
 import type { SourceTicketClaims, TicketClaims } from "@latex-renderer/ticket";
 import {
+  assertMinimumFreeStorage,
   assertSourceWritable,
   defaultSourceOrphanRetentionMinutes,
 } from "@latex-renderer/database";
@@ -390,9 +391,11 @@ async function writeVerifiedBody(
   claimedSize: number,
   claimedHash: string,
 ): Promise<void> {
-  const filesystem = await statfs(deps.storageRoot);
-  if (filesystem.bavail * filesystem.bsize < deps.minFreeStorageBytes)
-    throw new AppError("STORAGE_PRESSURE", "Insufficient free storage", 503);
+  assertMinimumFreeStorage(
+    deps.storageRoot,
+    deps.minFreeStorageBytes,
+    deps.readFreeStorageBytes,
+  );
   if (request.body === null)
     throw new AppError("UPLOAD_BODY_REQUIRED", "ZIP body is required", 400);
   let received = 0;

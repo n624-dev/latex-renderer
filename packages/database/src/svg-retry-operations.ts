@@ -1,7 +1,10 @@
 import { createHash } from "node:crypto";
 import { AppError, nowIso } from "@latex-renderer/shared";
 import type { RendererDatabase } from "./index.js";
-import { assertRenderAdmission } from "./render-admission.js";
+import {
+  assertRenderAdmission,
+  type RenderStorageLimits,
+} from "./render-admission.js";
 
 export interface SvgRetryActor {
   userId: string;
@@ -10,7 +13,7 @@ export interface SvgRetryActor {
   /** Present for API-key/OAuth callers to retain the existing Job boundary. */
   serviceAccountId?: string;
 }
-export interface SvgRetryLimits {
+export interface SvgRetryLimits extends RenderStorageLimits {
   maxQueueLength?: number;
   maxUserStorageBytes?: number;
   maxOutputBytes?: number;
@@ -98,6 +101,7 @@ export class SvgRetryOperations {
         this.db,
         { userId: actor.userId, serviceAccountId: row.service_account_id },
         {
+          ...this.limits,
           maxQueueLength: this.limits.maxQueueLength ?? 100,
           maxUserStorageBytes: this.limits.maxUserStorageBytes ?? 1024 ** 3,
         },

@@ -122,8 +122,9 @@ describe("bounded owner-bound Source input reuse (fixture renderer, no Docker)",
           apiKeyId: principal.api_key_id,
           rendererVersion: "fixture",
           runtime,
-          reservedOutputBytes: 1024,
-          admit: () => {},
+          maxOutputBytes: 1024,
+          maxQueueLength: 100,
+          maxUserStorageBytes: 1024 ** 3,
         });
         const time = new Date().toISOString();
         const job = defined(
@@ -312,8 +313,9 @@ describe("bounded owner-bound Source input reuse (fixture renderer, no Docker)",
         apiKeyId: principal.api_key_id,
         rendererVersion: "fixture",
         runtime: f.config.image,
-        reservedOutputBytes: 1024,
-        admit: () => {},
+        maxOutputBytes: 1024,
+        maxQueueLength: 100,
+        maxUserStorageBytes: 1024 ** 3,
       });
       await f.renders.draftFiles.saveDraftText(
         actor,

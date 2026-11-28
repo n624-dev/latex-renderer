@@ -113,7 +113,7 @@ Content-Type: application/zip
 Content-Length: <ZIP size in bytes>
 ```
 
-3. Create a job from the ready `sourceId`. The default `entrypoint` is `main.tex` and the default `outputs` is `["pdf"]`. Requesting `["svg"]` alone is invalid.
+3. Create a job from the ready `sourceId`. The default `entrypoint` is `main.tex` and the default `outputs` is `["pdf"]`. Requesting `["svg"]` alone is invalid. If free storage falls below the configured minimum, a new job request returns `503 STORAGE_PRESSURE`. This also applies to saved revision renders, new draft previews, and SVG-only retries. Legacy size-and-hash reservations check free storage at upload.
 
 ```http
 POST /api/v1/render-tickets

@@ -3,7 +3,10 @@ import type {
   BrowserAuthenticationService,
   DeploymentMode,
 } from "@latex-renderer/auth";
-import type { RendererDatabase } from "@latex-renderer/database";
+import type {
+  RendererDatabase,
+  RenderStorageLimits,
+} from "@latex-renderer/database";
 import type { TicketService } from "@latex-renderer/ticket";
 import type { ImageManagerClient } from "./services/image-manager.js";
 import type { UpdateManagerClient } from "./services/update-manager.js";
@@ -19,7 +22,7 @@ export interface AdminActor extends AppActor {
   role: "owner" | "admin";
 }
 
-export interface AdminDependencies {
+export interface AdminDependencies extends RenderStorageLimits {
   workerStatus?: () => { operational: boolean; state: string };
   httpServices?: () => {
     managed: boolean;

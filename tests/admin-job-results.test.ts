@@ -4,9 +4,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ApiKeyService, type AccessJwtVerifier } from "@latex-renderer/auth";
-import { RendererDatabase } from "@latex-renderer/database";
+import {
+  ProjectDraftOperations,
+  RendererDatabase,
+} from "@latex-renderer/database";
 import { TicketService } from "@latex-renderer/ticket";
 import { createAdminApp } from "../apps/admin-api/src/app.js";
+import { RenderTicketsService } from "../apps/internal-api/src/services/render-tickets.js";
+import { createRendererApp } from "../apps/renderer-api/src/app.js";
+import { RemoteRenderService } from "../packages/remote-mcp-core/src/index.js";
 import { legacyTestBrowserAuth } from "./helpers/browser-auth.js";
 
 const databases: RendererDatabase[] = [],
@@ -215,6 +221,236 @@ describe("administrator Job results and Sources", () => {
       source_id: sourceId,
       retry_of_job_id: jobId,
     });
+  });
+
+  it("checks storage on ready renders, audits their options, and retries expired Jobs with ready Sources", async () => {
+    const f = await registrationFixture();
+    const {
+      database,
+      sourceId,
+      project,
+      internal,
+      remote,
+      post,
+      actor,
+      identity,
+    } = f;
+    const pressure = { code: "STORAGE_PRESSURE", status: 503 };
+    const key = "registration-test-1234567890";
+    const request = {
+      sourceId,
+      engine: "xelatex" as const,
+      outputs: ["pdf", "svg"] as ("pdf" | "svg")[],
+    };
+    const internalReady = () =>
+      internal.create(actor, { ...request, project }, key);
+    const adminReady = () =>
+      post("/admin/api/v1/jobs/render-tickets", key, {
+        ...request,
+        apiKeyId: actor.apiKeyId,
+      });
+    const webReady = () =>
+      post(
+        `/app/api/v1/projects/${project.projectId}/revisions/${project.revisionId}/render`,
+        "web-" + key,
+      );
+    const remoteReady = () =>
+      remote.renderProjectRevision(
+        identity,
+        project.projectId,
+        project.revisionId,
+        undefined,
+        key,
+      );
+
+    await expect(internalReady()).rejects.toMatchObject(pressure);
+    await expectStoragePressure(await adminReady());
+    await expectStoragePressure(await webReady());
+    await expect(remoteReady()).rejects.toMatchObject(pressure);
+    expect(database.jobs.countActive()).toBe(0);
+
+    f.setFreeBytes(1);
+    const {
+      value: { jobId },
+    } = await internalReady();
+    expect((await adminReady()).status).toBe(201);
+    expect((await webReady()).status).toBe(201);
+    const remoteJob = await remoteReady();
+    const audits = database.raw
+      .prepare(
+        "SELECT action, metadata_json FROM audit_logs WHERE action IN ('render.queued','remote_mcp.render.queued') ORDER BY rowid",
+      )
+      .all();
+    expect(audits).toEqual(
+      [true, false, true, true].map((hasRevision, index) => ({
+        action: index === 3 ? "remote_mcp.render.queued" : "render.queued",
+        metadata_json: JSON.stringify({
+          sourceId,
+          entrypoint: "main.tex",
+          outputs: request.outputs,
+          engine: "xelatex",
+          ...(hasRevision ? { projectRevisionId: project.revisionId } : {}),
+        }),
+      })),
+    );
+
+    f.setFreeBytes(0);
+    await expect(internalReady()).resolves.toMatchObject({ status: 200 });
+    expect((await adminReady()).status).toBe(200);
+    expect((await webReady()).status).toBe(200);
+    await expect(remoteReady()).resolves.toMatchObject({ id: remoteJob.id });
+    await expect(
+      internal.create(actor, { retrySvgJobId: jobId }, key),
+    ).rejects.toMatchObject(pressure);
+    await expectStoragePressure(
+      await post(`/admin/api/v1/jobs/${jobId}/retry-svg`, key),
+    );
+    await expectStoragePressure(
+      await post(`/app/api/v1/jobs/${jobId}/retry-svg`, key),
+    );
+    expect(() => remote.retrySvgRender(identity, remoteJob.id, key)).toThrow(
+      expect.objectContaining(pressure),
+    );
+
+    database.raw
+      .prepare(
+        "UPDATE jobs SET status='expired',render_status='expired' WHERE id IN (?,?)",
+      )
+      .run(jobId, remoteJob.id);
+    const adminRetry = () => post(`/admin/api/v1/jobs/${jobId}/retry`, key);
+    const webRetry = () =>
+      post(`/app/api/v1/jobs/${jobId}/retry`, "web-" + key);
+    const remoteRetry = () => remote.retryRender(identity, remoteJob.id, key);
+    await expectStoragePressure(await adminRetry());
+    await expectStoragePressure(await webRetry());
+    expect(remoteRetry).toThrow(expect.objectContaining(pressure));
+
+    f.setFreeBytes(1);
+    const setSourceStatus = database.raw.prepare(
+      "UPDATE sources SET status=? WHERE id=?",
+    );
+    setSourceStatus.run("expired", sourceId);
+    expect((await adminRetry()).status).toBe(410);
+    expect(remoteRetry).toThrow(
+      expect.objectContaining({ code: "SOURCE_NOT_READY", status: 409 }),
+    );
+    setSourceStatus.run("ready", sourceId);
+    for (const retry of [adminRetry, webRetry]) {
+      const response = await retry();
+      expect(response.status).toBe(202);
+      await expect(response.json()).resolves.toMatchObject({
+        retryOfJobId: jobId,
+      });
+    }
+    expect(remoteRetry()).toMatchObject({
+      retryOf: remoteJob.id,
+      status: "queued",
+    });
+  });
+
+  it("audits each new draft preview once across Internal, web, and MCP", async () => {
+    const f = await registrationFixture();
+    const {
+      database,
+      project: { projectId },
+      drafts,
+      internal,
+      remote,
+      post,
+      actor,
+      identity,
+    } = f;
+    const pressure = { code: "STORAGE_PRESSURE", status: 503 };
+    const preview = (version: number) =>
+      post(
+        `/app/api/v1/projects/${projectId}/draft/preview`,
+        "draft-preview-1234567890",
+        { version },
+      );
+    const queue = [
+      () => internal.createDraftPreview(actor, projectId, 1),
+      async () => {
+        const response = await preview(2);
+        expect(response.status).toBe(202);
+        return (await response.json()) as { jobId: string };
+      },
+      () => remote.queueSharedDraftPreview(identity, projectId, 3),
+    ];
+    const expected = [];
+    for (const [index, create] of queue.entries()) {
+      const version = index + 1;
+      if (version > 1)
+        drafts.update(f.projectActor, projectId, {
+          version: version - 1,
+          files: [],
+        });
+      f.setFreeBytes(0);
+      if (version === 2) await expectStoragePressure(await preview(version));
+      else if (version === 1)
+        await expect(create()).rejects.toMatchObject(pressure);
+      else expect(create).toThrow(expect.objectContaining(pressure));
+      f.setFreeBytes(1);
+      const { jobId } = await create();
+      f.setFreeBytes(0);
+      await expect((await preview(version)).json()).resolves.toMatchObject({
+        jobId,
+        reused: true,
+      });
+      expected.push({
+        target_id: jobId,
+        metadata_json: JSON.stringify({
+          projectId,
+          draftVersion: version,
+          jobId,
+        }),
+      });
+    }
+    expect(
+      database.raw
+        .prepare(
+          "SELECT target_id, metadata_json FROM audit_logs WHERE action='render.draft_preview.queued' ORDER BY rowid",
+        )
+        .all(),
+    ).toEqual(expected);
+  });
+
+  it("defers storage admission for both legacy reservations until upload", async () => {
+    const { internal, actor, post, database, renderer } =
+      await registrationFixture();
+    const request = { size: 1, sha256: hash(Buffer.from("x")) };
+    const reserved = await internal.create(
+      actor,
+      request,
+      "legacy-registration-123456",
+    );
+    expect(reserved.status).toBe(201);
+    expect(
+      (
+        await post(
+          "/admin/api/v1/jobs/render-tickets",
+          "legacy-registration-123456",
+          { ...request, apiKeyId: actor.apiKeyId },
+        )
+      ).status,
+    ).toBe(201);
+    const { jobId } = reserved.value;
+    if (
+      !("uploadTicket" in reserved.value) ||
+      typeof reserved.value.uploadTicket !== "string"
+    )
+      throw new Error("Expected an upload ticket");
+    await expectStoragePressure(
+      await renderer.request(`/api/v1/jobs/${jobId}/source`, {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${reserved.value.uploadTicket}`,
+          "Content-Type": "application/zip",
+          "Content-Length": "1",
+        },
+        body: "x",
+      }),
+    );
+    expect(database.jobs.get(jobId)?.status).toBe("reserved");
   });
 
   it.each(["page-1.png", "page-01.png", "page-001.png"])(
@@ -519,7 +755,7 @@ describe("administrator Job results and Sources", () => {
   });
 });
 
-async function setup() {
+async function setup(readFreeStorageBytes?: () => number) {
   const database = new RendererDatabase(":memory:");
   databases.push(database);
   database.migrate();
@@ -555,13 +791,14 @@ async function setup() {
       verify: () =>
         Promise.resolve({ subject: "subject", payload: { sub: "subject" } }),
     } as unknown as AccessJwtVerifier,
+    apiKeys = new ApiKeyService(
+      database,
+      new Map([["v1", Buffer.alloc(32, 1)]]),
+      "v1",
+    ),
     app = createAdminApp({
       database,
-      apiKeys: new ApiKeyService(
-        database,
-        new Map([["v1", Buffer.alloc(32, 1)]]),
-        "v1",
-      ),
+      apiKeys,
       browserAuth: legacyTestBrowserAuth(database, access),
       deploymentMode: "cloudflare",
       publicOrigin: "https://latex.example.com",
@@ -573,6 +810,7 @@ async function setup() {
       maxQueueLength: 20,
       maxUserStorageBytes: 1_000_000,
       minFreeStorageBytes: 1,
+      readFreeStorageBytes,
       activeTicketKid: "v1",
       verificationTicketKids: [],
       artifactRetentionHours: 24,
@@ -585,8 +823,129 @@ async function setup() {
     database,
     root,
     app,
+    tickets,
+    apiKeys,
     headers: { "Cf-Access-Jwt-Assertion": "test" },
   };
+}
+
+async function registrationFixture() {
+  let freeBytes = 0;
+  const readFreeStorageBytes = () => freeBytes;
+  const { database, app, root, tickets, apiKeys, headers } =
+    await setup(readFreeStorageBytes);
+  database.raw.exec(
+    "UPDATE service_accounts SET name='External renderer' WHERE id='sa_web'",
+  );
+  const storage = {
+    storageRoot: root,
+    minFreeStorageBytes: 1,
+    readFreeStorageBytes,
+  };
+  const origin = "https://latex.example.com";
+  const renderer = createRendererApp({
+    database,
+    tickets,
+    ...storage,
+    maxUploadBytes: 100,
+    artifactRetentionHours: 24,
+  });
+  const internal = new RenderTicketsService({
+    database,
+    tickets,
+    apiKeys,
+    ...storage,
+    rendererPublicUrl: origin,
+    rendererVersion: "test",
+    maxOutputBytes: 1,
+    maxQueueLength: 20,
+    maxUserStorageBytes: 1_000_000,
+  });
+  const remote = new RemoteRenderService(
+    database,
+    root,
+    "test",
+    origin,
+    20,
+    1_000_000,
+    undefined,
+    undefined,
+    1,
+    24,
+    storage,
+  );
+  const userId = "user_owner",
+    serviceAccountId = "sa_web",
+    apiKeyId = "key_web";
+  const actor = {
+    userId,
+    serviceAccountId,
+    apiKeyId,
+    userSecurityVersion: 1,
+    serviceAccountSecurityVersion: 1,
+    keyKind: "render",
+    scopes: ["render:create"],
+  } as const;
+  const identity = { userId, scopes: ["mcp:render"] } as const;
+  const projectActor = { userId, type: "user", id: userId };
+  const sourceId = `source_${"a".repeat(32)}`,
+    projectId = `project_${"a".repeat(32)}`,
+    revisionId = `revision_${"a".repeat(32)}`,
+    timestamp = new Date().toISOString();
+  seedSource(database, sourceId, timestamp, ["main.tex"]);
+  database.projects.insert({
+    id: projectId,
+    ownerUserId: userId,
+    displayName: "Example",
+    timestamp,
+  });
+  database.projects.insertRevision({
+    id: revisionId,
+    projectId,
+    sourceId,
+    entrypoint: "main.tex",
+    engine: "xelatex",
+    displayName: "Example",
+    originalFilename: "example.zip",
+    outputs: ["pdf", "svg"],
+    timestamp,
+  });
+  const drafts = new ProjectDraftOperations(database);
+  drafts.open(projectActor, projectId, revisionId);
+  const post = (path: string, key: string, body: object = {}) =>
+    app.request(path, {
+      method: "POST",
+      headers: {
+        ...headers,
+        "X-CSRF-Token": "1",
+        "Idempotency-Key": key,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+  return {
+    database,
+    sourceId,
+    project: { projectId, revisionId },
+    projectActor,
+    renderer,
+    drafts,
+    internal,
+    remote,
+    post,
+    actor,
+    identity,
+    setFreeBytes: (value: number) => {
+      freeBytes = value;
+    },
+  };
+}
+
+async function expectStoragePressure(response: Response) {
+  expect(response.status).toBe(503);
+  await expect(response.json()).resolves.toMatchObject({
+    error: { code: "STORAGE_PRESSURE" },
+  });
 }
 
 function seedSource(

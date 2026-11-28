@@ -125,7 +125,13 @@ describe("independent output checkpoints", () => {
       lease_expires_at: null,
       output_size: 30,
     });
-    const op = new SvgRetryOperations(db, { maxOutputBytes: 100 }),
+    let freeBytes = 1;
+    const op = new SvgRetryOperations(db, {
+        maxOutputBytes: 100,
+        storageRoot: "/fixture-storage",
+        minFreeStorageBytes: 1,
+        readFreeStorageBytes: () => freeBytes,
+      }),
       actor = {
         type: "user",
         id: "actor",
@@ -148,7 +154,14 @@ describe("independent output checkpoints", () => {
     db.raw.prepare("UPDATE jobs SET entrypoint='other.tex' WHERE id=?").run(id);
     expect(() => op.retry(actor, id, key)).toThrow(/requires/);
     db.raw.prepare("UPDATE jobs SET entrypoint='main.tex' WHERE id=?").run(id);
+    freeBytes = 0;
+    expect(() => op.retry(actor, id, key)).toThrow(
+      expect.objectContaining({ code: "STORAGE_PRESSURE", status: 503 }),
+    );
+    expect(db.outputStages.publicState(id)?.svg.attempt).toBe(1);
+    freeBytes = 1;
     expect(op.retry(actor, id, key)).toEqual({ id, reused: false });
+    freeBytes = 0;
     expect(op.retry(actor, id, key)).toEqual({ id, reused: true });
     expect(db.outputStages.publicState(id)?.svg.attempt).toBe(2);
   });

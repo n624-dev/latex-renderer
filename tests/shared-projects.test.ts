@@ -382,9 +382,10 @@ describe("shared saved Project operations", () => {
       serviceAccountId: "service_0",
       apiKeyId: principal.id,
       rendererVersion: "test",
-      reservedOutputBytes: 100,
+      maxOutputBytes: 100,
       runtime: "sha256:" + "1".repeat(64),
-      admit: () => {},
+      maxQueueLength: 100,
+      maxUserStorageBytes: 1024 ** 3,
     };
     const first = drafts.queuePreview(actor, project.id, 1, options);
     expect(drafts.queuePreview(actor, project.id, 1, options)).toMatchObject({
@@ -452,11 +453,9 @@ describe("shared saved Project operations", () => {
     expect(() =>
       drafts.queuePreview(actor, project.id, 3, {
         ...options,
-        admit: () => {
-          throw new Error("No space");
-        },
+        maxUserStorageBytes: 1,
       }),
-    ).toThrow("No space");
+    ).toThrow("User storage quota is exhausted");
     expect(db.jobs.get(waiting.jobId)?.status).toBe("queued");
     const latest = drafts.queuePreview(actor, project.id, 3, options);
     expect(db.jobs.get(waiting.jobId)).toMatchObject({
