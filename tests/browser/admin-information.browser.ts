@@ -21,6 +21,12 @@ const fixtureIssuancePath = `/admin/api/v1/service-accounts/${requestedId}/api-k
 const jobId = `job_${"c".repeat(32)}`;
 const retryId = `job_${"f".repeat(32)}`;
 const sourceId = `source_${"d".repeat(32)}`;
+const retentionPath = "/admin/api/v1/backups/retention";
+const latestBackup = "latex-renderer-2026-11-28T02-15-00.000Z.tar.age";
+const verifiedBackup = "latex-renderer-2026-11-27T02-15-00.000Z.tar.age";
+const olderBackup = "latex-renderer-2026-11-26T02-15-00.000Z.tar.age";
+const previouslyDeletedBackup =
+  "latex-renderer-2026-11-25T02-15-00.000Z.tar.age";
 const user = {
   id: userId,
   display_name: "検証ユーザー",
@@ -106,6 +112,51 @@ async function fixture(
   const identity = { userId, displayName: user.display_name, role: "owner" };
   const keyResponse: { wait?: Promise<void> } = {};
   const jobState: { current: JobFixture } = { current: job };
+  const retention = {
+    failPrune: false,
+    previews: [] as Record<string, string>[],
+  };
+  const initialPlan = {
+    configured: false,
+    keep: [latestBackup, verifiedBackup, olderBackup],
+    delete: [],
+    protected: [latestBackup, verifiedBackup],
+    keptBytes: 6000,
+    deletedBytes: 0,
+    warnings: [],
+  };
+  const proposedPlan = {
+    ...initialPlan,
+    configured: true,
+    keep: initialPlan.protected,
+    delete: [olderBackup],
+    keptBytes: 4000,
+    deletedBytes: 2000,
+    warnings: [
+      "PROTECTED_OVER_GENERATIONS",
+      "PROTECTED_OVER_BYTES",
+      "PROTECTED_OVER_AGE",
+    ],
+  };
+  const retentionStatus: {
+    policy: unknown;
+    plan: typeof initialPlan | typeof proposedPlan;
+    lastRun: {
+      at: string;
+      status: string;
+      deleted: string[];
+      warnings: string[];
+    };
+  } = {
+    policy: null,
+    plan: initialPlan,
+    lastRun: {
+      at: "2026-11-27T02:22:00.000Z",
+      status: "succeeded",
+      deleted: [previouslyDeletedBackup],
+      warnings: [],
+    },
+  };
   const queueSetting = {
     key: "max_queue_length",
     value: 12,
@@ -131,6 +182,37 @@ async function fixture(
         csrf: request.headers()["x-csrf-token"],
         body: request.postData(),
       });
+      if (url.pathname === retentionPath) {
+        const limits = request.postDataJSON() as Record<string, unknown>;
+        retentionStatus.policy = {
+          maxAgeDays: limits.maxAgeDays,
+          maxGenerations: limits.maxGenerations,
+          maxTotalBytes: limits.maxTotalBytes,
+          confirmedAt: "2026-11-28T09:00:00.000Z",
+          confirmedBy: userId,
+        };
+        retentionStatus.plan = proposedPlan;
+        const prune = retention.failPrune
+          ? { status: "failed", warnings: ["BACKUP_CONTROL_UNAVAILABLE"] }
+          : {
+              at: "2026-11-28T09:00:00.000Z",
+              status: "succeeded",
+              deleted: [olderBackup],
+              warnings: proposedPlan.warnings,
+            };
+        if ("deleted" in prune) {
+          retentionStatus.lastRun = { ...prune, deleted: prune.deleted };
+          retentionStatus.plan = {
+            ...proposedPlan,
+            delete: [],
+            deletedBytes: 0,
+          };
+        }
+        await route.fulfill({
+          json: { policy: retentionStatus.policy, prune },
+        });
+        return;
+      }
       if (url.pathname === "/admin/api/v1/system/config/reset") {
         queueSetting.source = "host";
         queueSetting.value = queueSetting.fallback;
@@ -161,6 +243,32 @@ async function fixture(
     }
     if (url.pathname === "/admin/assets/styles.css") {
       await route.fulfill({ contentType: "text/css", body: styles });
+      return;
+    }
+    if (url.pathname === retentionPath) {
+      if (url.search)
+        retention.previews.push(Object.fromEntries(url.searchParams));
+      await route.fulfill({
+        json: {
+          ...retentionStatus,
+          archives: retentionStatus.plan.keep.map((name) => ({
+            name,
+            bytes: 2000,
+          })),
+          freeBytes: 1000000,
+          latestVerification: {
+            archive: verifiedBackup,
+            verifiedAt: "2026-11-27T03:00:00.000Z",
+          },
+          schedule: "daily",
+          candidates: {
+            maxAgeDays: 30,
+            maxGenerations: 30,
+            maxTotalBytes: 60000,
+          },
+          proposedPlan: url.search ? proposedPlan : null,
+        },
+      });
       return;
     }
     if (url.pathname === "/admin/assets/site.js") {
@@ -393,8 +501,110 @@ async function fixture(
     jobState,
     identity,
     keyResponse,
+    retention,
   };
 }
+
+it.each([false, true])(
+  "previews and confirms backup retention, with immediate pruning failure=%s",
+  async (failPrune) => {
+    const { page, errors, mutations, retention } = await fixture("system");
+    retention.failPrune = failPrune;
+    const summary = page.locator("#retention-summary");
+    expect(await summary.textContent()).toContain("毎日");
+    expect(await summary.textContent()).toContain("前回の整理");
+    expect(await summary.textContent()).toContain(previouslyDeletedBackup);
+    const form = page.locator("#retention-form");
+    const age = form.locator('[name="maxAgeDays"]');
+    const generations = form.locator('[name="maxGenerations"]');
+    const bytes = form.locator('[name="maxTotalBytes"]');
+    const previewButton = form.locator('button[type="submit"]');
+    const preview = page.locator("#retention-preview");
+    const confirmButton = page.locator("#retention-confirm");
+    expect(await age.inputValue()).toBe("30");
+    expect(await generations.inputValue()).toBe("30");
+    expect(await bytes.inputValue()).toBe("60000");
+    expect(await confirmButton.isDisabled()).toBe(true);
+
+    await age.fill("1");
+    await generations.fill("1");
+    await bytes.fill("0");
+    await previewButton.click();
+    await expect.poll(() => preview.textContent()).toContain(olderBackup);
+    expect(
+      await preview.locator("ul").first().locator("li").allTextContents(),
+    ).toEqual([olderBackup]);
+    expect(await preview.textContent()).toContain(latestBackup);
+    expect(await preview.textContent()).toContain(verifiedBackup);
+    expect(await preview.locator(".warning li").allTextContents()).toEqual([
+      "保護されたバックアップの世代数が上限を超えています。",
+      "保護されたバックアップの合計サイズが上限を超えています。",
+      "保護されたバックアップが保持日数の上限を超えています。",
+    ]);
+    await age.fill("2");
+    expect(await confirmButton.isDisabled()).toBe(true);
+    expect(await preview.textContent()).toBe("");
+    await previewButton.click();
+    await expect.poll(() => confirmButton.isEnabled()).toBe(true);
+    expect(retention.previews).toEqual([
+      { maxAgeDays: "1", maxGenerations: "1", maxTotalBytes: "0" },
+      { maxAgeDays: "2", maxGenerations: "1", maxTotalBytes: "0" },
+    ]);
+
+    await confirmButton.click();
+    const dialog = page.locator("dialog");
+    expect(await dialog.locator(".warning").textContent()).toContain(
+      "すぐに削除されます",
+    );
+    await dialog.locator("[data-dialog-cancel]").click();
+    expect(mutations).toEqual([]);
+
+    await confirmButton.click();
+    const reason = dialog.locator('[name="reason"]');
+    const submit = dialog.locator('button[type="submit"]');
+    await reason.fill("   ");
+    await submit.click();
+    await expect
+      .poll(() => dialog.locator(".dialog-error").textContent())
+      .toContain("理由を入力");
+    expect(mutations).toEqual([]);
+    await reason.fill("  容量制限のため  ");
+    await submit.click();
+    const result = page.locator("#retention-result");
+    await expect
+      .poll(() => result.textContent())
+      .toContain(failPrune ? "整理は失敗しました" : "整理が完了しました");
+    expect(mutations).toEqual([
+      {
+        path: retentionPath,
+        csrf: "fixture-csrf",
+        body: JSON.stringify({
+          maxAgeDays: 2,
+          maxGenerations: 1,
+          maxTotalBytes: 0,
+          reason: "容量制限のため",
+        }),
+      },
+    ]);
+    if (failPrune) {
+      expect(await result.textContent()).toContain(
+        "BACKUP_CONTROL_UNAVAILABLE",
+      );
+      expect(await summary.textContent()).toContain(previouslyDeletedBackup);
+    } else {
+      expect(await result.textContent()).toContain(olderBackup);
+      await expect.poll(() => summary.textContent()).toContain(olderBackup);
+      expect(await summary.textContent()).not.toContain(
+        previouslyDeletedBackup,
+      );
+    }
+    expect(await summary.locator("[data-retention-policy]").textContent()).toBe(
+      "2 日 / 1 世代 / 0 バイト",
+    );
+    expect(await confirmButton.isDisabled()).toBe(true);
+    expect(errors).toEqual([]);
+  },
+);
 
 it.each([false, true])(
   "selects an owner beyond the first page without silently changing it after search: disabled=%s",
