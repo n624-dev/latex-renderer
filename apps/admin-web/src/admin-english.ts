@@ -21,6 +21,7 @@ export const english = {
   adminCliAuthentication:
     "The admin CLI uses an lra_ admin API key. Sign in to use the browser interface.",
   adminKeyOwnersOnly: "Admin key (owners only)",
+  adminOverride: "Admin override",
   administration: "Administration",
   administrationLatexRenderer: "Administration | LaTeX Renderer",
   administrationNavigation: "Administration navigation",
@@ -87,6 +88,7 @@ export const english = {
   buildingTheEnvironmentCanTakeTens:
     "Building the environment can take tens of minutes to several hours and use substantial CPU and disk space. The switch takes place only after successful verification.",
   builtAndVerifiedOnThisServer: "Built and verified on this server",
+  builtInDefault: "Built-in default",
   bulkDeleteSelectedJobs: "Bulk delete selected jobs",
   bulkDeletionRequested: "Bulk deletion requested.",
   cancel: "Cancel",
@@ -115,6 +117,7 @@ export const english = {
   compileLog: "Compile log",
   completedSuccessfully: "Completed successfully",
   concurrentConversionLimitPerUser: "Concurrent conversion limit per user",
+  configurationSource: "Configuration source",
   confirmRoleChange: "The role will change from {oldRole} to {newRole}.",
   confirmUserAction: "Action on the selected user: {action}.",
   confirmWorkerState: "The worker state will change to {state}.",
@@ -201,6 +204,7 @@ export const english = {
   editServiceAccount: "Edit service account",
   editSetting: "Edit {setting}",
   editUser: "Edit user",
+  effectiveValue: "Effective value",
   email: "Email",
   emailNotSet: "Email not set",
   emailOptional: "Email (optional)",
@@ -236,6 +240,8 @@ export const english = {
   generalPurposeCli: "General-purpose CLI",
   getSvgLog: "Get SVG log",
   healthy: "Healthy",
+  hostDefault: "Host default",
+  hostSetting: "Host setting",
   httpServices: "HTTP services",
   iUnderstandTheImpact: "I understand the impact",
   identifier: "Identifier",
@@ -407,6 +413,11 @@ export const english = {
   readSharedDrafts: "Read shared project drafts",
   editSharedDrafts: "Open, edit and save shared project drafts",
   inspectOwnedPdfs: "Inspect PDFs from jobs owned by this key",
+  readProjectDocumentState:
+    "View document conditions, adopted revisions, and PDF reviews",
+  writeProjectDocumentState:
+    "Change document conditions, adopt revisions, and record PDF reviews",
+  applyProjectRevisionCleanup: "Apply saved revision cleanup",
   renderReadScope:
     "{scope}: Renew a short-lived token for your own job. Use it to check status, retrieve results, cancel or delete the job.",
   renderTarget: "Render target",
@@ -441,6 +452,7 @@ export const english = {
   retryPreview: "Retry preview",
   retrySvgOnly: "Retry SVG only",
   retryWithTheSameInput: "Retry with the same input",
+  returnToHostDefault: "Return to host default",
   returnToNormalOperation: "Return to normal operation.",
   returnToNormalOperation2: "Return to normal operation",
   review: "Review",
@@ -504,6 +516,7 @@ export const english = {
     "Services restart after backup and verification. They are temporarily unavailable during the operation.",
   setTicketSigningKidToThe:
     "Set TICKET_SIGNING_KID to the new ID and redeploy the internal API and renderer API.",
+  settingReset: "Host default restored.",
   settings: "Settings",
   settingsUpdated: "Settings updated.",
   showDetailedLog: "Show detailed log",
