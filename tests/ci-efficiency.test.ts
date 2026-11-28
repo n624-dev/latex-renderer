@@ -145,8 +145,18 @@ describe("cache-free CI validation", () => {
     expect(workflow).not.toContain("actions/cache");
     expect(workflow).not.toContain("cache-from:");
     expect(workflow).toContain("--with-deps --only-shell chromium");
-    expect(workflow).toContain("cancel-in-progress: true");
     expect(workflow).toContain("Scan repository history for secrets");
+  });
+
+  it.each(["ci", "security"])("isolates each %s merge-queue run", (name) => {
+    const workflow = read(`.github/workflows/${name}.yml`);
+    expect(workflow).toContain("  merge_group:\n    types: [checks_requested]");
+    expect(workflow).toContain(
+      "github.event_name == 'merge_group' && format('merge-group-{0}', github.run_id) || github.ref",
+    );
+    expect(workflow).toContain(
+      "cancel-in-progress: ${{ github.event_name != 'merge_group' }}",
+    );
   });
 
   it("recursive build still creates both Worker bundles and signed client assets", () => {
