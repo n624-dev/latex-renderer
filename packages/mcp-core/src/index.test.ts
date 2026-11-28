@@ -148,6 +148,7 @@ describe("MCP core", () => {
       "render_project",
       "get_render_status",
       "download_render_artifacts",
+      "get_project_revision_downloads",
       "cancel_render",
       "delete_render",
       "list_projects",

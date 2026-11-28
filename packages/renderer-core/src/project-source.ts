@@ -3,18 +3,22 @@ import { constants } from "node:fs";
 import { open } from "node:fs/promises";
 import { join } from "node:path";
 import { Readable } from "node:stream";
-import { ProjectOperations } from "@latex-renderer/database";
+import {
+  ProjectOperations,
+  type ProjectActor,
+  type RendererDatabase,
+} from "@latex-renderer/database";
 import { AppError } from "@latex-renderer/shared";
-import type { AdminDependencies, AppActor } from "../types.js";
 
 export async function downloadProjectSource(
-  deps: AdminDependencies,
-  actor: AppActor,
+  database: RendererDatabase,
+  storageRoot: string,
+  actor: ProjectActor,
   projectId: string,
   revisionId: string,
   signal: AbortSignal,
 ): Promise<Response> {
-  const projects = new ProjectOperations(deps.database);
+  const projects = new ProjectOperations(database);
   const { source } = projects.revision(actor, projectId, revisionId);
   if (source.storage_key !== `sources/${source.id}/source.zip`)
     throw new AppError(
@@ -29,7 +33,7 @@ export async function downloadProjectSource(
       410,
     );
   const file = await open(
-    join(deps.storageRoot, source.storage_key),
+    join(storageRoot, source.storage_key),
     constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
   ).catch((error: unknown) => {
     const code = (error as NodeJS.ErrnoException | null)?.code;
@@ -78,6 +82,7 @@ export async function downloadProjectSource(
       headers: {
         "Content-Type": "application/zip",
         "Content-Length": String(source.size),
+        "X-Source-Zip-Size": String(source.size),
         "Content-Disposition": `attachment; filename="${revisionId}.zip"`,
         ETag: `"${source.sha256}"`,
         "Cache-Control": "private, no-store",

@@ -307,8 +307,6 @@ CREATE INDEX IF NOT EXISTS idx_project_revisions_source ON project_revisions(sou
 INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (1, strftime('%Y-%m-%dT%H:%M:%fZ','now'));
 INSERT OR IGNORE INTO system_settings(key, value_json, updated_by, updated_at)
 VALUES ('maintenance_mode', '"normal"', 'migration', strftime('%Y-%m-%dT%H:%M:%fZ','now'));
-INSERT OR IGNORE INTO system_settings(key, value_json, updated_by, updated_at)
-VALUES ('source_orphan_retention_minutes', '60', 'migration', strftime('%Y-%m-%dT%H:%M:%fZ','now'));
 `;
 
 // Applied by migration 18, not schemaSql: existing rows must be backfilled in
