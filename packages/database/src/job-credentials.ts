@@ -29,6 +29,7 @@ export function jobTicketCredential(
     service_account_id: string;
     api_key_id: string;
     draft_preview?: true;
+    auth_scope?: string;
   },
 ) {
   const preview = claims.draft_preview === true;
@@ -69,10 +70,12 @@ export function jobTicketCredential(
         scopes_json: string;
       }
     | undefined;
-  if (row === undefined || !preview) return row;
+  if (row === undefined) return undefined;
+  if (!preview && claims.auth_scope === undefined) return row;
   const scopes: unknown = JSON.parse(row.scopes_json);
-  return Array.isArray(scopes) &&
-    canRenderDraftPreview({ keyKind: row.kind, scopes })
-    ? row
-    : undefined;
+  if (!Array.isArray(scopes)) return undefined;
+  const permitted = preview
+    ? canRenderDraftPreview({ keyKind: row.kind, scopes })
+    : scopes.includes(claims.auth_scope) || scopes.includes("admin:*");
+  return permitted ? row : undefined;
 }

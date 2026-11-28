@@ -107,7 +107,7 @@ export class RenderTicketsService {
       return {
         status: result.reused ? (200 as const) : (202 as const),
         value: {
-          ...(await this.renew(actor, result.id)),
+          ...(await this.issueAccess(actor, result.id, "render:create")),
           job: this.summarize(this.requireOwnedJob(actor, result.id)),
         },
       };
@@ -210,7 +210,7 @@ export class RenderTicketsService {
           sha256: input.sha256,
           nonce,
         }),
-        this.deps.tickets.issueJob(subject),
+        this.deps.tickets.issueJob(subject, "render:create"),
       ]),
       timestamp = nowIso(),
       expiresAt = new Date(Date.now() + 600_000).toISOString();
@@ -343,7 +343,11 @@ export class RenderTicketsService {
         );
       return {
         status: 200 as const,
-        value: await this.issueExistingSourceJob(actor, existing.resource_id),
+        value: await this.issueAccess(
+          actor,
+          existing.resource_id,
+          "render:create",
+        ),
       };
     }
     const source = this.deps.database.sources.getOwnedReady(
@@ -366,7 +370,10 @@ export class RenderTicketsService {
       );
     const jobId = `job_${randomBytes(16).toString("hex")}`,
       timestamp = nowIso(),
-      jobTicket = await this.deps.tickets.issueJob(toSubject(actor, jobId));
+      jobTicket = await this.deps.tickets.issueJob(
+        toSubject(actor, jobId),
+        "render:create",
+      );
     try {
       this.deps.database.transaction(() => {
         this.assertAccepting(actor, 0);
@@ -476,7 +483,11 @@ export class RenderTicketsService {
       if (raced?.resource_id && raced.request_hash === requestHash)
         return {
           status: 200 as const,
-          value: await this.issueExistingSourceJob(actor, raced.resource_id),
+          value: await this.issueAccess(
+            actor,
+            raced.resource_id,
+            "render:create",
+          ),
         };
       throw caught;
     }
@@ -489,11 +500,18 @@ export class RenderTicketsService {
       },
     };
   }
-  async renew(actor: AuthenticatedServiceAccount, jobId: string) {
+  private async issueAccess(
+    actor: AuthenticatedServiceAccount,
+    jobId: string,
+    authScope: "render:create" | "render:read:own",
+  ) {
     this.requireOwnedJob(actor, jobId);
     return {
       jobId,
-      jobTicket: await this.deps.tickets.issueJob(toSubject(actor, jobId)),
+      jobTicket: await this.deps.tickets.issueJob(
+        toSubject(actor, jobId),
+        authScope,
+      ),
       expiresAt: new Date(Date.now() + 1_800_000).toISOString(),
     };
   }
@@ -519,7 +537,7 @@ export class RenderTicketsService {
         "API key lacks the required scope",
         403,
       );
-    return this.renew(actor, jobId);
+    return this.issueAccess(actor, jobId, "render:read:own");
   }
   requireOwnedJob(actor: AuthenticatedServiceAccount, jobId: string) {
     const row = this.deps.database.jobs.getOwned(
@@ -580,20 +598,9 @@ export class RenderTicketsService {
         sha256: row.source_sha256,
         nonce,
       }),
-      jobTicket: await this.deps.tickets.issueJob(subject),
+      jobTicket: await this.deps.tickets.issueJob(subject, "render:create"),
       uploadUrl: this.uploadUrl(jobId),
       expiresAt,
-    };
-  }
-  private async issueExistingSourceJob(
-    actor: AuthenticatedServiceAccount,
-    jobId: string,
-  ) {
-    this.requireOwnedJob(actor, jobId);
-    return {
-      jobId,
-      jobTicket: await this.deps.tickets.issueJob(toSubject(actor, jobId)),
-      expiresAt: new Date(Date.now() + 1_800_000).toISOString(),
     };
   }
   private uploadUrl(jobId: string): string {

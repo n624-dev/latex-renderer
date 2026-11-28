@@ -194,6 +194,14 @@ Records the attempt count and schedule for temporary PDF inspection failures. Ex
 
 A routine rotation performed after this migration links the replacement key to the original application's Job history. A queued Job can continue if the active replacement is still authorized to render. Revocation invalidates the revoked key and its tickets. Keys issued independently or rotated before this migration retain their existing isolation.
 
+### Job ownership across key rotation
+
+- **Per-key isolation.** Each key can access only its own Jobs. A replacement starts with an empty Job history, even under the same service account.
+- **Rotation lineage (used by migration 032).** Rotation links the successor to the same lineage within the service account. Jobs retain the ID of their original key. An active successor can renew tickets and recover idempotent responses for that lineage, subject to its current scopes.
+- **Explicit transfer.** An administrator would separately select Jobs and assign them to another key. This would allow a selective handoff and require an additional operation to move each set of Jobs.
+
+Lineage preserves access during routine secret replacement and keeps the original key ID on each Job. Independently issued keys stay isolated, including keys under the same service account.
+
 ## Migration 022: PDF-bound preview requests
 
 The same migration adds bounded `source_trees` and `source_tree_readers` for
