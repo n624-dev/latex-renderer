@@ -382,7 +382,10 @@ describe("admin API cleanup", () => {
       const { jobTicket } = (await access.json()) as { jobTicket: string };
       await expect(
         tickets.verify(jobTicket, "status", jobId),
-      ).resolves.toMatchObject({ api_key_id: id });
+      ).resolves.toMatchObject({
+        api_key_id: id,
+        auth_scope: "render:read:own",
+      });
       const retried = await call(`${path}/retry`, "POST", {
         "Idempotency-Key": `fixture-retry-${prefix}`,
       });
@@ -390,11 +393,22 @@ describe("admin API cleanup", () => {
       const retry = (await retried.json()) as {
         id?: string;
         jobId?: string;
+        jobTicket?: string;
         retryOfJobId: string;
       };
       expect(retry.retryOfJobId).toBe(jobId);
       const retryId = retry.id ?? retry.jobId;
       if (retryId === undefined) throw new Error("Missing retry Job ID");
+      if (prefix === "/app/api/v1") {
+        if (retry.jobTicket === undefined)
+          throw new Error("Missing Job ticket");
+        await expect(
+          tickets.verify(retry.jobTicket, "status", retryId),
+        ).resolves.toMatchObject({
+          api_key_id: id,
+          auth_scope: "render:create",
+        });
+      }
       expect(database.jobs.getVisible(retryId)).toMatchObject({
         user_id: "user_owner",
         service_account_id: "sa_seed",
@@ -422,10 +436,69 @@ describe("admin API cleanup", () => {
         error: { code: "JOB_IDENTITY_REVOKED" },
       });
     }
+    const retryState = () => ({
+      jobs: database.raw.prepare("SELECT * FROM jobs ORDER BY id").all(),
+      audit: database.raw.prepare("SELECT * FROM audit_logs ORDER BY id").all(),
+      idempotency: database.raw
+        .prepare("SELECT * FROM idempotency_records ORDER BY key_hash")
+        .all(),
+    });
+    const beforeDeniedRetry = retryState();
+    const denied = await call(`/app/api/v1/jobs/${jobId}/retry`, "POST", {
+      "Idempotency-Key": "fixture-retry-after-revocation",
+    });
+    expect(denied.status).toBe(403);
+    await expect(denied.json()).resolves.toMatchObject({
+      error: { code: "JOB_IDENTITY_REVOKED" },
+    });
+    expect(retryState()).toEqual(beforeDeniedRetry);
     expect((await call(`/app/api/v1/jobs/${jobId}`, "DELETE")).status).toBe(
       204,
     );
     expect(database.jobs.get(jobId)?.status).toBe("deleting");
+  });
+
+  it("binds Web and Admin access tickets for Remote MCP Jobs to oauth:mcp", async () => {
+    const { app, database, tickets } = adminApp();
+    const timestamp = new Date().toISOString();
+    database.raw
+      .prepare("UPDATE api_keys SET scopes_json=? WHERE id='key_seed'")
+      .run('["oauth:mcp"]');
+    database.remoteMcp.insertPrincipal({
+      user_id: "user_owner",
+      service_account_id: "sa_seed",
+      api_key_id: "key_seed",
+      created_at: timestamp,
+    });
+    const jobId = `job_${"4".repeat(32)}`;
+    database.jobs.insertReserved({
+      id: jobId,
+      userId: "user_owner",
+      serviceAccountId: "sa_seed",
+      apiKeyId: "key_seed",
+      rendererVersion: "fixture",
+      sourceSize: 1,
+      sourceSha256: "a".repeat(64),
+      timestamp,
+      reservedOutputBytes: 1,
+    });
+    for (const prefix of ["/app/api/v1", "/admin/api/v1"]) {
+      const response = await app.request(
+        `${prefix}/jobs/${jobId}/access-ticket`,
+        {
+          method: "POST",
+          headers: { "Cf-Access-Jwt-Assertion": "test", "X-CSRF-Token": "1" },
+        },
+      );
+      expect(response.status).toBe(200);
+      const { jobTicket } = (await response.json()) as { jobTicket: string };
+      await expect(
+        tickets.verify(jobTicket, "status", jobId),
+      ).resolves.toMatchObject({
+        api_key_id: "key_seed",
+        auth_scope: "oauth:mcp",
+      });
+    }
   });
 
   it("pages audit logs and enforces ticket-key rotation safety", async () => {
@@ -700,7 +773,7 @@ function adminApp(storageRoot = "/nonexistent") {
   database.raw
     .prepare(
       `INSERT INTO api_keys(id,service_account_id,name,prefix,secret_hash,pepper_id,scopes_json,created_at,created_by)
-    VALUES ('key_seed','sa_seed','test','lrk_seed','00','v1','["render:create"]',?,'test')`,
+    VALUES ('key_seed','sa_seed','test','lrk_seed','00','v1','["render:create","render:read:own"]',?,'test')`,
     )
     .run(now);
 

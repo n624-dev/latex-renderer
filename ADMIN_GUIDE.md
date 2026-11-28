@@ -44,6 +44,30 @@ OTPs and API secrets out of audit reasons and comments.
 
 API secrets are shown once. Never paste them into prompts, project files, logs, or issue comments.
 
+## Recover an API key whose secret was never received
+
+If issuance succeeded and the one-time secret never reached the recipient,
+revoke the issued key and create a new one for the same service account with
+the intended scopes. Capture the new secret when it appears and deliver it
+through a secure channel.
+
+In the Admin CLI, look up the issued key ID, service account, and scopes. The
+example reissues a rendering key. Substitute your IDs, name, and scopes.
+
+```bash
+latex-render-admin api-keys list --query render-client
+latex-render-admin api-keys get KEY_ID
+latex-render-admin api-keys revoke KEY_ID --yes
+latex-render-admin api-keys create --service-account SERVICE_ACCOUNT_ID \
+  --name render-client --scope render:create render:read:own
+```
+
+In the Web UI, open **API keys** in `/admin/` and identify the issued key by
+name and prefix. Open **Details** to verify the key ID, service account, and
+scopes. Click **Revoke** on that row and confirm with **Revoke**. Then choose
+**Issue API key**, select the service account, key type, and intended scopes,
+enter a name, and click **Issue**. Use **Copy and close** to capture the secret.
+
 ## Backups
 
 Owners can use `backup status`, `backup create`, and `backup verify` in

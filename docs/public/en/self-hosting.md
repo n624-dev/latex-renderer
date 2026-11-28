@@ -76,6 +76,22 @@ After signing in to `/admin/` as an owner, register your users.
 - **Web and Remote MCP users.** Create the account under **Users**, register the identity information required by its sign-in method, and give the user the web app URL.
 - **CLI, Local MCP, and HTTP API users.** Create a **Service account** associated with the user. Under **API keys → Issue API key**, issue a rendering key (`lrk_...`) with `render:create` and `render:read:own` and deliver it through a secure channel.
 
+### Recover an API key whose secret was never received {#発行済み-api-キーのシークレットを受け取れなかった場合}
+
+If issuance succeeded and the one-time secret never reached the recipient, revoke the issued key and create a new one for the same service account with the intended scopes.
+
+In the Admin CLI, look up the issued key ID, service account, and scopes. The example reissues a rendering key. Substitute your IDs, name, and scopes.
+
+```bash
+latex-render-admin api-keys list --query render-client
+latex-render-admin api-keys get KEY_ID
+latex-render-admin api-keys revoke KEY_ID --yes
+latex-render-admin api-keys create --service-account SERVICE_ACCOUNT_ID \
+  --name render-client --scope render:create render:read:own
+```
+
+In `/admin/`, open **API keys** and find the issued key by name and prefix. Open **Details** to verify the key ID, service account, and scopes. Click **Revoke** on that row and confirm with **Revoke**. Then choose **Issue API key**, select the service account, key type, and intended scopes, enter a name, and click **Issue**. Use **Copy and close** to capture the secret and deliver it through a secure channel.
+
 ## Updates and rollback {#更新とロールバック}
 
 ### Update the application {#アプリケーションを更新する}
