@@ -41,48 +41,61 @@ OpenAPI 定義：[予約とジョブ作成（gateway.openapi.yaml）](/openapi/g
 > API キー、`uploadTicket`、`jobTicket` をログ、URL クエリ、送信するソース ZIP 内に含めないでください。
 
 > [!NOTE]
-API キーで作成した Job は、そのキーにひも付きます。管理画面でキーをローテーションすると、交換先のキーで既存 Job のチケット更新、同じ `Idempotency-Key` での応答再取得、SVG 再試行ができます。交換元のキーと発行済みチケットは失効します。新しいキーに描画権限があれば、受付済みの待機 Job はそのまま進みます。この引き継ぎは対応版を導入した後のローテーションから適用されます。
+> API キーで作成した Job は、そのキーにひも付きます。管理画面でキーをローテーションすると、交換先のキーで既存 Job のチケット更新、同じ `Idempotency-Key` での応答再取得、SVG 再試行ができます。交換元のキーと発行済みチケットは失効します。新しいキーに描画権限があれば、受付済みの待機 Job はそのまま進みます。この引き継ぎは対応版を導入した後のローテーションから適用されます。
 
 独立して発行したキーから既存 Job を操作すると、同じ Service Account 内でも `404` が返ります。漏えい時はキーを失効させてください。Source と保存 Project は同じユーザー内で共有されるため、別キーでも共有 Source から新しい Job を作れます。保存版の履歴に `detailAccess: "different_connection"` がある Job は、その接続からは詳細を開けません。
 
 ## APIエンドポイント
 
-| メソッド | パス | 用途 |
-| --- | --- | --- |
-| `GET` / `HEAD` | `/api/v1/health` | Gateway の応答を確認（認証不要。HEAD は本文なし） |
-| `GET` | `/api/v1/source-tickets` | 描画用APIキーで現在のZIP上限を取得 |
-| `POST` | `/api/v1/source-tickets` | Source を予約、または同一ユーザー内で既存 ZIP を再利用 |
-| `PUT` | `/api/v1/sources/{sourceId}/content` | Source ZIP を検証してアップロード |
-| `POST` | `/api/v1/render-tickets` | 既存 Source から Job 作成、SVG 再試行、または 1 ジョブ従来フローの予約 |
-| `POST` | `/api/v1/job-tickets/{jobId}` | 所有ジョブの操作用 `jobTicket` を再発行 |
-| `PUT` | `/api/v1/jobs/{jobId}/source` | 1 ジョブ従来フローで ZIP を直接アップロード |
-| `GET` | `/api/v1/jobs/{jobId}` | ジョブの状態とエラー情報を取得 |
-| `POST` | `/api/v1/jobs/{jobId}/cancel` | 待機中または処理中のジョブを中止 |
-| `GET` | `/api/v1/jobs/{jobId}/artifacts/{path}` | PDF、ログ、構造化エラー、SVG を取得 |
-| `GET` | `/api/v1/jobs/{jobId}/previews/{page}` | `page-N.png` のページプレビューを取得 |
-| `DELETE` | `/api/v1/jobs/{jobId}` | 終了済みジョブを削除対象へ移行 |
-| `GET` / `POST` | `/api/v1/projects` | 保存 Project の一覧取得 / 新規作成 |
-| `GET` / `PATCH` / `DELETE` | `/api/v1/projects/{projectId}` | Project の詳細・改訂履歴 / 改名 / 削除（非表示化） |
-| `GET` | `/api/v1/projects/{projectId}/draft` | 共有下書きの版とファイル一覧を取得 |
-| `GET` | `/api/v1/projects/{projectId}/draft/file` | 指定版の本文を分割取得 |
-| `POST` | `/api/v1/projects/{projectId}/draft/open` | 共有下書きを開く |
-| `POST` | `/api/v1/projects/{projectId}/draft/changes` | 指定版に変更をまとめて適用 |
-| `POST` | `/api/v1/projects/{projectId}/draft/preview` | 指定版のPDFプレビューを試し描画または再利用 |
-| `POST` | `/api/v1/projects/{projectId}/draft/save` | 共有下書きを保存版に保存 |
-| `GET` / `POST` | `/api/v1/job-tickets/{jobId}/pdf-inspection` | 指定したPDFの品質検査を取得、または要求 |
-| `POST` | `/api/v1/projects/{projectId}/revisions` | ready Source を不変の改訂として保存 |
-| `GET` | `/api/v1/projects/{projectId}/revisions/{revisionId}/jobs` | 指定した改訂の Job 履歴を取得 |
-| `GET` | `/api/v1/projects/{projectId}/revisions/{revisionId}/files` | 保存版のファイル一覧を取得。 `path` を指定すると本文を取得 |
-| `POST` | `/api/v1/projects/{projectId}/revisions/{revisionId}/render` | 指定した改訂を再レンダリング |
-| `GET` | `/api/v1/projects/{projectId}/document-state` | 文書条件、採用版、指定した保存版の変更履歴を取得 |
-| `PATCH` | `/api/v1/projects/{projectId}/document-state/conditions` | 指定版の文書条件を更新 |
-| `POST` | `/api/v1/projects/{projectId}/document-state/adoption` | 採用版を設定または解除 |
-| `GET` / `POST` | `/api/v1/projects/{projectId}/pdf-reviews` | Project の PDF 確認記録を一覧表示または追加 |
-| `GET` | `/api/v1/projects/{projectId}/storage-usage` | Project の保存量とアカウント上限を取得 |
-| `POST` | `/api/v1/projects/{projectId}/revision-protection` | 保存版の明示的な保護を設定または解除 |
-| `POST` | `/api/v1/projects/{projectId}/revision-cleanup/plan` | 指定した保存版の整理を計画 |
-| `POST` | `/api/v1/projects/{projectId}/revision-cleanup/apply` | 現在の計画ハッシュを使って保存版整理を実行 |
-| `GET` | `/api/v1/projects/{projectId}/revisions/{revisionId}/source.zip` | 指定した保存版の Source ZIP を取得 |
+| メソッド                   | パス                                                         | 用途                                                                                           |
+| -------------------------- | ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------- |
+| `GET` / `HEAD`             | `/api/v1/health`                                             | Gateway の応答を確認（認証不要。HEAD は本文なし）                                              |
+| `GET`                      | `/api/v1/source-tickets`                                     | 描画用APIキーで現在のZIP上限を取得                                                             |
+| `POST`                     | `/api/v1/source-tickets`                                     | Source を予約、または同一ユーザー内で既存 ZIP を再利用                                         |
+| `PUT`                      | `/api/v1/sources/{sourceId}/content`                         | Source ZIP を検証してアップロード                                                              |
+| `POST`                     | `/api/v1/render-tickets`                                     | 既存 Source から Job 作成、SVG 再試行、または 1 ジョブ従来フローの予約                         |
+| `POST`                     | `/api/v1/job-tickets/{jobId}`                                | 所有ジョブの操作用 `jobTicket` を再発行                                                        |
+| `PUT`                      | `/api/v1/jobs/{jobId}/source`                                | 1 ジョブ従来フローで ZIP を直接アップロード                                                    |
+| `GET`                      | `/api/v1/jobs/{jobId}`                                       | ジョブの状態とエラー情報を取得                                                                 |
+| `POST`                     | `/api/v1/jobs/{jobId}/cancel`                                | 待機中または処理中のジョブを中止                                                               |
+| `GET`                      | `/api/v1/jobs/{jobId}/artifacts/{path}`                      | PDF、ログ、構造化エラー、SVG を取得                                                            |
+| `GET`                      | `/api/v1/jobs/{jobId}/previews/{page}`                       | `page-N.png` のページプレビューを取得                                                          |
+| `DELETE`                   | `/api/v1/jobs/{jobId}`                                       | 終了済みジョブを削除対象へ移行                                                                 |
+| `GET` / `POST`             | `/api/v1/projects`                                           | 保存 Project の一覧取得 / 新規作成                                                             |
+| `GET` / `PATCH` / `DELETE` | `/api/v1/projects/{projectId}`                               | Project の詳細・改訂履歴 / 改名 / 削除（非表示化）                                             |
+| `GET`                      | `/api/v1/projects/{projectId}/draft`                         | 共有下書きの版とファイル一覧を取得                                                             |
+| `GET`                      | `/api/v1/projects/{projectId}/draft/file`                    | 指定版の本文を分割取得                                                                         |
+| `POST`                     | `/api/v1/projects/{projectId}/draft/open`                    | 共有下書きを開く                                                                               |
+| `POST`                     | `/api/v1/projects/{projectId}/draft/changes`                 | 指定版に変更をまとめて適用                                                                     |
+| `POST`                     | `/api/v1/projects/{projectId}/draft/preview`                 | 指定版のPDFプレビューを試し描画または再利用                                                    |
+| `POST`                     | `/api/v1/projects/{projectId}/draft/save`                    | 共有下書きを保存版に保存                                                                       |
+| `GET`                      | `/api/v1/environment`                                        | 描画環境と利用上限を取得                                                                       |
+| `GET`                      | `/api/v1/environment/profiles`                               | 制作プロファイルと確認状況を取得                                                               |
+| `POST`                     | `/api/v1/environment/packages/check`                         | 指定したパッケージの有無を確認                                                                 |
+| `GET`                      | `/api/v1/environment/packages/search`                        | パッケージ名を検索                                                                             |
+| `POST`                     | `/api/v1/environment/fonts/check`                            | 指定したフォントの有無を確認                                                                   |
+| `GET`                      | `/api/v1/environment/fonts/search`                           | フォント名を検索                                                                               |
+| `POST`                     | `/api/v1/environment/requirements/check`                     | 文書要件をRuntimeの構成と照合                                                                  |
+| `POST`                     | `/api/v1/environment/requirements/probe`                     | 検証用文書の描画を予約、または結果を取得                                                       |
+| `POST`                     | `/api/v1/job-tickets/{jobId}/retry`                          | 終了済みJobのSourceと設定で再試行                                                              |
+| `GET`                      | `/api/v1/job-tickets/{jobId}/diagnostics`                    | 診断一覧の指定範囲を取得                                                                       |
+| `GET`                      | `/api/v1/job-tickets/{jobId}/log`                            | ログをバイト位置または行番号で取得                                                             |
+| `GET`                      | `/api/v1/job-tickets/{jobId}/manifest`                       | Jobの入力、Runtime、成果物の識別情報を取得                                                     |
+| `POST`                     | `/api/v1/pdf-inspections/compare`                            | 指定した2つのPDFの検査結果を比較                                                               |
+| `GET` / `POST`             | `/api/v1/job-tickets/{jobId}/pdf-inspection`                 | 指定したPDFの品質検査を取得、または要求。POSTでは領域・複数ページのプレビューやSyncTeXも指定可 |
+| `POST`                     | `/api/v1/projects/{projectId}/revisions`                     | ready Source を不変の改訂として保存                                                            |
+| `GET`                      | `/api/v1/projects/{projectId}/revisions/{revisionId}/jobs`   | 指定した改訂の Job 履歴を取得                                                                  |
+| `GET`                      | `/api/v1/projects/{projectId}/revisions/{revisionId}/files`  | 保存版のファイル一覧を取得。 `path` を指定すると本文を取得                                     |
+| `POST`                     | `/api/v1/projects/{projectId}/revisions/{revisionId}/render` | 指定した改訂を再レンダリング                                                                   |
+| `GET`                      | `/api/v1/projects/{projectId}/document-state`                | 文書条件、採用版、指定した保存版の変更履歴を取得 |
+| `PATCH`                    | `/api/v1/projects/{projectId}/document-state/conditions`     | 指定版の文書条件を更新 |
+| `POST`                     | `/api/v1/projects/{projectId}/document-state/adoption`       | 採用版を設定または解除 |
+| `GET` / `POST`             | `/api/v1/projects/{projectId}/pdf-reviews`                   | Project の PDF 確認記録を一覧表示または追加 |
+| `GET`                      | `/api/v1/projects/{projectId}/storage-usage`                 | Project の保存量とアカウント上限を取得 |
+| `POST`                     | `/api/v1/projects/{projectId}/revision-protection`           | 保存版の明示的な保護を設定または解除 |
+| `POST`                     | `/api/v1/projects/{projectId}/revision-cleanup/plan`         | 指定した保存版の整理を計画 |
+| `POST`                     | `/api/v1/projects/{projectId}/revision-cleanup/apply`        | 現在の計画ハッシュを使って保存版整理を実行 |
+| `GET`                      | `/api/v1/projects/{projectId}/revisions/{revisionId}/source.zip` | 指定した保存版の Source ZIP を取得 |
 
 > [!DETAILS] 保存 Project API と保守モード時の挙動を表示
 >
@@ -196,7 +209,16 @@ Web・CLI での操作手順は[PDF・PNG・SVG を取得する](/docs/outputs/)
 >   ```
 > - **位置を確定できない場合（`placementStatus: "unknown"`）**：同一行に複数の数式があり SyncTeX から個別座標を確定できない場合などは推測座標を返さず、`page`・`x`・`y` を省略します（このときの `width`・`height` は抽出 SVG 自体の寸法であり、PDF 上の配置サイズではありません）。クライアントは必ず `schemaVersion` と `placementStatus` を確認してから PDF 上へ重ねてください。
 >   ```json
->   {"id":2,"kind":"math","artifact":"svg/objects/math-000002.svg","sourceFile":"main.tex","sourceLine":20,"placementStatus":"unknown","width":10,"height":5}
+>   {
+>     "id": 2,
+>     "kind": "math",
+>     "artifact": "svg/objects/math-000002.svg",
+>     "sourceFile": "main.tex",
+>     "sourceLine": 20,
+>     "placementStatus": "unknown",
+>     "width": 10,
+>     "height": 5
+>   }
 >   ```
 
 ## ZIPアップロード
@@ -212,14 +234,14 @@ Content-Length: <ZIPサイズ>
 
 ## ジョブ状態
 
-| 状態 | 意味 | クライアントの対応 |
-| --- | --- | --- |
-| `reserved` / `uploading` | 予約済み・アップロード中 | 期限内に ZIP を送信 |
-| `queued` / `validating` / `running` | 待機・検証・変換中 | 間隔を空けて状態を再確認 |
-| `succeeded` | 成功 | PDF と必要な成果物を取得 |
-| `failed` / `timeout` / `rejected` | 失敗・時間超過・受付拒否 | エラー情報を確認 |
-| `canceled` | キャンセル済み | 必要なら新しいジョブを作成 |
-| `deleting` / `deleted` / `expired` | 削除中・削除済み・期限切れ | 必要なら再作成 |
+| 状態                                | 意味                       | クライアントの対応         |
+| ----------------------------------- | -------------------------- | -------------------------- |
+| `reserved` / `uploading`            | 予約済み・アップロード中   | 期限内に ZIP を送信        |
+| `queued` / `validating` / `running` | 待機・検証・変換中         | 間隔を空けて状態を再確認   |
+| `succeeded`                         | 成功                       | PDF と必要な成果物を取得   |
+| `failed` / `timeout` / `rejected`   | 失敗・時間超過・受付拒否   | エラー情報を確認           |
+| `canceled`                          | キャンセル済み             | 必要なら新しいジョブを作成 |
+| `deleting` / `deleted` / `expired`  | 削除中・削除済み・期限切れ | 必要なら再作成             |
 
 **成果物の保持期限とダウンロード中の保護**：
 完了時刻（旧 Job で未記録なら更新時刻）から `ARTIFACT_RETENTION_HOURS`（既定 24 時間）を過ぎると、cleanup 待ちで実ファイルが残っていても新規取得はできません（Web・API・Renderer・Remote MCP 共通）。期限内に開始されたダウンロード・ZIP 取得・MCP 読み取りは転送中のみ削除防止の予約を自動更新し、終了・切断時に解放します（異常終了時は最終更新から 5 分で失効。予約更新に失敗した転送は中止され、期限切れ成果物を復活させることはありません）。
@@ -230,13 +252,13 @@ Content-Length: <ZIPサイズ>
 { "error": { "code": "ERROR_CODE", "message": "説明", "requestId": "任意" } }
 ```
 
-| HTTP ステータス | 意味 | 再試行の目安 |
-| --- | --- | --- |
-| `400` | 入力値、ヘッダー、または ZIP 内容が不正 | 入力内容を修正してから実行 |
-| `401` / `403` | トークン不正・期限切れ、またはスコープ不足 | 資格情報・権限を確認後に実行 |
-| `404` / `410` | ジョブ・成果物なし（別キー所有を含む）、または元データ期限切れ | 必要なら新規ジョブを作成 |
-| `409` | ジョブ状態の不整合、または `Idempotency-Key` の競合 | 現在の状態を確認後に判断 |
-| `429` / `503` | レート制限・容量不足・キュー上限・メンテナンス中 | 時間を置いて再試行可 |
+| HTTP ステータス | 意味                                                           | 再試行の目安                 |
+| --------------- | -------------------------------------------------------------- | ---------------------------- |
+| `400`           | 入力値、ヘッダー、または ZIP 内容が不正                        | 入力内容を修正してから実行   |
+| `401` / `403`   | トークン不正・期限切れ、またはスコープ不足                     | 資格情報・権限を確認後に実行 |
+| `404` / `410`   | ジョブ・成果物なし（別キー所有を含む）、または元データ期限切れ | 必要なら新規ジョブを作成     |
+| `409`           | ジョブ状態の不整合、または `Idempotency-Key` の競合            | 現在の状態を確認後に判断     |
+| `429` / `503`   | レート制限・容量不足・キュー上限・メンテナンス中               | 時間を置いて再試行可         |
 
 ## curlの例
 

@@ -120,6 +120,9 @@ const GATEWAY_ROUTES = [
   "= /api/v1/render-tickets",
   "= /api/v1/source-tickets",
   "^~ /api/v1/job-tickets/",
+  "= /api/v1/environment",
+  "^~ /api/v1/environment/",
+  "= /api/v1/pdf-inspections/compare",
   "= /api/v1/projects",
   "^~ /api/v1/projects/",
 ];
