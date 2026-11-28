@@ -400,7 +400,12 @@ it("uses the existing authenticated routes for jobs, backups, audit filtering an
       value: 15,
       reason: "Queue policy",
     });
-    expect(requests[6]?.body).toEqual({
+    expect(
+      requests.find(
+        ({ method, path }) =>
+          method === "POST" && path.endsWith("/system/config/reset"),
+      )?.body,
+    ).toEqual({
       key: "max_queue_length",
       reason: "Restore host limit",
     });
