@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { rm } from "node:fs/promises";
 import { dirname, isAbsolute, join } from "node:path";
+import { performance } from "node:perf_hooks";
 import { DatabaseSync } from "node:sqlite";
 import { pruneServiceDiagnostics } from "./service-diagnostics.mjs";
 import { sourceReferenceCountSql } from "../../packages/database/dist/source-lifecycle.js";
@@ -17,6 +18,10 @@ import {
 
 const databasePath = required("DATABASE_PATH");
 const storageRoot = required("STORAGE_ROOT");
+const cleanupBatchSize = 100;
+const cleanupDeadline =
+  performance.now() + positive("CLEANUP_MAX_RUN_SECONDS", 600) * 1000;
+let budgetStopped = false;
 try {
   await pruneServiceDiagnostics(storageRoot);
 } catch {
@@ -218,22 +223,24 @@ try {
 } catch (error) {
   recordFailure("draft-preview-gc", "draft-jobs", error);
 }
-const jobs = db
-  .prepare(
-    `SELECT j.id FROM jobs j WHERE (
-      (j.deletion_status='retained' AND j.status IN (${terminalStatuses})
-       AND COALESCE((SELECT p.pdf_completed_at FROM job_output_stages p WHERE p.job_id=j.id AND p.pdf_status='succeeded'),j.completed_at,j.updated_at)<=?)
-      OR (j.status='deleting' AND j.deletion_status IN ('retained','pending','deleting'))
-      OR (j.deletion_status IN ('pending','deleting','retry')
-          AND (j.deletion_next_attempt_at IS NULL OR j.deletion_next_attempt_at<=?))
-    ) AND j.lease_owner IS NULL AND NOT EXISTS
-    (SELECT 1 FROM artifact_download_leases l WHERE l.job_id=j.id AND l.expires_at>?)
-    AND NOT EXISTS (SELECT 1 FROM job_preview_requests p WHERE p.job_id=j.id AND p.status='running')
-    ORDER BY COALESCE(j.deletion_next_attempt_at,j.completed_at,j.updated_at),j.id LIMIT 100`,
-  )
-  .all(cutoff, now, now);
+const selectJobBatch = db.prepare(
+  `SELECT j.id FROM jobs j WHERE (
+    (j.deletion_status='retained' AND j.status IN (${terminalStatuses})
+     AND COALESCE((SELECT p.pdf_completed_at FROM job_output_stages p WHERE p.job_id=j.id AND p.pdf_status='succeeded'),j.completed_at,j.updated_at)<=?)
+    OR (j.status='deleting' AND j.deletion_status IN ('retained','pending','deleting'))
+    OR (j.deletion_status IN ('pending','deleting','retry')
+        AND (j.deletion_next_attempt_at IS NULL OR j.deletion_next_attempt_at<=?))
+  ) AND j.lease_owner IS NULL AND NOT EXISTS
+  (SELECT 1 FROM artifact_download_leases l WHERE l.job_id=j.id AND l.expires_at>?)
+  AND NOT EXISTS (SELECT 1 FROM job_preview_requests p WHERE p.job_id=j.id AND p.status='running')
+  ORDER BY COALESCE(j.deletion_next_attempt_at,j.completed_at,j.updated_at),j.id LIMIT ?`,
+);
+let jobsProcessed = 0;
 let artifactsDeleted = 0;
-for (const record of jobs) {
+for await (const record of cleanupCandidates(() =>
+  selectJobBatch.all(cutoff, now, now, cleanupBatchSize),
+)) {
+  jobsProcessed += 1;
   const id = String(record.id);
   try {
     db.exec("BEGIN IMMEDIATE");
@@ -325,31 +332,10 @@ for (const record of jobs) {
   }
 }
 
-let sources = [];
-try {
-  sources = await claimUnprotectedSources(
-    process.env.BACKUP_SOURCE_COORDINATION_DIR,
-    (protectedIds) => db.prepare(
-      `UPDATE sources SET status='deleting',deletion_status='deleting',
-         deletion_attempts=deletion_attempts+1,deletion_error=NULL,
-         deletion_next_attempt_at=NULL,updated_at=?
-       WHERE id IN (
-         SELECT s.id FROM sources s WHERE (
-           (deletion_status='retained' AND status IN ('ready','expired') AND expires_at<=?)
-           OR (status='deleting' AND deletion_status IN ('retained','pending','deleting'))
-           OR (deletion_status IN ('pending','deleting','retry')
-               AND (deletion_next_attempt_at IS NULL OR deletion_next_attempt_at<=?))
-         ) AND ${sourceReferenceCountSql("s")}=0
-           AND s.id NOT IN (SELECT value FROM json_each(?))
-         ORDER BY COALESCE(deletion_next_attempt_at,expires_at,updated_at),id LIMIT 100
-       ) RETURNING id,storage_key`,
-    ).all(now, now, now, JSON.stringify(protectedIds)),
-  );
-} catch (error) {
-  recordFailure("source-claim", "bounded-batch", error);
-}
+let sourcesProcessed = 0;
 let sourcesDeleted = 0;
-for (const record of sources) {
+for await (const record of cleanupCandidates(claimSourceBatch)) {
+  sourcesProcessed += 1;
   const id = String(record.id),
     storageKey = String(record.storage_key);
   try {
@@ -425,13 +411,17 @@ for (const id of old) {
     recordFailure("job-history-delete", id, error);
   }
 }
-const sourceHistoryCutoff = new Date(Date.now() - sourceHistoryDays * 86_400_000).toISOString();
+const sourceHistoryCutoff = new Date(
+  Date.now() - sourceHistoryDays * 86_400_000,
+).toISOString();
 let sourceHistoryDeleted = 0;
 try {
   // Physical Source deletion can precede Job history expiry. Unlike file
   // collection, row collection checks even expired Job and deleted Project references.
-  sourceHistoryDeleted = Number(db.prepare(
-    `DELETE FROM sources WHERE id IN (
+  sourceHistoryDeleted = Number(
+    db
+      .prepare(
+        `DELETE FROM sources WHERE id IN (
       SELECT s.id FROM sources s
       WHERE s.status='deleted' AND s.deletion_status='deleted' AND s.deleted_at<=?
         AND NOT EXISTS (SELECT 1 FROM jobs WHERE source_id=s.id)
@@ -443,7 +433,9 @@ try {
         AND NOT EXISTS (SELECT 1 FROM idempotency_records WHERE resource_id=s.id)
       ORDER BY s.deleted_at,s.id LIMIT 1000
     )`,
-  ).run(sourceHistoryCutoff).changes);
+      )
+      .run(sourceHistoryCutoff).changes,
+  );
 } catch (error) {
   recordFailure("source-history-delete", "bounded-batch", error);
 }
@@ -502,6 +494,9 @@ console.log(
   JSON.stringify({
     event: "cleanup.completed",
     result: itemFailureCount === 0 ? "success" : "partial",
+    jobsProcessed,
+    sourcesProcessed,
+    budgetStopped,
     artifactsDeleted,
     draftPreviewsScheduled,
     sourcesDeleted,
@@ -530,6 +525,44 @@ function required(name) {
 }
 function positive(name, fallback) {
   return positiveIntegerEnvironment(process.env, name, fallback);
+}
+
+async function* cleanupCandidates(loadBatch) {
+  while (performance.now() < cleanupDeadline) {
+    const batch = await loadBatch();
+    yield* batch;
+    if (batch.length < cleanupBatchSize) return;
+  }
+  budgetStopped = true;
+}
+
+async function claimSourceBatch() {
+  try {
+    return await claimUnprotectedSources(
+      process.env.BACKUP_SOURCE_COORDINATION_DIR,
+      (protectedIds) =>
+        db
+          .prepare(
+            `UPDATE sources SET status='deleting',deletion_status='deleting',
+           deletion_attempts=deletion_attempts+1,deletion_error=NULL,
+           deletion_next_attempt_at=NULL,updated_at=?
+         WHERE id IN (
+           SELECT s.id FROM sources s WHERE (
+             (deletion_status='retained' AND status IN ('ready','expired') AND expires_at<=?)
+             OR (status='deleting' AND deletion_status IN ('retained','pending','deleting'))
+             OR (deletion_status IN ('pending','deleting','retry')
+                 AND (deletion_next_attempt_at IS NULL OR deletion_next_attempt_at<=?))
+           ) AND ${sourceReferenceCountSql("s")}=0
+             AND s.id NOT IN (SELECT value FROM json_each(?))
+           ORDER BY COALESCE(deletion_next_attempt_at,expires_at,updated_at),id LIMIT ?
+         ) RETURNING id,storage_key`,
+          )
+          .all(now, now, now, JSON.stringify(protectedIds), cleanupBatchSize),
+    );
+  } catch (error) {
+    recordFailure("source-claim", "bounded-batch", error);
+    return [];
+  }
 }
 
 function cleanupAttempt(table, id) {
