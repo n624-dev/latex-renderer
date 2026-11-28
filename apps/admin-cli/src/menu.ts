@@ -159,12 +159,13 @@ export async function chooseAdminInvocation(
     const prompt = `${label}${mandatory ? "" : ` (${message.optional})`}: `;
     for (;;) {
       const value = await terminal.ask(prompt);
-      if (value.trim() === "") {
+      const trimmed = value.trim();
+      if (trimmed === "") {
         if (!mandatory) return [];
         terminal.write(message.required);
         continue;
       }
-      if (!variadic) return [value];
+      if (!variadic) return [trimmed];
 
       const items = tokenizeList(value);
       if (items === undefined) terminal.write(message.invalidList);

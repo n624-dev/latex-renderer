@@ -43,7 +43,8 @@ it("keeps secrets out of command arguments and requires explicit confirmation", 
     secret: "fixture-secret",
   });
   expect(accepted.ask).toHaveBeenLastCalledWith(expect.any(String), true);
-  if (invocation === undefined) throw new Error("Expected a selected operation");
+  if (invocation === undefined)
+    throw new Error("Expected a selected operation");
   await program.parseAsync(invocation.args, { from: "user" });
   expect(run).toHaveBeenCalledTimes(1);
 });
@@ -66,7 +67,8 @@ it("passes variadic fields, literal arguments, and confirmed changes to Commande
     "y",
   ]);
   const invocation = await chooseAdminInvocation(program, io, true);
-  if (invocation === undefined) throw new Error("Expected a selected operation");
+  if (invocation === undefined)
+    throw new Error("Expected a selected operation");
   await program.parseAsync(invocation.args, { from: "user" });
   expect(run).toHaveBeenCalledWith(
     "--literal-name",
@@ -160,18 +162,36 @@ it("rejects a variadic option value that starts with a hyphen after tokenization
   );
 });
 
-it("passes a non-variadic option value verbatim to Commander", async () => {
+it("passes a trimmed non-variadic option value to Commander", async () => {
   const program = new Command();
   const run = vi.fn();
   program.command("read").requiredOption("--file <path>").action(run);
-  const value = String.raw`  dir/"path with spaces.pdf"\ `;
-  const io = terminal(["1", value, "y"]);
+  const value = 'dir/"path with spaces.pdf"\\';
+  const io = terminal(["1", `  ${value} `, "y"]);
 
   const invocation = await chooseAdminInvocation(program, io, false);
   if (invocation === undefined)
     throw new Error("Expected a selected operation");
   await program.parseAsync(invocation.args, { from: "user" });
   expect(run).toHaveBeenCalledWith({ file: value }, expect.anything());
+});
+
+it("retries blank input and trims a mandatory non-variadic positional value", async () => {
+  const program = new Command();
+  const run = vi.fn();
+  program.command("read").argument("<path>").action(run);
+  const io = terminal(["1", "   ", "  path with spaces.pdf  ", "y"]);
+
+  const invocation = await chooseAdminInvocation(program, io, false);
+  expect(io.write).toHaveBeenCalledWith("Enter a value.\n");
+  if (invocation === undefined)
+    throw new Error("Expected a selected operation");
+  await program.parseAsync(invocation.args, { from: "user" });
+  expect(run).toHaveBeenCalledWith(
+    "path with spaces.pdf",
+    {},
+    expect.anything(),
+  );
 });
 
 it.each(["=value", "-value", "--", "--json"])(
