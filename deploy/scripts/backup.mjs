@@ -23,6 +23,7 @@ import {
   readBackupApplicationIdentity,
   validateBackupArchive,
 } from "./backup-boundary.mjs";
+import { runPostBackupRetention } from "./backup-retention.mjs";
 import { protectBackupSources } from "./backup-source-protection.mjs";
 
 const databasePath = absolutePath(required("DATABASE_PATH"), "DATABASE_PATH");
@@ -71,7 +72,10 @@ try {
       schemaVersion = snapshotDatabase
         .prepare("SELECT MAX(version) AS version FROM schema_migrations")
         .get()?.version;
-      projectBoundary = await copyProjectSources(snapshotDatabase, protection.sources);
+      projectBoundary = await copyProjectSources(
+        snapshotDatabase,
+        protection.sources,
+      );
     } finally {
       snapshotDatabase.close();
     }
@@ -91,10 +95,13 @@ try {
     },
     artifactsIncluded: false,
     application: readBackupApplicationIdentity(
-      await readFile(".latex-renderer-release.json", "utf8").then(JSON.parse, (error) => {
-        if (error?.code !== "ENOENT") throw error;
-        return null;
-      }),
+      await readFile(".latex-renderer-release.json", "utf8").then(
+        JSON.parse,
+        (error) => {
+          if (error?.code !== "ENOENT") throw error;
+          return null;
+        },
+      ),
     ),
     databaseSchemaVersion: schemaVersion,
     projectSources: {
@@ -150,6 +157,10 @@ try {
       projectRevisionCount: projectBoundary.revisions.length,
     }),
   );
+  await runPostBackupRetention({
+    snapshotPath: snapshot,
+    directory: destination,
+  });
 } finally {
   await rm(work, { recursive: true, force: true });
 }

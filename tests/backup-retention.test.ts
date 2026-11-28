@@ -21,11 +21,16 @@ import {
   planBackupRetention,
   readBackupRetentionPolicy,
   readVerificationReceipt,
+  runPostBackupRetention,
 } from "../deploy/scripts/backup-retention.mjs";
 
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
-  return { ...actual, unlink: vi.fn(actual.unlink) };
+  return {
+    ...actual,
+    lstat: vi.fn(actual.lstat),
+    unlink: vi.fn(actual.unlink),
+  };
 });
 
 function archive(stamp: string, bytes = 10) {
@@ -347,22 +352,37 @@ describe.skipIf(process.platform === "win32")(
         path = join(directory, "latest.json");
       });
 
-      it("reads a private receipt owned by the expected user", async () => {
-        await writeFile(path, JSON.stringify(record), { mode: 0o600 });
-        await expect(
-          readVerificationReceipt(path, { expectedUid }),
-        ).resolves.toEqual(record);
-        await expect(
-          readVerificationReceipt(path, { expectedUid: expectedUid + 1 }),
-        ).resolves.toBeNull();
-      });
+      it.each(["0600", "0640", "0644"])(
+        "accepts mode %s for a root-owned receipt",
+        async (mode) => {
+          await writeFile(path, JSON.stringify(record));
+          await chmod(path, mode);
+          const info = await lstat(path);
+          vi.mocked(lstat).mockResolvedValueOnce(
+            Object.assign(info, { uid: 0 }),
+          );
+          await expect(readVerificationReceipt(path)).resolves.toEqual(record);
+        },
+      );
 
-      it("ignores a receipt with group or other permissions", async () => {
-        await writeFile(path, JSON.stringify(record));
-        await chmod(path, 0o640);
-        await expect(
-          readVerificationReceipt(path, { expectedUid }),
-        ).resolves.toBeNull();
+      it.each(["0660", "0646", "0650", "0641"])(
+        "rejects mode %s with group or other write or execute bits",
+        async (mode) => {
+          await writeFile(path, JSON.stringify(record));
+          await chmod(path, mode);
+          await expect(
+            readVerificationReceipt(path, { expectedUid }),
+          ).resolves.toBeNull();
+        },
+      );
+
+      it("rejects a receipt owned by a non-root user", async () => {
+        await writeFile(path, JSON.stringify(record), { mode: 0o600 });
+        const info = await lstat(path);
+        vi.mocked(lstat).mockResolvedValueOnce(
+          Object.assign(info, { uid: 1000 }),
+        );
+        await expect(readVerificationReceipt(path)).resolves.toBeNull();
       });
 
       it("ignores a receipt larger than 4096 bytes", async () => {
@@ -511,6 +531,157 @@ describe.skipIf(process.platform === "win32")(
           alreadyAbsent: [older.name],
         });
         expect(await readdir(directory)).toEqual([newest.name]);
+      });
+    });
+
+    describe("runPostBackupRetention", () => {
+      let snapshotPath: string;
+      let receiptPath: string;
+      let log: ReturnType<typeof vi.fn<(line: string) => void>>;
+      let exitCode: typeof process.exitCode;
+
+      beforeEach(async () => {
+        exitCode = process.exitCode;
+        snapshotPath = join(directory, "renderer.sqlite3");
+        receiptPath = join(directory, "latest.json");
+        new DatabaseSync(snapshotPath).close();
+        log = vi.fn();
+        for (const { name, bytes } of [newest, recent, older])
+          await writeFile(join(directory, name), Buffer.alloc(bytes));
+      });
+
+      afterEach(() => {
+        process.exitCode = exitCode;
+        vi.mocked(lstat).mockReset();
+        vi.mocked(unlink).mockReset();
+      });
+
+      function setSnapshotPolicy(value: string) {
+        const db = new DatabaseSync(snapshotPath);
+        try {
+          db.exec(
+            "CREATE TABLE system_settings (key TEXT PRIMARY KEY, value_json)",
+          );
+          db.prepare("INSERT INTO system_settings VALUES (?, ?)").run(
+            backupRetentionSettingKey,
+            value,
+          );
+        } finally {
+          db.close();
+        }
+      }
+
+      async function archives() {
+        return (await readdir(directory))
+          .filter((name) => archivePattern.test(name))
+          .sort();
+      }
+
+      async function runRetention(path = receiptPath) {
+        await runPostBackupRetention({
+          snapshotPath,
+          directory,
+          receiptPath: path,
+          now,
+          log,
+        });
+        expect(log).toHaveBeenCalledTimes(1);
+        return JSON.parse(log.mock.calls[0]?.[0] ?? "") as unknown;
+      }
+
+      const oneGeneration = JSON.stringify({ ...policy, maxGenerations: 1 });
+
+      it("applies the snapshot policy and protects the archive named in the receipt", async () => {
+        setSnapshotPolicy(oneGeneration);
+        await writeFile(
+          receiptPath,
+          JSON.stringify({
+            archive: older.name,
+            verifiedAt: now.toISOString(),
+          }),
+          { mode: 0o600 },
+        );
+        const receiptStat = await lstat(receiptPath);
+        vi.mocked(lstat).mockResolvedValueOnce(
+          Object.assign(receiptStat, { uid: 0 }),
+        );
+
+        expect(await runRetention()).toEqual({
+          event: "backup.retention",
+          configured: true,
+          deleted: [recent.name],
+          alreadyAbsent: [],
+          keptCount: 2,
+          keptBytes: 20,
+          deletedBytes: 10,
+          warnings: ["PROTECTED_OVER_GENERATIONS"],
+        });
+        expect(await archives()).toEqual([older.name, newest.name]);
+      });
+
+      it("prunes normally when the receipt is missing", async () => {
+        setSnapshotPolicy(oneGeneration);
+        expect(await runRetention()).toMatchObject({
+          event: "backup.retention",
+          configured: true,
+          deleted: [recent.name, older.name],
+          warnings: [],
+        });
+        expect(await archives()).toEqual([newest.name]);
+      });
+
+      it.each([false, true])(
+        "keeps all backups without a usable policy (invalid: %s)",
+        async (invalid) => {
+          if (invalid) setSnapshotPolicy("{}");
+          expect(await runRetention()).toEqual({
+            event: "backup.retention",
+            configured: false,
+            deleted: [],
+            alreadyAbsent: [],
+            keptCount: 3,
+            keptBytes: 30,
+            deletedBytes: 0,
+            warnings: invalid ? ["POLICY_INVALID"] : [],
+          });
+          expect(await archives()).toEqual([
+            older.name,
+            recent.name,
+            newest.name,
+          ]);
+        },
+      );
+
+      it("skips all deletions when the receipt reader throws", async () => {
+        setSnapshotPolicy(oneGeneration);
+        const unreadablePath = join(snapshotPath, "latest.json");
+        expect(await runRetention(unreadablePath)).toMatchObject({
+          event: "backup.retention_skipped",
+          warnings: ["RECEIPT_UNREADABLE"],
+          message: expect.stringContaining("ENOTDIR") as unknown,
+        });
+        expect(vi.mocked(unlink)).not.toHaveBeenCalled();
+        expect(await archives()).toEqual([
+          older.name,
+          recent.name,
+          newest.name,
+        ]);
+        expect(process.exitCode).toBe(exitCode);
+      });
+
+      it("logs a pruning failure and sets a nonzero exit code without throwing", async () => {
+        setSnapshotPolicy(oneGeneration);
+        vi.mocked(unlink).mockRejectedValueOnce(new Error("Could not unlink"));
+        expect(await runRetention()).toEqual({
+          event: "backup.retention_failed",
+          message: "Could not unlink",
+        });
+        expect(process.exitCode).toBe(1);
+        expect(await archives()).toEqual([
+          older.name,
+          recent.name,
+          newest.name,
+        ]);
       });
     });
   },

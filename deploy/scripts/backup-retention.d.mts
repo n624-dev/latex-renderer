@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 
 export const archivePattern: RegExp;
 export const backupRetentionSettingKey: "backup_retention_policy";
+export const verificationReceiptPath: string;
 
 export interface BackupRetentionPolicy {
   maxAgeDays: number;
@@ -45,3 +46,11 @@ export function applyBackupRetention(
     alreadyAbsent: string[];
   }
 >;
+
+export function runPostBackupRetention(options: {
+  snapshotPath: string;
+  directory: string;
+  receiptPath?: string;
+  now?: Date;
+  log?: (line: string) => void;
+}): Promise<void>;

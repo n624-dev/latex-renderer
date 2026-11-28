@@ -1,9 +1,12 @@
 import { lstat, open, readFile, readdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 
 export const archivePattern =
   /^latex-renderer-\d{4}-\d\d-\d\dT\d\d-\d\d-\d\d\.\d{3}Z\.tar\.age$/;
 export const backupRetentionSettingKey = "backup_retention_policy";
+export const verificationReceiptPath =
+  "/var/lib/latex-renderer-backup-verification/latest.json";
 
 const dayMs = 86_400_000;
 const retentionLimits = ["maxAgeDays", "maxGenerations", "maxTotalBytes"];
@@ -52,7 +55,7 @@ export async function readVerificationReceipt(path, { expectedUid = 0 } = {}) {
     if (
       !info.isFile() ||
       info.uid !== expectedUid ||
-      info.mode & 0o077 ||
+      info.mode & 0o033 ||
       info.size > 4096
     )
       return null;
@@ -216,4 +219,64 @@ export async function applyBackupRetention({
     }
   }
   return { ...plan, deleted, alreadyAbsent };
+}
+
+export async function runPostBackupRetention({
+  snapshotPath,
+  directory,
+  receiptPath = verificationReceiptPath,
+  now = new Date(),
+  log = console.log,
+}) {
+  try {
+    const db = new DatabaseSync(snapshotPath, { readOnly: true });
+    let setting;
+    try {
+      setting = readBackupRetentionPolicy(db);
+    } finally {
+      db.close();
+    }
+    const { policy, warning } = setting;
+    const warnings = warning ? [warning] : [];
+    let receipt;
+    try {
+      receipt = await readVerificationReceipt(receiptPath);
+    } catch (error) {
+      log(
+        JSON.stringify({
+          event: "backup.retention_skipped",
+          warnings: [...warnings, "RECEIPT_UNREADABLE"],
+          message: error.message,
+        }),
+      );
+      return;
+    }
+
+    const result = await applyBackupRetention({
+      directory,
+      policy,
+      now,
+      latestVerifiedArchive: receipt?.archive,
+    });
+    log(
+      JSON.stringify({
+        event: "backup.retention",
+        configured: result.configured,
+        deleted: result.deleted,
+        alreadyAbsent: result.alreadyAbsent,
+        keptCount: result.keep.length,
+        keptBytes: result.keptBytes,
+        deletedBytes: result.deletedBytes,
+        warnings: [...warnings, ...result.warnings],
+      }),
+    );
+  } catch (error) {
+    log(
+      JSON.stringify({
+        event: "backup.retention_failed",
+        message: error.message,
+      }),
+    );
+    process.exitCode = 1;
+  }
 }

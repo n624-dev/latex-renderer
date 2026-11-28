@@ -1,16 +1,17 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
-import { readdir, rename, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { open, readdir, rename, rm } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { openBackupFile } from "./backup-boundary.mjs";
 import {
   archivePattern,
   readVerificationReceipt,
+  verificationReceiptPath,
 } from "./backup-retention.mjs";
 
 const backup = "latex-renderer-backup.service";
 const verify = "latex-renderer-backup-verify.service";
-const receipt = "/var/lib/latex-renderer-backup-verification/latest.json";
 
 function systemctl(args) {
   return execFileSync("/usr/bin/systemctl", args, {
@@ -52,7 +53,9 @@ async function request() {
     JSON.stringify({
       backup: state(backup),
       verification: state(verify),
-      latestVerification: await readVerificationReceipt(receipt),
+      latestVerification: await readVerificationReceipt(
+        verificationReceiptPath,
+      ),
     }),
   );
 }
@@ -91,12 +94,46 @@ async function verifyLatest() {
   } finally {
     await handle.close();
   }
-  await writeFile(
-    `${receipt}.part`,
-    JSON.stringify({ archive, verifiedAt: new Date().toISOString() }) + "\n",
-    { mode: 0o600 },
-  );
-  await rename(`${receipt}.part`, receipt);
+  const gid = backupGroupId();
+  const pending = `${verificationReceiptPath}.${randomUUID()}.part`;
+  const receipt = await open(pending, "wx", 0o600);
+  try {
+    try {
+      await receipt.writeFile(
+        JSON.stringify({ archive, verifiedAt: new Date().toISOString() }) +
+          "\n",
+      );
+      if (gid !== null) await receipt.chown(0, gid);
+      await receipt.chmod(gid === null ? 0o600 : 0o640);
+    } finally {
+      await receipt.close();
+    }
+    await rename(pending, verificationReceiptPath);
+  } finally {
+    await rm(pending, { force: true });
+  }
+}
+
+function backupGroupId() {
+  let group;
+  try {
+    group = execFileSync(
+      "/usr/bin/getent",
+      ["group", "latex-renderer-backup"],
+      {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 5000,
+      },
+    );
+  } catch (error) {
+    if (error.status === 2) return null;
+    throw error;
+  }
+  const gid = Number(group.split(":")[2]);
+  if (!Number.isInteger(gid) || gid <= 0 || gid >= 0xffffffff)
+    throw new Error("Invalid backup group ID");
+  return gid;
 }
 
 if (process.geteuid() !== 0 || process.argv.length !== 3)

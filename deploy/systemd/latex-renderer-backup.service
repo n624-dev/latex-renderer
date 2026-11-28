@@ -5,6 +5,7 @@ Description=Encrypted LaTeX renderer database backup
 Type=oneshot
 User=latex-renderer-backup
 Group=latex-renderer
+SupplementaryGroups=latex-renderer-backup
 WorkingDirectory=/opt/latex-renderer/current
 EnvironmentFile=/etc/latex-renderer/backup.env
 Environment=BACKUP_AGE_RECIPIENT_FILE=%d/age-recipient
