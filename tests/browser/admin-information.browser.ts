@@ -85,6 +85,16 @@ async function fixture(kind: string, query = "", pagedOwners = false, pagedAccou
     }> = [];
   const ownerState = { disabled: false };
   const jobState: { current: JobFixture } = { current: job };
+  const queueSetting = {
+    key: "max_queue_length",
+    value: 12,
+    source: "database",
+    fallback: 32,
+    minimum: 2,
+    maximum: 345,
+    unit: "jobs",
+    environment: "MAX_QUEUE_LENGTH",
+  };
   page.on("pageerror", (error) => errors.push(error.message));
   await page.route("**/*", async (route) => {
     const request = route.request(),
@@ -100,6 +110,12 @@ async function fixture(kind: string, query = "", pagedOwners = false, pagedAccou
         csrf: request.headers()["x-csrf-token"],
         body: request.postData(),
       });
+      if (url.pathname === "/admin/api/v1/system/config/reset") {
+        queueSetting.source = "host";
+        queueSetting.value = queueSetting.fallback;
+        await route.fulfill({ json: queueSetting });
+        return;
+      }
       await route.fulfill({
         json:
           url.pathname === `/admin/api/v1/jobs/${jobId}/retry`
@@ -269,7 +285,32 @@ async function fixture(kind: string, query = "", pagedOwners = false, pagedAccou
           ],
         },
       },
-      "/system/config": { items: [] },
+      "/system/config": {
+        items: [],
+        effective: [
+          queueSetting,
+          {
+            key: "max_user_storage_bytes",
+            value: 524288001,
+            source: "host",
+            fallback: 524288001,
+            minimum: 104857600,
+            maximum: 107374182400,
+            unit: "bytes",
+            environment: "MAX_USER_STORAGE_BYTES",
+          },
+          {
+            key: "max_user_active_jobs",
+            value: 20,
+            source: "default",
+            fallback: 20,
+            minimum: 1,
+            maximum: 1000,
+            unit: "jobs",
+            environment: null,
+          },
+        ],
+      },
       "/system/ticket-keys": { activeKid: "fixture", verificationKids: [] },
       "/backups/status": {
         backup: { active: "inactive", result: "success" },
@@ -406,6 +447,61 @@ it.each([
     expect(errors).toEqual([]);
   },
 );
+
+it("shows effective system limits and resets an override after confirmation", async () => {
+  const { page, errors, mutations } = await fixture("system");
+  const queue = page.getByRole("row").filter({
+    has: page.locator('[data-config="max_queue_length"]'),
+  });
+  const reset = queue.getByRole("button", { name: "ホスト既定値に戻す" });
+  expect(await queue.getByRole("cell").allTextContents()).toEqual([
+    expect.any(String),
+    "12",
+    "管理者による上書き",
+    "32",
+    expect.stringContaining("ホスト既定値に戻す"),
+  ]);
+  expect(await page.getByText("524288001 B", { exact: true }).count()).toBe(2);
+  expect(await page.getByText("ホスト設定", { exact: true }).count()).toBe(1);
+  expect(
+    await page.getByText("組み込みの既定値", { exact: true }).count(),
+  ).toBe(1);
+  expect(await page.locator("[data-config-reset]").count()).toBe(1);
+
+  await queue.locator("[data-config]").click();
+  const dialog = page.getByRole("dialog");
+  const value = dialog.locator('input[name="value"]');
+  expect(await value.inputValue()).toBe("12");
+  expect(await value.getAttribute("min")).toBe("2");
+  expect(await value.getAttribute("max")).toBe("345");
+  await dialog.locator("[data-dialog-cancel]").click();
+
+  await reset.click();
+  expect(await dialog.locator("dd").allTextContents()).toEqual(["12", "32"]);
+  const reason = dialog.locator('textarea[name="reason"]');
+  expect(await reason.getAttribute("required")).not.toBeNull();
+  expect(mutations).toEqual([]);
+  await reason.fill("設定を見直したため");
+  await dialog.getByRole("button", { name: "ホスト既定値に戻す" }).click();
+  await page
+    .locator("#success")
+    .filter({ hasText: "ホスト既定値に戻しました。" })
+    .waitFor();
+  await reset.waitFor({ state: "detached" });
+  expect(await queue.getByText("32", { exact: true }).count()).toBe(2);
+  expect(await queue.getByText("ホスト設定", { exact: true }).count()).toBe(1);
+  expect(mutations).toEqual([
+    {
+      path: "/admin/api/v1/system/config/reset",
+      csrf: "fixture-csrf",
+      body: JSON.stringify({
+        key: "max_queue_length",
+        reason: "設定を見直したため",
+      }),
+    },
+  ]);
+  expect(errors).toEqual([]);
+});
 
 it("selects an explicit account outside the first page and keeps scope labels aligned", async () => {
   const { page, errors, mutations } = await fixture(

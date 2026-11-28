@@ -4,6 +4,12 @@ import {
 } from "@latex-renderer/shared/locale";
 
 const english = {
+  adminOverride: "Admin override",
+  hostSetting: "Host setting",
+  builtInDefault: "Built-in default",
+  returnToHostDefault: "Return to host default",
+  runtimeSettingSummary:
+    "Effective value: {value} {unit} ({source}) · Host default: {fallback} {unit} · Allowed range: {minimum}–{maximum} {unit}",
   modeMustBeNotifyOrAutomatic: "mode must be notify or automatic",
   chooseExactlyOneOfLanguageAll:
     "Choose exactly one of --language, --all-languages, or --clear-languages",
@@ -52,6 +58,12 @@ type Catalog = Readonly<Record<Message, string>>;
 const locale = terminalDisplayLocale(process.env);
 const select: Partial<Record<DisplayLocale, () => Catalog>> = {
   ja: () => ({
+    adminOverride: "管理者による上書き",
+    hostSetting: "ホスト設定",
+    builtInDefault: "組み込みの既定値",
+    returnToHostDefault: "ホスト既定値に戻す",
+    runtimeSettingSummary:
+      "実効値：{value} {unit}（{source}）・ホスト既定値：{fallback} {unit}・設定可能範囲：{minimum}～{maximum} {unit}",
     modeMustBeNotifyOrAutomatic: "mode の許容値：notify, automatic",
     chooseExactlyOneOfLanguageAll:
       "--language、--all-languages、--clear-languages のいずれか1つだけを指定してください。",
@@ -96,6 +108,12 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Cloudflare Accessのサービストークンは両方の項目を設定してください。Standaloneでは両方とも未設定にします",
   }),
   "zh-CN": () => ({
+    adminOverride: "管理员覆盖",
+    hostSetting: "主机设置",
+    builtInDefault: "内置默认值",
+    returnToHostDefault: "恢复主机默认值",
+    runtimeSettingSummary:
+      "生效值：{value} {unit}（{source}）· 主机默认值：{fallback} {unit} · 允许范围：{minimum}–{maximum} {unit}",
     modeMustBeNotifyOrAutomatic: "mode 的允许值：notify, automatic",
     chooseExactlyOneOfLanguageAll:
       "请从 --language、--all-languages、--clear-languages 中选择且仅选择一项。",
@@ -134,6 +152,12 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Cloudflare Access 的服务令牌字段必须两个都填写；Standalone 模式下应都不填",
   }),
   ko: () => ({
+    adminOverride: "관리자 재정의",
+    hostSetting: "호스트 설정",
+    builtInDefault: "기본 제공 값",
+    returnToHostDefault: "호스트 기본값으로 되돌리기",
+    runtimeSettingSummary:
+      "적용 값: {value} {unit} ({source}) · 호스트 기본값: {fallback} {unit} · 허용 범위: {minimum}–{maximum} {unit}",
     modeMustBeNotifyOrAutomatic: "mode에 허용되는 값: notify, automatic",
     chooseExactlyOneOfLanguageAll:
       "--language, --all-languages, --clear-languages 중 하나만 지정하세요.",
@@ -178,6 +202,12 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Cloudflare Access 서비스 토큰 필드는 둘 다 설정하고 Standalone에서는 둘 다 비워 두세요",
   }),
   es: () => ({
+    adminOverride: "Valor fijado por el administrador",
+    hostSetting: "Configuración del servidor",
+    builtInDefault: "Valor predeterminado integrado",
+    returnToHostDefault: "Restablecer el valor predeterminado del servidor",
+    runtimeSettingSummary:
+      "Valor efectivo: {value} {unit} ({source}) · Valor predeterminado del servidor: {fallback} {unit} · Intervalo permitido: {minimum}–{maximum} {unit}",
     modeMustBeNotifyOrAutomatic:
       "Valores permitidos para mode: notify, automatic",
     chooseExactlyOneOfLanguageAll:
@@ -227,6 +257,12 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Configure los dos campos del token de servicio Cloudflare Access, o ninguno en Standalone",
   }),
   pt: () => ({
+    adminOverride: "Valor definido pelo administrador",
+    hostSetting: "Configuração do servidor",
+    builtInDefault: "Valor padrão integrado",
+    returnToHostDefault: "Restaurar o valor padrão do servidor",
+    runtimeSettingSummary:
+      "Valor efetivo: {value} {unit} ({source}) · Valor padrão do servidor: {fallback} {unit} · Intervalo permitido: {minimum}–{maximum} {unit}",
     modeMustBeNotifyOrAutomatic:
       "Valores permitidos para mode: notify, automatic",
     chooseExactlyOneOfLanguageAll:
@@ -274,6 +310,12 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Configure ambos os campos do token de serviço Cloudflare Access, ou nenhum no modo Standalone",
   }),
   fr: () => ({
+    adminOverride: "Valeur imposée par l’administrateur",
+    hostSetting: "Paramètre de l’hôte",
+    builtInDefault: "Valeur par défaut intégrée",
+    returnToHostDefault: "Rétablir la valeur par défaut de l’hôte",
+    runtimeSettingSummary:
+      "Valeur effective : {value} {unit} ({source}) · Valeur par défaut de l’hôte : {fallback} {unit} · Plage autorisée : {minimum}–{maximum} {unit}",
     modeMustBeNotifyOrAutomatic:
       "Valeurs autorisées pour mode : notify, automatic",
     chooseExactlyOneOfLanguageAll:
@@ -323,6 +365,12 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Renseignez les deux champs du jeton de service Cloudflare Access, ou aucun en mode Standalone",
   }),
   de: () => ({
+    adminOverride: "Vom Administrator gesetzter Wert",
+    hostSetting: "Host-Einstellung",
+    builtInDefault: "Integrierter Standardwert",
+    returnToHostDefault: "Host-Standardwert wiederherstellen",
+    runtimeSettingSummary:
+      "Wirksamer Wert: {value} {unit} ({source}) · Host-Standardwert: {fallback} {unit} · Zulässiger Bereich: {minimum}–{maximum} {unit}",
     modeMustBeNotifyOrAutomatic: "Zulässige Werte für mode: notify, automatic",
     chooseExactlyOneOfLanguageAll:
       "Wählen Sie genau eine Option: --language, --all-languages oder --clear-languages.",
@@ -369,6 +417,12 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Beide Felder des Cloudflare-Access-Diensttokens ausfüllen, bei Standalone beide leer lassen",
   }),
   it: () => ({
+    adminOverride: "Valore impostato dall’amministratore",
+    hostSetting: "Impostazione dell’host",
+    builtInDefault: "Valore predefinito integrato",
+    returnToHostDefault: "Ripristina il valore predefinito dell’host",
+    runtimeSettingSummary:
+      "Valore effettivo: {value} {unit} ({source}) · Valore predefinito dell’host: {fallback} {unit} · Intervallo consentito: {minimum}–{maximum} {unit}",
     modeMustBeNotifyOrAutomatic: "Valori ammessi per mode: notify, automatic",
     chooseExactlyOneOfLanguageAll:
       "Specificare una sola opzione: --language, --all-languages o --clear-languages.",
@@ -416,6 +470,12 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Configurare entrambi i campi del token di servizio Cloudflare Access, o nessuno per Standalone",
   }),
   ru: () => ({
+    adminOverride: "Значение, заданное администратором",
+    hostSetting: "Настройка хоста",
+    builtInDefault: "Встроенное значение по умолчанию",
+    returnToHostDefault: "Восстановить значение хоста по умолчанию",
+    runtimeSettingSummary:
+      "Действующее значение: {value} {unit} ({source}) · Значение хоста по умолчанию: {fallback} {unit} · Допустимый диапазон: {minimum}–{maximum} {unit}",
     modeMustBeNotifyOrAutomatic:
       "Допустимые значения для mode: notify, automatic",
     chooseExactlyOneOfLanguageAll:
@@ -462,6 +522,12 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Настройте оба поля служебного токена Cloudflare Access или оставьте оба пустыми для Standalone",
   }),
   tr: () => ({
+    adminOverride: "Yönetici tarafından belirlenen değer",
+    hostSetting: "Sunucu ayarı",
+    builtInDefault: "Yerleşik varsayılan değer",
+    returnToHostDefault: "Sunucu varsayılanına dön",
+    runtimeSettingSummary:
+      "Geçerli değer: {value} {unit} ({source}) · Sunucu varsayılanı: {fallback} {unit} · İzin verilen aralık: {minimum}–{maximum} {unit}",
     modeMustBeNotifyOrAutomatic:
       "mode için izin verilen değerler: notify, automatic",
     chooseExactlyOneOfLanguageAll:
@@ -508,6 +574,12 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Cloudflare Access hizmet belirteci alanlarının ikisini de yapılandırın; Standalone için ikisini de boş bırakın",
   }),
   pl: () => ({
+    adminOverride: "Wartość ustawiona przez administratora",
+    hostSetting: "Ustawienie hosta",
+    builtInDefault: "Wbudowana wartość domyślna",
+    returnToHostDefault: "Przywróć wartość domyślną hosta",
+    runtimeSettingSummary:
+      "Wartość obowiązująca: {value} {unit} ({source}) · Wartość domyślna hosta: {fallback} {unit} · Dozwolony zakres: {minimum}–{maximum} {unit}",
     modeMustBeNotifyOrAutomatic:
       "Dozwolone wartości dla mode: notify, automatic",
     chooseExactlyOneOfLanguageAll:
@@ -557,6 +629,12 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Ustaw oba pola tokenu usługi Cloudflare Access lub pozostaw oba puste dla Standalone",
   }),
   cs: () => ({
+    adminOverride: "Hodnota nastavená správcem",
+    hostSetting: "Nastavení hostitele",
+    builtInDefault: "Vestavěná výchozí hodnota",
+    returnToHostDefault: "Obnovit výchozí hodnotu hostitele",
+    runtimeSettingSummary:
+      "Platná hodnota: {value} {unit} ({source}) · Výchozí hodnota hostitele: {fallback} {unit} · Povolený rozsah: {minimum}–{maximum} {unit}",
     modeMustBeNotifyOrAutomatic: "Povolené hodnoty pro mode: notify, automatic",
     chooseExactlyOneOfLanguageAll:
       "Zadejte právě jednu možnost: --language, --all-languages nebo --clear-languages.",
@@ -603,6 +681,12 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Vyplňte obě pole servisního tokenu Cloudflare Access, pro Standalone nechte obě prázdná",
   }),
   nl: () => ({
+    adminOverride: "Waarde ingesteld door de beheerder",
+    hostSetting: "Instelling van de host",
+    builtInDefault: "Ingebouwde standaardwaarde",
+    returnToHostDefault: "Standaardwaarde van de host herstellen",
+    runtimeSettingSummary:
+      "Effectieve waarde: {value} {unit} ({source}) · Standaardwaarde van de host: {fallback} {unit} · Toegestaan bereik: {minimum}–{maximum} {unit}",
     modeMustBeNotifyOrAutomatic:
       "Toegestane waarden voor mode: notify, automatic",
     chooseExactlyOneOfLanguageAll:
@@ -650,6 +734,12 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Stel beide velden van het Cloudflare Access-servicetoken in, of geen van beide voor Standalone",
   }),
   sv: () => ({
+    adminOverride: "Värde angivet av administratören",
+    hostSetting: "Värdinställning",
+    builtInDefault: "Inbyggt standardvärde",
+    returnToHostDefault: "Återställ värdens standardvärde",
+    runtimeSettingSummary:
+      "Gällande värde: {value} {unit} ({source}) · Värdens standardvärde: {fallback} {unit} · Tillåtet intervall: {minimum}–{maximum} {unit}",
     modeMustBeNotifyOrAutomatic: "Tillåtna värden för mode: notify, automatic",
     chooseExactlyOneOfLanguageAll:
       "Ange exakt ett alternativ: --language, --all-languages eller --clear-languages.",
@@ -695,6 +785,12 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Ange båda fälten för Cloudflare Access-tjänsttoken eller inget av dem för Standalone",
   }),
   no: () => ({
+    adminOverride: "Verdi satt av administrator",
+    hostSetting: "Vertsinnstilling",
+    builtInDefault: "Innebygd standardverdi",
+    returnToHostDefault: "Gjenopprett vertens standardverdi",
+    runtimeSettingSummary:
+      "Gjeldende verdi: {value} {unit} ({source}) · Vertens standardverdi: {fallback} {unit} · Tillatt område: {minimum}–{maximum} {unit}",
     modeMustBeNotifyOrAutomatic: "Tillatte verdier for mode: notify, automatic",
     chooseExactlyOneOfLanguageAll:
       "Angi nøyaktig ett alternativ: --language, --all-languages eller --clear-languages.",
@@ -741,6 +837,12 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Angi begge feltene for Cloudflare Access-tjenestokenet, eller ingen for Standalone",
   }),
   da: () => ({
+    adminOverride: "Værdi angivet af administratoren",
+    hostSetting: "Værtsindstilling",
+    builtInDefault: "Indbygget standardværdi",
+    returnToHostDefault: "Gendan værtens standardværdi",
+    runtimeSettingSummary:
+      "Gældende værdi: {value} {unit} ({source}) · Værtens standardværdi: {fallback} {unit} · Tilladt interval: {minimum}–{maximum} {unit}",
     modeMustBeNotifyOrAutomatic: "Tilladte værdier for mode: notify, automatic",
     chooseExactlyOneOfLanguageAll:
       "Angiv præcis én mulighed: --language, --all-languages eller --clear-languages.",
@@ -786,6 +888,12 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Angiv begge felter til Cloudflare Access-tjenestokenet, eller ingen for Standalone",
   }),
   fi: () => ({
+    adminOverride: "Järjestelmänvalvojan asettama arvo",
+    hostSetting: "Isännän asetus",
+    builtInDefault: "Sisäinen oletusarvo",
+    returnToHostDefault: "Palauta isännän oletusarvo",
+    runtimeSettingSummary:
+      "Käytössä oleva arvo: {value} {unit} ({source}) · Isännän oletusarvo: {fallback} {unit} · Sallittu väli: {minimum}–{maximum} {unit}",
     modeMustBeNotifyOrAutomatic: "Sallitut arvot (mode): notify, automatic",
     chooseExactlyOneOfLanguageAll:
       "Anna täsmälleen yksi vaihtoehdoista --language, --all-languages ja --clear-languages.",
