@@ -7,6 +7,8 @@ export interface InternalApiDependencies {
   apiKeys: ApiKeyService;
   tickets: TicketService;
   rendererPublicUrl: string;
+  publicOrigin?: string;
+  environmentRoot?: string;
   rendererVersion: string;
   maxUploadBytes?: number;
   sourceLimits?: Readonly<ResourceLimits>;
