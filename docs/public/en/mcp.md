@@ -46,22 +46,22 @@ Send document text to your AI client to generate PDFs and SVGs, diagnose errors,
 
 > [!DETAILS] Tools and developer reference
 >
-> | Category | Tools |
-> | --- | --- |
-> | Profile | `get_profile` |
-> | Source | `create_source`, `update_source_file`, `delete_source_file`, `begin_source_upload`, `upload_source_chunk`, `finalize_source_upload`, `create_source_ref` |
-> | Saved projects | `list_projects`, `get_project`, `get_project_revision_jobs`, `create_project`, `rename_project`, `delete_project`, `attach_project_revision`, `update_project_file`, `delete_project_file`, `render_project_revision` |
-> | Render | `create_render`, `retry_render`, `retry_svg_render`, `get_render_status`, `cancel_render`, `delete_render` |
-> | Saved revision contents | `list_project_revision_files`, `get_project_revision_file`, `get_project_revision_downloads` |
-> | Drafts | `get_project_draft`, `open_project_draft`, `get_project_draft_file`, `apply_project_changes`, `render_project_draft`, `save_project_draft` |
-> | Document requirements and review history | `get_project_document_state`, `update_project_document_conditions`, `adopt_project_revision`, `record_project_pdf_review`, `list_project_pdf_reviews` |
-> | Revision retention | `get_project_storage_usage`, `protect_project_revision`, `plan_project_revision_cleanup`, `apply_project_revision_cleanup` |
-> | Upload recovery and attachments | `get_source_upload_status`, `import_source_attachment` (requires administrator configuration) |
-> | Attachment connection check | `verify_attachment_delivery_origin` (designated test accounts only) |
-> | Diagnostics and results | `get_render_diagnostics`, `read_render_log`, `get_render_artifacts`, `get_render_manifest` |
-> | Previews | `get_render_preview`, `get_render_preview_pages`, `get_render_preview_crop`, `locate_render_source`, `get_render_preview_sheet` |
-> | PDF inspection | `request_render_quality_report`, `get_render_quality_report`, `compare_render_quality` |
-> | Environment and guide | `get_renderer_capabilities`, `get_authoring_guide`, `list_authoring_profiles`, `check_document_requirements`, `probe_document_requirements`, `check_packages`, `search_packages`, `check_fonts`, `search_fonts` |
+> | Category                                 | Tools                                                                                                                                                                                                                 |
+> | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+> | Profile                                  | `get_profile`                                                                                                                                                                                                         |
+> | Source                                   | `create_source`, `update_source_file`, `delete_source_file`, `begin_source_upload`, `upload_source_chunk`, `finalize_source_upload`, `create_source_ref`                                                              |
+> | Saved projects                           | `list_projects`, `get_project`, `get_project_revision_jobs`, `create_project`, `rename_project`, `delete_project`, `attach_project_revision`, `update_project_file`, `delete_project_file`, `render_project_revision` |
+> | Render                                   | `create_render`, `retry_render`, `retry_svg_render`, `get_render_status`, `cancel_render`, `delete_render`                                                                                                            |
+> | Saved revision contents                  | `list_project_revision_files`, `get_project_revision_file`, `get_project_revision_downloads`                                                                                                                          |
+> | Drafts                                   | `get_project_draft`, `open_project_draft`, `get_project_draft_file`, `apply_project_changes`, `render_project_draft`, `save_project_draft`                                                                            |
+> | Document requirements and review history | `get_project_document_state`, `update_project_document_conditions`, `adopt_project_revision`, `record_project_pdf_review`, `list_project_pdf_reviews`                                                                 |
+> | Revision retention                       | `get_project_storage_usage`, `protect_project_revision`, `plan_project_revision_cleanup`, `apply_project_revision_cleanup`                                                                                            |
+> | Upload recovery and attachments          | `get_source_upload_status`, `import_source_attachment` (requires administrator configuration)                                                                                                                         |
+> | Attachment connection check              | `verify_attachment_delivery_origin` (designated test accounts only)                                                                                                                                                   |
+> | Diagnostics and results                  | `get_render_diagnostics`, `read_render_log`, `get_render_artifacts`, `get_render_manifest`                                                                                                                            |
+> | Previews                                 | `get_render_preview`, `get_render_preview_pages`, `get_render_preview_crop`, `locate_render_source`, `get_render_preview_sheet`                                                                                       |
+> | PDF inspection                           | `request_render_quality_report`, `get_render_quality_report`, `compare_render_quality`                                                                                                                                |
+> | Environment and guide                    | `get_renderer_capabilities`, `get_authoring_guide`, `list_authoring_profiles`, `check_document_requirements`, `probe_document_requirements`, `check_packages`, `search_packages`, `check_fonts`, `search_fonts`       |
 >
 > - **Identity and scopes.** `get_profile` returns only an opaque, stable ID for the authenticated user. It remains the same across token refreshes and reconnections. The response excludes email and display name. Each tool declares its OAuth scopes in the tool list and checks them at execution.
 > - **Source creation and limits.**
@@ -76,11 +76,11 @@ Send document text to your AI client to generate PDFs and SVGs, diagnose errors,
 
 ### Operations and permissions by connection {#接続方式ごとの操作と権限}
 
-| Connection | Authentication | Common tasks |
-| --- | --- | --- |
-| Local MCP (stdio) | Rendering API key and short-lived job tickets | Render a local folder or ZIP and save PDFs, SVGs, and logs to your computer |
-| Direct Remote MCP (HTTPS) | An account on the connected Renderer and OAuth scopes | Read saved revisions, edit shared drafts, and inspect PDFs on the connected Renderer |
-| Public MCP gateway | An approved Renderer connection and permission for the requested operations | Create and render documents on the approved Renderer and retrieve artifacts using MCP resources or download links |
+| Connection                | Authentication                                                              | Common tasks                                                                                                      |
+| ------------------------- | --------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| Local MCP (stdio)         | Rendering API key and short-lived job tickets                               | Render a local folder or ZIP and save PDFs, SVGs, and logs to your computer                                       |
+| Direct Remote MCP (HTTPS) | An account on the connected Renderer and OAuth scopes                       | Read saved revisions, edit shared drafts, and inspect PDFs on the connected Renderer                              |
+| Public MCP gateway        | An approved Renderer connection and permission for the requested operations | Create and render documents on the approved Renderer and retrieve artifacts using MCP resources or download links |
 
 Available operations depend on the connected Renderer and its version. Check the MCP tool list and use `get_renderer_capabilities`, when available, to check the rendering environment and attachment support. Local MCP can read or edit shared drafts and inspect PDFs when the server supports those operations and the API key explicitly grants the relevant scopes. Use Local MCP or the CLI to save artifacts to your computer.
 
@@ -113,29 +113,35 @@ To repair a registration created by the downloadable installer, run `n624-latex 
 
 ## Local MCP tools {#local-mcpのツール}
 
-| Tool | Operation |
-| --- | --- |
-| `upload_source` | Prepare a directory or ZIP as one source |
-| `create_render_job` | Create one job from `sourceId + entrypoint`, optionally requesting SVG in `outputs` |
-| `render_project` | Prepare a source, render, and retrieve artifacts in one call, optionally requesting SVG in `outputs` |
-| `get_authoring_guide` | Read the bundled LaTeX authoring guide |
-| `list_projects` / `get_project` / `get_project_revision_jobs` | View saved projects, revisions, and job history |
-| `list_project_revision_files` / `get_project_revision_file` | List files and read text in your saved revisions. Requires a compatible server and a key with the `render:project:read` scope |
-| `get_project_revision_downloads` | Save the exact revision's Source ZIP as `<revisionId>.zip` in `outputDirectory` (default `.render`). Returns the local path and SHA-256. Requires `render:project:read`. To save a Job PDF, use `download_render_artifacts` |
-| `get_project_document_state` / `list_project_pdf_reviews` | Read conditions, the adopted revision, change history, and PDF review records with `render:project:state:read` |
-| `update_project_document_conditions` / `adopt_project_revision` / `record_project_pdf_review` | Change conditions, adopt a revision, or record a PDF review with `render:project:state:write` |
-| `get_project_storage_usage` / `plan_project_revision_cleanup` | Check storage usage and plan saved revision cleanup with `render:project:read` |
-| `protect_project_revision` | Set or clear explicit protection for a revision with `render:create` |
-| `apply_project_revision_cleanup` | Apply cleanup to the user-confirmed selection using the current `planHash` with `render:project:delete` |
-| `get_project_draft` / `get_project_draft_file` | Read shared draft metadata and text with `render:draft:read` |
-| `open_project_draft` / `apply_project_changes` / `save_project_draft` | Open, edit, and save shared drafts with `render:draft:write` |
-| `request_render_quality_report` / `get_render_quality_report` | Inspect PDFs from jobs that the key owns with `render:pdf:inspect` |
-| `create_project` / `rename_project` / `delete_project` | Manage saved projects |
-| `attach_project_revision` / `render_project_revision` | Save an uploaded source and create a job from a fixed revision |
-| `get_render_status` | Check job status |
-| `download_render_artifacts` | Download PDFs, SVGs, logs, and structured errors locally |
-| `cancel_render` | Cancel an active job |
-| `delete_render` | Delete a finished job |
+| Tool                                                                                                       | Operation                                                                                                                     |
+| ---------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `upload_source`                                                                                            | Prepare a directory or ZIP as one source                                                                                      |
+| `create_render_job`                                                                                        | Create one job from `sourceId + entrypoint`, optionally requesting SVG in `outputs`                                           |
+| `render_project`                                                                                           | Prepare a source, render, and retrieve artifacts in one call, optionally requesting SVG in `outputs`                          |
+| `get_authoring_guide`                                                                                      | Read the bundled LaTeX authoring guide                                                                                        |
+| `list_projects` / `get_project` / `get_project_revision_jobs`                                              | View saved projects, revisions, and job history                                                                               |
+| `list_project_revision_files` / `get_project_revision_file`                                                | List files and read text in your saved revisions. Requires a compatible server and a key with the `render:project:read` scope |
+| `get_project_revision_downloads`                                                                           | Save the exact revision's Source ZIP as `<revisionId>.zip` in `outputDirectory` (default `.render`). Returns the local path and SHA-256. Requires `render:project:read`. To save a Job PDF, use `download_render_artifacts` |
+| `get_project_document_state` / `list_project_pdf_reviews`                                                  | Read conditions, the adopted revision, change history, and PDF review records with `render:project:state:read` |
+| `update_project_document_conditions` / `adopt_project_revision` / `record_project_pdf_review`              | Change conditions, adopt a revision, or record a PDF review with `render:project:state:write` |
+| `get_project_storage_usage` / `plan_project_revision_cleanup`                                              | Check storage usage and plan saved revision cleanup with `render:project:read` |
+| `protect_project_revision`                                                                                 | Set or clear explicit protection for a revision with `render:create` |
+| `apply_project_revision_cleanup`                                                                           | Apply cleanup to the user-confirmed selection using the current `planHash` with `render:project:delete` |
+| `get_project_draft` / `get_project_draft_file`                                                             | Read shared draft metadata and text with `render:draft:read`                                                                  |
+| `open_project_draft` / `apply_project_changes` / `save_project_draft`                                      | Open, edit, and save shared drafts with `render:draft:write`                                                                  |
+| `request_render_quality_report` / `get_render_quality_report`                                              | Inspect PDFs from jobs that the key owns with `render:pdf:inspect`                                                            |
+| `create_project` / `rename_project` / `delete_project`                                                     | Manage saved projects                                                                                                         |
+| `attach_project_revision` / `render_project_revision`                                                      | Save an uploaded source and create a job from a fixed revision                                                                |
+| `get_render_status`                                                                                        | Check job status                                                                                                              |
+| `get_renderer_capabilities` / `list_authoring_profiles`                                                    | Read the rendering environment and authoring profiles (`render:create`)                                                       |
+| `check_packages` / `search_packages` / `check_fonts` / `search_fonts`                                      | Check or search packages and fonts (`render:create`)                                                                          |
+| `check_document_requirements` / `probe_document_requirements`                                              | Check document requirements or queue a synthetic probe (`render:create`)                                                      |
+| `retry_render` / `retry_svg_render`                                                                        | Retry the whole job or only the SVG stage (`render:create`)                                                                   |
+| `get_render_diagnostics` / `read_render_log` / `get_render_manifest`                                       | Read diagnostics, log windows, and the manifest of an owned job (`render:read:own`)                                           |
+| `get_render_preview_crop` / `get_render_preview_sheet` / `locate_render_source` / `compare_render_quality` | Crop or arrange PDF previews, query SyncTeX, or compare PDF inspection reports (`render:pdf:inspect`)                         |
+| `download_render_artifacts`                                                                                | Download PDFs, SVGs, logs, and structured errors locally                                                                      |
+| `cancel_render`                                                                                            | Cancel an active job                                                                                                          |
+| `delete_render`                                                                                            | Delete a finished job                                                                                                         |
 
 > [!DETAILS] Local MCP tool conventions
 >

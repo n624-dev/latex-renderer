@@ -40,14 +40,14 @@ Envía el texto al asistente para generar PDF y SVG, diagnosticar errores, ver p
 
 > [!DETAILS] Herramientas y detalles para desarrolladores
 >
-> | Categoría | Herramientas |
-> | --- | --- |
-> | Perfil | `get_profile` |
-> | Entrada | `create_source`, `update_source_file`, `delete_source_file`, `begin_source_upload`, `upload_source_chunk`, `finalize_source_upload`, `create_source_ref` |
+> | Categoría           | Herramientas                                                                                                                                                                                                          |
+> | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+> | Perfil              | `get_profile`                                                                                                                                                                                                         |
+> | Entrada             | `create_source`, `update_source_file`, `delete_source_file`, `begin_source_upload`, `upload_source_chunk`, `finalize_source_upload`, `create_source_ref`                                                              |
 > | Proyectos guardados | `list_projects`, `get_project`, `get_project_revision_jobs`, `create_project`, `rename_project`, `delete_project`, `attach_project_revision`, `update_project_file`, `delete_project_file`, `render_project_revision` |
-> | Renderizado | `create_render`, `retry_render`, `retry_svg_render`, `get_render_status`, `cancel_render`, `delete_render` |
-> | Inspección | `get_render_diagnostics`, `get_render_preview`, `get_render_artifacts` |
-> | Entorno | `get_renderer_capabilities`, `check_packages`, `search_packages`, `check_fonts`, `search_fonts` |
+> | Renderizado         | `create_render`, `retry_render`, `retry_svg_render`, `get_render_status`, `cancel_render`, `delete_render`                                                                                                            |
+> | Inspección          | `get_render_diagnostics`, `get_render_preview`, `get_render_artifacts`                                                                                                                                                |
+> | Entorno             | `get_renderer_capabilities`, `check_packages`, `search_packages`, `check_fonts`, `search_fonts`                                                                                                                       |
 >
 > - **Identidad y permisos.** `get_profile` devuelve únicamente un ID opaco y estable del usuario autenticado. Se mantiene al renovar tokens o reconectar y omite el correo y el nombre visible. Cada herramienta declara sus alcances OAuth en la lista y los comprueba al ejecutarse.
 > - **Crear entradas y límites**
@@ -87,18 +87,24 @@ Para reparar registros sin modificar creados por el instalador descargable, usa 
 
 ## Herramientas de Local MCP {#local-mcpのツール}
 
-| Herramienta | Operación |
-| --- | --- |
-| `upload_source` | Preparar una carpeta o ZIP como entrada |
-| `create_render_job` | Crear un trabajo a partir de `sourceId + entrypoint` y solicitar SVG opcionalmente en `outputs` |
-| `render_project` | Preparar la entrada, convertir y descargar en una llamada, con SVG opcional en `outputs` |
-| `list_projects` / `get_project` / `get_project_revision_jobs` | Consultar proyectos, revisiones e historial de trabajos |
-| `create_project` / `rename_project` / `delete_project` | Administrar proyectos guardados |
-| `attach_project_revision` / `render_project_revision` | Guardar una entrada subida y crear un trabajo desde una revisión fija |
-| `get_render_status` | Consultar el estado del trabajo |
-| `download_render_artifacts` | Descargar PDF, SVG, registros y errores estructurados |
-| `cancel_render` | Cancelar un trabajo activo |
-| `delete_render` | Eliminar un trabajo finalizado |
+| Herramienta                                                                                                | Operación                                                                                                       |
+| ---------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `upload_source`                                                                                            | Preparar una carpeta o ZIP como entrada                                                                         |
+| `create_render_job`                                                                                        | Crear un trabajo a partir de `sourceId + entrypoint` y solicitar SVG opcionalmente en `outputs`                 |
+| `render_project`                                                                                           | Preparar la entrada, convertir y descargar en una llamada, con SVG opcional en `outputs`                        |
+| `list_projects` / `get_project` / `get_project_revision_jobs`                                              | Consultar proyectos, revisiones e historial de trabajos                                                         |
+| `create_project` / `rename_project` / `delete_project`                                                     | Administrar proyectos guardados                                                                                 |
+| `attach_project_revision` / `render_project_revision`                                                      | Guardar una entrada subida y crear un trabajo desde una revisión fija                                           |
+| `get_render_status`                                                                                        | Consultar el estado del trabajo                                                                                 |
+| `get_renderer_capabilities` / `list_authoring_profiles`                                                    | Consultar el entorno de renderizado y los perfiles de autoría (`render:create`)                                 |
+| `check_packages` / `search_packages` / `check_fonts` / `search_fonts`                                      | Comprobar o buscar paquetes y fuentes (`render:create`)                                                         |
+| `check_document_requirements` / `probe_document_requirements`                                              | Comprobar los requisitos del documento o poner una prueba en cola (`render:create`)                             |
+| `retry_render` / `retry_svg_render`                                                                        | Reintentar el trabajo completo o solo la etapa SVG (`render:create`)                                            |
+| `get_render_diagnostics` / `read_render_log` / `get_render_manifest`                                       | Leer diagnósticos, segmentos del registro y el manifiesto de un trabajo propio (`render:read:own`)              |
+| `get_render_preview_crop` / `get_render_preview_sheet` / `locate_render_source` / `compare_render_quality` | Recortar o agrupar vistas previas de PDF, usar SyncTeX o comparar informes de inspección (`render:pdf:inspect`) |
+| `download_render_artifacts`                                                                                | Descargar PDF, SVG, registros y errores estructurados                                                           |
+| `cancel_render`                                                                                            | Cancelar un trabajo activo                                                                                      |
+| `delete_render`                                                                                            | Eliminar un trabajo finalizado                                                                                  |
 
 > [!DETAILS] Convenciones de las herramientas de Local MCP
 >
