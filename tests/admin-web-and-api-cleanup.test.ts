@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { ApiKeyService, type AccessJwtVerifier } from "@latex-renderer/auth";
 import { RendererDatabase } from "@latex-renderer/database";
 import {
@@ -405,13 +406,14 @@ describe("public and administrative Web", () => {
     expect(adminDocs).toContain("ブラウザー認証とは別の lra_ 管理APIキー");
   });
 
-  it("keeps the administrative module valid and exposes guarded operations", () => {
-    expect(() =>
-      execFileSync(process.execPath, ["--input-type=module", "--check"], {
-        input: localizedAdminScript("ja"),
-        timeout: 5000,
-      }),
-    ).not.toThrow();
+  it("keeps the administrative module valid and exposes guarded operations", async () => {
+    const check = promisify(execFile)(
+      process.execPath,
+      ["--input-type=module", "--check"],
+      { timeout: 5000 },
+    );
+    check.child.stdin?.end(localizedAdminScript("ja"));
+    await check;
     expect(adminScript).not.toMatch(/\b(?:prompt|confirm|alert)\s*\(/);
     expect(adminScript).toContain("openAdminDialog");
     expect(adminScript).toContain("formDialog");
