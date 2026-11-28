@@ -156,6 +156,7 @@ describe("admin route contract", () => {
       ["/sources/{id}/source-ref", "SourceReferenceRequest"],
       ["/system/config", "UpdateSystemConfigRequest"],
       ["/system/maintenance/enable", "EnableMaintenanceRequest"],
+      ["/backups/retention", "ConfirmBackupRetention"],
     ] as const) {
       const operation = openApiPathBlock(document, path);
       expect(operation, `${path} is present in OpenAPI`).toContain(

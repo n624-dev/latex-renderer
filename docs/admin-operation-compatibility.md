@@ -55,8 +55,8 @@
 | 監査ログの表示・検索 | ○ | ○ | ○ | `audit list`。両方で絞り込み・ページ送りが可能。 |
 | 定期バックアップの状態・最終検証の表示 | ○ | ○ | ○ | `backup status`。 |
 | バックアップ作成・検証を要求 | ○ | ○ | ○ | `backup create`、`backup verify`。 |
-| バックアップの日数・世代・容量・頻度の設定 | × | × | × | #381の追加受入条件。 |
-| バックアップの削除候補・容量予算・保持超過の確認 | × | × | × | #381の追加受入条件。 |
+| バックアップの保持日数・世代数・容量上限の確定 | ○ | ○ | × | `backup retention set` または Admin API `POST /backups/retention`。確定時にローカルのバックアップを整理。 |
+| バックアップの削除候補・容量予算・保持超過の確認 | ○ | ○ | × | `backup retention` または Admin API `GET /backups/retention`。設定案のプレビュー、日次スケジュール、前回の整理結果も表示。 |
 | バックアップから本番DBを復元 | × | × | × | 権限を持つ運用者向けの[復旧手順](public/backups.md)を使用。 |
 | TeX環境の状態・イメージ・言語一覧 | ○ | ○ | ○ | `tex status`、`images`、`languages`。 |
 | TeX環境の国設定・解除 | ○ | ○ | ○ | `tex country set`、`tex country clear`。 |

@@ -17,6 +17,7 @@ import {
   type BackupRetentionOptions,
   applyBackupRetention,
   archivePattern,
+  backupRetentionCandidates,
   backupRetentionSettingKey,
   planBackupRetention,
   readBackupRetentionPolicy,
@@ -216,9 +217,9 @@ describe("encrypted backup retention", () => {
   });
 
   it.each(["maxAgeDays", "maxGenerations", "maxTotalBytes"])(
-    "requires %s to be a positive safe integer",
+    "rejects invalid %s",
     (limit) => {
-      for (const value of [undefined, 0, -1, 1.5, 2 ** 53, "1"]) {
+      for (const value of [undefined, -1, 1.5, 2 ** 53, "1"]) {
         expect(() =>
           plan([], { policy: { ...policy, [limit]: value } }),
         ).toThrow(limit);
@@ -262,6 +263,50 @@ describe("encrypted backup retention", () => {
   });
 });
 
+describe("backup retention candidates", () => {
+  it("requires a completed backup", () => {
+    expect(
+      backupRetentionCandidates({
+        archives: [],
+        freeBytes: 1_000,
+        minFreeStorageBytes: 10,
+      }),
+    ).toBeNull();
+  });
+
+  it.each([
+    { freeBytes: 14, reserve: 1, budget: 7, generations: 1 },
+    { freeBytes: 500, reserve: 8, budget: 127, generations: 12 },
+    { freeBytes: 2_000, reserve: 0, budget: 504, generations: 30 },
+    { freeBytes: 14, reserve: 50, budget: 0, generations: 1 },
+  ])(
+    "offers $generations days and generations for a budget of $budget bytes",
+    ({ freeBytes, reserve, budget, generations }) => {
+      expect(
+        backupRetentionCandidates({
+          archives: [newest, { ...older, bytes: 6 }],
+          freeBytes,
+          minFreeStorageBytes: reserve,
+        }),
+      ).toEqual({
+        maxAgeDays: generations,
+        maxGenerations: generations,
+        maxTotalBytes: budget,
+      });
+    },
+  );
+
+  it("applies a zero byte limit while protecting the newest backup", () => {
+    expect(
+      plan([older, newest], { policy: { ...policy, maxTotalBytes: 0 } }),
+    ).toMatchObject({
+      keep: [newest.name],
+      delete: [older.name],
+      warnings: ["PROTECTED_OVER_BYTES"],
+    });
+  });
+});
+
 describe("readBackupRetentionPolicy", () => {
   let db: DatabaseSync;
   beforeEach(() => {
@@ -289,7 +334,7 @@ describe("readBackupRetentionPolicy", () => {
     });
   });
 
-  it("reads the three limits and ignores confirmation metadata", () => {
+  it("reads the confirmed limits and confirmation metadata", () => {
     expect(backupRetentionSettingKey).toBe("backup_retention_policy");
     createSettings().run(
       backupRetentionSettingKey,
@@ -299,7 +344,14 @@ describe("readBackupRetentionPolicy", () => {
         confirmedBy: "admin",
       }),
     );
-    expect(readBackupRetentionPolicy(db)).toEqual({ policy, warning: null });
+    expect(readBackupRetentionPolicy(db)).toEqual({
+      policy: {
+        ...policy,
+        confirmedAt: now.toISOString(),
+        confirmedBy: "admin",
+      },
+      warning: null,
+    });
   });
 
   it.each([
@@ -307,21 +359,42 @@ describe("readBackupRetentionPolicy", () => {
     { description: "JSON null", value: "null" },
     { description: "JSON array", value: "[]" },
     { description: "missing limits", value: "{}" },
+    { description: "missing confirmation", value: JSON.stringify(policy) },
     {
       description: "zero days",
-      value: JSON.stringify({ ...policy, maxAgeDays: 0 }),
+      value: JSON.stringify({
+        ...policy,
+        maxAgeDays: 0,
+        confirmedAt: now.toISOString(),
+        confirmedBy: "owner",
+      }),
     },
     {
       description: "fractional generations",
-      value: JSON.stringify({ ...policy, maxGenerations: 1.5 }),
+      value: JSON.stringify({
+        ...policy,
+        maxGenerations: 1.5,
+        confirmedAt: now.toISOString(),
+        confirmedBy: "owner",
+      }),
     },
     {
       description: "unsafe byte count",
-      value: JSON.stringify({ ...policy, maxTotalBytes: 2 ** 53 }),
+      value: JSON.stringify({
+        ...policy,
+        maxTotalBytes: 2 ** 53,
+        confirmedAt: now.toISOString(),
+        confirmedBy: "owner",
+      }),
     },
     {
       description: "numeric string",
-      value: JSON.stringify({ ...policy, maxTotalBytes: "100" }),
+      value: JSON.stringify({
+        ...policy,
+        maxTotalBytes: "100",
+        confirmedAt: now.toISOString(),
+        confirmedBy: "owner",
+      }),
     },
     { description: "SQLite null", value: null },
     { description: "SQLite integer", value: 2n ** 63n - 1n },
@@ -535,29 +608,26 @@ describe.skipIf(process.platform === "win32")(
     });
 
     describe("runPostBackupRetention", () => {
-      let snapshotPath: string;
+      let databasePath: string;
       let receiptPath: string;
       let log: ReturnType<typeof vi.fn<(line: string) => void>>;
-      let exitCode: typeof process.exitCode;
 
       beforeEach(async () => {
-        exitCode = process.exitCode;
-        snapshotPath = join(directory, "renderer.sqlite3");
+        databasePath = join(directory, "renderer.sqlite3");
         receiptPath = join(directory, "latest.json");
-        new DatabaseSync(snapshotPath).close();
+        new DatabaseSync(databasePath).close();
         log = vi.fn();
         for (const { name, bytes } of [newest, recent, older])
           await writeFile(join(directory, name), Buffer.alloc(bytes));
       });
 
       afterEach(() => {
-        process.exitCode = exitCode;
         vi.mocked(lstat).mockReset();
         vi.mocked(unlink).mockReset();
       });
 
-      function setSnapshotPolicy(value: string) {
-        const db = new DatabaseSync(snapshotPath);
+      function setLivePolicy(value: string) {
+        const db = new DatabaseSync(databasePath);
         try {
           db.exec(
             "CREATE TABLE system_settings (key TEXT PRIMARY KEY, value_json)",
@@ -579,9 +649,10 @@ describe.skipIf(process.platform === "win32")(
 
       async function runRetention(path = receiptPath) {
         await runPostBackupRetention({
-          snapshotPath,
+          databasePath,
           directory,
           receiptPath: path,
+          statePath: null,
           now,
           log,
         });
@@ -589,10 +660,15 @@ describe.skipIf(process.platform === "win32")(
         return JSON.parse(log.mock.calls[0]?.[0] ?? "") as unknown;
       }
 
-      const oneGeneration = JSON.stringify({ ...policy, maxGenerations: 1 });
+      const oneGeneration = JSON.stringify({
+        ...policy,
+        maxGenerations: 1,
+        confirmedAt: now.toISOString(),
+        confirmedBy: "owner",
+      });
 
-      it("applies the snapshot policy and protects the archive named in the receipt", async () => {
-        setSnapshotPolicy(oneGeneration);
+      it("applies the live policy and protects the archive named in the receipt", async () => {
+        setLivePolicy(oneGeneration);
         await writeFile(
           receiptPath,
           JSON.stringify({
@@ -620,7 +696,7 @@ describe.skipIf(process.platform === "win32")(
       });
 
       it("prunes normally when the receipt is missing", async () => {
-        setSnapshotPolicy(oneGeneration);
+        setLivePolicy(oneGeneration);
         expect(await runRetention()).toMatchObject({
           event: "backup.retention",
           configured: true,
@@ -633,7 +709,7 @@ describe.skipIf(process.platform === "win32")(
       it.each([false, true])(
         "keeps all backups without a usable policy (invalid: %s)",
         async (invalid) => {
-          if (invalid) setSnapshotPolicy("{}");
+          if (invalid) setLivePolicy("{}");
           expect(await runRetention()).toEqual({
             event: "backup.retention",
             configured: false,
@@ -653,11 +729,11 @@ describe.skipIf(process.platform === "win32")(
       );
 
       it("skips all deletions when the receipt reader throws", async () => {
-        setSnapshotPolicy(oneGeneration);
-        const unreadablePath = join(snapshotPath, "latest.json");
+        setLivePolicy(oneGeneration);
+        const unreadablePath = join(databasePath, "latest.json");
         expect(await runRetention(unreadablePath)).toMatchObject({
-          event: "backup.retention_skipped",
-          warnings: ["RECEIPT_UNREADABLE"],
+          event: "backup.retention_failed",
+          warnings: ["RECEIPT_UNREADABLE", "PRUNE_FAILED"],
           message: expect.stringContaining("ENOTDIR") as unknown,
         });
         expect(vi.mocked(unlink)).not.toHaveBeenCalled();
@@ -666,17 +742,17 @@ describe.skipIf(process.platform === "win32")(
           recent.name,
           newest.name,
         ]);
-        expect(process.exitCode).toBe(exitCode);
       });
 
-      it("logs a pruning failure and sets a nonzero exit code without throwing", async () => {
-        setSnapshotPolicy(oneGeneration);
+      it("logs a pruning failure without throwing", async () => {
+        setLivePolicy(oneGeneration);
         vi.mocked(unlink).mockRejectedValueOnce(new Error("Could not unlink"));
         expect(await runRetention()).toEqual({
           event: "backup.retention_failed",
           message: "Could not unlink",
+          deleted: [],
+          warnings: ["PRUNE_FAILED"],
         });
-        expect(process.exitCode).toBe(1);
         expect(await archives()).toEqual([
           older.name,
           recent.name,

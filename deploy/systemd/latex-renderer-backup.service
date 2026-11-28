@@ -11,7 +11,10 @@ EnvironmentFile=/etc/latex-renderer/backup.env
 Environment=BACKUP_AGE_RECIPIENT_FILE=%d/age-recipient
 Environment=BACKUP_SOURCE_COORDINATION_DIR=/run/latex-renderer-backup-coordination
 LoadCredential=age-recipient:/etc/latex-renderer/secrets/backup-age-recipient
-ExecStart=/usr/local/bin/node deploy/scripts/backup.mjs
+ExecStart=/usr/local/bin/node deploy/scripts/backup.mjs --create-only
+# The post-backup command needs root to write the verification state directory.
+# The ! prefix retains the filesystem sandbox while bypassing User= and Group=.
+ExecStartPost=!/usr/local/bin/node deploy/scripts/backup.mjs --retention-only
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
@@ -19,5 +22,5 @@ PrivateTmp=true
 PrivateDevices=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 ReadOnlyPaths=/var/lib/latex-renderer/renderer.sqlite3 /var/lib/latex-renderer/storage
-ReadWritePaths=/var/lib/latex-renderer/backups /run/latex-renderer-backup-coordination
+ReadWritePaths=/var/lib/latex-renderer/backups /run/latex-renderer-backup-coordination /var/lib/latex-renderer-backup-verification
 UMask=0077

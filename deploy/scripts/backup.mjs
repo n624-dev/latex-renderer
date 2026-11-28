@@ -27,145 +27,163 @@ import { runPostBackupRetention } from "./backup-retention.mjs";
 import { protectBackupSources } from "./backup-source-protection.mjs";
 
 const databasePath = absolutePath(required("DATABASE_PATH"), "DATABASE_PATH");
-const storageRoot = absolutePath(required("STORAGE_ROOT"), "STORAGE_ROOT");
 const destination = absolutePath(
   required("BACKUP_DIRECTORY"),
   "BACKUP_DIRECTORY",
 );
-const recipientFile = absolutePath(
-  required("BACKUP_AGE_RECIPIENT_FILE"),
-  "BACKUP_AGE_RECIPIENT_FILE",
-);
+const mode = process.argv[2];
+if (mode === "--retention-only") await retainBackups();
+else if (mode === undefined || mode === "--create-only")
+  await createBackup(mode === "--create-only");
+else throw new Error("Unknown backup operation");
 
-await mkdir(destination, { recursive: true, mode: 0o700 });
-const work = await mkdtemp(join(tmpdir(), "latex-renderer-backup-"));
-const stamp = new Date().toISOString().replaceAll(":", "-");
-const snapshot = join(work, "renderer.sqlite3");
-
-try {
-  const protection = await protectBackupSources(
-    process.env.BACKUP_SOURCE_COORDINATION_DIR,
-    () => {
-      const sourceDatabase = new DatabaseSync(databasePath, { readOnly: true });
-      try {
-        sourceDatabase.exec("PRAGMA busy_timeout=30000");
-        sourceDatabase.prepare("VACUUM INTO ?").run(snapshot);
-      } finally {
-        sourceDatabase.close();
-      }
-      const copy = new DatabaseSync(snapshot, { readOnly: true });
-      try {
-        return projectSourceRows(copy);
-      } finally {
-        copy.close();
-      }
-    },
-  );
-  let projectBoundary;
-  let schemaVersion;
-  try {
-    // Node 24.15.0 / SQLite 3.51.3 returned "ok" for a CHECK violation on a
-    // read-only database in our fixture. Only the private copy is writable.
-    const snapshotDatabase = new DatabaseSync(snapshot);
-    try {
-      assertBackupDatabase(snapshotDatabase);
-      schemaVersion = snapshotDatabase
-        .prepare("SELECT MAX(version) AS version FROM schema_migrations")
-        .get()?.version;
-      projectBoundary = await copyProjectSources(
-        snapshotDatabase,
-        protection.sources,
-      );
-    } finally {
-      snapshotDatabase.close();
-    }
-  } finally {
-    await protection.release();
-  }
-
-  const snapshotStat = await stat(snapshot);
-  const digest = await sha256(snapshot);
-  const manifest = {
-    format: 2,
-    createdAt: new Date().toISOString(),
-    database: {
-      name: "renderer.sqlite3",
-      size: snapshotStat.size,
-      sha256: digest,
-    },
-    artifactsIncluded: false,
-    application: readBackupApplicationIdentity(
-      await readFile(".latex-renderer-release.json", "utf8").then(
-        JSON.parse,
-        (error) => {
-          if (error?.code !== "ENOENT") throw error;
-          return null;
-        },
-      ),
-    ),
-    databaseSchemaVersion: schemaVersion,
-    projectSources: {
-      included: true,
-      directory: "project-sources",
-      sources: projectBoundary.sources,
-      revisions: projectBoundary.revisions,
-    },
-  };
-  await writeFile(
-    join(work, "manifest.json"),
-    `${JSON.stringify(manifest, null, 2)}\n`,
-    { mode: 0o600 },
-  );
-
-  const tarPath = join(work, `latex-renderer-${stamp}.tar`);
-  const entries = ["renderer.sqlite3", "manifest.json"];
-  if (projectBoundary.sources.length > 0) entries.push("project-sources");
-  await run("tar", ["-C", work, "-cf", tarPath, ...entries]);
-  // Do not publish a backup that the shared restore boundary cannot inspect.
-  await validateBackupArchive(tarPath);
-  const output = join(destination, `${basename(tarPath)}.age`);
-  const pending = await mkdtemp(join(destination, ".pending-backup-"));
-  try {
-    const candidate = join(pending, "encrypted.age");
-    await run("age", ["-R", recipientFile, "-o", candidate, tarPath]);
-    const handle = await open(candidate, "r");
-    try {
-      if ((await handle.stat()).size === 0)
-        throw new Error("Encrypted backup is empty");
-      await handle.sync();
-    } finally {
-      await handle.close();
-    }
-    // Atomic create-only publication on the destination filesystem. A name
-    // collision must never replace a previously completed backup.
-    await link(candidate, output);
-    const directory = await open(destination, "r");
-    try {
-      await directory.sync();
-    } finally {
-      await directory.close();
-    }
-  } finally {
-    await rm(pending, { recursive: true, force: true });
-  }
-  await uploadIfConfigured(output);
-  console.log(
-    JSON.stringify({
-      event: "backup.completed",
-      file: output,
-      projectSourceCount: projectBoundary.sources.length,
-      projectRevisionCount: projectBoundary.revisions.length,
-    }),
-  );
-  await runPostBackupRetention({
-    snapshotPath: snapshot,
+async function retainBackups(statePath) {
+  const result = await runPostBackupRetention({
+    databasePath,
     directory: destination,
+    statePath,
   });
-} finally {
-  await rm(work, { recursive: true, force: true });
+  if (result.status === "failed") process.exitCode = 1;
 }
 
-async function copyProjectSources(database, sources) {
+async function createBackup(createOnly) {
+  const storageRoot = absolutePath(required("STORAGE_ROOT"), "STORAGE_ROOT");
+  const recipientFile = absolutePath(
+    required("BACKUP_AGE_RECIPIENT_FILE"),
+    "BACKUP_AGE_RECIPIENT_FILE",
+  );
+
+  await mkdir(destination, { recursive: true, mode: 0o700 });
+  const work = await mkdtemp(join(tmpdir(), "latex-renderer-backup-"));
+  const stamp = new Date().toISOString().replaceAll(":", "-");
+  const snapshot = join(work, "renderer.sqlite3");
+
+  try {
+    const protection = await protectBackupSources(
+      process.env.BACKUP_SOURCE_COORDINATION_DIR,
+      () => {
+        const sourceDatabase = new DatabaseSync(databasePath, {
+          readOnly: true,
+        });
+        try {
+          sourceDatabase.exec("PRAGMA busy_timeout=30000");
+          sourceDatabase.prepare("VACUUM INTO ?").run(snapshot);
+        } finally {
+          sourceDatabase.close();
+        }
+        const copy = new DatabaseSync(snapshot, { readOnly: true });
+        try {
+          return projectSourceRows(copy);
+        } finally {
+          copy.close();
+        }
+      },
+    );
+    let projectBoundary;
+    let schemaVersion;
+    try {
+      // Node 24.15.0 / SQLite 3.51.3 returned "ok" for a CHECK violation on a
+      // read-only database in our fixture. Only the private copy is writable.
+      const snapshotDatabase = new DatabaseSync(snapshot);
+      try {
+        assertBackupDatabase(snapshotDatabase);
+        schemaVersion = snapshotDatabase
+          .prepare("SELECT MAX(version) AS version FROM schema_migrations")
+          .get()?.version;
+        projectBoundary = await copyProjectSources(
+          snapshotDatabase,
+          protection.sources,
+          work,
+          storageRoot,
+        );
+      } finally {
+        snapshotDatabase.close();
+      }
+    } finally {
+      await protection.release();
+    }
+
+    const snapshotStat = await stat(snapshot);
+    const digest = await sha256(snapshot);
+    const manifest = {
+      format: 2,
+      createdAt: new Date().toISOString(),
+      database: {
+        name: "renderer.sqlite3",
+        size: snapshotStat.size,
+        sha256: digest,
+      },
+      artifactsIncluded: false,
+      application: readBackupApplicationIdentity(
+        await readFile(".latex-renderer-release.json", "utf8").then(
+          JSON.parse,
+          (error) => {
+            if (error?.code !== "ENOENT") throw error;
+            return null;
+          },
+        ),
+      ),
+      databaseSchemaVersion: schemaVersion,
+      projectSources: {
+        included: true,
+        directory: "project-sources",
+        sources: projectBoundary.sources,
+        revisions: projectBoundary.revisions,
+      },
+    };
+    await writeFile(
+      join(work, "manifest.json"),
+      `${JSON.stringify(manifest, null, 2)}\n`,
+      { mode: 0o600 },
+    );
+
+    const tarPath = join(work, `latex-renderer-${stamp}.tar`);
+    const entries = ["renderer.sqlite3", "manifest.json"];
+    if (projectBoundary.sources.length > 0) entries.push("project-sources");
+    await run("tar", ["-C", work, "-cf", tarPath, ...entries]);
+    // Do not publish a backup that the shared restore boundary cannot inspect.
+    await validateBackupArchive(tarPath);
+    const output = join(destination, `${basename(tarPath)}.age`);
+    const pending = await mkdtemp(join(destination, ".pending-backup-"));
+    try {
+      const candidate = join(pending, "encrypted.age");
+      await run("age", ["-R", recipientFile, "-o", candidate, tarPath]);
+      const handle = await open(candidate, "r");
+      try {
+        if ((await handle.stat()).size === 0)
+          throw new Error("Encrypted backup is empty");
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+      // Atomic create-only publication on the destination filesystem. A name
+      // collision must never replace a previously completed backup.
+      await link(candidate, output);
+      const directory = await open(destination, "r");
+      try {
+        await directory.sync();
+      } finally {
+        await directory.close();
+      }
+    } finally {
+      await rm(pending, { recursive: true, force: true });
+    }
+    await uploadIfConfigured(output);
+    console.log(
+      JSON.stringify({
+        event: "backup.completed",
+        file: output,
+        projectSourceCount: projectBoundary.sources.length,
+        projectRevisionCount: projectBoundary.revisions.length,
+      }),
+    );
+    if (!createOnly) await retainBackups(null);
+  } finally {
+    await rm(work, { recursive: true, force: true });
+  }
+}
+
+async function copyProjectSources(database, sources, work, storageRoot) {
   const revisions = database
     .prepare(
       `SELECT r.id AS revision_id,r.project_id,r.source_id
@@ -187,6 +205,7 @@ async function copyProjectSources(database, sources) {
       destinationPath,
       source.size,
       source.sha256,
+      storageRoot,
     );
     copied.push({
       id: source.id,
@@ -210,6 +229,7 @@ async function copyVerifiedRegularFile(
   destinationPath,
   expectedSize,
   expectedSha256,
+  storageRoot,
 ) {
   let source;
   let destinationHandle;

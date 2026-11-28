@@ -4,6 +4,14 @@ import {
 } from "@latex-renderer/shared/locale";
 
 const english = {
+  showOrPreviewBackupRetention: "Show or preview local backup retention",
+  confirmBackupRetention: "Confirm backup retention limits and prune now",
+  backupRetentionMaxAge: "maximum archive age in days",
+  backupRetentionMaxGenerations: "maximum number of backup generations",
+  backupRetentionMaxBytes: "maximum total archive size in bytes",
+  backupRetentionLimitsRequired:
+    "Specify all three limits as integers. Days and generations must be positive. Bytes may be zero.",
+  backupRetentionSavedPruneFailed: "Retention policy saved. Pruning failed.",
   modeMustBeNotifyOrAutomatic: "mode must be notify or automatic",
   chooseExactlyOneOfLanguageAll:
     "Choose exactly one of --language, --all-languages, or --clear-languages",
@@ -50,6 +58,16 @@ type Catalog = Readonly<Record<Message, string>>;
 const locale = terminalDisplayLocale(process.env);
 const select: Partial<Record<DisplayLocale, () => Catalog>> = {
   ja: () => ({
+    showOrPreviewBackupRetention:
+      "ローカルバックアップの保持設定を表示・プレビュー",
+    confirmBackupRetention: "バックアップの保持上限を確定してすぐに整理",
+    backupRetentionMaxAge: "バックアップの最大保持日数",
+    backupRetentionMaxGenerations: "バックアップの最大保持世代数",
+    backupRetentionMaxBytes: "バックアップの最大合計バイト数",
+    backupRetentionLimitsRequired:
+      "3つの上限をすべて整数で指定してください。日数と世代数は1以上、バイト数は0以上です。",
+    backupRetentionSavedPruneFailed:
+      "保持設定を保存しました。バックアップの整理に失敗しました。",
     modeMustBeNotifyOrAutomatic: "mode の許容値：notify, automatic",
     chooseExactlyOneOfLanguageAll:
       "--language、--all-languages、--clear-languages のいずれか1つだけを指定してください。",
@@ -92,6 +110,14 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Cloudflare Accessのサービストークンは両方の項目を設定してください。Standaloneでは両方とも未設定にします",
   }),
   "zh-CN": () => ({
+    showOrPreviewBackupRetention: "查看或预览本地备份保留策略",
+    confirmBackupRetention: "确认备份保留上限并立即清理",
+    backupRetentionMaxAge: "备份最长保留天数",
+    backupRetentionMaxGenerations: "最多保留的备份代数",
+    backupRetentionMaxBytes: "备份总大小上限（字节）",
+    backupRetentionLimitsRequired:
+      "请将三个上限都指定为整数。天数和代数须为正数，字节数可以为零。",
+    backupRetentionSavedPruneFailed: "已保存保留策略。清理备份失败。",
     modeMustBeNotifyOrAutomatic: "mode 的允许值：notify, automatic",
     chooseExactlyOneOfLanguageAll:
       "请从 --language、--all-languages、--clear-languages 中选择且仅选择一项。",
@@ -129,6 +155,15 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Cloudflare Access 的服务令牌字段必须两个都填写；Standalone 模式下应都不填",
   }),
   ko: () => ({
+    showOrPreviewBackupRetention: "로컬 백업 보존 설정 확인 또는 미리 보기",
+    confirmBackupRetention: "백업 보존 한도를 확정하고 지금 정리",
+    backupRetentionMaxAge: "최대 백업 보존 일수",
+    backupRetentionMaxGenerations: "보존할 최대 백업 세대 수",
+    backupRetentionMaxBytes: "백업의 최대 총 크기(바이트)",
+    backupRetentionLimitsRequired:
+      "세 가지 한도를 모두 정수로 지정하세요. 일수와 세대 수는 양수이며 바이트 수는 0일 수 있습니다.",
+    backupRetentionSavedPruneFailed:
+      "보존 정책을 저장했습니다. 백업 정리에 실패했습니다.",
     modeMustBeNotifyOrAutomatic: "mode에 허용되는 값: notify, automatic",
     chooseExactlyOneOfLanguageAll:
       "--language, --all-languages, --clear-languages 중 하나만 지정하세요.",
@@ -171,6 +206,16 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Cloudflare Access 서비스 토큰 필드는 둘 다 설정하고 Standalone에서는 둘 다 비워 두세요",
   }),
   es: () => ({
+    showOrPreviewBackupRetention:
+      "Mostrar o previsualizar la retención de copias locales",
+    confirmBackupRetention: "Confirmar los límites y depurar las copias ahora",
+    backupRetentionMaxAge: "antigüedad máxima de la copia en días",
+    backupRetentionMaxGenerations: "número máximo de generaciones de copias",
+    backupRetentionMaxBytes: "tamaño total máximo de las copias en bytes",
+    backupRetentionLimitsRequired:
+      "Indica los tres límites como enteros. Los días y las generaciones deben ser positivos. Los bytes pueden ser cero.",
+    backupRetentionSavedPruneFailed:
+      "Se guardó la política de retención. La depuración falló.",
     modeMustBeNotifyOrAutomatic:
       "Valores permitidos para mode: notify, automatic",
     chooseExactlyOneOfLanguageAll:
@@ -218,6 +263,16 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Configure los dos campos del token de servicio Cloudflare Access, o ninguno en Standalone",
   }),
   pt: () => ({
+    showOrPreviewBackupRetention:
+      "Mostrar ou pré-visualizar a retenção de cópias locais",
+    confirmBackupRetention: "Confirmar os limites e limpar as cópias agora",
+    backupRetentionMaxAge: "idade máxima da cópia em dias",
+    backupRetentionMaxGenerations: "número máximo de gerações de cópias",
+    backupRetentionMaxBytes: "tamanho total máximo das cópias em bytes",
+    backupRetentionLimitsRequired:
+      "Indique os três limites como números inteiros. Os dias e as gerações devem ser positivos. Os bytes podem ser zero.",
+    backupRetentionSavedPruneFailed:
+      "A política de retenção foi guardada. A limpeza falhou.",
     modeMustBeNotifyOrAutomatic:
       "Valores permitidos para mode: notify, automatic",
     chooseExactlyOneOfLanguageAll:
@@ -263,6 +318,18 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Configure ambos os campos do token de serviço Cloudflare Access, ou nenhum no modo Standalone",
   }),
   fr: () => ({
+    showOrPreviewBackupRetention:
+      "Afficher ou prévisualiser la rétention des sauvegardes locales",
+    confirmBackupRetention:
+      "Confirmer les limites et purger les sauvegardes maintenant",
+    backupRetentionMaxAge: "âge maximal de la sauvegarde en jours",
+    backupRetentionMaxGenerations:
+      "nombre maximal de générations de sauvegardes",
+    backupRetentionMaxBytes: "taille totale maximale des sauvegardes en octets",
+    backupRetentionLimitsRequired:
+      "Indiquez les trois limites en nombres entiers. Les jours et les générations doivent être positifs. Les octets peuvent valoir zéro.",
+    backupRetentionSavedPruneFailed:
+      "La politique de rétention a été enregistrée. La purge a échoué.",
     modeMustBeNotifyOrAutomatic:
       "Valeurs autorisées pour mode : notify, automatic",
     chooseExactlyOneOfLanguageAll:
@@ -310,6 +377,17 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Renseignez les deux champs du jeton de service Cloudflare Access, ou aucun en mode Standalone",
   }),
   de: () => ({
+    showOrPreviewBackupRetention:
+      "Lokale Backup-Aufbewahrung anzeigen oder prüfen",
+    confirmBackupRetention:
+      "Aufbewahrungsgrenzen bestätigen und Backups sofort bereinigen",
+    backupRetentionMaxAge: "maximales Alter eines Backups in Tagen",
+    backupRetentionMaxGenerations: "maximale Anzahl der Backup-Generationen",
+    backupRetentionMaxBytes: "maximale Gesamtgröße der Backups in Byte",
+    backupRetentionLimitsRequired:
+      "Gib alle drei Grenzen als ganze Zahlen an. Tage und Generationen müssen positiv sein. Byte dürfen null sein.",
+    backupRetentionSavedPruneFailed:
+      "Aufbewahrungsrichtlinie gespeichert. Bereinigung fehlgeschlagen.",
     modeMustBeNotifyOrAutomatic: "Zulässige Werte für mode: notify, automatic",
     chooseExactlyOneOfLanguageAll:
       "Wählen Sie genau eine Option: --language, --all-languages oder --clear-languages.",
@@ -354,6 +432,17 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Beide Felder des Cloudflare-Access-Diensttokens ausfüllen, bei Standalone beide leer lassen",
   }),
   it: () => ({
+    showOrPreviewBackupRetention:
+      "Mostra o visualizza in anteprima la conservazione dei backup locali",
+    confirmBackupRetention:
+      "Conferma i limiti e rimuovi subito i backup in eccesso",
+    backupRetentionMaxAge: "età massima del backup in giorni",
+    backupRetentionMaxGenerations: "numero massimo di generazioni di backup",
+    backupRetentionMaxBytes: "dimensione totale massima dei backup in byte",
+    backupRetentionLimitsRequired:
+      "Specifica tutti e tre i limiti come interi. Giorni e generazioni devono essere positivi. I byte possono essere zero.",
+    backupRetentionSavedPruneFailed:
+      "Politica di conservazione salvata. Rimozione non riuscita.",
     modeMustBeNotifyOrAutomatic: "Valori ammessi per mode: notify, automatic",
     chooseExactlyOneOfLanguageAll:
       "Specificare una sola opzione: --language, --all-languages o --clear-languages.",
@@ -399,6 +488,18 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Configurare entrambi i campi del token di servizio Cloudflare Access, o nessuno per Standalone",
   }),
   ru: () => ({
+    showOrPreviewBackupRetention:
+      "Показать или предварительно проверить хранение локальных резервных копий",
+    confirmBackupRetention:
+      "Подтвердить ограничения и сразу очистить резервные копии",
+    backupRetentionMaxAge: "максимальный возраст копии в днях",
+    backupRetentionMaxGenerations:
+      "максимальное число поколений резервных копий",
+    backupRetentionMaxBytes: "максимальный общий размер копий в байтах",
+    backupRetentionLimitsRequired:
+      "Укажите все три ограничения целыми числами. Дни и поколения должны быть положительными. Число байтов может быть нулём.",
+    backupRetentionSavedPruneFailed:
+      "Политика хранения сохранена. Не удалось очистить резервные копии.",
     modeMustBeNotifyOrAutomatic:
       "Допустимые значения для mode: notify, automatic",
     chooseExactlyOneOfLanguageAll:
@@ -443,6 +544,16 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Настройте оба поля служебного токена Cloudflare Access или оставьте оба пустыми для Standalone",
   }),
   tr: () => ({
+    showOrPreviewBackupRetention:
+      "Yerel yedek saklama ayarlarını göster veya önizle",
+    confirmBackupRetention: "Yedek saklama sınırlarını onayla ve hemen temizle",
+    backupRetentionMaxAge: "yedeklerin gün cinsinden azami yaşı",
+    backupRetentionMaxGenerations: "azami yedek nesli sayısı",
+    backupRetentionMaxBytes: "bayt cinsinden azami toplam yedek boyutu",
+    backupRetentionLimitsRequired:
+      "Üç sınırı da tam sayı olarak belirtin. Gün ve nesil sayısı pozitif olmalıdır. Bayt sayısı sıfır olabilir.",
+    backupRetentionSavedPruneFailed:
+      "Saklama politikası kaydedildi. Yedekler temizlenemedi.",
     modeMustBeNotifyOrAutomatic:
       "mode için izin verilen değerler: notify, automatic",
     chooseExactlyOneOfLanguageAll:
@@ -487,6 +598,17 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Cloudflare Access hizmet belirteci alanlarının ikisini de yapılandırın; Standalone için ikisini de boş bırakın",
   }),
   pl: () => ({
+    showOrPreviewBackupRetention:
+      "Pokaż ustawienia lub podgląd przechowywania lokalnych kopii zapasowych",
+    confirmBackupRetention: "Potwierdź limity i usuń teraz nadmiarowe kopie",
+    backupRetentionMaxAge: "maksymalny wiek kopii w dniach",
+    backupRetentionMaxGenerations:
+      "maksymalna liczba generacji kopii zapasowych",
+    backupRetentionMaxBytes: "maksymalny łączny rozmiar kopii w bajtach",
+    backupRetentionLimitsRequired:
+      "Podaj wszystkie trzy limity jako liczby całkowite. Dni i generacje muszą być dodatnie. Liczba bajtów może wynosić zero.",
+    backupRetentionSavedPruneFailed:
+      "Zapisano zasady przechowywania. Usuwanie kopii nie powiodło się.",
     modeMustBeNotifyOrAutomatic:
       "Dozwolone wartości dla mode: notify, automatic",
     chooseExactlyOneOfLanguageAll:
@@ -534,6 +656,17 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Ustaw oba pola tokenu usługi Cloudflare Access lub pozostaw oba puste dla Standalone",
   }),
   cs: () => ({
+    showOrPreviewBackupRetention:
+      "Zobrazit nastavení nebo náhled uchovávání místních záloh",
+    confirmBackupRetention:
+      "Potvrdit limity a ihned odstranit nadbytečné zálohy",
+    backupRetentionMaxAge: "maximální stáří zálohy ve dnech",
+    backupRetentionMaxGenerations: "maximální počet generací záloh",
+    backupRetentionMaxBytes: "maximální celková velikost záloh v bajtech",
+    backupRetentionLimitsRequired:
+      "Zadejte všechny tři limity jako celá čísla. Počet dnů a generací musí být kladný. Počet bajtů může být nula.",
+    backupRetentionSavedPruneFailed:
+      "Pravidla uchovávání byla uložena. Odstranění záloh se nezdařilo.",
     modeMustBeNotifyOrAutomatic: "Povolené hodnoty pro mode: notify, automatic",
     chooseExactlyOneOfLanguageAll:
       "Zadejte právě jednu možnost: --language, --all-languages nebo --clear-languages.",
@@ -578,6 +711,17 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Vyplňte obě pole servisního tokenu Cloudflare Access, pro Standalone nechte obě prázdná",
   }),
   nl: () => ({
+    showOrPreviewBackupRetention:
+      "Bewaarbeleid voor lokale back-ups bekijken of vooraf toetsen",
+    confirmBackupRetention:
+      "Bewaarlimieten bevestigen en back-ups direct opschonen",
+    backupRetentionMaxAge: "maximale leeftijd van een back-up in dagen",
+    backupRetentionMaxGenerations: "maximaal aantal back-upgeneraties",
+    backupRetentionMaxBytes: "maximale totale grootte van back-ups in bytes",
+    backupRetentionLimitsRequired:
+      "Geef alle drie de limieten op als gehele getallen. Dagen en generaties moeten positief zijn. Bytes mogen nul zijn.",
+    backupRetentionSavedPruneFailed:
+      "Bewaarbeleid opgeslagen. Opschonen van back-ups mislukt.",
     modeMustBeNotifyOrAutomatic:
       "Toegestane waarden voor mode: notify, automatic",
     chooseExactlyOneOfLanguageAll:
@@ -623,6 +767,19 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Stel beide velden van het Cloudflare Access-servicetoken in, of geen van beide voor Standalone",
   }),
   sv: () => ({
+    showOrPreviewBackupRetention:
+      "Visa eller förhandsgranska lagring av lokala säkerhetskopior",
+    confirmBackupRetention:
+      "Bekräfta lagringsgränserna och rensa säkerhetskopior nu",
+    backupRetentionMaxAge: "maximal ålder för en säkerhetskopia i dagar",
+    backupRetentionMaxGenerations:
+      "maximalt antal generationer av säkerhetskopior",
+    backupRetentionMaxBytes:
+      "maximal sammanlagd storlek på säkerhetskopior i byte",
+    backupRetentionLimitsRequired:
+      "Ange alla tre gränser som heltal. Dagar och generationer måste vara positiva. Antalet byte får vara noll.",
+    backupRetentionSavedPruneFailed:
+      "Lagringspolicyn sparades. Rensningen misslyckades.",
     modeMustBeNotifyOrAutomatic: "Tillåtna värden för mode: notify, automatic",
     chooseExactlyOneOfLanguageAll:
       "Ange exakt ett alternativ: --language, --all-languages eller --clear-languages.",
@@ -666,6 +823,19 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Ange båda fälten för Cloudflare Access-tjänsttoken eller inget av dem för Standalone",
   }),
   no: () => ({
+    showOrPreviewBackupRetention:
+      "Vis eller forhåndsvis oppbevaring av lokale sikkerhetskopier",
+    confirmBackupRetention:
+      "Bekreft grensene og rydd opp i sikkerhetskopiene nå",
+    backupRetentionMaxAge: "maksimal alder på en sikkerhetskopi i dager",
+    backupRetentionMaxGenerations:
+      "maksimalt antall generasjoner av sikkerhetskopier",
+    backupRetentionMaxBytes:
+      "maksimal samlet størrelse på sikkerhetskopiene i byte",
+    backupRetentionLimitsRequired:
+      "Oppgi alle tre grensene som heltall. Dager og generasjoner må være positive. Antall byte kan være null.",
+    backupRetentionSavedPruneFailed:
+      "Oppbevaringspolicyen ble lagret. Oppryddingen mislyktes.",
     modeMustBeNotifyOrAutomatic: "Tillatte verdier for mode: notify, automatic",
     chooseExactlyOneOfLanguageAll:
       "Angi nøyaktig ett alternativ: --language, --all-languages eller --clear-languages.",
@@ -710,6 +880,19 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Angi begge feltene for Cloudflare Access-tjenestokenet, eller ingen for Standalone",
   }),
   da: () => ({
+    showOrPreviewBackupRetention:
+      "Vis eller gennemse opbevaring af lokale sikkerhedskopier",
+    confirmBackupRetention:
+      "Bekræft grænserne, og ryd op i sikkerhedskopierne nu",
+    backupRetentionMaxAge: "maksimal alder på en sikkerhedskopi i dage",
+    backupRetentionMaxGenerations:
+      "maksimalt antal generationer af sikkerhedskopier",
+    backupRetentionMaxBytes:
+      "maksimal samlet størrelse på sikkerhedskopierne i byte",
+    backupRetentionLimitsRequired:
+      "Angiv alle tre grænser som hele tal. Dage og generationer skal være positive. Antallet af byte må være nul.",
+    backupRetentionSavedPruneFailed:
+      "Opbevaringspolitikken blev gemt. Oprydningen mislykkedes.",
     modeMustBeNotifyOrAutomatic: "Tilladte værdier for mode: notify, automatic",
     chooseExactlyOneOfLanguageAll:
       "Angiv præcis én mulighed: --language, --all-languages eller --clear-languages.",
@@ -753,6 +936,17 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Angiv begge felter til Cloudflare Access-tjenestokenet, eller ingen for Standalone",
   }),
   fi: () => ({
+    showOrPreviewBackupRetention:
+      "Näytä tai esikatsele paikallisten varmuuskopioiden säilytysasetuksia",
+    confirmBackupRetention:
+      "Vahvista rajat ja poista ylimääräiset varmuuskopiot heti",
+    backupRetentionMaxAge: "varmuuskopion enimmäisikä päivinä",
+    backupRetentionMaxGenerations: "varmuuskopiosukupolvien enimmäismäärä",
+    backupRetentionMaxBytes: "varmuuskopioiden enimmäiskoko yhteensä tavuina",
+    backupRetentionLimitsRequired:
+      "Anna kaikki kolme rajaa kokonaislukuina. Päivien ja sukupolvien määrän on oltava positiivinen. Tavujen määrä voi olla nolla.",
+    backupRetentionSavedPruneFailed:
+      "Säilytyskäytäntö tallennettiin. Varmuuskopioiden poistaminen epäonnistui.",
     modeMustBeNotifyOrAutomatic: "Sallitut arvot (mode): notify, automatic",
     chooseExactlyOneOfLanguageAll:
       "Anna täsmälleen yksi vaihtoehdoista --language, --all-languages ja --clear-languages.",

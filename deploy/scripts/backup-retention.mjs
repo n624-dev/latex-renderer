@@ -1,5 +1,8 @@
-import { lstat, open, readFile, readdir, unlink } from "node:fs/promises";
-import { join } from "node:path";
+import { execFileSync, spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { constants } from "node:fs";
+import * as filesystem from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 export const archivePattern =
@@ -7,12 +10,66 @@ export const archivePattern =
 export const backupRetentionSettingKey = "backup_retention_policy";
 export const verificationReceiptPath =
   "/var/lib/latex-renderer-backup-verification/latest.json";
+export const retentionStatePath = (receiptPath) =>
+  join(dirname(receiptPath), "retention.json");
 
 const dayMs = 86_400_000;
 const retentionLimits = ["maxAgeDays", "maxGenerations", "maxTotalBytes"];
 
-function isPositiveSafeInteger(value) {
-  return Number.isSafeInteger(value) && value > 0;
+function validLimit(limit, value) {
+  return (
+    Number.isSafeInteger(value) && value >= (limit === "maxTotalBytes" ? 0 : 1)
+  );
+}
+
+export function isBackupRetentionProposal(value) {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    Object.keys(value).length === retentionLimits.length &&
+    retentionLimits.every(
+      (limit) => Object.hasOwn(value, limit) && validLimit(limit, value[limit]),
+    )
+  );
+}
+
+export function backupRetentionCandidates({
+  archives,
+  freeBytes,
+  minFreeStorageBytes,
+}) {
+  if (archives.length === 0) return null;
+  const totalBytes = archives.reduce(
+    (sum, archive) => sum + BigInt(archive.bytes),
+    0n,
+  );
+  const latest = archives.reduce((newest, archive) =>
+    archive.name > newest.name ? archive : newest,
+  );
+  const available =
+    BigInt(freeBytes) + totalBytes - BigInt(minFreeStorageBytes);
+  const budget = available > 0n ? available / 4n : 0n;
+  const size = BigInt(latest.bytes);
+  const generations =
+    budget === 0n
+      ? 1
+      : size === 0n
+        ? 30
+        : Math.max(1, Math.min(Number(budget / size), 30));
+  return {
+    maxAgeDays: generations,
+    maxGenerations: generations,
+    maxTotalBytes: Number(budget),
+  };
+}
+
+export function readLiveBackupRetentionPolicy(databasePath) {
+  const db = new DatabaseSync(databasePath, { readOnly: true });
+  try {
+    return readBackupRetentionPolicy(db);
+  } finally {
+    db.close();
+  }
 }
 
 export function readBackupRetentionPolicy(db) {
@@ -40,35 +97,125 @@ export function readBackupRetentionPolicy(db) {
   } catch {
     return { policy: null, warning: "POLICY_INVALID" };
   }
-  if (!retentionLimits.every((limit) => isPositiveSafeInteger(value?.[limit])))
+  if (!retentionLimits.every((limit) => validLimit(limit, value?.[limit])))
     return { policy: null, warning: "POLICY_INVALID" };
-  const { maxAgeDays, maxGenerations, maxTotalBytes } = value;
+  const {
+    maxAgeDays,
+    maxGenerations,
+    maxTotalBytes,
+    confirmedAt,
+    confirmedBy,
+  } = value;
+  if (
+    typeof confirmedAt !== "string" ||
+    !Number.isFinite(Date.parse(confirmedAt)) ||
+    typeof confirmedBy !== "string" ||
+    confirmedBy.trim() === ""
+  )
+    return { policy: null, warning: "POLICY_INVALID" };
   return {
-    policy: { maxAgeDays, maxGenerations, maxTotalBytes },
+    policy: {
+      maxAgeDays,
+      maxGenerations,
+      maxTotalBytes,
+      confirmedAt,
+      confirmedBy,
+    },
     warning: null,
   };
 }
 
-export async function readVerificationReceipt(path, { expectedUid = 0 } = {}) {
+async function readBackupState(path, { expectedUid, maxBytes, fs }) {
   try {
-    const info = await lstat(path);
+    const info = await fs.lstat(path);
     if (
       !info.isFile() ||
       info.uid !== expectedUid ||
       info.mode & 0o033 ||
-      info.size > 4096
+      info.size > maxBytes
     )
       return null;
-    const record = JSON.parse(await readFile(path, "utf8"));
-    if (
-      archivePattern.test(record.archive) &&
-      typeof record.verifiedAt === "string"
-    )
-      return { archive: record.archive, verifiedAt: record.verifiedAt };
+    return JSON.parse(await fs.readFile(path, "utf8"));
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
   }
   return null;
+}
+
+export async function readVerificationReceipt(
+  path,
+  { expectedUid = 0, fs = filesystem } = {},
+) {
+  const record = await readBackupState(path, {
+    expectedUid,
+    maxBytes: 4096,
+    fs,
+  });
+  if (
+    archivePattern.test(record?.archive) &&
+    typeof record.verifiedAt === "string"
+  )
+    return { archive: record.archive, verifiedAt: record.verifiedAt };
+  return null;
+}
+
+export function readLastRetentionRun(
+  path,
+  { fs = filesystem, expectedUid = 0 } = {},
+) {
+  return readBackupState(path, { expectedUid, maxBytes: 1024 * 1024, fs });
+}
+
+export async function writeBackupState(path, record, fs = filesystem) {
+  let gid;
+  try {
+    const group = execFileSync(
+      "/usr/bin/getent",
+      ["group", "latex-renderer-backup"],
+      {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 5000,
+      },
+    );
+    gid = Number(group.split(":")[2]);
+    if (!Number.isInteger(gid) || gid <= 0 || gid >= 0xffffffff)
+      throw new Error("Invalid backup group ID");
+  } catch (error) {
+    if (error.status !== 2) throw error;
+  }
+  const pending = `${path}.${randomUUID()}.part`;
+  const file = await fs.open(pending, "wx", 0o600);
+  try {
+    try {
+      await file.writeFile(JSON.stringify(record) + "\n");
+      if (gid !== undefined) await file.chown(0, gid);
+      await file.chmod(gid === undefined ? 0o600 : 0o640);
+      await file.sync();
+    } finally {
+      await file.close();
+    }
+    await fs.rename(pending, path);
+  } finally {
+    await fs.rm(pending, { force: true });
+  }
+}
+
+export async function withBackupStateLock(receiptPath, run, timeoutSeconds) {
+  const directory = await filesystem.open(dirname(receiptPath), "r");
+  try {
+    // flock locks the inherited open file description until this handle closes.
+    const args =
+      timeoutSeconds === undefined ? [] : ["--timeout", String(timeoutSeconds)];
+    const lock = spawnSync("/usr/bin/flock", [...args, "3"], {
+      stdio: ["ignore", "ignore", "inherit", directory.fd],
+    });
+    if (lock.status !== 0)
+      throw new Error("Could not lock backup verification and retention state");
+    return await run();
+  } finally {
+    await directory.close();
+  }
 }
 
 export function planBackupRetention({
@@ -79,8 +226,8 @@ export function planBackupRetention({
 }) {
   if (policy !== null) {
     for (const limit of retentionLimits) {
-      if (!isPositiveSafeInteger(policy?.[limit]))
-        throw new Error(`${limit} must be a positive safe integer`);
+      if (!validLimit(limit, policy?.[limit]))
+        throw new Error(`${limit} is outside the supported integer range`);
     }
   }
 
@@ -171,37 +318,43 @@ export function planBackupRetention({
   return result;
 }
 
-export async function applyBackupRetention({
-  directory,
-  policy,
-  now,
-  latestVerifiedArchive,
-}) {
+export async function listBackupArchives(directory, fs = filesystem) {
   const archives = [];
-  for (const name of await readdir(directory)) {
+  for (const name of await fs.readdir(directory)) {
     if (!archivePattern.test(name)) continue;
     try {
-      const info = await lstat(join(directory, name));
+      const info = await fs.lstat(join(directory, name));
       if (info.isFile()) archives.push({ name, bytes: info.size });
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
     }
   }
+  return archives;
+}
 
+export async function applyBackupRetention({
+  directory,
+  policy,
+  now,
+  latestVerifiedArchive,
+  fs = filesystem,
+  deleted = [],
+  warnings = [],
+}) {
   const plan = planBackupRetention({
-    archives,
+    archives: await listBackupArchives(directory, fs),
     policy,
     now,
     latestVerifiedArchive,
   });
-  const deleted = [];
+  warnings.push(...plan.warnings);
   const alreadyAbsent = [];
   try {
     for (const name of plan.delete) {
       const path = join(directory, name);
       try {
-        if (!(await lstat(path)).isFile()) continue;
-        await unlink(path);
+        if (!(await fs.lstat(path)).isFile()) continue;
+        await fs.unlink(path);
         deleted.push(name);
       } catch (error) {
         if (error.code !== "ENOENT") throw error;
@@ -210,7 +363,7 @@ export async function applyBackupRetention({
     }
   } finally {
     if (deleted.length > 0) {
-      const handle = await open(directory, "r");
+      const handle = await fs.open(directory, "r");
       try {
         await handle.sync();
       } finally {
@@ -218,65 +371,115 @@ export async function applyBackupRetention({
       }
     }
   }
-  return { ...plan, deleted, alreadyAbsent };
+  return { ...plan, deleted, alreadyAbsent, warnings };
 }
 
 export async function runPostBackupRetention({
-  snapshotPath,
+  databasePath,
   directory,
   receiptPath = verificationReceiptPath,
+  statePath = retentionStatePath(receiptPath),
   now = new Date(),
   log = console.log,
+  fs = filesystem,
+  writeState = writeBackupState,
+  lockTimeoutSeconds,
 }) {
-  try {
-    const db = new DatabaseSync(snapshotPath, { readOnly: true });
-    let setting;
+  if (statePath === null) return await run();
+  return await withBackupStateLock(receiptPath, run, lockTimeoutSeconds);
+
+  async function run() {
+    const deleted = [];
+    const warnings = [];
+    const at = now.toISOString();
+    let result;
     try {
-      setting = readBackupRetentionPolicy(db);
-    } finally {
-      db.close();
-    }
-    const { policy, warning } = setting;
-    const warnings = warning ? [warning] : [];
-    let receipt;
-    try {
-      receipt = await readVerificationReceipt(receiptPath);
+      const { policy, warning } = readLiveBackupRetentionPolicy(databasePath);
+      if (warning) warnings.push(warning);
+      let receipt;
+      try {
+        receipt = await readVerificationReceipt(receiptPath, { fs });
+      } catch (error) {
+        warnings.push("RECEIPT_UNREADABLE");
+        throw error;
+      }
+
+      // The root runner keeps working in the same directory if its path is renamed.
+      const handle =
+        statePath === null
+          ? null
+          : await fs.open(
+              directory,
+              constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_DIRECTORY,
+            );
+      try {
+        const archiveDirectory =
+          handle === null ? directory : `/proc/self/fd/${handle.fd}`;
+        if (
+          handle !== null &&
+          (await fs.realpath(archiveDirectory)) !== directory
+        )
+          throw new Error(
+            "Backup directory must be an absolute path without symbolic links",
+          );
+        result = await applyBackupRetention({
+          directory: archiveDirectory,
+          policy,
+          now,
+          latestVerifiedArchive: receipt?.archive,
+          fs,
+          deleted,
+          warnings,
+        });
+      } finally {
+        await handle?.close();
+      }
     } catch (error) {
+      result = undefined;
+      warnings.push("PRUNE_FAILED");
       log(
         JSON.stringify({
-          event: "backup.retention_skipped",
-          warnings: [...warnings, "RECEIPT_UNREADABLE"],
+          event: "backup.retention_failed",
           message: error.message,
+          deleted,
+          warnings,
         }),
       );
-      return;
     }
-
-    const result = await applyBackupRetention({
-      directory,
-      policy,
-      now,
-      latestVerifiedArchive: receipt?.archive,
-    });
-    log(
-      JSON.stringify({
-        event: "backup.retention",
-        configured: result.configured,
-        deleted: result.deleted,
-        alreadyAbsent: result.alreadyAbsent,
-        keptCount: result.keep.length,
-        keptBytes: result.keptBytes,
-        deletedBytes: result.deletedBytes,
-        warnings: [...warnings, ...result.warnings],
-      }),
-    );
-  } catch (error) {
-    log(
-      JSON.stringify({
-        event: "backup.retention_failed",
-        message: error.message,
-      }),
-    );
-    process.exitCode = 1;
+    const summary = {
+      at,
+      deleted,
+      warnings,
+      status: result ? "succeeded" : "failed",
+    };
+    try {
+      if (statePath !== null) await writeState(statePath, summary, fs);
+    } catch (error) {
+      warnings.push("STATE_WRITE_FAILED");
+      log(
+        JSON.stringify({
+          event: "backup.retention_failed",
+          message: error.message,
+          deleted,
+          warnings,
+        }),
+      );
+      return { ...summary, status: "failed" };
+    }
+    if (result) {
+      log(
+        JSON.stringify({
+          event: "backup.retention",
+          configured: result.configured,
+          deleted,
+          alreadyAbsent: result.alreadyAbsent,
+          keptCount: result.keep.length,
+          keptBytes: result.keptBytes,
+          deletedBytes: result.deletedBytes,
+          warnings,
+        }),
+      );
+    }
+    return { ...result, ...summary };
   }
 }

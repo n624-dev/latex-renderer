@@ -561,6 +561,46 @@ for (const action of ["create", "verify"] as const)
     .command(action)
     .action(async () => print(await request("POST", `/backups/${action}`)));
 
+const retention = backup
+  .command("retention")
+  .description(humanText("showOrPreviewBackupRetention"))
+  .option("--max-age-days <days>", humanText("backupRetentionMaxAge"))
+  .option(
+    "--max-generations <count>",
+    humanText("backupRetentionMaxGenerations"),
+  )
+  .option("--max-total-bytes <bytes>", humanText("backupRetentionMaxBytes"))
+  .action(async (options: BackupRetentionOptions) => {
+    const path = "/backups/retention";
+    const preview = Object.keys(options).length > 0;
+    if (preview) parseBackupRetentionLimits(options);
+    print(
+      await request("GET", preview ? withQuery(path, { ...options }) : path),
+    );
+  });
+retention
+  .command("set")
+  .description(humanText("confirmBackupRetention"))
+  .configureHelp({ showGlobalOptions: true })
+  .requiredOption("--reason <reason>", humanText("reasonRecordedInTheAuditLog"))
+  .requiredOption("--yes")
+  .action(async (_options: unknown, command: Command) => {
+    const options = command.optsWithGlobals<
+      BackupRetentionOptions & { reason: string }
+    >();
+    const result = await request("POST", "/backups/retention", {
+      ...parseBackupRetentionLimits(options),
+      reason: options.reason,
+    });
+    print(result);
+    if (asRecord(asRecord(result).prune).status === "failed")
+      throw new AppError(
+        "BACKUP_PRUNE_FAILED",
+        humanText("backupRetentionSavedPruneFailed"),
+        503,
+      );
+  });
+
 program
   .command("audit")
   .command("list")
@@ -867,6 +907,37 @@ function withQuery(
 ): string {
   const query = new URLSearchParams(filters).toString();
   return query ? `${path}?${query}` : path;
+}
+
+interface BackupRetentionOptions {
+  maxAgeDays?: string;
+  maxGenerations?: string;
+  maxTotalBytes?: string;
+}
+
+function parseBackupRetentionLimits(options: BackupRetentionOptions) {
+  const { maxAgeDays, maxGenerations, maxTotalBytes } = options;
+  const days = Number(maxAgeDays);
+  const generations = Number(maxGenerations);
+  const bytes = Number(maxTotalBytes);
+  if (
+    ![maxAgeDays, maxGenerations, maxTotalBytes].every(
+      (value) => value !== undefined && /^\d+$/.test(value),
+    ) ||
+    ![days, generations, bytes].every(Number.isSafeInteger) ||
+    days < 1 ||
+    generations < 1
+  )
+    throw new AppError(
+      "INVALID_OPTION",
+      humanText("backupRetentionLimitsRequired"),
+      400,
+    );
+  return {
+    maxAgeDays: days,
+    maxGenerations: generations,
+    maxTotalBytes: bytes,
+  };
 }
 
 async function request(
