@@ -40,14 +40,14 @@ Teilen Sie der Administration bei Rückfragen mit, ob Registrierung, Anmeldung, 
 
 > [!DETAILS] Werkzeuge und Details für die Entwicklung
 >
-> | Kategorie | Werkzeuge |
-> | --- | --- |
-> | Profil | `get_profile` |
-> | Quelle | `create_source`, `update_source_file`, `delete_source_file`, `begin_source_upload`, `upload_source_chunk`, `finalize_source_upload`, `create_source_ref` |
+> | Kategorie             | Werkzeuge                                                                                                                                                                                                             |
+> | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+> | Profil                | `get_profile`                                                                                                                                                                                                         |
+> | Quelle                | `create_source`, `update_source_file`, `delete_source_file`, `begin_source_upload`, `upload_source_chunk`, `finalize_source_upload`, `create_source_ref`                                                              |
 > | Gespeicherte Projekte | `list_projects`, `get_project`, `get_project_revision_jobs`, `create_project`, `rename_project`, `delete_project`, `attach_project_revision`, `update_project_file`, `delete_project_file`, `render_project_revision` |
-> | Rendern | `create_render`, `retry_render`, `retry_svg_render`, `get_render_status`, `cancel_render`, `delete_render` |
-> | Prüfung | `get_render_diagnostics`, `get_render_preview`, `get_render_artifacts` |
-> | Umgebung | `get_renderer_capabilities`, `check_packages`, `search_packages`, `check_fonts`, `search_fonts` |
+> | Rendern               | `create_render`, `retry_render`, `retry_svg_render`, `get_render_status`, `cancel_render`, `delete_render`                                                                                                            |
+> | Prüfung               | `get_render_diagnostics`, `get_render_preview`, `get_render_artifacts`                                                                                                                                                |
+> | Umgebung              | `get_renderer_capabilities`, `check_packages`, `search_packages`, `check_fonts`, `search_fonts`                                                                                                                       |
 >
 > - **Identität und Berechtigungen.** `get_profile` gibt nur eine stabile, undurchsichtige Benutzerkennung zurück. Sie bleibt nach Tokenerneuerung oder Neuverbindung erhalten und enthält weder E-Mail-Adresse noch Anzeigenamen. Jedes Werkzeug gibt seine OAuth-Berechtigungsbereiche in der Auflistung an und prüft sie bei der Ausführung.
 > - **Quellen erstellen und Grenzen**
@@ -87,18 +87,24 @@ Unveränderte Einträge des heruntergeladenen Installationsprogramms können Sie
 
 ## Werkzeuge von Local MCP {#local-mcpのツール}
 
-| Werkzeug | Vorgang |
-| --- | --- |
-| `upload_source` | Ordner oder ZIP als Eingabe vorbereiten |
-| `create_render_job` | Auftrag aus `sourceId + entrypoint` erstellen und optional SVG in `outputs` anfordern |
-| `render_project` | Eingabe vorbereiten, umwandeln und herunterladen in einem Aufruf, optional SVG über `outputs` |
-| `list_projects` / `get_project` / `get_project_revision_jobs` | Projekte, Revisionen und Auftragsverlauf abrufen |
-| `create_project` / `rename_project` / `delete_project` | Gespeicherte Projekte verwalten |
-| `attach_project_revision` / `render_project_revision` | Hochgeladene Eingabe speichern und Auftrag aus einer festen Revision erstellen |
-| `get_render_status` | Auftragsstatus abfragen |
-| `download_render_artifacts` | PDF, SVGs, Protokolle und strukturierte Fehler herunterladen |
-| `cancel_render` | Aktiven Auftrag abbrechen |
-| `delete_render` | Abgeschlossenen Auftrag löschen |
+| Werkzeug                                                                                                   | Vorgang                                                                                                                               |
+| ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `upload_source`                                                                                            | Ordner oder ZIP als Eingabe vorbereiten                                                                                               |
+| `create_render_job`                                                                                        | Auftrag aus `sourceId + entrypoint` erstellen und optional SVG in `outputs` anfordern                                                 |
+| `render_project`                                                                                           | Eingabe vorbereiten, umwandeln und herunterladen in einem Aufruf, optional SVG über `outputs`                                         |
+| `list_projects` / `get_project` / `get_project_revision_jobs`                                              | Projekte, Revisionen und Auftragsverlauf abrufen                                                                                      |
+| `create_project` / `rename_project` / `delete_project`                                                     | Gespeicherte Projekte verwalten                                                                                                       |
+| `attach_project_revision` / `render_project_revision`                                                      | Hochgeladene Eingabe speichern und Auftrag aus einer festen Revision erstellen                                                        |
+| `get_render_status`                                                                                        | Auftragsstatus abfragen                                                                                                               |
+| `get_renderer_capabilities` / `list_authoring_profiles`                                                    | Renderumgebung und Autorenprofile abrufen (`render:create`)                                                                           |
+| `check_packages` / `search_packages` / `check_fonts` / `search_fonts`                                      | Pakete und Schriftarten prüfen oder suchen (`render:create`)                                                                          |
+| `check_document_requirements` / `probe_document_requirements`                                              | Dokumentanforderungen prüfen oder einen Testlauf einreihen (`render:create`)                                                          |
+| `retry_render` / `retry_svg_render`                                                                        | Den gesamten Auftrag oder nur die SVG-Stufe erneut ausführen (`render:create`)                                                        |
+| `get_render_diagnostics` / `read_render_log` / `get_render_manifest`                                       | Diagnosen, Protokollausschnitte und Manifest eines eigenen Auftrags lesen (`render:read:own`)                                         |
+| `get_render_preview_crop` / `get_render_preview_sheet` / `locate_render_source` / `compare_render_quality` | PDF-Ausschnitte und Seitenübersichten abrufen, Positionen mit SyncTeX suchen oder PDF-Prüfberichte vergleichen (`render:pdf:inspect`) |
+| `download_render_artifacts`                                                                                | PDF, SVGs, Protokolle und strukturierte Fehler herunterladen                                                                          |
+| `cancel_render`                                                                                            | Aktiven Auftrag abbrechen                                                                                                             |
+| `delete_render`                                                                                            | Abgeschlossenen Auftrag löschen                                                                                                       |
 
 > [!DETAILS] Konventionen der Local-MCP-Werkzeuge
 >
