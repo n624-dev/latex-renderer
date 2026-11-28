@@ -11,6 +11,7 @@ import {
   createSourceReference,
   assertUserStorageQuota,
   type JobRow,
+  type RenderIdentityRow,
 } from "@latex-renderer/database";
 import {
   defaultRenderEngine,
@@ -18,6 +19,7 @@ import {
   type RenderOutput,
 } from "@latex-renderer/contracts";
 import { validateEntrypointPath } from "@latex-renderer/zip-validation";
+import type { JobTicketAuthScope } from "@latex-renderer/ticket";
 import type { AdminDependencies, AppActor } from "../types.js";
 import { artifactContentType, retentionExpiresAt } from "./artifacts.js";
 
@@ -336,7 +338,7 @@ export class AdminJobsService {
         sha256: input.sha256,
         nonce,
       }),
-      config.tickets.issueJob(subject),
+      config.tickets.issueJob(subject, "render:create"),
     ]);
     try {
       this.deps.database.transaction(() => {
@@ -728,15 +730,18 @@ export class AdminJobsService {
       );
     const jobId = newId("job"),
       timestamp = nowIso(),
-      jobTicket = await this.renderTicketConfig().tickets.issueJob({
-        jobId,
-        userId: identity.user_id,
-        serviceAccountId: identity.service_account_id,
-        apiKeyId: identity.api_key_id,
-        userSecurityVersion: identity.user_security_version,
-        serviceAccountSecurityVersion:
-          identity.service_account_security_version,
-      });
+      jobTicket = await this.renderTicketConfig().tickets.issueJob(
+        {
+          jobId,
+          userId: identity.user_id,
+          serviceAccountId: identity.service_account_id,
+          apiKeyId: identity.api_key_id,
+          userSecurityVersion: identity.user_security_version,
+          serviceAccountSecurityVersion:
+            identity.service_account_security_version,
+        },
+        "render:create",
+      );
     let createdProjectRevisionId: string | undefined;
     try {
       this.deps.database.transaction(() => {
@@ -982,23 +987,63 @@ export class AdminJobsService {
     actor: AppActor,
     id: string,
     key: string,
-  ): Promise<{ id: string; reused: boolean }> {
+    options?: { accessTicket: true },
+  ) {
     const row = this.deps.database.jobs.getVisible(id);
     if (!row) throw new AppError("JOB_NOT_FOUND", "Job does not exist", 404);
     const fs = await statfs(this.deps.storageRoot);
     if (fs.bavail * fs.bsize < this.deps.minFreeStorageBytes)
       throw new AppError("STORAGE_PRESSURE", "Insufficient free storage", 503);
-    return new SvgRetryOperations(this.deps.database, {
+    const config = options?.accessTicket
+      ? this.renderTicketConfig()
+      : undefined;
+    if (config) this.assertJobAccessAvailable(row);
+    const identity =
+      config && this.requireActiveJobIdentity(row, "render:create");
+    const retried = new SvgRetryOperations(this.deps.database, {
       ...this.deps,
       runtimeImage: process.env.RENDERER_IMAGE,
     }).retry({ userId: row.user_id, type: actor.type, id: actor.id }, id, key);
+    const access =
+      config && identity
+        ? await this.issueAccessTicketForIdentity(
+            actor,
+            retried.id,
+            identity,
+            config,
+          )
+        : undefined;
+    return { ...retried, access };
   }
 
   async retry(
     actor: AppActor,
     sourceJobId: string,
     idempotencyKey: string,
-  ): Promise<{ id: string; retryOfJobId: string; reused: boolean }> {
+    options?: { accessTicket: true },
+  ) {
+    const config = options?.accessTicket
+      ? this.renderTicketConfig()
+      : undefined;
+    const { id, reused, identity } = await this.queueRetry(
+      actor,
+      sourceJobId,
+      idempotencyKey,
+      config !== undefined,
+    );
+    const access =
+      config === undefined
+        ? undefined
+        : await this.issueAccessTicketForIdentity(actor, id, identity, config);
+    return { id, retryOfJobId: sourceJobId, reused, access };
+  }
+
+  private async queueRetry(
+    actor: AppActor,
+    sourceJobId: string,
+    idempotencyKey: string,
+    accessTicket: boolean,
+  ) {
     if (idempotencyKey.length < 16 || idempotencyKey.length > 200)
       throw new AppError(
         "IDEMPOTENCY_KEY_REQUIRED",
@@ -1007,6 +1052,25 @@ export class AdminJobsService {
       );
     const keyHash = createHash("sha256").update(idempotencyKey).digest("hex"),
       requestHash = createHash("sha256").update(sourceJobId).digest("hex");
+    const replay = (id: string) => {
+      const row = this.deps.database.jobs.getVisible(id);
+      if (row === undefined)
+        throw new AppError(
+          "IDEMPOTENT_RESOURCE_GONE",
+          "The idempotent Retry Job no longer exists",
+          410,
+        );
+      if (accessTicket) {
+        if (row.user_id !== actor.userId)
+          throw new AppError("JOB_NOT_FOUND", "Job does not exist", 404);
+        this.assertJobAccessAvailable(row);
+      }
+      return {
+        id,
+        reused: true,
+        identity: this.requireActiveJobIdentity(row, "render:create"),
+      };
+    };
     const existing = this.deps.database.security.idempotency(
       actor.type,
       actor.id,
@@ -1021,19 +1085,7 @@ export class AdminJobsService {
           "Idempotency-Key was reused with another job",
           409,
         );
-      if (
-        this.deps.database.jobs.getVisible(existing.resource_id) === undefined
-      )
-        throw new AppError(
-          "IDEMPOTENT_RESOURCE_GONE",
-          "The idempotent Retry Job no longer exists",
-          410,
-        );
-      return {
-        id: existing.resource_id,
-        retryOfJobId: sourceJobId,
-        reused: true,
-      };
+      return replay(existing.resource_id);
     }
     if (this.deps.database.jobs.getVisible(sourceJobId) === undefined)
       throw new AppError("JOB_NOT_FOUND", "Job does not exist", 404);
@@ -1063,8 +1115,13 @@ export class AdminJobsService {
       );
     const id = newId("job");
     try {
-      const timestamp = nowIso();
-      this.deps.database.transaction(() => {
+      return this.deps.database.transaction(() => {
+        const timestamp = nowIso();
+        const identity = this.requireActiveJobIdentity(
+          source,
+          "render:create",
+          timestamp,
+        );
         this.assertAccepting(source.user_id, source.service_account_id, 0);
         const currentSource = this.deps.database.sources.getReady(
           sourceId,
@@ -1103,8 +1160,8 @@ export class AdminJobsService {
           result: "success",
           metadata: { retryOfJobId: sourceJobId },
         });
+        return { id, reused: false, identity };
       });
-      return { id, retryOfJobId: sourceJobId, reused: false };
     } catch (error) {
       const raced = this.deps.database.security.idempotency(
         actor.type,
@@ -1114,11 +1171,7 @@ export class AdminJobsService {
         nowIso(),
       );
       if (raced?.resource_id && raced.request_hash === requestHash)
-        return {
-          id: raced.resource_id,
-          retryOfJobId: sourceJobId,
-          reused: true,
-        };
+        return replay(raced.resource_id);
       throw error;
     }
   }
@@ -1283,7 +1336,7 @@ export class AdminJobsService {
           sha256: row.source_sha256,
           nonce,
         }),
-        config.tickets.issueJob(subject),
+        config.tickets.issueJob(subject, "render:create"),
       ]);
     return {
       jobId,
@@ -1317,15 +1370,18 @@ export class AdminJobsService {
       );
     return {
       jobId,
-      jobTicket: await this.renderTicketConfig().tickets.issueJob({
-        jobId,
-        userId: identity.user_id,
-        serviceAccountId: identity.service_account_id,
-        apiKeyId: identity.api_key_id,
-        userSecurityVersion: identity.user_security_version,
-        serviceAccountSecurityVersion:
-          identity.service_account_security_version,
-      }),
+      jobTicket: await this.renderTicketConfig().tickets.issueJob(
+        {
+          jobId,
+          userId: identity.user_id,
+          serviceAccountId: identity.service_account_id,
+          apiKeyId: identity.api_key_id,
+          userSecurityVersion: identity.user_security_version,
+          serviceAccountSecurityVersion:
+            identity.service_account_security_version,
+        },
+        "render:create",
+      ),
       ...(row.project_revision_id === null
         ? {}
         : { projectRevisionId: row.project_revision_id }),
@@ -1350,10 +1406,16 @@ export class AdminJobsService {
     return this.issueAccessTicketForRow(actor, row);
   }
 
-  private async issueAccessTicketForRow(
-    actor: AppActor,
-    row: JobRow,
-  ): Promise<{ jobId: string; jobTicket: string; expiresAt: string }> {
+  private issueAccessTicketForRow(actor: AppActor, row: JobRow) {
+    this.assertJobAccessAvailable(row);
+    return this.issueAccessTicketForIdentity(
+      actor,
+      row.id,
+      this.requireActiveJobIdentity(row, "render:read:own"),
+    );
+  }
+
+  private assertJobAccessAvailable(row: JobRow): void {
     if (["deleted", "deleting", "expired"].includes(row.status))
       throw new AppError("JOB_UNAVAILABLE", "Job is no longer available", 410);
     if (
@@ -1367,38 +1429,72 @@ export class AdminJobsService {
         "Job artifact retention has expired",
         410,
       );
+  }
+
+  private requireActiveJobIdentity(
+    row: JobRow,
+    scope: "render:create" | "render:read:own",
+    timestamp = nowIso(),
+  ): RenderIdentityRow & { authScope: JobTicketAuthScope } {
     const identity = this.deps.database.apiKeys.activeJobIdentity(
       row.api_key_id,
-      nowIso(),
+      timestamp,
     );
     if (
-      identity === undefined ||
-      identity.user_id !== row.user_id ||
-      identity.service_account_id !== row.service_account_id
-    )
-      throw new AppError(
-        "JOB_IDENTITY_REVOKED",
-        "Job access is no longer authorized",
-        403,
-      );
+      identity !== undefined &&
+      identity.user_id === row.user_id &&
+      identity.service_account_id === row.service_account_id
+    ) {
+      const scopes: unknown = JSON.parse(identity.scopes_json);
+      if (Array.isArray(scopes)) {
+        if (scopes.includes(scope) || scopes.includes("admin:*"))
+          return { ...identity, authScope: scope };
+        // Browser and Admin access to Jobs created for a create-only target.
+        if (scope === "render:read:own" && scopes.includes("render:create"))
+          return { ...identity, authScope: "render:create" };
+        if (
+          scopes.includes("oauth:mcp") &&
+          this.deps.database.remoteMcp.principal(row.user_id)?.api_key_id ===
+            identity.api_key_id
+        )
+          return { ...identity, authScope: "oauth:mcp" };
+      }
+    }
+    throw new AppError(
+      "JOB_IDENTITY_REVOKED",
+      "Job access is no longer authorized",
+      403,
+    );
+  }
+
+  private async issueAccessTicketForIdentity(
+    actor: AppActor,
+    jobId: string,
+    identity: RenderIdentityRow & { authScope: JobTicketAuthScope },
+    config = this.renderTicketConfig(),
+  ) {
     const expiresAt = new Date(Date.now() + 1_800_000).toISOString();
-    const jobTicket = await this.renderTicketConfig().tickets.issueJob({
-      jobId: row.id,
-      userId: identity.user_id,
-      serviceAccountId: identity.service_account_id,
-      apiKeyId: identity.api_key_id,
-      userSecurityVersion: identity.user_security_version,
-      serviceAccountSecurityVersion: identity.service_account_security_version,
-    });
+    const jobTicket = await config.tickets.issueJob(
+      {
+        jobId,
+        userId: identity.user_id,
+        serviceAccountId: identity.service_account_id,
+        apiKeyId: identity.api_key_id,
+        userSecurityVersion: identity.user_security_version,
+        serviceAccountSecurityVersion:
+          identity.service_account_security_version,
+      },
+      identity.authScope,
+    );
     this.deps.database.audit({
       actorType: actor.type,
       actorId: actor.id,
       action: "web.job_ticket.issued",
       targetType: "job",
-      targetId: row.id,
+      targetId: jobId,
       result: "success",
       metadata: { expiresAt },
     });
-    return { jobId: row.id, jobTicket, expiresAt };
+    return { jobId, jobTicket, expiresAt };
   }
 }
