@@ -76,6 +76,22 @@ APT で新規構築できるのは、`systemd` が動作する単一の Debian 1
 - **Web・Remote MCP の利用者**：管理画面の**ユーザー**から利用者を作成し、ログイン方式に対応する識別情報を登録して Web アプリの URL を案内します。
 - **CLI・Local MCP・HTTP API の利用者**：管理画面で利用者に紐づく**サービスアカウント**を作成し、**APIキー → APIキーを発行**から `render:create` と `render:read:own` を付けたレンダリングキー（`lrk_...`）を発行して安全な経路で渡します。
 
+### 発行済み API キーのシークレットを受け取れなかった場合
+
+発行が完了していても、一度だけ表示されるシークレットが利用者に届かなかった場合は、発行済みのキーを失効させ、同じサービスアカウントに必要なスコープで新しいキーを発行します。
+
+管理 CLI では、発行済みのキー ID、サービスアカウント、スコープを確認してから、失効と新規発行を行います。次はレンダリングキーの例です。ID、名前、スコープは実際の値に置き換えてください。
+
+```bash
+latex-render-admin api-keys list --query render-client
+latex-render-admin api-keys get KEY_ID
+latex-render-admin api-keys revoke KEY_ID --yes
+latex-render-admin api-keys create --service-account SERVICE_ACCOUNT_ID \
+  --name render-client --scope render:create render:read:own
+```
+
+管理画面では、`/admin/` の **APIキー**を開き、名前とプレフィックスで対象のキーを探します。**詳細**でキー ID、サービスアカウント、スコープを確認し、その行の**失効**を押して確認画面でも**失効**を押します。続けて **APIキーを発行**を開き、サービスアカウント、キーの種類、必要なスコープを選び、名前を入力して**発行**を押します。**コピーして閉じる**でシークレットを控え、安全な経路で利用者に渡します。
+
 ## 更新とロールバック
 
 ### アプリケーションを更新する

@@ -149,7 +149,7 @@ describe("administrator Web render jobs", () => {
       publicOrigin: "https://latex.example.com",
       allowedOrigins: new Set(),
       writeEnabled: true,
-      storageRoot: "/tmp",
+      storageRoot: process.cwd(),
       rendererVersion: "test",
       maxOutputBytes: 1,
       maxQueueLength: 5,
@@ -325,6 +325,14 @@ describe("administrator Web render jobs", () => {
       jobTicket: string;
     };
     expect(sourceJobValue).not.toHaveProperty("uploadTicket");
+    for (const scope of ["status", "download"] as const) {
+      await expect(
+        tickets.verify(sourceJobValue.jobTicket, scope, sourceJobValue.jobId),
+      ).resolves.toMatchObject({
+        api_key_id: "key_web",
+        auth_scope: "render:create",
+      });
+    }
     expect(database.jobs.get(sourceJobValue.jobId)).toMatchObject({
       status: "queued",
       source_id: sourceTicket.sourceId,
@@ -351,7 +359,10 @@ describe("administrator Web render jobs", () => {
     expect(renewedValue.jobId).toBe(sourceJobValue.jobId);
     await expect(
       tickets.verify(renewedValue.jobTicket, "status", sourceJobValue.jobId),
-    ).resolves.toMatchObject({ api_key_id: "key_web" });
+    ).resolves.toMatchObject({
+      api_key_id: "key_web",
+      auth_scope: "render:create",
+    });
     database.raw
       .prepare("UPDATE api_keys SET revoked_at=? WHERE id='key_web'")
       .run(now);
