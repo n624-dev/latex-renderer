@@ -62,6 +62,7 @@ jobs:
       mode: ${{ steps.plan.outputs.mode }}
       digest: ${{ steps.plan.outputs.digest }}
       architectures: ${{ steps.plan.outputs.architectures }}
+      validation-attempt: ${{ steps.plan.outputs.validation_attempt }}
       amd64-digest: ${{ steps.plan.outputs.amd64_digest }}
       arm64-digest: ${{ steps.plan.outputs.arm64_digest }}
     steps:
@@ -115,6 +116,7 @@ jobs:
       TEXLIVE_INSTALLER_SHA512: ${{ needs.validate-source.outputs.installer }}
       TEXLIVE_DATABASE_SHA512: ${{ needs.validate-source.outputs.database }}
       MIRROR_SNAPSHOT_ID: ${{ needs.validate-source.outputs.snapshot-id }}
+      BASE_VALIDATION_ATTEMPT: ${{ needs.validate-source.outputs.validation-attempt }}
       EXISTING_MANIFEST_DIGEST: ${{ matrix.architecture == 'arm64' && needs.validate-source.outputs.arm64-digest || needs.validate-source.outputs.amd64-digest }}
       REQUESTED_DATE: ${{ github.event.inputs.texlive_date || 'latest' }}
       PUBLISH_REQUESTED: ${{ github.event_name == 'schedule' || inputs.publish == true }}
@@ -294,8 +296,11 @@ jobs:
         if: needs.validate-source.outputs.mode != 'legacy'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: native-base-${{ matrix.architecture }}-${{ github.run_id }}-${{ github.run_attempt }}
+          # A failed native job can be retried without rerunning source validation
+          # or the other native job. A fresh source validation uses a new name.
+          name: native-base-${{ matrix.architecture }}-${{ github.run_id }}-${{ needs.validate-source.outputs.validation-attempt }}
           path: ${{ runner.temp }}/native-receipt/
+          overwrite: true
           retention-days: 1
           if-no-files-found: error
 
@@ -351,7 +356,7 @@ jobs:
           node-version: "26.13.0"
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          pattern: native-base-*-${{ github.run_id }}-${{ github.run_attempt }}
+          pattern: native-base-*-${{ github.run_id }}-${{ needs.validate-source.outputs.validation-attempt }}
           path: ${{ runner.temp }}/receipts
           merge-multiple: true
           digest-mismatch: error
@@ -361,6 +366,7 @@ jobs:
           SNAPSHOT_DATE: ${{ needs.validate-source.outputs.date }}
           TEXLIVE_REPOSITORY: ${{ needs.validate-source.outputs.repository }}
           TEXLIVE_INSTALLER_SHA512: ${{ needs.validate-source.outputs.installer }}
+          BASE_VALIDATION_ATTEMPT: ${{ needs.validate-source.outputs.validation-attempt }}
           GHCR_TOKEN: ${{ github.token }}
           GHCR_ACTOR: ${{ github.actor }}
         run: node deploy/scripts/ghcr-base-publication.mjs publish "$RUNNER_TEMP/receipts"

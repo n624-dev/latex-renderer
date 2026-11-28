@@ -662,6 +662,14 @@ it("separates native validation, immutable publication, anonymous pulls and late
   expect(daily).toContain("outputs.mode != 'legacy'");
   expect(daily).toContain("retention-days: 1");
   expect(daily).toContain(
+    "validation-attempt: ${{ steps.plan.outputs.validation_attempt }}",
+  );
+  const receiptScope =
+    "${{ github.run_id }}-${{ needs.validate-source.outputs.validation-attempt }}";
+  for (const architecture of ["${{ matrix.architecture }}", "*"])
+    expect(daily).toContain(`native-base-${architecture}-${receiptScope}`);
+  expect(daily).toContain("overwrite: true");
+  expect(daily).toContain(
     "if: always() && needs.validate-source.result == 'success'",
   );
   expect(daily).toMatch(
