@@ -11,6 +11,37 @@ type MenuTerminal = {
 
 export type AdminMenuInvocation = { args: string[]; secret?: string };
 
+function tokenizeList(value: string): string[] | undefined {
+  const items: string[] = [];
+  let item: string | undefined;
+  let quote: string | undefined;
+  let escaped = false;
+  for (const character of value) {
+    if (escaped) {
+      item = (item ?? "") + character;
+      escaped = false;
+    } else if (character === "\\" && quote !== "'") {
+      escaped = true;
+    } else if (character === quote) {
+      quote = undefined;
+    } else if (
+      quote === undefined &&
+      (character === '"' || character === "'")
+    ) {
+      quote = character;
+      item ??= "";
+    } else if (quote === undefined && /\s/.test(character)) {
+      if (item !== undefined) items.push(item);
+      item = undefined;
+    } else {
+      item = (item ?? "") + character;
+    }
+  }
+  if (quote !== undefined || escaped) return undefined;
+  if (item !== undefined) items.push(item);
+  return items;
+}
+
 export async function openAdminMenu(
   program: Command,
 ): Promise<AdminMenuInvocation | undefined> {
@@ -70,6 +101,8 @@ export async function chooseAdminInvocation(
         back: "戻る",
         optional: "任意",
         required: "値を入力してください。\n",
+        invalidList:
+          "引用符が閉じていないか、末尾のバックスラッシュの後に文字がありません。\n",
         advanced: "任意の設定を指定しますか？ [y/N] ",
         confirm: "この操作を実行しますか？ [y/N] ",
         apiKey: "管理用APIキー（非表示）: ",
@@ -81,6 +114,7 @@ export async function chooseAdminInvocation(
         back: "Back",
         optional: "optional",
         required: "Enter a value.\n",
+        invalidList: "Unclosed quote or trailing backslash.\n",
         advanced: "Set optional fields? [y/N] ",
         confirm: "Run this operation? [y/N] ",
         apiKey: "Admin API key (hidden): ",
@@ -117,13 +151,25 @@ export async function chooseAdminInvocation(
       if (selected !== undefined) return selected;
     }
   }
-  async function field(label: string, mandatory: boolean): Promise<string> {
+  async function field(
+    label: string,
+    mandatory: boolean,
+    variadic: boolean,
+  ): Promise<string[]> {
+    const prompt = `${label}${mandatory ? "" : ` (${message.optional})`}: `;
     for (;;) {
-      const value = await ask(
-        `${label}${mandatory ? "" : ` (${message.optional})`}: `,
-      );
-      if (value || !mandatory) return value;
-      terminal.write(message.required);
+      const value = await terminal.ask(prompt);
+      if (value.trim() === "") {
+        if (!mandatory) return [];
+        terminal.write(message.required);
+        continue;
+      }
+      if (!variadic) return [value];
+
+      const items = tokenizeList(value);
+      if (items === undefined) terminal.write(message.invalidList);
+      else if (items.includes("")) terminal.write(message.required);
+      else return items;
     }
   }
   const selection = await select(program, []);
@@ -132,9 +178,7 @@ export async function chooseAdminInvocation(
 
   const positions: string[] = [];
   for (const item of selected.registeredArguments) {
-    const value = await field(item.name(), item.required);
-    if (value)
-      positions.push(...(item.variadic ? value.split(/\s+/) : [value]));
+    positions.push(...(await field(item.name(), item.required, item.variadic)));
   }
   const flags: string[] = [];
   let secretPrompt: string | undefined;
@@ -157,10 +201,10 @@ export async function chooseAdminInvocation(
       flags.push(flag);
       continue;
     }
-    const value = await field(label, option.mandatory);
-    if (!value) continue;
+    const values = await field(label, option.mandatory, option.variadic);
+    const [value] = values;
+    if (value === undefined) continue;
     if (option.variadic) {
-      const values = value.split(/\s+/);
       if (values.some((item) => item.startsWith("-")))
         throw new AppError(
           "INVALID_OPTION",
@@ -168,8 +212,11 @@ export async function chooseAdminInvocation(
           400,
         );
       flags.push(flag, ...values);
-    } else {
+    } else if (option.long !== undefined) {
       flags.push(`${flag}=${value}`);
+    } else {
+      // An ancestor command can consume a separate value that looks like a flag.
+      flags.push(`${flag}${value}`);
     }
   }
   if (!(await confirm(message.confirm))) return undefined;
