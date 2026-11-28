@@ -2,6 +2,8 @@ name: security
 
 on:
   pull_request:
+  merge_group:
+    types: [checks_requested]
   push:
     branches: [main]
   schedule:
@@ -12,11 +14,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: security-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: security-${{ github.workflow }}-${{ github.event_name == 'merge_group' && format('merge-group-{0}', github.run_id) || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'merge_group' }}
 
 jobs:
   codeql:
+    name: CodeQL
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -35,7 +38,11 @@ jobs:
         uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           category: "/language:javascript-typescript"
+          # Follow CodeQL's own workflow for temporary merge-queue refs.
+          upload: ${{ github.event_name == 'merge_group' && 'never' || 'always' }}
   secret-scan:
+    # The pinned Gitleaks action rejects merge_group events.
+    if: github.event_name != 'merge_group'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
