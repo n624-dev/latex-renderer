@@ -41,6 +41,7 @@ import {
 } from "../packages/contracts/src/renderer-relay.js";
 import {
   ProjectDraftOperations,
+  ProjectDocumentState,
   RendererDatabase,
   pdfInspectionUploadDirectory,
   pdfInspectionUploadResult,
@@ -1491,6 +1492,74 @@ describe("Remote MCP HTTP server", () => {
       });
     },
   );
+
+  it("labels Project revision Jobs according to Remote MCP detail access", async () => {
+    const f = await createFixture();
+    const token = issueAccessToken(f.oauth);
+    const identity = { userId: "user_test", scopes: ["mcp"] as const };
+    const { id: projectId } = f.renders.createProject(
+      identity,
+      "Shared history",
+    );
+    const source = await f.renders.createSource(identity, [
+      { path: "main.tex", text: "Shared input" },
+    ]);
+    const { id: revisionId } = f.renders.attachProjectRevision(identity, {
+      projectId,
+      sourceId: source.id,
+      entrypoint: "main.tex",
+      displayName: "Original",
+      originalFilename: "main.tex",
+      outputs: ["pdf"],
+    });
+    const createJob = () =>
+      f.renders.createRender(identity, {
+        sourceId: source.id,
+        entrypoint: "main.tex",
+      });
+    const remoteJob = await createJob();
+    const webJob = await createJob();
+    const web = f.database.webPrincipals.ensure(identity.userId);
+    f.database.raw
+      .prepare("UPDATE jobs SET project_revision_id=? WHERE id IN (?,?)")
+      .run(revisionId, remoteJob.id, webJob.id);
+    f.database.raw
+      .prepare("UPDATE jobs SET service_account_id=?,api_key_id=? WHERE id=?")
+      .run(web.service_account_id, web.api_key_id, webJob.id);
+
+    const call = (id: number, name: string, args: Record<string, unknown>) =>
+      callTool(f.app, token, id, name, args);
+    const remote = await call(1, "get_render_status", { jobId: remoteJob.id });
+    expect(remote.result.structuredContent).toMatchObject({
+      success: true,
+      result: { job: { id: remoteJob.id } },
+    });
+    const webDetail = await call(2, "get_render_status", { jobId: webJob.id });
+    expect(webDetail.result.structuredContent).toMatchObject({
+      error: { code: "JOB_NOT_FOUND" },
+    });
+    const jobs = expect.arrayContaining([
+      expect.objectContaining({
+        id: remoteJob.id,
+        detailAccess: "available",
+      }) as unknown,
+      expect.objectContaining({
+        id: webJob.id,
+        detailAccess: "different_connection",
+      }) as unknown,
+    ]) as unknown;
+    const history = await call(3, "get_project_revision_jobs", {
+      projectId,
+      revisionId,
+    });
+    expect(structuredResult(history)).toMatchObject({
+      page: { items: jobs },
+    });
+    const project = await call(4, "get_project", { projectId });
+    expect(structuredResult(project)).toMatchObject({
+      project: { revisions: [{ id: revisionId, jobs }] },
+    });
+  });
 
   it("keeps document conditions versioned and invalidates changed cleanup plans", async () => {
     const f = await createFixture(),
@@ -4320,6 +4389,108 @@ describe("Remote MCP HTTP server", () => {
       }
     },
   );
+
+  it("redacts content metadata when a Project is logically deleted", async () => {
+    const f = await createFixture();
+    const identity = { userId: "user_test", scopes: ["mcp"] as const };
+    const actor = {
+      userId: identity.userId,
+      type: "oauth",
+      id: identity.userId,
+    };
+    const jobId = await seedCompletedRemoteJob(f, "succeeded");
+    const sourceId = f.database.jobs.get(jobId)?.source_id;
+    const pdf = f.database.artifacts.getDownloadable(jobId, "result.pdf");
+    if (!sourceId || !pdf) throw new Error("Incomplete PDF fixture");
+    const { id: projectId } = f.renders.createProject(
+      identity,
+      "Retired project",
+    );
+    const { id: revisionId } = f.renders.attachProjectRevision(identity, {
+      projectId,
+      sourceId,
+      entrypoint: "main.tex",
+      displayName: "Original",
+      originalFilename: "main.tex",
+      outputs: ["pdf"],
+    });
+    f.database.raw
+      .prepare("UPDATE jobs SET project_revision_id=? WHERE id=?")
+      .run(revisionId, jobId);
+    const state = new ProjectDocumentState(f.database);
+    const condition = { kind: "preserve", basis: "user_specified" } as const;
+    state.updateConditions(actor, projectId, 0, [
+      { ...condition, text: "Record of accepted requirements" },
+    ]);
+    f.database.transaction(() =>
+      state.recordRevisionChange(actor, {
+        projectId,
+        revisionId,
+        parentRevisionId: null,
+        draftVersion: 1,
+        description: "Private revision description",
+      }),
+    );
+    const review = state.recordReview(
+      actor,
+      projectId,
+      {
+        revisionId,
+        jobId,
+        pdfSha256: pdf.sha256,
+        conditionsVersion: 1,
+        guideVersion: null,
+        checks: [
+          {
+            type: "visual",
+            status: "not_checked",
+            note: "Private review note",
+          },
+        ],
+      },
+      24,
+    );
+    state.updateConditions(actor, projectId, 1, [
+      { ...condition, text: "Unreferenced private requirements" },
+    ]);
+
+    f.renders.deleteProject(identity, projectId);
+
+    expect(
+      f.database.raw
+        .prepare("SELECT deleted_at FROM projects WHERE id=?")
+        .get(projectId),
+    ).toMatchObject({ deleted_at: expect.any(String) as unknown });
+    expect(
+      f.database.raw
+        .prepare(
+          "SELECT revision_id,conditions_version,description FROM project_revision_changes WHERE project_id=?",
+        )
+        .all(projectId),
+    ).toEqual([
+      { revision_id: revisionId, conditions_version: 1, description: "" },
+    ]);
+    expect(
+      f.database.raw
+        .prepare(
+          `SELECT job_id,pdf_sha256,conditions_version,
+      json_extract(review_json, '$.checks') AS checks FROM project_pdf_reviews WHERE id=?`,
+        )
+        .get(review.id),
+    ).toEqual({
+      job_id: jobId,
+      pdf_sha256: pdf.sha256,
+      conditions_version: 1,
+      checks: JSON.stringify([{ type: "visual", status: "not_checked" }]),
+    });
+    expect(
+      f.database.raw
+        .prepare(
+          "SELECT version FROM project_document_conditions WHERE project_id=? ORDER BY version",
+        )
+        .all(projectId),
+    ).toEqual([{ version: 1 }]);
+  });
 
   it("keeps the reviewed PDF identity when Job history is deleted", async () => {
     const f = await createFixture();
