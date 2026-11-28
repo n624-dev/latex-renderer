@@ -25,6 +25,8 @@ const english = {
     "TeX environment: reconnecting to Admin API...",
   readTheInitialPasswordFromStandard:
     "read the initial password from standard input, never argv",
+  readTheNewPasswordFromStandard:
+    "read the new password from standard input, never argv",
   choosePasswordWithLoginNameAnd:
     "Choose password with --login-name and --password-stdin, or external with --subject",
   manageTheTexLiveBaseImage:
@@ -71,6 +73,8 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
     texEnvironmentReconnectingToAdminApi: "TeX環境：Admin APIへ再接続中…",
     readTheInitialPasswordFromStandard:
       "初期パスワードは必ず標準入力から読み取る。argvは使用しない",
+    readTheNewPasswordFromStandard:
+      "新しいパスワードは必ず標準入力から読み取る。argvは使用しない",
     choosePasswordWithLoginNameAnd:
       "password は --login-name と --password-stdin、external は --subject と組み合わせて指定",
     manageTheTexLiveBaseImage:
@@ -112,6 +116,7 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
     texEnvironmentReconnectingToAdminApi: "TeX 环境：正在重新连接管理 API…",
     readTheInitialPasswordFromStandard:
       "仅从标准输入读取初始密码，绝不通过 argv",
+    readTheNewPasswordFromStandard: "仅从标准输入读取新密码，绝不通过 argv",
     choosePasswordWithLoginNameAnd:
       "选择 password 并提供 --login-name 和 --password-stdin，或选择 external 并提供 --subject",
     manageTheTexLiveBaseImage: "管理 TeX Live 基础镜像和语言集合",
@@ -151,6 +156,8 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "TeX 환경: Admin API에 다시 연결하는 중…",
     readTheInitialPasswordFromStandard:
       "초기 비밀번호는 반드시 표준 입력으로만 읽고 argv는 사용하지 않음",
+    readTheNewPasswordFromStandard:
+      "새 비밀번호는 반드시 표준 입력으로만 읽고 argv는 사용하지 않음",
     choosePasswordWithLoginNameAnd:
       "password에는 --login-name 및 --password-stdin을, external에는 --subject를 지정하세요",
     manageTheTexLiveBaseImage: "TeX Live 기본 이미지 및 언어 모음 관리",
@@ -196,6 +203,8 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Entorno TeX: Reconectando con la Admin API…",
     readTheInitialPasswordFromStandard:
       "leer la contraseña inicial de la entrada estándar, nunca de argv",
+    readTheNewPasswordFromStandard:
+      "leer la contraseña nueva de la entrada estándar, nunca de argv",
     choosePasswordWithLoginNameAnd:
       "Elija password con --login-name y --password-stdin, o external con --subject",
     manageTheTexLiveBaseImage:
@@ -242,6 +251,8 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Ambiente TeX: A restabelecer a ligação à Admin API…",
     readTheInitialPasswordFromStandard:
       "ler a senha inicial da entrada padrão, nunca de argv",
+    readTheNewPasswordFromStandard:
+      "ler a senha nova da entrada padrão, nunca de argv",
     choosePasswordWithLoginNameAnd:
       "Escolha password com --login-name e --password-stdin, ou external com --subject",
     manageTheTexLiveBaseImage:
@@ -289,6 +300,8 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Environnement TeX : Reconnexion à l’API d’administration…",
     readTheInitialPasswordFromStandard:
       "lire le mot de passe initial sur l’entrée standard, jamais dans argv",
+    readTheNewPasswordFromStandard:
+      "lire le nouveau mot de passe sur l’entrée standard, jamais dans argv",
     choosePasswordWithLoginNameAnd:
       "Choisissez password avec --login-name et --password-stdin, ou external avec --subject",
     manageTheTexLiveBaseImage:
@@ -333,6 +346,8 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "TeX-Umgebung: Verbindung zur Admin API wird wiederhergestellt…",
     readTheInitialPasswordFromStandard:
       "Startpasswort aus der Standardeingabe lesen, niemals aus argv",
+    readTheNewPasswordFromStandard:
+      "neues Passwort aus der Standardeingabe lesen, niemals aus argv",
     choosePasswordWithLoginNameAnd:
       "password mit --login-name und --password-stdin oder external mit --subject wählen",
     manageTheTexLiveBaseImage:
@@ -378,6 +393,8 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Ambiente TeX: Riconnessione all’Admin API…",
     readTheInitialPasswordFromStandard:
       "leggere la password iniziale dallo standard input, mai da argv",
+    readTheNewPasswordFromStandard:
+      "leggere la password nuova dallo standard input, mai da argv",
     choosePasswordWithLoginNameAnd:
       "Scegliere password con --login-name e --password-stdin oppure external con --subject",
     manageTheTexLiveBaseImage:
@@ -422,6 +439,8 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Среда TeX: Повторное подключение к Admin API…",
     readTheInitialPasswordFromStandard:
       "читать начальный пароль из стандартного ввода, никогда не из argv",
+    readTheNewPasswordFromStandard:
+      "читать новый пароль из стандартного ввода, никогда не из argv",
     choosePasswordWithLoginNameAnd:
       "Выберите password с --login-name и --password-stdin или external с --subject",
     manageTheTexLiveBaseImage:
@@ -466,6 +485,8 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "TeX ortamı: Admin API’ye yeniden bağlanılıyor…",
     readTheInitialPasswordFromStandard:
       "ilk parolayı standart girdiden oku, asla argv kullanma",
+    readTheNewPasswordFromStandard:
+      "yeni parolayı standart girdiden oku, asla argv kullanma",
     choosePasswordWithLoginNameAnd:
       "password için --login-name ve --password-stdin, external için --subject seçin",
     manageTheTexLiveBaseImage:
@@ -513,6 +534,8 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Środowisko TeX: Ponowne łączenie z Admin API…",
     readTheInitialPasswordFromStandard:
       "odczytaj początkowe hasło ze standardowego wejścia, nigdy z argv",
+    readTheNewPasswordFromStandard:
+      "odczytaj nowe hasło ze standardowego wejścia, nigdy z argv",
     choosePasswordWithLoginNameAnd:
       "Wybierz password z --login-name i --password-stdin lub external z --subject",
     manageTheTexLiveBaseImage:
@@ -557,6 +580,8 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Prostředí TeXu: Obnovování připojení k Admin API…",
     readTheInitialPasswordFromStandard:
       "načíst počáteční heslo ze standardního vstupu, nikdy z argv",
+    readTheNewPasswordFromStandard:
+      "načíst nové heslo ze standardního vstupu, nikdy z argv",
     choosePasswordWithLoginNameAnd:
       "Zvolte password s --login-name a --password-stdin nebo external s --subject",
     manageTheTexLiveBaseImage:
@@ -602,6 +627,8 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "TeX-omgeving: Opnieuw verbinden met de Admin API…",
     readTheInitialPasswordFromStandard:
       "het eerste wachtwoord uit standaardinvoer lezen, nooit uit argv",
+    readTheNewPasswordFromStandard:
+      "het nieuwe wachtwoord uit standaardinvoer lezen, nooit uit argv",
     choosePasswordWithLoginNameAnd:
       "Kies password met --login-name en --password-stdin of external met --subject",
     manageTheTexLiveBaseImage:
@@ -646,6 +673,8 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "TeX-miljö: Återansluter till Admin API…",
     readTheInitialPasswordFromStandard:
       "läs det första lösenordet från standardindata, aldrig från argv",
+    readTheNewPasswordFromStandard:
+      "läs det nya lösenordet från standardindata, aldrig från argv",
     choosePasswordWithLoginNameAnd:
       "Välj password med --login-name och --password-stdin eller external med --subject",
     manageTheTexLiveBaseImage:
@@ -689,6 +718,8 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "TeX-miljø: Kobler til Admin API på nytt…",
     readTheInitialPasswordFromStandard:
       "les det første passordet fra standardinndata, aldri fra argv",
+    readTheNewPasswordFromStandard:
+      "les det nye passordet fra standardinndata, aldri fra argv",
     choosePasswordWithLoginNameAnd:
       "Velg password med --login-name og --password-stdin eller external med --subject",
     manageTheTexLiveBaseImage:
@@ -733,6 +764,8 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "TeX-miljø: Opretter forbindelse til Admin API igen…",
     readTheInitialPasswordFromStandard:
       "læs den første adgangskode fra standardinput, aldrig fra argv",
+    readTheNewPasswordFromStandard:
+      "læs den nye adgangskode fra standardinput, aldrig fra argv",
     choosePasswordWithLoginNameAnd:
       "Vælg password med --login-name og --password-stdin eller external med --subject",
     manageTheTexLiveBaseImage:
@@ -776,6 +809,8 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "TeX-ympäristö: Yhdistetään uudelleen Admin APIin…",
     readTheInitialPasswordFromStandard:
       "lue alkusalasana vakiosyötteestä, älä koskaan argv:stä",
+    readTheNewPasswordFromStandard:
+      "lue uusi salasana vakiosyötteestä, älä koskaan argv:stä",
     choosePasswordWithLoginNameAnd:
       "Valitse password ja anna --login-name sekä --password-stdin tai valitse external ja anna --subject",
     manageTheTexLiveBaseImage:

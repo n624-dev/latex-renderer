@@ -188,7 +188,7 @@ users
   .requiredOption("--login-name <name>")
   .requiredOption(
     "--password-stdin",
-    humanText("readTheInitialPasswordFromStandard"),
+    humanText("readTheNewPasswordFromStandard"),
   )
   .requiredOption("--reason <reason>")
   .requiredOption("--yes")
