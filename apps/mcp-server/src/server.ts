@@ -6,6 +6,7 @@ import { z } from "zod";
 import {
   authoringGuideToolDefinition,
   rendererApiAuthoringRoutes,
+  pdfInspectionToolResult,
   rendererApiAuthoringTools,
   savedRevisionFileTools,
   type RendererApiAuthoringTool,
@@ -64,8 +65,7 @@ export function createLatexRendererMcpServer(
     "upload_source",
     {
       title: mcpText(locale, "uploadLatexSource"),
-      description:
-        mcpText(locale, "packageALocalProjectDirectoryOr"),
+      description: mcpText(locale, "packageALocalProjectDirectoryOr"),
       inputSchema: uploadSourceInputSchema,
       outputSchema: uploadSourceOutputSchema,
       annotations: {
@@ -82,8 +82,7 @@ export function createLatexRendererMcpServer(
     "create_render_job",
     {
       title: mcpText(locale, "createRenderJobFromSource"),
-      description:
-        mcpText(locale, "createOneRenderJobFromAn"),
+      description: mcpText(locale, "createOneRenderJobFromAn"),
       inputSchema: createRenderJobInputSchema,
       outputSchema: createRenderJobOutputSchema,
       annotations: {
@@ -95,7 +94,13 @@ export function createLatexRendererMcpServer(
     },
     async ({ sourceId, entrypoint, outputs, engine }, { mcpReq: { signal } }) =>
       runTool("create_render_job", () =>
-        operations.createRenderJob(sourceId, entrypoint, outputs, engine, signal),
+        operations.createRenderJob(
+          sourceId,
+          entrypoint,
+          outputs,
+          engine,
+          signal,
+        ),
       ),
   );
 
@@ -103,8 +108,7 @@ export function createLatexRendererMcpServer(
     "render_project",
     {
       title: mcpText(locale, "renderLatexProject"),
-      description:
-        mcpText(locale, "packageAndSecurelyRenderALocal"),
+      description: mcpText(locale, "packageAndSecurelyRenderALocal"),
       inputSchema: renderProjectInputSchema,
       outputSchema: renderProjectOutputSchema,
       annotations: {
@@ -114,17 +118,28 @@ export function createLatexRendererMcpServer(
         openWorldHint: false,
       },
     },
-    async ({ directory, entrypoint, outputs, engine }, { mcpReq: { signal } }) =>
+    async (
+      { directory, entrypoint, outputs, engine },
+      { mcpReq: { signal } },
+    ) =>
       runTool("render_project", () =>
-        operations.renderProject(directory, entrypoint, outputs, engine, signal),
+        operations.renderProject(
+          directory,
+          entrypoint,
+          outputs,
+          engine,
+          signal,
+        ),
       ),
   );
   server.registerTool(
     "get_render_status",
     {
       title: mcpText(locale, "getRenderStatus"),
-      description:
-        mcpText(locale, "getCurrentRenderMetadataPreviewpagecountWhen"),
+      description: mcpText(
+        locale,
+        "getCurrentRenderMetadataPreviewpagecountWhen",
+      ),
       inputSchema: jobInputSchema,
       outputSchema: getRenderStatusOutputSchema,
       annotations: {
@@ -135,14 +150,15 @@ export function createLatexRendererMcpServer(
       },
     },
     async ({ jobId }, { mcpReq: { signal } }) =>
-      runTool("get_render_status", () => operations.getRenderStatus(jobId, signal)),
+      runTool("get_render_status", () =>
+        operations.getRenderStatus(jobId, signal),
+      ),
   );
   server.registerTool(
     "download_render_artifacts",
     {
       title: mcpText(locale, "downloadRenderArtifacts"),
-      description:
-        mcpText(locale, "downloadPdfStructuredErrorsPreviewsAnd"),
+      description: mcpText(locale, "downloadPdfStructuredErrorsPreviewsAnd"),
       inputSchema: downloadArtifactsInputSchema,
       outputSchema: downloadArtifactsOutputSchema,
       annotations: {
@@ -166,8 +182,7 @@ export function createLatexRendererMcpServer(
     "cancel_render",
     {
       title: mcpText(locale, "cancelRender"),
-      description:
-        mcpText(locale, "requestCancellationOfANonTerminal"),
+      description: mcpText(locale, "requestCancellationOfANonTerminal"),
       inputSchema: jobInputSchema,
       outputSchema: cancelRenderOutputSchema,
       annotations: {
@@ -184,8 +199,7 @@ export function createLatexRendererMcpServer(
     "delete_render",
     {
       title: mcpText(locale, "deleteRender"),
-      description:
-        mcpText(locale, "permanentlyDeleteATerminalRenderJob"),
+      description: mcpText(locale, "permanentlyDeleteATerminalRenderJob"),
       inputSchema: jobInputSchema,
       outputSchema: deleteRenderOutputSchema,
       annotations: {
@@ -208,16 +222,28 @@ export function createLatexRendererMcpServer(
       return {
         content: [{ type: "text" as const, text: result.body }],
         structuredContent: guide.outputSchema.parse({
-          success: true, operation: "get_authoring_guide", result,
+          success: true,
+          operation: "get_authoring_guide",
+          result,
         }),
       };
     } catch {
       return {
-        content: [{ type: "text" as const, text: "The bundled authoring guide could not be loaded." }],
+        content: [
+          {
+            type: "text" as const,
+            text: "The bundled authoring guide could not be loaded.",
+          },
+        ],
         isError: true as const,
         structuredContent: guide.outputSchema.parse({
-          success: false, operation: "get_authoring_guide",
-          error: { code: "GUIDE_UNAVAILABLE", message: "The bundled authoring guide could not be loaded.", status: 503 },
+          success: false,
+          operation: "get_authoring_guide",
+          error: {
+            code: "GUIDE_UNAVAILABLE",
+            message: "The bundled authoring guide could not be loaded.",
+            status: 503,
+          },
         }),
       };
     }
@@ -225,13 +251,20 @@ export function createLatexRendererMcpServer(
   return server;
 }
 
-function localTool<Definition extends {
-  title: string;
-  description: string;
-  annotations: object;
-  inputSchema: z.ZodType;
-  outputSchema: z.ZodType;
-}>(definition: Definition): Pick<Definition, "title" | "description" | "annotations" | "inputSchema" | "outputSchema"> {
+function localTool<
+  Definition extends {
+    title: string;
+    description: string;
+    annotations: object;
+    inputSchema: z.ZodType;
+    outputSchema: z.ZodType;
+  },
+>(
+  definition: Definition,
+): Pick<
+  Definition,
+  "title" | "description" | "annotations" | "inputSchema" | "outputSchema"
+> {
   return {
     title: definition.title,
     description: definition.description,
@@ -241,78 +274,170 @@ function localTool<Definition extends {
   };
 }
 
-function registerAuthoringTools(server: McpServer, operations: McpOperations): void {
+function registerAuthoringTools(
+  server: McpServer,
+  operations: McpOperations,
+): void {
   const run = operations.runAuthoringOperation;
   if (run === undefined) return;
   const definitions = rendererApiAuthoringTools();
-  for (const name of Object.keys(rendererApiAuthoringRoutes) as RendererApiAuthoringTool[]) {
-    const { inputSchema, outputSchema, ...definition } = localTool(definitions[name]);
-    server.registerTool(name, {
-      ...definition,
-      inputSchema: inputSchema as z.ZodType<Record<string, unknown>>,
-      outputSchema: outputSchema as z.ZodType<Record<string, unknown>>,
-    }, async (input, { mcpReq: { signal } }) => {
-      try {
-        const result = await run(name, input, { signal });
-        return {
-          content: [{ type: "text" as const, text: `${definition.title} completed.` }],
-          structuredContent: outputSchema.parse({ success: true, operation: name, result }),
-        };
-      } catch (error) {
-        const failure = mcpFailure(name, error);
-        const currentVersion = error instanceof AppError && error.code === "DRAFT_VERSION_CONFLICT"
-          ? error.details?.currentVersion : undefined;
-        const recovery = currentVersion === null || typeof currentVersion === "number" ? { currentVersion } : {};
-        return {
-          content: [{ type: "text" as const, text: `${definition.title} failed (${failure.error.code}).` }],
-          isError: true,
-          structuredContent: outputSchema.parse({ ...failure, error: { ...failure.error, ...recovery } }),
-        };
-      }
-    });
+  for (const name of Object.keys(
+    rendererApiAuthoringRoutes,
+  ) as RendererApiAuthoringTool[]) {
+    const { inputSchema, outputSchema, ...definition } = localTool(
+      definitions[name],
+    );
+    server.registerTool(
+      name,
+      {
+        ...definition,
+        inputSchema: inputSchema as z.ZodType<Record<string, unknown>>,
+        outputSchema: outputSchema as z.ZodType<Record<string, unknown>>,
+      },
+      async (input, { mcpReq: { signal } }) => {
+        try {
+          const response = await run(name, input, { signal });
+          const route = rendererApiAuthoringRoutes[name];
+          const { result, image } =
+            "inspectionParam" in route
+              ? pdfInspectionToolResult(response, route.inspectionParam)
+              : { result: response, image: undefined };
+          return {
+            content: [
+              { type: "text" as const, text: `${definition.title} completed.` },
+              ...(image === undefined ? [] : [image]),
+            ],
+            structuredContent: outputSchema.parse({
+              success: true,
+              operation: name,
+              result,
+            }),
+          };
+        } catch (error) {
+          const failure = mcpFailure(name, error);
+          const currentVersion =
+            error instanceof AppError && error.code === "DRAFT_VERSION_CONFLICT"
+              ? error.details?.currentVersion
+              : undefined;
+          const recovery =
+            currentVersion === null || typeof currentVersion === "number"
+              ? { currentVersion }
+              : {};
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `${definition.title} failed (${failure.error.code}).`,
+              },
+            ],
+            isError: true,
+            structuredContent: outputSchema.parse({
+              ...failure,
+              error: { ...failure.error, ...recovery },
+            }),
+          };
+        }
+      },
+    );
   }
 }
 
-function registerSavedRevisionFileTools(server: McpServer, operations: McpOperations): void {
+function registerSavedRevisionFileTools(
+  server: McpServer,
+  operations: McpOperations,
+): void {
   const list = operations.listProjectRevisionFiles;
   if (list !== undefined) {
     const name = "list_project_revision_files";
     const definition = localTool(savedRevisionFileTools[name]);
-    server.registerTool(name, definition, async ({ projectId, revisionId, offset, limit }, { mcpReq: { signal } }) => {
-      try {
-        const result = await list(projectId, revisionId, { offset, limit, signal });
-        return {
-          content: [{ type: "text" as const, text: `Found ${result.totalFiles} saved revision files.` }],
-          structuredContent: definition.outputSchema.parse({ success: true, operation: name, result }),
-        };
-      } catch (error) {
-        return {
-          content: [{ type: "text" as const, text: "Could not list saved revision files." }],
-          isError: true,
-          structuredContent: definition.outputSchema.parse(mcpFailure(name, error)),
-        };
-      }
-    });
+    server.registerTool(
+      name,
+      definition,
+      async (
+        { projectId, revisionId, offset, limit },
+        { mcpReq: { signal } },
+      ) => {
+        try {
+          const result = await list(projectId, revisionId, {
+            offset,
+            limit,
+            signal,
+          });
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `Found ${result.totalFiles} saved revision files.`,
+              },
+            ],
+            structuredContent: definition.outputSchema.parse({
+              success: true,
+              operation: name,
+              result,
+            }),
+          };
+        } catch (error) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: "Could not list saved revision files.",
+              },
+            ],
+            isError: true,
+            structuredContent: definition.outputSchema.parse(
+              mcpFailure(name, error),
+            ),
+          };
+        }
+      },
+    );
   }
   const read = operations.getProjectRevisionFile;
   if (read !== undefined) {
     const name = "get_project_revision_file";
     const definition = localTool(savedRevisionFileTools[name]);
-    server.registerTool(name, definition, async ({ projectId, revisionId, path, offset }, { mcpReq: { signal } }) => {
-      try {
-        const result = await read(projectId, revisionId, path, { offset, signal });
-        return {
-          content: [{ type: "text" as const, text: "Read text from the saved revision." }],
-          structuredContent: definition.outputSchema.parse({ success: true, operation: name, result }),
-        };
-      } catch (error) {
-        return {
-          content: [{ type: "text" as const, text: "Could not read the saved revision file." }],
-          isError: true,
-          structuredContent: definition.outputSchema.parse(mcpFailure(name, error)),
-        };
-      }
-    });
+    server.registerTool(
+      name,
+      definition,
+      async (
+        { projectId, revisionId, path, offset },
+        { mcpReq: { signal } },
+      ) => {
+        try {
+          const result = await read(projectId, revisionId, path, {
+            offset,
+            signal,
+          });
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: "Read text from the saved revision.",
+              },
+            ],
+            structuredContent: definition.outputSchema.parse({
+              success: true,
+              operation: name,
+              result,
+            }),
+          };
+        } catch (error) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: "Could not read the saved revision file.",
+              },
+            ],
+            isError: true,
+            structuredContent: definition.outputSchema.parse(
+              mcpFailure(name, error),
+            ),
+          };
+        }
+      },
+    );
   }
 }
 
@@ -421,8 +546,7 @@ function registerProjectTools(
     "attach_project_revision",
     {
       title: mcpText(locale, "saveProjectRevision"),
-      description:
-        mcpText(locale, "attachAnAlreadyUploadedImmutableSource"),
+      description: mcpText(locale, "attachAnAlreadyUploadedImmutableSource"),
       inputSchema: attachProjectRevisionInputSchema,
       outputSchema: attachProjectRevisionOutputSchema,
       annotations: mutate,
@@ -472,19 +596,28 @@ function shortSummary(output: McpToolOutput): string {
       : `${output.operation} failed (${output.error?.code ?? "UNKNOWN"}).`;
   switch (output.operation) {
     case "list_projects":
-      return mcpText(locale, "foundValueProjectS", { value: output.result?.page.items.length ?? 0 });
+      return mcpText(locale, "foundValueProjectS", {
+        value: output.result?.page.items.length ?? 0,
+      });
     case "get_project":
       return `Project ${output.result?.project.id ?? "found"}.`;
     case "get_project_revision_jobs":
-      return mcpText(locale, "foundValueJobS", { value: output.result?.page.items.length ?? 0 });
+      return mcpText(locale, "foundValueJobS", {
+        value: output.result?.page.items.length ?? 0,
+      });
     case "create_project":
     case "rename_project":
     case "delete_project":
       return `Project ${output.result?.project.id ?? "updated"}.`;
     case "attach_project_revision":
-      return mcpText(locale, "projectRevisionValue", { value: output.result?.revision.id ?? "saved" });
+      return mcpText(locale, "projectRevisionValue", {
+        value: output.result?.revision.id ?? "saved",
+      });
     case "render_project_revision":
-      return mcpText(locale, "renderValue1ForRevisionValue2", { value1: output.result?.job.id ?? "queued", value2: output.result?.revisionId ?? "selected" });
+      return mcpText(locale, "renderValue1ForRevisionValue2", {
+        value1: output.result?.job.id ?? "queued",
+        value2: output.result?.revisionId ?? "selected",
+      });
     case "upload_source":
       return `Source ${output.result?.source.sourceId ?? "prepared"}.`;
     case "create_render_job":
@@ -494,11 +627,20 @@ function shortSummary(output: McpToolOutput): string {
     case "get_render_status":
       return `Render ${output.result?.job.id ?? "status"}: ${outputStageLabel(output.result?.job, "available")}.`;
     case "download_render_artifacts":
-      return mcpText(locale, "artifactsDownloadedForValue1Value2", { value1: output.result?.job.id ?? "render job", value2: output.result?.job.stages ? ` PDF: ${output.result.job.stages.pdf.status}; SVG: ${output.result.job.stages.svg.status}.` : "" });
+      return mcpText(locale, "artifactsDownloadedForValue1Value2", {
+        value1: output.result?.job.id ?? "render job",
+        value2: output.result?.job.stages
+          ? ` PDF: ${output.result.job.stages.pdf.status}; SVG: ${output.result.job.stages.svg.status}.`
+          : "",
+      });
     case "cancel_render":
-      return mcpText(locale, "cancellationRequestedForValue", { value: output.result?.jobId ?? "render job" });
+      return mcpText(locale, "cancellationRequestedForValue", {
+        value: output.result?.jobId ?? "render job",
+      });
     case "delete_render":
-      return mcpText(locale, "deletionRequestedForValue", { value: output.result?.jobId ?? "render job" });
+      return mcpText(locale, "deletionRequestedForValue", {
+        value: output.result?.jobId ?? "render job",
+      });
   }
 }
 

@@ -12,7 +12,7 @@ latex.example.com {
   request_header X-Real-IP {remote_host}
   request_header X-Latex-Renderer-Client-IP {remote_host}
 
-  @gateway path /api/v1/health /api/v1/render-tickets /api/v1/source-tickets /api/v1/job-tickets/* /api/v1/projects /api/v1/projects/*
+  @gateway path /api/v1/health /api/v1/render-tickets /api/v1/source-tickets /api/v1/job-tickets/* /api/v1/projects /api/v1/projects/* /api/v1/environment /api/v1/environment/* /api/v1/pdf-inspections/compare
   reverse_proxy @gateway 127.0.0.1:3105 {
     transport http {
       dial_timeout 5s

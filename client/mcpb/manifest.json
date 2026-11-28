@@ -133,6 +133,74 @@
     {
       "name": "delete_render",
       "description": "Delete an owned terminal Job after user confirmation."
+    },
+    {
+      "name": "get_renderer_capabilities",
+      "description": "Read the renderer engine, runtime, and limits."
+    },
+    {
+      "name": "list_authoring_profiles",
+      "description": "List verified authoring profiles and their evidence."
+    },
+    {
+      "name": "check_packages",
+      "description": "Check whether named LaTeX packages are installed."
+    },
+    {
+      "name": "search_packages",
+      "description": "Search the available LaTeX package inventory."
+    },
+    {
+      "name": "check_fonts",
+      "description": "Check whether named font families are installed."
+    },
+    {
+      "name": "search_fonts",
+      "description": "Search the installed font inventory."
+    },
+    {
+      "name": "check_document_requirements",
+      "description": "Check document requirements against the runtime inventory."
+    },
+    {
+      "name": "probe_document_requirements",
+      "description": "Queue an isolated synthetic document probe or read its result."
+    },
+    {
+      "name": "retry_render",
+      "description": "Queue a new Job with the same Source and render settings."
+    },
+    {
+      "name": "retry_svg_render",
+      "description": "Retry SVG conversion on the same Job and preserve its PDF."
+    },
+    {
+      "name": "get_render_diagnostics",
+      "description": "Read paged errors and warnings for an owned Job."
+    },
+    {
+      "name": "read_render_log",
+      "description": "Read an owned compile log by byte offset or line."
+    },
+    {
+      "name": "get_render_preview_crop",
+      "description": "Request or read an enlarged region of an exact PDF."
+    },
+    {
+      "name": "get_render_preview_sheet",
+      "description": "Request or read a contact sheet of selected PDF pages."
+    },
+    {
+      "name": "locate_render_source",
+      "description": "Find candidate TeX source lines or PDF positions using SyncTeX."
+    },
+    {
+      "name": "compare_render_quality",
+      "description": "Compare recorded inspection observations for two exact PDFs."
+    },
+    {
+      "name": "get_render_manifest",
+      "description": "Read the input, runtime, and artifact identities of an owned Job."
     }
   ],
   "keywords": ["latex", "pdf", "mcp", "renderer"],

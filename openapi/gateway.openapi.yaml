@@ -100,7 +100,10 @@ paths:
       description: Requires the render:draft:read scope.
       security: [{ renderApiKey: [] }]
       responses:
-        "200": { description: Shared draft metadata or a null draft when none exists }
+        "200":
+          {
+            description: Shared draft metadata or a null draft when none exists,
+          }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
   /api/v1/projects/{projectId}/draft/file:
@@ -111,8 +114,18 @@ paths:
       description: Requires the render:draft:read scope. Follow nextOffset to continue reading in UTF-16 code units.
       security: [{ renderApiKey: [] }]
       parameters:
-        - { in: query, name: version, required: true, schema: { type: integer, minimum: 1 } }
-        - { in: query, name: path, required: true, schema: { type: string, maxLength: 2048 } }
+        - {
+            in: query,
+            name: version,
+            required: true,
+            schema: { type: integer, minimum: 1 },
+          }
+        - {
+            in: query,
+            name: path,
+            required: true,
+            schema: { type: string, maxLength: 2048 },
+          }
         - { in: query, name: offset, schema: { type: integer, minimum: 0 } }
       responses:
         "200": { description: Draft file text and continuation information }
@@ -158,7 +171,8 @@ paths:
                 idempotencyKey: { type: string, minLength: 16, maxLength: 200 }
                 entrypoint: { type: string }
                 engine: { type: string }
-                outputs: { type: array, items: { type: string, enum: [pdf, svg] } }
+                outputs:
+                  { type: array, items: { type: string, enum: [pdf, svg] } }
                 files:
                   type: array
                   maxItems: 200
@@ -174,10 +188,12 @@ paths:
                         type: object
                         required: [expectedSha256, original, replacement]
                         properties:
-                          expectedSha256: { type: string, pattern: "^[a-f0-9]{64}$" }
+                          expectedSha256:
+                            { type: string, pattern: "^[a-f0-9]{64}$" }
                           original: { type: string }
                           replacement: { type: string }
-                          expectedMatches: { type: integer, minimum: 1, maximum: 100 }
+                          expectedMatches:
+                            { type: integer, minimum: 1, maximum: 100 }
       responses:
         "200": { description: Resulting draft version and changed paths }
         "403": { $ref: "#/components/responses/Error" }
@@ -287,11 +303,20 @@ paths:
       description: Requires an explicitly granted render:project:read scope. When path is present, offset counts UTF-16 code units. Otherwise offset counts files.
       security: [{ renderApiKey: [] }]
       parameters:
-        - { in: query, name: path, schema: { type: string, minLength: 1, maxLength: 2048 } }
+        - {
+            in: query,
+            name: path,
+            schema: { type: string, minLength: 1, maxLength: 2048 },
+          }
         - { in: query, name: offset, schema: { type: integer, minimum: 0 } }
-        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 25 } }
+        - {
+            in: query,
+            name: limit,
+            schema: { type: integer, minimum: 1, maximum: 25 },
+          }
       responses:
-        "200": { description: Saved revision identity and a page of files or text }
+        "200":
+          { description: Saved revision identity and a page of files or text }
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
@@ -341,7 +366,13 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [maxUploadBytes, maxExtractedBytes, maxFileCount, maxZipEntries]
+                required:
+                  [
+                    maxUploadBytes,
+                    maxExtractedBytes,
+                    maxFileCount,
+                    maxZipEntries,
+                  ]
                 properties:
                   maxUploadBytes: { type: integer, minimum: 1 }
                   maxExtractedBytes: { type: integer, minimum: 1 }
@@ -417,15 +448,269 @@ paths:
         "409": { $ref: "#/components/responses/Error" }
         "429": { $ref: "#/components/responses/Error" }
         "503": { $ref: "#/components/responses/Error" }
+  /api/v1/environment:
+    get:
+      summary: Read Renderer capabilities
+      description: Requires the render:create scope.
+      security: [{ renderApiKey: [] }]
+      responses:
+        "200": { description: Successful operation }
+        "403": { $ref: "#/components/responses/Error" }
+  /api/v1/environment/profiles:
+    get:
+      summary: List authoring profiles
+      description: Requires the render:create scope.
+      security: [{ renderApiKey: [] }]
+      responses:
+        "200": { description: Successful operation }
+        "403": { $ref: "#/components/responses/Error" }
+  /api/v1/environment/packages/check:
+    post:
+      summary: Check named packages
+      description: Requires the render:create scope.
+      security: [{ renderApiKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [names]
+              properties:
+                names:
+                  {
+                    type: array,
+                    minItems: 1,
+                    maxItems: 50,
+                    items: { type: string },
+                  }
+      responses:
+        "200": { description: Successful operation }
+        "403": { $ref: "#/components/responses/Error" }
+  /api/v1/environment/packages/search:
+    get:
+      summary: Search package names
+      description: Requires the render:create scope.
+      security: [{ renderApiKey: [] }]
+      parameters:
+        - { in: query, name: query, required: true, schema: { type: string } }
+        - { in: query, name: cursor, schema: { type: string } }
+      responses:
+        "200": { description: Successful operation }
+        "403": { $ref: "#/components/responses/Error" }
+  /api/v1/environment/fonts/check:
+    post:
+      summary: Check named fonts
+      description: Requires the render:create scope.
+      security: [{ renderApiKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [names]
+              properties:
+                names:
+                  {
+                    type: array,
+                    minItems: 1,
+                    maxItems: 50,
+                    items: { type: string },
+                  }
+      responses:
+        "200": { description: Successful operation }
+        "403": { $ref: "#/components/responses/Error" }
+  /api/v1/environment/fonts/search:
+    get:
+      summary: Search font families
+      description: Requires the render:create scope.
+      security: [{ renderApiKey: [] }]
+      parameters:
+        - { in: query, name: query, required: true, schema: { type: string } }
+        - { in: query, name: cursor, schema: { type: string } }
+      responses:
+        "200": { description: Successful operation }
+        "403": { $ref: "#/components/responses/Error" }
+  /api/v1/environment/requirements/check:
+    post:
+      summary: Check document requirements
+      description: Requires the render:create scope.
+      security: [{ renderApiKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [engine]
+              properties:
+                engine: { $ref: "#/components/schemas/RenderEngine" }
+                requirements:
+                  { type: array, maxItems: 32, items: { type: object } }
+                revision:
+                  type: object
+                  required: [projectId, revisionId]
+                  properties:
+                    projectId: { type: string }
+                    revisionId: { type: string }
+                    inspectEntrypoint: { type: boolean }
+      responses:
+        "200": { description: Successful operation }
+        "403": { $ref: "#/components/responses/Error" }
+  /api/v1/environment/requirements/probe:
+    post:
+      summary: Request or poll a synthetic document probe
+      description: Requires the render:create scope.
+      security: [{ renderApiKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [engine]
+              properties:
+                engine: { $ref: "#/components/schemas/RenderEngine" }
+                documentClass: { type: string, default: article }
+                packages: { type: array, maxItems: 12, items: { type: string } }
+                font: { type: string }
+                mathFont: { type: string }
+                japanese: { type: boolean, default: false }
+      responses:
+        "200": { description: Successful operation }
+        "403": { $ref: "#/components/responses/Error" }
+  /api/v1/job-tickets/{jobId}/retry:
+    post:
+      summary: Retry a terminal Job with its reusable Source
+      description: Requires the render:create scope and Job ownership.
+      security: [{ renderApiKey: [] }]
+      parameters:
+        - {
+            in: path,
+            name: jobId,
+            required: true,
+            schema: { type: string, pattern: "^job_[a-f0-9]{32}$" },
+          }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                idempotencyKey: { type: string, minLength: 16, maxLength: 200 }
+      responses:
+        "200": { description: Successful operation }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/job-tickets/{jobId}/diagnostics:
+    get:
+      summary: Read a page of render diagnostics
+      description: Requires the render:read:own scope and Job ownership.
+      security: [{ renderApiKey: [] }]
+      parameters:
+        - {
+            in: path,
+            name: jobId,
+            required: true,
+            schema: { type: string, pattern: "^job_[a-f0-9]{32}$" },
+          }
+        - { in: query, name: stage, schema: { type: string, enum: [pdf, svg] } }
+        - { in: query, name: offset, schema: { type: integer, minimum: 0 } }
+        - {
+            in: query,
+            name: limit,
+            schema: { type: integer, minimum: 1, maximum: 25 },
+          }
+      responses:
+        "200": { description: Successful operation }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/job-tickets/{jobId}/log:
+    get:
+      summary: Read a compile-log window
+      description: Requires the render:read:own scope and Job ownership.
+      security: [{ renderApiKey: [] }]
+      parameters:
+        - {
+            in: path,
+            name: jobId,
+            required: true,
+            schema: { type: string, pattern: "^job_[a-f0-9]{32}$" },
+          }
+        - { in: query, name: stage, schema: { type: string, enum: [pdf, svg] } }
+        - { in: query, name: startByte, schema: { type: integer, minimum: 0 } }
+        - { in: query, name: startLine, schema: { type: integer, minimum: 1 } }
+        - {
+            in: query,
+            name: sha256,
+            schema: { type: string, pattern: "^[a-f0-9]{64}$" },
+          }
+      responses:
+        "200": { description: Successful operation }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/job-tickets/{jobId}/manifest:
+    get:
+      summary: Read a render manifest
+      description: Requires the render:read:own scope and Job ownership.
+      security: [{ renderApiKey: [] }]
+      parameters:
+        - {
+            in: path,
+            name: jobId,
+            required: true,
+            schema: { type: string, pattern: "^job_[a-f0-9]{32}$" },
+          }
+      responses:
+        "200": { description: Successful operation }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/pdf-inspections/compare:
+    post:
+      summary: Compare observations for two exact PDFs
+      description: Requires the render:pdf:inspect scope and ownership of both Jobs.
+      security: [{ renderApiKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [before, after]
+              properties:
+                before: { $ref: "#/components/schemas/JobPdf" }
+                after: { $ref: "#/components/schemas/JobPdf" }
+      responses:
+        "200": { description: Successful operation }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /api/v1/job-tickets/{jobId}/pdf-inspection:
     parameters:
-      - { in: path, name: jobId, required: true, schema: { type: string, pattern: "^job_[a-f0-9]{32}$" } }
+      - {
+          in: path,
+          name: jobId,
+          required: true,
+          schema: { type: string, pattern: "^job_[a-f0-9]{32}$" },
+        }
     get:
       summary: Read the inspection report for an exact PDF
       description: Requires the render:pdf:inspect scope and Job ownership.
       security: [{ renderApiKey: [] }]
       parameters:
-        - { in: query, name: pdfSha256, required: true, schema: { type: string, pattern: "^[a-f0-9]{64}$" } }
+        - {
+            in: query,
+            name: pdfSha256,
+            required: true,
+            schema: { type: string, pattern: "^[a-f0-9]{64}$" },
+          }
       responses:
         "200": { description: Inspection state and report when available }
         "403": { $ref: "#/components/responses/Error" }
@@ -445,6 +730,9 @@ paths:
               required: [pdfSha256]
               properties:
                 pdfSha256: { type: string, pattern: "^[a-f0-9]{64}$" }
+                params:
+                  type: object
+                  description: Supply normalized crop geometry, an ordered array of pages, or a SyncTeX query with direction. Omit for a quality report.
       responses:
         "200": { description: Accepted or existing inspection state }
         "403": { $ref: "#/components/responses/Error" }
@@ -529,6 +817,13 @@ components:
       properties:
         size: { type: integer, minimum: 1, maximum: 20971520 }
         sha256: { type: string, pattern: "^[a-f0-9]{64}$" }
+    JobPdf:
+      type: object
+      additionalProperties: false
+      required: [jobId, pdfSha256]
+      properties:
+        jobId: { type: string, pattern: "^job_[a-f0-9]{32}$" }
+        pdfSha256: { type: string, pattern: "^[a-f0-9]{64}$" }
     RenderEngine:
       type: string
       enum: [lualatex, pdflatex, xelatex, uplatex, platex]

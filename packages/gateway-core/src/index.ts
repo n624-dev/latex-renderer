@@ -1,4 +1,5 @@
 const MAX_JSON_BYTES = 1024;
+const MAX_REQUIREMENTS_JSON_BYTES = 64 * 1024;
 const MAX_PROJECT_JSON_BYTES = 4096;
 const MAX_DRAFT_EDIT_JSON_BYTES = 8 * 1024 * 1024;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
@@ -28,9 +29,11 @@ export async function proxyGatewayJson(input: {
   const bodyRequired = input.bodyRequired !== false;
   const maxJsonBytes = input.upstreamPath.endsWith("/draft/changes")
     ? MAX_DRAFT_EDIT_JSON_BYTES
-    : input.upstreamPath.startsWith("/internal/v1/projects")
-    ? MAX_PROJECT_JSON_BYTES
-    : MAX_JSON_BYTES;
+    : input.upstreamPath.startsWith("/internal/v1/environment/")
+      ? MAX_REQUIREMENTS_JSON_BYTES
+      : input.upstreamPath.startsWith("/internal/v1/projects")
+        ? MAX_PROJECT_JSON_BYTES
+        : MAX_JSON_BYTES;
   const authorization = input.request.headers.get("Authorization");
   if (authorization === null || !API_KEY.test(authorization))
     return errorResponse("UNAUTHORIZED", "Bearer API key is required", 401);
@@ -122,15 +125,22 @@ export async function proxyGatewayJson(input: {
   if (bodyRequired) headers.set("Content-Type", "application/json");
   if (idempotencyKey !== null) headers.set("Idempotency-Key", idempotencyKey);
   const upstreamUrl = new URL(input.upstreamPath, "http://internal-api.local");
-  if (input.request.method === "GET" && (
-    upstreamUrl.pathname.startsWith("/internal/v1/projects") ||
-    upstreamUrl.pathname.endsWith("/pdf-inspection")
-  )) {
+  if (
+    input.request.method === "GET" &&
+    (upstreamUrl.pathname.startsWith("/internal/v1/projects") ||
+      upstreamUrl.pathname.startsWith("/internal/v1/environment") ||
+      /^\/internal\/v1\/jobs\/job_[a-f0-9]{32}\/(pdf-inspection|diagnostics|log|manifest)$/.test(
+        upstreamUrl.pathname,
+      ))
+  ) {
     const search = new URL(input.request.url).search;
-    const queryLimit = upstreamUrl.pathname.endsWith("/files") ||
-      upstreamUrl.pathname.endsWith("/draft/file") ? 8192 : 2048;
+    const queryLimit =
+      upstreamUrl.pathname.endsWith("/files") ||
+      upstreamUrl.pathname.endsWith("/draft/file")
+        ? 8192
+        : 2048;
     if (search.length > queryLimit)
-      return errorResponse("INVALID_QUERY", "Project query is too long", 400);
+      return errorResponse("INVALID_QUERY", "Request query is too long", 400);
     upstreamUrl.search = search;
   }
   const response = await input.fetchUpstream(upstreamUrl, {
@@ -202,7 +212,10 @@ export function gatewayRoute(
       bodyRequired: method === "POST",
     };
   }
-  const draftPath = /^\/api\/v1\/projects\/project_[a-f0-9]{32}\/draft(?:\/(file|open|changes|preview|save))?$/.exec(pathname);
+  const draftPath =
+    /^\/api\/v1\/projects\/project_[a-f0-9]{32}\/draft(?:\/(file|open|changes|preview|save))?$/.exec(
+      pathname,
+    );
   if (draftPath !== null) {
     const hasBody = draftPath[1] !== undefined && draftPath[1] !== "file";
     if (method !== (hasBody ? "POST" : "GET")) return "method-not-allowed";
@@ -239,11 +252,32 @@ export function gatewayRoute(
       bodyRequired: method === "POST" || method === "PATCH",
     };
   }
-  const inspection = /^\/api\/v1\/job-tickets\/(job_[a-f0-9]{32})\/pdf-inspection$/.exec(pathname);
-  if (inspection !== null) {
-    if (method !== "GET" && method !== "POST") return "method-not-allowed";
+  if (
+    /^\/api\/v1\/(environment(?:\/(?:profiles|(?:packages|fonts)\/(?:check|search)|requirements\/(?:check|probe)))?|pdf-inspections\/compare)$/.test(
+      pathname,
+    )
+  ) {
+    const hasBody = /\/(check|probe|compare)$/.test(pathname);
+    if (method !== (hasBody ? "POST" : "GET")) return "method-not-allowed";
     return {
-      upstreamPath: `/internal/v1/jobs/${String(inspection[1])}/pdf-inspection`,
+      upstreamPath: pathname.replace(/^\/api\/v1/, "/internal/v1"),
+      idempotencyRequired: false,
+      bodyRequired: hasBody,
+    };
+  }
+  const jobOperation =
+    /^\/api\/v1\/job-tickets\/(job_[a-f0-9]{32})\/(pdf-inspection|retry|diagnostics|log|manifest)$/.exec(
+      pathname,
+    );
+  if (jobOperation !== null) {
+    const suffix = jobOperation[2];
+    if (
+      method !== (suffix === "retry" ? "POST" : "GET") &&
+      !(suffix === "pdf-inspection" && method === "POST")
+    )
+      return "method-not-allowed";
+    return {
+      upstreamPath: `/internal/v1/jobs/${String(jobOperation[1])}/${String(suffix)}`,
       idempotencyRequired: false,
       bodyRequired: method === "POST",
     };

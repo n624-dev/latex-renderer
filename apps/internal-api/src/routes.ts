@@ -8,7 +8,10 @@ import {
   type RenderApiScope,
 } from "@latex-renderer/contracts";
 import { ProjectOperations } from "@latex-renderer/database";
-import { RendererSavedSources, RendererSourceStore } from "@latex-renderer/renderer-core";
+import {
+  RendererSavedSources,
+  RendererSourceStore,
+} from "@latex-renderer/renderer-core";
 import {
   AppError,
   DEFAULT_RESOURCE_LIMITS,
@@ -24,7 +27,9 @@ import { mountAuthoringRoutes } from "./authoring.js";
 export function createInternalV1Router(deps: InternalApiDependencies): Hono {
   const r = new Hono(),
     maxUploadBytes =
-      deps.maxUploadBytes ?? deps.sourceLimits?.maxUploadBytes ?? DEFAULT_RESOURCE_LIMITS.maxUploadBytes,
+      deps.maxUploadBytes ??
+      deps.sourceLimits?.maxUploadBytes ??
+      DEFAULT_RESOURCE_LIMITS.maxUploadBytes,
     service = new RenderTicketsService(deps),
     sources = new SourceTicketsService(deps),
     projects = new ProjectOperations(deps.database);
@@ -44,13 +49,18 @@ export function createInternalV1Router(deps: InternalApiDependencies): Hono {
           value !== "." &&
           value !== "..",
       );
-  function actor(
-    c: string | undefined,
-    scope: RenderApiScope,
-  ) {
+  function actor(c: string | undefined, scope: RenderApiScope) {
     const identity = deps.apiKeys.authenticate(parseBearer(c), scope);
-    if (scope !== "render:create" && scope !== "render:read:own" && identity.keyKind !== "render")
-      throw new AppError("INSUFFICIENT_SCOPE", "A rendering API key is required", 403);
+    if (
+      scope !== "render:create" &&
+      scope !== "render:read:own" &&
+      identity.keyKind !== "render"
+    )
+      throw new AppError(
+        "INSUFFICIENT_SCOPE",
+        "A rendering API key is required",
+        403,
+      );
     return {
       userId: identity.userId,
       type: "service_account",
@@ -58,7 +68,9 @@ export function createInternalV1Router(deps: InternalApiDependencies): Hono {
       jobReader: {
         kind: "api-key" as const,
         serviceAccountId: identity.serviceAccountId,
-        credentialOwnerId: deps.database.apiKeys.jobOwnerId(identity.apiKeyId) ?? identity.apiKeyId,
+        credentialOwnerId:
+          deps.database.apiKeys.jobOwnerId(identity.apiKeyId) ??
+          identity.apiKeyId,
       },
     };
   }
@@ -68,16 +80,26 @@ export function createInternalV1Router(deps: InternalApiDependencies): Hono {
       throw new AppError("INVALID_REQUEST", "Project request is invalid", 400);
     return result.data;
   }
+  const resourceLimits = {
+    ...DEFAULT_RESOURCE_LIMITS,
+    ...deps.sourceLimits,
+    maxUploadBytes,
+  };
   function sourceStore() {
     if (deps.storageRoot === undefined)
-      throw new AppError("AUTHORING_UNAVAILABLE", "Authoring operations are unavailable", 503);
-    return new RendererSourceStore(deps.database, deps.storageRoot, {
-      ...DEFAULT_RESOURCE_LIMITS,
-      ...deps.sourceLimits,
-      maxUploadBytes,
-    }, deps.maxUserStorageBytes);
+      throw new AppError(
+        "AUTHORING_UNAVAILABLE",
+        "Authoring operations are unavailable",
+        503,
+      );
+    return new RendererSourceStore(
+      deps.database,
+      deps.storageRoot,
+      resourceLimits,
+      deps.maxUserStorageBytes,
+    );
   }
-  mountAuthoringRoutes(r, deps, service, sourceStore, actor);
+  mountAuthoringRoutes(r, deps, service, sourceStore, actor, resourceLimits);
   r.get("/projects", (c) =>
     c.json(
       projects.list(actor(c.req.header("Authorization"), "render:read:own"), {
@@ -139,16 +161,47 @@ export function createInternalV1Router(deps: InternalApiDependencies): Hono {
     const owner = actor(c.req.header("Authorization"), "render:project:read");
     const project = parse(projectId, c.req.param("id"));
     const revision = parse(revisionId, c.req.param("revisionId"));
-    const query = parse(z.object({
-      path: z.string().min(1).max(2048).optional(),
-      offset: z.string().regex(/^[0-9]+$/).transform(Number).pipe(z.int().nonnegative()).optional(),
-      limit: z.string().regex(/^[0-9]+$/).transform(Number).pipe(z.int().min(1).max(25)).optional(),
-    }).strict(), c.req.query());
+    const query = parse(
+      z
+        .object({
+          path: z.string().min(1).max(2048).optional(),
+          offset: z
+            .string()
+            .regex(/^[0-9]+$/)
+            .transform(Number)
+            .pipe(z.int().nonnegative())
+            .optional(),
+          limit: z
+            .string()
+            .regex(/^[0-9]+$/)
+            .transform(Number)
+            .pipe(z.int().min(1).max(25))
+            .optional(),
+        })
+        .strict(),
+      c.req.query(),
+    );
     const files = new RendererSavedSources(deps.database, sourceStore());
     if (query.path === undefined) {
-      return c.json(await files.listProjectRevisionFiles(owner, project, revision, query.offset, query.limit));
+      return c.json(
+        await files.listProjectRevisionFiles(
+          owner,
+          project,
+          revision,
+          query.offset,
+          query.limit,
+        ),
+      );
     }
-    return c.json(await files.getProjectRevisionFile(owner, project, revision, query.path, query.offset));
+    return c.json(
+      await files.getProjectRevisionFile(
+        owner,
+        project,
+        revision,
+        query.path,
+        query.offset,
+      ),
+    );
   });
   r.post("/projects/:id/revisions", async (c) => {
     const owner = actor(c.req.header("Authorization"), "render:create"),
@@ -233,7 +286,10 @@ export function createInternalV1Router(deps: InternalApiDependencies): Hono {
     );
   });
   r.get("/source-tickets", (c) => {
-    deps.apiKeys.authenticate(parseBearer(c.req.header("Authorization")), "render:create");
+    deps.apiKeys.authenticate(
+      parseBearer(c.req.header("Authorization")),
+      "render:create",
+    );
     return c.json({
       ...DEFAULT_RESOURCE_LIMITS,
       ...deps.sourceLimits,
@@ -285,7 +341,9 @@ export function createInternalV1Router(deps: InternalApiDependencies): Hono {
     return c.json(result.value, result.status);
   });
   r.post("/jobs/:jobId/ticket", async (c) => {
-    const actor = deps.apiKeys.authenticate(parseBearer(c.req.header("Authorization")));
+    const actor = deps.apiKeys.authenticate(
+      parseBearer(c.req.header("Authorization")),
+    );
     return c.json(await service.renewForApiKey(actor, c.req.param("jobId")));
   });
   return r;
