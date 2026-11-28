@@ -9,6 +9,7 @@ export {
   zipFiles,
 } from "./source-archive.js";
 export { RendererSavedSources, sourceFileKind, sourceTextPage } from "./saved-sources.js";
+export { downloadProjectSource } from "./project-source.js";
 export { decodeSourceBase64 } from "./source-content.js";
 export { inspectJobPdf } from "./pdf-inspection.js";
 export {
