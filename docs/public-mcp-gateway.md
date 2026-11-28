@@ -29,6 +29,14 @@ For the project-operated gateway, set `GATEWAY_PUBLIC_ORIGIN=https://latex-mcp.n
 
 For ChatGPT with the gateway's exact issuer identification enabled, confirm the redirect in the MCP settings. The stable DCR callback is `https://chatgpt.com/connector_platform_oauth_redirect`. The stable CIMD client and key URLs are `https://chatgpt.com/oauth/client.json` and `https://chatgpt.com/oauth/jwks.json`. Only add approved exact URLs. Keep the origin listening on loopback and configure the reverse proxy to overwrite the client-address header used for registration rate limits.
 
+## Monitor credential cleanup
+
+Cleanup runs at startup and hourly. Each run writes one JSON log entry with the event `public_mcp_gateway.cleanup`, its `startedAt` timestamp and a `status` of `ok` or `failed`. `GET /health` is reachable from the internet, so it reports only readiness; read cleanup results from the log.
+
+On success, `expiredRecordsRemoved` counts expired credential and related records deleted directly by cleanup, and `expiredConnectionsRemoved` counts connection authorizations removed after their retention period. `dcrRegistrationsReclaimed` counts DCR clients deleted by this run. `dcrRegistrationsUsed` and `dcrRegistrationCapacityRemaining` report occupied and free DCR slots at the end of the cleanup transaction, based on `GATEWAY_MAX_REGISTRATIONS`. Registration can also reclaim expired clients between cleanup runs. A failed run reports its timestamp and status.
+
+Registration and cleanup retry SQLite lock acquisition for up to five seconds. If registration cannot write, `/oauth/register` returns HTTP `503` with `temporarily_unavailable`.
+
 ## Enable a Renderer connection
 
 For a public HTTPS installation, generate an Ed25519 installation key and a unique `instance_` identifier followed by 32 lower-case hexadecimal characters. Configure `RENDERER_RELAY_INSTANCE_ID` and `RENDERER_RELAY_INSTANCE_KEY_FILE` on the Remote MCP service, keeping the key private to that service. Preserve them for recovery or switching transport. At the gateway authorization page, enter the installation's public HTTPS `/mcp` URL, finish the Renderer approval, and confirm the connection back at the gateway. The same browser can later disconnect each grant at `/oauth/connection`.

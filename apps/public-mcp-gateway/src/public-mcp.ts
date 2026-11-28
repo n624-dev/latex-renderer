@@ -11,7 +11,6 @@ import {
 } from "@latex-renderer/contracts/renderer-mcp-definitions";
 import {
   rendererMcpToolPolicies,
-  type RendererMcpTool,
   type RendererRelayDownloadTarget,
 } from "@latex-renderer/contracts";
 import { z } from "zod";
@@ -87,24 +86,23 @@ export function createPublicMcp(options: {
       server.setRequestHandler("tools/call", async (request, ctx) => {
         const name = asRendererTool(request.params.name);
         if (!name) return failure("invalid_operation");
-        if (name === "get_profile") {
-          const structuredContent = { id: authorization.profileId };
-          return {
-            structuredContent,
-            content: [
-              { type: "text", text: JSON.stringify(structuredContent) },
-            ],
-          };
-        }
         try {
           const input = options.references.arguments(
             authorization,
             request.params.arguments ?? {},
           );
-          const validation =
-            definitions[name as RendererMcpTool].inputSchema.safeParse(input);
+          const validation = definitions[name].inputSchema.safeParse(input);
           if (!validation.success || !isRecord(validation.data))
             return failure("invalid_operation");
+          if (name === "get_profile") {
+            const structuredContent = { id: authorization.profileId };
+            return {
+              structuredContent,
+              content: [
+                { type: "text", text: JSON.stringify(structuredContent) },
+              ],
+            };
+          }
           const reply = await options.dispatch.call(
             authorization,
             { method: "tools/call", name, arguments: validation.data },
@@ -123,7 +121,9 @@ export function createPublicMcp(options: {
               /^[A-Z0-9_]{1,64}$/.test(body.error.code)
                 ? body.error.code
                 : "renderer_operation_failed";
-            const recovery = rendererMcpRecoveryDetailsSchema.safeParse(body.error);
+            const recovery = rendererMcpRecoveryDetailsSchema.safeParse(
+              body.error,
+            );
             return failure(code, recovery.success ? recovery.data : undefined);
           }
           if (!isRecord(result.structuredContent))
@@ -163,6 +163,7 @@ export function createPublicMcp(options: {
           const scope = rendererMcpToolPolicies[name].scope;
           if (
             code === "insufficient_scope" &&
+            scope !== null &&
             !authorization.scopes.includes(scope)
           ) {
             const result = failure(code);

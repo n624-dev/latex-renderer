@@ -105,14 +105,8 @@ const gateway = createGateway({
   },
 });
 
-store.pruneExpiredCredentials(Date.now());
-const cleanup = setInterval(() => {
-  try {
-    store.pruneExpiredCredentials(Date.now());
-  } catch {
-    console.error("Expired MCP gateway credentials could not be removed.");
-  }
-}, 3600_000).unref();
+gateway.cleanup();
+const cleanup = setInterval(gateway.cleanup, 3600_000).unref();
 gateway.server.listen(port, "127.0.0.1");
 for (const event of ["SIGTERM", "SIGINT"] as const)
   process.once(event, () => {
