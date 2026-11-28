@@ -102,17 +102,32 @@ const sourceUploadSchema = z
     maxChunkBytes: z.number().int().positive(),
   })
   .strict();
-const sourceFileSchema = z
-  .object({
+const specified = z.unknown().nonoptional();
+const omitted = z.never().optional();
+
+function constrainInput<T extends z.ZodObject>(
+  schema: T,
+  constraint: z.ZodType,
+  message: string,
+): T {
+  // Serialize the same constraint that validates the parsed input. Keep the
+  // base schema an object so MCP can advertise its properties at the top level.
+  const jsonSchema = z.toJSONSchema(constraint, { io: "input" });
+  delete jsonSchema.$schema;
+  return schema
+    .refine((input) => constraint.safeParse(input).success, message)
+    .meta({ allOf: [jsonSchema] });
+}
+
+const sourceFileSchema = constrainInput(
+  z.strictObject({
     path: z.string().min(1).max(2048),
     text: z.string().max(1_048_576).optional(),
     base64: z.string().max(1_400_000).optional(),
-  })
-  .strict()
-  .refine(
-    (file) => (file.text === undefined) !== (file.base64 === undefined),
-    "Specify exactly one of text or base64",
-  );
+  }),
+  z.xor([z.object({ text: specified }), z.object({ base64: specified })]),
+  "Specify exactly one of text or base64",
+);
 const jobSchema = z
   .object({
     id: jobId,
@@ -589,8 +604,8 @@ function rendererMcpRenderToolDefinitions(
       _meta: oauthToolMeta("create_render"),
       title: translate("createRemoteLatexRender"),
       description: translate("createOneRenderFromSmallInline"),
-      inputSchema: z
-        .object({
+      inputSchema: constrainInput(
+        z.strictObject({
           inlineSource: z
             .string()
             .min(1)
@@ -621,15 +636,14 @@ function rendererMcpRenderToolDefinitions(
             .describe(
               "LuaLaTeX only. Fixed uses the supplied UTC date. Latest uses this Job’s acceptance time.",
             ),
-        })
-        .strict()
-        .refine(
-          (input) =>
-            [input.inlineSource, input.sourceId, input.sourceRef].filter(
-              (value) => value !== undefined,
-            ).length === 1,
-          "Specify exactly one of inlineSource, sourceId, or sourceRef",
-        ),
+        }),
+        z.xor([
+          z.object({ inlineSource: specified }),
+          z.object({ sourceId: specified }),
+          z.object({ sourceRef: specified }),
+        ]),
+        "Specify exactly one of inlineSource, sourceId, or sourceRef",
+      ),
       outputSchema: operationOutput(
         "create_render",
         z.object({ job: jobSchema }).strict(),
@@ -1046,8 +1060,8 @@ function rendererMcpRenderToolDefinitions(
       title: "Read a compile log range",
       description:
         "Read the tail of an owned PDF or SVG compile log, or specify a byte offset or physical start line. Pass sha256 and nextByte to continue reading the same log.",
-      inputSchema: z
-        .object({
+      inputSchema: constrainInput(
+        z.strictObject({
           jobId,
           stage: z.enum(["pdf", "svg"]).default("pdf"),
           sha256: z
@@ -1056,13 +1070,13 @@ function rendererMcpRenderToolDefinitions(
             .optional(),
           startByte: z.number().int().nonnegative().optional(),
           startLine: z.number().int().positive().optional(),
-        })
-        .strict()
-        .refine(
-          ({ startByte, startLine }) =>
-            startByte === undefined || startLine === undefined,
-          "Choose one range unit",
-        ),
+        }),
+        z.union([
+          z.object({ startByte: omitted }),
+          z.object({ startLine: omitted }),
+        ]),
+        "Choose one range unit",
+      ),
       outputSchema: operationOutput(
         "read_render_log",
         z
@@ -1238,8 +1252,8 @@ function rendererMcpRenderToolDefinitions(
       title: "Check explicit document requirements against the Runtime",
       description:
         "Check class, package, distribution, font family, face and character coverage for the selected engine and Runtime. Explicitly request inspectEntrypoint to list candidate declarations in the saved entrypoint. Candidates and inventory coverage do not establish that the document compiles.",
-      inputSchema: z
-        .object({
+      inputSchema: constrainInput(
+        z.strictObject({
           engine: renderEngineSchema,
           requirements: z.array(documentRequirement).max(32).default([]),
           revision: z
@@ -1250,13 +1264,15 @@ function rendererMcpRenderToolDefinitions(
             })
             .strict()
             .optional(),
-        })
-        .strict()
-        .refine(
-          ({ requirements, revision }) =>
-            requirements.length > 0 || revision?.inspectEntrypoint === true,
-          "Provide explicit requirements or request entrypoint inspection",
-        ),
+        }),
+        z.union([
+          z.object({ requirements: z.array(z.unknown()).min(1) }),
+          z.object({
+            revision: z.object({ inspectEntrypoint: z.literal(true) }),
+          }),
+        ]),
+        "Provide explicit requirements or request entrypoint inspection",
+      ),
       outputSchema: operationOutput(
         "check_document_requirements",
         z
@@ -1572,13 +1588,7 @@ function rendererMcpProjectToolDefinitions(translate: RendererMcpTranslate) {
       .trim()
       .min(1)
       .max(240)
-      .refine(
-        (value) =>
-          !value.includes("/") &&
-          !value.includes("\\") &&
-          value !== "." &&
-          value !== "..",
-      ),
+      .regex(/^(?!\s*\.{1,2}\s*$)(?=\s*\S)[^/\\]+$/),
     pageInput = z
       .object({
         cursor: z.string().max(2048).optional(),
@@ -1926,19 +1936,18 @@ function rendererMcpProjectToolDefinitions(translate: RendererMcpTranslate) {
       title: "Open or replace the shared Project draft",
       description:
         "Continue an existing draft, or start from the latest saved revision. To start from an older revision, specify revisionId. Only supply replaceVersion after the user explicitly chooses to replace the existing draft at that version.",
-      inputSchema: z
-        .object({
+      inputSchema: constrainInput(
+        z.strictObject({
           projectId,
           revisionId: revisionId.optional(),
           replaceVersion: draftVersion.optional(),
-        })
-        .strict()
-        .refine(
-          (input) =>
-            input.replaceVersion === undefined ||
-            input.revisionId !== undefined,
-          "Replacing a draft requires a saved revision",
-        ),
+        }),
+        z.union([
+          z.object({ replaceVersion: omitted }),
+          z.object({ revisionId: specified }),
+        ]),
+        "Replacing a draft requires a saved revision",
+      ),
       outputSchema: operationOutput(
         "open_project_draft",
         z.object({ draft: draftSchema }).strict(),

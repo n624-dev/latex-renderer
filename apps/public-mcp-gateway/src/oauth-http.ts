@@ -7,6 +7,7 @@ import {
   readCimdClient,
   verifyCimdClientAssertion,
   type CimdClientTrust,
+  type DcrClientRegistration,
   type DcrClientStore,
 } from "./oauth-clients.js";
 import {
@@ -111,16 +112,21 @@ export function createGatewayOAuthHandler(options: OAuthHttpOptions) {
     if (pathname === "/oauth/register") {
       if (!options.allowRegistration(request))
         return oauthError("temporarily_unavailable", 429);
+      let registration: DcrClientRegistration;
       try {
         const raw = await readBoundedBody(
           request,
           "application/json",
           options.maxBodyBytes,
         );
-        const registration = parseDcrClientRegistration(
+        registration = parseDcrClientRegistration(
           JSON.parse(raw) as unknown,
           options.dcrRedirectUris,
         );
+      } catch {
+        return oauthError("invalid_client_metadata", 400);
+      }
+      try {
         const client = options.clients.registerDcrClient(
           registration,
           options.dcrCapacity,
@@ -139,7 +145,7 @@ export function createGatewayOAuthHandler(options: OAuthHttpOptions) {
           201,
         );
       } catch {
-        return oauthError("invalid_client_metadata", 400);
+        return oauthError("temporarily_unavailable", 503);
       }
     }
     if (pathname === "/oauth/authorize") {

@@ -2505,7 +2505,11 @@ describe("Remote MCP HTTP server", () => {
       },
       body: new URLSearchParams({ action: "revoke", grant: browserGrant, csrf }),
     });
-    expect((await disconnect("null")).status).toBe(403);
+    const rejected = await disconnect("null");
+    expect(rejected.status).toBe(403);
+    expect(await rejected.json()).toMatchObject({
+      error: { code: "ORIGIN_REJECTED" },
+    });
     expect(grants.lookup(browserGrant, Date.now())).toBeDefined();
     const disconnected = await disconnect(ORIGIN);
     expect(disconnected.status).toBe(303);
