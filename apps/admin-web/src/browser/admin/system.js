@@ -1,6 +1,25 @@
-export function createSystem({
-  adminMessage, bindAction, confirmDialog, details, displayLabel, err, esc, fmt, formDialog, jsonBody, me, ok, out, request, section, table
-}) {
+import { createBackups } from "./backups.js";
+
+export function createSystem(view) {
+  const {
+    adminMessage,
+    bindAction,
+    confirmDialog,
+    details,
+    displayLabel,
+    err,
+    esc,
+    fmt,
+    formDialog,
+    jsonBody,
+    me,
+    ok,
+    out,
+    request,
+    section,
+    table,
+  } = view;
+  const { backups } = createBackups(view);
 async function system(){
   const [s, c, keys] = await Promise.all([
     request("/system/status"),
@@ -61,15 +80,7 @@ async function system(){
   const keySummary=keys.verificationKids.length?("<button id=\"ticket-revoke\" class=\"danger\">"+esc(adminMessage("revokeOldSigningKey"))+"</button>"):("<p class=\"muted\">"+esc(adminMessage("noVerificationKeysAreAvailableTo"))+"</p>");
   out.innerHTML=section(adminMessage("status"),("<dl class=\"details\"><dt>"+esc(adminMessage("maintenance"))+"</dt><dd>")+esc(displayLabel(s.maintenance))+("</dd><dt>"+esc(adminMessage("worker"))+"</dt><dd>")+esc(({idle:adminMessage("standbyStartsOnRequest"),starting:adminMessage("starting"),unavailable:adminMessage("unavailable")}[s.rendering?.state]||displayLabel(s.worker)))+("</dd><dt>"+esc(adminMessage("writes"))+"</dt><dd>")+(s.writeEnabled?adminMessage("enabled"):adminMessage("paused"))+("</dd></dl><details><summary>"+esc(adminMessage("detailedDataJson"))+"</summary><pre id=\"system-json\"></pre></details>"))+(s.httpServices?.managed?section(adminMessage("httpServices"),table(s.httpServices.services,[[adminMessage("service"),x=>({'latex-renderer-web.service':'Web','latex-renderer-admin-web.service':'Web','latex-renderer-api.service':adminMessage("rendererApi"),'latex-renderer-internal-api.service':adminMessage("internalApi"),'latex-renderer-admin-api.service':adminMessage("adminApi"),'latex-renderer-remote-mcp.service':adminMessage("aiIntegrations")}[x.service]||x.service)],[adminMessage("status"),x=>({running:adminMessage("running"),idle:adminMessage("standbyStartsOnRequest"),starting:adminMessage("starting"),unavailable:adminMessage("unavailable")}[x.state]||adminMessage("couldNotVerify"))]])):'' )+section(adminMessage("settings"),settingsTable)+section(adminMessage("maintenance"),("<p><strong>"+esc(adminMessage("readOnly2"))+"</strong> "+esc(adminMessage("stopNewWorkAndAllowReads"))+" <strong>"+esc(adminMessage("emergencyLockdown2"))+"</strong> "+esc(adminMessage("stopAllUse"))+" <strong>"+esc(adminMessage("clear"))+"</strong> "+esc(adminMessage("returnToNormalOperation"))+"</p><div class=\"actions\"><button data-maint=\"read-only\">"+esc(adminMessage("readOnly"))+"</button><button data-maint=\"lockdown\" class=\"danger\">"+esc(adminMessage("emergencyLockdown"))+"</button><button data-maint=\"normal\" class=\"secondary\">"+esc(adminMessage("clear2"))+"</button></div>"))+section(adminMessage("worker"),("<p class=\"muted\">"+esc(adminMessage("pauseStopsTheWorkerFromTaking"))+"</p><div class=\"actions\"><button data-worker=\"pause\">"+esc(adminMessage("pause"))+"</button><button data-worker=\"drain\">"+esc(adminMessage("drain"))+"</button><button data-worker=\"resume\">"+esc(adminMessage("resume"))+"</button></div>"))+(me.role==='owner'?section(adminMessage("advancedActions"),("<details><summary>"+esc(adminMessage("signingKeyRevocation"))+"</summary><div class=\"notice warning\"><strong>")+esc(adminMessage("cannotRevokeActiveKey",{keyId:keys.activeKid}))+("</strong> "+esc(adminMessage("switchToANewKeyAnd"))+"</div><div class=\"actions\">")+keySummary+'</div></details>'):'');
   document.querySelector('#system-json').textContent=JSON.stringify(s,null,2);
-  if(me.role==='owner'){
-    const backupState=await request('/backups/status').catch(()=>null);
-    if(backupState){
-      const stateLabel=value=>value.active==='activating'||value.active==='active'?adminMessage("running"):value.result==='success'?adminMessage("queued"):value.result;
-      const last=backupState.latestVerification;
-      out.insertAdjacentHTML('beforeend',section(adminMessage("backups"),'<p>'+esc(adminMessage("backupsAndVerificationStatus",{backupStatus:stateLabel(backupState.backup),verificationStatus:stateLabel(backupState.verification)}))+("</p><p>"+esc(adminMessage("lastVerification"))+" ")+(last?esc(fmt(last.verifiedAt))+' '+esc(last.archive):adminMessage("noRecord"))+("</p><div class=\"actions\"><button type=\"button\" data-backup=\"create\">"+esc(adminMessage("createBackup"))+"</button><button type=\"button\" data-backup=\"verify\">"+esc(adminMessage("verifyLatestBackup"))+"</button></div>")));
-      bindAction('[data-backup]',button=>confirmDialog({title:button.textContent,onSubmit:()=>request('/backups/'+button.dataset.backup,{method:'POST',...jsonBody({})}),successMessage:adminMessage("operationStartedUseRefreshToCheck")}));
-    }
-  }
+  if (me.role === "owner") await backups();
   bindAction("[data-config]", (button) => {
     const config = configs.find((entry) => entry.key === button.dataset.config);
     formDialog({
