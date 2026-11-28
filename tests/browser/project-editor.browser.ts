@@ -13,6 +13,7 @@ import type { ClientDistribution } from "../../apps/admin-web/src/client-distrib
 const origin = "http://127.0.0.1:43128";
 const projectId = `project_${"a".repeat(32)}`;
 const jobId = `job_${"1".repeat(32)}`;
+const failedJobId = `job_${"2".repeat(32)}`;
 const editorPath = `/app/projects/${projectId}/edit/`;
 const draftPath = `/app/api/v1/projects/${projectId}/draft`;
 const appScript = localizedAppScript("ja");
@@ -185,6 +186,7 @@ describe("Project editor", () => {
         engine = "lualatex";
       const engines = ["lualatex", "pdflatex", "xelatex", "platex", "uplatex"];
       let previewGate: Promise<void> | undefined;
+      const failedJobStatus = () => (running ? "running" : "failed");
       const draft = () => ({
         version,
         entrypoint: "main.tex",
@@ -280,7 +282,11 @@ describe("Project editor", () => {
               latest:
                 posts === 0
                   ? null
-                  : { jobId, version, status: running ? "running" : fail ? "failed" : "succeeded" },
+                  : {
+                      jobId: fail ? failedJobId : jobId,
+                      version,
+                      status: fail ? failedJobStatus() : "succeeded",
+                    },
               successful:
                 posts === 0 ? null : { jobId, version: 1, pageCount: 2 },
             });
@@ -294,14 +300,16 @@ describe("Project editor", () => {
               error: { code: "TEMPORARY_FAILURE", message: "Preview unavailable" },
             } });
           }
-          return json({ jobId, version: requested.version });
+          return json({
+            jobId: fail ? failedJobId : jobId,
+            version: requested.version,
+          });
         }
         if (path === `/app/api/v1/jobs/${jobId}`)
-          return json({
-            status: running ? "running" : fail ? "failed" : "succeeded",
-            pdfPageCount: 2,
-          });
-        if (path === `/app/api/v1/jobs/${jobId}/artifacts/errors.json`)
+          return json({ status: "succeeded", pdfPageCount: 2 });
+        if (path === `/app/api/v1/jobs/${failedJobId}`)
+          return json({ status: failedJobStatus() });
+        if (path === `/app/api/v1/jobs/${failedJobId}/artifacts/errors.json`)
           return json({
             success: false,
             exitCode: 1,
@@ -328,11 +336,14 @@ describe("Project editor", () => {
         });
       });
       await page.goto(origin + "/app/projects/");
+      await expect
+        .poll(() => page.locator("#app-projects").textContent(), { timeout: 8000 })
+        .toBe("プロジェクトはありません。");
+      await page.setViewportSize({ width: 390, height: 780 });
       expect(observed).not.toContain(entrypoint);
       expect(observed.some((path) => path.startsWith(assetRoot + "pdf/"))).toBe(
         false,
       );
-      await page.setViewportSize({ width: 390, height: 780 });
       await page.goto(origin + editorPath);
       await page.locator(".cm-content").waitFor({ timeout: 7000 });
       const openOptions = (panel: string) =>
@@ -417,6 +428,7 @@ describe("Project editor", () => {
         .poll(() => page.locator("#editor-preview-status").textContent())
         .toBe("コンパイル中");
       const activeJob = await page.locator("#editor-build-detail").getAttribute("href");
+      expect(activeJob).toBe(`/app/jobs/${failedJobId}/`);
       await openOptions("settings");
       await page.locator("#editor-language").selectOption("en");
       await expect
@@ -438,8 +450,12 @@ describe("Project editor", () => {
         .toBe("コンパイル失敗");
       expect(await page.locator("#editor-canvas").isVisible()).toBe(true);
       expect(
-        await page.locator("#editor-preview-version").textContent(),
-      ).toContain("最新の編集は反映されていません");
+        await page.locator("#editor-canvas").getAttribute("aria-label"),
+      ).toBe("PDF 1 / 2");
+      expect(await page.locator("#editor-pdf").getAttribute("href")).toBe(pdfPath);
+      const retainedVersion = await page.locator("#editor-preview-version").textContent();
+      expect(retainedVersion).toContain("下書き版 1");
+      expect(retainedVersion).toContain("最新の編集は反映されていません");
       await page.setViewportSize({ width: 390, height: 780 });
       await page.getByRole("button", { name: "エラー", exact: true }).click();
       expect(await page.locator("#editor-error-detail").isVisible()).toBe(true);
@@ -459,6 +475,14 @@ describe("Project editor", () => {
         .poll(() => page.locator("#editor-canvas").getAttribute("aria-label"))
         .toBe("PNG 1 / 2");
       const pngMs = Math.round(performance.now() - pngStart);
+      // The canvas is painted before the previous PDF is torn down and timed.
+      await page.waitForFunction(
+        () =>
+          performance.getEntriesByName(
+            "latex-renderer:editor:png-load-and-paint",
+            "measure",
+          ).length > 0,
+      );
       const browserTiming = await page.evaluate(() =>
         performance
           .getEntriesByType("measure")
@@ -503,9 +527,9 @@ describe("Project editor", () => {
       expect(await page.locator("#editor-preview-status").textContent()).toBe(
         "コンパイル失敗",
       );
-      expect(
-        await page.locator("#editor-preview-version").textContent(),
-      ).toContain("下書き版 1");
+      await expect
+        .poll(() => page.locator("#editor-preview-version").textContent())
+        .toContain("下書き版 1");
       expect(posts).toBe(2);
       const savedRevision =
         origin + editorPath + "?revision=revision_" + "b".repeat(32);
