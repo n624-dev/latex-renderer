@@ -10,6 +10,9 @@ import * as failure from "../apps/renderer-worker/src/failure.js";
 import * as queue from "../apps/renderer-worker/src/queue.js";
 import * as admission from "../apps/renderer-worker/src/admission.js";
 import * as sourceTrees from "../apps/renderer-worker/src/source-tree-cache.js";
+import * as inspections from "../apps/renderer-worker/src/pdf-inspection.js";
+import * as previews from "../apps/renderer-worker/src/preview-processor.js";
+import { documentProbeSchema } from "../packages/contracts/src/index.js";
 import { runWorker } from "../apps/renderer-worker/src/worker.js";
 import {
   MIB,
@@ -80,6 +83,149 @@ function fixture() {
   };
 }
 describe("worker stop and orphan-recovery lifecycle", () => {
+  it("gives aged probes, previews, and inspections a turn while renders remain queued", async () => {
+    const f = fixture();
+    const { database, config } = f;
+    const timestamp = new Date().toISOString();
+    const ago = (seconds: number) =>
+      new Date(Date.parse(timestamp) - seconds * 1000).toISOString();
+    const userId = "owner";
+    database.users.insertInvitation({
+      id: userId,
+      displayName: "Owner",
+      role: "user",
+      createdBy: "test",
+      timestamp,
+    });
+    const web = database.webPrincipals.ensure(userId);
+    const insertJob = database.raw.prepare(`INSERT INTO jobs
+      (id,user_id,service_account_id,api_key_id,status,renderer_version,
+       source_size,source_sha256,created_at,updated_at,queued_at,completed_at)
+      VALUES (?,?,?,?,?,'test',1,?,?,?,?,?)`);
+    insertJob.run(
+      job.id,
+      userId,
+      web.service_account_id,
+      web.api_key_id,
+      "queued",
+      job.source_sha256,
+      timestamp,
+      timestamp,
+      timestamp,
+      null,
+    );
+    const publishedId = `job_${"b".repeat(32)}`;
+    insertJob.run(
+      publishedId,
+      userId,
+      web.service_account_id,
+      web.api_key_id,
+      "succeeded",
+      job.source_sha256,
+      ago(90),
+      ago(90),
+      ago(90),
+      ago(90),
+    );
+    const pdf = {
+      id: "artifact_pdf",
+      job_id: publishedId,
+      type: "pdf",
+      relative_path: "result.pdf",
+      storage_generation: 1,
+      size: 1,
+      sha256: "b".repeat(64),
+      created_at: ago(90),
+    };
+    database.artifacts.insert(pdf);
+    database.previews.register({
+      job_id: publishedId,
+      pdf_artifact_id: pdf.id,
+      pdf_sha256: pdf.sha256,
+      page_count: 2,
+      runtime_image: config.image,
+      created_at: ago(90),
+    });
+    const probe = database.documentProbes.request(
+      userId,
+      config.image,
+      documentProbeSchema.parse({ engine: "lualatex" }),
+      ago(80),
+    );
+    database.previews.request(publishedId, 2, ago(70));
+    const expiration = new Date(Date.parse(timestamp) + 60_000).toISOString();
+    const olderInspection = database.pdfInspections.request(
+      pdf,
+      expiration,
+      ago(60),
+    );
+    const newerInspection = database.pdfInspections.request(
+      pdf,
+      expiration,
+      ago(50),
+      {
+        direction: "source_to_pdf",
+        path: "main.tex",
+        line: 1,
+      },
+    );
+
+    const dispatched: string[] = [];
+    f.processed.mockImplementation(() => {
+      dispatched.push("render");
+      expect(database.worker.nextQueued()?.id).toBe(job.id);
+      if (f.processed.mock.calls.length === 4) f.abort.abort();
+      return Promise.resolve();
+    });
+    vi.spyOn(inspections, "processDocumentProbe").mockImplementation(
+      (_db, _config, request) => {
+        dispatched.push(request.id);
+        database.documentProbes.finish(
+          request.id,
+          config.workerId,
+          "DOCUMENT_PROBE_COMPILED",
+          "ready",
+        );
+        return Promise.resolve();
+      },
+    );
+    vi.spyOn(previews, "processPreview").mockImplementation(
+      (_db, _config, request) => {
+        dispatched.push(`preview:${request.job_id}:${request.page}`);
+        database.raw
+          .prepare(
+            "UPDATE job_preview_requests SET status='succeeded' WHERE sequence=?",
+          )
+          .run(request.sequence);
+        return Promise.resolve();
+      },
+    );
+    vi.spyOn(inspections, "processPdfInspection").mockImplementation(
+      (_db, _config, request) => {
+        dispatched.push(request.id);
+        database.raw
+          .prepare("UPDATE pdf_inspections SET status='ready' WHERE id=?")
+          .run(request.id);
+        return Promise.resolve();
+      },
+    );
+
+    await runWorker(database, config, f.abort.signal);
+
+    expect(dispatched).toEqual([
+      "render",
+      probe.id,
+      "render",
+      `preview:${publishedId}:2`,
+      "render",
+      olderInspection.id,
+      "render",
+    ]);
+    expect(database.pdfInspections.get(newerInspection.id)?.status).toBe(
+      "queued",
+    );
+  });
+
   it("exits only after the full empty-queue deadline and successful maintenance", async () => {
     const f = fixture();
     f.claimed.mockReturnValue(undefined);
