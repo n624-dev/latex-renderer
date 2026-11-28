@@ -2,8 +2,14 @@ import type { Browser } from "playwright";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { launchTestBrowser, newTestPage } from "../helpers/browser-engine.js";
 import { updateViewSource } from "../helpers/admin-ui-source.js";
+import { localizedAdminScript } from "../../apps/admin-web/src/assets/admin-script.js";
 import { styles } from "../../apps/admin-web/src/assets/styles.js";
-import { adminCatalog, createAdminMessage } from "../../apps/admin-web/src/admin-messages.js";
+import { readBrowserAsset } from "../../apps/admin-web/src/browser-assets.js";
+import { adminPage } from "../../apps/admin-web/src/templates-admin.js";
+import {
+  adminCatalog,
+  createAdminMessage,
+} from "../../apps/admin-web/src/admin-messages.js";
 
 let browser: Browser | undefined;
 beforeAll(async () => {
@@ -11,6 +17,109 @@ beforeAll(async () => {
 });
 afterAll(async () => {
   await browser?.close();
+});
+
+it("shows rejected policy writes and reloads the confirmed policy and accepted operation ID", async () => {
+  if (!browser) throw new Error("Browser not started");
+  const page = await newTestPage(browser);
+  const origin = "https://renderer.invalid";
+  const id = "updop_1700000000000_fixture";
+  const errors = [
+    {
+      status: 409,
+      code: "UPDATE_OPERATION_ACTIVE",
+      message: "Update policy cannot change while an operation is running",
+    },
+    { status: 500, code: "ENOENT", message: "Update state rename failed" },
+  ];
+  let policyRequests = 0,
+    applyRequests = 0,
+    restarted = false;
+  const script = localizedAdminScript("en");
+  try {
+    await page.route("**/*", async (route) => {
+      const request = route.request();
+      const url = new URL(request.url());
+      if (url.origin !== origin) return route.abort();
+      switch (url.pathname) {
+        case "/admin/updates/":
+          return route.fulfill({
+            contentType: "text/html",
+            body: adminPage("updates", "en"),
+          });
+        case "/admin/assets/styles.css":
+          return route.fulfill({ contentType: "text/css", body: styles });
+        case "/admin/assets/site.js":
+          return route.fulfill({
+            contentType: "text/javascript",
+            body: readBrowserAsset("site"),
+          });
+        case "/admin/assets/admin.js":
+          return route.fulfill({
+            contentType: "text/javascript",
+            body: script,
+          });
+        case "/auth/session":
+          return route.fulfill({ json: { csrfToken: "fixture-csrf" } });
+        case "/admin/api/v1/me":
+          return route.fulfill({
+            json: { role: "owner", displayLocale: "en" },
+          });
+        case "/admin/api/v1/updates/state":
+          return route.fulfill({
+            json: {
+              policy: { channel: "stable", mode: "automatic" },
+              lastOperationId: restarted ? id : null,
+            },
+          });
+        case "/admin/api/v1/updates/policy": {
+          const failure = errors[policyRequests++];
+          if (!failure) throw new Error("Unexpected extra policy mutation");
+          const { status, code, message } = failure;
+          return route.fulfill({ status, json: { error: { code, message } } });
+        }
+        case "/admin/api/v1/updates/apply":
+          applyRequests++;
+          return route.fulfill({
+            status: 202,
+            json: { id, status: "running" },
+          });
+        case `/admin/api/v1/updates/operations/${id}`:
+          return route.fulfill({
+            json: { id, status: restarted ? "failed" : "running" },
+          });
+        default:
+          return route.fulfill({ status: 404, body: "" });
+      }
+    });
+    await page.goto(`${origin}/admin/updates/?locale=en`);
+    const policy = page.locator("#update-policy-form");
+    const mode = policy.locator('select[name="mode"]');
+    await mode.waitFor();
+    expect(await mode.inputValue()).toBe("automatic");
+    for (const { code, message } of errors) {
+      await mode.selectOption("notify");
+      await policy.locator("textarea").fill("Confirm fixture policy");
+      await policy.locator("button").click();
+      await page.getByText(`[${code}] ${message}`, { exact: true }).waitFor();
+      expect(await page.locator("#success").textContent()).toBe("");
+    }
+    await page.locator("#update-apply").click();
+    await page.locator("dialog textarea").fill("Fixture deployment");
+    await page.locator('dialog button[type="submit"]').click();
+    const operation = page.locator(
+      `#update-operation [data-operation-id="${id}"]`,
+    );
+    await operation.waitFor();
+    restarted = true;
+    await page.reload();
+    await operation.waitFor();
+    expect(await mode.inputValue()).toBe("automatic");
+    expect(await page.locator("#error").textContent()).toBe("");
+    expect([policyRequests, applyRequests]).toEqual([2, 1]);
+  } finally {
+    await page.close();
+  }
 });
 
 it("preserves update log disclosure, focus, and scroll across polling and page refresh", async () => {

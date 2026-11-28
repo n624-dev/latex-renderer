@@ -240,6 +240,7 @@ describe("admin route contract", () => {
     const updateApply = vi.fn(() => {
       return Promise.resolve({ id: "updop_test" });
     });
+    const updatePolicy = vi.fn<(mode: string) => Promise<unknown>>();
     const imageApply = vi.fn(() => {
       return Promise.resolve({ id: "imgop_test" });
     });
@@ -290,6 +291,7 @@ describe("admin route contract", () => {
       verificationTicketKids: ["v1"],
       updateManager: {
         apply: updateApply,
+        policy: updatePolicy,
         state: vi.fn(() => Promise.resolve({})),
       } as never,
       imageManager: { apply: imageApply } as never,
@@ -323,14 +325,12 @@ describe("admin route contract", () => {
     });
     expect(updateApply).not.toHaveBeenCalled();
     maintenanceMode = "normal";
-    expect(
-      (
-        await post("/updates/apply", {
-          version: "v1.2.3",
-          reason: "  planned maintenance  ",
-        })
-      ).status,
-    ).toBe(202);
+    const accepted = await post("/updates/apply", {
+      version: "v1.2.3",
+      reason: "  planned maintenance  ",
+    });
+    expect(accepted.status).toBe(202);
+    await expect(accepted.json()).resolves.toMatchObject({ id: "updop_test" });
     expect(updateApply).toHaveBeenCalledWith("v1.2.3");
     expect(authenticate).toHaveBeenCalledWith(
       "test-token",
@@ -338,7 +338,40 @@ describe("admin route contract", () => {
     );
     expect(audits.at(-1)).toMatchObject({
       action: "application_update.apply_requested",
+      targetId: "updop_test",
       metadata: { reason: "planned maintenance" },
+    });
+
+    const policy = { mode: "automatic", reason: "  Confirm policy  " };
+    const auditCount = audits.length;
+    for (const [status, code, message] of [
+      [
+        409,
+        "UPDATE_OPERATION_ACTIVE",
+        "Update policy cannot change while an operation is running",
+      ],
+      [500, "ENOENT", "Update state rename failed"],
+    ] as const) {
+      updatePolicy.mockRejectedValueOnce(new AppError(code, message, status));
+      const result = await post("/updates/policy", policy);
+      expect(result.status).toBe(status);
+      await expect(result.json()).resolves.toMatchObject({
+        error: { code, message },
+      });
+      expect(audits).toHaveLength(auditCount);
+    }
+    updatePolicy.mockResolvedValueOnce({
+      channel: "stable",
+      mode: "automatic",
+    });
+    expect((await post("/updates/policy", policy)).status).toBe(200);
+    expect(updatePolicy).toHaveBeenNthCalledWith(3, "automatic");
+    expect(audits).toHaveLength(auditCount + 1);
+    expect(audits.at(-1)).toMatchObject({
+      action: "application_update.policy_updated",
+      targetId: "stable:automatic",
+      result: "success",
+      metadata: { reason: "Confirm policy" },
     });
 
     expect(
