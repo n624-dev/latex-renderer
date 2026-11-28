@@ -625,10 +625,15 @@ it.each([
     });
     await page.locator("[data-k-rotate]").click();
     await page.locator('dialog button[type="submit"]').click();
+    const credentialDialog = page.getByRole("dialog", {
+      name: "APIキーを発行しました",
+      exact: true,
+    });
     const credential = page.locator("[data-issued-credential]");
     await expect.poll(() => credential.textContent()).toBe(rotatedCredential);
+    expect(await page.locator("dialog[open]").count()).toBe(1);
     const element = await credential.elementHandle();
-    await page.locator(`dialog ${selector}`).click();
+    await credentialDialog.locator(selector).click();
     await credential.waitFor({ state: "detached" });
     expect(await element.evaluate((node) => node.textContent)).toBe("");
     expect(copied).toEqual(exit === "copy" ? [rotatedCredential] : []);
