@@ -79,7 +79,7 @@ export class RendererClient {
     jobId: string,
     idempotencyKey: string,
     options?: RendererRequestOptions,
-  ): Promise<SourceRenderResponse> {
+  ): Promise<SourceRenderResponse & { job?: unknown }> {
     const response = await fetch(
       new URL(`${PUBLIC_API_PREFIX}/render-tickets`, this.#baseUrl),
       {
@@ -93,7 +93,9 @@ export class RendererClient {
         ...(options?.signal === undefined ? {} : { signal: options.signal }),
       },
     );
-    return sourceRenderResponseSchema.parse(await responseJson(response));
+    return sourceRenderResponseSchema
+      .extend({ job: z.unknown().optional() })
+      .parse(await responseJson(response));
   }
   async upload(
     ticket: TicketResponse,
@@ -113,7 +115,9 @@ export class RendererClient {
     } as RequestInit & { duplex: "half" });
     if (!response.ok) await throwResponse(response);
   }
-  async sourceLimits(options?: RendererRequestOptions): Promise<ResourceLimits | undefined> {
+  async sourceLimits(
+    options?: RendererRequestOptions,
+  ): Promise<ResourceLimits | undefined> {
     const response = await fetch(
       new URL(`${PUBLIC_API_PREFIX}/source-tickets`, this.#baseUrl),
       {
@@ -126,14 +130,20 @@ export class RendererClient {
       await response.body?.cancel();
       return undefined;
     }
-    const limits = z.object({
-      maxUploadBytes: z.int().positive(),
-      maxExtractedBytes: z.int().positive(),
-      maxFileCount: z.int().positive(),
-      maxZipEntries: z.int().positive(),
-    }).safeParse(await responseJson(response));
+    const limits = z
+      .object({
+        maxUploadBytes: z.int().positive(),
+        maxExtractedBytes: z.int().positive(),
+        maxFileCount: z.int().positive(),
+        maxZipEntries: z.int().positive(),
+      })
+      .safeParse(await responseJson(response));
     if (!limits.success)
-      throw new AppError("INVALID_RESPONSE", "Server returned invalid Source limits", 502);
+      throw new AppError(
+        "INVALID_RESPONSE",
+        "Server returned invalid Source limits",
+        502,
+      );
     return limits.data;
   }
 
@@ -292,13 +302,22 @@ export class RendererClient {
   async listProjectRevisionFiles(
     projectId: string,
     revisionId: string,
-    options: RendererRequestOptions & { offset?: number | undefined; limit?: number | undefined } = {},
+    options: RendererRequestOptions & {
+      offset?: number | undefined;
+      limit?: number | undefined;
+    } = {},
   ) {
     const query = new URLSearchParams();
-    if (options.offset !== undefined) query.set("offset", String(options.offset));
+    if (options.offset !== undefined)
+      query.set("offset", String(options.offset));
     if (options.limit !== undefined) query.set("limit", String(options.limit));
     return savedRevisionFilesPageSchema.parse(
-      await this.#readProjectRevisionFiles(projectId, revisionId, query, options.signal),
+      await this.#readProjectRevisionFiles(
+        projectId,
+        revisionId,
+        query,
+        options.signal,
+      ),
     );
   }
   async runAuthoringOperation(
@@ -307,16 +326,51 @@ export class RendererClient {
     options: RendererRequestOptions = {},
   ): Promise<unknown> {
     const route = rendererApiAuthoringRoutes[operation];
-    const idKey = route.resource === "project" ? "projectId" : "jobId";
-    const { [idKey]: id, ...parameters } = input;
-    const pattern = route.resource === "project" ? /^project_[a-f0-9]{32}$/ : /^job_[a-f0-9]{32}$/;
-    if (typeof id !== "string" || !pattern.test(id))
-      throw new AppError("INVALID_REQUEST", "A valid Project or Job ID is required", 400);
-    const collection = route.resource === "project" ? "projects" : "job-tickets";
-    const url = new URL(
-      `${PUBLIC_API_PREFIX}/${collection}/${encodeURIComponent(id)}${route.suffix}`,
-      this.#baseUrl,
-    );
+    let path: string = route.suffix;
+    let parameters = input;
+    if (route.resource !== "collection") {
+      const idKey = route.resource === "project" ? "projectId" : "jobId";
+      const { [idKey]: id, ...resourceParameters } = input;
+      const pattern =
+        route.resource === "project"
+          ? /^project_[a-f0-9]{32}$/
+          : /^job_[a-f0-9]{32}$/;
+      if (typeof id !== "string" || !pattern.test(id))
+        throw new AppError(
+          "INVALID_REQUEST",
+          "A valid Project or Job ID is required",
+          400,
+        );
+      if (route.resource === "render-ticket") {
+        const { idempotencyKey } = resourceParameters;
+        if (typeof idempotencyKey !== "string")
+          throw new AppError(
+            "INVALID_REQUEST",
+            "An Idempotency-Key is required",
+            400,
+          );
+        const { job } = await this.retrySvgJob(id, idempotencyKey, options);
+        if (job === undefined)
+          throw new AppError(
+            "AUTHORING_UNAVAILABLE",
+            `SVG retry was accepted for ${id}. Read its state with get_render_status.`,
+            501,
+          );
+        return { job };
+      }
+      const collection =
+        route.resource === "project" ? "projects" : "job-tickets";
+      path = `/${collection}/${encodeURIComponent(id)}${route.suffix}`;
+      parameters = resourceParameters;
+    }
+    const url = new URL(`${PUBLIC_API_PREFIX}${path}`, this.#baseUrl);
+    const body =
+      "inspectionParam" in route
+        ? {
+            pdfSha256: parameters.pdfSha256,
+            params: parameters[route.inspectionParam],
+          }
+        : parameters;
     if (route.method === "GET")
       for (const [key, value] of Object.entries(parameters)) {
         if (typeof value === "number" || typeof value === "string")
@@ -338,7 +392,7 @@ export class RendererClient {
       ),
       cache: "no-store",
       redirect: "error",
-      ...(hasBody ? { body: JSON.stringify(parameters) } : {}),
+      ...(hasBody ? { body: JSON.stringify(body) } : {}),
       ...(options.signal === undefined ? {} : { signal: options.signal }),
     });
     return await authoringResponse(response, route.resource === "job");
@@ -391,9 +445,15 @@ export class RendererClient {
     options: RendererRequestOptions & { offset?: number | undefined } = {},
   ) {
     const query = new URLSearchParams({ path });
-    if (options.offset !== undefined) query.set("offset", String(options.offset));
+    if (options.offset !== undefined)
+      query.set("offset", String(options.offset));
     return savedRevisionFileTextSchema.parse(
-      await this.#readProjectRevisionFiles(projectId, revisionId, query, options.signal),
+      await this.#readProjectRevisionFiles(
+        projectId,
+        revisionId,
+        query,
+        options.signal,
+      ),
     );
   }
   async #readProjectRevisionFiles(
@@ -463,15 +523,18 @@ export class RendererClient {
     );
     await responseJson(response);
   }
-  async attachProjectRevision(input: {
-    projectId: string;
-    sourceId: string;
-    entrypoint: string;
-    displayName: string;
-    originalFilename: string;
-    outputs?: readonly RenderOutput[];
-    engine?: RenderEngine | undefined;
-  }, options?: RendererRequestOptions): Promise<AttachProjectRevisionResponse> {
+  async attachProjectRevision(
+    input: {
+      projectId: string;
+      sourceId: string;
+      entrypoint: string;
+      displayName: string;
+      originalFilename: string;
+      outputs?: readonly RenderOutput[];
+      engine?: RenderEngine | undefined;
+    },
+    options?: RendererRequestOptions,
+  ): Promise<AttachProjectRevisionResponse> {
     const response = await fetch(
       new URL(
         `${PUBLIC_API_PREFIX}/projects/${encodeURIComponent(input.projectId)}/revisions`,
@@ -849,11 +912,17 @@ async function authoringResponse(
   try {
     return await responseJson(response);
   } catch (error) {
-    if (error instanceof AppError && (
-      error.status === 405 ||
-      (error.status === 404 && ["NOT_FOUND", "INVALID_RESPONSE", "HTTP_ERROR"].includes(error.code)) ||
-      (legacyJobRoute && error.status === 400 && error.code === "INVALID_JOB_ID")
-    ))
+    if (
+      error instanceof AppError &&
+      (error.status === 405 ||
+        (error.status === 404 &&
+          ["NOT_FOUND", "INVALID_RESPONSE", "HTTP_ERROR"].includes(
+            error.code,
+          )) ||
+        (legacyJobRoute &&
+          error.status === 400 &&
+          error.code === "INVALID_JOB_ID"))
+    )
       throw new AppError(
         "AUTHORING_UNAVAILABLE",
         "This server does not support the requested Local MCP authoring operation. Update the server or use its Web editor or Remote MCP.",
@@ -894,7 +963,7 @@ function throwFromValue(status: number, value: unknown): never {
               retryable: error.retryable,
             }
           : (error.code === "DRAFT_VERSION_CONFLICT" ||
-                error.code === "DOCUMENT_CONDITIONS_CONFLICT") &&
+              error.code === "DOCUMENT_CONDITIONS_CONFLICT") &&
               (error.currentVersion === null ||
                 (typeof error.currentVersion === "number" &&
                   Number.isSafeInteger(error.currentVersion) &&
