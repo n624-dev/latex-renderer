@@ -157,6 +157,89 @@ describe("compile log parser", () => {
     expect(result.coverage?.messagesTruncated).toBe(1);
   });
 
+  it("preserves repeated undefined references and missing glyphs with their observed positions", () => {
+    const reference = (line: number) =>
+      "LaTeX Warning: Reference `eq:balance' on page 1 undefined on input line " +
+      String(line) +
+      ".";
+    const missing =
+      "Missing character: There is no 字 (U+5B57) in font Example!";
+    const result = parseCompileLog(
+      [
+        reference(12),
+        missing,
+        reference(37),
+        missing,
+        "LaTeX Warning: There were undefined references.",
+      ].join("\n"),
+      0,
+    );
+    expect(result.success).toBe(true);
+    expect(result.warnings).toEqual([
+      {
+        type: "latex-warning",
+        file: null,
+        line: 12,
+        logLine: 1,
+        message: reference(12),
+      },
+      {
+        type: "missing-character",
+        file: null,
+        line: null,
+        logLine: 2,
+        message: missing,
+      },
+      {
+        type: "latex-warning",
+        file: null,
+        line: 37,
+        logLine: 3,
+        message: reference(37),
+      },
+      {
+        type: "missing-character",
+        file: null,
+        line: null,
+        logLine: 4,
+        message: missing,
+      },
+      {
+        type: "latex-warning",
+        file: null,
+        line: null,
+        logLine: 5,
+        message: "LaTeX Warning: There were undefined references.",
+      },
+    ]);
+  });
+
+  // The parser currently flattens warnings from all latexmk passes.
+  it.fails(
+    "distinguishes resolved first-pass warnings from warnings in the final pass",
+    () => {
+      const result = parseCompileLog(
+        [
+          "Run number 1 of rule 'lualatex'",
+          "LaTeX Warning: Reference `eq:later' on page 1 undefined on input line 10.",
+          "Run number 2 of rule 'lualatex'",
+          "LaTeX Warning: Reference `eq:missing' on page 1 undefined on input line 15.",
+        ].join("\n"),
+        0,
+      );
+      expect(result.warnings).toEqual([
+        {
+          type: "latex-warning",
+          file: null,
+          line: 15,
+          logLine: 4,
+          message:
+            "LaTeX Warning: Reference `eq:missing' on page 1 undefined on input line 15.",
+        },
+      ]);
+    },
+  );
+
   it("keeps the first affected line of overfull and underfull warnings", () => {
     const result = parseCompileLog(
       [
