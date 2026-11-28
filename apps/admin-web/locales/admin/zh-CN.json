@@ -1,4 +1,9 @@
 {
+  "renderNow": "立即渲染",
+  "selectSourceOwnerKey": "选择渲染密钥",
+  "noSourceOwnerKeys": "没有可用的渲染密钥",
+  "sourceRegistered": "已登记源文件。",
+  "includeSvgOutput": "同时输出 SVG",
   "aNewJobWillBeCreated": "将使用原始输入创建新作业。",
   "aShortLivedReferenceForPassing": "用于向 Remote MCP 传递同一输入的短期引用。",
   "accountAndAppearance": "账户与外观",

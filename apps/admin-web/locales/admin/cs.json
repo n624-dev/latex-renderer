@@ -1,4 +1,9 @@
 {
+  "renderNow": "Vykreslit nyní",
+  "selectSourceOwnerKey": "Vyberte klíč pro vykreslování",
+  "noSourceOwnerKeys": "Žádné klíče pro vykreslování nejsou k dispozici",
+  "sourceRegistered": "Zdroj byl zaregistrován.",
+  "includeSvgOutput": "Zahrnout výstup SVG",
   "aNewJobWillBeCreated": "Z původního vstupu se vytvoří nová úloha.",
   "aShortLivedReferenceForPassing": "Krátkodobý odkaz pro předání stejného vstupu do Remote MCP.",
   "accountAndAppearance": "Účet a vzhled",

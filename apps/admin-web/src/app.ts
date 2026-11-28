@@ -9,7 +9,10 @@ import {
 import { Hono, type Context } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
 import { secureHeaders } from "hono/secure-headers";
-import { localizedAdminScript } from "./assets/admin-script.js";
+import {
+  localizedAdminRenderScript,
+  localizedAdminScript,
+} from "./assets/admin-script.js";
 import { localizedAppScript } from "./assets/localized-app-script.js";
 import { readBrowserAsset } from "./browser-assets.js";
 import { styles } from "./assets/styles.js";
@@ -28,6 +31,7 @@ import {
 import { publicDocsSearchJson } from "./markdown-docs.js";
 import {
   adminPage,
+  adminRenderPage,
   adminDocsPage,
   appEnvironmentPage,
   appHistoryPage,
@@ -179,7 +183,11 @@ export function createWebApp(
   });
   app.get("/admin/assets/render.js", (c) => {
     c.header("Content-Type", "text/javascript; charset=utf-8");
-    return c.body(readBrowserAsset("admin-render"));
+    return c.body(
+      localizedAdminRenderScript(
+        resolveDisplayLocale({ selected: c.req.query("locale") ?? "ja" }),
+      ),
+    );
   });
   app.get("/app/assets/app.js", (c) => {
     const locale = resolveDisplayLocale({ selected: c.req.query("locale") });
@@ -429,8 +437,10 @@ export function createWebApp(
   app.get("/admin/updates", (c) => c.redirect("/admin/updates/", 308));
   app.get("/admin/docs", (c) => c.redirect("/admin/docs/", 308));
   app.get("/admin/docs/", (c) => c.html(adminDocsPage(pageLocale(c))));
-  app.get("/admin/render", (c) => c.redirect("/app/", 308));
-  app.get("/admin/render/", (c) => c.redirect("/app/", 308));
+  app.get("/admin/render", (c) =>
+    c.redirect("/admin/render/" + new URL(c.req.url).search, 308),
+  );
+  app.get("/admin/render/", (c) => c.html(adminRenderPage(pageLocale(c))));
   for (const [path, page] of Object.entries(pages))
     app.get(path, (c) => c.html(adminPage(page, pageLocale(c))));
 

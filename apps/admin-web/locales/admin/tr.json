@@ -1,4 +1,9 @@
 {
+  "renderNow": "Şimdi işle",
+  "selectSourceOwnerKey": "Bir işleme anahtarı seçin",
+  "noSourceOwnerKeys": "Kullanılabilir işleme anahtarı yok",
+  "sourceRegistered": "Kaynak kaydedildi.",
+  "includeSvgOutput": "SVG çıktısını ekle",
   "aNewJobWillBeCreated": "Özgün girdiyle yeni bir iş oluşturulur.",
   "aShortLivedReferenceForPassing": "Aynı girdiyi Remote MCP’ye aktarmak için kısa süreli bir başvurudur.",
   "accountAndAppearance": "Hesap ve görünüm",

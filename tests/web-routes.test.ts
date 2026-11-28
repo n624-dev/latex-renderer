@@ -50,6 +50,7 @@ describe("unified web", () => {
       "/admin/",
       "/admin/jobs/",
       "/admin/sources/",
+      "/admin/render/",
       "/admin/docs/",
       "/downloads/",
       "/app/",
@@ -99,11 +100,23 @@ describe("unified web", () => {
     expect(renderPage).not.toContain("Access保護領域");
     expect(renderPage).not.toContain("短命ticket");
     expect(renderPage).not.toContain("SHA-256");
-    const oldAdmin = await app.request("/admin/render/", {
+    const adminRedirect = await app.request("/admin/render?locale=en", {
       redirect: "manual",
     });
-    expect(oldAdmin.status).toBe(308);
-    expect(oldAdmin.headers.get("location")).toBe("/app/");
+    expect(adminRedirect.status).toBe(308);
+    expect(adminRedirect.headers.get("location")).toBe(
+      "/admin/render/?locale=en",
+    );
+    const adminRender = await (
+      await app.request("/admin/render/?locale=en")
+    ).text();
+    expect(adminRender).toContain("Register input files");
+    expect(adminRender).toContain("Render now");
+    expect(adminRender).toContain('src="/admin/assets/render.js?locale=en"');
+    const script = await (
+      await app.request("/admin/assets/render.js?locale=en")
+    ).text();
+    expect(script).toContain("Select a render key");
     expect((await app.request("/app/assets/app.js")).status).toBe(200);
     expect((await app.request("/admin/assets/render.js")).status).toBe(200);
     expect((await app.request("/assets/render.js")).status).toBe(404);

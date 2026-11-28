@@ -4,6 +4,10 @@ import {
 } from "@latex-renderer/shared/locale";
 
 const english = {
+  sourceOwnerKey: "ID of the render key whose user will own the Source",
+  renderSourceAfterRegistration: "Queue a Job after registration",
+  registerAndOptionallyRenderSource:
+    "Register a directory or ZIP and optionally render it",
   showOrPreviewBackupRetention: "Show or preview local backup retention",
   confirmBackupRetention: "Confirm backup retention limits and prune now",
   backupRetentionMaxAge: "maximum archive age in days",
@@ -64,6 +68,10 @@ type Catalog = Readonly<Record<Message, string>>;
 const locale = terminalDisplayLocale(process.env);
 const select: Partial<Record<DisplayLocale, () => Catalog>> = {
   ja: () => ({
+    sourceOwnerKey: "Sourceの所有者を指定する描画キーID",
+    renderSourceAfterRegistration: "登録後にJobをキューに追加する",
+    registerAndOptionallyRenderSource:
+      "フォルダーまたはZIPを登録し、必要に応じて描画する",
     showOrPreviewBackupRetention:
       "ローカルバックアップの保持設定を表示・プレビュー",
     confirmBackupRetention: "バックアップの保持上限を確定してすぐに整理",
@@ -122,6 +130,9 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Cloudflare Accessのサービストークンは両方の項目を設定してください。Standaloneでは両方とも未設定にします",
   }),
   "zh-CN": () => ({
+    sourceOwnerKey: "用于指定源文件所有者的渲染密钥 ID",
+    renderSourceAfterRegistration: "登记后将任务加入队列",
+    registerAndOptionallyRenderSource: "登记文件夹或 ZIP，并可选择渲染",
     showOrPreviewBackupRetention: "查看或预览本地备份保留策略",
     confirmBackupRetention: "确认备份保留上限并立即清理",
     backupRetentionMaxAge: "备份最长保留天数",
@@ -173,6 +184,10 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Cloudflare Access 的服务令牌字段必须两个都填写；Standalone 模式下应都不填",
   }),
   ko: () => ({
+    sourceOwnerKey: "소스를 소유할 사용자의 렌더 키 ID",
+    renderSourceAfterRegistration: "등록 후 작업을 대기열에 추가",
+    registerAndOptionallyRenderSource:
+      "폴더 또는 ZIP을 등록하고 필요에 따라 렌더링",
     showOrPreviewBackupRetention: "로컬 백업 보존 설정 확인 또는 미리 보기",
     confirmBackupRetention: "백업 보존 한도를 확정하고 지금 정리",
     backupRetentionMaxAge: "최대 백업 보존 일수",
@@ -230,6 +245,12 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Cloudflare Access 서비스 토큰 필드는 둘 다 설정하고 Standalone에서는 둘 다 비워 두세요",
   }),
   es: () => ({
+    sourceOwnerKey:
+      "ID de la clave de renderizado del usuario que será propietario de la fuente",
+    renderSourceAfterRegistration:
+      "Poner un trabajo en cola después del registro",
+    registerAndOptionallyRenderSource:
+      "Registrar una carpeta o un ZIP y renderizarlo si se desea",
     showOrPreviewBackupRetention:
       "Mostrar o previsualizar la retención de copias locales",
     confirmBackupRetention: "Confirmar los límites y depurar las copias ahora",
@@ -293,6 +314,11 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Configure los dos campos del token de servicio Cloudflare Access, o ninguno en Standalone",
   }),
   pt: () => ({
+    sourceOwnerKey:
+      "ID da chave de renderização do usuário que será dono da fonte",
+    renderSourceAfterRegistration: "Colocar uma tarefa na fila após o registro",
+    registerAndOptionallyRenderSource:
+      "Registrar uma pasta ou um ZIP e renderizar opcionalmente",
     showOrPreviewBackupRetention:
       "Mostrar ou pré-visualizar a retenção de cópias locais",
     confirmBackupRetention: "Confirmar os limites e limpar as cópias agora",
@@ -354,6 +380,12 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Configure ambos os campos do token de serviço Cloudflare Access, ou nenhum no modo Standalone",
   }),
   fr: () => ({
+    sourceOwnerKey:
+      "ID de la clé de rendu de la personne qui sera propriétaire de la source",
+    renderSourceAfterRegistration:
+      "Mettre une tâche en file après l’enregistrement",
+    registerAndOptionallyRenderSource:
+      "Enregistrer un dossier ou un ZIP et le convertir si nécessaire",
     showOrPreviewBackupRetention:
       "Afficher ou prévisualiser la rétention des sauvegardes locales",
     confirmBackupRetention:
@@ -419,6 +451,11 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Renseignez les deux champs du jeton de service Cloudflare Access, ou aucun en mode Standalone",
   }),
   de: () => ({
+    sourceOwnerKey:
+      "ID des Render-Schlüssels, dessen Benutzer die Quelle besitzen soll",
+    renderSourceAfterRegistration: "Nach der Registrierung einen Job einreihen",
+    registerAndOptionallyRenderSource:
+      "Ordner oder ZIP registrieren und optional rendern",
     showOrPreviewBackupRetention:
       "Lokale Backup-Aufbewahrung anzeigen oder prüfen",
     confirmBackupRetention:
@@ -480,6 +517,11 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Beide Felder des Cloudflare-Access-Diensttokens ausfüllen, bei Standalone beide leer lassen",
   }),
   it: () => ({
+    sourceOwnerKey:
+      "ID della chiave di rendering dell’utente che possiederà il sorgente",
+    renderSourceAfterRegistration: "Accoda un job dopo la registrazione",
+    registerAndOptionallyRenderSource:
+      "Registrare una cartella o uno ZIP e convertirlo facoltativamente",
     showOrPreviewBackupRetention:
       "Mostra o visualizza in anteprima la conservazione dei backup locali",
     confirmBackupRetention:
@@ -542,6 +584,12 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Configurare entrambi i campi del token di servizio Cloudflare Access, o nessuno per Standalone",
   }),
   ru: () => ({
+    sourceOwnerKey:
+      "ID ключа рендеринга пользователя, которому будет принадлежать источник",
+    renderSourceAfterRegistration:
+      "Поставить задание в очередь после регистрации",
+    registerAndOptionallyRenderSource:
+      "Зарегистрировать папку или ZIP и при необходимости выполнить рендеринг",
     showOrPreviewBackupRetention:
       "Показать или предварительно проверить хранение локальных резервных копий",
     confirmBackupRetention:
@@ -604,6 +652,11 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Настройте оба поля служебного токена Cloudflare Access или оставьте оба пустыми для Standalone",
   }),
   tr: () => ({
+    sourceOwnerKey:
+      "Kaynağın sahibi olacak kullanıcının işleme anahtarı kimliği",
+    renderSourceAfterRegistration: "Kayıttan sonra bir işi kuyruğa ekle",
+    registerAndOptionallyRenderSource:
+      "Klasörü veya ZIP dosyasını kaydet ve isteğe bağlı olarak işle",
     showOrPreviewBackupRetention:
       "Yerel yedek saklama ayarlarını göster veya önizle",
     confirmBackupRetention: "Yedek saklama sınırlarını onayla ve hemen temizle",
@@ -664,6 +717,11 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Cloudflare Access hizmet belirteci alanlarının ikisini de yapılandırın; Standalone için ikisini de boş bırakın",
   }),
   pl: () => ({
+    sourceOwnerKey:
+      "Identyfikator klucza renderowania użytkownika, który będzie właścicielem źródła",
+    renderSourceAfterRegistration: "Dodaj zadanie do kolejki po rejestracji",
+    registerAndOptionallyRenderSource:
+      "Zarejestruj folder lub ZIP i opcjonalnie go wyrenderuj",
     showOrPreviewBackupRetention:
       "Pokaż ustawienia lub podgląd przechowywania lokalnych kopii zapasowych",
     confirmBackupRetention: "Potwierdź limity i usuń teraz nadmiarowe kopie",
@@ -728,6 +786,11 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Ustaw oba pola tokenu usługi Cloudflare Access lub pozostaw oba puste dla Standalone",
   }),
   cs: () => ({
+    sourceOwnerKey:
+      "ID klíče pro vykreslování uživatele, který bude vlastníkem zdroje",
+    renderSourceAfterRegistration: "Po registraci zařadit úlohu do fronty",
+    registerAndOptionallyRenderSource:
+      "Zaregistrovat složku nebo ZIP a volitelně jej vykreslit",
     showOrPreviewBackupRetention:
       "Zobrazit nastavení nebo náhled uchovávání místních záloh",
     confirmBackupRetention:
@@ -789,6 +852,11 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Vyplňte obě pole servisního tokenu Cloudflare Access, pro Standalone nechte obě prázdná",
   }),
   nl: () => ({
+    sourceOwnerKey:
+      "ID van de rendersleutel van de gebruiker die eigenaar van de bron wordt",
+    renderSourceAfterRegistration: "Zet na registratie een taak in de wachtrij",
+    registerAndOptionallyRenderSource:
+      "Een map of ZIP registreren en optioneel renderen",
     showOrPreviewBackupRetention:
       "Bewaarbeleid voor lokale back-ups bekijken of vooraf toetsen",
     confirmBackupRetention:
@@ -851,6 +919,11 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Stel beide velden van het Cloudflare Access-servicetoken in, of geen van beide voor Standalone",
   }),
   sv: () => ({
+    sourceOwnerKey:
+      "ID för renderingsnyckeln för användaren som ska äga källan",
+    renderSourceAfterRegistration: "Köa ett jobb efter registrering",
+    registerAndOptionallyRenderSource:
+      "Registrera en mapp eller ZIP-fil och rendera vid behov",
     showOrPreviewBackupRetention:
       "Visa eller förhandsgranska lagring av lokala säkerhetskopior",
     confirmBackupRetention:
@@ -913,6 +986,11 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Ange båda fälten för Cloudflare Access-tjänsttoken eller inget av dem för Standalone",
   }),
   no: () => ({
+    sourceOwnerKey:
+      "ID-en til gjengivelsesnøkkelen til brukeren som skal eie kilden",
+    renderSourceAfterRegistration: "Legg en jobb i kø etter registrering",
+    registerAndOptionallyRenderSource:
+      "Registrer en mappe eller ZIP-fil og gjengi den ved behov",
     showOrPreviewBackupRetention:
       "Vis eller forhåndsvis oppbevaring av lokale sikkerhetskopier",
     confirmBackupRetention:
@@ -976,6 +1054,11 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Angi begge feltene for Cloudflare Access-tjenestokenet, eller ingen for Standalone",
   }),
   da: () => ({
+    sourceOwnerKey:
+      "ID for gengivelsesnøglen til den bruger, der skal eje kilden",
+    renderSourceAfterRegistration: "Sæt et job i kø efter registrering",
+    registerAndOptionallyRenderSource:
+      "Registrer en mappe eller ZIP-fil og gengiv den efter behov",
     showOrPreviewBackupRetention:
       "Vis eller gennemse opbevaring af lokale sikkerhedskopier",
     confirmBackupRetention:
@@ -1038,6 +1121,11 @@ const select: Partial<Record<DisplayLocale, () => Catalog>> = {
       "Angiv begge felter til Cloudflare Access-tjenestokenet, eller ingen for Standalone",
   }),
   fi: () => ({
+    sourceOwnerKey:
+      "Lähteen omistajaksi tulevan käyttäjän renderöintiavaimen tunnus",
+    renderSourceAfterRegistration: "Lisää työ jonoon rekisteröinnin jälkeen",
+    registerAndOptionallyRenderSource:
+      "Rekisteröi kansio tai ZIP-tiedosto ja renderöi tarvittaessa",
     showOrPreviewBackupRetention:
       "Näytä tai esikatsele paikallisten varmuuskopioiden säilytysasetuksia",
     confirmBackupRetention:

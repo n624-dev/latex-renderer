@@ -1,11 +1,20 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { Worker } from "node:worker_threads";
 import { expect, it } from "vitest";
+import { listValidatedSourceFiles } from "@latex-renderer/zip-validation";
 import { readFixtureBody } from "./helpers/fixture-http.js";
 
 const run = promisify(execFile);
@@ -601,3 +610,187 @@ it("previews and confirms backup retention through the admin API", async () => {
     ) as unknown,
   });
 }, 30_000);
+
+it("registers a ZIP or directory and renders through the existing Source route when requested", async () => {
+  const sourceId = `source_${"a".repeat(32)}`;
+  const jobId = `job_${"b".repeat(32)}`;
+  const renderKey = "key_render";
+  const idempotencyKey = "register-and-render-fixture";
+  const registerOnlyKey = "register-only-fixture";
+  const uploadTicket = "fixture-source-upload-ticket";
+  const expiresAt = "2099-01-01T00:00:00Z";
+  const uploads: Buffer[] = [];
+  const reservations: {
+    auth?: string;
+    key?: string | string[];
+    body: unknown;
+  }[] = [];
+  const renders: typeof reservations = [];
+  const uploadHeaders: Record<string, unknown>[] = [];
+  let origin = "";
+  const server = createServer((req, res) => {
+    void (async () => {
+      const send = (value: unknown) =>
+        res
+          .writeHead(200, { "Content-Type": "application/json" })
+          .end(JSON.stringify(value));
+      const prefix = "/admin/api/v1";
+      const uploadPath = `/api/v1/sources/${sourceId}/content`;
+      const { authorization: auth, "idempotency-key": key } = req.headers;
+      if (req.method === "GET" && req.url === prefix + "/jobs/render-targets") {
+        send({
+          items: [],
+          sourceLimits: {
+            maxUploadBytes: 65536,
+            maxExtractedBytes: 65536,
+            maxFileCount: 10,
+            maxZipEntries: 10,
+          },
+        });
+      } else if (
+        req.method === "POST" &&
+        req.url === prefix + "/jobs/source-tickets"
+      ) {
+        reservations.push({
+          ...(auth ? { auth } : {}),
+          ...(key ? { key } : {}),
+          body: JSON.parse((await readFixtureBody(req)).toString()),
+        });
+        send({
+          sourceId,
+          uploadRequired: reservations.length !== 2,
+          uploadUrl: origin + uploadPath,
+          uploadTicket,
+          expiresAt,
+        });
+      } else if (req.method === "PUT" && req.url === uploadPath) {
+        uploadHeaders.push(req.headers);
+        uploads.push(await readFixtureBody(req));
+        res.writeHead(204).end();
+      } else if (
+        req.method === "POST" &&
+        req.url === prefix + `/sources/${sourceId}/render`
+      ) {
+        renders.push({
+          ...(auth ? { auth } : {}),
+          ...(key ? { key } : {}),
+          body: JSON.parse((await readFixtureBody(req)).toString()),
+        });
+        send({ jobId, jobTicket: "fixture-job-ticket", expiresAt });
+      } else res.writeHead(404).end();
+    })().catch(() => res.writeHead(500).end());
+  });
+  const directory = await mkdtemp(join(tmpdir(), "admin-cli-source-"));
+  try {
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (!address || typeof address === "string")
+      throw new Error("Missing fixture port");
+    origin = `http://127.0.0.1:${address.port}`;
+    const folder = join(directory, "input");
+    await mkdir(join(folder, "reports"), { recursive: true });
+    await writeFile(join(folder, "reports", "report.tex"), "fixture");
+    await writeFile(join(folder, ".latexrenderignore"), "ignored.tex\n");
+    await writeFile(join(folder, "ignored.tex"), "ignored");
+    const create = (input: string, ...flags: string[]) =>
+      run(
+        process.execPath,
+        [...cli, "sources", "create", input, "--json", ...flags],
+        {
+          env: {
+            ...process.env,
+            LATEX_RENDER_BASE_URL: origin,
+            LATEX_RENDER_TRUSTED_ADMIN_ORIGINS: origin,
+            LATEX_RENDER_ADMIN_API_KEY: "fixture-admin-key",
+            CF_ACCESS_CLIENT_ID: "fixture-access-id",
+            CF_ACCESS_CLIENT_SECRET: "fixture-access-secret",
+          },
+          encoding: "utf8",
+        },
+      );
+    await expect(create(folder, "--yes")).rejects.toThrow(
+      /required option '--key <apiKeyId>'/,
+    );
+    await expect(create(folder, "--key", renderKey)).rejects.toThrow(
+      /required option '--yes'/,
+    );
+    const flags = [
+      "--key",
+      renderKey,
+      "--render",
+      "--entrypoint",
+      "reports/report.tex",
+      "--svg",
+      "--idempotency-key",
+      idempotencyKey,
+      "--yes",
+    ];
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const rendered = await create(folder, ...flags);
+      expect(JSON.parse(rendered.stdout)).toEqual({ sourceId, jobId });
+    }
+    const uploaded = uploads[0];
+    if (!uploaded) throw new Error("Missing Source upload");
+    const zipPath = join(directory, "input.zip");
+    await writeFile(zipPath, uploaded);
+    const files = await listValidatedSourceFiles(zipPath, {
+      maxExtractedBytes: 65536,
+      maxFileBytes: 65536,
+      maxEntries: 10,
+      maxFiles: 10,
+      maxDepth: 10,
+      maxNameLength: 200,
+    });
+    expect(files.map(({ path }) => path)).toEqual(["reports/report.tex"]);
+
+    const registered = await create(
+      zipPath,
+      "--key",
+      renderKey,
+      "--yes",
+      "--idempotency-key",
+      registerOnlyKey,
+    );
+    expect(JSON.parse(registered.stdout)).toEqual({ sourceId });
+    const identity = { auth: "Bearer fixture-admin-key", key: idempotencyKey };
+    const metadata = {
+      size: uploaded.length,
+      sha256: createHash("sha256").update(uploaded).digest("hex"),
+    };
+    expect(reservations).toEqual([
+      ...Array.from({ length: 2 }, () => ({
+        ...identity,
+        body: { apiKeyId: renderKey, ...metadata },
+      })),
+      {
+        ...identity,
+        key: registerOnlyKey,
+        body: { apiKeyId: renderKey, ...metadata },
+      },
+    ]);
+    expect(renders).toEqual(
+      Array.from({ length: 2 }, () => ({
+        ...identity,
+        body: {
+          apiKeyId: renderKey,
+          entrypoint: "reports/report.tex",
+          outputs: ["pdf", "svg"],
+        },
+      })),
+    );
+    expect(uploads).toEqual([uploaded, uploaded]);
+    for (const headers of uploadHeaders) {
+      expect(headers).toMatchObject({
+        authorization: `Bearer ${uploadTicket}`,
+        "content-type": "application/zip",
+      });
+      expect(headers).not.toHaveProperty("cf-access-client-id");
+      expect(headers).not.toHaveProperty("cf-access-client-secret");
+    }
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await rm(directory, { recursive: true, force: true });
+  }
+});

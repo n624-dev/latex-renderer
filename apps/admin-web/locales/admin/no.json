@@ -1,4 +1,9 @@
 {
+  "renderNow": "Gjengi nå",
+  "selectSourceOwnerKey": "Velg en gjengivelsesnøkkel",
+  "noSourceOwnerKeys": "Ingen gjengivelsesnøkler tilgjengelige",
+  "sourceRegistered": "Kilden er registrert.",
+  "includeSvgOutput": "Inkluder SVG-filer",
   "aNewJobWillBeCreated": "En ny jobb opprettes med opprinnelige inndata.",
   "aShortLivedReferenceForPassing": "En kortvarig referanse for å sende samme inndata til Remote MCP.",
   "accountAndAppearance": "Konto og utseende",

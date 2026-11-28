@@ -570,7 +570,10 @@ describe("Web render ZIP preflight", () => {
     expect(page).toContain("multiple");
     expect(page).toContain('role="status"');
     expect(page).toContain('role="alert"');
-    expect(page).toContain('id="render-target"');
+    expect(page).toContain('id="render-target" name="render-target" required');
+    expect(page).toContain(
+      'id="render-now" name="render-now" type="checkbox" checked',
+    );
     expect(page).not.toContain('id="render-api-key"');
     expect(page).toContain('id="cancel-all-render"');
     expect(page).toContain('id="render-items"');

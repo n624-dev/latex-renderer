@@ -121,6 +121,11 @@ try {
       .stdout,
     /Usage:.*status/,
   );
+  const sourceHelp = (
+    await exec(alias, ["admin", "sources", "create", "--help"], { env })
+  ).stdout;
+  assert.match(sourceHelp, /--key <apiKeyId>/);
+  assert.match(sourceHelp, /--render\s/);
   const removed = await runCheck("client-uninstall", process.execPath, [
     join(repository, "client-dist/uninstall.mjs"),
     "--install-directory",

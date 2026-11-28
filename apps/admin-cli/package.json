@@ -13,6 +13,9 @@
     "dev": "tsx src/index.ts"
   },
   "dependencies": {
+    "@latex-renderer/api-client": "workspace:*",
+    "@latex-renderer/client-core": "workspace:*",
+    "@latex-renderer/contracts": "workspace:*",
     "@latex-renderer/shared": "workspace:*",
     "commander": "^15.1.0"
   }

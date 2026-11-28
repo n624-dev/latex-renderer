@@ -37,11 +37,17 @@ const browserBuild = {
 };
 await build({
   ...browserBuild,
-  entryPoints: ["admin-render", "login", "site"].map((name) => ({
+  entryPoints: ["login", "site"].map((name) => ({
     in: join(root, "src/browser", name + ".ts"),
     out: name,
   })),
   outdir: join(root, "dist/browser-assets"),
+});
+await build({
+  ...browserBuild,
+  entryPoints: [join(root, "src/browser/admin-render.ts")],
+  outfile: join(root, "dist/browser-assets/admin-render.js"),
+  globalName: "rendererAdminRenderController",
 });
 await build({
   ...browserBuild,

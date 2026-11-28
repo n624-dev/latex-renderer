@@ -29,5 +29,10 @@ Symlinks are rejected when packaging local projects. Use `--output` to select th
 
 For the complete and current command reference, setup/repair flow, JSON contract, and artifact layout, use [`docs/public/cli.md`](docs/public/cli.md).
 
+For administrator uploads, run `latex-render-admin sources create ./project --key <apiKeyId> --yes --json`.
+The command accepts a directory or ZIP and returns `sourceId`. The selected key
+identifies the Source's owner. Add `--render` to queue a Job for that key and
+include `jobId` in the result. See [administrator Source registration](ADMIN_GUIDE.md#register-and-render-tex-inputs).
+
 For owner commands that create, verify, and manage backup retention, see the
 [administrator guide](ADMIN_GUIDE.md#backups).

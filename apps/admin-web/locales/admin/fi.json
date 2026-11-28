@@ -1,4 +1,9 @@
 {
+  "renderNow": "Renderöi nyt",
+  "selectSourceOwnerKey": "Valitse renderöintiavain",
+  "noSourceOwnerKeys": "Renderöintiavaimia ei ole käytettävissä",
+  "sourceRegistered": "Lähde rekisteröity.",
+  "includeSvgOutput": "Sisällytä SVG-tuloste",
   "aNewJobWillBeCreated": "Alkuperäisestä syötteestä luodaan uusi työ.",
   "aShortLivedReferenceForPassing": "Lyhytaikainen viite saman syötteen välittämiseksi Remote MCP:lle.",
   "accountAndAppearance": "Tili ja ulkoasu",

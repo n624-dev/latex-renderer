@@ -148,6 +148,15 @@ importers:
 
   apps/admin-cli:
     dependencies:
+      '@latex-renderer/api-client':
+        specifier: workspace:*
+        version: link:../../packages/api-client
+      '@latex-renderer/client-core':
+        specifier: workspace:*
+        version: link:../../packages/client-core
+      '@latex-renderer/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
       '@latex-renderer/shared':
         specifier: workspace:*
         version: link:../../packages/shared

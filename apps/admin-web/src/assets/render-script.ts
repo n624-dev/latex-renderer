@@ -1,3 +1,4 @@
+import type { AdminMessage } from "../admin-messages.js";
 import type { JobRetryResponse } from "@latex-renderer/contracts";
 import {
   DEFAULT_RESOURCE_LIMITS,
@@ -1114,7 +1115,10 @@ function jobStatusLabel(status: string): string {
   );
 }
 
-export function installRenderWorkflow(csrfToken: string): void {
+export function installRenderWorkflow(
+  csrfToken: string,
+  message: (key: AdminMessage) => string,
+): void {
   const form = document.querySelector<HTMLFormElement>("#render-preflight"),
     input = document.querySelector<HTMLInputElement>("#project-files"),
     directory = document.querySelector<HTMLInputElement>("#project-directory"),
@@ -1124,6 +1128,7 @@ export function installRenderWorkflow(csrfToken: string): void {
     summary = document.querySelector<HTMLElement>("#render-summary"),
     selection = document.querySelector<HTMLElement>("#render-selection"),
     startForm = document.querySelector<HTMLFormElement>("#render-start"),
+    renderNow = document.querySelector<HTMLInputElement>("#render-now"),
     svgOutput = document.querySelector<HTMLInputElement>("#render-svg"),
     target = document.querySelector<HTMLSelectElement>("#render-target"),
     start = document.querySelector<HTMLButtonElement>("#start-render"),
@@ -1150,6 +1155,7 @@ export function installRenderWorkflow(csrfToken: string): void {
     !summary ||
     !selection ||
     !startForm ||
+    !renderNow ||
     !svgOutput ||
     !target ||
     !start ||
@@ -1163,13 +1169,15 @@ export function installRenderWorkflow(csrfToken: string): void {
     !cancelAll
   )
     return;
+  if (!Reflect.has(directory, "webkitdirectory"))
+    directory.closest("label")?.setAttribute("hidden", "");
+
   type Prepared = {
     label: string;
     entrypoint: string;
     blob: Blob;
     size: number;
     sha256: string;
-    legacy: boolean;
     selected: boolean;
   };
   type Task = Prepared & {
@@ -1199,8 +1207,18 @@ export function installRenderWorkflow(csrfToken: string): void {
       new Promise((resolve) => globalThis.setTimeout(resolve, ms));
   const updateStart = () => {
     const chosen = prepared.filter((item) => item.selected);
+    const registerOnly = !renderNow.checked;
+    start.textContent = message(
+      registerOnly ? "registerInputFiles" : "startSelectedDocuments",
+    );
     start.disabled =
-      running || !targetsReady || target.value === "" || chosen.length === 0;
+      running ||
+      !targetsReady ||
+      target.value === "" ||
+      (registerOnly && sharedBlob
+        ? prepared.length === 0
+        : chosen.length === 0);
+    svgOutput.disabled = running || registerOnly;
     createRef.disabled =
       running ||
       !targetsReady ||
@@ -1213,6 +1231,7 @@ export function installRenderWorkflow(csrfToken: string): void {
     input.disabled = value;
     directory.disabled = value;
     target.disabled = value || !targetsReady;
+    renderNow.disabled = value;
     inspect.disabled =
       value ||
       (input.files?.length ?? 0) + (directory.files?.length ?? 0) === 0;
@@ -1284,7 +1303,7 @@ export function installRenderWorkflow(csrfToken: string): void {
     selection.replaceChildren();
     summary.hidden = true;
     error.textContent = "";
-    status.textContent = "ファイルを確認しています…";
+    status.textContent = message("loading");
     inspect.disabled = true;
     updateStart();
     // Build an isolated selection; publish it only if it is still current.
@@ -1319,30 +1338,16 @@ export function installRenderWorkflow(csrfToken: string): void {
           type: "application/zip",
         });
         sharedSize = bytes.length;
-        if (found.hasMainTex)
-          prepared = [
-            {
-              label: file.name,
-              entrypoint: "main.tex",
-              blob: sharedBlob,
-              size: sharedSize,
-              sha256: sha,
-              legacy: true,
-              selected: true,
-            },
-          ];
-        else
-          prepared = found.texFiles.slice(0, 20).map((entrypoint) => ({
-            label: entrypoint,
-            entrypoint,
-            blob: sharedBlob as Blob,
-            size: sharedSize,
-            sha256: sha,
-            legacy: false,
-            selected: true,
-          }));
-        if (found.texFiles.length > 20)
-          throw new Error("ZIP内のTeX候補は20件までです。");
+        prepared = found.texFiles.map((entrypoint) => ({
+          label: entrypoint === "main.tex" ? file.name : entrypoint,
+          entrypoint,
+          blob: sharedBlob as Blob,
+          size: sharedSize,
+          sha256: sha,
+          selected:
+            entrypoint === "main.tex" ||
+            (!found.hasMainTex && found.texFiles.length <= 20),
+        }));
       } else if (
         tex.length === files.length &&
         files.every((file) => !file.webkitRelativePath)
@@ -1370,7 +1375,6 @@ export function installRenderWorkflow(csrfToken: string): void {
             blob,
             size: archive.length,
             sha256: await sha256Hex(archive),
-            legacy: false,
             selected: true,
           });
         }
@@ -1423,8 +1427,6 @@ export function installRenderWorkflow(csrfToken: string): void {
           .filter((name) => name.toLowerCase().endsWith(".tex"));
         if (entrypoints.length === 0)
           throw new Error("プロジェクトにTeXファイルがありません。");
-        if (entrypoints.length > 20)
-          throw new Error("TeXのentrypoint候補は20件までです。");
         sharedBlob = new Blob([archive.slice().buffer], {
           type: "application/zip",
         });
@@ -1450,7 +1452,6 @@ export function installRenderWorkflow(csrfToken: string): void {
           blob: sharedBlob as Blob,
           size: sharedSize,
           sha256: sha,
-          legacy: false,
           selected: entrypoint === "main.tex" || entrypoints.length === 1,
         }));
       }
@@ -1497,6 +1498,10 @@ export function installRenderWorkflow(csrfToken: string): void {
     }
     throw last;
   };
+  const taskFinished = (state: string) =>
+    TERMINAL_JOB_STATUSES.has(state) ||
+    state === "registered" ||
+    state === "canceled-local";
   const renderRows = () => {
     rows.replaceChildren();
     for (const task of tasks) {
@@ -1505,13 +1510,17 @@ export function installRenderWorkflow(csrfToken: string): void {
         state = document.createElement("td"),
         job = document.createElement("td"),
         actions = document.createElement("td");
-      name.dataset.label = "文書";
-      state.dataset.label = "状態";
-      job.dataset.label = "ジョブID";
-      actions.dataset.label = "操作";
+      name.dataset.label = message("document");
+      state.dataset.label = message("status");
+      job.dataset.label = message("jobId2");
+      actions.dataset.label = message("actions");
       actions.className = "actions-cell";
       name.textContent = task.label;
-      state.textContent = task.message ?? jobStatusLabel(task.state);
+      state.textContent =
+        task.message ??
+        (task.state === "registered"
+          ? message("sourceRegistered")
+          : jobStatusLabel(task.state));
       if (task.job?.stages && task.state !== "failed-local") {
         const { pdf, svg } = task.job.stages,
           partial =
@@ -1523,11 +1532,14 @@ export function installRenderWorkflow(csrfToken: string): void {
       }
       if (task.job) state.textContent += resourceWaitLabel(task.job);
       job.textContent = task.jobId ?? "—";
-      if (
-        !TERMINAL_JOB_STATUSES.has(task.state) &&
-        task.state !== "failed-local" &&
-        task.state !== "canceled-local"
-      ) {
+      if (task.sourceId) {
+        const source = document.createElement("a");
+        source.href = `/admin/sources/?source=${encodeURIComponent(task.sourceId)}`;
+        source.textContent = task.sourceId;
+        source.className = "button secondary";
+        actions.append(source);
+      }
+      if (!taskFinished(task.state) && task.state !== "failed-local") {
         const button = document.createElement("button");
         button.type = "button";
         button.className = "secondary";
@@ -1611,32 +1623,31 @@ export function installRenderWorkflow(csrfToken: string): void {
         const detail = document.createElement("a");
         detail.className = "button secondary";
         detail.href = `/admin/jobs/?job=${encodeURIComponent(task.jobId)}`;
-        detail.textContent = "結果詳細";
+        detail.textContent = message("result");
         actions.append(detail);
       }
       row.append(name, state, job, actions);
       rows.append(row);
     }
-    const succeeded = tasks.filter((task) => task.state === "succeeded").length,
+    const succeeded = tasks.filter(
+        (task) => task.state === "succeeded" || task.state === "registered",
+      ).length,
       completed = tasks.filter(
-        (task) =>
-          TERMINAL_JOB_STATUSES.has(task.state) ||
-          task.state === "failed-local" ||
-          task.state === "canceled-local",
+        (task) => taskFinished(task.state) || task.state === "failed-local",
       ).length,
       failed = completed - succeeded,
       active = tasks.length - completed;
     batchSummary.replaceChildren();
     for (const [label, value] of [
-      ["成功", succeeded],
-      ["失敗・中止・確認不可", failed],
-      ["実行中・待機", active],
+      [message("succeeded"), succeeded],
+      [message("failed"), failed],
+      [message("processing"), active],
     ] as const) {
       const item = document.createElement("div"),
         title = document.createElement("strong"),
         count = document.createElement("p");
       title.textContent = label;
-      count.textContent = `${value}件`;
+      count.textContent = String(value);
       item.append(title, count);
       batchSummary.append(item);
     }
@@ -1714,13 +1725,13 @@ export function installRenderWorkflow(csrfToken: string): void {
           csrfToken,
         ),
       );
-    task.sourceId = ticket.sourceId;
     if (ticket.uploadRequired) {
       task.state = "uploading";
       renderRows();
       await bounded(() => uploadSourceZip(fetcher, ticket, task.blob));
       if (ticket.uploadTicket) ticket.uploadTicket = "";
     }
+    task.sourceId = ticket.sourceId;
     return ticket.sourceId;
   };
   const poll = async (task: Task, current: number) => {
@@ -1770,7 +1781,7 @@ export function installRenderWorkflow(csrfToken: string): void {
     task: Task,
     apiKeyId: string,
     current: number,
-    outputs: ("pdf" | "svg")[],
+    outputs: ("pdf" | "svg")[] | undefined,
   ) => {
     // Cancellation can be changed by another event handler while awaiting a
     // reservation. Read through a function instead of narrowing it once.
@@ -1779,61 +1790,37 @@ export function installRenderWorkflow(csrfToken: string): void {
     try {
       task.state = "preparing";
       renderRows();
-      if (task.legacy) {
-        const ticket = await bounded(() =>
-          createAdminRenderTicket(
-            fetcher,
-            origin,
-            apiKeyId,
-            task.size,
-            task.sha256,
-            `legacy-${task.id}`,
-            csrfToken,
-            outputs,
-          ),
-        );
-        task.jobId = ticket.jobId;
-        task.jobTicket = ticket.jobTicket;
-        task.expiresAt = ticket.expiresAt;
-        if (isCanceled()) {
-          ticket.uploadTicket = "";
-          await cancelTask(task);
-          if (task.state !== "failed-local") await poll(task, current);
-          return;
-        }
-        task.state = "uploading";
+      const sourceId = task.sourceId ?? (await reserveSource(task, apiKeyId));
+      if (isCanceled()) {
         renderRows();
-        await bounded(async () => {
-          if (!isCanceled())
-            await uploadRenderZip(fetcher, ticket, task.blob as File);
-        });
-        ticket.uploadTicket = "";
-      } else {
-        const sourceId = task.sourceId ?? (await reserveSource(task, apiKeyId));
-        const currentTask = tasks.find((item) => item.id === task.id);
-        if (currentTask?.canceled === true) return;
-        const ticket = await bounded(() =>
-          createAdminSourceRenderTicket(
-            fetcher,
-            origin,
-            apiKeyId,
-            sourceId,
-            task.entrypoint,
-            `job-${task.id}`,
-            csrfToken,
-            outputs,
-          ),
-        );
-        task.jobId = ticket.jobId;
-        task.jobTicket = ticket.jobTicket;
-        task.expiresAt = ticket.expiresAt;
-        if (isCanceled()) {
-          await cancelTask(task);
-          if (task.state !== "failed-local") await poll(task, current);
-          return;
-        }
-        task.state = "queued";
+        return;
       }
+      if (outputs === undefined) {
+        task.state = "registered";
+        renderRows();
+        return;
+      }
+      const ticket = await bounded(() =>
+        createAdminSourceRenderTicket(
+          fetcher,
+          origin,
+          apiKeyId,
+          sourceId,
+          task.entrypoint,
+          `job-${task.id}`,
+          csrfToken,
+          outputs,
+        ),
+      );
+      task.jobId = ticket.jobId;
+      task.jobTicket = ticket.jobTicket;
+      task.expiresAt = ticket.expiresAt;
+      if (isCanceled()) {
+        await cancelTask(task);
+        if (task.state !== "failed-local") await poll(task, current);
+        return;
+      }
+      task.state = "queued";
       renderRows();
       await poll(task, current);
     } catch (caught) {
@@ -1845,11 +1832,11 @@ export function installRenderWorkflow(csrfToken: string): void {
   const runBatch = async (
     apiKeyId: string,
     current: number,
-    outputs: ("pdf" | "svg")[],
+    outputs: ("pdf" | "svg")[] | undefined,
   ) => {
     const selected = tasks;
     try {
-      if (sharedBlob && selected.length > 1 && !selected[0]?.legacy) {
+      if (sharedBlob && selected.length > 1) {
         const shared = selected[0] as Task;
         try {
           const sourceId = await reserveSource(shared, apiKeyId);
@@ -1869,12 +1856,10 @@ export function installRenderWorkflow(csrfToken: string): void {
       });
       status.textContent =
         current === generation &&
-        selected.every(
-          (task) =>
-            TERMINAL_JOB_STATUSES.has(task.state) ||
-            task.state === "canceled-local",
-        )
-          ? "すべての処理が終了しました。"
+        selected.every((task) => taskFinished(task.state))
+          ? selected.every((task) => task.state === "registered")
+            ? message("sourceRegistered")
+            : "すべての処理が終了しました。"
           : "一部の処理結果を確認できませんでした。結果詳細で状態を確認してください。";
     } finally {
       setRunning(false);
@@ -1894,6 +1879,7 @@ export function installRenderWorkflow(csrfToken: string): void {
     reset();
   });
   target.addEventListener("change", updateStart);
+  renderNow.addEventListener("change", updateStart);
   createRef.addEventListener("click", () => {
     if (createRef.disabled || target.value === "") return;
     const chosen = prepared.filter((item) => item.selected),
@@ -1934,8 +1920,13 @@ export function installRenderWorkflow(csrfToken: string): void {
   });
   startForm.addEventListener("submit", (event) => {
     event.preventDefault();
-    if (running || target.value === "") return;
-    const chosen = prepared.filter((item) => item.selected);
+    const apiKeyId = target.value;
+    if (running || !targetsReady || apiKeyId === "") return;
+    const shouldRender = renderNow.checked;
+    const chosen =
+      !shouldRender && sharedBlob
+        ? prepared.slice(0, 1)
+        : prepared.filter((item) => item.selected);
     if (chosen.length === 0) return;
     const current = ++generation;
     tasks = chosen.map((item, index) => ({
@@ -1952,18 +1943,16 @@ export function installRenderWorkflow(csrfToken: string): void {
     status.textContent = `${tasks.length}件を最大3件ずつ処理します。`;
     renderRows();
     updateStart();
-    const outputs: ("pdf" | "svg")[] = svgOutput.checked
-      ? ["pdf", "svg"]
-      : ["pdf"];
-    void runBatch(target.value, current, outputs);
+    const outputs: ("pdf" | "svg")[] | undefined = shouldRender
+      ? svgOutput.checked
+        ? ["pdf", "svg"]
+        : ["pdf"]
+      : undefined;
+    void runBatch(apiKeyId, current, outputs);
   });
   cancelAll.addEventListener("click", () => {
     for (const task of tasks)
-      if (
-        !TERMINAL_JOB_STATUSES.has(task.state) &&
-        task.state !== "failed-local" &&
-        task.state !== "canceled-local"
-      )
+      if (!taskFinished(task.state) && task.state !== "failed-local")
         void cancelTask(task);
   });
   downloadSuccessful.addEventListener("click", () => {
@@ -2085,21 +2074,22 @@ export function installRenderWorkflow(csrfToken: string): void {
   void renderTargets
     .then(({ items }) => {
       target.replaceChildren();
-      if (items.length === 0) {
-        target.append(new Option("利用できる実行先がありません", ""));
-        status.textContent = "利用できる実行先がありません。";
-        return;
-      }
-      target.append(new Option("実行先を選択してください", ""));
+      const placeholder = new Option(
+        message(items.length ? "selectSourceOwnerKey" : "noSourceOwnerKeys"),
+        "",
+      );
+      placeholder.disabled = true;
+      target.append(placeholder);
       for (const item of items)
         target.append(
           new Option(
-            `${item.serviceAccountName} / ${item.apiKeyName}`,
+            `${item.userLabel} / ${item.serviceAccountName} / ${item.apiKeyName} (${item.apiKeyId})`,
             item.apiKeyId,
           ),
         );
-      targetsReady = true;
-      target.disabled = false;
+      target.value = "";
+      targetsReady = items.length > 0;
+      target.disabled = !targetsReady;
       updateStart();
     })
     .catch((caught: unknown) => {

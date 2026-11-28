@@ -1,4 +1,9 @@
 {
+  "renderNow": "지금 렌더링",
+  "selectSourceOwnerKey": "렌더 키 선택",
+  "noSourceOwnerKeys": "사용 가능한 렌더 키가 없습니다",
+  "sourceRegistered": "소스를 등록했습니다.",
+  "includeSvgOutput": "SVG 출력 포함",
   "aNewJobWillBeCreated": "원래 입력으로 새 작업을 만듭니다.",
   "aShortLivedReferenceForPassing": "같은 입력을 Remote MCP에 전달하는 단기 참조입니다.",
   "accountAndAppearance": "계정 및 화면 설정",

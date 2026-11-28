@@ -44,6 +44,33 @@ OTPs and API secrets out of audit reasons and comments.
 
 API secrets are shown once. Never paste them into prompts, project files, logs, or issue comments.
 
+## Register and render TeX inputs
+
+Open **New job** in Jobs or **Register input files** in Sources. Choose a ZIP
+or use the folder picker if your browser offers it, then review the contents.
+Select the render key for the user who will own the Source. **Render now** is
+checked by default. Select the documents to render, or clear the checkbox to
+register the Source for later. The results link to the Source and any Jobs
+created. To render later, open the Source and choose **Convert this input**.
+
+In `latex-render-admin`, select **sources → create** in the interactive menu or
+run the subcommand. Use `jobs render-targets` to look up the render API key ID.
+
+```bash
+latex-render-admin sources create ./project.zip --key key_... --yes --json
+latex-render-admin sources create ./project --key key_... --render --entrypoint reports/main.tex --svg --idempotency-key example-render-20261128 --yes --json
+latex-render-admin sources render source_... --api-key-id key_... --entrypoint reports/main.tex --yes
+```
+
+`--key` is required for every registration. Its user owns the Source from the
+start, and its service account authorizes the upload. Add `--render` to queue a
+Job. The default entrypoint is `main.tex` and `--svg` adds SVG output alongside
+PDF. The result contains `sourceId` and includes `jobId` when a Job is queued.
+If rendering fails after registration, the command exits with an error and
+still prints `sourceId`. Repeat the same command with the same
+`--idempotency-key` to reuse its reservation and Job while the requests are
+retained. Later renders use a key owned by the Source's user.
+
 ## Backups
 
 Owners can use `backup status`, `backup create`, and `backup verify` in

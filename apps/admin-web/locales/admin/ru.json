@@ -1,4 +1,9 @@
 {
+  "renderNow": "Запустить рендеринг сейчас",
+  "selectSourceOwnerKey": "Выберите ключ рендеринга",
+  "noSourceOwnerKeys": "Нет доступных ключей рендеринга",
+  "sourceRegistered": "Исходные файлы зарегистрированы.",
+  "includeSvgOutput": "Добавить вывод SVG",
   "aNewJobWillBeCreated": "Будет создано новое задание с исходными входными данными.",
   "aShortLivedReferenceForPassing": "Краткосрочная ссылка для передачи тех же входных данных в Remote MCP.",
   "accountAndAppearance": "Учётная запись и оформление",

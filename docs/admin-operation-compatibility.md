@@ -39,7 +39,7 @@
 | Jobの個別削除 | ○ | ○ | ○ | `jobs delete`。 |
 | Jobの一括削除 | ○ | ○ | ○ | `jobs bulk-delete` に対象IDを列挙。 |
 | 管理者として使える描画先と入力上限を確認 | ○ | ○ | ○ | `jobs render-targets`。 |
-| 管理画面から入力を登録して描画・描画先を選ぶ | × | × | ○ | 通常の利用者CLIでの描画とは別の管理経路。 |
+| 管理画面から入力を登録して描画・描画先を選ぶ | ○ | ○ | ○ | `sources create <path> --key <apiKeyId> --yes` で所有者を選んで登録し、`--render` で描画。Webではジョブまたは入力ファイルから操作。 |
 | 管理者としてPDF・SVG等の個別ファイルを取得 | ○ | ○ | ○ | `jobs download <id> --artifact result.pdf --output result.pdf`。 |
 | 管理者として成果物の一括ZIPを取得 | ○ | ○ | ○ | `jobs download <id> --output artifacts.zip`。 |
 | 管理者としてエラー詳細・描画ログ・PNGを確認 | ○ | ○ | ○ | CLIは `jobs download` でファイルに保存。 |

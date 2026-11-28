@@ -1,4 +1,9 @@
 {
+  "renderNow": "Nu renderen",
+  "selectSourceOwnerKey": "Selecteer een rendersleutel",
+  "noSourceOwnerKeys": "Geen rendersleutels beschikbaar",
+  "sourceRegistered": "Bron geregistreerd.",
+  "includeSvgOutput": "SVG-uitvoer toevoegen",
   "aNewJobWillBeCreated": "Er wordt een nieuwe taak met de oorspronkelijke invoer aangemaakt.",
   "aShortLivedReferenceForPassing": "Een kort geldige verwijzing waarmee u dezelfde invoer aan Remote MCP kunt doorgeven.",
   "accountAndAppearance": "Account en weergave",
